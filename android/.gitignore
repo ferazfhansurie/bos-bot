@@ -1,0 +1,9 @@
+.gradle/
+.kotlin/
+build/
+**/build/
+local.properties
+# Release signing material, read by app/build.gradle.kts. Holds a path to
+# the maintainer's keystore and its passwords.
+keystore.properties
+

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The launcher background. White, so the mascot reads exactly as it does in
+      the roster: a green silhouette with white eyes. MAUS_COLORS green is the
+      brand colour, applied to the mascot itself rather than behind it.
+    -->
+    <color name="launcher_background">#FFFFFFFF</color>
+</resources>
