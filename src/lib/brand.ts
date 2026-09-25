@@ -19,7 +19,11 @@ export interface BrandStatus {
   notice?: string;
 }
 
-export const DEFAULT_BRAND: Brand = { name: "OpenMausBot" };
+export const DEFAULT_BRAND: Brand = {
+  name: "BOS Bot",
+  tagline: "your models. your tools. one local desktop.",
+  accent: "#22c55e",
+};
 
 let current: BrandStatus = { brand: DEFAULT_BRAND, source: "default", file: "" };
 

@@ -1,8 +1,8 @@
 {
-  "name": "openmausbot",
+  "name": "bos-bot",
   "private": true,
   "version": "0.1.84",
-  "description": "A local-first chat app for running a team of AI agents.",
+  "description": "A private, local-first multi-model AI desktop for Claude and Codex.",
   "homepage": "https://github.com/milind-soni/OpenMausBot",
   "repository": {
     "type": "git",

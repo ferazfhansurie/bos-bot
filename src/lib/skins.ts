@@ -13,6 +13,9 @@ export const SKIN_IDS = [
   "linen",
   "dusk",
   "daylight",
+  "sakura",
+  "blossom",
+  "velvet",
 ] as const;
 export type SkinId = (typeof SKIN_IDS)[number];
 
@@ -32,6 +35,9 @@ export const SKINS: readonly Skin[] = [
   { id: "linen", name: "Linen", tagline: "Clean daylight with a restrained navy accent." },
   { id: "dusk", name: "Dusk", tagline: "Muted plum after dark, calm and low-key." },
   { id: "daylight", name: "Daylight", tagline: "Midnight in reverse. Near-white, ink-black bubbles." },
+  { id: "sakura", name: "Sakura", tagline: "Putri's pink, light or dark with the Mac." },
+  { id: "blossom", name: "Blossom", tagline: "Soft pink daylight." },
+  { id: "velvet", name: "Velvet", tagline: "Deep plum with pink accents." },
 ];
 
 export const DEFAULT_SKIN: SkinId = "midnight";
@@ -86,7 +92,10 @@ export function applySkin(id: SkinId): void {
   // corner" of issue #454. Best-effort: a browser tab or an older desktop
   // build has no bridge, and the skin still applies without it.
   try {
-    void window.ogb?.applySkin?.(id)?.catch(() => undefined);
+    const chrome = id === "sakura"
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dusk" : "daylight")
+      : id === "blossom" ? "daylight" : id === "velvet" ? "dusk" : id;
+    void window.ogb?.applySkin?.(chrome)?.catch(() => undefined);
   } catch {
     /* no bridge */
   }

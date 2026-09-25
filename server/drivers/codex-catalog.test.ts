@@ -9,6 +9,7 @@ import {
   decodeCodexSelection,
   encodeCodexSelection,
   OFFICIAL_CODEX_PROVIDER,
+  RECENT_CODEX_MODELS,
   readCodexModelCatalog,
   STATIC_CODEX_MODELS,
 } from "./codex-catalog.ts";
@@ -76,6 +77,7 @@ describe("readCodexModelCatalog", () => {
       options: [
         { id: "gpt-fake-default", label: "GPT Fake Default" },
         { id: "gpt-page-two", label: "GPT Page Two" },
+        ...RECENT_CODEX_MODELS,
       ],
     });
   });
@@ -192,6 +194,16 @@ name = "oMLX"
 });
 
 describe("CodexDriver catalog", () => {
+  it("keeps newly released models when the CLI catalog lags behind", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const home = scratchHome({});
+    const catalog = await readCodexModelCatalog({ HOME: home }, fetch, FAKE_CLI);
+    expect(catalog.options.filter((row) => row.id === "gpt-6-sol")).toEqual([
+      { id: "gpt-6-sol", label: "GPT-6 Sol" },
+    ]);
+    expect(catalog.options.some((row) => row.id === "gpt-6-luna" && !row.custom)).toBe(true);
+    expect(decodeCodexSelection("gpt-6-sol").modelProvider).toBe("openai");
+  });
   it("loads the config catalog when the instance is created", async () => {
     chmodSync(FAKE_CLI, 0o755);
     const home = scratchHome({

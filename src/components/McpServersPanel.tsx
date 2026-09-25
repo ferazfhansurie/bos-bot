@@ -71,6 +71,14 @@ interface McpMessage {
 const EMPTY_DRAFT: McpDraft = { name: "", transport: "stdio", command: "", args: "", env: "", type: "http", url: "", headers: "" };
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/;
+const AIOS_MCP_PRESET = JSON.stringify({
+  mcpServers: {
+    aios: {
+      command: "/Users/firazfhansurie/.nvm/versions/node/v24.21.0/bin/node",
+      args: ["/Users/firazfhansurie/aios-firaz/system/aios-mcp/server.mjs"],
+    },
+  },
+}, null, 2);
 
 export function parseMcpArguments(value: string): string[] {
   return value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -347,6 +355,19 @@ export function McpServersPanel() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => {
+                setImportText(AIOS_MCP_PRESET);
+                setImportOpen(true);
+                setError(null);
+                setNotice(null);
+              }}
+              className="flex items-center gap-1.5 rounded-lg border border-accent/40 px-3 py-2 text-[12.5px] font-medium text-accent hover:bg-accent/10 disabled:opacity-40"
+            >
+              <Plus size={14} /> connect aios
+            </button>
             <button
               type="button"
               onClick={() => void load()}

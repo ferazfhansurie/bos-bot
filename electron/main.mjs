@@ -189,7 +189,7 @@ function applyUnreadBadge(win = mainWindow) {
 // intercepting input. This app is not graphics-heavy, so reliability wins.
 if (process.platform === "linux") {
   app.disableHardwareAcceleration();
-  app.setDesktopName("com.openmausbot.app.desktop");
+  app.setDesktopName("ai.bos.bot.desktop");
 }
 
 // One instance per user: without this lock a second launch forks a second
@@ -323,7 +323,7 @@ function desktopDataDir() {
   // then pass this exact resolved path to the utility child. server/config.ts
   // intentionally treats an empty OMB_DATA_DIR differently, so inheriting it
   // without normalization would lease one directory and write another.
-  return process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".openmausbot");
+  return process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".bos-bot");
 }
 
 async function stopUtilityServer(proc, timeoutMs = UTILITY_SERVER_STOP_TIMEOUT_MS) {
@@ -1222,6 +1222,9 @@ async function startServerOn(port) {
     // the boot migration has deleted
     ...workspaceCredentialEnv(secureCredentials),
   });
+  delete childEnv.OMB_COMPOSIO_BROKER_URL;
+  delete childEnv.OMB_COMPOSIO_BROKER_TOKEN;
+  delete childEnv.COMPOSIO_API_KEY;
   delete childEnv.OMB_BROWSER_CONNECTION;
   slog(`fork ${entry} port=${port}`);
   const proc = utilityProcess.fork(entry, [], {

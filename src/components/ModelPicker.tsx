@@ -22,6 +22,7 @@ import { COMPACT_SQUARE } from "@/lib/compact-chip";
 
 type ModelOption = InstanceInfo["models"]["options"][number];
 const COMPACT_MODEL_COUNT = 5;
+const BOS_DRIVER_KINDS = new Set(["claudeAgent", "codex"]);
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
   return instance?.models.options.find((option) => option.id === model)?.label ?? model;
@@ -265,9 +266,10 @@ export function ModelEngineRail({ instances, selectedInstance, claudeInstance, o
   claudeInstance?: InstanceInfo;
   onSelect: (instance: InstanceInfo) => void;
 }) {
-  const firstClaude = instances.find((instance) => instance.driverKind === "claudeAgent" && instance.claudeAccount?.isDefault)
-    ?? instances.find((instance) => instance.driverKind === "claudeAgent");
-  const providers = instances.filter((instance) => instance.driverKind !== "claudeAgent" || instance === firstClaude);
+  const supported = instances.filter((instance) => BOS_DRIVER_KINDS.has(instance.driverKind));
+  const firstClaude = supported.find((instance) => instance.driverKind === "claudeAgent" && instance.claudeAccount?.isDefault)
+    ?? supported.find((instance) => instance.driverKind === "claudeAgent");
+  const providers = supported.filter((instance) => instance.driverKind !== "claudeAgent" || instance === firstClaude);
   const { subscription, custom: local } = splitEngineRail(providers);
   const railButton = (instance: InstanceInfo) => {
     const claude = instance.driverKind === "claudeAgent";
@@ -358,13 +360,14 @@ export function ModelPicker({
     active?.models.options.find((option) => option.id === selection.model)?.variants?.find((option) => option.id === selection.variant)
       ?? { id: selection.variant, label: selection.variant },
   );
-  const claudeAccounts = state.instances.filter((instance) => instance.driverKind === "claudeAgent");
+  const supportedInstances = state.instances.filter((instance) => BOS_DRIVER_KINDS.has(instance.driverKind));
+  const claudeAccounts = supportedInstances.filter((instance) => instance.driverKind === "claudeAgent");
   const multipleClaudeAccounts = claudeAccounts.length > 1;
   const showActiveAccount = multipleClaudeAccounts && active?.driverKind === "claudeAgent";
   const claudeRailInstance = claudeAccounts.find((instance) => instance.instanceId === lastClaudeIdRef.current)
     ?? (active?.driverKind === "claudeAgent" ? active : claudeAccounts[0]);
   const railInstance =
-    state.instances.find((instance) => instance.instanceId === (railId ?? selection.instanceId)) ?? state.instances[0];
+    supportedInstances.find((instance) => instance.instanceId === (railId ?? selection.instanceId)) ?? supportedInstances[0];
 
   const refreshLocalInstances = useCallback(() => {
     if (refreshingRef.current) return;
@@ -508,7 +511,7 @@ export function ModelPicker({
         setRailId(selection.instanceId);
         setOpen((wasOpen) => {
           const next = !wasOpen;
-          if (next) openFor(state.instances.find((instance) => instance.instanceId === selection.instanceId));
+          if (next) openFor(supportedInstances.find((instance) => instance.instanceId === selection.instanceId));
           return next;
         });
       }}
@@ -590,7 +593,7 @@ export function ModelPicker({
               : "absolute right-0 top-full z-30 mt-2 w-[380px] max-w-[calc(100vw-2rem)] max-h-[min(480px,calc(100dvh-7rem))] shadow-2xl shadow-black/50",
           )}
         >
-          <ModelEngineRail instances={state.instances} selectedInstance={railInstance} claudeInstance={claudeRailInstance} onSelect={selectRail} />
+          <ModelEngineRail instances={supportedInstances} selectedInstance={railInstance} claudeInstance={claudeRailInstance} onSelect={selectRail} />
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {threadId && (

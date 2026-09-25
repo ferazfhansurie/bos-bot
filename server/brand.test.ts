@@ -28,7 +28,7 @@ describe("brand.json", () => {
     expect(describeBrand(loadBrand({ file, isEntitled: licensed }))).toBe("brand: default");
   });
 
-  it("applies a valid file on a licensed server", () => {
+  it("applies a valid local override", () => {
     const file = brandFile(JSON.stringify({
       name: "Reliable Platform",
       tagline: "Back office, on autopilot",
@@ -44,12 +44,12 @@ describe("brand.json", () => {
     expect(describeBrand(status)).toBe(`brand: Reliable Platform (from ${file})`);
   });
 
-  it("keeps the default brand on an unlicensed server and says so", () => {
+  it("does not require an enterprise license for a local override", () => {
     const file = brandFile(JSON.stringify({ name: "Acme" }));
     const status = loadBrand({ file, isEntitled: unlicensed });
-    expect(status.brand).toEqual(DEFAULT_BRAND);
-    expect(status.source).toBe("default");
-    expect(status.notice).toContain("not licensed for whitelabel");
+    expect(status.brand).toEqual({ name: "Acme" });
+    expect(status.source).toBe("file");
+    expect(status.notice).toBeUndefined();
   });
 
   it("explains a broken file in terms of what to change, and never applies it", () => {
@@ -70,7 +70,7 @@ describe("brand.json", () => {
     }
   });
 
-  it("validates before gating, so an unlicensed operator still learns about a broken file", () => {
+  it("validates a local override and explains a broken file", () => {
     const status = loadBrand({ file: brandFile(JSON.stringify({ name: "Acme", accent: "nope" })), isEntitled: unlicensed });
     expect(status.notice).toMatch(/accent/);
   });

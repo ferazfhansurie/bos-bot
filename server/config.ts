@@ -9,6 +9,7 @@ import { normalizeImageGenerationUrl, type ImageGenerationConfig } from "../shar
 
 import { writeFileAtomic } from "./atomic.ts";
 import { EFFORT_LEVELS } from "../shared/wire.ts";
+import { APPROVAL_MODES, isApprovalMode, type ApprovalMode } from "../shared/approval-mode.ts";
 import { isModelVariant, type InstanceConfigMap, type ModelSelection } from "./contracts.ts";
 import { PROVIDER_ICON_PRESETS, providerIconError } from "../shared/provider-icon.ts";
 import type { McpServerSpec } from "./contracts.ts";
@@ -28,6 +29,14 @@ export const DEFAULT_ROOM_HANDOFF_MIN_RUNWAY_MINUTES = 10;
 export const DEFAULT_ROOM_HANDOFF_HARD_CAP_MINUTES = 240;
 export const DEFAULT_MAX_CONCURRENT_BOT_THREADS = 3;
 export const MAX_CONCURRENT_BOT_THREADS = 10;
+/** Whether two threads of one bot may run at once in the same explicit
+ * project folder. Default on: a bot pinned to a folder is the normal setup,
+ * and holding that folder for a whole turn meant the second thread — the
+ * phone, while the desktop was mid-turn — was refused outright. Two provider
+ * sessions in one folder is ordinary; the narrow hazard is the automatic
+ * "before" checkpoint, which turnStart skips rather than snapshotting a
+ * folder another live turn is already editing. */
+export const DEFAULT_PARALLEL_PROJECT_FOLDER_THREADS = true;
 /** Bounds for threads.eventLogMaxBytes: the floor keeps the kept tail large
  * enough to still serve the event inspector's recent-line window; the
  * ceiling just rejects absurd hand edits. */
@@ -431,6 +440,20 @@ const appConfigSchema = z.object({
     /** Days a closed or archived thread's event logs survive (#1280).
      * Absent keeps them forever. */
     eventLogRetentionDays: z.number().int().min(1).max(3650).optional(),
+    /** Allow a bot's threads to run concurrently in one pinned project
+     * folder. Absent means the default (on). */
+    parallelProjectFolder: z.boolean().optional(),
+  }).strict().optional(),
+  /** Workspace-wide permission defaults. `defaultMode` is the approval level
+   * a newly created bot (and its first thread) starts at, instead of the
+   * historical hard-coded Ask. `keepAcrossModelSwitch` keeps an elevated
+   * level through an engine change when the destination engine implements
+   * that level, instead of forcing the Ask reset. Neither weakens an
+   * individual elevation: changing a live bot's level still goes through the
+   * desktop prepare/confirm/activate commit. */
+  approvals: z.object({
+    defaultMode: z.enum(APPROVAL_MODES).optional(),
+    keepAcrossModelSwitch: z.boolean().optional(),
   }).strict().optional(),
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
@@ -477,8 +500,10 @@ export interface AppConfig {
   imageGen?: ImageGenerationConfig;
   profile?: { name?: string; email?: string };
   rooms?: { turnTimeoutMinutes: number; handoffLifetimeMinutes?: number; handoffMinRunwayMinutes?: number; handoffHardCapMinutes?: number };
-  threads?: { maxConcurrentPerBot: number; eventLogMaxBytes?: number; eventLogRetentionDays?: number };
+  threads?: { maxConcurrentPerBot: number; eventLogMaxBytes?: number; eventLogRetentionDays?: number; parallelProjectFolder?: boolean };
   context?: { rebuildBytes?: number; compactAt?: number; autoCompact?: boolean };
+  /** Workspace-wide permission defaults; see approvals in appConfigSchema. */
+  approvals?: { defaultMode?: ApprovalMode; keepAcrossModelSwitch?: boolean };
   /** Shared preserves the historical singleton. Per-bot gives every bot a
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
@@ -500,6 +525,20 @@ export type BrowserProfile = z.output<typeof browserProfileSchema> & {
   partitionId?: string;
 };
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
+
+/** The approval level new bots start at. Absent or unparseable config keeps
+ * the historical Ask, so a corrupt file can never widen permissions. */
+export function defaultApprovalMode(config: AppConfig): ApprovalMode {
+  const mode = config.approvals?.defaultMode;
+  return isApprovalMode(mode) ? mode : "ask";
+}
+
+/** Whether an engine switch may carry an elevated level across instead of
+ * resetting to Ask. Only ever honoured when the destination engine actually
+ * implements that level (supportsApprovalMode). */
+export function keepApprovalAcrossModelSwitch(config: AppConfig): boolean {
+  return config.approvals?.keepAcrossModelSwitch === true;
+}
 
 /** Resolve a canonical profile record to its exact durable Electron
  * partition identity. Callers must never substitute the display/API id. */
@@ -634,6 +673,11 @@ export function roomHandoffLimits(cfg: AppConfig): RoomHandoffLimitsMs {
 
 export function maxConcurrentBotThreads(cfg: AppConfig): number {
   return cfg.threads?.maxConcurrentPerBot ?? DEFAULT_MAX_CONCURRENT_BOT_THREADS;
+}
+
+/** Whether a bot's threads may share one explicit project folder. */
+export function parallelProjectFolderThreads(cfg: AppConfig): boolean {
+  return cfg.threads?.parallelProjectFolder ?? DEFAULT_PARALLEL_PROJECT_FOLDER_THREADS;
 }
 
 /** Size cap for each per-thread events/ and native/ NDJSON log. Null (the

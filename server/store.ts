@@ -11,7 +11,7 @@ import { ensureSections, readSections, changeEmptySection } from "./section-cont
 import { removeBotFolder, soulFile, soulHash, writeSoulMirror } from "./bot-folder.ts";
 import type { BotProfilePatch } from "./bot-profile.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
-import { DATA_DIR, EVENTS_DIR, NATIVE_DIR, loadBrowserProfileIdAliases } from "./config.ts";
+import { DATA_DIR, EVENTS_DIR, NATIVE_DIR, loadBrowserProfileIdAliases, loadConfig, defaultApprovalMode } from "./config.ts";
 import * as mdb from "./message-db.ts";
 import { runCommand, type Command } from "./commands.ts";
 import { workspaceDir } from "./workspace.ts";
@@ -19,7 +19,7 @@ import { newId, type ModelSelection } from "./contracts.ts";
 import { pickBotName } from "./names.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { botAvatarProfile } from "../shared/bot-avatar.ts";
-import { approvalModeFor, isApprovalMode } from "../shared/approval-mode.ts";
+import { approvalModeFor, isApprovalMode, type ApprovalMode } from "../shared/approval-mode.ts";
 import type { ProfileRequestChanges } from "../shared/profile-request.ts";
 import type { TeamSetupRequest, TeamSetupResult } from "../shared/team-setup.ts";
 import type { GroupGoalRunCardData } from "../shared/group-goal-run.ts";
@@ -378,6 +378,9 @@ const COLORS: MausColor[] = [
   "yellow",
   "teal",
   "coral",
+  "white",
+  "brown",
+  "gray",
 ];
 
 /** Sections are persisted as display labels, so exact trimmed labels are
@@ -461,6 +464,14 @@ interface ThreadState {
   activeLeafId: string | null;
 }
 
+/** The workspace default for a brand-new bot. Custom is Codex-only config
+ * semantics, so it is never handed to a bot that has not been configured for
+ * it: that case falls back to Ask. */
+function newBotApprovalMode(): ApprovalMode {
+  const mode = defaultApprovalMode(loadConfig());
+  return mode === "custom" ? "ask" : mode;
+}
+
 export class Store {
   bots: BotRecord[] = [];
   groups: GroupRecord[] = [];
@@ -490,6 +501,22 @@ export class Store {
     // busy never survives a restart — no turn does either. Rooms saved
     // before default responders existed adopt their first member as lead.
     let botsMigrated = false;
+    let migratedRioThread: string | null = null;
+    if (this.bots.length === 1) {
+      const first = this.bots[0];
+      if (!first.title && !first.description && !first.soul) {
+        first.name = "Jarvis";
+        first.title = "AI co-founder";
+        first.description = "Your always-on BOS operator for planning, research, coordination, and execution.";
+        first.soul = [
+          "You are Jarvis, Firaz's direct and proactive AI co-founder inside BOS Bot.",
+          "Use the selected Claude or Codex subscription model and AIOS MCP tools when available.",
+          "Be concise, action-first, security-conscious, and clear about verified versus configured state.",
+        ].join("\n");
+        migratedRioThread = first.threadId;
+        botsMigrated = true;
+      }
+    }
     const browserProfileAliases = loadBrowserProfileIdAliases();
     const chiefSectionsSeen = new Set<string>();
     let groupsMigrated = false;
@@ -538,6 +565,16 @@ export class Store {
       if (b.approvalMode !== undefined && !isApprovalMode(b.approvalMode)) {
         delete b.approvalMode;
         botsMigrated = true;
+      }
+      // A bot that predates the workspace default, or never had a level
+      // chosen for it, adopts the configured one once. An explicit stored
+      // level — including a deliberate Ask — is never rewritten.
+      if (b.approvalMode === undefined && b.autoApprove === undefined) {
+        const fallback = newBotApprovalMode();
+        if (fallback !== "ask") {
+          b.approvalMode = fallback;
+          botsMigrated = true;
+        }
       }
       // A trusted elevation is a prepare/confirm/activate commit. If the
       // desktop process or its private reply path died before activation,
@@ -723,6 +760,13 @@ export class Store {
     for (const threadId of knownThreads) {
       const legacyFile = messagesFile(threadId);
       if (existsSync(legacyFile)) mdb.readThread(threadId, legacyFile);
+    }
+    if (migratedRioThread) {
+      this.appendMessage(migratedRioThread, {
+        role: "bot",
+        kind: "text",
+        text: "Hi, I'm Jarvis. BOS and AIOS are preloaded. What should we work on?",
+      });
     }
     this.registeringInitialSections = false;
   }
@@ -1357,6 +1401,9 @@ export class Store {
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
       resumeCursors: {},
       createdAt: Date.now(),
+      // Only a non-default level is written: an Ask bot keeps the historical
+      // record shape, where an absent level means Ask.
+      ...(newBotApprovalMode() === "ask" ? {} : { approvalMode: newBotApprovalMode() }),
     };
     if (section) bot.section = section;
     bot.tasks = [{
@@ -1365,6 +1412,7 @@ export class Store {
       createdAt: bot.createdAt,
       resumeCursors: {},
       modelSelection: structuredClone(bot.modelSelection),
+      ...(bot.approvalMode ? { approvalMode: bot.approvalMode } : {}),
       unread: false,
       activity: "idle",
       busy: false,
@@ -1413,9 +1461,9 @@ export class Store {
         next = { id: operation.botId, threadId: operation.threadId, name: operation.fields.name,
           title: "", description: "", soul: "", notifications: true, color: COLORS[nextBots.length % COLORS.length], unread: false,
           modelSelection: operation.fields.modelSelection, resumeCursors: {}, createdAt, ...operation.fields,
-          approvalMode: "ask", autoApprove: false, composio: false, approvePeerComms: false,
+          approvalMode: newBotApprovalMode(), autoApprove: false, composio: false, approvePeerComms: false,
           tasks: [{ threadId: operation.threadId, title: UNTITLED_THREAD, createdAt, resumeCursors: {},
-            modelSelection: structuredClone(operation.fields.modelSelection), approvalMode: "ask", autoApprove: false,
+            modelSelection: structuredClone(operation.fields.modelSelection), approvalMode: newBotApprovalMode(), autoApprove: false,
             unread: false, activity: "idle", busy: false }],
         };
         nextBots.unshift(next);

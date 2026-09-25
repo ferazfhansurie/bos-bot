@@ -409,6 +409,10 @@ describe("independent bot tasks through the isolated control surface", () => {
   }, 30_000);
 
   it("refuses a second engine in the same selected project folder until its owner stops", async () => {
+    // Exclusivity is now opt-in: threads.parallelProjectFolder defaults on so
+    // a bot pinned to a folder can answer the phone and the desktop at once.
+    // This case pins the old behaviour, which must stay a true no-op.
+    expect((await api("PATCH", "/api/config", { threads: { maxConcurrentPerBot: 3, parallelProjectFolder: false } })).status).toBe(200);
     const created = await tool("create_bot", { name: "Shared project fixture", instance_id: "claude", model: models[0] });
     const botId = created.bot.id;
     const taskA = created.bot.activeTaskId;
@@ -431,6 +435,35 @@ describe("independent bot tasks through the isolated control surface", () => {
     await control(["wait", "--bot", botId, "--task", taskA, "--timeout", "10"]);
     await control(["send", "--bot", botId, "--task", taskB, "--text", "PROJECT_B_NOW_OWNS_FOLDER"]);
     expect((await dump(models[1])).env.OMB_FIXTURE_CWD).toBe(realpathSync(cwd));
+    await control(["interrupt", "--bot", botId, "--task", taskB]);
+  }, 45_000);
+
+  it("runs two threads of one bot in the same selected project folder when parallel folders are on", async () => {
+    // The live bug: a bot pinned to a project folder held that folder for the
+    // whole turn, so messaging it from the phone while the desktop was mid-turn
+    // was refused outright. Both threads must now reach their own engine.
+    expect((await api("GET", "/api/config")).body.threads?.parallelProjectFolder ?? true).toBe(true);
+    const created = await tool("create_bot", { name: "Parallel project fixture", instance_id: "claude", model: models[0] });
+    const botId = created.bot.id;
+    const taskA = created.bot.activeTaskId;
+    const cwd = join(session.info.dataDir, "parallel-project");
+    mkdirSync(cwd);
+    expect((await api("PATCH", `/api/bots/${botId}`, { cwd })).status).toBe(200);
+    await control(["send", "--bot", botId, "--task", taskA, "--text", "PARALLEL_A"]);
+    expect((await dump(models[0])).env.OMB_FIXTURE_CWD).toBe(realpathSync(cwd));
+
+    const second = await tool("create_task", { target_type: "bot", target_id: botId, title: "Parallel sibling" });
+    const taskB = second.task.taskId;
+    await control(["set-model", "--bot", botId, "--task", taskB, "--instance", "claude", "--model", models[1]]);
+    await control(["send", "--bot", botId, "--task", taskB, "--text", "PARALLEL_B"]);
+    // The second engine actually launched in the same folder — the assertion
+    // the old exclusivity made impossible.
+    expect((await dump(models[1])).env.OMB_FIXTURE_CWD).toBe(realpathSync(cwd));
+    const state = await botState(botId);
+    expect(state.tasks.find((task: any) => task.taskId === taskA)?.busy).toBe(true);
+    expect(state.tasks.find((task: any) => task.taskId === taskB)?.busy).toBe(true);
+
+    await control(["interrupt", "--bot", botId, "--task", taskA]);
     await control(["interrupt", "--bot", botId, "--task", taskB]);
   }, 45_000);
 

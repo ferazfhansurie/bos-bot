@@ -76,6 +76,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // configured-or-not booleans. The write side is refused below: reading
   // which providers are set up is not reading their keys.
   { method: "GET", path: /^\/api\/config$/ },
+  { method: "GET", path: /^\/api\/provider-usage$/ },
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
   { method: "GET", path: /^\/api\/team-map$/ },

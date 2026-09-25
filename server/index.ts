@@ -19,6 +19,7 @@ import { SharedComputerControl } from "./shared-computer-control.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
+import { BOS_JARVIS } from "../shared/bos-jarvis.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
 import {
   approvalModeFor,
@@ -41,6 +42,7 @@ import {
 import { approvalHeldNote, approvalHeldReason, approvalModeForOrigin, autoVerdict, deliverFullAccessApproval, delegationInheritsFullAccess } from "./auto-approve.ts";
 import { updateClaudeCli } from "./claude-update.ts";
 import { configuredAccountDirectory, assertSeparateClaudeAccount, claudeAccountInfo, createClaudeAccountSchema, instanceSettingsSchema, newClaudeAccount } from "./claude-accounts.ts";
+import { providerUsage } from "./provider-usage.ts";
 import { providerIconPatchSchema, withInstanceIcon } from "./provider-icon.ts";
 import { providerIconError } from "../shared/provider-icon.ts";
 import {
@@ -130,6 +132,9 @@ import {
   roomTurnTimeoutMinutes,
   threadEventLogMaxBytes,
   maxConcurrentBotThreads,
+  parallelProjectFolderThreads,
+  defaultApprovalMode,
+  keepApprovalAcrossModelSwitch,
   threadEventLogRetentionDays,
   saveConfig,
   showToolCallsEnabled,
@@ -1578,9 +1583,16 @@ function checkedTaskModelSwitch(current: BotRecord, raw: unknown, updateBotDefau
     if (resetApprovalToAsk && mode === "custom" && !trusted) {
       return { ok: false as const, status: 403, error: "Leaving Custom approval requires confirmation in the packaged desktop app" };
     }
-    if (!resetApprovalToAsk && modelSwitchNeedsAsk(mode,
+    const destination = registry.cliTarget(checked.selection.instanceId)?.driverKind;
+    // With the workspace set to carry permissions across engines, a level the
+    // destination engine actually implements survives the switch instead of
+    // demanding a fresh Ask confirmation. A destination that cannot express
+    // the level still falls back to Ask — never to a silently weaker or
+    // stronger mapping.
+    const carryOver = keepApprovalAcrossModelSwitch(cfg) && supportsApprovalMode(destination, mode);
+    if (!resetApprovalToAsk && !carryOver && modelSwitchNeedsAsk(mode,
       registry.cliTarget(target.modelSelection.instanceId)?.driverKind,
-      registry.cliTarget(checked.selection.instanceId)?.driverKind)) {
+      destination)) {
       return { ok: false as const, status: 400, error: "Confirm switching this model with Ask permissions first (resetApprovalToAsk)" };
     }
   }
@@ -6494,14 +6506,30 @@ async function startTurn(
           ? store.pinTaskCwd(bot.id, threadId, privateWorkspace)
           : null;
       const cwd = pinnedCwd ?? undefined;
-      if (cwd && !claimTurnResource(resourceOwner, workspaceResource(cwd))) {
+      // A bot pinned to a project folder shares that folder across all its
+      // threads, so an exclusive whole-turn claim meant the second thread —
+      // the phone, while the desktop was mid-turn — was refused outright.
+      // Two provider sessions in one folder is ordinary work; what is not
+      // safe is snapshotting a folder another live turn is already editing,
+      // which sharedFolderTurn below suppresses.
+      // The claim is still taken, so the first turn in a folder owns it and
+      // the existing parent/child overlap rules keep working. What changes
+      // is the consequence of losing it: a later thread proceeds instead of
+      // being refused, and only remembers that it is sharing.
+      const claimedFolder = cwd ? claimTurnResource(resourceOwner, workspaceResource(cwd)) : true;
+      if (cwd && !claimedFolder && !parallelProjectFolderThreads(cfg)) {
         throw Object.assign(new Error("another thread is working in this project folder — wait for it to finish or choose a separate folder"), { status: 409, code: "workspace_busy" });
       }
+      const folderShared = Boolean(cwd) && !claimedFolder;
       // Checkpoint explicit project folders, where a bot can overwrite the
       // user's work. Its private OpenMaus workspace is app-owned and changes
       // on nearly every ordinary chat; snapshotting it would add hidden disk
       // and process overhead without a user project to restore.
-      const checkpointCwd = cwd && cwd !== privateWorkspace ? cwd : undefined;
+      // Not while another live turn is editing the same folder: a "before"
+      // snapshot taken mid-edit captures the other thread's work too, so
+      // reverting this turn would silently revert theirs. No checkpoint is
+      // recorded for this turn, and the revert path therefore offers none.
+      const checkpointCwd = cwd && cwd !== privateWorkspace && !folderShared ? cwd : undefined;
       // dweb is opt-in: without an explicit daemon URL, do not advertise
       // tools that would fail on every call or spawn an unnecessary proxy.
       const dwebUrl = process.env.DWEB_URL?.trim();
@@ -10712,7 +10740,13 @@ function configStatus() {
     // not a secret — the settings picker shows it; "" = follow the system
     language: cfg.language ?? "",
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
-    threads: { maxConcurrentPerBot: maxConcurrentBotThreads(cfg) },
+    threads: { maxConcurrentPerBot: maxConcurrentBotThreads(cfg), parallelProjectFolder: parallelProjectFolderThreads(cfg) },
+    // permission defaults for new bots and engine switches — a setting, not a
+    // secret, and never itself an elevation of a running bot
+    approvals: {
+      defaultMode: defaultApprovalMode(cfg),
+      keepAcrossModelSwitch: keepApprovalAcrossModelSwitch(cfg),
+    },
     localVm: {
       mode: localVmMode(cfg),
       maxInstances: localVmMaxInstances(cfg),
@@ -14810,7 +14844,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (store.bots.length >= MAX_WORKSPACE_BOTS) {
         return json(res, 409, { error: `this workspace is limited to ${MAX_WORKSPACE_BOTS} bots` });
       }
-      const bot = store.createBot({ ...profile.patch, section, modelSelection: selection });
+      const firstBosBot = store.bots.length === 0;
+      const bot = store.createBot({
+        ...profile.patch,
+        ...(firstBosBot ? {
+          ...BOS_JARVIS,
+          soul: [
+            "You are Jarvis, Firaz's direct and proactive AI co-founder inside BOS Bot.",
+            "Use the available Claude or Codex subscription model selected for this thread.",
+            "Use AIOS MCP tools and durable workspace context when available.",
+            "Be concise, action-first, security-conscious, and explicit about what is verified versus merely configured.",
+          ].join("\n"),
+        } : {}),
+        section,
+        modelSelection: selection,
+      });
       return json(res, 201, {
         bot: {
           ...wireBot(bot),
@@ -17002,6 +17050,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── the usage ledger: what this workspace spent over a period ──
     // Read-only over the month files usage-ledger.ts appends at turn.completed.
     // Admin scope by default, like every route not opened to clients.
+    if (method === "GET" && path === "/api/provider-usage") {
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, { accounts: await providerUsage(persistableInstanceConfigs(cfg)) });
+    }
     if (method === "GET" && (path === "/api/usage" || path === "/api/usage.csv")) {
       const range = parseUsageRange(url.searchParams.get("from"), url.searchParams.get("to"));
       if (!range) return json(res, 400, { error: "from and to must be YYYY-MM-DD, from no later than to, at most a year apart" });
@@ -18351,7 +18403,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   } catch (e) {
     const status = (e as any)?.status ?? 500;
     const candidateCode = (e as { code?: unknown })?.code;
-    const code = typeof candidateCode === "string" && ["guarded_busy", "guarded_branch", "guarded_permissions"].includes(candidateCode)
+    // Codes a client is meant to branch on. thread_busy/thread_limit/
+    // workspace_busy are retry-later, not failure: an out-of-process caller
+    // (the worker bridge) otherwise has only the error wording to tell a
+    // full bot apart from a broken one.
+    const code = typeof candidateCode === "string"
+      && ["guarded_busy", "guarded_branch", "guarded_permissions", "thread_busy", "thread_limit", "workspace_busy"].includes(candidateCode)
       ? candidateCode : undefined;
     return json(res, status, { error: e instanceof Error ? e.message : String(e), ...(code ? { code } : {}) });
   } finally {

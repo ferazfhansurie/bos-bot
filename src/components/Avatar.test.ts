@@ -9,7 +9,8 @@ import {
   type BotAvatarProps,
   type MausAvatarProps,
 } from "./Avatar";
-import { MASCOT_BODIES } from "../../shared/mascot-bodies";
+import { MASCOT_BODY_IDS } from "../../shared/mascot-bodies";
+import { PICKABLE_STATES } from "@/lib/mascot";
 
 const render = (props: Partial<MausAvatarProps>) =>
   renderToStaticMarkup(createElement(MausAvatar, { color: "green", animated: false, ...props }));
@@ -20,30 +21,18 @@ const renderBot = (bot: Partial<BotAvatarProps["bot"]>) =>
   );
 
 describe("MausAvatar body", () => {
-  it("wears the cursor when no body is given", () => {
-    expect(render({})).toContain(MASCOT_BODIES.cursor.fit);
+  it("renders a different outline for every body", () => {
+    const paths = MASCOT_BODY_IDS.filter(id => id !== "shield" && id !== "diamond").map(bodyId => render({ bodyId }).match(/<path d="([^"]+)"/)?.[1]);
+    expect(new Set(paths).size).toBe(8);
   });
-
-  it("wears the body it is given", () => {
-    const markup = render({ bodyId: "star" });
-    expect(markup).toContain(MASCOT_BODIES.star.fit);
+  it("keeps the same face regardless of saved expressions", () => {
+    const faces = PICKABLE_STATES.map(state => render({ state }).match(/<path d="[^"]+"/g)?.slice(1).join());
+    expect(new Set(faces).size).toBe(1);
   });
-
-  it("falls back to the cursor for an unknown body", () => {
-    // SAFETY: "hexagram" is deliberately not a valid MascotBodyId — this
-    // exercises the runtime schema fallback for a value that could arrive
-    // from persisted/streamed data, which the type system would otherwise
-    // rule out at this call site.
-    expect(render({ bodyId: "hexagram" as MausAvatarProps["bodyId"] })).toContain(
-      MASCOT_BODIES.cursor.fit,
-    );
-  });
-
-  it("paints the body with the per-bot gradient, never a flat black fill", () => {
-    const markup = render({ bodyId: "circle" });
-    expect(markup).not.toContain('fill="#000000"');
-    expect(markup).not.toContain("{{GRADIENT}}");
-    expect(markup).toContain("url(#");
+  it("uses the selected flat color without a fixed image", () => {
+    expect(render({ color: "white" })).toContain('fill="#FFFFFF"');
+    expect(render({ color: "brown" })).toContain('fill="#885E36"');
+    expect(render({})).not.toContain('<img');
   });
 });
 

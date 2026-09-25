@@ -11,9 +11,16 @@ import type { ModelCatalog } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
 import { mergeLocalInject } from "./local-inject.ts";
 
+// Recent releases can precede the installed CLI's model/list catalog.
+export const RECENT_CODEX_MODELS = [
+  { id: "gpt-6-sol", label: "GPT-6 Sol" },
+  { id: "gpt-6-luna", label: "GPT-6 Luna" },
+];
+
 export const STATIC_CODEX_MODELS: ModelCatalog = {
   default: "gpt-5.6-sol",
   options: [
+    ...RECENT_CODEX_MODELS,
     { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
@@ -360,6 +367,11 @@ export async function readCodexModelCatalog(
   cli?: string,
 ): Promise<ModelCatalog> {
   const official = (cli ? await readCodexAppServerModelCatalog(cli, env) : null) ?? STATIC_CODEX_MODELS;
+  for (const recent of RECENT_CODEX_MODELS) {
+    if (!official.options.some((option) => option.id === recent.id)) {
+      official.options.push({ ...recent });
+    }
+  }
   const home = codexHome(env);
   const mainText = readText(join(home, "config.toml"));
   if (!mainText) return mergeLocalInject(official, env, fetchImpl);

@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { z } from "zod";
 
 import { DATA_DIR } from "./config.ts";
-import { entitled } from "./enterprise.ts";
 
 const HEX_COLOUR = /^#[0-9a-fA-F]{6}$/;
 const MAX_LOGO_CHARS = 300_000;
@@ -41,7 +40,11 @@ export const brandSchema = z
 
 export type Brand = z.infer<typeof brandSchema>;
 
-export const DEFAULT_BRAND: Brand = { name: "OpenMausBot" };
+export const DEFAULT_BRAND: Brand = {
+  name: "BOS Bot",
+  tagline: "your models. your tools. one local desktop.",
+  accent: "#22c55e",
+};
 
 export interface BrandStatus {
   brand: Brand;
@@ -60,7 +63,6 @@ export function brandFile(): string {
 /** Resolve the brand for this server right now. Never throws. */
 export function loadBrand(options: { file?: string; isEntitled?: (feature: string) => boolean } = {}): BrandStatus {
   const file = options.file ?? brandFile();
-  const isEntitled = options.isEntitled ?? entitled;
   const fallback = (notice?: string): BrandStatus =>
     notice ? { brand: DEFAULT_BRAND, source: "default", file, notice } : { brand: DEFAULT_BRAND, source: "default", file };
   if (!existsSync(file)) return fallback();
@@ -75,9 +77,6 @@ export function loadBrand(options: { file?: string; isEntitled?: (feature: strin
     const issue = parsed.error.issues[0];
     const where = issue?.path.length ? `${issue.path.join(".")}: ` : "";
     return fallback(`${file}: ${where}${issue?.message ?? "invalid"}; using the default brand`);
-  }
-  if (!isEntitled("whitelabel")) {
-    return fallback(`${file} found but this server is not licensed for whitelabel; using the default brand`);
   }
   return { brand: parsed.data, source: "file", file };
 }
