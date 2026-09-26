@@ -56,17 +56,42 @@ export class SharedRoomRepository {
     return room?.memberIds.includes(actorId) ? room : null;
   }
 
-  create(name: string, memberIds: string[], at = Date.now()): SharedRoom {
+  create(name: string, memberIds: string[], at = Date.now(), createdBy?: string): SharedRoom {
     const cleanName = name.trim();
     if (!cleanName || cleanName.length > 100) throw new Error("invalid room name");
     if (memberIds.length < 2 || memberIds.length > 50 || new Set(memberIds).size !== memberIds.length || memberIds.some(id => !parseContactId(id))) {
       throw new Error("invalid room roster");
     }
-    const room: SharedRoom = { id: randomUUID(), homeId: this.homeId, name: cleanName, memberIds, createdAt: at };
+    const room: SharedRoom = { id: randomUUID(), homeId: this.homeId, name: cleanName, memberIds, createdAt: at,
+      ...(createdBy ? { createdBy } : {}), revision: 1 };
     this.rooms.set(room.id, new SharedRoomLog(room));
     try { this.persist(); }
     catch (error) { this.rooms.delete(room.id); throw error; }
     return room;
+  }
+
+  updateRoom(roomId: string, actorId: string, expectedRevision: number, patch: { name?: string; memberIds?: string[] }): SharedRoom {
+    const previous = this.rooms.get(roomId);
+    if (!previous || !previous.room.memberIds.includes(actorId)) throw new Error("room unavailable");
+    if ((previous.room.revision ?? 1) !== expectedRevision) throw new Error("room changed; reload before editing");
+    const name = patch.name?.trim() ?? previous.room.name;
+    const members = patch.memberIds ?? previous.room.memberIds;
+    if (!name || name.length > 100 || members.length < 2 || members.length > 50 || new Set(members).size !== members.length ||
+        members.some(id => !parseContactId(id))) throw new Error("invalid room update");
+    const room = { ...previous.room, name, memberIds: [...members], revision: expectedRevision + 1 };
+    this.rooms.set(roomId, new SharedRoomLog(room, previous.all()));
+    try { this.persist(); }
+    catch (error) { this.rooms.set(roomId, previous); throw error; }
+    return room;
+  }
+
+  deleteRoom(roomId: string, actorId: string, expectedRevision: number): void {
+    const previous = this.rooms.get(roomId);
+    if (!previous || !previous.room.memberIds.includes(actorId)) throw new Error("room unavailable");
+    if ((previous.room.revision ?? 1) !== expectedRevision) throw new Error("room changed; reload before deleting");
+    this.rooms.delete(roomId);
+    try { this.persist(); }
+    catch (error) { this.rooms.set(roomId, previous); throw error; }
   }
 
   append(roomId: string, actorId: string, raw: unknown, at = Date.now()): { message: SharedTextMessage; created: boolean } {
@@ -93,6 +118,12 @@ export class SharedRoomRepository {
     const log = this.rooms.get(roomId);
     if (!log || !log.room.memberIds.includes(actorId)) throw new Error("room unavailable");
     return log.after(sequence, limit);
+  }
+
+  latestFor(roomId: string, actorId: string, limit = 100): SharedTextMessage[] {
+    const log = this.rooms.get(roomId);
+    if (!log || !log.room.memberIds.includes(actorId)) return [];
+    return log.all().slice(-limit);
   }
 
   messageFor(roomId: string, actorId: string, messageId: string): SharedTextMessage | null {

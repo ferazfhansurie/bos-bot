@@ -5976,14 +5976,16 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   await startTurn(bot.id, prompt, { threadId, sendId: source.id, sender: { name: senderName } });
-  const delivered = new Set<string>();
+  const delivered = new Map<string, string>();
   while (Date.now() < deadline) {
     const messages = store.messagesFor(threadId);
     const start = messages.findIndex(message => message.sendId === source.id && message.role === "user");
     if (start >= 0) for (const message of messages.slice(start + 1)) {
-      if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name || delivered.has(message.id)) continue;
+      if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name) continue;
+      const state = JSON.stringify(message.tool);
+      if (delivered.get(message.id) === state) continue;
       progress(message.id, message.tool);
-      delivered.add(message.id);
+      delivered.set(message.id, state);
     }
     const failed = start >= 0 ? messages.slice(start + 1).find(message => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false) : undefined;
     if (failed) throw new Error("the shared bot could not finish its turn");
@@ -6029,15 +6031,27 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
     const botActor = target.key;
     const append = (input: { text: string; sendId: string; kind?: "activity"; tool?: { name: string; ok?: boolean; spoken?: string } }) =>
       sharedRooms.append(room.id, target.id, { actor: botActor, responseTo: source.id, ...input });
+    const openActivities = new Map<string, { name: string; spoken?: string }>();
+    const seenProgress = new Set<string>();
     const progress = (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => {
       if (!tool?.name) return;
+      const status = tool.ok === undefined ? "start" : tool.ok ? "ok" : "failed";
+      const key = `${id}:${status}`;
+      if (seenProgress.has(key)) return;
+      seenProgress.add(key);
+      if (tool.ok === undefined) openActivities.set(id, { name: tool.name, spoken: tool.spoken });
+      else openActivities.delete(id);
       try {
-        append({ text: "", kind: "activity", sendId: `activity-${source.id}-${id}`.slice(0, 120),
+        append({ text: "", kind: "activity", sendId: `activity-${source.id}-${id}-${status}`.slice(0, 120),
           tool: { name: tool.name.slice(0, 100), ...(tool.ok === undefined ? {} : { ok: tool.ok }), ...(tool.spoken ? { spoken: tool.spoken.slice(0, 500) } : {}) } });
       } catch { /* a progress line is best effort */ }
     };
+    const settleActivities = (ok: boolean) => {
+      for (const [id, tool] of openActivities) progress(id, { ...tool, ok });
+    };
     const timeoutMinutes = roomTurnTimeoutMinutes(cfg);
     const deadline = Date.now() + timeoutMinutes * 60_000;
+    progress(`turn-${target.key.localId}`, { name: "working", spoken: `${target.name} is working on this` });
     const stillWorking = setTimeout(() => progress(`still-${target.key.localId}`, { name: "still working", spoken: `${target.name} is still working on this` }), 5 * 60_000);
     let reply = "";
     try {
@@ -6053,6 +6067,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
         reply = await runLocalRoomTurn(room, target, prompt, source, senderName, level, progress, deadline);
       }
     } catch (error) {
+      settleActivities(false);
       console.warn(`shared room bot turn failed for ${room.id}/${target.name}: ${error instanceof Error ? error.message : "unknown failure"}`);
       try { append({ text: "", kind: "activity", tool: { name: "reply failed", ok: false, spoken: `${target.name} could not complete that reply. Please try again.` }, sendId: `failed-${source.id}-${target.key.localId}`.slice(0, 120) }); }
       catch { /* nothing more to report */ }
@@ -6061,10 +6076,12 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
       clearTimeout(stillWorking);
     }
     if (!reply) {
+      settleActivities(false);
       try { append({ text: `that took longer than ${timeoutMinutes} minutes, so i stopped waiting. ask again to pick it back up.`, sendId: `timeout-${source.id}-${target.key.localId}`.slice(0, 120) }); }
       catch { /* nothing more to report */ }
       return;
     }
+    settleActivities(true);
     const saved = append({ text: reply, sendId: `reply-${source.id}-${target.key.localId}`.slice(0, 120) });
     if (!saved.created) return;
     for (const memberId of room.memberIds) {
@@ -11746,7 +11763,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (auth.kind !== "loopback" && actorId !== multiplayerLinks.primaryActorId()) {
           return json(res, 403, { error: "this device is not bound to the shared person" });
         }
-        const body = method === "POST" ? await readBody(req, path.includes("/attachments") ? 36_000_000 : 22_000) : undefined;
+        const body = method === "POST" || method === "PATCH" || method === "DELETE"
+          ? await readBody(req, path.includes("/attachments") ? 36_000_000 : path.endsWith("/messages") ? 100_000 : 22_000) : undefined;
         // A group room may hold the host's bots; only a one-to-one room with a
         // bot on another Mac is refused, since that bot has its own chat here.
         if (method === "POST" && ((path === "/api/multiplayer/dm" && remoteBotMember(body?.targetId)) ||
@@ -11787,7 +11805,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (method === "GET" && path === "/api/multiplayer/contacts") {
         if (!actorId) return json(res, 403, { error: "this device has not been assigned to a person" });
-        await multiplayerLinks.refreshAllBots();
+        void multiplayerLinks.refreshAllBots().catch(error =>
+          console.warn(`shared contact refresh failed: ${error instanceof Error ? error.message : "unknown"}`));
         return json(res, 200, { contacts: [
           ...multiplayerActors.people(cfg.profile?.name ?? "Owner").map(person => ({
             ...person, avatar: person.id === multiplayerActors.ownerId ? ownerPhotoData() : multiplayerLinks.avatarForPerson(person.name),
@@ -11883,9 +11902,46 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (body.memberIds.some((id: unknown) => typeof id !== "string" || !allowedMembers.has(id))) {
             return json(res, 403, { error: "room contains an unavailable member" });
           }
-          try { return json(res, 201, { room: sharedRooms.create(body.name, body.memberIds) }); }
+          try { return json(res, 201, { room: sharedRooms.create(body.name, body.memberIds, Date.now(), actorId) }); }
           catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "invalid room" }); }
         }
+      }
+      m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)$/);
+      if (m && (method === "PATCH" || method === "DELETE")) {
+        const room = sharedRooms.roomFor(m[1], actorId);
+        if (!room) return json(res, 404, { error: "room unavailable" });
+        const body = await readBody(req, 16_384);
+        if (!Number.isSafeInteger(body?.revision) || body.revision < 1) return json(res, 400, { error: "room revision required" });
+        if (method === "DELETE") {
+          if (actorId !== (room.createdBy ?? `${room.homeId}:person:owner`) && actorId !== multiplayerActors.ownerId) {
+            return json(res, 403, { error: "only the creator or home owner can delete this room" });
+          }
+          try { sharedRooms.deleteRoom(room.id, actorId, body.revision); return json(res, 200, { ok: true }); }
+          catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : "room changed" }); }
+        }
+        if (body.name === undefined && body.memberIds === undefined) return json(res, 400, { error: "name or members required" });
+        if (body.name !== undefined && typeof body.name !== "string") return json(res, 400, { error: "invalid room name" });
+        if (body.memberIds !== undefined) {
+          if (!Array.isArray(body.memberIds) || !body.memberIds.includes(actorId)) return json(res, 400, { error: "you must remain a member; use leave to exit" });
+          const allowedMembers = new Set([
+            ...multiplayerActors.people(cfg.profile?.name ?? "Owner").map(person => person.id),
+            ...store.bots.filter(bot => !bot.hidden).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
+            ...multiplayerLinks.contacts().filter(bot => remoteBots.roomBot(bot.homeId, parseContactId(bot.id)!.localId)).map(bot => bot.id),
+          ]);
+          if (body.memberIds.some((id: unknown) => typeof id !== "string" || !allowedMembers.has(id))) return json(res, 403, { error: "room contains an unavailable member" });
+        }
+        try { return json(res, 200, { room: sharedRooms.updateRoom(room.id, actorId, body.revision, { name: body.name, memberIds: body.memberIds }) }); }
+        catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : "room changed" }); }
+      }
+      m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/leave$/);
+      if (m && method === "POST") {
+        const room = sharedRooms.roomFor(m[1], actorId);
+        if (!room) return json(res, 404, { error: "room unavailable" });
+        if (room.memberIds.length <= 2) return json(res, 400, { error: "leave is available for group rooms" });
+        const body = await readBody(req, 1024);
+        if (!Number.isSafeInteger(body?.revision)) return json(res, 400, { error: "room revision required" });
+        try { return json(res, 200, { room: sharedRooms.updateRoom(room.id, actorId, body.revision, { memberIds: room.memberIds.filter(id => id !== actorId) }) }); }
+        catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : "room changed" }); }
       }
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/trust$/);
       if (m) {
@@ -11924,12 +11980,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "invalid room cursor" });
         }
         if (!sharedRooms.roomFor(m[1], actorId)) return json(res, 404, { error: "room unavailable" });
+        if (url.searchParams.get("latest") === "1") return json(res, 200, { messages: sharedRooms.latestFor(m[1], actorId, limit) });
         return json(res, 200, { messages: sharedRooms.messagesAfter(m[1], actorId, after, limit) });
       }
       if (m && method === "POST") {
         const roomId = m[1];
         if (!sharedRooms.roomFor(roomId, actorId)) return json(res, 404, { error: "room unavailable" });
-        const body = await readBody(req, 22_000);
+        const body = await readBody(req, 100_000);
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session ended" });
         if (!body || typeof body !== "object" || Array.isArray(body) ||
             typeof body.text !== "string" || typeof body.sendId !== "string") return json(res, 400, { error: "text and sendId required" });

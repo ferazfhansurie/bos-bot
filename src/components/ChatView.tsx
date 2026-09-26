@@ -882,7 +882,7 @@ function PinnedBanner({
   );
 }
 
-export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: (text: string, files: File[], sendId: string) => Promise<void>; faces?: GroupMarkMember[] } }) {
+export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: (text: string, files: File[], sendId: string) => Promise<void>; faces?: GroupMarkMember[]; actions?: ReactNode } }) {
   const bot = useMemo(() => currentTaskBot(profile), [profile]);
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
@@ -1234,7 +1234,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
               <Crown size={11} /> {t("chat.chiefOfStaff")}
             </span>
           )}
-          {!shared && bot.busy && <WorkingDots className="text-ink-secondary" />}
+          {bot.busy && <WorkingDots className="text-ink-secondary" />}
         </div>
         <div
           className="flex shrink-0 items-center gap-2"
@@ -1243,6 +1243,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
           // buttons clear the 26px overlay while the rest of the layout stays.
           style={controlsShiftStyle}
         >
+          {shared?.actions}
           <button
             onClick={() => setFindOpen((open) => !open)}
             aria-label={t("chat.find")}

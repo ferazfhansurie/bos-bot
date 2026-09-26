@@ -53,6 +53,8 @@ export interface SharedRoom {
   name: string;
   memberIds: string[];
   createdAt: number;
+  createdBy?: string;
+  revision?: number;
 }
 
 export type SharedSendInput = Pick<SharedTextMessage, "actor" | "text" | "sendId" | "responseTo" | "attachments" | "kind" | "tool">;
@@ -108,7 +110,7 @@ export class SharedRoomLog {
     for (let index = 0; index < this.messages.length; index++) {
       const message = this.messages[index];
       if (!message || message.roomId !== room.id || message.sequence !== index + 1 ||
-          !room.memberIds.includes(contactId(message.actor))) throw new Error("invalid room log");
+          !parseContactId(contactId(message.actor))) throw new Error("invalid room log");
       const dedupe = `${contactId(message.actor)}:${message.sendId}`;
       if (seen.has(dedupe)) throw new Error("duplicate room send");
       seen.add(dedupe);

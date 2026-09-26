@@ -114,7 +114,7 @@ export class MultiplayerLinks {
   async forwardShared(path: string, method: string, body?: unknown): Promise<{ status: number; body: unknown }> {
     const link = this.primary && this.links.get(this.primary.homeId);
     if (!link) throw new Error("shared chat home is unavailable");
-    if (!/^\/api\/multiplayer\/(?:me|contacts|dm|push-token|rooms(?:\/[\w-]+\/(?:messages|attachments(?:\/[\w-]+)?))?)?(?:\?[\w=&-]+)?$/.test(path)) {
+    if (!/^\/api\/multiplayer\/(?:me|contacts|dm|push-token|rooms(?:\/[\w-]+(?:\/(?:messages|leave|attachments(?:\/[\w-]+)?))?)?)?(?:\?[\w=&-]+)?$/.test(path)) {
       throw new Error("invalid shared chat route");
     }
     const url = new URL(path, link.origin);

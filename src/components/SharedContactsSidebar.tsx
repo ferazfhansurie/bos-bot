@@ -20,6 +20,10 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   const [selfId, setSelfId] = useState<string | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [seenRooms, setSeenRooms] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(globalThis.localStorage?.getItem("bos.shared-room-seen") ?? "{}"); }
+    catch { return {}; }
+  });
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [owner, setOwner] = useState(false);
@@ -62,6 +66,17 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     return () => { alive = false; window.clearInterval(timer); window.removeEventListener("multiplayer:refresh", refresh); };
   }, []);
 
+  useEffect(() => {
+    if (state.activeView !== "shared" || !state.selectedSharedRoomId) return;
+    const room = rooms.find(item => item.id === state.selectedSharedRoomId);
+    if (!room?.lastActivity || seenRooms[room.id] >= room.lastActivity) return;
+    setSeenRooms(previous => {
+      const next = { ...previous, [room.id]: room.lastActivity! };
+      try { globalThis.localStorage?.setItem("bos.shared-room-seen", JSON.stringify(next)); } catch { /* private browsing */ }
+      return next;
+    });
+  }, [rooms, seenRooms, state.activeView, state.selectedSharedRoomId]);
+
   if (!selfId && placement !== "unified") return null;
   const openPerson = async (contact: Contact) => {
     if (busyId) return;
@@ -81,6 +96,10 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   // everyone but me first, so the mark shows who else is here
   const roomFaces = (room: Room) => [...room.memberIds.filter(id => id !== selfId), ...(selfId ? [selfId] : [])]
     .map(id => contacts.find(contact => contact.id === id)).filter((contact): contact is Contact => Boolean(contact));
+  const roomName = (room: Room) => room.name === "Group chat"
+    ? room.memberIds.filter(id => id !== selfId).map(id => contacts.find(contact => contact.id === id)?.name).filter(Boolean).join(", ") || room.name
+    : room.name;
+  const roomUnread = (room: Room) => !(state.activeView === "shared" && state.selectedSharedRoomId === room.id) && (room.lastActivity ?? 0) > (seenRooms[room.id] ?? 0);
   const visibleContacts = contacts.filter(contact => contact.id !== selfId && contact.kind === "person");
   const unifiedContacts = visibleContacts;
   if (placement === "unified") {
@@ -91,6 +110,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
         const room = directRoom(contact);
         const at = room?.lastActivity ?? 0;
         const selected = state.activeView === "shared" && Boolean(room) && state.selectedSharedRoomId === room?.id;
+        const unread = Boolean(room && roomUnread(room));
         const avatarPx = compact ? 44 : density === "compact" ? (showThreads ? 26 : 40) : (showThreads ? 32 : 56);
         const rowClass = cn(
           "flex w-full items-center rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50",
@@ -112,14 +132,14 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
                 <span className="min-w-0 grow truncate text-[14px] font-semibold text-ink">{contact.name}</span>
                 {selected && at > 0 && <span className="shrink-0 text-xs text-ink-secondary">{formatTime(at)}</span>}
               </div>
-              <div className="truncate text-[11px] text-ink-secondary">{room?.preview ?? ""}</div>
+              <div className="flex items-center gap-2"><span className="min-w-0 truncate text-[11px] text-ink-secondary">{room?.preview ?? ""}</span>{unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</div>
             </div>}
           </button>
         </div> };
       }),
       ...visibleRooms.map(room => ({ id: `room:${room.id}`, at: room.lastActivity ?? 0, element: <button key={room.id} type="button" onClick={() => dispatch({ type: "selectSharedRoom", roomId: room.id })}
-        aria-label={`Open ${room.name}`} title={room.name} className="flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left text-ink hover:bg-raised/40">
-        <GroupMark members={roomFaces(room)} size={compact ? 44 : 48} />{!compact && <span className="min-w-0 flex-1"><span className="flex justify-between gap-2 text-[14px] font-semibold"><span className="truncate">{room.name}</span>{(room.lastActivity ?? 0) > 0 && <span className="shrink-0 text-xs font-normal text-ink-secondary">{formatTime(room.lastActivity!)}</span>}</span><span className="block truncate text-[11px] text-ink-secondary">{room.preview ?? ""}</span></span>}
+        aria-label={`Open ${roomName(room)}`} title={roomName(room)} className={cn("flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left text-ink hover:bg-raised/40", state.activeView === "shared" && state.selectedSharedRoomId === room.id && "bg-raised/70")}>
+        <GroupMark members={roomFaces(room)} size={compact ? 44 : 48} />{!compact && <span className="min-w-0 flex-1"><span className="flex justify-between gap-2 text-[14px] font-semibold"><span className="truncate">{roomName(room)}</span>{(room.lastActivity ?? 0) > 0 && <span className="shrink-0 text-xs font-normal text-ink-secondary">{formatTime(room.lastActivity!)}</span>}</span><span className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[11px] text-ink-secondary">{room.preview ?? ""}</span>{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</span></span>}
       </button> })),
     ];
     entries.sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
@@ -162,9 +182,9 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
       {!compact && <span className="min-w-0 truncate"><span className="block truncate">{contact.name}</span></span>}
     </button>)}
     {placement === "people" && visibleRooms.map(room => <button key={room.id} type="button" onClick={() => dispatch({ type: "selectSharedRoom", roomId: room.id })}
-      aria-label={`Open ${room.name}`} title={room.name}
+      aria-label={`Open ${roomName(room)}`} title={roomName(room)}
       className={`flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-[14px] hover:bg-raised/60 ${state.activeView === "shared" && state.selectedSharedRoomId === room.id ? "bg-raised text-ink" : "text-ink-secondary"}`}>
-      <GroupMark members={roomFaces(room)} size={32} />{!compact && <span className="truncate">{room.name}</span>}
+      <GroupMark members={roomFaces(room)} size={32} />{!compact && <span className="min-w-0 flex-1 truncate">{roomName(room)}</span>}{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
     </button>)}
     {error && !compact && <p role="status" className="px-2 pt-1 text-[11px] text-danger">{error}</p>}
   </section>;

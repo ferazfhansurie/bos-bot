@@ -685,7 +685,7 @@ export class RemoteBotBridge {
     }
     const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true);
     if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
-    const delivered = new Set<string>();
+    const delivered = new Map<string, string>();
     while (Date.now() < input.deadlineMs) {
       let before: string | undefined;
       let messages: Array<Record<string, any>> = [];
@@ -708,8 +708,10 @@ export class RemoteBotBridge {
       if (start >= 0) {
         const after = messages.slice(start + 1);
         for (const message of after) {
-          if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name || delivered.has(message.id)) continue;
-          delivered.add(message.id);
+          if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name) continue;
+          const state = JSON.stringify(message.tool);
+          if (delivered.get(message.id) === state) continue;
+          delivered.set(message.id, state);
           input.onActivity(message.id, message.tool);
         }
         const failed = after.find((message) => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false);
@@ -718,7 +720,7 @@ export class RemoteBotBridge {
         if (settled) return { reply: String(settled.text) };
         const ask = after.find((message) => message.kind === "options" && message.card?.requestId && !message.card.answered && !message.card.dismissed);
         if (ask && !delivered.has(`ask-${ask.id}`)) {
-          delivered.add(`ask-${ask.id}`);
+          delivered.set(`ask-${ask.id}`, "waiting");
           input.onActivity(`ask-${ask.id}`, { name: "waiting for approval", spoken: `waiting for ${home.link.ownerName ?? "its owner"} to approve ${String(ask.card.tool ?? "a step")} on their Mac` });
         }
       }
