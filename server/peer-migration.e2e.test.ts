@@ -57,6 +57,7 @@ it("migrates a 0.1.84 bridge thread without granting private conversations", asy
       ["GET", "/api/config", undefined],
       ["GET", "/api/routines", undefined],
       ["GET", "/api/workspace-backup/export", undefined],
+      ["POST", "/api/multiplayer/peer-announce", { homeId: "other-mac", origin: "https://other.ts.net" }],
     ] as const) expect((await request(method, path, body, peerToken)).status, `${method} ${path}`).toBe(403);
   } finally {
     await fixture.close();

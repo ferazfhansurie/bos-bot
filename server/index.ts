@@ -531,6 +531,8 @@ const remoteBots = new RemoteBotBridge({
   file: join(DATA_DIR, "remote-bots.json"),
   links: () => multiplayerLinks.bridgeLinks(),
   replaceLinkToken: (homeId, token) => multiplayerLinks.replaceToken(homeId, token),
+  localHomeId: ENVIRONMENT_ID,
+  localOriginForPeer: (peerOrigin) => tailnetOrigin(peerOrigin),
   broadcast: (frame) => broadcast(frame),
   notify: (notification) => notify(notification),
   queuesChanged: () => broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() }),
@@ -11688,6 +11690,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         catch (error) { sessions.revoke(issued.session.id); throw error; }
         if (superseded) sessions.revoke(superseded);
         return json(res, 200, { rotated: true, token: issued.token });
+      }
+      if (path === "/api/multiplayer/peer-announce" && method === "POST") {
+        if (auth.kind !== "session" || !auth.scopes.includes("peer")) return json(res, 403, { error: "a peer session is required" });
+        const body = await readBody(req, 2048);
+        const binding = multiplayerActors.bindingFor(auth.session.id);
+        if (typeof body?.homeId !== "string" || typeof body?.origin !== "string" ||
+            parseContactId(binding?.personId)?.homeId !== body.homeId) {
+          return json(res, 403, { error: "this peer cannot announce that Mac" });
+        }
+        try {
+          const updated = await multiplayerLinks.reannounce(body.homeId, body.origin);
+          if (updated) remoteBots.sync();
+          return json(res, updated ? 200 : 404, updated ? { ok: true } : { error: "link unavailable" });
+        } catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : "address could not be verified" }); }
       }
       if (method === "GET" && path === "/api/multiplayer/home") {
         return json(res, 200, { homeId: ENVIRONMENT_ID, name: cfg.profile?.name ?? "Owner", avatar: ownerPhotoData() });

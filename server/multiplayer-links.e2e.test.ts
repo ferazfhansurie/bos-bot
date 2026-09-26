@@ -24,7 +24,7 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     expect(pairing.status).toBe(200);
     const fetcher: typeof fetch = (input, init) => {
       const target = new URL(String(input));
-      expect(target.hostname).toBe("putri-fixture.ts.net");
+      expect(["putri-fixture.ts.net", "putri-new.ts.net"]).toContain(target.hostname);
       return fetch(new URL(target.pathname + target.search, fixture.info.url), init);
     };
     const links = new MultiplayerLinks(join(folder, "links.json"), "firaz-fixture", fetcher);
@@ -59,6 +59,9 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     expect(renamed).toMatchObject({ status: 200, body: { room: { name: "Renamed team", revision: 2 } } });
     expect(await links.forwardShared(`/api/multiplayer/rooms/${(room.body as any).room.id}`, "DELETE", { revision: 2 })).toMatchObject({ status: 200 });
     expect((await links.forwardShared("/api/multiplayer/rooms", "GET")).body).toMatchObject({ rooms: [] });
+    expect(await links.reannounce(added.homeId, "https://putri-new.ts.net")).toBe(true);
+    expect(links.bridgeLinks()[0].origin).toBe("https://putri-new.ts.net");
+    await expect(links.reannounce(added.homeId, "https://putri.other.ts.net")).rejects.toThrow("same private tailnet");
     expect(await links.remove(added.homeId)).toBe(true);
     expect(links.bridgeLinks()).toHaveLength(0);
     expect((await remote("GET", "/api/auth/sessions")).body.sessions.filter((session: any) => session.label === "BOS multiplayer bridge")).toHaveLength(0);

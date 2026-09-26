@@ -50,6 +50,8 @@ export interface RemoteBotBridgeOptions {
   file: string;
   links: () => BridgeLink[];
   replaceLinkToken?: (homeId: string, token: string) => void;
+  localHomeId?: string;
+  localOriginForPeer?: (peerOrigin: string) => Promise<string | null>;
   broadcast: (frame: Record<string, unknown>) => void;
   notify?: (notification: Notification) => void;
   /** The merged bot.queued snapshot changed. */
@@ -128,6 +130,8 @@ interface Home {
   running: boolean;
   connected: boolean;
   peerMigrated?: boolean;
+  announcedOrigin?: string;
+  announcedAt?: number;
   abort: AbortController | null;
   wake: (() => void) | null;
   snapshotAt: number;
@@ -315,6 +319,7 @@ export class RemoteBotBridge {
     for (const link of links) {
       let home = this.homes.get(link.homeId);
       if (home) {
+        if (home.link.origin !== link.origin) { home.abort?.abort(); home.wake?.(); }
         home.link = link;
       } else {
         home = {
@@ -955,6 +960,17 @@ export class RemoteBotBridge {
       if (rotation.body?.rotated === true && typeof rotation.body.token === "string") {
         this.options.replaceLinkToken(home.link.homeId, rotation.body.token);
         home.link.token = rotation.body.token;
+      }
+    }
+    if (this.options.localHomeId && this.options.localOriginForPeer &&
+        (!home.announcedAt || Date.now() - home.announcedAt > 30 * 60_000)) {
+      home.announcedAt = Date.now();
+      const origin = await this.options.localOriginForPeer(home.link.origin).catch(() => null);
+      if (origin && origin !== home.announcedOrigin) {
+        const announced = await this.call(home, "POST", "/api/multiplayer/peer-announce", {
+          homeId: this.options.localHomeId, origin,
+        }).catch(() => null);
+        if (announced?.status === 200) home.announcedOrigin = origin;
       }
     }
     const result = await this.call(home, "GET", "/api/bots?messages=0");

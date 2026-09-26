@@ -266,4 +266,32 @@ export class MultiplayerLinks {
     }).catch(() => {});
     return true;
   }
+
+  async reannounce(homeId: string, origin: string): Promise<boolean> {
+    const link = this.links.get(homeId);
+    if (!link) return false;
+    const next = new URL(origin);
+    const previous = new URL(link.origin);
+    if (next.protocol !== "https:" || !next.hostname.endsWith(".ts.net") || next.pathname !== "/" || next.search || next.hash ||
+        next.username || next.password || next.hostname.split(".").slice(1).join(".") !== previous.hostname.split(".").slice(1).join(".")) {
+      throw new Error("new address must be on the same private tailnet");
+    }
+    if (next.origin === previous.origin) return true;
+    const descriptor = await this.fetcher(new URL("/.well-known/openmausbot/environment", next), {
+      redirect: "error", signal: AbortSignal.timeout(10_000),
+    });
+    const identity = descriptor.ok ? await descriptor.json() as { environmentId?: string; multiplayerProtocol?: number } : null;
+    if (identity?.environmentId !== homeId || identity.multiplayerProtocol !== 1) {
+      throw new Error("new address did not verify the linked Mac identity");
+    }
+    const probe = await this.fetcher(new URL("/api/multiplayer/home", next), {
+      headers: { authorization: `Bearer ${link.token}` }, redirect: "error", signal: AbortSignal.timeout(10_000),
+    });
+    if (!probe.ok || (await probe.json() as { homeId?: string }).homeId !== homeId) throw new Error("new address did not accept the existing peer session");
+    const oldOrigin = link.origin;
+    link.origin = next.origin;
+    try { this.persist(); }
+    catch (error) { link.origin = oldOrigin; throw error; }
+    return true;
+  }
 }
