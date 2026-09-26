@@ -27,6 +27,7 @@ class FakeHome {
   /** Putri's bot is on a Custom approval setting a client may not leave. */
   customApproval = false;
   extraBots: Array<Record<string, unknown>> = [];
+  failRoomTurn = false;
 
   bot(): Record<string, unknown> {
     return {
@@ -107,7 +108,8 @@ class FakeHome {
       const b = body as { text: string; threadId: string; sendId?: string };
       const message = { id: `u${this.calls.length}`, role: "user", kind: "text", text: b.text, sendId: b.sendId, at: Date.now() };
       this.threads.get(b.threadId)?.push(message);
-      if (b.sendId) this.threads.get(b.threadId)?.push({ id: `b${this.calls.length}`, role: "bot", kind: "text", text: "reply from pixie", turnTerminal: true, at: Date.now() + 1 });
+      if (b.sendId) this.threads.get(b.threadId)?.push({ id: `b${this.calls.length}`, role: "bot", kind: "text", text: this.failRoomTurn ? "partial work" : "reply from pixie", turnTerminal: true,
+        ...(this.failRoomTurn ? { turnOutcome: { ok: false, stopReason: "claude exited 143" } } : {}), at: Date.now() + 1 });
       return json(b.sendId ? 202 : 200, { ok: true, threadId: b.threadId, message, bot: this.bot() });
     }
     if (method === "POST" && /^\/api\/threads\/[\w-]+\/respond$/.test(url.pathname)) return json(200, { ok: true });
@@ -191,7 +193,20 @@ describe("RemoteBotBridge", () => {
     });
     expect(result.reply).toBe("reply from pixie");
     expect(threads).toEqual(["bridge-1"]);
+    const [visible] = await bridge.listBots(0);
+    expect(visible!.tasks).toEqual([]);
+    expect(visible!.threadId).toBe(pending);
+    expect((await route("GET", `/api/threads/rt-${KEY}-bridge-1/messages`)).status).toBe(404);
     expect(fake.calls.some((call) => call.path === "/api/bots/pixie/messages" && (call.body as { sendId?: string }).sendId === "room-send-1")).toBe(true);
+  });
+
+  it("rejects a failed terminal turn instead of posting its partial text", async () => {
+    fake.failRoomTurn = true;
+    await bridge.listBots(0);
+    await expect(bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-send-failed",
+      onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000,
+    })).rejects.toThrow("the shared bot could not finish its turn");
   });
 
   it("lists a remote bot as an ordinary bot and opens a thread on B only on the first send", async () => {

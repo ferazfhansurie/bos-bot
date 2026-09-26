@@ -166,6 +166,7 @@ export interface Message {
   turnId?: string;
   /** Last assistant text item from a settled provider turn. */
   turnTerminal?: boolean;
+  turnOutcome?: { ok: boolean; stopReason?: string };
   /** screen messages: a frame of the bot's computer (base64) */
   png?: string;
   mime?: string;

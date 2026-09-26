@@ -4969,7 +4969,7 @@ bus.subscribe((event: RuntimeEvent) => {
           });
         }
       }
-      if (completedTurnId || !event.ok) store.settleTurn(event.threadId, completedTurnId, { ok: event.ok, stopReason: event.stopReason });
+      if (completedTurnId || !event.ok) store.settleTurn(event.threadId, completedTurnId ?? undefined, { ok: event.ok, stopReason: event.stopReason ?? undefined });
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
       // A run that broke — not one the person stopped, and not a routine's,
@@ -5960,6 +5960,8 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
       progress(message.id, message.tool);
       delivered.add(message.id);
     }
+    const failed = start >= 0 ? messages.slice(start + 1).find(message => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false) : undefined;
+    if (failed) throw new Error("the shared bot could not finish its turn");
     const settled = start >= 0 ? messages.slice(start + 1).find(message => message.role === "bot" && message.kind === "text" && message.text && message.turnTerminal) : undefined;
     if (settled?.text) return settled.text;
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -6006,8 +6008,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
       }
     } catch (error) {
       console.warn(`shared room bot turn failed for ${room.id}/${target.name}: ${error instanceof Error ? error.message : "unknown failure"}`);
-      const why = error instanceof Error && target.remote ? ` (${error.message.slice(0, 160)})` : "";
-      try { append({ text: `i couldn't complete that message${why}. please try again.`, sendId: `failed-${source.id}-${target.key.localId}`.slice(0, 120) }); }
+      try { append({ text: "", kind: "activity", tool: { name: "reply failed", ok: false, spoken: `${target.name} could not complete that reply. Please try again.` }, sendId: `failed-${source.id}-${target.key.localId}`.slice(0, 120) }); }
       catch { /* nothing more to report */ }
       return;
     } finally {

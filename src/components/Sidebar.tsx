@@ -123,6 +123,7 @@ function preview(bot: Bot): string {
   // the harness's receipts (digest, compaction) to the reply a person reads
   const last = lastNonReceipt(visibleMessages(bot));
   if (!last) return "";
+  if (last.role === "bot" && last.turnOutcome?.ok === false) return "last reply failed";
   if (last.kind === "options" && last.card) return last.card.title;
   if (last.kind === "activity" && last.tool) return last.tool.name;
   if (last.kind === "screen") return t("sidebar.preview.screenFrame");

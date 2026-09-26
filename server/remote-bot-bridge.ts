@@ -93,6 +93,8 @@ interface SafeBot {
 interface ThreadEntry {
   botId: string;
   createdAt: number;
+  /** Internal shared-room turn; never exposed as this bot's private chat. */
+  room?: true;
   /** Last display snapshot, keyed by B's thread id. */
   task?: WireTask;
 }
@@ -337,7 +339,8 @@ export class RemoteBotBridge {
 
   /** Virtual thread id for a B thread, only when the bridge created it. */
   private mapped(home: Home, remoteThreadId: unknown): string | null {
-    return typeof remoteThreadId === "string" && home.state.threads[remoteThreadId] ? this.threadId(home, remoteThreadId) : null;
+    return typeof remoteThreadId === "string" && home.state.threads[remoteThreadId] && !this.isRoomThread(home.state.threads[remoteThreadId]!)
+      ? this.threadId(home, remoteThreadId) : null;
   }
 
   private sharedBot(home: Home, remoteBotId: unknown): string | null {
@@ -346,14 +349,18 @@ export class RemoteBotBridge {
 
   private threadsOf(home: Home, remoteBotId: string): string[] {
     return Object.entries(home.state.threads)
-      .filter(([, entry]) => entry.botId === remoteBotId)
+      .filter(([, entry]) => entry.botId === remoteBotId && !this.isRoomThread(entry))
       .sort((a, b) => a[1].createdAt - b[1].createdAt)
       .map(([threadId]) => threadId);
   }
 
+  private isRoomThread(entry: ThreadEntry): boolean {
+    return entry.room === true || entry.task?.title?.startsWith("room · ") === true;
+  }
+
   private selectedThread(home: Home, remoteBotId: string): string | null {
     const selected = home.state.selected[remoteBotId];
-    if (selected && home.state.threads[selected]?.botId === remoteBotId) return selected;
+    if (selected && home.state.threads[selected]?.botId === remoteBotId && !this.isRoomThread(home.state.threads[selected]!)) return selected;
     const threads = this.threadsOf(home, remoteBotId);
     return threads.at(-1) ?? null;
   }
@@ -504,7 +511,7 @@ export class RemoteBotBridge {
     match = /^tasks\/([\w-]+)$/.exec(rest);
     if (match) {
       const threadId = this.parse(match[1]!, "rt")?.home === home ? this.parse(match[1]!, "rt")!.remoteId : null;
-      if (!threadId || home.state.threads[threadId]?.botId !== botId) return failure(404, "no such task");
+      if (!threadId || home.state.threads[threadId]?.botId !== botId || this.isRoomThread(home.state.threads[threadId]!)) return failure(404, "no such task");
       if (method === "POST") {
         const raw = search.get("messages");
         const limit = raw === null ? PAGE_MAX : Number(raw);
@@ -546,7 +553,7 @@ export class RemoteBotBridge {
       return { status: 200, json: { messages: [], hasMore: false, activeLeafId: null } };
     }
     const entry = target?.home.state.threads[target.remoteId];
-    if (!target || !entry) return failure(404, "no such conversation");
+    if (!target || !entry || this.isRoomThread(entry)) return failure(404, "no such conversation");
     const { home, remoteId: threadId } = target;
     const remoteThread = `/api/threads/${threadId}`;
     if (rest === "messages" && method === "GET") {
@@ -618,11 +625,11 @@ export class RemoteBotBridge {
     return refused();
   }
 
-  private async send(home: Home, botId: string, input: Record<string, any>): Promise<BridgeResponse> {
+  private async send(home: Home, botId: string, input: Record<string, any>, room = false): Promise<BridgeResponse> {
     const text = typeof input.text === "string" ? input.text : "";
     if (!text.trim()) return failure(400, "text required");
     // The first real message is what opens a thread on the other Mac.
-    const threadId = (await this.threadFor(home, botId, input.threadId, true))!;
+    const threadId = (await this.threadFor(home, botId, input.threadId, true, room))!;
     const sendId = typeof input.sendId === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(input.sendId) ? input.sendId : undefined;
     const run = async (): Promise<BridgeResponse> => {
       const rewritten = await this.rewriteAttachments(home, text);
@@ -670,11 +677,11 @@ export class RemoteBotBridge {
     if (!home || !home.state.bots[input.remoteBotId]) throw new BridgeError(404, "that bot is no longer shared");
     let threadId = input.threadId && home.state.threads[input.threadId]?.botId === input.remoteBotId ? input.threadId : undefined;
     if (!threadId) {
-      threadId = await this.createThread(home, input.remoteBotId, input.title.slice(0, 200));
+      threadId = await this.createThread(home, input.remoteBotId, input.title.slice(0, 200), true);
       this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, input.remoteBotId) });
       input.onThread(threadId);
     }
-    const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId });
+    const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true);
     if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
     const delivered = new Set<string>();
     while (Date.now() < input.deadlineMs) {
@@ -688,6 +695,8 @@ export class RemoteBotBridge {
           delivered.add(message.id);
           input.onActivity(message.id, message.tool);
         }
+        const failed = after.find((message) => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false);
+        if (failed) throw new BridgeError(502, "the shared bot could not finish its turn");
         const settled = after.find((message) => message.role === "bot" && message.kind === "text" && message.text && message.turnTerminal);
         if (settled) return { reply: String(settled.text) };
         const ask = after.find((message) => message.kind === "options" && message.card?.requestId && !message.card.answered && !message.card.dismissed);
@@ -987,13 +996,13 @@ export class RemoteBotBridge {
 
   /** B thread id for a request: an explicit virtual id must be a bridge
    * thread of this bot; no id means this home's selection for the bot. */
-  private async threadFor(home: Home, botId: string, requested: unknown, create: boolean): Promise<string | null> {
+  private async threadFor(home: Home, botId: string, requested: unknown, create: boolean, room = false): Promise<string | null> {
     const fallback = () => (create ? this.ensureThread(home, botId) : this.selectedThread(home, botId));
     if (requested === undefined || requested === null) return fallback();
     if (typeof requested !== "string") throw new BridgeError(400, "threadId must be a task id");
     const target = this.parse(requested, "rt");
     if (target?.home === home && target.remoteId === `pending-${botId}`) return fallback();
-    if (target?.home !== home || home.state.threads[target.remoteId]?.botId !== botId) throw new BridgeError(404, "no such task");
+    if (target?.home !== home || home.state.threads[target.remoteId]?.botId !== botId || (!room && this.isRoomThread(home.state.threads[target.remoteId]!))) throw new BridgeError(404, "no such task");
     return target.remoteId;
   }
 
@@ -1017,7 +1026,7 @@ export class RemoteBotBridge {
 
   /** Open a thread on B for this home. B's create also selects it for B's
    * owner, so the owner's previous selection is put back straight after. */
-  private async createThread(home: Home, botId: string, title: string | undefined): Promise<string> {
+  private async createThread(home: Home, botId: string, title: string | undefined, room = false): Promise<string> {
     const previous = home.remoteSelected.get(botId);
     const result = await this.call(home, "POST", `/api/bots/${botId}/tasks`, title ? { title } : {});
     const task = result.body?.task;
@@ -1039,7 +1048,7 @@ export class RemoteBotBridge {
       if (previous && previous !== threadId) await this.call(home, "POST", `/api/bots/${botId}/tasks/${previous}?messages=0`).catch(() => {});
       throw new BridgeError(409, `${home.link.name} keeps this bot on a custom approval setting; ask ${home.link.ownerName ?? "its owner"} to switch it to Ask first`);
     }
-    home.state.threads[threadId] = { botId, createdAt: Date.now(), task: safeTask(reset.body.task) };
+    home.state.threads[threadId] = { botId, createdAt: Date.now(), task: safeTask(reset.body.task), ...(room ? { room: true as const } : {}) };
     home.cache.set(threadId, { messages: [], hasMore: false, activeLeafId: null, hydrated: true });
     this.persist();
     if (previous && previous !== threadId) {
