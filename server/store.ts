@@ -1203,16 +1203,54 @@ export class Store {
   /** Mark the last assistant text on the active branch as this turn's final
    * visible answer. If a provider ends after commentary without emitting a
    * separate answer, that commentary remains visible as the safe fallback. */
-  markTerminalAssistantMessage(threadId: string, turnId: string): Message | null {
+  markTerminalAssistantMessage(threadId: string, turnId: string, outcome?: { ok: boolean; stopReason?: string }): Message | null {
     const path = this.activePath(threadId);
+    const failed = outcome && !outcome.ok ? { turnOutcome: { ok: false, ...(outcome.stopReason ? { stopReason: outcome.stopReason.slice(0, 200) } : {}) } } : {};
     for (let i = path.length - 1; i >= 0; i -= 1) {
       const message = path[i];
       if (message.role === "bot" && message.kind === "text" && message.turnId === turnId) {
-        if (message.turnTerminal) return message;
-        return this.patchMessage(threadId, message.id, { turnTerminal: true });
+        if (message.turnTerminal && (!failed.turnOutcome || message.turnOutcome)) return message;
+        return this.patchMessage(threadId, message.id, { turnTerminal: true, ...failed });
       }
     }
     return null;
+  }
+
+  /** Settle a provider turn so every poller can see where it ended. The last
+   * assistant text is the terminal answer; a turn that produced no text (a
+   * tool-only turn, a crash, a kill) still gets one terminal marker, on its
+   * own last message or on a small activity row. Failed turns carry
+   * turnOutcome.ok=false so a waiting room never mistakes partial commentary
+   * for an answer. */
+  settleTurn(threadId: string, turnId: string | undefined, outcome: { ok: boolean; stopReason?: string }): Message | null {
+    if (turnId) {
+      const marked = this.markTerminalAssistantMessage(threadId, turnId, outcome);
+      if (marked) return marked;
+    }
+    const path = this.activePath(threadId);
+    const turnOutcome = { ok: outcome.ok, ...(!outcome.ok && outcome.stopReason ? { stopReason: outcome.stopReason.slice(0, 200) } : {}) };
+    let lastUser = -1;
+    for (let i = path.length - 1; i >= 0; i -= 1) if (path[i].role === "user") { lastUser = i; break; }
+    for (let i = path.length - 1; i > lastUser; i -= 1) {
+      const message = path[i];
+      if (message.role !== "bot" || message.turnTerminal) {
+        if (message.turnTerminal) return message;
+        continue;
+      }
+      if (turnId && message.turnId && message.turnId !== turnId) continue;
+      if (message.kind === "text" || message.kind === "activity") {
+        return this.patchMessage(threadId, message.id, { turnTerminal: true, turnOutcome });
+      }
+    }
+    if (lastUser < 0 || outcome.ok) return null;
+    return this.appendMessage(threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: outcome.ok ? "finished" : "turn failed", ok: outcome.ok, terminal: true },
+      ...(turnId ? { turnId } : {}),
+      turnTerminal: true,
+      turnOutcome,
+    });
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }, command?: Command): Message {

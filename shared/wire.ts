@@ -270,6 +270,8 @@ export interface RemoteBotOrigin {
   homeId: string;
   homeName: string;
   ownerName: string | null;
+  /** False while the home Mac's event stream is disconnected. */
+  online?: boolean;
 }
 
 /** Error text every relay-refused bot route answers with (HTTP 403). */
@@ -326,6 +328,9 @@ export interface WireMessage {
   turnId?: string;
   /** The last assistant text item from a settled provider turn. */
   turnTerminal?: boolean;
+  /** How the settled turn ended, stamped on its terminal message. Absent on
+   * older messages, which read as a successful turn. */
+  turnOutcome?: { ok: boolean; stopReason?: string };
   /** screen messages: a frame of the bot's computer (base64 image) */
   png?: string;
   mime?: string;

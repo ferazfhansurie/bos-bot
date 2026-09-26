@@ -4920,6 +4920,7 @@ bus.subscribe((event: RuntimeEvent) => {
         role: "bot",
         kind: "activity",
         tool: { name: `error: ${event.message.slice(0, 160)}`, ok: false, setup: event.setup, ...(event.terminal ? { terminal: true } : {}) },
+        ...(liveTurnId ? { turnId: liveTurnId } : {}),
       });
       // a setup error means the engine could not even start: the bot is
       // dead until something changes, not merely idle. The next successful
@@ -4968,7 +4969,7 @@ bus.subscribe((event: RuntimeEvent) => {
           });
         }
       }
-      if (completedTurnId) store.markTerminalAssistantMessage(event.threadId, completedTurnId);
+      if (completedTurnId || !event.ok) store.settleTurn(event.threadId, completedTurnId, { ok: event.ok, stopReason: event.stopReason });
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
       // A run that broke — not one the person stopped, and not a routine's,
@@ -14127,7 +14128,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (limit === null) return json(res, 400, { error: "limit must be a non-negative whole number" });
       const before = url.searchParams.get("before");
       const around = url.searchParams.get("around");
-      if (before && around) return json(res, 400, { error: "before and around cannot be combined" });
+      const afterId = url.searchParams.get("after");
+      if ([before, around, afterId].filter(Boolean).length > 1) return json(res, 400, { error: "before, around and after cannot be combined" });
+      if (afterId) {
+        // Forward paging from a known message, inclusive, so a room waiting
+        // on one sent line never loses it behind a long turn's output.
+        const all = store.messagesFor(threadId);
+        const start = all.findIndex((msg) => msg.id === afterId);
+        if (start < 0) return json(res, 404, { error: "no such message" });
+        const size = limit ?? DEFAULT_PAGE;
+        const page = all.slice(start, start + size);
+        return json(res, 200, { messages: page.map(slimMessage), hasMore: start + size < all.length, activeLeafId: store.activeLeaf(threadId) });
+      }
       if (around) {
         const window = messageWindow(threadId, around, limit ?? DEFAULT_PAGE);
         if (!window) return json(res, 404, { error: "no such message" });
@@ -16547,6 +16559,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
             }
             noteTurnTrigger(threadId, auth);
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth) });
+            return { ok: true as const, threadId, message };
+          }
+
+          if (body.exclusive === true) {
+            // A room turn owns its whole provider turn: never steered into a
+            // running turn or batched in the queue with other lines, so the
+            // answer it waits for is the answer to exactly this message.
+            if (currentAtStart.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
+              throw Object.assign(new Error("this thread is busy; retry when it is free"), { status: 409, code: "exclusive_busy" });
+            }
             const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth) });
             return { ok: true as const, threadId, message };
           }
