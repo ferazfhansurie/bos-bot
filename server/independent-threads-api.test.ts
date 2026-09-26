@@ -409,9 +409,8 @@ describe("independent bot tasks through the isolated control surface", () => {
   }, 30_000);
 
   it("refuses a second engine in the same selected project folder until its owner stops", async () => {
-    // Exclusivity is now opt-in: threads.parallelProjectFolder defaults on so
-    // a bot pinned to a folder can answer the phone and the desktop at once.
-    // This case pins the old behaviour, which must stay a true no-op.
+    // The default keeps one active thread per selected folder. This case
+    // pins that behavior so a conflicting send remains a true no-op.
     expect((await api("PATCH", "/api/config", { threads: { maxConcurrentPerBot: 3, parallelProjectFolder: false } })).status).toBe(200);
     const created = await tool("create_bot", { name: "Shared project fixture", instance_id: "claude", model: models[0] });
     const botId = created.bot.id;
@@ -442,7 +441,8 @@ describe("independent bot tasks through the isolated control surface", () => {
     // The live bug: a bot pinned to a project folder held that folder for the
     // whole turn, so messaging it from the phone while the desktop was mid-turn
     // was refused outright. Both threads must now reach their own engine.
-    expect((await api("GET", "/api/config")).body.threads?.parallelProjectFolder ?? true).toBe(true);
+    expect((await api("PATCH", "/api/config", { threads: { maxConcurrentPerBot: 3, parallelProjectFolder: true } })).status).toBe(200);
+    expect((await api("GET", "/api/config")).body.threads?.parallelProjectFolder).toBe(true);
     const created = await tool("create_bot", { name: "Parallel project fixture", instance_id: "claude", model: models[0] });
     const botId = created.bot.id;
     const taskA = created.bot.activeTaskId;

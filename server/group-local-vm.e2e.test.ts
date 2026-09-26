@@ -6,10 +6,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
+
 import { writeFileAtomic } from "./atomic.ts";
 import { freePortBlock } from "./testing/ports.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 
+const boxAgentAvailable = BUILT_IN_DRIVERS.some(driver => driver.driverKind === "boxAgent");
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 let child: ChildProcess;
 let fixtureHome = "";
@@ -147,7 +150,7 @@ const send = (id: string) => api("POST", `/api/groups/${id}/messages`, { text: "
 const stop = (id: string) => api("POST", `/api/groups/${id}/interrupt`, {});
 
 describe("Group Local VM ownership on the real isolated server", () => {
-  it.each(["wake", "removed", "missing-auto"])("chat selection starts or provisions a configured cloud computer (%s) only after selecting it", async state => {
+  it.skipIf(!boxAgentAvailable).each(["wake", "removed", "missing-auto"])("chat selection starts or provisions a configured cloud computer (%s) only after selecting it", async state => {
     vmState(); rmSync(dumpFile, { force: true }); rmSync(finishFile, { force: true });
     const { bot } = await api("POST", "/api/bots", { name: "Chat cloud selection" });
     try {
@@ -166,7 +169,8 @@ describe("Group Local VM ownership on the real isolated server", () => {
       if (computer(before)) expect((await gate(computer(before))).status).toBe(200);
       const token = before.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN;
       const options = await (await fetch(base + "/api/internal/computer/select", { headers: { authorization: `Bearer ${token}` } })).json() as any;
-      expect(options.options.find((option: any) => option.surface === "cloud")).toMatchObject({ available: true, ready: false,
+      const cloud = options.options.find((option: any) => option.surface === "cloud");
+      expect(cloud, JSON.stringify(cloud)).toMatchObject({ available: true, ready: false,
         canStart: state !== "missing-auto", canCreate: state === "missing-auto" });
       expect(boxCalls.every(call => call.method === "GET")).toBe(true);
       const result = await fetch(base + "/api/internal/computer/select", { method: "POST",
@@ -197,7 +201,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
     }
   });
 
-  it("lets a chat tool select Auto, replaces tools after completion, and continues the same user message once", async () => {
+  it.skipIf(!boxAgentAvailable)("lets a chat tool select Auto, replaces tools after completion, and continues the same user message once", async () => {
     vmState(); rmSync(dumpFile, { force: true }); rmSync(finishFile, { force: true });
     const { bot } = await api("POST", "/api/bots", { name: "Chat selects computer" });
     try {
@@ -347,7 +351,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
     expect(existsSync(dumpFile)).toBe(false);
   });
 
-  it("runs a channel speaker's own Cloud destination on its Box, waking it first", async () => {
+  it.skipIf(!boxAgentAvailable)("runs a channel speaker's own Cloud destination on its Box, waking it first", async () => {
     const { bots, group } = await room();
     try {
       await api("PUT", "/api/config", { box: { token: "box_fixture" } });

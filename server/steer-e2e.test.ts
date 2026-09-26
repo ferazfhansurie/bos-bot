@@ -12,7 +12,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 
+const acpAvailable = BUILT_IN_DRIVERS.some(driver => driver.driverKind === "grokAgent");
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLAUDE = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
 const FAKE_ACP = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
@@ -273,7 +275,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(rejected.body.error).toMatch(/no such bot/i);
   }, 40_000);
 
-  it("an engine without a live session preserves the message in the server-side queue", async () => {
+  it.skipIf(!acpAvailable)("an engine without a live session preserves the message in the server-side queue", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
     expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first" })).status).toBe(202);
@@ -365,7 +367,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(stderr).not.toContain("signal SIGTERM");
   }, 40_000);
 
-  it("an engine without live steering keeps its queue through the steer endpoint, then drains after Stop", async () => {
+  it.skipIf(!acpAvailable)("an engine without live steering keeps its queue through the steer endpoint, then drains after Stop", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
     expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first" })).status).toBe(202);
@@ -436,7 +438,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(stderr).not.toContain("signal SIGTERM");
   }, 40_000);
 
-  it("a room whose engine cannot steer keeps its queue, then drains after Stop", async () => {
+  it.skipIf(!acpAvailable)("a room whose engine cannot steer keeps its queue, then drains after Stop", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
     const room = (await api("POST", "/api/groups", {

@@ -21,6 +21,7 @@ import {
 } from "@hpke/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
 import { startFakeHttpMcp } from "./testing/fake-http-mcp-server.ts";
@@ -34,6 +35,7 @@ import {
   type PhoneSecretContext,
 } from "./phone-secret.ts";
 
+const boxAgentAvailable = BUILT_IN_DRIVERS.some(driver => driver.driverKind === "boxAgent");
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SERVER_DIR, "..");
 const FAKE_CLAUDE_CLI = join(SERVER_DIR, "testing", "fake-claude-cli.ts");
@@ -1162,7 +1164,7 @@ describe("harness HTTP API", () => {
       req.end();
     });
     expect(brand.status).toBe(200);
-    expect(Reflect.get(Object(Reflect.get(Object(brand.body), "brand")), "name")).toBe("OpenMausBot");
+    expect(Reflect.get(Object(Reflect.get(Object(brand.body), "brand")), "name")).toBe("BOS Bot");
     expect(await statusWithHeaders({ origin: "https://example.com" })).toBe(403);
     expect(await statusWithHeaders({ host: `127.0.0.2:${PORT}` })).toBe(200);
     expect(await statusWithHeaders({ host: `[::1]:${PORT}` })).toBe(200);
@@ -2693,7 +2695,7 @@ describe("harness HTTP API", () => {
     }
   }, 30_000);
 
-  it("shares one team computer across direct and room turns without overriding explicit destinations", async () => {
+  it.skipIf(!boxAgentAvailable)("shares one team computer across direct and room turns without overriding explicit destinations", async () => {
     const requestId = randomUUID();
     const section = `Shared machine ${requestId.slice(0, 8)}`;
     const botIds: string[] = [];
@@ -4803,7 +4805,7 @@ describe("harness HTTP API", () => {
     expect(patched.body.error).toContain("not recognized");
   });
 
-  it("buzzes when a turn dies before it can start", async () => {
+  it.skipIf(!boxAgentAvailable)("buzzes when a turn dies before it can start", async () => {
     // A dispatch failure already leaves an error row in the thread, but the
     // person who has to fix it is often not looking at the thread — the cause
     // is usually a setting, so no retry can clear it on its own. A routine
@@ -6165,7 +6167,7 @@ describe("harness HTTP API", () => {
     expect(cleared.body.task.surface).toBeUndefined();
   });
 
-  it("dispatches the conversation's pinned computer, never advertises a phantom Auto Box, and previews that same surface", async () => {
+  it.skipIf(!boxAgentAvailable)("dispatches the conversation's pinned computer, never advertises a phantom Auto Box, and previews that same surface", async () => {
     const bot = (await api("POST", "/api/bots", {
       name: "Surface routing fixture", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
     })).body.bot;
@@ -8698,7 +8700,7 @@ describe("harness HTTP API", () => {
     expect(saved.status).toBe(200);
     expect(saved.body.composio).toEqual({ configured: true, mode: "self-hosted" });
     expect(saved.body.opencodeGo).toEqual({ configured: true });
-    expect(saved.body.profile).toEqual({ name: "External Store", email: "" });
+    expect(saved.body.profile).toEqual({ name: "External Store", email: "", avatarUrl: "" });
     expect(JSON.stringify(saved.body)).not.toContain("ak_good");
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
@@ -8806,10 +8808,10 @@ describe("harness HTTP API", () => {
   it("stores and echoes the user profile (not write-only, unlike keys)", async () => {
     const put = await api("PUT", "/api/config", { profile: { name: "Ada Lovelace", email: "Ada@Example.com" } });
     expect(put.status).toBe(200);
-    expect(put.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
+    expect(put.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com", avatarUrl: "" });
 
     const after = await api("GET", "/api/config");
-    expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com" });
+    expect(after.body.profile).toEqual({ name: "Ada Lovelace", email: "Ada@Example.com", avatarUrl: "" });
   });
 
   it("creates an independent webhook, accepts a delivery, deduplicates it, and rotates its secret", async () => {
