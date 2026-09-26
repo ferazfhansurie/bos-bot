@@ -24,6 +24,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [memberCandidate, setMemberCandidate] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const cursor = useRef(0);
   const uploadedBySend = useRef(new Map<string, SharedAttachment[]>());
 
@@ -31,6 +32,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
     let alive = true;
     cursor.current = 0;
     uploadedBySend.current.clear();
+    setRoom(null);
     setMessages([]);
     void Promise.all([
       api<{ actorId: string | null }>("/api/multiplayer/me"),
@@ -46,7 +48,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       setError("");
     }).catch(cause => { if (alive) setError(cause instanceof Error ? cause.message : "Could not load conversation."); });
     return () => { alive = false; };
-  }, [roomId]);
+  }, [roomId, loadAttempt]);
 
   useEffect(() => {
     if (!room) return;
@@ -197,6 +199,6 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
     </div>}
   </div>;
 
-  if (!projected) return <main className="flex flex-1 items-center justify-center bg-app text-ink-secondary">{error || "Loading conversation…"}</main>;
+  if (!projected) return <main className="flex flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary">{error || "Loading conversation…"}{error && <button type="button" onClick={() => setLoadAttempt(value => value + 1)} className="rounded-lg bg-raised px-3 py-2 text-ink">Retry</button>}</main>;
   return <><ChatView bot={projected} shared={{ send, faces, actions }} />{error && <div role="alert" className="absolute bottom-24 left-1/2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>}</>;
 }

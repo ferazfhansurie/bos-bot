@@ -11640,6 +11640,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         sessions.revoke(auth.session.id);
         return json(res, 200, { scoped: true, token: issued.token });
       }
+      if (path === "/api/multiplayer/peer-rotate" && method === "POST") {
+        if (auth.kind !== "session" || !auth.scopes.includes("peer")) return json(res, 403, { error: "a peer session is required" });
+        if (Date.now() - auth.session.createdAt < 150 * 24 * 60 * 60_000) return json(res, 200, { rotated: false });
+        const issued = sessions.issue({ label: "BOS peer bridge", scopes: ["peer"] });
+        try {
+          peerThreads.grant(issued.session.id, peerThreads.list(auth.session.id));
+          const binding = multiplayerActors.bindingFor(auth.session.id);
+          if (binding) multiplayerActors.bind(issued.session.id, binding.personId, binding.name);
+        } catch (error) {
+          sessions.revoke(issued.session.id);
+          throw error;
+        }
+        sessions.revoke(auth.session.id);
+        return json(res, 200, { rotated: true, token: issued.token });
+      }
       if (method === "GET" && path === "/api/multiplayer/home") {
         return json(res, 200, { homeId: ENVIRONMENT_ID, name: cfg.profile?.name ?? "Owner", avatar: ownerPhotoData() });
       }
@@ -11835,6 +11850,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
           catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "could not link workspace" }); }
         }
+      }
+      m = path.match(/^\/api\/multiplayer\/links\/([\w-]+)$/);
+      if (m && method === "DELETE") {
+        if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+        const removed = await multiplayerLinks.remove(m[1]);
+        if (removed) remoteBots.sync();
+        return json(res, removed ? 200 : 404, removed ? { ok: true } : { error: "link unavailable" });
       }
       if (path === "/api/multiplayer/actor-bindings") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });

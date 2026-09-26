@@ -59,6 +59,9 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     expect(renamed).toMatchObject({ status: 200, body: { room: { name: "Renamed team", revision: 2 } } });
     expect(await links.forwardShared(`/api/multiplayer/rooms/${(room.body as any).room.id}`, "DELETE", { revision: 2 })).toMatchObject({ status: 200 });
     expect((await links.forwardShared("/api/multiplayer/rooms", "GET")).body).toMatchObject({ rooms: [] });
+    expect(await links.remove(added.homeId)).toBe(true);
+    expect(links.bridgeLinks()).toHaveLength(0);
+    expect((await remote("GET", "/api/auth/sessions")).body.sessions.filter((session: any) => session.label === "BOS multiplayer bridge")).toHaveLength(0);
   } finally {
     await fixture.close();
     rmSync(folder, { recursive: true, force: true });

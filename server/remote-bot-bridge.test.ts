@@ -243,7 +243,7 @@ describe("RemoteBotBridge", () => {
     const [bot] = await bridge.listBots(50);
     expect(bot!.threadId).toBe(`rt-${KEY}-bridge-1`);
     expect(bot!.tasks.map((task) => task.threadId)).toEqual([`rt-${KEY}-bridge-1`]);
-    expect(bot!.remote).toEqual({ homeId: HOME, homeName: "Putri's Mac", ownerName: "Putri" });
+    expect(bot!.remote).toEqual({ homeId: HOME, homeName: "Putri's Mac", ownerName: "Putri", online: false });
     expect(bot!.messages.map((message) => message.text)).toEqual(["hi pixie"]);
     expect(bot!.computer).toBe("off");
     // the thread was opened on B with this home's title, and B's own selection put back

@@ -3,7 +3,8 @@ import type { Bot } from "@/state/store";
 /** "on Putri's Mac" for a bot the server relays from a linked Mac; null for local bots. */
 export function remoteBotHint(bot: Pick<Bot, "remote">): string | null {
   if (!bot.remote) return null;
-  return `on ${bot.remote.ownerName?.trim() || bot.remote.homeName}'s Mac`;
+  const place = `on ${bot.remote.ownerName?.trim() || bot.remote.homeName}'s Mac`;
+  return bot.remote.online === false ? `offline · ${place}` : place;
 }
 
 /**

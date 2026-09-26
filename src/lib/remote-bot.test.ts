@@ -39,6 +39,7 @@ describe("remote bot controls", () => {
   it("names the Mac a relayed bot runs on", () => {
     expect(remoteBotHint({ remote })).toBe("on Putri's Mac");
     expect(remoteBotHint({ remote: { ...remote, ownerName: null } })).toBe("on Studio's Mac");
+    expect(remoteBotHint({ remote: { ...remote, online: false } })).toBe("offline · on Putri's Mac");
     expect(remoteBotHint({})).toBeNull();
   });
 });

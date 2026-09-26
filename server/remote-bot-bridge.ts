@@ -294,6 +294,12 @@ export class RemoteBotBridge {
     }
   }
 
+  private setConnected(home: Home, online: boolean): void {
+    if (home.connected === online) return;
+    home.connected = online;
+    for (const botId of Object.keys(home.state.bots)) this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, botId) });
+  }
+
   /** Match runtimes to the current links; starts a stream for a new link. */
   sync(): void {
     const links = this.options.links();
@@ -817,7 +823,8 @@ export class RemoteBotBridge {
   private virtualTask(home: Home, remoteThreadId: string): WireTask {
     const entry = home.state.threads[remoteThreadId]!;
     const task = entry.task ?? safeTask({ threadId: remoteThreadId, title: "Linked chat", createdAt: entry.createdAt });
-    return { ...task, threadId: this.threadId(home, remoteThreadId) };
+    return { ...task, threadId: this.threadId(home, remoteThreadId),
+      ...(!home.connected ? { busy: false, activity: "idle" as const } : {}) };
   }
 
   private virtualBot(home: Home, remoteBotId: string): WireBot & { tasks: WireTask[] } {
@@ -825,7 +832,7 @@ export class RemoteBotBridge {
     const tasks = this.threadsOf(home, remoteBotId).map((threadId) => this.virtualTask(home, threadId));
     const selected = this.selectedThread(home, remoteBotId);
     const task = selected ? tasks.find((candidate) => candidate.threadId === this.threadId(home, selected)) : undefined;
-    const remote: RemoteBotOrigin = { homeId: home.link.homeId, homeName: home.link.name, ownerName: home.link.ownerName };
+    const remote: RemoteBotOrigin = { homeId: home.link.homeId, homeName: home.link.name, ownerName: home.link.ownerName, online: home.connected };
     return {
       id: this.botId(home, remoteBotId),
       threadId: selected ? this.threadId(home, selected) : this.placeholder(home, remoteBotId),
@@ -846,8 +853,8 @@ export class RemoteBotBridge {
       ...((task?.autoApprove ?? bot.autoApprove) !== undefined ? { autoApprove: task?.autoApprove ?? bot.autoApprove } : {}),
       pinned: home.state.pinned[remoteBotId] === true,
       ...(task?.pinnedMessageId ? { pinnedMessageId: task.pinnedMessageId } : {}),
-      busy: task?.busy === true,
-      activity: task?.activity ?? "idle",
+      busy: home.connected && task?.busy === true,
+      activity: home.connected ? task?.activity ?? "idle" : "idle",
       createdAt: bot.createdAt,
       remote,
     };
@@ -941,6 +948,14 @@ export class RemoteBotBridge {
         home.link.token = migrated.body.token;
       }
       home.peerMigrated = true;
+    }
+    if (this.options.replaceLinkToken && home.peerMigrated) {
+      const rotation = await this.call(home, "POST", "/api/multiplayer/peer-rotate", {});
+      if (rotation.status !== 200) throw new BridgeError(rotation.status, String(rotation.body?.error ?? "peer session rotation failed"));
+      if (rotation.body?.rotated === true && typeof rotation.body.token === "string") {
+        this.options.replaceLinkToken(home.link.homeId, rotation.body.token);
+        home.link.token = rotation.body.token;
+      }
     }
     const result = await this.call(home, "GET", "/api/bots?messages=0");
     if (result.status !== 200 || !Array.isArray(result.body?.bots)) throw new BridgeError(502, "the other Mac did not list its bots");
@@ -1249,9 +1264,9 @@ export class RemoteBotBridge {
           await this.refreshSnapshot(home);
           await Promise.all([...home.cache.entries()].filter(([threadId, cache]) => cache.hydrated && home.state.threads[threadId])
             .map(([threadId]) => this.hydrate(home, threadId, true).catch(() => {})));
-          home.connected = true;
+          this.setConnected(home, true);
         } catch (error) {
-          home.connected = false;
+          this.setConnected(home, false);
           this.log(`${home.link.name}: peer refresh failed (${error instanceof Error ? error.message : "unknown"})`);
         }
         await new Promise<void>(resolveWait => {
@@ -1301,7 +1316,7 @@ export class RemoteBotBridge {
         }
       } finally {
         quiet();
-        home.connected = false;
+        this.setConnected(home, false);
         home.abort = null;
       }
       if (this.stopped || !home.running) break;
@@ -1332,7 +1347,7 @@ export class RemoteBotBridge {
     try { frame = JSON.parse(data.join("\n")); } catch { return false; }
     if (!isObject(frame)) return false;
     if (frame.kind === "hello") {
-      home.connected = true;
+      this.setConnected(home, true);
       if (frame.resumed !== true) {
         if (typeof frame.cursor === "string" && frame.cursor.length <= 64) home.cursor = frame.cursor;
         try { await this.resync(home); }

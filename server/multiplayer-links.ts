@@ -252,4 +252,18 @@ export class MultiplayerLinks {
     try { this.persist(); }
     catch (error) { link.token = previous; throw error; }
   }
+
+  async remove(homeId: string): Promise<boolean> {
+    const previous = this.links.get(homeId);
+    if (!previous) return false;
+    const primary = this.primary;
+    this.links.delete(homeId);
+    if (this.primary?.homeId === homeId) this.primary = null;
+    try { this.persist(); }
+    catch (error) { this.links.set(homeId, previous); this.primary = primary; throw error; }
+    await this.fetcher(new URL("/api/auth/logout", previous.origin), {
+      method: "POST", headers: { authorization: `Bearer ${previous.token}` }, redirect: "error", signal: AbortSignal.timeout(5_000),
+    }).catch(() => {});
+    return true;
+  }
 }

@@ -281,6 +281,7 @@ export const PEER_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegEx
   { methods: ["GET"], path: /^\/api\/auth\/session$/ },
   { methods: ["POST"], path: /^\/api\/auth\/logout$/ },
   { methods: ["POST"], path: /^\/api\/multiplayer\/peer-migrate$/ },
+  { methods: ["POST"], path: /^\/api\/multiplayer\/peer-rotate$/ },
   { methods: ["GET"], path: /^\/api\/multiplayer\/(?:home|me|contacts)$/ },
   { methods: ["POST"], path: /^\/api\/multiplayer\/(?:register|dm|push-token)$/ },
   { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms(?:\/[\w-]+\/messages)?$/ },
