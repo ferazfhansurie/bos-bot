@@ -1279,6 +1279,17 @@ export class RemoteBotBridge {
     const idleMs = this.options.idleTimeoutMs ?? 45_000;
     let attempt = 0;
     while (!this.stopped && home.running) {
+      // A 0.1.84 link cannot open the event stream anymore. Migrate its
+      // saved bridge-thread map before choosing the scoped polling path.
+      if (!home.peerMigrated && this.options.replaceLinkToken) {
+        try { await this.refreshSnapshot(home); }
+        catch (error) {
+          this.setConnected(home, false);
+          this.log(`${home.link.name}: peer migration failed (${error instanceof Error ? error.message : "unknown"})`);
+          await new Promise(resolveWait => setTimeout(resolveWait, delays[Math.min(attempt++, delays.length - 1)]));
+          continue;
+        }
+      }
       if (home.peerMigrated) {
         try {
           await this.refreshSnapshot(home);
