@@ -62,6 +62,20 @@ describe("shared room repository", () => {
     expect(() => store.append(room.id, contactId(putri), { actor: firaz, text: "forged", sendId: "forged" })).toThrow("actor mismatch");
     const reloaded = new SharedRoomRepository(file, firaz.homeId);
     expect(reloaded.messagesAfter(room.id, contactId(putri), 200)).toHaveLength(5);
-    expect(JSON.parse(readFileSync(file, "utf8")).rooms[0].messages).toHaveLength(205);
+    expect(JSON.parse(readFileSync(file, "utf8")).rooms[0].messages).toHaveLength(0);
+    expect(readFileSync(`${file}.events`, "utf8").trimEnd().split("\n")).toHaveLength(205);
+  });
+  it("preserves valid journal entries and quarantines a torn tail", () => {
+    const file = join(root, "journal", "rooms.json");
+    const firaz = { homeId: "firaz-home", kind: "person" as const, localId: "owner" };
+    const actorId = contactId(firaz);
+    const repo = new SharedRoomRepository(file, firaz.homeId);
+    const room = repo.create("Team", [actorId, contactId({ homeId: "putri-home", kind: "person", localId: "owner" })]);
+    repo.append(room.id, actorId, { actor: firaz, text: "kept", sendId: "one" });
+    writeFileSync(`${file}.events`, `${readFileSync(`${file}.events`, "utf8")}{\"truncated\":`, "utf8");
+    const recovered = new SharedRoomRepository(file, firaz.homeId);
+    expect(recovered.messagesAfter(room.id, actorId, 0).map(message => message.text)).toEqual(["kept"]);
+    expect(readdirSync(join(root, "journal")).some(name => name.startsWith("rooms.json.events.quarantine-"))).toBe(true);
+    expect(new SharedRoomRepository(file, firaz.homeId).messagesAfter(room.id, actorId, 0).map(message => message.text)).toEqual(["kept"]);
   });
 });

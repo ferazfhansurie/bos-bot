@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, truncateSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { quarantineSaved } from "./quarantine-saved.ts";
@@ -9,6 +9,7 @@ interface Snapshot {
   version: 1;
   rooms: Array<{ room: SharedRoom; messages: SharedTextMessage[] }>;
 }
+interface RoomEvent { roomId: string; id: string; at: number; input: unknown }
 
 /** Canonical-home storage. Caller authenticates the actor before append. */
 export class SharedRoomRepository {
@@ -36,6 +37,25 @@ export class SharedRoomRepository {
       } catch { invalid = true; }
     }
     if (invalid) quarantineSaved(file, { version: 1, rooms: [...this.rooms.values()].map(log => ({ room: log.room, messages: log.all() })) });
+    const journal = `${file}.events`;
+    if (existsSync(journal)) {
+      let broken = false;
+      for (const line of readFileSync(journal, "utf8").split("\n")) {
+        if (!line) continue;
+        try {
+          const event = JSON.parse(line) as RoomEvent;
+          if (!event || typeof event.roomId !== "string") throw new Error("invalid room event");
+          const log = this.rooms.get(event.roomId);
+          if (!log) throw new Error("room event has no room");
+          const result = log.append(event.input, event.id, event.at);
+          if (result.message.id !== event.id) throw new Error("room event conflicts with snapshot");
+        } catch { broken = true; break; }
+      }
+      if (broken) {
+        quarantineSaved(journal, "");
+        this.persist();
+      }
+    }
   }
 
   listFor(actorId: string): SharedRoom[] {
@@ -108,7 +128,7 @@ export class SharedRoomRepository {
     const before = log.all();
     const result = log.append(raw, randomUUID(), at);
     if (!result.created) return result;
-    try { this.persist(); }
+    try { this.appendEvent({ roomId, id: result.message.id, at: result.message.at, input: raw }); }
     catch (error) {
       // Recreate from the durable snapshot. A failed disk write must not
       // leave a message visible in memory that a restart would forget.
@@ -140,5 +160,25 @@ export class SharedRoomRepository {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     const snapshot: Snapshot = { version: 1, rooms: [...this.rooms.values()].map(log => ({ room: log.room, messages: log.all() })) };
     writeFileAtomic(this.file, JSON.stringify(snapshot), { mode: 0o600 });
+    const journal = `${this.file}.events`;
+    if (existsSync(journal)) {
+      try { writeFileAtomic(journal, "", { mode: 0o600 }); }
+      catch (error) { console.warn(`room journal compaction deferred: ${error instanceof Error ? error.message : "unknown"}`); }
+    }
+  }
+
+  private appendEvent(event: RoomEvent): void {
+    mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    const journal = `${this.file}.events`;
+    const previousSize = existsSync(journal) ? statSync(journal).size : 0;
+    const fd = openSync(journal, "a", 0o600);
+    try {
+      const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
+      if (writeSync(fd, bytes) !== bytes.length) throw new Error("short room journal write");
+      fsyncSync(fd);
+    } catch (error) {
+      try { truncateSync(journal, previousSize); } catch { /* replay quarantines a torn entry */ }
+      throw error;
+    } finally { closeSync(fd); }
   }
 }
