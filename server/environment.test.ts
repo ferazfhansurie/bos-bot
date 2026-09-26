@@ -123,6 +123,7 @@ describe("environment identity", () => {
       label: "cab mini",
       platform: process.platform,
       version: "0.1.99",
+      multiplayerProtocol: 1,
       capabilities: { remoteSessions: true, selfUpdate: "desktop-managed", emailSignIn: false },
     });
     expect(environmentDescriptor({ environmentId: "abc", desktopManaged: false }).capabilities.selfUpdate).toBe("operator");
