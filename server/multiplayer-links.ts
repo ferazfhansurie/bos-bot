@@ -141,7 +141,7 @@ export class MultiplayerLinks {
     if (!paired.ok) throw new Error(`other workspace refused pairing (${paired.status})`);
     const redeemed = await paired.json() as Record<string, any>;
     const scopes = redeemed.session?.scopes;
-    if (!Array.isArray(scopes) || !scopes.includes("client") || scopes.includes("admin") || typeof redeemed.token !== "string") {
+    if (!Array.isArray(scopes) || !scopes.includes("peer") || scopes.includes("admin") || typeof redeemed.token !== "string") {
       if (typeof redeemed.token === "string") {
         await this.fetcher(new URL("/api/auth/logout", origin), { method: "POST", headers: { authorization: `Bearer ${redeemed.token}` } }).catch(() => {});
       }
@@ -231,5 +231,15 @@ export class MultiplayerLinks {
     return [...this.links.values()].map(link => ({
       homeId: link.homeId, origin: link.origin, token: link.token, name: link.name, ownerName: link.ownerName ?? null,
     }));
+  }
+
+  replaceToken(homeId: string, token: string): void {
+    if (!/^omb_sess_[A-Za-z0-9_-]{43}$/.test(token)) throw new Error("invalid peer session token");
+    const link = this.links.get(homeId);
+    if (!link) throw new Error("peer link is unavailable");
+    const previous = link.token;
+    link.token = token;
+    try { this.persist(); }
+    catch (error) { link.token = previous; throw error; }
   }
 }

@@ -14,8 +14,8 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { writeFileAtomic } from "./atomic.ts";
 
-export type Scope = "admin" | "client";
-export const SCOPES: readonly Scope[] = ["admin", "client"];
+export type Scope = "admin" | "client" | "peer";
+export const SCOPES: readonly Scope[] = ["admin", "client", "peer"];
 
 export const PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const PAIRING_CODE_LENGTH = 12;
@@ -63,7 +63,7 @@ export const EXCHANGE_REPLAY_MS = 60_000;
 export const MAX_STREAM_TICKETS_PER_SESSION = 5;
 const LAST_SEEN_WRITE_INTERVAL_MS = 60_000;
 
-const scopeSchema = z.enum(["admin", "client"]);
+const scopeSchema = z.enum(["admin", "client", "peer"]);
 
 const sessionSchema = z.object({
   id: z.string().min(1),

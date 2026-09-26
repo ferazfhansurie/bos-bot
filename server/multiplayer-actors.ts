@@ -37,6 +37,11 @@ export class MultiplayerActors {
     return this.bindings.get(sessionId)?.personId ?? null;
   }
 
+  bindingFor(sessionId: string): { personId: string; name: string } | null {
+    const binding = this.bindings.get(sessionId);
+    return binding ? { personId: binding.personId, name: binding.name } : null;
+  }
+
   nameFor(personId: string): string | null {
     if (personId === this.ownerId) return null;
     for (const binding of this.bindings.values()) if (binding.personId === personId) return binding.name;

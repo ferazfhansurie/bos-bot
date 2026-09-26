@@ -16,6 +16,7 @@ import { compactBudget, contextWindowFor, shouldCompact } from "./context-budget
 import { autoCompactWindow } from "./drivers/claude.ts";
 import { SharedComputers, sharedComputerOperation, sharedComputerRegistration } from "./shared-computers.ts";
 import { MultiplayerActors } from "./multiplayer-actors.ts";
+import { PeerThreads, type PeerThread } from "./peer-threads.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
@@ -445,6 +446,7 @@ import {
   clearSessionCookie,
   clientBotPatchViolation,
   clientGroupPatchViolation,
+  isLegacyPeerSession,
   isLoopbackHost,
   isProxied,
   labelFromUserAgent,
@@ -518,6 +520,7 @@ const workspaceMaintenance = new WorkspaceBackupMaintenance();
 // for this server, the paired sessions, and the cookie the served UI uses.
 const ENVIRONMENT_ID = loadEnvironmentId(DATA_DIR);
 const multiplayerActors = new MultiplayerActors(join(DATA_DIR, "multiplayer-actors.json"), ENVIRONMENT_ID);
+const peerThreads = new PeerThreads(join(DATA_DIR, "peer-threads.json"));
 const apnsPush = new ApnsPush();
 const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.json"), ENVIRONMENT_ID);
 // A linked Mac's bots, shown here as ordinary bots (server/remote-bot-bridge.ts).
@@ -525,6 +528,7 @@ const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.
 const remoteBots = new RemoteBotBridge({
   file: join(DATA_DIR, "remote-bots.json"),
   links: () => multiplayerLinks.bridgeLinks(),
+  replaceLinkToken: (homeId, token) => multiplayerLinks.replaceToken(homeId, token),
   broadcast: (frame) => broadcast(frame),
   notify: (notification) => notify(notification),
   queuesChanged: () => broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() }),
@@ -1777,6 +1781,23 @@ const wireBot = (bot: BotRecord): WireBot => {
   return { ...visible, ...(activeCoordinationForThread(bot.threadId) && !visible.busy ? { busy: true, activity: "working" as const } : {}),
     avatarUrl: visible.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
 };
+
+function peerBotView(bot: BotRecord, sessionId: string) {
+  const tasks = store.tasks(bot.id).filter(task => peerThreads.owns(sessionId, bot.id, task.threadId)).map(task => ({
+    threadId: task.threadId, title: task.title, createdAt: task.createdAt,
+    modelSelection: task.modelSelection, approvalMode: "ask" as const, autoApprove: false,
+    unread: task.unread, busy: task.busy, activity: task.activity,
+  }));
+  const selected = tasks.at(-1);
+  return {
+    id: bot.id, name: bot.name, title: bot.title, description: bot.description,
+    color: bot.color, mascotExpression: bot.mascotExpression, mascotBody: bot.mascotBody,
+    avatarUrl: bot.avatarUrl ?? null, avatarCrop: bot.avatarCrop,
+    modelSelection: bot.modelSelection, notifications: bot.notifications, createdAt: bot.createdAt,
+    threadId: selected?.threadId ?? "", tasks, messages: [], hasMore: false, activeLeafId: null,
+    approvalMode: "ask" as const, autoApprove: false,
+  };
+}
 
 /** The correlated private response carries the requested value so Electron
  * can validate it before sending the confirmation that makes it effective. */
@@ -3306,6 +3327,8 @@ function closeSessionStreams(sessionId: string): void {
   }
 }
 sessions.onSessionRevoked((sessionId) => {
+  peerThreads.revoke(sessionId);
+  multiplayerActors.unbind(sessionId);
   providerAuthSessions.revokeOwner(sessionId);
   closeSessionStreams(sessionId);
 });
@@ -11530,6 +11553,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
+    const peerSessionId = auth.kind === "session" && auth.scopes.includes("peer") ? auth.session.id : null;
+    const peerOwns = (botId: string, threadId: unknown): boolean =>
+      !peerSessionId || (typeof threadId === "string" && peerThreads.owns(peerSessionId, botId, threadId));
     if (HOSTED_WORKSPACE && auth.kind === "session") {
       const failure = workspaceAccess
         ? await workspaceAccess.authorize(req, auth)
@@ -11543,6 +11569,41 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const actorId = auth.kind === "loopback"
         ? multiplayerActors.ownerId
         : multiplayerActors.actorFor(auth.session.id);
+      if (path === "/api/multiplayer/peer-migrate" && method === "POST") {
+        if (auth.kind !== "session") return json(res, 403, { error: "a linked peer session is required" });
+        if (auth.scopes.includes("peer")) return json(res, 200, { scoped: true });
+        if (!isLegacyPeerSession(auth.session)) return json(res, 403, { error: "this session is not a peer link" });
+        const body = await readBody(req, 96_000);
+        if (!Array.isArray(body?.threads) || body.threads.length > 1000) return json(res, 400, { error: "bridge thread map required" });
+        const threads: PeerThread[] = [];
+        const binding = multiplayerActors.bindingFor(auth.session.id);
+        for (const entry of body.threads) {
+          if (!entry || typeof entry.botId !== "string" || typeof entry.threadId !== "string" ||
+              !/^[\w-]{1,128}$/.test(entry.botId) || !/^[\w-]{1,128}$/.test(entry.threadId)) {
+            return json(res, 400, { error: "invalid bridge thread map" });
+          }
+          const task = store.taskByThread(entry.botId, entry.threadId);
+          const targetBot = store.bot(entry.botId);
+          const title = task?.title ?? "";
+          const privateBridge = binding ? title === `${binding.name} · linked Mac` : / · linked Mac$/.test(title);
+          if (!task || !targetBot || targetBot.hidden || (!privateBridge && !title.startsWith("room · "))) {
+            return json(res, 409, { error: "a renamed or private thread needs owner review before peer migration" });
+          }
+          if (threadBusy(entry.botId, entry.threadId)) return json(res, 409, { error: "wait for the bridge thread to finish before migrating" });
+          threads.push({ botId: entry.botId, threadId: entry.threadId });
+        }
+        for (const entry of threads) store.patchTask(entry.botId, entry.threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [] });
+        const issued = sessions.issue({ label: "BOS peer bridge", scopes: ["peer"] });
+        try {
+          peerThreads.grant(issued.session.id, threads);
+          if (binding) multiplayerActors.bind(issued.session.id, binding.personId, binding.name);
+        } catch (error) {
+          sessions.revoke(issued.session.id);
+          throw error;
+        }
+        sessions.revoke(auth.session.id);
+        return json(res, 200, { scoped: true, token: issued.token });
+      }
       if (method === "GET" && path === "/api/multiplayer/home") {
         return json(res, 200, { homeId: ENVIRONMENT_ID, name: cfg.profile?.name ?? "Owner", avatar: ownerPhotoData() });
       }
@@ -11568,14 +11629,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (path === "/api/multiplayer/invites" && method === "POST") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
-        const origin = tailnetOrigin();
+        const origin = await tailnetOrigin();
         if (!origin) return json(res, 503, { error: "private Tailscale address is unavailable" });
         const body = await readBody(req, 1024);
         const personId = typeof body?.personId === "string" ? body.personId : undefined;
         if (personId && !multiplayerActors.people(cfg.profile?.name ?? "Owner").some(person => person.id === personId && person.id !== multiplayerActors.ownerId)) {
           return json(res, 400, { error: "choose an existing person" });
         }
-        const opened = sessions.openPairing({ scopes: ["client"], label: "BOS team member" });
+        const opened = sessions.openPairing({ scopes: ["peer"], label: "BOS team member" });
         teamInvites.set(opened.id, { expiresAt: opened.expiresAt, personId });
         return json(res, 201, { url: `${origin}/pair#code=${opened.code}`, expiresAt: opened.expiresAt });
       }
@@ -11599,31 +11660,48 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const personId = pending.personId ?? (matchingPeople.length === 1 ? matchingPeople[0].id : contactId({ homeId: link.homeId, kind: "person", localId: "owner" }));
           multiplayerActors.bind(auth.session.id, personId, remoteHome.name);
           pendingTeamJoins.delete(auth.session.id);
+          remoteBots.sync();
           return json(res, 201, { actorId: personId, homeId: ENVIRONMENT_ID });
         } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "could not register workspace" }); }
       }
       if (path === "/api/multiplayer/join" && method === "POST") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
-        const ownOrigin = tailnetOrigin();
-        if (!ownOrigin) return json(res, 503, { error: "private Tailscale address is unavailable" });
         const body = await readBody(req, 4096);
         if (typeof body?.url !== "string") return json(res, 400, { error: "team invitation required" });
+        let pairedToken: string | null = null;
+        let localSessionId: string | null = null;
+        let homeOrigin: string | null = null;
+        let linked = false;
         try {
           const invite = new URL(body.url);
+          const ownOrigin = await tailnetOrigin(invite.origin);
+          if (!ownOrigin) return json(res, 503, { error: "no Running Tailscale client matches that peer's tailnet" });
           const code = new URLSearchParams(invite.hash.slice(1)).get("code");
           if (invite.protocol !== "https:" || !invite.hostname.endsWith(".ts.net") || invite.pathname !== "/pair" || invite.username || invite.password || !code || !/^[A-Z0-9-]{12,20}$/i.test(code)) throw new Error("invalid team invitation");
-          const homeOrigin = invite.origin;
+          homeOrigin = invite.origin;
           const pairedResponse = await fetch(new URL("/api/auth/pair", homeOrigin), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, label: "BOS team link" }), redirect: "error", signal: AbortSignal.timeout(20_000) });
           if (!pairedResponse.ok) throw new Error("team invitation expired or was already used");
           const paired = await pairedResponse.json() as { token?: string; session?: { scopes?: string[] } };
-          if (typeof paired.token !== "string" || !paired.session?.scopes?.includes("client") || paired.session.scopes.includes("admin")) throw new Error("team invitation must be chat only");
-          const local = sessions.issue({ label: "BOS team bridge", scopes: ["client"] });
+          pairedToken = typeof paired.token === "string" ? paired.token : null;
+          if (typeof paired.token !== "string" || !paired.session?.scopes?.some(scope => scope === "peer" || scope === "client") || paired.session.scopes.includes("admin")) throw new Error("team invitation must be chat only");
+          const local = sessions.issue({ label: "BOS peer bridge", scopes: ["peer"] });
+          localSessionId = local.session.id;
           const registered = await fetch(new URL("/api/multiplayer/register", homeOrigin), { method: "POST", headers: { authorization: `Bearer ${paired.token}`, "content-type": "application/json" }, body: JSON.stringify({ origin: ownOrigin, token: local.token }), redirect: "error", signal: AbortSignal.timeout(30_000) });
           if (!registered.ok) throw new Error(`other workspace refused registration (${registered.status})`);
-          const linked = await multiplayerLinks.addVerified(homeOrigin, paired.token);
-          const primary = await multiplayerLinks.setPrimary(linked.homeId);
-          return json(res, 201, { link: linked, primary });
-        } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "could not join team" }); }
+          const added = await multiplayerLinks.addVerified(homeOrigin, paired.token);
+          linked = true;
+          const primary = await multiplayerLinks.setPrimary(added.homeId);
+          remoteBots.sync();
+          return json(res, 201, { link: added, primary });
+        } catch (error) {
+          if (!linked) {
+            if (localSessionId) sessions.revoke(localSessionId);
+            if (pairedToken && homeOrigin) await fetch(new URL("/api/auth/logout", homeOrigin), {
+              method: "POST", headers: { authorization: `Bearer ${pairedToken}` }, redirect: "error", signal: AbortSignal.timeout(5_000),
+            }).catch(() => {});
+          }
+          return json(res, 400, { error: error instanceof Error ? error.message : "could not join team" });
+        }
       }
       if (path === "/api/multiplayer/primary") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
@@ -11712,7 +11790,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (method === "POST") {
           const body = await readBody(req, 4096);
           if (typeof body?.pairingUrl !== "string") return json(res, 400, { error: "pairingUrl required" });
-          try { return json(res, 201, { link: await multiplayerLinks.addFromPairingUrl(body.pairingUrl) }); }
+          try {
+            const link = await multiplayerLinks.addFromPairingUrl(body.pairingUrl);
+            remoteBots.sync();
+            return json(res, 201, { link });
+          }
           catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "could not link workspace" }); }
         }
       }
@@ -11735,6 +11817,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (m && method === "DELETE") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
         const removed = multiplayerActors.unbind(m[1]);
+        if (removed) sessions.revoke(m[1]);
         return json(res, removed ? 200 : 404, removed ? { ok: true } : { error: "binding unavailable" });
       }
       if (!actorId) return json(res, 403, { error: "this device has not been assigned to a person" });
@@ -11903,7 +11986,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 401, { error: "Your session ended. Sign in again before creating a pairing code." });
       }
       const requested: unknown = body?.scopes;
-      const scopes = Array.isArray(requested) ? requested.filter((v): v is Scope => v === "admin" || v === "client") : undefined;
+      const scopes = Array.isArray(requested) ? requested.filter((v): v is Scope => v === "admin" || v === "client" || v === "peer") : undefined;
       const opened = sessions.openPairing({ label: typeof body?.label === "string" ? body.label : undefined, scopes });
       const origin = requestOrigin(req);
       const base = publicUrl() ?? (auth.kind === "session" && origin ? origin : null);
@@ -14101,6 +14184,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     };
     if (method === "GET" && path === "/api/bots") {
+      if (peerSessionId) return json(res, 200, {
+        bots: store.bots.filter(bot => !bot.hidden).map(bot => peerBotView(bot, peerSessionId)),
+        botQueuedMessages: {}, sections: [], groups: [], computerControl: {},
+      });
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       // wireBot(), not publicBot(): publicBot() pulls the whole transcript via
@@ -14131,6 +14218,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     m = path.match(/^\/api\/threads\/([\w-]+)\/messages$/);
     if (m && method === "GET") {
       const threadId = m[1];
+      if (peerSessionId && !peerThreads.botFor(peerSessionId, threadId)) return json(res, 403, { error: "thread is not part of this peer link" });
       if (!store.botByThread(threadId) && !store.groupByThread(threadId)) {
         return json(res, 404, { error: "no such conversation" });
       }
@@ -15525,6 +15613,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "POST") {
       const body = await readBody(req);
       requirePinnedClientThread(m[1], body?.threadId);
+      if (!peerOwns(m[1], body?.threadId)) return json(res, 403, { error: "thread is not part of this peer link" });
       const current = requestedTaskBot(m[1], body?.threadId);
       store.patchTask(current.id, current.threadId, { unread: false });
       const bot = store.bot(current.id)!;
@@ -16505,6 +16594,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // receipt after a task switch, while a genuinely new send still has to
       // target the task that is active now.
       const threadId = body.threadId ?? bot.threadId;
+      if (!peerOwns(bot.id, threadId)) return json(res, 403, { error: "thread is not part of this peer link" });
       if (!guarded) noteTurnTrigger(threadId, auth);
       // The send is acknowledged before the turn starts, so a workspace at its
       // spend limit is refused here, where the person can see it.
@@ -16956,6 +17046,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const body = rawBody ?? {};
       requirePinnedClientThread(bot.id, body.threadId);
       const expectedThreadId = body.threadId;
+      if (!peerOwns(bot.id, expectedThreadId)) return json(res, 403, { error: "thread is not part of this peer link" });
       if (expectedThreadId !== undefined && (typeof expectedThreadId !== "string" || !/^[\w-]+$/.test(expectedThreadId))) {
         return json(res, 400, { error: "threadId must be a task id" });
       }
@@ -17072,6 +17163,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (peerSessionId && (bot.hidden || body?.projectId !== undefined || body?.approvalMode !== undefined)) {
+        return json(res, 403, { error: "peer tasks cannot change bot permissions or projects" });
+      }
       if (phoneSecretSubmissions.hasBot(bot.id)) {
         return json(res, 409, { error: "this bot is securely saving a credential — try again when it finishes" });
       }
@@ -17080,14 +17174,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const task = store.createTask(bot.id, typeof body.title === "string" ? body.title : undefined, true, body.projectId);
       if (!task) return json(res, 500, { error: "couldn't create that task" });
+      if (peerSessionId) {
+        store.patchTask(bot.id, task.threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [] });
+        peerThreads.add(peerSessionId, { botId: bot.id, threadId: task.threadId });
+      }
       const fresh = botWithThread(store.bot(bot.id)!);
       broadcast({ kind: "bot", bot: fresh });
+      if (peerSessionId) return json(res, 201, { bot: peerBotView(store.bot(bot.id)!, peerSessionId), task: wireTask(store.taskByThread(bot.id, task.threadId)!) });
       return json(res, 201, { bot: fresh, task: wireTask(task) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/tasks\/([\w-]+)$/);
     if (m && method === "POST") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (!peerOwns(bot.id, m[2])) return json(res, 403, { error: "thread is not part of this peer link" });
       if (phoneSecretSubmissions.hasBot(bot.id)) {
         return json(res, 409, { error: "this bot is securely saving a credential — try again when it finishes" });
       }
@@ -17095,6 +17195,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const requestedMessages = url.searchParams.get("messages");
       const switchLimit = pageSize(requestedMessages);
       if (switchLimit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
+      if (peerSessionId) return json(res, 200, { bot: {
+        ...peerBotView(bot, peerSessionId),
+        threadId: m[2],
+        ...messagePage(m[2], switchLimit ?? DEFAULT_PAGE),
+      } });
       const switched = store.switchTask(bot.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such task" });
       const switchedSettings = { ...wireBot(switched), tasks: store.tasks(switched.id).map(wireTask) };
@@ -17198,6 +17303,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (m && method === "DELETE") {
       const bot = store.bot(m[1]);
+      if (!peerOwns(m[1], m[2])) return json(res, 403, { error: "thread is not part of this peer link" });
       if (!bot || !store.taskByThread(bot.id, m[2])) {
         return json(res, 404, { error: "no such task" });
       }

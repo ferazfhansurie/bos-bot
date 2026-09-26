@@ -49,6 +49,7 @@ export interface BridgeLink {
 export interface RemoteBotBridgeOptions {
   file: string;
   links: () => BridgeLink[];
+  replaceLinkToken?: (homeId: string, token: string) => void;
   broadcast: (frame: Record<string, unknown>) => void;
   notify?: (notification: Notification) => void;
   /** The merged bot.queued snapshot changed. */
@@ -126,6 +127,7 @@ interface Home {
   cursor: string | null;
   running: boolean;
   connected: boolean;
+  peerMigrated?: boolean;
   abort: AbortController | null;
   wake: (() => void) | null;
   snapshotAt: number;
@@ -925,6 +927,18 @@ export class RemoteBotBridge {
   // ── snapshot and threads ──────────────────────────────────────────────
 
   private async refreshSnapshot(home: Home): Promise<void> {
+    if (this.options.replaceLinkToken && !home.peerMigrated) {
+      const threads = Object.entries(home.state.threads).map(([threadId, entry]) => ({ botId: entry.botId, threadId }));
+      const migrated = await this.call(home, "POST", "/api/multiplayer/peer-migrate", { threads });
+      if (migrated.status !== 200 || migrated.body?.scoped !== true) {
+        throw new BridgeError(migrated.status, String(migrated.body?.error ?? `update BOS on ${home.link.name} to finish peer security`));
+      }
+      if (typeof migrated.body?.token === "string") {
+        this.options.replaceLinkToken(home.link.homeId, migrated.body.token);
+        home.link.token = migrated.body.token;
+      }
+      home.peerMigrated = true;
+    }
     const result = await this.call(home, "GET", "/api/bots?messages=0");
     if (result.status !== 200 || !Array.isArray(result.body?.bots)) throw new BridgeError(502, "the other Mac did not list its bots");
     const seen = new Set<string>();
@@ -1053,9 +1067,11 @@ export class RemoteBotBridge {
     // B copies the bot's approval mode and always-allow list into a new
     // thread and its create route takes no approval setting. Reset the thread
     // to Ask with no grants before it is used; if B will not, it is removed.
-    const reset = await this.call(home, "PATCH", `/api/bots/${botId}/tasks/${threadId}`, {
-      modelSelection: task.modelSelection, resetApprovalToAsk: true,
-    }).catch(() => null);
+    const reset = task.approvalMode === "ask" && task.autoApprove !== true
+      ? { status: 200, body: { task } }
+      : await this.call(home, "PATCH", `/api/bots/${botId}/tasks/${threadId}`, {
+        modelSelection: task.modelSelection, resetApprovalToAsk: true,
+      }).catch(() => null);
     const confirmed = reset?.status === 200 && isObject(reset.body?.task) && reset.body.task.threadId === threadId &&
       reset.body.task.approvalMode === "ask" && reset.body.task.autoApprove !== true;
     if (!confirmed) {
@@ -1225,6 +1241,22 @@ export class RemoteBotBridge {
     const idleMs = this.options.idleTimeoutMs ?? 45_000;
     let attempt = 0;
     while (!this.stopped && home.running) {
+      if (home.peerMigrated) {
+        try {
+          await this.refreshSnapshot(home);
+          await Promise.all([...home.cache.entries()].filter(([threadId, cache]) => cache.hydrated && home.state.threads[threadId])
+            .map(([threadId]) => this.hydrate(home, threadId, true).catch(() => {})));
+          home.connected = true;
+        } catch (error) {
+          home.connected = false;
+          this.log(`${home.link.name}: peer refresh failed (${error instanceof Error ? error.message : "unknown"})`);
+        }
+        await new Promise<void>(resolveWait => {
+          const timer = setTimeout(resolveWait, 5_000);
+          home.wake = () => { clearTimeout(timer); resolveWait(); };
+        });
+        continue;
+      }
       const controller = new AbortController();
       home.abort = controller;
       let idle: ReturnType<typeof setTimeout> | undefined;

@@ -266,6 +266,33 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/config$/ },
 ];
 
+const LEGACY_PEER_LABELS = new Set(["BOS multiplayer bridge", "BOS team link", "BOS team bridge"]);
+export function isLegacyPeerSession(session: SessionRecord): boolean {
+  return session.scopes.includes("client") && !session.scopes.includes("admin") && LEGACY_PEER_LABELS.has(session.label);
+}
+
+/** Peers have room membership plus their own bridge threads. No approvals,
+ * export, search, events, config, files, routines or task PATCH. Thread IDs
+ * are checked again against PeerThreads in the server handler. */
+export const PEER_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegExp }> = [
+  { methods: ["GET"], path: /^\/api\/(?:health|edition|brand|bots)$/ },
+  { methods: ["GET"], path: /^\/api\/auth\/session$/ },
+  { methods: ["POST"], path: /^\/api\/auth\/logout$/ },
+  { methods: ["POST"], path: /^\/api\/multiplayer\/peer-migrate$/ },
+  { methods: ["GET"], path: /^\/api\/multiplayer\/(?:home|me|contacts)$/ },
+  { methods: ["POST"], path: /^\/api\/multiplayer\/(?:register|dm|push-token)$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms(?:\/[\w-]+\/messages)?$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/attachments(?:\/[\w-]+)?$/ },
+  { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
+  { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/(?:messages|tasks|read|interrupt)$/ },
+  { methods: ["POST", "DELETE"], path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
+];
+
+export function peerAllowed(method: string, path: string): boolean {
+  const upper = method.toUpperCase();
+  return PEER_ALLOW.some(rule => rule.methods.includes(upper) && rule.path.test(path));
+}
+
 export function requiredScope(method: string, path: string, features: { sharedComputers?: boolean } = {}): Scope {
   const upper = method.toUpperCase();
   for (const rule of CLIENT_ALLOW) {
@@ -364,9 +391,19 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
 
   if (session && via) {
     if (via === "cookie" && !isSameOrigin(req)) return deny(403, "forbidden: cross-origin request");
-    const needed = requiredScope(method, path, options.features ?? {});
-    if (!session.scopes.includes(needed)) {
-      return deny(403, `forbidden: this session lacks the ${needed} scope`);
+    const legacyPeer = isLegacyPeerSession(session);
+    if (legacyPeer && !((method === "POST" && (path === "/api/multiplayer/peer-migrate" || path === "/api/multiplayer/register" || path === "/api/auth/logout")) ||
+      (method === "GET" && path === "/api/health"))) {
+      return deny(403, "update BOS on this Mac to finish the private peer link migration");
+    }
+    if (legacyPeer) {
+      // The legacy credential is valid only for exchanging its saved bridge
+      // map for a peer token. It cannot keep using broad client routes.
+    } else if (session.scopes.includes("peer") && !session.scopes.includes("admin")) {
+      if (!peerAllowed(method, path)) return deny(403, "forbidden: this peer session cannot use that route");
+    } else {
+      const needed = requiredScope(method, path, options.features ?? {});
+      if (!session.scopes.includes(needed)) return deny(403, `forbidden: this session lacks the ${needed} scope`);
     }
     // Only a request that passed both checks counts as use of the session,
     // and only a request the client made itself: redeeming a stream ticket
