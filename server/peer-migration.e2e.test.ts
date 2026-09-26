@@ -33,10 +33,18 @@ it("migrates a 0.1.84 bridge thread without granting private conversations", asy
       threads: [{ botId, threadId: ownThread }],
     }, oldToken);
     expect(migrated.status).toBe(200);
-    const peerToken = migrated.body.token as string;
-    expect((await request("GET", "/api/bots", undefined, oldToken)).status).toBe(401);
+    // The first reply can be lost in transit. The restricted legacy token
+    // remains retryable until a new token makes its first request.
+    expect((await request("GET", "/api/bots", undefined, oldToken)).status).toBe(403);
+    const retried = await request("POST", "/api/multiplayer/peer-migrate", {
+      threads: [{ botId, threadId: ownThread }],
+    }, oldToken);
+    expect(retried.status).toBe(200);
+    expect((await request("GET", "/api/bots", undefined, migrated.body.token)).status).toBe(401);
+    const peerToken = retried.body.token as string;
     const listing = await request("GET", "/api/bots?messages=0", undefined, peerToken);
     expect(listing.status).toBe(200);
+    expect((await request("GET", "/api/bots", undefined, oldToken)).status).toBe(401);
     expect(listing.body.bots[0].tasks.map((task: any) => task.threadId)).toEqual([ownThread]);
     expect((await request("GET", `/api/threads/${ownThread}/messages`, undefined, peerToken)).status).toBe(200);
     expect((await request("GET", `/api/threads/${privateThread}/messages`, undefined, peerToken)).status).toBe(403);

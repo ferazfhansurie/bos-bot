@@ -17,6 +17,7 @@ import { autoCompactWindow } from "./drivers/claude.ts";
 import { SharedComputers, sharedComputerOperation, sharedComputerRegistration } from "./shared-computers.ts";
 import { MultiplayerActors } from "./multiplayer-actors.ts";
 import { PeerThreads, type PeerThread } from "./peer-threads.ts";
+import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
@@ -521,6 +522,7 @@ const workspaceMaintenance = new WorkspaceBackupMaintenance();
 const ENVIRONMENT_ID = loadEnvironmentId(DATA_DIR);
 const multiplayerActors = new MultiplayerActors(join(DATA_DIR, "multiplayer-actors.json"), ENVIRONMENT_ID);
 const peerThreads = new PeerThreads(join(DATA_DIR, "peer-threads.json"));
+const peerHandoffs = new PeerHandoffs(join(DATA_DIR, "peer-handoffs.json"));
 const apnsPush = new ApnsPush();
 const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.json"), ENVIRONMENT_ID);
 // A linked Mac's bots, shown here as ordinary bots (server/remote-bot-bridge.ts).
@@ -3327,6 +3329,7 @@ function closeSessionStreams(sessionId: string): void {
   }
 }
 sessions.onSessionRevoked((sessionId) => {
+  peerHandoffs.forget(sessionId);
   peerThreads.revoke(sessionId);
   multiplayerActors.unbind(sessionId);
   providerAuthSessions.revokeOwner(sessionId);
@@ -11609,6 +11612,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
+    if (auth.kind === "session") {
+      const replaced = peerHandoffs.confirm(auth.session.id);
+      if (replaced) sessions.revoke(replaced);
+    }
     const peerSessionId = auth.kind === "session" && auth.scopes.includes("peer") && !auth.scopes.includes("client") && !auth.scopes.includes("admin")
       ? auth.session.id : null;
     const peerOwns = (botId: string, threadId: unknown): boolean =>
@@ -11658,7 +11665,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           sessions.revoke(issued.session.id);
           throw error;
         }
-        sessions.revoke(auth.session.id);
+        let superseded: string | null;
+        try { superseded = peerHandoffs.prepare(auth.session.id, issued.session.id); }
+        catch (error) { sessions.revoke(issued.session.id); throw error; }
+        if (superseded) sessions.revoke(superseded);
         return json(res, 200, { scoped: true, token: issued.token });
       }
       if (path === "/api/multiplayer/peer-rotate" && method === "POST") {
@@ -11673,7 +11683,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           sessions.revoke(issued.session.id);
           throw error;
         }
-        sessions.revoke(auth.session.id);
+        let superseded: string | null;
+        try { superseded = peerHandoffs.prepare(auth.session.id, issued.session.id); }
+        catch (error) { sessions.revoke(issued.session.id); throw error; }
+        if (superseded) sessions.revoke(superseded);
         return json(res, 200, { rotated: true, token: issued.token });
       }
       if (method === "GET" && path === "/api/multiplayer/home") {
