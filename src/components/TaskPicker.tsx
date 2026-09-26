@@ -451,7 +451,8 @@ export function TaskPicker({ bot }: { bot: Bot }) {
       onSwitch={(threadId) => dispatch({ type: "switchTask", botId: bot.id, threadId })}
       onRename={(threadId, title) => dispatch({ type: "renameTask", botId: bot.id, threadId, title })}
       onDelete={(threadId) => dispatch({ type: "deleteTask", botId: bot.id, threadId })}
-      onMove={(threadId, projectId) => dispatch({ type: "updateTask", botId: bot.id, threadId, patch: { projectId } })}
+      // folders stay with the owner of a bot relayed from a linked Mac
+      onMove={bot.remote ? undefined : (threadId, projectId) => dispatch({ type: "updateTask", botId: bot.id, threadId, patch: { projectId } })}
       onAttentionJump={(entry) => dispatch({ type: "switchTask", botId: entry.botId, threadId: entry.task.threadId })}
     />
   );

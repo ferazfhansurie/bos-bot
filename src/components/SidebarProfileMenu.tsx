@@ -21,7 +21,7 @@ import {
   Smartphone,
 } from "lucide-react";
 
-import { InitialsAvatar } from "./Avatar";
+import { InitialsAvatar, PersonPhoto } from "./Avatar";
 import { DiscordIcon } from "./DiscordIcon";
 import { AboutDialog } from "./AboutDialog";
 import { SidebarPopoverMenu, type SidebarMenuItem } from "./SidebarPopoverMenu";
@@ -260,7 +260,7 @@ export function SidebarProfileMenu() {
               open ? "bg-raised" : "hover:bg-raised/50",
             )}
           >
-            <InitialsAvatar initials={profileInitials(profile)} size={28} />
+            {profile?.avatarUrl ? <PersonPhoto src={profile.avatarUrl} size={28} /> : <InitialsAvatar initials={profileInitials(profile)} size={28} />}
             <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{name}</span>
             {/* an update is the one thing worth interrupting the name for, so
               * it sits on the row rather than waiting to be found in the menu */}

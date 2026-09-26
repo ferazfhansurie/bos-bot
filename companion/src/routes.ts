@@ -76,7 +76,6 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // configured-or-not booleans. The write side is refused below: reading
   // which providers are set up is not reading their keys.
   { method: "GET", path: /^\/api\/config$/ },
-  { method: "GET", path: /^\/api\/provider-usage$/ },
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
   { method: "GET", path: /^\/api\/team-map$/ },
@@ -128,6 +127,19 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // rooms — making one, and talking in one
   { method: "POST", path: /^\/api\/groups$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
+  // Shared people chats remain bound to the owner identity when reached
+  // through this owner's paired companion; remote people use server sessions.
+  { method: "GET", path: /^\/api\/multiplayer\/me$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/contacts$/ },
+  { method: "PUT", path: /^\/api\/multiplayer\/profile-photo$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/rooms$/ },
+  { method: "POST", path: /^\/api\/multiplayer\/rooms$/ },
+  { method: "POST", path: /^\/api\/multiplayer\/dm$/ },
+  { method: "POST", path: /^\/api\/multiplayer\/push-token$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/messages$/ },
+  { method: "POST", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/messages$/ },
+  { method: "POST", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/attachments$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/attachments\/[\w-]+$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/interrupt$/ },
   { method: "DELETE", path: /^\/api\/groups\/[\w-]+\/queue\/[\w-]+$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/read$/ },

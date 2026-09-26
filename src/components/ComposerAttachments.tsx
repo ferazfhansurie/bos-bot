@@ -20,6 +20,21 @@ export function pathForFile(file: File): string {
   return window.ogb?.getPathForFile?.(file) ?? "";
 }
 
+/** A bot on another Mac cannot read this Mac's disk, so a file that would
+ * attach by Finder path is refused with a clear reason; uploads still work. */
+export function uploadOnlyIntake(): { getPath: (file: File) => string; notice: (fallback: string | null) => string | null } {
+  const blocked: string[] = [];
+  return {
+    getPath: (file) => {
+      if (pathForFile(file)) blocked.push(file.name);
+      return "";
+    },
+    notice: (fallback) => blocked.length
+      ? `${blocked.join(", ")} can't be sent to a bot on another Mac. Only images, documents, and audio files upload.`
+      : fallback,
+  };
+}
+
 /** Renders pending attachments and their composer actions. */
 export function ComposerAttachments({
   items,
@@ -31,6 +46,7 @@ export function ComposerAttachments({
   onNotice,
   onPendingChange,
   uploadImage,
+  uploadOnly = false,
 }: {
   items: Attachment[];
   onAdd: (attachments: Attachment[]) => void;
@@ -41,14 +57,16 @@ export function ComposerAttachments({
   onNotice: (notice: string | null) => void;
   onPendingChange?: (pending: boolean) => void;
   uploadImage: (file: File) => Promise<Attachment | null>;
+  /** The recipient lives on another Mac: never attach by local path. */
+  uploadOnly?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<PreviewImage | null>(null);
   // dragenter/dragleave fire once per element crossed, so the overlay
   // tracks depth rather than the last event it happened to see
   const depth = useRef(0);
-  const callbacks = useRef({ onAdd, onNotice, onPendingChange, allowImages, uploadImage });
-  callbacks.current = { onAdd, onNotice, onPendingChange, allowImages, uploadImage };
+  const callbacks = useRef({ onAdd, onNotice, onPendingChange, allowImages, uploadImage, uploadOnly });
+  callbacks.current = { onAdd, onNotice, onPendingChange, allowImages, uploadImage, uploadOnly };
   const pendingDrops = useRef(new Set<symbol>());
 
   useEffect(() => {
@@ -81,11 +99,13 @@ export function ComposerAttachments({
       pendingDrops.current.add(operation);
       callbacks.current.onPendingChange?.(true);
       try {
-        const { attachments, notice: message } = await intakeFiles(files, {
+        const remote = callbacks.current.uploadOnly ? uploadOnlyIntake() : null;
+        const { attachments, notice } = await intakeFiles(files, {
           allowImages: callbacks.current.allowImages,
-          getPath: pathForFile,
+          getPath: remote?.getPath ?? pathForFile,
           uploadImage: callbacks.current.uploadImage,
         });
+        const message = remote ? remote.notice(notice) : notice;
         if (attachments.length) callbacks.current.onAdd(attachments);
         if (message) callbacks.current.onNotice(message);
       } finally {

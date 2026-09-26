@@ -259,7 +259,21 @@ export interface WireBot {
   /** What the bot is doing right now; transient like busy. */
   activity?: BotActivity;
   createdAt: number;
+  /** Present only on a bot that lives on another linked Mac and is relayed
+   * by this server (virtual id `rb-…`). Clients render it through the
+   * ordinary bot path and hide controls the relay refuses with 403. */
+  remote?: RemoteBotOrigin;
 }
+
+/** Where a relayed bot actually runs. Never carries the link credential. */
+export interface RemoteBotOrigin {
+  homeId: string;
+  homeName: string;
+  ownerName: string | null;
+}
+
+/** Error text every relay-refused bot route answers with (HTTP 403). */
+export const REMOTE_BOT_UNAVAILABLE = "not available for a bot on another Mac";
 
 /** One transcript line. Serialized as stored — the durable delivery
  * identity (roomRequest) rides the wire unchanged. */

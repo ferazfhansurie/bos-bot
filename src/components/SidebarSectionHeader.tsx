@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, GripVertical } from "lucide-react";
+import { ChevronDown, ChevronRight, GripVertical, Trash2 } from "lucide-react";
 import type { DragEvent, KeyboardEvent } from "react";
 
 import { cn } from "@/lib/cn";
@@ -18,6 +18,7 @@ export function SidebarSectionHeader({
   onDragStart,
   onDragEnd,
   onMove,
+  onDelete,
 }: {
   name: string;
   collapsed: boolean;
@@ -28,6 +29,7 @@ export function SidebarSectionHeader({
   onDragStart?: (event: DragEvent<HTMLSpanElement>) => void;
   onDragEnd?: () => void;
   onMove?: (direction: -1 | 1) => void;
+  onDelete?: () => void;
 }) {
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   const attentionLabel = attention ? sidebarAttentionLabel(attention) : "";
@@ -115,6 +117,11 @@ export function SidebarSectionHeader({
           <GripVertical size={13} />
         </span>
       )}
+      {onDelete && <button type="button" onClick={onDelete} title={`Delete empty team ${name}`}
+        aria-label={`Delete empty team ${name}`}
+        className="flex size-6 shrink-0 items-center justify-center rounded text-ink-secondary hover:bg-raised hover:text-danger">
+        <Trash2 size={13} />
+      </button>}
     </div>
   );
 }

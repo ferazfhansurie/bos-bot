@@ -32,6 +32,7 @@ import { cn } from "@/lib/cn";
 import { track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { callCapabilityHelp } from "@/lib/call-capability";
+import { botControlAvailable } from "@/lib/remote-bot";
 
 /** Spoken answers to a permission card. Anything else is read as a reply
  * to the bot, not as consent — an approval must never be granted by a
@@ -49,6 +50,7 @@ export function CallButton({ bot }: { bot: Bot }) {
       targetName={bot.name}
       voices={[bot.voice]}
       setupBotId={bot.id}
+      voiceSetup={botControlAvailable(bot, "voiceSetup")}
       requireExplicitVoices={false}
       onStart={() => track("call_started", { driver: bot.modelSelection?.instanceId })}
     />
@@ -60,6 +62,7 @@ export function CallTargetButton({
   targetName,
   voices,
   setupBotId,
+  voiceSetup = true,
   requireExplicitVoices,
   onStart,
 }: {
@@ -68,6 +71,8 @@ export function CallTargetButton({
   voices: Array<string | undefined>;
   /** Agent profile to open when voice setup is missing (rooms choose a member). */
   setupBotId?: string;
+  /** false when voice is set up elsewhere (a bot relayed from a linked Mac). */
+  voiceSetup?: boolean;
   /** Rooms cannot rely on one workspace fallback for multiple speakers. */
   requireExplicitVoices: boolean;
   onStart: () => void;
@@ -86,7 +91,7 @@ export function CallTargetButton({
     localVoice ||
     (configured && (requireExplicitVoices ? everyTargetHasVoice : Boolean(state.config?.tts?.ready || everyTargetHasVoice)));
   const unavailable = !active && (!capabilitiesReady || !supported || !voiceReady);
-  const voiceSetupRequired = capabilitiesReady && supported && !voiceReady;
+  const voiceSetupRequired = voiceSetup && capabilitiesReady && supported && !voiceReady;
   const [helpOpen, setHelpOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);

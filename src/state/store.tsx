@@ -13,7 +13,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { CloudBackend, EffortLevel, ServerFrame } from "../../shared/wire";
+import type { CloudBackend, EffortLevel, RemoteBotOrigin, ServerFrame } from "../../shared/wire";
 import type { TurnDigest } from "../../shared/digest";
 import type { ModelVariantOption, RuntimeEvent } from "../../shared/runtime-events";
 import type { MausColor, MausMotion } from "@/lib/mascot";
@@ -142,6 +142,8 @@ export interface Message {
   compaction?: import("../../shared/wire").WireMessage["compaction"];
   /** Provider-generated files attached to this assistant response. */
   attachments?: Array<{ kind: "image"; path: string; mime: string }>;
+  /** Federated media is room scoped and downloaded through its authorized transport. */
+  sharedAttachments?: Array<{ id: string; name: string; mime: string; size: number }>;
   card?: OptionCardData;
   connector?: ConnectorCardData;
   secret?: SecretRequestCardData;
@@ -417,6 +419,8 @@ export interface Bot {
   awaitingThreadSnapshot?: boolean;
   /** leaf of the visible conversation branch (see visibleMessages) */
   activeLeafId?: string | null;
+  /** Set when this bot lives on a linked Mac and the server relays it. */
+  remote?: RemoteBotOrigin;
 }
 
 export interface BotProject {
@@ -539,7 +543,7 @@ export interface ConfigStatus {
     customKeyConfigured?: boolean;
   };
   /** who's using the app — collected in onboarding, shown in the sidebar */
-  profile?: { name: string; email: string };
+  profile?: { name: string; email: string; avatarUrl?: string };
   /** UI language override; "" (or absent) follows the system language. */
   language?: string;
   /** Opt-in flags. Absent means off. */
@@ -728,7 +732,8 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "team-map" | "routines";
+  activeView: "chat" | "team-map" | "routines" | "shared";
+  selectedSharedRoomId: string | null;
   routines: Routine[];
   routineRuns: RoutineRun[];
   routinesLoadState: "loading" | "ready" | "error";
@@ -890,6 +895,10 @@ export type Action =
     }
   | { type: "botQueues"; queues: AppState["pendingQueued"] }
   | { type: "sections"; sections: string[] }
+  | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
+  | { type: "showTeamMap" }
+  | { type: "showChat" }
+  | { type: "selectSharedRoom"; roomId: string }
   | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
   | { type: "showTeamMap" }
   | { type: "showChat" }
@@ -1300,6 +1309,9 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "showChat":
       return state.activeView === "chat" ? state : { ...state, activeView: "chat" };
+    case "selectSharedRoom":
+      return { ...state, activeView: "shared", selectedSharedRoomId: action.roomId,
+        settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
     case "showTeamMap":
       return {
         ...state,
@@ -2086,6 +2098,7 @@ export const initialState: AppState = {
   config: null,
   selectedId: "",
   activeView: "chat",
+  selectedSharedRoomId: null,
   routines: [],
   routineRuns: [],
   routinesLoadState: "loading",

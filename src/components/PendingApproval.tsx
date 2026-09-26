@@ -10,6 +10,7 @@
 import { memo } from "react";
 import { useStore, type Bot, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { botControlAvailable } from "@/lib/remote-bot";
 import { t, tFromServer } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 import { SkillRequestPreview } from "@/components/SkillRequestPreview";
@@ -220,6 +221,8 @@ export function PendingApprovalActions({
   const isProfileRequest = isProfileApproval(pending);
   const isTeamSetup = Boolean(pending.message.card?.teamSetupRequest);
   const durableRequest = isRoutineRequest || isSkillRequest || isProfileRequest || isTeamSetup;
+  // a relayed bot's server refuses remembered grants; one-off allow/deny still work
+  const canAlwaysAllow = !durableRequest && botControlAvailable(bot, "alwaysAllow");
   const reviewedSha256 = pending.message.card?.skillRequest
     ? reviewedSkillSha256(pending.message.card.skillRequest)
     : undefined;
@@ -233,8 +236,8 @@ export function PendingApprovalActions({
       reviewedSha256: behavior === "allow" ? reviewedSha256 : undefined,
       // a harness-native card (peer comms) remembers a grant on the bot; a
       // provider's card hands the allow to the provider for its session
-      alwaysAllow: always && bot && pending.allowKey ? { botId: bot.id, key: pending.allowKey } : undefined,
-      always: always && !pending.allowKey && pending.allowSession ? true : undefined,
+      alwaysAllow: always && canAlwaysAllow && bot && pending.allowKey ? { botId: bot.id, key: pending.allowKey } : undefined,
+      always: always && canAlwaysAllow && !pending.allowKey && pending.allowSession ? true : undefined,
     });
 
   const base = "rounded-full px-3.5 py-1.5 text-[13.5px] transition-colors";
@@ -252,7 +255,7 @@ export function PendingApprovalActions({
       >
         {isRoutineRequest || isProfileRequest || isTeamSetup ? t("approval.action.cancel") : t("approval.action.deny")}
       </button>
-      {!durableRequest && bot && pending.allowKey && (
+      {canAlwaysAllow && bot && pending.allowKey && (
         <button
           onClick={() => decide("allow", true)}
           title={t("approval.action.stopAsking", { name: bot.name, key: pending.allowKey })}
@@ -261,7 +264,7 @@ export function PendingApprovalActions({
           {t("approval.action.alwaysAllow")}
         </button>
       )}
-      {!durableRequest && !pending.allowKey && pending.allowSession && (
+      {canAlwaysAllow && !pending.allowKey && pending.allowSession && (
         <button
           onClick={() => decide("allow", true)}
           title={t("approval.action.alwaysAllowSessionHint")}

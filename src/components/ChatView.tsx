@@ -39,7 +39,7 @@ import {
 } from "@/state/store";
 import { EngineSetup } from "./EngineSetup";
 import { isProviderSafetyBlock, PROVIDER_SAFETY_GUIDANCE, PROVIDER_SAFETY_HELP_URL } from "../../shared/provider-safety";
-import { BotAvatar } from "./Avatar";
+import { BotAvatar, GroupMark, PersonPhoto, type GroupMarkMember } from "./Avatar";
 import { TurnPresence } from "./TurnPresence";
 import { showToolCallsEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
 import { normalizeState, stateForBot } from "@/lib/mascot";
@@ -57,6 +57,8 @@ import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Composer } from "./Composer";
+import { ConversationHeader } from "./ConversationChrome";
+import { SharedAttachmentTile } from "./SharedAttachmentTile";
 import { ChatFindBar } from "./ChatFindBar";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
@@ -69,6 +71,7 @@ import { RenameTitle } from "./RenameTitle";
 import { BotActivityPicker, TaskPicker } from "./TaskPicker";
 import { ModelPicker } from "./ModelPicker";
 import { ExportTranscriptMenu } from "./ExportTranscriptMenu";
+import { botControlAvailable, remoteBotHint } from "@/lib/remote-bot";
 
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
@@ -276,6 +279,7 @@ function Bubble({
   onRegenerate,
   replyTarget,
   onReply,
+  shared = false,
 }: {
   bot: Bot;
   message: Message;
@@ -289,6 +293,7 @@ function Bubble({
   onRegenerate?: () => void;
   replyTarget?: Message;
   onReply: () => void;
+  shared?: boolean;
 }) {
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
@@ -331,12 +336,13 @@ function Bubble({
   return (
     <div className={cn("group flex w-full flex-col", user ? "animate-msg-in items-end" : "items-start")}>
       {peer && <PeerLabel peer={peer} />}
+      {shared && !user && message.from && <div className="mb-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{message.from.name}</div>}
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
         {user && (
           <MessageActions side="user">
             {/* editing rewinds the thread, so it waits for the turn to end —
                 same rule as the version switcher below */}
-            {message.kind === "text" && !webhookView && !hasAttachments && !bot.busy && (
+            {!shared && botControlAvailable(bot, "edit") && message.kind === "text" && !webhookView && !hasAttachments && !bot.busy && (
               <button
                 onClick={onStartEdit}
                 aria-label={t("chat.editMessage")}
@@ -347,7 +353,7 @@ function Bubble({
               </button>
             )}
             {Boolean(visibleText.trim()) && <CopyButton text={visibleText} className="opacity-100" />}
-            <button
+            {!shared && <button
               type="button"
               onClick={onReply}
               aria-label={t("chat.replyToMessage")}
@@ -355,8 +361,8 @@ function Bubble({
               className={messageActionClass}
             >
               <MessageSquareReply size={14} />
-            </button>
-            <button
+            </button>}
+            {!shared && <button
               onClick={() =>
                 dispatch({
                   type: "updateTask",
@@ -370,7 +376,7 @@ function Bubble({
               className={cn(messageActionClass, remoteClient && "hidden")}
             >
               {bot.pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
-            </button>
+            </button>}
           </MessageActions>
         )}
         <div
@@ -397,6 +403,7 @@ function Bubble({
               />
             </div>
           )}
+          {shared && message.sharedAttachments?.map(attachment => <SharedAttachmentTile key={attachment.id} roomId={bot.threadId.slice("shared:".length)} attachment={attachment} />)}
           {user && webhookView ? (
             <div className="min-w-[300px] max-w-[520px]">
               <div className="flex items-center gap-2 border-b border-accent/15 bg-accent/[0.055] px-4 py-2.5 text-[11.5px] font-medium text-accent">
@@ -452,10 +459,10 @@ function Bubble({
           <MessageActions side="bot" forceOpen={viewRaw || speaking}>
             {text && <CopyButton text={text} className="opacity-100" />}
             {text && <RawToggleAction active={viewRaw} onToggle={() => setViewRaw((r) => !r)} className="opacity-100" />}
-            {message.kind === "text" && text && !peer && (
+            {!shared && message.kind === "text" && text && !peer && (
               <SpeakButton text={text} botId={bot.id} messageId={message.id} voiceId={bot.voice} className="opacity-100" />
             )}
-            {isLastBotText && !bot.busy && onRegenerate && (
+            {!shared && isLastBotText && !bot.busy && onRegenerate && (
               <button
                 onClick={onRegenerate}
                 aria-label={t("chat.regenerate")}
@@ -465,7 +472,7 @@ function Bubble({
                 <RefreshCw size={14} />
               </button>
             )}
-            <button
+            {!shared && <button
               type="button"
               onClick={onReply}
               aria-label={t("chat.replyToMessage")}
@@ -473,8 +480,8 @@ function Bubble({
               className={messageActionClass}
             >
               <MessageSquareReply size={14} />
-            </button>
-            <button
+            </button>}
+            {!shared && <button
               onClick={() =>
                 dispatch({
                   type: "updateTask",
@@ -488,7 +495,7 @@ function Bubble({
               className={cn(messageActionClass, remoteClient && "hidden")}
             >
               {bot.pinnedMessageId === message.id ? <PinOff size={14} /> : <Pin size={14} />}
-            </button>
+            </button>}
           </MessageActions>
         )}
         <span
@@ -500,7 +507,7 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
-      {versions.length > 1 && (
+      {versions.length > 1 && botControlAvailable(bot, "versions") && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
           <button
             onClick={() => switchTo(versions[versionIndex - 1])}
@@ -605,6 +612,7 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit,
   onRegenerate,
   onReply,
+  shared = false,
 }: {
   bot: Bot;
   messages: Message[];
@@ -622,8 +630,9 @@ const MessagesList = memo(function MessagesList({
   onStartEdit: (id: string) => void;
   onCancelEdit: () => void;
   onSubmitEdit: (id: string, text: string) => void;
-  onRegenerate: () => void;
+  onRegenerate?: () => void;
   onReply: (message: Message) => void;
+  shared?: boolean;
 }) {
   const { state, dispatch } = useStore();
   const showToolCalls = showToolCallsEnabled(state.config);
@@ -643,7 +652,7 @@ const MessagesList = memo(function MessagesList({
       {messages.length === 0 && !bot.busy && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
           <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
-          <RenameTitle
+          {bot.remote ? <div className="text-[17px] font-semibold text-ink">{bot.name}</div> : <RenameTitle
             value={bot.name}
             onCommit={(name) => {
               if (window.ogb?.remoteClient?.active) {
@@ -656,7 +665,7 @@ const MessagesList = memo(function MessagesList({
             }}
             className="text-[17px] font-semibold text-ink"
             inputClassName="rounded bg-inset px-1.5 py-0.5 text-center text-[17px] font-semibold"
-          />
+          />}
           <div className="max-w-[360px] text-[14px] text-ink-secondary">
             {bot.description || t("chat.emptyPrompt")}
           </div>
@@ -680,6 +689,7 @@ const MessagesList = memo(function MessagesList({
                     <Bubble
                       bot={bot}
                       message={message}
+                      shared={shared}
                       editing={false}
                       isLastBotText={false}
                       onStartEdit={noop}
@@ -715,9 +725,11 @@ const MessagesList = memo(function MessagesList({
         const row = (() => {
           switch (m.kind) {
             case "secret":
-              return m.secret ? <SecretRequestCard botId={bot.id} threadId={bot.threadId} message={m} /> : null;
+              if (!m.secret) return null;
+              return bot.remote ? <RemoteOnlyCard bot={bot} /> : <SecretRequestCard botId={bot.id} threadId={bot.threadId} message={m} />;
             case "connector":
-              return m.connector ? <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} /> : null;
+              if (!m.connector) return null;
+              return bot.remote ? <RemoteOnlyCard bot={bot} /> : <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} />;
             case "options": {
               // a live permission ask gets the approval box; a structured
               // ask gets the question box; anything else keeps the list
@@ -786,6 +798,7 @@ const MessagesList = memo(function MessagesList({
                 <Bubble
                   bot={bot}
                   message={m}
+                  shared={shared}
                   emerging={m.id === emergingId}
                   eagerAttachments={m.id === newestMessageId || m.id === newestUserMessageId}
                   editing={editingId === m.id}
@@ -811,6 +824,15 @@ const MessagesList = memo(function MessagesList({
     </>
   );
 });
+
+/** Secret and connector requests are answered on the Mac the bot lives on. */
+function RemoteOnlyCard({ bot }: { bot: Bot }) {
+  return (
+    <div className="rounded-lg border border-hairline/40 bg-panel px-3 py-2 text-[12.5px] text-ink-secondary">
+      {bot.name} is asking for something only its own Mac can provide. Answer it {remoteBotHint(bot) ?? "there"}.
+    </div>
+  );
+}
 
 /** The one pinned message, above the transcript: sender, one line, click to
  * jump, X to unpin. Resolves the pin id against the full message list; a
@@ -860,10 +882,13 @@ function PinnedBanner({
   );
 }
 
-export function ChatView({ bot: profile }: { bot: Bot }) {
+export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: (text: string, files: File[], sendId: string) => Promise<void>; faces?: GroupMarkMember[] } }) {
   const bot = useMemo(() => currentTaskBot(profile), [profile]);
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
+  // A bot relayed from a linked Mac: conversation works, its settings stay there.
+  const remoteHint = remoteBotHint(bot);
+  const local = !shared && !remoteHint;
   // Windows has no native caption buttons (renderer-drawn, see
   // WindowCaptionButtons); this header is the window drag region, and the
   // icon row shifts below the 26px-tall corner the buttons occupy.
@@ -1163,32 +1188,31 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
       {/* Call mode covers the thread while the bot is on the line */}
       <CallOverlay bot={bot} />
       {/* Header */}
-      <div
-        style={headerDragStyle}
-        className={cn(
-          // @container so the chips on the right can fold to icon bubbles
-          // when the column is narrow (side panel open, small window)
-          "@container/chathead flex items-center justify-between px-5 py-3",
-          // Room for the drawer button, which overlays this corner below md.
-          "pl-11 md:pl-5",
-        )}
-      >
+      <ConversationHeader style={headerDragStyle}>
         <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1" style={headerNoDragStyle}>
           <button
-            onClick={() => dispatch({ type: "toggleSettings", open: true })}
+            onClick={() => { if (local) dispatch({ type: "toggleSettings", open: true }); }}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
             title={t("chat.openProfile")}
             aria-label={t("chat.openProfileAria", { name: bot.name })}
           >
-            <BotAvatar
-              bot={bot}
-              state={stateForBot({ ...bot, messages })}
-              size={28}
-              motion={mascotMotion?.kind ?? "none"}
-              motionKey={mascotMotion?.nonce ?? 0}
-            />
+            {/* a person's photo arrives as a data: image, which bot avatars
+                refuse by design; show it the same size a bot avatar sits */}
+            {shared?.faces && shared.faces.length > 1 ? (
+              <GroupMark members={shared.faces} size={34} />
+            ) : shared && bot.avatarUrl?.startsWith("data:image/") ? (
+              <PersonPhoto src={bot.avatarUrl} size={28} testId="shared-person-avatar" />
+            ) : (
+              <BotAvatar
+                bot={bot}
+                state={stateForBot({ ...bot, messages })}
+                size={28}
+                motion={mascotMotion?.kind ?? "none"}
+                motionKey={mascotMotion?.nonce ?? 0}
+              />
+            )}
           </button>
-          <RenameTitle
+          {!local ? <span className="truncate text-[15px] font-semibold text-ink">{bot.name}</span> : <RenameTitle
             value={bot.name}
             onCommit={(name) => {
               if (window.ogb?.remoteClient?.active) {
@@ -1203,13 +1227,14 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
             showEditButton
             className="truncate text-[15px] font-semibold text-ink"
             inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
-          />
-          {bot.chiefOfStaff && (
+          />}
+          {remoteHint && <span className="shrink-0 truncate text-[12px] text-ink-secondary" data-testid="remote-bot-hint">{remoteHint}</span>}
+          {!shared && bot.chiefOfStaff && (
             <span className="flex items-center gap-1 rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent">
               <Crown size={11} /> {t("chat.chiefOfStaff")}
             </span>
           )}
-          {bot.busy && <WorkingDots className="text-ink-secondary" />}
+          {!shared && bot.busy && <WorkingDots className="text-ink-secondary" />}
         </div>
         <div
           className="flex shrink-0 items-center gap-2"
@@ -1230,12 +1255,12 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           >
             <Search size={18} />
           </button>
-          <ExportTranscriptMenu
+          {!remoteHint && <ExportTranscriptMenu
             title={bot.name}
             messages={messages}
             botName={bot.name}
-          />
-          {bot.busy && (
+          />}
+          {!shared && bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id, threadId: bot.threadId })}
               className={cn(
@@ -1248,11 +1273,11 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
               <span className="@max-4xl/chathead:hidden">{t("chat.stop")}</span>
             </button>
           )}
-          <TaskPicker bot={bot} />
-          <UsageChip bot={bot} />
-          {!remoteClient && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
-          <CallButton bot={bot} />
-          <button
+          {!shared && <TaskPicker bot={bot} />}
+          {local && <UsageChip bot={bot} />}
+          {local && !remoteClient && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
+          {!shared && <CallButton bot={bot} />}
+          {local && <button
             data-tour="computer"
             onClick={() => dispatch({ type: "toggleComputer" })}
             className={cn(
@@ -1262,8 +1287,8 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
             title={t("chat.computer")}
           >
             <Monitor size={18} />
-          </button>
-          {!remoteClient && <button
+          </button>}
+          {local && !remoteClient && <button
             onClick={() => dispatch({ type: "toggleInspector" })}
             aria-label={t("chat.inspector")}
             aria-pressed={state.inspectorOpen}
@@ -1276,9 +1301,9 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
             <Bug size={18} />
           </button>}
         </div>
-      </div>
+      </ConversationHeader>
 
-      <BotActivityPicker bot={bot} />
+      {!shared && <BotActivityPicker bot={bot} />}
       {routineExecution && <div className="mx-5 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[11.5px] text-ink-secondary">
         <span className="min-w-0 flex-1 truncate">{t("routines.executionDetails", { name: routineExecution.routineName })}</span>
         {canOpenResults && resultsThreadId && <button type="button" onClick={() => openNotificationTarget(dispatch, { botId: bot.id, threadId: resultsThreadId }, state)} className="rounded px-2 py-1 text-accent hover:bg-raised">{t("routines.results.back")}</button>}
@@ -1382,18 +1407,19 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           ) : null}
           <MessagesList
             bot={bot}
+            shared={Boolean(shared)}
             locale={activeLocale()}
             messages={windowedMessages}
             transcript={messages}
             editingId={editingId}
             lastBotTextId={lastBotTextId}
             emergingId={popping}
-            canRetryLast={!bot.busy && Boolean(lastUserMessage)}
+            canRetryLast={local && !bot.busy && Boolean(lastUserMessage)}
             engine={state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId)}
             onStartEdit={startEdit}
             onCancelEdit={cancelEdit}
             onSubmitEdit={submitEdit}
-            onRegenerate={regenerate}
+            onRegenerate={local ? regenerate : undefined}
             onReply={selectReply}
           />
           {laterCount > 0 && (
@@ -1477,11 +1503,12 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
       <Composer
         key={bot.threadId}
         bot={profile}
+        shared={shared}
         replyTo={replyTo}
         onClearReply={clearReply}
         onConsumeReply={consumeReply}
         onRestoreReply={restoreReply}
-        onEditLast={lastUserMessage && !lastUserMessageHasAttachments && !bot.busy
+        onEditLast={!remoteHint && lastUserMessage && !lastUserMessageHasAttachments && !bot.busy
           ? () => setEditingId(lastUserMessage.id)
           : undefined}
       />

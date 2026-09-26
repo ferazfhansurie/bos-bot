@@ -10,6 +10,7 @@ import { emailGateDone, initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { SharedConversationController } from "@/components/SharedConversationController";
 import { BotSettingsDialog } from "@/components/BotSettingsDialog";
 import { RemoteAgentSettingsPanel } from "@/components/RemoteAgentSettingsPanel";
 import { NewBotDialog } from "@/components/NewBotDialog";
@@ -151,7 +152,7 @@ function Shell() {
 
   useEffect(() => {
     if (state.activeView === "routines" && previousViewRef.current !== "routines") {
-      calendarOriginRef.current = previousViewRef.current;
+      calendarOriginRef.current = previousViewRef.current === "team-map" ? "team-map" : "chat";
     }
     previousViewRef.current = state.activeView;
   }, [state.activeView]);
@@ -190,9 +191,7 @@ function Shell() {
   const nativeViewOverlayOpen =
     drawerOpen ||
     paletteOpen ||
-    state.settingsOpen ||
-    state.computerOpen ||
-    state.inspectorOpen ||
+    (!bot?.remote && (state.settingsOpen || state.computerOpen || state.inspectorOpen)) ||
     state.appSettingsOpen ||
     state.pluginsOpen;
 
@@ -261,6 +260,8 @@ function Shell() {
         <TeamMapPage />
       ) : state.activeView === "routines" ? (
         <RoutinesPage onBack={closeCalendar} onOpenRoom={openCalendarRoom} />
+      ) : state.activeView === "shared" && state.selectedSharedRoomId ? (
+        <SharedConversationController key={state.selectedSharedRoomId} roomId={state.selectedSharedRoomId} />
       ) : !remoteClient && localVmWorkspaceBotId ? (
         <LocalVmWorkspace
           primaryBotId={localVmWorkspaceBotId}
@@ -293,12 +294,14 @@ function Shell() {
           (Computer panel, then the usage chip): every re-render mounts a
           fresh settings panel and never removes the previous one, so the
           panels pile up and Close stops working. */}
-      {state.settingsOpen && bot && (
+      {/* A bot relayed from a linked Mac keeps its settings, computer and
+          inspector on that Mac; the server refuses them here. */}
+      {state.settingsOpen && bot && !bot.remote && (
         remoteClient
           ? <RemoteAgentSettingsPanel bot={bot} />
           : <BotSettingsDialog key={`settings:${bot.id}`} bot={bot} />
       )}
-      {state.computerOpen && bot && (
+      {state.computerOpen && bot && !bot.remote && (
         remoteClient ? (
           <RemoteDesktopPanel key={`computer:${bot.id}`} bot={bot} />
         ) : (
@@ -309,7 +312,7 @@ function Shell() {
           />
         )
       )}
-      {!remoteClient && state.inspectorOpen && bot && <InspectorPanel key={bot.threadId} bot={bot} />}
+      {!remoteClient && state.inspectorOpen && bot && !bot.remote && <InspectorPanel key={bot.threadId} bot={bot} />}
       {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
       {state.newBotOpen && <NewBotDialog />}

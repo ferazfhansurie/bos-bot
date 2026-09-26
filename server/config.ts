@@ -6,10 +6,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { normalizeImageGenerationUrl, type ImageGenerationConfig } from "../shared/image-generation.ts";
+import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
+import type { ApprovalMode } from "../shared/approval-mode.ts";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { EFFORT_LEVELS } from "../shared/wire.ts";
-import { APPROVAL_MODES, isApprovalMode, type ApprovalMode } from "../shared/approval-mode.ts";
 import { isModelVariant, type InstanceConfigMap, type ModelSelection } from "./contracts.ts";
 import { PROVIDER_ICON_PRESETS, providerIconError } from "../shared/provider-icon.ts";
 import type { McpServerSpec } from "./contracts.ts";
@@ -29,14 +30,6 @@ export const DEFAULT_ROOM_HANDOFF_MIN_RUNWAY_MINUTES = 10;
 export const DEFAULT_ROOM_HANDOFF_HARD_CAP_MINUTES = 240;
 export const DEFAULT_MAX_CONCURRENT_BOT_THREADS = 3;
 export const MAX_CONCURRENT_BOT_THREADS = 10;
-/** Whether two threads of one bot may run at once in the same explicit
- * project folder. Default on: a bot pinned to a folder is the normal setup,
- * and holding that folder for a whole turn meant the second thread — the
- * phone, while the desktop was mid-turn — was refused outright. Two provider
- * sessions in one folder is ordinary; the narrow hazard is the automatic
- * "before" checkpoint, which turnStart skips rather than snapshotting a
- * folder another live turn is already editing. */
-export const DEFAULT_PARALLEL_PROJECT_FOLDER_THREADS = true;
 /** Bounds for threads.eventLogMaxBytes: the floor keeps the kept tail large
  * enough to still serve the event inspector's recent-line window; the
  * ceiling just rejects absurd hand edits. */
@@ -422,7 +415,8 @@ const appConfigSchema = z.object({
     ).optional(),
   }).optional(),
   /** Non-secret profile details shown in the sidebar. */
-  profile: z.object({ name: optionalText, email: optionalText }).optional(),
+  profile: z.object({ name: optionalText, email: optionalText, avatarUrl: z.union([z.literal(""), botAvatarUrlSchema]).optional() }).optional(),
+  approvals: z.object({ defaultMode: z.enum(["ask", "edits", "auto", "full", "custom"]).optional(), keepAcrossModelSwitch: z.boolean().optional() }).optional(),
   /** UI language override (BCP-47, lowercase). Empty/absent = follow the
    * system language. Unknown tags degrade to English in the renderer. */
   language: optionalText,
@@ -434,26 +428,13 @@ const appConfigSchema = z.object({
   }).optional(),
   threads: z.object({
     maxConcurrentPerBot: z.number().int().min(1).max(MAX_CONCURRENT_BOT_THREADS),
+    parallelProjectFolder: z.boolean().optional(),
     /** Cap each per-thread events/ and native/ NDJSON log at this many
      * bytes; absent (the default) keeps today's unbounded growth (#1280). */
     eventLogMaxBytes: z.number().int().min(MIN_THREAD_EVENT_LOG_BYTES).max(MAX_THREAD_EVENT_LOG_BYTES).optional(),
     /** Days a closed or archived thread's event logs survive (#1280).
      * Absent keeps them forever. */
     eventLogRetentionDays: z.number().int().min(1).max(3650).optional(),
-    /** Allow a bot's threads to run concurrently in one pinned project
-     * folder. Absent means the default (on). */
-    parallelProjectFolder: z.boolean().optional(),
-  }).strict().optional(),
-  /** Workspace-wide permission defaults. `defaultMode` is the approval level
-   * a newly created bot (and its first thread) starts at, instead of the
-   * historical hard-coded Ask. `keepAcrossModelSwitch` keeps an elevated
-   * level through an engine change when the destination engine implements
-   * that level, instead of forcing the Ask reset. Neither weakens an
-   * individual elevation: changing a live bot's level still goes through the
-   * desktop prepare/confirm/activate commit. */
-  approvals: z.object({
-    defaultMode: z.enum(APPROVAL_MODES).optional(),
-    keepAcrossModelSwitch: z.boolean().optional(),
   }).strict().optional(),
   localVm: localVmConfigSchema.optional(),
   features: featureConfigSchema.optional(),
@@ -498,12 +479,11 @@ export interface AppConfig {
   opencodeGo?: { apiKey?: string };
   tts?: { key?: string; fishKey?: string; voice?: string; provider?: "elevenlabs" | "fish" | "system" | "chatterbox"; baseUrl?: string; model?: string };
   imageGen?: ImageGenerationConfig;
-  profile?: { name?: string; email?: string };
-  rooms?: { turnTimeoutMinutes: number; handoffLifetimeMinutes?: number; handoffMinRunwayMinutes?: number; handoffHardCapMinutes?: number };
-  threads?: { maxConcurrentPerBot: number; eventLogMaxBytes?: number; eventLogRetentionDays?: number; parallelProjectFolder?: boolean };
-  context?: { rebuildBytes?: number; compactAt?: number; autoCompact?: boolean };
-  /** Workspace-wide permission defaults; see approvals in appConfigSchema. */
+  profile?: { name?: string; email?: string; avatarUrl?: string };
   approvals?: { defaultMode?: ApprovalMode; keepAcrossModelSwitch?: boolean };
+  rooms?: { turnTimeoutMinutes: number; handoffLifetimeMinutes?: number; handoffMinRunwayMinutes?: number; handoffHardCapMinutes?: number };
+  threads?: { maxConcurrentPerBot: number; parallelProjectFolder?: boolean; eventLogMaxBytes?: number; eventLogRetentionDays?: number };
+  context?: { rebuildBytes?: number; compactAt?: number; autoCompact?: boolean };
   /** Shared preserves the historical singleton. Per-bot gives every bot a
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
@@ -525,20 +505,6 @@ export type BrowserProfile = z.output<typeof browserProfileSchema> & {
   partitionId?: string;
 };
 export type ConfigPatch = z.output<typeof appConfigPatchSchema>;
-
-/** The approval level new bots start at. Absent or unparseable config keeps
- * the historical Ask, so a corrupt file can never widen permissions. */
-export function defaultApprovalMode(config: AppConfig): ApprovalMode {
-  const mode = config.approvals?.defaultMode;
-  return isApprovalMode(mode) ? mode : "ask";
-}
-
-/** Whether an engine switch may carry an elevated level across instead of
- * resetting to Ask. Only ever honoured when the destination engine actually
- * implements that level (supportsApprovalMode). */
-export function keepApprovalAcrossModelSwitch(config: AppConfig): boolean {
-  return config.approvals?.keepAcrossModelSwitch === true;
-}
 
 /** Resolve a canonical profile record to its exact durable Electron
  * partition identity. Callers must never substitute the display/API id. */
@@ -638,6 +604,15 @@ export function parseConfigPatch(value: JsonValue): ConfigPatch {
   return parsed.data;
 }
 
+export function defaultApprovalMode(cfg: Pick<AppConfig, "approvals">): ApprovalMode {
+  const mode = cfg.approvals?.defaultMode;
+  return mode === "ask" || mode === "edits" || mode === "auto" || mode === "full" ? mode : "ask";
+}
+
+export function keepApprovalAcrossModelSwitch(cfg: Pick<AppConfig, "approvals">): boolean {
+  return cfg.approvals?.keepAcrossModelSwitch === true;
+}
+
 export function vpsSshAlias(cfg: AppConfig): string | null {
   return isValidSshAlias(cfg.vps?.sshAlias) ? cfg.vps.sshAlias : null;
 }
@@ -675,9 +650,8 @@ export function maxConcurrentBotThreads(cfg: AppConfig): number {
   return cfg.threads?.maxConcurrentPerBot ?? DEFAULT_MAX_CONCURRENT_BOT_THREADS;
 }
 
-/** Whether a bot's threads may share one explicit project folder. */
 export function parallelProjectFolderThreads(cfg: AppConfig): boolean {
-  return cfg.threads?.parallelProjectFolder ?? DEFAULT_PARALLEL_PROJECT_FOLDER_THREADS;
+  return cfg.threads?.parallelProjectFolder === true;
 }
 
 /** Size cap for each per-thread events/ and native/ NDJSON log. Null (the
@@ -978,7 +952,7 @@ export function saveConfig(patch: Partial<AppConfig>, options: { replaceInstance
   // back after we have successfully recognized the legacy list.
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
-  for (const key of ["xai", "anthropic", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "rooms", "threads", "context", "localVm", "features", "budgets", "billing", "onboarding", "browserEngine"] as const) {
+  for (const key of ["xai", "anthropic", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "approvals", "rooms", "threads", "context", "localVm", "features", "budgets", "billing", "onboarding", "browserEngine"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

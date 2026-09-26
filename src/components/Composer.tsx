@@ -22,8 +22,9 @@ import {
   type FailedComposerSend,
 } from "@/lib/drafts";
 import { BotAvatar } from "./Avatar";
+import { ConversationComposerFrame } from "./ConversationChrome";
 import { MentionTextarea } from "./MentionTextarea";
-import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
+import { ComposerAttachments, pathForFile, uploadOnlyIntake } from "./ComposerAttachments";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
 import { PlaceChip } from "./PlaceChip";
 import { FullAccessWarning } from "./FullAccessWarning";
@@ -58,6 +59,7 @@ import {
 } from "./ComposerQueuedMessages";
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
 import { mentionChoicesForQuery } from "@/lib/mentions";
+import { botControlAvailable, mentionableBots } from "@/lib/remote-bot";
 import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@/lib/thread-refs";
 import {
   composerSlashTrigger,
@@ -89,6 +91,7 @@ export function Composer({
   bot: profile,
   group,
   members,
+  shared,
   onEditLast,
   replyTo,
   onClearReply,
@@ -99,6 +102,7 @@ export function Composer({
   bot?: Bot;
   group?: Group;
   members?: Bot[];
+  shared?: { send: (text: string, files: File[], sendId: string) => Promise<void> };
   onEditLast?: () => void;
   replyTo?: Message | null;
   onClearReply?: () => void;
@@ -211,6 +215,10 @@ export function Composer({
   );
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [sharedFiles, setSharedFiles] = useState<File[]>([]);
+  const [sharedSending, setSharedSending] = useState(false);
+  const [sharedError, setSharedError] = useState("");
+  const sharedSendId = useRef<string | null>(null);
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
@@ -223,10 +231,13 @@ export function Composer({
   // image paste is offered only when every bot that will actually answer
   // can open one. sendGroup routes to mentions, else the room default —
   // `members.some` would let a mixed room send <attached-image> to Grok.
+  // A bot relayed from a linked Mac runs an engine this Mac may not have
+  // installed; its own server decides, so never gate it on local instances.
   const botSupportsImages = (candidate?: Bot) =>
     Boolean(
       candidate &&
-        state.instances.find((i) => i.instanceId === candidate.modelSelection.instanceId)?.capabilities?.images,
+        (candidate.remote ||
+          state.instances.find((i) => i.instanceId === candidate.modelSelection.instanceId)?.capabilities?.images),
     );
   const imageTargetsSupport = (message: string, mode: "chat" | "goal") => {
     if (!group) return botSupportsImages(bot);
@@ -295,8 +306,7 @@ export function Composer({
           ...(!group.dm ? [{ id: "__everyone__", name: "everyone" }] : []),
           ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
         ]
-      : state.bots
-          .filter((member) => member.id !== bot?.id && !member.hidden)
+      : mentionableBots(state.bots, bot?.id)
           .map((member) => ({ id: member.id, name: member.name, bot: member }));
     return mentionChoicesForQuery(pool, mention.query);
   }, [mention, dismissedAt, state.bots, bot?.id, group, members]);
@@ -348,7 +358,8 @@ export function Composer({
   // auto-send intent whenever navigation unmounted the composer.
   const pendingCount = (state.pendingQueued[threadId] ?? []).length;
   const queuedMessages = state.pendingQueued[threadId] ?? [];
-  const canSteerQueued = composerCanSteerQueuedMessages(
+  // Steering a relayed bot's queue is refused by its server; cancel still works.
+  const canSteerQueued = botControlAvailable(bot, "steer") && composerCanSteerQueuedMessages(
     busy,
     locked,
     pendingCount,
@@ -421,7 +432,8 @@ export function Composer({
   } | null>(null);
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   // Approval mode belongs to one bot; a room has several, each with its own.
-  const modeBot = group ? undefined : bot;
+  // A bot on a linked Mac keeps its approval level and place on that Mac.
+  const modeBot = group || shared || bot?.remote ? undefined : bot;
   const approvalEngine = modeBot
     ? state.instances.find((instance) => instance.instanceId === modeBot.modelSelection.instanceId)
     : undefined;
@@ -453,13 +465,21 @@ export function Composer({
   }, [draftId]);
   const pickFiles = async (picked: FileList | null) => {
     if (!picked?.length) return;
+    if (shared) {
+      const next = Array.from(picked);
+      if (next.some(file => file.size > 25 * 1024 * 1024)) { setSharedError("Each attachment must be under 25 MB."); return; }
+      setSharedFiles(previous => [...previous, ...next].slice(0, 4));
+      return;
+    }
     changeDraftAttachmentPending(draftId, true);
     try {
-      const { attachments: added, notice } = await intakeFiles(Array.from(picked), {
+      const remote = bot?.remote ? uploadOnlyIntake() : null;
+      const { attachments: added, notice: intakeNotice } = await intakeFiles(Array.from(picked), {
         allowImages: engineSupportsImages,
-        getPath: pathForFile,
+        getPath: remote?.getPath ?? pathForFile,
         uploadImage,
       });
+      const notice = remote ? remote.notice(intakeNotice) : intakeNotice;
       if (added.length) addAttachments(added);
       if (notice) setAttachmentNotice(notice);
     } finally {
@@ -481,7 +501,7 @@ export function Composer({
     dispatch({ type: "updateTask", botId: modeBot.id, threadId: modeBot.threadId, patch: { approvalMode: mode } });
   };
 
-  const hasContent = Boolean(effectiveText.trim()) || attachments.length > 0;
+  const hasContent = Boolean(effectiveText.trim()) || attachments.length > 0 || sharedFiles.length > 0;
   const retryFailedSend = (failed: FailedComposerSend) => {
     const failedMode = failed.channelMode ?? "chat";
     if (failed.requestText.includes("<attached-image ") && !imageTargetsSupport(failed.requestText, failedMode)) {
@@ -513,6 +533,20 @@ export function Composer({
   };
   const send = () => {
     if (locked || attachmentPending) return;
+    if (shared) {
+      if ((!text.trim() && !sharedFiles.length) || sharedSending) return;
+      const sendId = sharedSendId.current ?? crypto.randomUUID();
+      sharedSendId.current = sendId;
+      setSharedSending(true);
+      setSharedError("");
+      void shared.send(text.trim(), sharedFiles, sendId).then(() => {
+        sharedSendId.current = null;
+        setText("");
+        setSharedFiles([]);
+      }).catch(error => setSharedError(error instanceof Error ? error.message : "Message was not sent."))
+        .finally(() => setSharedSending(false));
+      return;
+    }
     if (
       attachments.some((attachment) => attachment.kind === "image") &&
       !imageTargetsSupport(effectiveText, effectiveChannelMode)
@@ -835,7 +869,9 @@ export function Composer({
             />
           </div>
         )}
-        <ComposerAttachments
+        {sharedError && <div role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{sharedError}</div>}
+        {sharedFiles.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{sharedFiles.map(file => <span key={`${file.name}-${file.lastModified}`} className="flex items-center gap-1 rounded-lg bg-raised px-2 py-1 text-xs">{file.name}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => setSharedFiles(previous => previous.filter(item => item !== file))}><X size={13} /></button></span>)}</div>}
+        {!shared && <ComposerAttachments
           items={attachments}
           onAdd={addAttachments}
           onRemove={removeAttachment}
@@ -845,7 +881,8 @@ export function Composer({
           onNotice={setAttachmentNotice}
           onPendingChange={(pending) => changeDraftAttachmentPending(draftId, pending)}
           uploadImage={uploadImage}
-        />
+          uploadOnly={Boolean(bot?.remote)}
+        />}
         <QueuedComposerMessages
           items={queuedMessages}
           onSteer={canSteerQueued ? steerQueued : undefined}
@@ -868,7 +905,7 @@ export function Composer({
             data-composer-backdrop
             className="pointer-events-none absolute -left-5 -right-5 -bottom-3 top-1/2 bg-app"
           />
-        <div data-tour="composer" className="relative z-[1] rounded-3xl bg-composer px-2 py-1.5 ring-1 ring-composer-ring">
+        <ConversationComposerFrame>
         <div className="flex items-end gap-1">
           <input
             ref={fileInput}
@@ -1115,7 +1152,7 @@ export function Composer({
           )}
           </div>
         </div>
-        </div>
+        </ConversationComposerFrame>
         </div>
       </div>
       <div className="pointer-events-auto">

@@ -209,3 +209,148 @@ export function InitialsAvatar({
     </div>
   );
 }
+
+const cutouts = new Map<string, Promise<string>>();
+
+/** A person's photo with its plain backdrop removed: light pixels reachable
+ * from the image border turn transparent (a flood fill, so a white face or
+ * shirt inside the outline stays), and the picture sits on the sidebar like
+ * a bot mascot does instead of in a white disc. Falls back to the original. */
+function cutout(src: string): Promise<string> {
+  const cached = cutouts.get(src);
+  if (cached) return cached;
+  const started = new Promise<string>((resolve) => {
+    const image = new Image();
+    image.onerror = () => resolve(src);
+    image.onload = () => {
+      try {
+        const scale = Math.min(1, 256 / Math.max(image.naturalWidth, image.naturalHeight));
+        const width = Math.max(1, Math.round(image.naturalWidth * scale));
+        const height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext("2d");
+        if (!context) return resolve(src);
+        context.drawImage(image, 0, 0, width, height);
+        const data = context.getImageData(0, 0, width, height);
+        const pixels = data.data;
+        const total = width * height;
+        // Backdrop: light, near-grey pixels, which also covers a checkerboard
+        // "transparency" pattern baked into a JPEG.
+        const light = (at: number) => {
+          const r = pixels[at * 4]!, g = pixels[at * 4 + 1]!, b = pixels[at * 4 + 2]!;
+          return Math.min(r, g, b) > 185 && Math.max(r, g, b) - Math.min(r, g, b) < 14;
+        };
+        const backdrop = new Uint8Array(total);
+        const seen = new Uint8Array(total);
+        const stack: number[] = [];
+        for (let x = 0; x < width; x++) stack.push(x, (height - 1) * width + x);
+        for (let y = 0; y < height; y++) stack.push(y * width, y * width + width - 1);
+        while (stack.length) {
+          const at = stack.pop()!;
+          if (seen[at]) continue;
+          seen[at] = 1;
+          // Already-transparent corners (a round photo) pass the fill on.
+          if (pixels[at * 4 + 3]! > 0 && !light(at)) continue;
+          backdrop[at] = 1;
+          const x = at % width;
+          if (x > 0) stack.push(at - 1);
+          if (x < width - 1) stack.push(at + 1);
+          if (at >= width) stack.push(at - width);
+          if (at < width * (height - 1)) stack.push(at + width);
+        }
+        // Close the subject (grow, then shrink, by a small disc) so thin white
+        // details that touch the backdrop, like glasses frames, stay.
+        const radius = 4;
+        const morph = (mask: Uint8Array, grow: boolean) => {
+          const out = new Uint8Array(total);
+          for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              let value = grow ? 0 : 1;
+              search: for (let dy = -radius; dy <= radius; dy++) {
+                const yy = y + dy;
+                if (yy < 0 || yy >= height) continue;
+                for (let dx = -radius; dx <= radius; dx++) {
+                  const xx = x + dx;
+                  if (xx < 0 || xx >= width || dx * dx + dy * dy > radius * radius) continue;
+                  const on = mask[yy * width + xx] === 1;
+                  if (grow && on) { value = 1; break search; }
+                  if (!grow && !on) { value = 0; break search; }
+                }
+              }
+              out[y * width + x] = value;
+            }
+          }
+          return out;
+        };
+        const subject = new Uint8Array(total);
+        for (let at = 0; at < total; at++) subject[at] = backdrop[at] ? 0 : 1;
+        const kept = morph(morph(subject, true), false);
+        let cleared = 0;
+        for (let at = 0; at < total; at++) {
+          if (kept[at]) continue;
+          pixels[at * 4 + 3] = 0;
+          cleared++;
+        }
+        if (cleared === 0) return resolve(src);
+        context.putImageData(data, 0, 0);
+        resolve(canvas.toDataURL("image/png"));
+      } catch {
+        resolve(src);
+      }
+    };
+    image.src = src;
+  });
+  cutouts.set(src, started);
+  return started;
+}
+
+export function PersonPhoto({ src, size, className = "", testId }: { src: string; size: number; className?: string; testId?: string }) {
+  const [shown, setShown] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setShown(null);
+    void cutout(src).then((next) => { if (alive) setShown(next); });
+    return () => { alive = false; };
+  }, [src]);
+  return (
+    <img
+      src={shown ?? src}
+      alt=""
+      draggable={false}
+      data-testid={testId}
+      className={`block shrink-0 object-contain ${shown ? "" : "rounded-full"} ${className}`}
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
+export interface GroupMarkMember { id: string; name: string; kind: "person" | "bot"; avatar?: string | null; color?: string | null; mascotBody?: string | null }
+
+/** A group's face: up to three members overlapping, bare like the mascots
+ * themselves. With three, one sits on top and two in front; with two, one
+ * back-left and one front-right. */
+export function GroupMark({ members, size }: { members: GroupMarkMember[]; size: number }) {
+  const shown = members.slice(0, 3);
+  const face = (member: GroupMarkMember, px: number) => member.kind === "person"
+    ? member.avatar ? <PersonPhoto src={member.avatar} size={px} />
+      : <span style={{ width: px, height: px, fontSize: px * 0.42 }} className="flex items-center justify-center rounded-full bg-accent/20 font-semibold text-accent">{member.name.slice(0, 1).toUpperCase()}</span>
+    : <MausAvatar color={Object.hasOwn(MAUS_COLORS, member.color ?? "") ? member.color as MausColor : "green"}
+        bodyId={(member.mascotBody ?? undefined) as MascotBodyId | undefined} size={px} animated={false} label={member.name} />;
+  if (shown.length <= 1) {
+    return <span className="relative block shrink-0" style={{ width: size, height: size }}>{shown[0] && face(shown[0], size)}</span>;
+  }
+  const slots = shown.length === 2
+    ? [{ x: 0, y: 0.06, s: 0.66 }, { x: 0.36, y: 0.32, s: 0.64 }]
+    : [{ x: 0.24, y: 0, s: 0.52 }, { x: 0, y: 0.44, s: 0.54 }, { x: 0.46, y: 0.44, s: 0.54 }];
+  return (
+    <span className="relative block shrink-0" style={{ width: size, height: size }}>
+      {shown.map((member, index) => (
+        <span key={member.id} className="absolute" style={{ left: slots[index]!.x * size, top: slots[index]!.y * size, zIndex: index + 1 }}>
+          {face(member, Math.round(slots[index]!.s * size))}
+        </span>
+      ))}
+    </span>
+  );
+}

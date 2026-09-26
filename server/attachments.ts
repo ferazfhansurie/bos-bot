@@ -111,6 +111,13 @@ const FILE_MIMES: Readonly<Record<string, string>> = {
   "application/vnd.oasis.opendocument.presentation": ".odp",
 };
 
+/** The mime a shared file with this extension is uploaded as (the first
+ * FILE_MIMES entry for it), or null when the extension is not a shared file. */
+export function fileMimeForExtension(extension: string): string | null {
+  const wanted = extension.toLowerCase();
+  return Object.entries(FILE_MIMES).find(([, ext]) => ext === wanted)?.[0] ?? null;
+}
+
 export function extensionForMime(mime: string | undefined): string | null {
   if (!mime) return null;
   return IMAGE_MIMES[mime.split(";")[0]!.trim().toLowerCase()] ?? null;

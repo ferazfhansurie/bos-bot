@@ -117,7 +117,7 @@ export interface PublicPairing {
 }
 
 export type ExchangeResult =
-  | { ok: true; token: string; session: PublicSession }
+  | { ok: true; token: string; session: PublicSession; pairingId: string }
   | { ok: false; status: 401 | 429; error: string };
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -410,7 +410,7 @@ export class SessionRegistry {
     this.sessions.push(record);
     this.lastSeenWrites.set(record.id, now); // the exchange itself was the first sighting
     this.persist();
-    const result: ExchangeResult = { ok: true, token, session: publicSession(record) };
+    const result: ExchangeResult = { ok: true, token, session: publicSession(record), pairingId: pairing.id };
     if (attemptId) this.replays.push({ codeHash: presented, attemptId, result, expiresAt: now + EXCHANGE_REPLAY_MS });
     return result;
   }

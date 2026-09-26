@@ -88,7 +88,7 @@ export function proxyHeadersTimeoutMs(url: string, override?: number): number {
 /** A JSON response has to be buffered whole before it can be scrubbed, so the
  * buffer is the size of the response and nothing upstream promises that is
  * small. Far above any real payload — it exists to have a ceiling at all. */
-const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
+const MAX_JSON_BODY_BYTES = 36 * 1024 * 1024;
 
 /** Read a JSON body, bounded. An unbounded read on an unauthenticated route
  * is a way to be memory-exhausted by anyone who can reach the port. */

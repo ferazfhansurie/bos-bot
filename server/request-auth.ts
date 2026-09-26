@@ -234,6 +234,17 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/groups\/[\w-]+\/tasks$/ },
   { methods: ["POST", "PATCH", "DELETE"], path: /^\/api\/groups\/[\w-]+\/tasks\/[\w-]+$/ },
   { methods: ["PATCH"], path: /^\/api\/groups\/[\w-]+$/ }, // display fields only: see clientGroupPatchViolation
+  // Shared chat is scoped again by an explicit session-to-person binding and
+  // room membership in its handler. Roster changes stay admin-only.
+  { methods: ["GET"], path: /^\/api\/multiplayer\/me$/ },
+  { methods: ["GET"], path: /^\/api\/multiplayer\/home$/ },
+  { methods: ["POST"], path: /^\/api\/multiplayer\/register$/ },
+  { methods: ["GET"], path: /^\/api\/multiplayer\/contacts$/ },
+  { methods: ["POST"], path: /^\/api\/multiplayer\/dm$/ },
+  { methods: ["POST"], path: /^\/api\/multiplayer\/push-token$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/messages$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/attachments(?:\/[\w-]+)?$/ },
   { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/reactions$/ },
   // attachments
   { methods: ["POST"], path: /^\/api\/attachments$/ },
