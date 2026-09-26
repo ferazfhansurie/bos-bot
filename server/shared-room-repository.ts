@@ -43,6 +43,10 @@ export class SharedRoomRepository {
     return [...this.rooms.values()].map(log => log.room).filter(room => room.memberIds.includes(actorId));
   }
 
+  /** Internal restart recovery only; request handlers must use member-filtered reads. */
+  allRooms(): SharedRoom[] { return [...this.rooms.values()].map(log => log.room); }
+  allMessages(roomId: string): SharedTextMessage[] { return this.rooms.get(roomId)?.all() ?? []; }
+
   summariesFor(actorId: string): Array<SharedRoom & { lastActivity: number; preview: string }> {
     if (!parseContactId(actorId)) return [];
     return [...this.rooms.values()].filter(log => log.room.memberIds.includes(actorId)).map(log => {

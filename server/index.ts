@@ -5975,7 +5975,9 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
     if (Date.now() >= deadline) throw new Error("the shared bot was busy until the room deadline");
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  await startTurn(bot.id, prompt, { threadId, sendId: source.id, sender: { name: senderName } });
+  const recoveredUserMessage = store.messagesFor(threadId).findLast(message => message.role === "user" && message.sendId === source.id);
+  await startTurn(bot.id, prompt, { threadId, sendId: source.id,
+    ...(recoveredUserMessage ? { userMessage: recoveredUserMessage } : {}), sender: { name: senderName } });
   const delivered = new Map<string, string>();
   while (Date.now() < deadline) {
     const messages = store.messagesFor(threadId);
@@ -6001,7 +6003,12 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
   if (hop > MAX_SHARED_ROOM_HOPS || source.kind === "activity") return;
   const bots = sharedRoomBots(room);
   const fromBot = source.actor.kind === "bot";
-  const targets = sharedRoomTargets(bots, source.text, fromBot).filter(bot => bot.id !== contactId(source.actor));
+  const completed = new Set(sharedRooms.allMessages(room.id).filter(message =>
+    message.responseTo === source.id && message.actor.kind === "bot" &&
+    (message.kind !== "activity" || message.tool?.name === "reply failed")
+  ).map(message => contactId(message.actor)));
+  const targets = sharedRoomTargets(bots, source.text, fromBot)
+    .filter(bot => bot.id !== contactId(source.actor) && !completed.has(bot.id));
   if (!targets.length) return;
   const people = multiplayerActors.people(cfg.profile?.name ?? "Owner");
   const senderName = fromBot
@@ -6098,6 +6105,19 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
     }
     if (nextMessage) await runSharedBotTurn(sharedRooms.roomFor(room.id, target.id) ?? room, nextMessage, hop + 1);
   }));
+}
+
+async function recoverSharedRoomTurns(): Promise<void> {
+  await remoteBots.listBots(0);
+  const maxAge = roomTurnTimeoutMinutes(cfg) * 60_000;
+  const pending = sharedRooms.allRooms().flatMap(room => sharedRooms.allMessages(room.id)
+    .filter(message => message.kind !== "activity" && Date.now() - message.at < maxAge)
+    .map(message => ({ room, message })))
+    .sort((a, b) => a.message.at - b.message.at).slice(-50);
+  for (const { room, message } of pending) {
+    void runSharedBotTurn(room, message).catch(error =>
+      console.warn(`room recovery failed for ${room.id}: ${error instanceof Error ? error.message : "unknown"}`));
+  }
 }
 
 /** How many start_thread calls one turn may make. Same spirit as the
@@ -19309,6 +19329,8 @@ server.listen(PORT, "127.0.0.1", () => {
   setInterval(expireDelegationsNow, DELEGATION_SWEEP_MS).unref();
   // One event stream per linked Mac; relays only threads the bridge opened.
   remoteBots.start();
+  void recoverSharedRoomTurns().catch(error =>
+    console.warn(`room recovery could not start: ${error instanceof Error ? error.message : "unknown"}`));
 });
 
 // A second listener for `openmausbot serve --tunnel` (server/tunnel.ts): the
