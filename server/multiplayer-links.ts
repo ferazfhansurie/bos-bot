@@ -133,7 +133,6 @@ export class MultiplayerLinks {
     if (typeof descriptor.environmentId !== "string" || !/^[\w-]{1,128}$/.test(descriptor.environmentId) || descriptor.environmentId === this.homeId) {
       throw new Error("other workspace identity is invalid");
     }
-    if (this.links.has(descriptor.environmentId)) throw new Error("workspace is already linked");
     const paired = await this.fetcher(new URL("/api/auth/pair", origin), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(20_000),
       headers: { "content-type": "application/json" },
@@ -165,8 +164,9 @@ export class MultiplayerLinks {
     if (typeof descriptor.environmentId !== "string" || !/^[\w-]{1,128}$/.test(descriptor.environmentId) || descriptor.environmentId === this.homeId) {
       throw new Error("other workspace identity is invalid");
     }
-    if (this.links.has(descriptor.environmentId)) throw new Error("workspace is already linked");
-    const link: RemoteLink = { homeId: descriptor.environmentId, origin, name: String(descriptor.label ?? "Other Mac").slice(0, 80), token, bots: [], proxyGroups: {} };
+    const previous = this.links.get(descriptor.environmentId);
+    const link: RemoteLink = { homeId: descriptor.environmentId, origin, name: String(descriptor.label ?? previous?.name ?? "Other Mac").slice(0, 80), token,
+      bots: [], proxyGroups: previous?.proxyGroups ?? {} };
     this.checkLink(link);
     let bots: RemoteBot[];
     try { bots = await this.refreshBotsFor(link); }
@@ -176,6 +176,12 @@ export class MultiplayerLinks {
     }
     this.links.set(link.homeId, link);
     this.persist();
+    if (previous?.token && previous.token !== token) {
+      // Once the replacement is durable, retire the superseded peer session.
+      await this.fetcher(new URL("/api/auth/logout", previous.origin), {
+        method: "POST", headers: { authorization: `Bearer ${previous.token}` }, redirect: "error", signal: AbortSignal.timeout(20_000),
+      }).catch(() => {});
+    }
     return { homeId: link.homeId, name: link.name, bots };
   }
 

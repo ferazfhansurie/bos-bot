@@ -33,11 +33,15 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     const added = await links.addFromPairingUrl(`https://putri-fixture.ts.net/pair#code=${pairing.body.code}`);
     expect(added.homeId).toBe(descriptor.body.environmentId);
     expect(links.contacts()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Pixie fixture" })]));
+    const replacement = await remote("POST", "/api/auth/pairing", { scopes: ["client"] });
+    expect(replacement.status).toBe(200);
+    expect((await links.addFromPairingUrl(`https://putri-fixture.ts.net/pair#code=${replacement.body.code}`)).homeId).toBe(added.homeId);
+    expect(links.bridgeLinks()).toHaveLength(1);
     const sessions = await remote("GET", "/api/auth/sessions");
-    const bridge = sessions.body.sessions.find((session: any) => session.label === "BOS multiplayer bridge");
-    expect(bridge).toBeTruthy();
+    const bridges = sessions.body.sessions.filter((session: any) => session.label === "BOS multiplayer bridge");
+    expect(bridges).toHaveLength(1);
     const actorId = "firaz-fixture:person:owner";
-    expect((await remote("POST", "/api/multiplayer/actor-bindings", {
+    for (const bridge of bridges) expect((await remote("POST", "/api/multiplayer/actor-bindings", {
       sessionId: bridge.id, personId: actorId, name: "Firaz",
     })).status).toBe(200);
     expect((await links.setPrimary(added.homeId)).actorId).toBe(actorId);
