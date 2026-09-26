@@ -42,20 +42,24 @@ export class SharedRoomTrust {
 
 /** Which bots a message is addressed to: every @named bot, @everyone for
  * all of them, else the room's lead bot for a person's message. */
-export function sharedRoomTargets<T extends { name: string }>(bots: T[], text: string, fromBot: boolean): T[] {
+export function sharedRoomTargets<T extends { name: string; ownerName?: string }>(bots: T[], text: string, fromBot: boolean): T[] {
   const lower = text.toLowerCase();
-  if (/(^|[^\w@])@(everyone|all|bots)\b/.test(lower)) return bots;
+  if (!fromBot && /(^|[^\w@])@(everyone|all|bots)\b/.test(lower)) return bots;
   const named = bots.filter(bot => {
-    const at = `@${bot.name.toLowerCase()}`;
-    let index = lower.indexOf(at);
-    while (index >= 0) {
-      const before = index === 0 ? " " : lower[index - 1]!;
-      const after = lower[index + at.length] ?? " ";
-      if (!/[\w@]/.test(before) && !/\w/.test(after)) return true;
-      index = lower.indexOf(at, index + 1);
+    const ambiguous = bots.filter(other => other.name.toLowerCase() === bot.name.toLowerCase()).length > 1;
+    const aliases = ambiguous && bot.ownerName ? [`@${bot.name.toLowerCase()} · ${bot.ownerName.toLowerCase()}`] :
+      ambiguous ? [] : [`@${bot.name.toLowerCase()}`];
+    for (const at of aliases) {
+      let index = lower.indexOf(at);
+      while (index >= 0) {
+        const before = index === 0 ? " " : lower[index - 1]!;
+        const after = lower[index + at.length] ?? " ";
+        if (!/[\w@]/.test(before) && !/\w/.test(after)) return true;
+        index = lower.indexOf(at, index + 1);
+      }
     }
     return false;
   });
-  if (named.length || fromBot) return named;
+  if (named.length || fromBot || /(^|[^\w@])@[\w]/.test(lower)) return named;
   return bots.slice(0, 1);
 }

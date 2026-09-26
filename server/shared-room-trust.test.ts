@@ -15,6 +15,12 @@ describe("sharedRoomTargets", () => {
   });
   it("routes @everyone to all bots", () => {
     expect(sharedRoomTargets(bots, "@everyone hi", false)).toHaveLength(3);
+    expect(sharedRoomTargets(bots, "@everyone hi", true)).toEqual([]);
+  });
+  it("requires an owner-qualified mention when bot names collide", () => {
+    const twins = [{ name: "Koda", ownerName: "Firaz" }, { name: "Koda", ownerName: "Faeez" }];
+    expect(sharedRoomTargets(twins, "@Koda help", false)).toEqual([]);
+    expect(sharedRoomTargets(twins, "@Koda · Faeez help", false)).toEqual([twins[1]]);
   });
   it("ignores partial names and emails", () => {
     expect(sharedRoomTargets(bots, "mail pixie@example.com or @pixies", true)).toEqual([]);
