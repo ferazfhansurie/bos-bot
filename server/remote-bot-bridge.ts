@@ -633,7 +633,7 @@ export class RemoteBotBridge {
       });
       const json = this.outbound(home, botId, result.body);
       // the relayed message frame may trail the receipt; the cache dedupes by id
-      if (result.status === 200 && isObject(json.message)) this.remember(home, threadId, json.message as WireMessage, false);
+      if (result.status >= 200 && result.status < 300 && isObject(json.message)) this.remember(home, threadId, json.message as WireMessage, false);
       return { status: result.status, json };
     };
     if (!sendId) return run();
@@ -675,7 +675,7 @@ export class RemoteBotBridge {
       input.onThread(threadId);
     }
     const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId });
-    if (sent.status !== 200) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
+    if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
     const delivered = new Set<string>();
     while (Date.now() < input.deadlineMs) {
       const result = await this.call(home, "GET", `/api/threads/${threadId}/messages?limit=60`).catch(() => null);

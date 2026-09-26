@@ -104,10 +104,11 @@ class FakeHome {
       if (this.holdMessages === null) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      const b = body as { text: string; threadId: string };
-      const message = { id: `u${this.calls.length}`, role: "user", kind: "text", text: b.text, at: Date.now() };
+      const b = body as { text: string; threadId: string; sendId?: string };
+      const message = { id: `u${this.calls.length}`, role: "user", kind: "text", text: b.text, sendId: b.sendId, at: Date.now() };
       this.threads.get(b.threadId)?.push(message);
-      return json(200, { ok: true, threadId: b.threadId, message, bot: this.bot() });
+      if (b.sendId) this.threads.get(b.threadId)?.push({ id: `b${this.calls.length}`, role: "bot", kind: "text", text: "reply from pixie", turnTerminal: true, at: Date.now() + 1 });
+      return json(b.sendId ? 202 : 200, { ok: true, threadId: b.threadId, message, bot: this.bot() });
     }
     if (method === "POST" && /^\/api\/threads\/[\w-]+\/respond$/.test(url.pathname)) return json(200, { ok: true });
     if (method === "POST" && /^\/api\/bots\/pixie\/(interrupt|read|respond)$/.test(url.pathname)) {
@@ -179,6 +180,18 @@ describe("RemoteBotBridge", () => {
     expect(isRemoteBotPath(`/api/threads/rt-${KEY}-bridge-1/messages`)).toBe(true);
     expect(isRemoteBotPath("/api/bots/pixie/messages")).toBe(false);
     expect(isRemoteBotPath("/api/bots")).toBe(false);
+  });
+
+  it("accepts an async 202 receipt and returns the shared-room reply", async () => {
+    await bridge.listBots(0);
+    const threads: string[] = [];
+    const result = await bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-send-1",
+      onThread: (id) => threads.push(id), onActivity: () => {}, deadlineMs: Date.now() + 1000,
+    });
+    expect(result.reply).toBe("reply from pixie");
+    expect(threads).toEqual(["bridge-1"]);
+    expect(fake.calls.some((call) => call.path === "/api/bots/pixie/messages" && (call.body as { sendId?: string }).sendId === "room-send-1")).toBe(true);
   });
 
   it("lists a remote bot as an ordinary bot and opens a thread on B only on the first send", async () => {
@@ -316,7 +329,7 @@ describe("RemoteBotBridge", () => {
     writeFileSync(join(attachments, `${docId}.pdf`), "%PDF-1.4");
     const text = `look\n<attached-image path="${join(attachments, `${uuid}.png`)}" name="shot &amp; more.png" />\n<attached-file path="${join(attachments, `${docId}.pdf`)}" name="plan.pdf" />`;
     const answer = await route("POST", `/api/bots/${botId}/messages`, { text, threadId: bot!.threadId, sendId: "send-1" });
-    expect(answer.status).toBe(200);
+    expect(answer.status).toBe(202);
     const image = fake.calls.find((call) => call.path === "/api/attachments");
     expect(image?.search).toBe(`?uploadId=${uuid}`);
     expect(image?.headers["content-type"]).toBe("image/png");
@@ -344,7 +357,7 @@ describe("RemoteBotBridge", () => {
       route("POST", `/api/bots/${botId}/messages`, { text: "hello", sendId: "same" }),
       route("POST", `/api/bots/${botId}/messages`, { text: "hello", sendId: "same" }),
     ]);
-    expect(a.status).toBe(200);
+    expect(a.status).toBe(202);
     expect(jsonOf(a)).toEqual(jsonOf(b));
     expect(fake.calls.filter((call) => call.path === "/api/bots/pixie/messages")).toHaveLength(1);
   });
