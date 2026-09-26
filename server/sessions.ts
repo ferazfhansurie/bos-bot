@@ -310,7 +310,7 @@ export class SessionRegistry {
     const now = this.now();
     const code = generatePairingCode();
     const credential = generatePairingCredential();
-    const scopes = input.scopes?.length ? [...new Set(input.scopes)] : [...SCOPES];
+    const scopes = input.scopes?.length ? [...new Set(input.scopes)] : ["admin", "client"] satisfies Scope[];
     const pairing: PairingCode = {
       id: randomUUID(),
       codeHash: sha256(code),

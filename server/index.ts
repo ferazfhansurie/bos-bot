@@ -11609,7 +11609,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
-    const peerSessionId = auth.kind === "session" && auth.scopes.includes("peer") ? auth.session.id : null;
+    const peerSessionId = auth.kind === "session" && auth.scopes.includes("peer") && !auth.scopes.includes("client") && !auth.scopes.includes("admin")
+      ? auth.session.id : null;
     const peerOwns = (botId: string, threadId: unknown): boolean =>
       !peerSessionId || (typeof threadId === "string" && peerThreads.owns(peerSessionId, botId, threadId));
     if (HOSTED_WORKSPACE && auth.kind === "session") {
@@ -17284,6 +17285,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (peerSessionId && (bot.hidden || body?.projectId !== undefined || body?.approvalMode !== undefined)) {
         return json(res, 403, { error: "peer tasks cannot change bot permissions or projects" });
       }
+      if (peerSessionId && peerThreads.list(peerSessionId).length >= 1000) return json(res, 429, { error: "peer thread limit reached" });
       if (phoneSecretSubmissions.hasBot(bot.id)) {
         return json(res, 409, { error: "this bot is securely saving a credential — try again when it finishes" });
       }
