@@ -5977,9 +5977,17 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
   const senderName = fromBot
     ? bots.find(bot => bot.id === contactId(source.actor))?.name ?? "A bot"
     : people.find(person => person.id === contactId(source.actor))?.name ?? "A room member";
-  // A room's trusted setting never transfers the owner's authority to a
-  // remote person or bot that happens to speak in the same room.
-  const level = source.actor.kind === "person" && contactId(source.actor) === multiplayerActors.ownerId
+  // Trust follows the message that started a bot chain, not the room or the
+  // latest bot speaker. A remote person/bot cannot inherit the owner's level.
+  let initiator = source;
+  const seen = new Set<string>();
+  while (initiator.responseTo && !seen.has(initiator.id) && seen.size < MAX_SHARED_ROOM_HOPS + 1) {
+    seen.add(initiator.id);
+    const parent = sharedRooms.messageFor(room.id, multiplayerActors.ownerId, initiator.responseTo);
+    if (!parent) break;
+    initiator = parent;
+  }
+  const level = initiator.actor.kind === "person" && contactId(initiator.actor) === multiplayerActors.ownerId
     ? sharedRoomTrustLevel(room) : "helper";
   await Promise.all(targets.map(async target => {
     const botActor = target.key;

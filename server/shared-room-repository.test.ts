@@ -20,6 +20,9 @@ describe("shared room repository", () => {
       store.append(room.id, contactId(firaz), { actor: firaz, text: `line ${n}`, sendId: `send-${n}` }, n);
     }
     expect(store.messagesAfter(room.id, contactId(putri), 200)).toHaveLength(5);
+    const last = store.messagesAfter(room.id, contactId(putri), 204)[0]!;
+    expect(store.messageFor(room.id, contactId(putri), last.id)?.text).toBe("line 204");
+    expect(store.messageFor(room.id, contactId(outsider), last.id)).toBeNull();
     expect(store.roomFor(room.id, contactId(outsider))).toBeNull();
     expect(() => store.append(room.id, contactId(outsider), { actor: outsider, text: "no", sendId: "bad" })).toThrow("room unavailable");
     expect(() => store.append(room.id, contactId(putri), { actor: firaz, text: "forged", sendId: "forged" })).toThrow("actor mismatch");

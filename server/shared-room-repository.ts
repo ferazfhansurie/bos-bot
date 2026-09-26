@@ -87,6 +87,12 @@ export class SharedRoomRepository {
     return log.after(sequence, limit);
   }
 
+  messageFor(roomId: string, actorId: string, messageId: string): SharedTextMessage | null {
+    const log = this.rooms.get(roomId);
+    if (!log || !log.room.memberIds.includes(actorId)) return null;
+    return log.all().find(message => message.id === messageId) ?? null;
+  }
+
   private persist(): void {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     const snapshot: Snapshot = { version: 1, rooms: [...this.rooms.values()].map(log => ({ room: log.room, messages: log.all() })) };
