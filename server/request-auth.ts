@@ -247,6 +247,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/leave$/ },
   { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/messages$/ },
   { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/attachments(?:\/[\w-]+)?$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/peer-threads\/[\w-]+\/attachments(?:\/[\w.-]+)?$/ },
   { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/reactions$/ },
   // attachments
   { methods: ["POST"], path: /^\/api\/attachments$/ },
@@ -290,6 +291,7 @@ export const PEER_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegEx
   { methods: ["POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/leave$/ },
   { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/rooms\/[\w-]+\/attachments(?:\/[\w-]+)?$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/peer-threads\/[\w-]+\/attachments(?:\/[\w.-]+)?$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/(?:messages|tasks|read|interrupt)$/ },
   { methods: ["POST", "DELETE"], path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
 ];

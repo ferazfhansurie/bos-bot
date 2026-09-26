@@ -413,10 +413,14 @@ export class RemoteBotBridge {
     for (const home of this.homes.values()) {
       if (!home.state.attachments.includes(name)) continue;
       try {
-        const result = await this.call(home, "GET", `/api/attachments/${name}`, undefined, { bytes: true });
-        const mime = result.contentType ?? "";
-        if (result.status !== 200 || !result.bytes || !/^image\/(?:png|jpeg|gif|webp)$/.test(mime)) return failure(404, "no such attachment");
-        return { status: 200, headers: { "content-type": mime, "cache-control": "private, max-age=31536000, immutable", "x-content-type-options": "nosniff" }, bytes: result.bytes };
+        for (const threadId of Object.keys(home.state.threads)) {
+          const result = await this.call(home, "GET", `/api/multiplayer/peer-threads/${threadId}/attachments/${name}`, undefined, { bytes: true });
+          const mime = result.contentType ?? "";
+          if (result.status === 200 && result.bytes && /^image\/(?:png|jpeg|gif|webp)$/.test(mime)) {
+            return { status: 200, headers: { "content-type": mime, "cache-control": "private, max-age=31536000, immutable", "x-content-type-options": "nosniff" }, bytes: result.bytes };
+          }
+        }
+        return failure(404, "no such attachment");
       } catch {
         return failure(502, `${home.link.name} is offline`);
       }
@@ -491,7 +495,7 @@ export class RemoteBotBridge {
       const input = await body();
       const threadId = await this.threadFor(home, botId, input.threadId, false);
       if (!threadId) return failure(404, "no such message");
-      const text = typeof input.text === "string" ? await this.rewriteAttachments(home, input.text) : input.text;
+      const text = typeof input.text === "string" ? await this.rewriteAttachments(home, threadId, input.text) : input.text;
       const result = await this.call(home, "POST", `${remoteBot}/messages/${match[1]}/edit`, { ...input, text, threadId });
       return { status: result.status, json: this.outbound(home, botId, result.body) };
     }
@@ -645,7 +649,7 @@ export class RemoteBotBridge {
     const threadId = (await this.threadFor(home, botId, input.threadId, true, room))!;
     const sendId = typeof input.sendId === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(input.sendId) ? input.sendId : undefined;
     const run = async (): Promise<BridgeResponse> => {
-      const rewritten = await this.rewriteAttachments(home, text);
+      const rewritten = await this.rewriteAttachments(home, threadId, text);
       const result = await this.call(home, "POST", `/api/bots/${botId}/messages`, {
         text: rewritten, threadId,
         ...(sendId ? { sendId } : {}),
@@ -746,7 +750,7 @@ export class RemoteBotBridge {
   /** Re-upload every composer attachment to B and point the tag at B's copy.
    * A's upload id is reused, so B stores the same basename: a retry is
    * idempotent and the transcript image resolves to this Mac's copy too. */
-  private async rewriteAttachments(home: Home, text: string): Promise<string> {
+  private async rewriteAttachments(home: Home, threadId: string, text: string): Promise<string> {
     const tags = [...text.matchAll(TAG)];
     if (!tags.length) return text;
     const root = resolve(this.options.attachmentsDir);
@@ -759,14 +763,14 @@ export class RemoteBotBridge {
       }
       if (replacements.has(tag[0])) continue;
       const displayName = tag[3] === undefined ? name : decodeAttribute(tag[3]);
-      const remotePath = await this.upload(home, path, displayName);
+      const remotePath = await this.upload(home, threadId, path, displayName);
       const nameAttribute = tag[3] === undefined ? "" : ` name="${tag[3]}"`;
       replacements.set(tag[0], `<${tag[1]} path="${escapeAttribute(remotePath)}"${nameAttribute} />`);
     }
     return text.replace(TAG, (whole) => replacements.get(whole) ?? whole);
   }
 
-  private async upload(home: Home, path: string, displayName: string): Promise<string> {
+  private async upload(home: Home, threadId: string, path: string, displayName: string): Promise<string> {
     let info;
     try { info = await stat(path); } catch { throw new BridgeError(400, "that attachment is no longer on this Mac"); }
     if (!info.isFile()) throw new BridgeError(400, "that attachment is no longer on this Mac");
@@ -779,12 +783,12 @@ export class RemoteBotBridge {
     const imageMime = IMAGE_MIMES[extension];
     let result;
     if (imageMime) {
-      result = await this.call(home, "POST", `/api/attachments${uploadId ? `?${uploadId}` : ""}`, undefined, { raw: { bytes, contentType: imageMime } });
+      result = await this.call(home, "POST", `/api/multiplayer/peer-threads/${threadId}/attachments${uploadId ? `?${uploadId}` : ""}`, undefined, { raw: { bytes, contentType: imageMime } });
     } else {
       const mime = this.options.fileMime(extension);
       if (!mime) throw new BridgeError(400, "that file type cannot be sent to the other Mac");
       const query = new URLSearchParams({ name: displayName.slice(0, 512) || file });
-      result = await this.call(home, "POST", `/api/files?${query}${uploadId ? `&${uploadId}` : ""}`, undefined, { raw: { bytes, contentType: mime } });
+      result = await this.call(home, "POST", `/api/multiplayer/peer-threads/${threadId}/attachments?${query}${uploadId ? `&${uploadId}` : ""}`, undefined, { raw: { bytes, contentType: mime } });
     }
     if ((result.status !== 200 && result.status !== 201) || typeof result.body?.path !== "string") {
       throw new BridgeError(result.status >= 400 && result.status < 500 ? result.status : 502,

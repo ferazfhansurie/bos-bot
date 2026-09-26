@@ -100,11 +100,8 @@ class FakeHome {
       const from = Math.max(0, end - limit);
       return json(200, { messages: messages.slice(from, end), hasMore: from > 0, activeLeafId: (messages.at(-1)?.id as string | undefined) ?? null });
     }
-    if (method === "POST" && url.pathname === "/api/attachments") {
-      return json(200, { path: `/Users/owner/.bos-bot/attachments/${url.searchParams.get("uploadId")}.png`, uploadId: url.searchParams.get("uploadId") });
-    }
-    if (method === "POST" && url.pathname === "/api/files") {
-      return json(200, { path: `/Users/owner/.bos-bot/attachments/${url.searchParams.get("uploadId")}.pdf` });
+    if (method === "POST" && /^\/api\/multiplayer\/peer-threads\/bridge-1\/attachments$/.test(url.pathname)) {
+      return json(201, { path: `/Users/owner/.bos-bot/attachments/${url.searchParams.get("uploadId")}.${url.searchParams.has("name") ? "pdf" : "png"}` });
     }
     if (method === "POST" && url.pathname === "/api/bots/pixie/messages") {
       if (this.holdMessages === null) {
@@ -363,11 +360,11 @@ describe("RemoteBotBridge", () => {
     const text = `look\n<attached-image path="${join(attachments, `${uuid}.png`)}" name="shot &amp; more.png" />\n<attached-file path="${join(attachments, `${docId}.pdf`)}" name="plan.pdf" />`;
     const answer = await route("POST", `/api/bots/${botId}/messages`, { text, threadId: bot!.threadId, sendId: "send-1" });
     expect(answer.status).toBe(202);
-    const image = fake.calls.find((call) => call.path === "/api/attachments");
+    const image = fake.calls.find((call) => call.path === "/api/multiplayer/peer-threads/bridge-1/attachments" && !call.search.includes("name="));
     expect(image?.search).toBe(`?uploadId=${uuid}`);
     expect(image?.headers["content-type"]).toBe("image/png");
     expect([...image!.raw!]).toEqual([137, 80, 78, 71]);
-    const file = fake.calls.find((call) => call.path === "/api/files");
+    const file = fake.calls.find((call) => call.path === "/api/multiplayer/peer-threads/bridge-1/attachments" && call.search.includes("name="));
     expect(new URLSearchParams(file!.search).get("uploadId")).toBe(docId);
     expect(new URLSearchParams(file!.search).get("name")).toBe("plan.pdf");
     expect(file?.headers["content-type"]).toBe("application/pdf");

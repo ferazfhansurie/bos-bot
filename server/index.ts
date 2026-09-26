@@ -7,7 +7,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
-import { extname, join } from "node:path";
+import { basename, extname, join } from "node:path";
 
 import { z } from "zod";
 import { selectReplay, DEFAULT_REBUILD_BYTES, MAX_SUMMARY_BYTES } from "./context-rebuild.ts";
@@ -11627,6 +11627,60 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? await workspaceAccess.authorize(req, auth)
         : { status: 503, error: "Workspace sign-in is unavailable." };
       if (failure) return json(res, failure.status, { error: failure.error });
+    }
+
+    // Peer uploads are bound to one bridge thread. The ordinary attachment
+    // routes remain unavailable to peer tokens, including during migration.
+    const peerAttachmentRoute = path.match(/^\/api\/multiplayer\/peer-threads\/([\w-]+)\/attachments(?:\/([\w.-]+))?$/);
+    if (peerAttachmentRoute) {
+      const threadId = peerAttachmentRoute[1]!;
+      if (!peerSessionId || !peerThreads.botFor(peerSessionId, threadId)) {
+        req.resume();
+        return json(res, 403, { error: "thread is not part of this peer link" });
+      }
+      const name = peerAttachmentRoute[2];
+      if (method === "GET" && name) {
+        if (!/^[A-Za-z0-9-]+\.[A-Za-z0-9]{1,8}$/.test(name)) return json(res, 404, { error: "no such attachment" });
+        const generated = store.messagesFor(threadId).some(message => message.role === "bot" &&
+          message.attachments?.some(attachment => attachment.path === join(ATTACHMENTS_DIR, name)));
+        if (!peerThreads.hasAttachment(threadId, name) && !generated) return json(res, 404, { error: "no such attachment" });
+        const image = readAttachment(name);
+        const mime = image?.mime ?? fileMimeForExtension(extname(name));
+        if (!mime) return json(res, 404, { error: "no such attachment" });
+        let bytes: Buffer;
+        try { bytes = image?.bytes ?? readFileSync(join(ATTACHMENTS_DIR, name)); }
+        catch { return json(res, 404, { error: "no such attachment" }); }
+        res.writeHead(200, { "content-type": mime, "content-length": String(bytes.length), "cache-control": "private, no-store", "x-content-type-options": "nosniff" });
+        return res.end(bytes);
+      }
+      if (method !== "POST" || name) return json(res, 405, { error: "unsupported attachment request" });
+      const rawType = Array.isArray(req.headers["content-type"]) ? req.headers["content-type"][0] : req.headers["content-type"];
+      const mime = rawType?.split(";")[0]?.trim().toLowerCase() ?? "";
+      const uploadId = validateAttachmentUploadId(url.searchParams.get("uploadId") ?? undefined);
+      const rawLength = Array.isArray(req.headers["content-length"]) ? req.headers["content-length"][0] : req.headers["content-length"];
+      const expectedBytes = rawLength === undefined ? undefined : Number(rawLength);
+      if (expectedBytes !== undefined && (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0 || expectedBytes > FILE_MAX_BYTES)) {
+        req.resume();
+        return json(res, 413, { error: "attachment exceeds 25 MB" });
+      }
+      let saved: { path: string };
+      if (extensionForMime(mime)) {
+        if (expectedBytes !== undefined && expectedBytes > IMAGE_MAX_BYTES) { req.resume(); return json(res, 413, { error: "image too large" }); }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        for await (const chunk of req) {
+          total += chunk.length;
+          if (total > IMAGE_MAX_BYTES) { req.resume(); return json(res, 413, { error: "image too large" }); }
+          chunks.push(chunk);
+        }
+        saved = await saveImageUpload(Buffer.concat(chunks), mime, uploadId);
+      } else {
+        const displayName = url.searchParams.get("name");
+        if (!displayName) { req.resume(); return json(res, 400, { error: "name is required" }); }
+        saved = await saveFile(req.iterator({ destroyOnReturn: false }) as AsyncIterable<Buffer>, displayName, mime, { uploadId, expectedBytes });
+      }
+      peerThreads.recordAttachment(threadId, basename(saved.path));
+      return json(res, 201, saved);
     }
 
     // Shared-chat identities are explicit. A paired device called "Putri"

@@ -48,6 +48,24 @@ it("migrates a 0.1.84 bridge thread without granting private conversations", asy
     expect(listing.body.bots[0].tasks.map((task: any) => task.threadId)).toEqual([ownThread]);
     expect((await request("GET", `/api/threads/${ownThread}/messages`, undefined, peerToken)).status).toBe(200);
     expect((await request("GET", `/api/threads/${privateThread}/messages`, undefined, peerToken)).status).toBe(403);
+    const ownUpload = `/api/multiplayer/peer-threads/${ownThread}/attachments?name=notes.txt`;
+    const upload = await fetch(`${fixture.info.url}${ownUpload}`, { method: "POST", headers: {
+      origin: fixture.info.url, authorization: `Bearer ${peerToken}`, "content-type": "text/plain",
+    }, body: "team-only note", signal: AbortSignal.timeout(10_000) });
+    expect(upload.status).toBe(201);
+    const uploaded = await upload.json() as { path: string };
+    const name = uploaded.path.split("/").at(-1)!;
+    const ownRead = await fetch(`${fixture.info.url}/api/multiplayer/peer-threads/${ownThread}/attachments/${name}`, {
+      headers: { origin: fixture.info.url, authorization: `Bearer ${peerToken}` }, signal: AbortSignal.timeout(10_000),
+    });
+    expect(ownRead.status).toBe(200);
+    expect(await ownRead.text()).toBe("team-only note");
+    expect((await request("GET", `/api/multiplayer/peer-threads/${privateThread}/attachments/${name}`, undefined, peerToken)).status).toBe(403);
+    expect((await request("GET", `/api/attachments/${name}`, undefined, peerToken)).status).toBe(403);
+    const foreignUpload = await fetch(`${fixture.info.url}/api/multiplayer/peer-threads/${privateThread}/attachments?name=steal.txt`, { method: "POST", headers: {
+      origin: fixture.info.url, authorization: `Bearer ${peerToken}`, "content-type": "text/plain",
+    }, body: "blocked", signal: AbortSignal.timeout(10_000) });
+    expect(foreignUpload.status).toBe(403);
     for (const [method, path, body] of [
       ["POST", `/api/bots/${botId}/messages`, { threadId: privateThread, text: "hi" }],
       ["POST", `/api/bots/${botId}/interrupt`, { threadId: privateThread }],
