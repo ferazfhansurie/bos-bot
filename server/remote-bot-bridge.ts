@@ -685,8 +685,23 @@ export class RemoteBotBridge {
     if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
     const delivered = new Set<string>();
     while (Date.now() < input.deadlineMs) {
-      const result = await this.call(home, "GET", `/api/threads/${threadId}/messages?limit=60`).catch(() => null);
-      const messages = result?.status === 200 ? this.sanitizeAll(home, result.body?.messages) as Array<Record<string, any>> : [];
+      let before: string | undefined;
+      let messages: Array<Record<string, any>> = [];
+      // The latest page can lose the initiating message during a long turn.
+      // Walk back to that sendId before deciding which reply belongs here.
+      for (let page = 0; page < 100 && Date.now() < input.deadlineMs; page += 1) {
+        const query = new URLSearchParams({ limit: "60" });
+        if (before) query.set("before", before);
+        const result = await this.call(home, "GET", `/api/threads/${threadId}/messages?${query}`).catch(() => null);
+        if (result?.status !== 200) break;
+        const batch = this.sanitizeAll(home, result.body?.messages) as Array<Record<string, any>>;
+        if (!batch.length) break;
+        messages = [...batch, ...messages];
+        if (messages.some((message) => message.sendId === input.sendId && message.role === "user") || result.body?.hasMore !== true) break;
+        const next = String(batch[0]?.id ?? "");
+        if (!next || next === before) break;
+        before = next;
+      }
       const start = messages.findIndex((message) => message.sendId === input.sendId && message.role === "user");
       if (start >= 0) {
         const after = messages.slice(start + 1);

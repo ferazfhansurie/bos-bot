@@ -28,6 +28,7 @@ class FakeHome {
   customApproval = false;
   extraBots: Array<Record<string, unknown>> = [];
   failRoomTurn = false;
+  afterSendActivityCount = 0;
 
   bot(): Record<string, unknown> {
     return {
@@ -93,7 +94,11 @@ class FakeHome {
     match = /^\/api\/threads\/([\w-]+)\/messages$/.exec(url.pathname);
     if (match && method === "GET") {
       const messages = this.threads.get(match[1]!) ?? [];
-      return json(200, { messages, hasMore: false, activeLeafId: (messages.at(-1)?.id as string | undefined) ?? null });
+      const before = url.searchParams.get("before");
+      const end = before ? messages.findIndex((message) => message.id === before) : messages.length;
+      const limit = Number(url.searchParams.get("limit") ?? messages.length);
+      const from = Math.max(0, end - limit);
+      return json(200, { messages: messages.slice(from, end), hasMore: from > 0, activeLeafId: (messages.at(-1)?.id as string | undefined) ?? null });
     }
     if (method === "POST" && url.pathname === "/api/attachments") {
       return json(200, { path: `/Users/owner/.bos-bot/attachments/${url.searchParams.get("uploadId")}.png`, uploadId: url.searchParams.get("uploadId") });
@@ -108,6 +113,8 @@ class FakeHome {
       const b = body as { text: string; threadId: string; sendId?: string };
       const message = { id: `u${this.calls.length}`, role: "user", kind: "text", text: b.text, sendId: b.sendId, at: Date.now() };
       this.threads.get(b.threadId)?.push(message);
+      if (b.sendId) this.threads.get(b.threadId)?.push(...Array.from({ length: this.afterSendActivityCount }, (_, index) =>
+        ({ id: `activity-${index}`, role: "bot", kind: "activity", tool: { name: `step ${index}` }, at: Date.now() + index })));
       if (b.sendId) this.threads.get(b.threadId)?.push({ id: `b${this.calls.length}`, role: "bot", kind: "text", text: this.failRoomTurn ? "partial work" : "reply from pixie", turnTerminal: true,
         ...(this.failRoomTurn ? { turnOutcome: { ok: false, stopReason: "claude exited 143" } } : {}), at: Date.now() + 1 });
       return json(b.sendId ? 202 : 200, { ok: true, threadId: b.threadId, message, bot: this.bot() });
@@ -207,6 +214,17 @@ describe("RemoteBotBridge", () => {
       homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-send-failed",
       onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000,
     })).rejects.toThrow("the shared bot could not finish its turn");
+  });
+
+  it("finds the initiating send beyond the latest 60 messages", async () => {
+    fake.afterSendActivityCount = 65;
+    await bridge.listBots(0);
+    const result = await bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-send-long",
+      onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000,
+    });
+    expect(result.reply).toBe("reply from pixie");
+    expect(fake.calls.some((call) => call.path === "/api/threads/bridge-1/messages" && call.search.includes("before="))).toBe(true);
   });
 
   it("lists a remote bot as an ordinary bot and opens a thread on B only on the first send", async () => {
