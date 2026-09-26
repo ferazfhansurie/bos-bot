@@ -23,6 +23,8 @@ export interface EnvironmentDescriptor {
   label: string;
   platform: NodeJS.Platform;
   version: string;
+  /** Host-to-host room and peer-session protocol. Absent on pre-hardening Macs. */
+  multiplayerProtocol: 1;
   capabilities: {
     /** Pairing and sessions are available (this build). */
     remoteSessions: true;
@@ -125,6 +127,7 @@ export function environmentDescriptor(input: { environmentId: string; desktopMan
     label: process.env.OMB_ENVIRONMENT_LABEL?.trim() || hostname(),
     platform: process.platform,
     version: serverVersion(),
+    multiplayerProtocol: 1,
     capabilities: {
       remoteSessions: true,
       // Never advertise a protocol this server would refuse: the routes are

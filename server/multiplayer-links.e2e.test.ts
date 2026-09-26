@@ -28,6 +28,9 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
       return fetch(new URL(target.pathname + target.search, fixture.info.url), init);
     };
     const links = new MultiplayerLinks(join(folder, "links.json"), "firaz-fixture", fetcher);
+    await expect(links.addVerified("https://putri-fixture.ts.net", `omb_sess_${"x".repeat(43)}`, {
+      environmentId: "old-mac", label: "Putri's Mac", version: "0.1.84",
+    })).rejects.toThrow("update BOS on Putri's Mac");
     const descriptor = await remote("GET", "/.well-known/openmausbot/environment");
     expect(descriptor.status).toBe(200);
     const added = await links.addFromPairingUrl(`https://putri-fixture.ts.net/pair#code=${pairing.body.code}`);

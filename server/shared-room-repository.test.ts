@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,21 @@ const root = mkdtempSync(join(tmpdir(), "omb-shared-rooms-"));
 afterEach(() => rmSync(root, { force: true, recursive: true }));
 
 describe("shared room repository", () => {
+  it("quarantines a bad saved entry while retaining valid room history", () => {
+    const file = join(root, "quarantine", "rooms.json");
+    const firaz = { homeId: "firaz-home", kind: "person" as const, localId: "owner" };
+    const store = new SharedRoomRepository(file, firaz.homeId);
+    const room = store.create("Team", [contactId(firaz), contactId({ homeId: "putri-home", kind: "person", localId: "owner" })]);
+    store.append(room.id, contactId(firaz), { actor: firaz, text: "history", sendId: "before" });
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    saved.rooms.push(null);
+    writeFileSync(file, JSON.stringify(saved));
+    const recovered = new SharedRoomRepository(file, firaz.homeId);
+    expect(recovered.messagesAfter(room.id, contactId(firaz), 0)[0]?.text).toBe("history");
+    const backup = readdirSync(join(root, "quarantine")).find(name => name.startsWith("rooms.json.quarantine-"));
+    expect(backup).toBeTruthy();
+    expect(JSON.parse(readFileSync(join(root, "quarantine", backup!), "utf8")).rooms).toHaveLength(2);
+  });
   it("persists ordered messages and lets only members read or send", () => {
     const file = join(root, "private", "rooms.json");
     const firaz = { homeId: "firaz-home", kind: "person" as const, localId: "firaz" };

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
+import { quarantineSaved } from "./quarantine-saved.ts";
 import { contactId, parseContactId } from "../shared/multiplayer.ts";
 
 interface ActorBinding {
@@ -24,13 +25,20 @@ export class MultiplayerActors {
     if (!existsSync(file)) return;
     let snapshot: Snapshot;
     try { snapshot = JSON.parse(readFileSync(file, "utf8")) as Snapshot; }
-    catch { throw new Error("could not read actor bindings"); }
-    if (snapshot.version !== 1 || !Array.isArray(snapshot.bindings)) throw new Error("invalid actor bindings");
-    for (const binding of snapshot.bindings) {
-      this.validate(binding.sessionId, binding.personId, binding.name);
-      if (this.bindings.has(binding.sessionId)) throw new Error("duplicate actor binding");
-      this.bindings.set(binding.sessionId, binding);
+    catch {
+      quarantineSaved(file, { version: 1, bindings: [] });
+      return;
     }
+    if (snapshot.version !== 1 || !Array.isArray(snapshot.bindings)) throw new Error("invalid actor bindings");
+    let invalid = false;
+    for (const binding of snapshot.bindings) {
+      try {
+        this.validate(binding.sessionId, binding.personId, binding.name);
+        if (this.bindings.has(binding.sessionId)) throw new Error("duplicate actor binding");
+        this.bindings.set(binding.sessionId, binding);
+      } catch { invalid = true; }
+    }
+    if (invalid) quarantineSaved(file, { version: 1, bindings: [...this.bindings.values()] });
   }
 
   actorFor(sessionId: string): string | null {

@@ -724,6 +724,7 @@ export class RemoteBotBridge {
       }
       await new Promise((resolve) => setTimeout(resolve, 2500));
     }
+    await this.call(home, "POST", `/api/bots/${input.remoteBotId}/interrupt`, { threadId }).catch(() => null);
     return { reply: "" };
   }
 

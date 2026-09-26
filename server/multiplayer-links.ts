@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
+import { quarantineSaved } from "./quarantine-saved.ts";
 import { contactId, parseContactId } from "../shared/multiplayer.ts";
 
 interface RemoteBot { id: string; name: string; title: string; color?: string; mascotBody?: string | null; avatarUrl?: string | null; avatarCrop?: string; hidden?: boolean }
@@ -44,21 +45,29 @@ export class MultiplayerLinks {
     if (!existsSync(file)) return;
     let snapshot: Snapshot;
     try { snapshot = JSON.parse(readFileSync(file, "utf8")) as Snapshot; }
-    catch { throw new Error("could not read multiplayer links"); }
+    catch {
+      quarantineSaved(file, { version: 1, links: [], primary: null });
+      return;
+    }
     if (snapshot.version !== 1 || !Array.isArray(snapshot.links)) throw new Error("invalid multiplayer links");
+    let invalid = false;
     for (const link of snapshot.links) {
-      this.checkLink(link);
-      if (this.links.has(link.homeId)) throw new Error("duplicate multiplayer link");
-      this.links.set(link.homeId, link);
+      try {
+        this.checkLink(link);
+        if (this.links.has(link.homeId)) throw new Error("duplicate multiplayer link");
+        this.links.set(link.homeId, link);
+      } catch { invalid = true; }
     }
     const primary = (snapshot as Snapshot & { primary?: PrimaryRoomHome }).primary;
     if (primary) {
       if (typeof primary.homeId !== "string" || !this.links.has(primary.homeId) ||
           typeof primary.actorId !== "string" || parseContactId(primary.actorId)?.kind !== "person") {
-        throw new Error("invalid primary shared chat home");
+        invalid = true;
+      } else {
+        this.primary = primary;
       }
-      this.primary = primary;
     }
+    if (invalid) quarantineSaved(file, { version: 1, links: [...this.links.values()], primary: this.primary });
   }
 
   private checkLink(link: RemoteLink): void {
@@ -161,6 +170,7 @@ export class MultiplayerLinks {
     });
     if (descriptorResponse && !descriptorResponse.ok) throw new Error("other workspace did not answer");
     const descriptor = knownDescriptor ?? await descriptorResponse!.json() as Record<string, unknown>;
+    if (descriptor.multiplayerProtocol !== 1) throw new Error(`update BOS on ${String(descriptor.label ?? "the other Mac").slice(0, 80)} before linking shared chat`);
     if (typeof descriptor.environmentId !== "string" || !/^[\w-]{1,128}$/.test(descriptor.environmentId) || descriptor.environmentId === this.homeId) {
       throw new Error("other workspace identity is invalid");
     }

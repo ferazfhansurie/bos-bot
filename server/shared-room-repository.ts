@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
+import { quarantineSaved } from "./quarantine-saved.ts";
 import { contactId, parseContactId, SharedRoomLog, type SharedRoom, type SharedTextMessage } from "../shared/multiplayer.ts";
 
 interface Snapshot {
@@ -22,12 +23,19 @@ export class SharedRoomRepository {
     if (!existsSync(file)) return;
     let snapshot: Snapshot;
     try { snapshot = JSON.parse(readFileSync(file, "utf8")) as Snapshot; }
-    catch { throw new Error("could not read shared room storage"); }
-    if (snapshot.version !== 1 || !Array.isArray(snapshot.rooms)) throw new Error("invalid shared room storage");
-    for (const entry of snapshot.rooms) {
-      if (entry.room.homeId !== homeId || this.rooms.has(entry.room.id)) throw new Error("invalid shared room storage");
-      this.rooms.set(entry.room.id, new SharedRoomLog(entry.room, entry.messages));
+    catch {
+      quarantineSaved(file, { version: 1, rooms: [] });
+      return;
     }
+    if (snapshot.version !== 1 || !Array.isArray(snapshot.rooms)) throw new Error("invalid shared room storage");
+    let invalid = false;
+    for (const entry of snapshot.rooms) {
+      try {
+        if (entry.room.homeId !== homeId || this.rooms.has(entry.room.id)) throw new Error("invalid shared room storage");
+        this.rooms.set(entry.room.id, new SharedRoomLog(entry.room, entry.messages));
+      } catch { invalid = true; }
+    }
+    if (invalid) quarantineSaved(file, { version: 1, rooms: [...this.rooms.values()].map(log => ({ room: log.room, messages: log.all() })) });
   }
 
   listFor(actorId: string): SharedRoom[] {

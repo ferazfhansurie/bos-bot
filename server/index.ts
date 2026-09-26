@@ -5891,8 +5891,8 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
 
 /** Bot-to-bot hops one person message may cause in a shared room. */
 const MAX_SHARED_ROOM_HOPS = 4;
-/** How long one shared-room bot turn may run before it gives up. */
-const SHARED_ROOM_TURN_MS = 30 * 60_000;
+const sharedRoomLocks = new Set<string>();
+const sharedBotLocks = new Set<string>();
 
 interface SharedRoomBot { key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string }
 
@@ -5971,7 +5971,11 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
     mkdirSync(sandbox, { recursive: true, mode: 0o700 });
     store.patchTask(bot.id, threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [], cwd: sandbox });
   }
-  await startOrQueueDirectMessage(bot.id, threadId, prompt, undefined, source.id, { name: senderName });
+  while (threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
+    if (Date.now() >= deadline) throw new Error("the shared bot was busy until the room deadline");
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  await startTurn(bot.id, prompt, { threadId, sendId: source.id, sender: { name: senderName } });
   const delivered = new Set<string>();
   while (Date.now() < deadline) {
     const messages = store.messagesFor(threadId);
@@ -5987,6 +5991,7 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
     if (settled?.text) return settled.text;
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
+  await interruptDirectThread(bot.id, threadId);
   return "";
 }
 
@@ -6013,6 +6018,14 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
   const level = initiator.actor.kind === "person" && contactId(initiator.actor) === multiplayerActors.ownerId
     ? sharedRoomTrustLevel(room) : "helper";
   await Promise.all(targets.map(async target => {
+    const roomLock = `${room.id}:${target.id}`;
+    let nextMessage: SharedTextMessage | null = null;
+    while (sharedRoomLocks.has(roomLock) || sharedBotLocks.has(target.id)) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    sharedRoomLocks.add(roomLock);
+    sharedBotLocks.add(target.id);
+    try {
     const botActor = target.key;
     const append = (input: { text: string; sendId: string; kind?: "activity"; tool?: { name: string; ok?: boolean; spoken?: string } }) =>
       sharedRooms.append(room.id, target.id, { actor: botActor, responseTo: source.id, ...input });
@@ -6023,7 +6036,8 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
           tool: { name: tool.name.slice(0, 100), ...(tool.ok === undefined ? {} : { ok: tool.ok }), ...(tool.spoken ? { spoken: tool.spoken.slice(0, 500) } : {}) } });
       } catch { /* a progress line is best effort */ }
     };
-    const deadline = Date.now() + SHARED_ROOM_TURN_MS;
+    const timeoutMinutes = roomTurnTimeoutMinutes(cfg);
+    const deadline = Date.now() + timeoutMinutes * 60_000;
     const stillWorking = setTimeout(() => progress(`still-${target.key.localId}`, { name: "still working", spoken: `${target.name} is still working on this` }), 5 * 60_000);
     let reply = "";
     try {
@@ -6047,7 +6061,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
       clearTimeout(stillWorking);
     }
     if (!reply) {
-      try { append({ text: "that took longer than 30 minutes, so i stopped waiting. ask again to pick it back up.", sendId: `timeout-${source.id}-${target.key.localId}`.slice(0, 120) }); }
+      try { append({ text: `that took longer than ${timeoutMinutes} minutes, so i stopped waiting. ask again to pick it back up.`, sendId: `timeout-${source.id}-${target.key.localId}`.slice(0, 120) }); }
       catch { /* nothing more to report */ }
       return;
     }
@@ -6060,7 +6074,12 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, hop
       }
     }
     // A reply that @mentions another bot in the room hands the work on.
-    await runSharedBotTurn(sharedRooms.roomFor(room.id, target.id) ?? room, saved.message, hop + 1);
+    nextMessage = saved.message;
+    } finally {
+      sharedRoomLocks.delete(roomLock);
+      sharedBotLocks.delete(target.id);
+    }
+    if (nextMessage) await runSharedBotTurn(sharedRooms.roomFor(room.id, target.id) ?? room, nextMessage, hop + 1);
   }));
 }
 
