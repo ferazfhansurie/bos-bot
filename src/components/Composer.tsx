@@ -160,12 +160,15 @@ export function Composer({
   // Goal mode is opt-in and one-shot so the next ordinary channel message
   // cannot accidentally start another multi-turn team run.
   const [channelMode, setChannelMode] = useComposerChannelMode(draftId);
+  const sharedSendId = useRef<string | null>(null);
+  const sharedDraftVersion = useRef(0);
   const editText = useCallback(
     (next: string) => {
       markDraftEdited(draftId);
+      if (shared) { sharedDraftVersion.current += 1; sharedSendId.current = null; }
       setText(next);
     },
-    [draftId, setText],
+    [draftId, setText, shared],
   );
   const editAttachments = useCallback(
     (next: SetStateAction<Attachment[]>) => {
@@ -216,9 +219,13 @@ export function Composer({
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [sharedFiles, setSharedFiles] = useState<File[]>([]);
+  const editSharedFiles = (change: (previous: File[]) => File[]) => {
+    sharedDraftVersion.current += 1;
+    sharedSendId.current = null;
+    setSharedFiles(change);
+  };
   const [sharedSending, setSharedSending] = useState(false);
   const [sharedError, setSharedError] = useState("");
-  const sharedSendId = useRef<string | null>(null);
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
@@ -468,7 +475,7 @@ export function Composer({
     if (shared) {
       const next = Array.from(picked);
       if (next.some(file => file.size > 25 * 1024 * 1024)) { setSharedError("Each attachment must be under 25 MB."); return; }
-      setSharedFiles(previous => [...previous, ...next].slice(0, 4));
+      editSharedFiles(previous => [...previous, ...next].slice(0, 4));
       return;
     }
     changeDraftAttachmentPending(draftId, true);
@@ -537,12 +544,15 @@ export function Composer({
       if ((!text.trim() && !sharedFiles.length) || sharedSending) return;
       const sendId = sharedSendId.current ?? crypto.randomUUID();
       sharedSendId.current = sendId;
+      const version = sharedDraftVersion.current;
       setSharedSending(true);
       setSharedError("");
       void shared.send(text.trim(), sharedFiles, sendId).then(() => {
-        sharedSendId.current = null;
-        setText("");
-        setSharedFiles([]);
+        if (sharedDraftVersion.current === version) {
+          sharedSendId.current = null;
+          setText("");
+          setSharedFiles([]);
+        }
       }).catch(error => setSharedError(error instanceof Error ? error.message : "Message was not sent."))
         .finally(() => setSharedSending(false));
       return;
@@ -615,6 +625,11 @@ export function Composer({
     const imageFiles = clipboardImageFiles(e.clipboardData);
     if (imageFiles.length > 0 || clipboardHasImages(e.clipboardData)) {
       e.preventDefault();
+      if (shared) {
+        if (!imageFiles.length) { setSharedError("Could not read the pasted image."); return; }
+        editSharedFiles(previous => [...previous, ...imageFiles].slice(0, 4));
+        return;
+      }
       if (!engineSupportsImages) {
         dispatch({
           type: "error",
@@ -870,7 +885,7 @@ export function Composer({
           </div>
         )}
         {sharedError && <div role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{sharedError}</div>}
-        {sharedFiles.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{sharedFiles.map(file => <span key={`${file.name}-${file.lastModified}`} className="flex items-center gap-1 rounded-lg bg-raised px-2 py-1 text-xs">{file.name}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => setSharedFiles(previous => previous.filter(item => item !== file))}><X size={13} /></button></span>)}</div>}
+        {sharedFiles.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{sharedFiles.map(file => <span key={`${file.name}-${file.lastModified}`} className="flex items-center gap-1 rounded-lg bg-raised px-2 py-1 text-xs">{file.name}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => editSharedFiles(previous => previous.filter(item => item !== file))}><X size={13} /></button></span>)}</div>}
         {!shared && <ComposerAttachments
           items={attachments}
           onAdd={addAttachments}
