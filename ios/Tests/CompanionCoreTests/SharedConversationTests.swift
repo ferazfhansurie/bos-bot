@@ -2,6 +2,18 @@ import XCTest
 @testable import CompanionCore
 
 final class SharedConversationTests: XCTestCase {
+    func testSendIdentityIncludesReplyAndOrderedAttachmentIdentity() {
+        let first = UUID(), second = UUID()
+        let original = SharedSendDraft(text: "Review", fileIDs: [first, second], replyTo: "request-a")
+        XCTAssertEqual(original.sendID(retrying: original, previousID: "accepted-id"), "accepted-id")
+        let changedReply = SharedSendDraft(text: "Review", fileIDs: [first, second], replyTo: "request-b")
+        XCTAssertNotEqual(changedReply.sendID(retrying: original, previousID: "accepted-id"), "accepted-id")
+        let reordered = SharedSendDraft(text: "Review", fileIDs: [second, first], replyTo: "request-a")
+        XCTAssertNotEqual(reordered.sendID(retrying: original, previousID: "accepted-id"), "accepted-id")
+        let removed = SharedSendDraft(text: "Review", fileIDs: [first], replyTo: "request-a")
+        XCTAssertNotEqual(removed.sendID(retrying: original, previousID: "accepted-id"), "accepted-id")
+    }
+
     func testHumanAndBotPickerLabelsDoNotCollide() throws {
         let contacts = try JSONDecoder().decode(SharedContactsResponse.self, from: Data(#"{"contacts":[{"id":"m","name":"Maya","kind":"person"},{"id":"outside","name":"Absent","kind":"person"}]}"#.utf8)).contacts
         let bots = try JSONDecoder().decode(SharedEligibleBotsResponse.self, from: Data(#"{"bots":[{"id":"a:bot:m","name":"Maya","ownerName":"Alex"},{"id":"p:bot:p","name":"Pixie","ownerName":"Putri"}]}"#.utf8)).bots

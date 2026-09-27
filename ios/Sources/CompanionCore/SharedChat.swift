@@ -57,6 +57,8 @@ public struct SharedChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let replyTo: String?
     public let editedAt: Double?
     public let deletedAt: Double?
+    public var reactions: [String: [String]]? = nil
+    public var pinnedBy: String? = nil
     public let attachments: [SharedAttachment]?
     /// "activity" marks a tool/progress line posted by a bot (usually with an
     /// empty `text`). Absent means an ordinary message.
@@ -149,6 +151,7 @@ public struct SharedContactsResponse: Codable, Sendable { public let contacts: [
 public struct SharedRoomsResponse: Codable, Sendable { public let rooms: [SharedRoomSummary] }
 public struct SharedRoomResponse: Codable, Sendable { public let room: SharedRoomSummary }
 public struct SharedMessagesResponse: Codable, Sendable {
+    public var typing: [String]? = nil
     public let messages: [SharedChatMessage]
     public let changes: [SharedChatMessage]?
     public let version: Int?
@@ -259,3 +262,17 @@ public struct SharedRequestsResponse: Codable, Sendable {
     public let before: Int?
 }
 public struct SharedRequestResponse: Codable, Sendable { public let request: SharedBotRequest }
+
+
+/// Everything that affects message identity is captured before an upload awaits.
+public struct SharedSendDraft: Equatable, Sendable {
+    public let text: String
+    public let fileIDs: [UUID]
+    public let replyTo: String?
+    public init(text: String, fileIDs: [UUID], replyTo: String?) {
+        self.text = text; self.fileIDs = fileIDs; self.replyTo = replyTo
+    }
+    public func sendID(retrying previous: SharedSendDraft?, previousID: String?) -> String {
+        self == previous ? previousID ?? UUID().uuidString : UUID().uuidString
+    }
+}

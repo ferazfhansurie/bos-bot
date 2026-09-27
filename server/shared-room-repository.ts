@@ -249,6 +249,36 @@ export class SharedRoomRepository {
     return edited;
   }
 
+  annotateMessage(roomId: string, actorId: string, messageId: string, patch: { reaction?: unknown; active?: unknown; pinned?: unknown }): SharedTextMessage {
+    const room = this.roomFor(roomId, actorId);
+    const previous = this.rooms.get(roomId);
+    if (!room || !previous || parseContactId(actorId)?.kind !== "person") throw new Error("room unavailable");
+    const messages = previous.all();
+    const index = messages.findIndex(message => message.id === messageId);
+    const target = messages[index];
+    if (!target || target.deletedAt || target.kind === "activity") throw new Error("message unavailable");
+    const edited = { ...target };
+    if (patch.reaction !== undefined) {
+      if (!["👍", "❤️", "😂", "🎉", "👀", "✅"].includes(patch.reaction as string) || typeof patch.active !== "boolean" || patch.pinned !== undefined) throw new Error("invalid reaction");
+      const emoji = patch.reaction as string;
+      const actors = new Set(target.reactions?.[emoji] ?? []);
+      if (patch.active) actors.add(actorId); else actors.delete(actorId);
+      edited.reactions = { ...target.reactions };
+      if (actors.size) edited.reactions[emoji] = [...actors]; else delete edited.reactions[emoji];
+    } else {
+      if (typeof patch.pinned !== "boolean") throw new Error("invalid pin");
+      if (!patch.pinned && target.pinnedBy && target.pinnedBy !== actorId && room.createdBy !== actorId) throw new Error("only the person who pinned this or group creator can unpin it");
+      if (patch.pinned && target.pinnedBy) return target;
+      edited.pinnedBy = patch.pinned ? actorId : null;
+    }
+    if (JSON.stringify(edited) === JSON.stringify(target)) return target;
+    edited.changeSequence = (room.messageVersion ?? 0) + 1;
+    messages[index] = edited;
+    this.rooms.set(roomId, new SharedRoomLog({ ...room, messageVersion: edited.changeSequence }, messages));
+    try { this.persist(); } catch (error) { this.rooms.set(roomId, previous); throw error; }
+    return edited;
+  }
+
   changesAfter(roomId: string, actorId: string, version: number): { changes: SharedTextMessage[]; version: number } {
     const room = this.roomFor(roomId, actorId);
     if (!room) throw new Error("room unavailable");

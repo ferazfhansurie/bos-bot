@@ -53,3 +53,25 @@ it("binds reply references to an existing visible message in the same conversati
   repo.editMessage(room.id, owner, first.id, null);
   expect(() => repo.append(room.id, owner, { actor, text: "gone", sendId: "gone", replyTo: first.id })).toThrow("reply message unavailable");
 });
+
+it("persists member reactions and pins without changing the original send or read order", () => {
+  const { repo, room, actor, owner, teammate, file } = fixture();
+  const input = { actor, text: "agreed decision", sendId: "decision" };
+  const message = repo.append(room.id, owner, input).message;
+  repo.annotateMessage(room.id, teammate, message.id, { reaction: "✅", active: true });
+  const duplicate = repo.annotateMessage(room.id, teammate, message.id, { reaction: "✅", active: true });
+  expect(duplicate.reactions).toEqual({ "✅": [teammate] });
+  expect(duplicate.changeSequence).toBe(1);
+  repo.annotateMessage(room.id, owner, message.id, { reaction: "✅", active: true });
+  repo.annotateMessage(room.id, teammate, message.id, { pinned: true });
+  const reloaded = new SharedRoomRepository(file, "one");
+  expect(reloaded.searchFor(room.id, owner, { kind: "pinned" }).messages.map(item => item.id)).toEqual([message.id]);
+  expect(reloaded.append(room.id, owner, input).created).toBe(false);
+  expect(() => repo.annotateMessage(room.id, "other:person:owner", message.id, { pinned: true })).toThrow("unavailable");
+  expect(() => repo.annotateMessage(room.id, owner, message.id, { reaction: "garbage", active: true })).toThrow("invalid reaction");
+  expect(repo.annotateMessage(room.id, teammate, message.id, { reaction: "✅", active: false }).reactions).toEqual({ "✅": [owner] });
+  repo.annotateMessage(room.id, owner, message.id, { pinned: false });
+  expect(repo.searchFor(room.id, owner, { kind: "pinned" }).messages).toEqual([]);
+  repo.editMessage(room.id, owner, message.id, null);
+  expect(() => repo.annotateMessage(room.id, teammate, message.id, { pinned: true })).toThrow("unavailable");
+});

@@ -64,11 +64,14 @@ import type { SharedComposer } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 interface SharedChatOptions extends SharedComposer {
+  selfId?: string;
+  annotateMessage?: (id: string, patch: { reaction?: string; active?: boolean; pinned?: boolean }) => Promise<void>;
+  onLatestVisible?: (messageId: string | null) => void;
   faces?: GroupMarkMember[]; actions?: ReactNode; banner?: ReactNode; onOpenDetails?: () => void; onOpenSearch?: () => void;
   loadOlder?: () => Promise<void>; olderLoading?: boolean; historyLoading?: boolean;
   editMessage?: (id: string, text: string) => Promise<void>;
   deleteMessage?: (id: string) => Promise<void>;
-  messageMeta?: Record<string, { editedAt?: number; deletedAt?: number }>;
+  messageMeta?: Record<string, { editedAt?: number; deletedAt?: number; reactions?: Record<string, string[]>; pinnedBy?: string | null }>;
   changeRevision?: number;
   onRequestDelete?: (id: string) => void;
   editingPending?: boolean; editingError?: string;
@@ -566,6 +569,11 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
+      {shared?.annotateMessage && <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
+        {Object.entries(sharedMeta?.reactions ?? {}).map(([emoji, actors]) => <button key={emoji} type="button" aria-label={`${emoji}, ${actors.length} reactions`} aria-pressed={actors.includes(shared.selfId ?? "")} onClick={() => void shared.annotateMessage?.(message.id, { reaction: emoji, active: !actors.includes(shared.selfId ?? "") })} className="rounded-full border border-hairline px-2 py-1 hover:bg-raised">{emoji} {actors.length}</button>)}
+        <details className="relative"><summary className="cursor-pointer rounded-full px-2 py-1 text-ink-secondary hover:bg-raised" aria-label="React to message">React</summary><div className="absolute z-20 flex rounded-xl border border-hairline bg-panel p-2 shadow-lg">{["👍", "❤️", "😂", "🎉", "👀", "✅"].map(emoji => <button key={emoji} type="button" aria-label={`React ${emoji}`} className="rounded p-2 hover:bg-raised" onClick={event => { void shared.annotateMessage?.(message.id, { reaction: emoji, active: !sharedMeta?.reactions?.[emoji]?.includes(shared.selfId ?? "") }); event.currentTarget.closest("details")?.removeAttribute("open"); }}>{emoji}</button>)}</div></details>
+        <button type="button" className="rounded-full px-2 py-1 text-ink-secondary hover:bg-raised" onClick={() => void shared.annotateMessage?.(message.id, { pinned: !sharedMeta?.pinnedBy })}>{sharedMeta?.pinnedBy ? "📌 Pinned · Unpin" : "Pin"}</button>
+      </div>}
       {versions.length > 1 && botControlAvailable(bot, "versions") && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
           <button
@@ -1188,6 +1196,31 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
   }, [bot.id, messages.length, streaming, reasoning, bot.busy, composerDock.pad]);
+
+  // Report the rendered tail only after layout. A focused window can still
+  // be reading scrollback, including a bounded search-result window.
+  const onLatestVisible = shared?.onLatestVisible;
+  useEffect(() => {
+    if (!onLatestVisible) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    let frame = 0;
+    const report = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const landing = state.focusMessage && !state.focusMessage.consumed && state.focusMessage.threadId === bot.threadId;
+        const visible = !landing && endIndex >= messages.length && el.clientHeight > 0
+          && el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
+        onLatestVisible(visible ? messages.at(-1)?.id ?? null : null);
+      });
+    };
+    el.addEventListener("scroll", report, { passive: true });
+    const resize = new ResizeObserver(report);
+    resize.observe(el);
+    if (transcriptRef.current) resize.observe(transcriptRef.current);
+    report();
+    return () => { cancelAnimationFrame(frame); resize.disconnect(); el.removeEventListener("scroll", report); onLatestVisible(null); };
+  }, [onLatestVisible, messages, endIndex, bot.threadId, state.focusMessage]);
 
   // Expanding prepends rows: capture the height first, then after the commit
   // shift scrollTop by the growth so the message under the cursor stays put

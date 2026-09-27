@@ -4,7 +4,7 @@ import { api } from "@/state/store";
 import type { SharedSearchKind } from "../../shared/shared-search-kinds";
 import type { SharedContact, SharedMessage, SharedEligibleBot } from "./shared-conversation";
 
-const filters: Array<[SharedSearchKind, string]> = [["all", "All messages"], ["people", "People"], ["bots", "Bots"], ["files", "Files"], ["links", "Links"], ["results", "Bot results"]];
+const filters: Array<[SharedSearchKind, string]> = [["all", "All messages"], ["people", "People"], ["bots", "Bots"], ["files", "Files"], ["links", "Links"], ["results", "Bot results"], ["pinned", "Pinned"]];
 interface SearchPage { messages: SharedMessage[]; hasMore: boolean; before: number | null }
 
 export function SharedConversationSearch({ roomId, selfId, contacts, onShowMessage, focusToken = 0, bots = [] }: {

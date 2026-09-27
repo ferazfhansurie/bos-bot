@@ -44,6 +44,8 @@ export interface SharedTextMessage {
   editedAt?: number;
   deletedAt?: number;
   changeSequence?: number;
+  reactions?: Record<string, string[]>;
+  pinnedBy?: string | null;
   humanMentions?: string[];
   /** Canonical bot identities authorized for this human request, never members. */
   botTargets?: string[];

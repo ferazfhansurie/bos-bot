@@ -28,6 +28,13 @@ it("invokes an owned bot inside a human group without giving it membership", asy
     expect(created.status).toBe(201);
     const room = created.body.room;
     expect(room.kind).toBe("group");
+    const humanDirect = await api("POST", "/api/multiplayer/dm", { targetId: teammate });
+    expect(humanDirect.status).toBe(201);
+    expect(humanDirect.body.room.kind).toBe("direct");
+    expect(humanDirect.body.room.id).not.toBe(room.id);
+    const reusedDirect = await api("POST", "/api/multiplayer/dm", { targetId: teammate });
+    expect(reusedDirect.status).toBe(200);
+    expect(reusedDirect.body.room.id).toBe(humanDirect.body.room.id);
     const path = `/api/multiplayer/rooms/${room.id}`;
     expect((await api("GET", `${path}/bots`)).body.bots.map((b: any) => b.id)).toContain(botId);
     expect((await api("GET", `${path}/bots`, undefined, paired.body.token)).body.bots).toEqual([]);
@@ -36,6 +43,22 @@ it("invokes an owned bot inside a human group without giving it membership", asy
       expect(sent.status).toBe(201);
       expect(sent.body.message.botTargets).toEqual([]);
     }
+    expect((await api("PATCH", `${path}/preferences`, { typing: true }, paired.body.token)).status).toBe(200);
+    expect((await api("GET", `${path}/messages`)).body.typing).toEqual([teammate]);
+    expect((await api("GET", `${path}/messages`, undefined, paired.body.token)).body.typing).toEqual([]);
+    await api("PATCH", `${path}/preferences`, { typing: false }, paired.body.token);
+    expect((await api("GET", `${path}/messages`)).body.typing).toEqual([]);
+    const decision = await api("POST", `${path}/messages`, { text: "Launch decision", sendId: "decision" });
+    const decisionPath = `${path}/messages/${decision.body.message.id}`;
+    const reacted = await api("PATCH", decisionPath, { reaction: "✅", active: true }, paired.body.token);
+    expect(reacted.status).toBe(200);
+    expect(reacted.body.message.reactions).toEqual({ "✅": [teammate] });
+    expect((await api("PATCH", decisionPath, { reaction: "✅", active: true }, paired.body.token)).body.message.changeSequence).toBe(reacted.body.message.changeSequence);
+    expect((await api("PATCH", decisionPath, { pinned: true }, paired.body.token)).status).toBe(200);
+    const pinned = await api("GET", `${path}/search?kind=pinned`);
+    expect(pinned.body.messages.map((message: any) => message.id)).toEqual([decision.body.message.id]);
+    const changes = await api("GET", `${path}/messages?after=5&version=0`);
+    expect(changes.body.changes.some((message: any) => message.id === decision.body.message.id && message.pinnedBy === teammate)).toBe(true);
     expect((await api("GET", `${path}/messages`)).body.messages.every((m: any) => m.actor.kind === "person")).toBe(true);
     const request = { text: "@Ultron say hello", sendId: "invoke-once", botTargets: [botId] };
     const sent = await api("POST", `${path}/messages`, request);

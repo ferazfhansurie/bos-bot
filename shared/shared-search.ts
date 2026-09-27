@@ -18,6 +18,7 @@ export function searchSharedMessages(messages: readonly SharedTextMessage[], opt
     if (message.sequence >= before || message.deletedAt || message.kind === "activity" || (author && contactId(message.actor) !== author)) continue;
     if (kind === "people" && message.actor.kind !== "person" || kind === "bots" && message.actor.kind !== "bot" ||
         kind === "files" && !message.attachments?.length || kind === "links" && !/https?:\/\/[^\s<>]+/i.test(message.text) ||
+        kind === "pinned" && !message.pinnedBy ||
         kind === "results" && (message.actor.kind !== "bot" || !message.responseTo)) continue;
     const text = [message.text, ...(message.attachments ?? []).map(file => file.name)].join("\n").normalize("NFKC").toLowerCase();
     if (needle && !text.includes(needle)) continue;

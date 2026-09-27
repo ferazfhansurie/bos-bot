@@ -19,6 +19,7 @@ export interface SharedMessage {
   actor: { homeId: string; kind: string; localId: string };
   text: string; at: number; attachments?: SharedAttachment[];
   kind?: "text" | "activity"; tool?: { name: string; ok?: boolean; spoken?: string };
+  reactions?: Record<string, string[]>; pinnedBy?: string | null;
   responseTo?: string;
   replyTo?: string; editedAt?: number; deletedAt?: number; changeSequence?: number;
 }
@@ -51,7 +52,7 @@ export function sharedHasActiveWork(messages: readonly SharedMessage[]): boolean
   return sharedVisibleMessages(messages).some(message => message.kind === "activity" && message.tool?.ok === undefined && Boolean(message.tool)
     && !answered.has(`${message.actor.homeId}:${message.actor.localId}:${message.responseTo ?? ""}`));
 }
-export interface SharedHistoryPage { messages: SharedMessage[]; changes?: SharedMessage[]; version?: number; hasMore?: boolean }
+export interface SharedHistoryPage { typing?: string[]; messages: SharedMessage[]; changes?: SharedMessage[]; version?: number; hasMore?: boolean }
 export interface SharedHistory {
   messages: SharedMessage[]; sequence: number; version: number; hasMore: boolean; changeRevision: number;
 }
@@ -106,6 +107,7 @@ export interface SharedEligibleBot {
   mascotBody?: Bot["mascotBody"]; avatarUrl?: string | null;
 }
 export interface SharedComposer {
+  onTyping?: (active: boolean) => void;
   send: (text: string, files: File[], sendId: string, options?: { replyTo?: string }) => Promise<void>;
   mentionBots: Bot[];
   mentionPeople?: { id: string; name: string }[];

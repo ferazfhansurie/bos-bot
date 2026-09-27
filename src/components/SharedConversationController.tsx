@@ -1,3 +1,4 @@
+import { sharedRoomUploads } from "@/lib/shared-upload-cache";
 import { sharedMentionLabel, sharedMentionTargets } from "../../shared/shared-mentions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelRight } from "lucide-react";
@@ -16,6 +17,13 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   const { dispatch } = useStore();
   const [room, setRoom] = useState<SharedRoom | null>(null);
   const [selfId, setSelfId] = useState<string | null>(null);
+  const [typing, setTyping] = useState<string[]>([]);
+  const typingAt = useRef(0);
+  const onTyping = (active: boolean) => {
+    if (active && Date.now() - typingAt.current < 2000) return;
+    typingAt.current = Date.now();
+    void api(`/api/multiplayer/rooms/${roomId}/preferences`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ typing: active }) }).catch(() => {});
+  };
   const [contacts, setContacts] = useState<SharedContact[]>([]);
   const [eligibleBots, setEligibleBots] = useState<SharedEligibleBot[]>([]);
   const [history, setHistory] = useState(emptySharedHistory);
@@ -30,6 +38,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   const [preferencePending, setPreferencePending] = useState(false);
   const [preferenceError, setPreferenceError] = useState("");
   const readPending = useRef(false);
+  const [visibleTailId, setVisibleTailId] = useState<string | null>(null);
   const preferencesRef = useRef(preferences);
   preferencesRef.current = preferences;
   const [error, setError] = useState("");
@@ -43,7 +52,6 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [olderLoading, setOlderLoading] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const uploadedBySend = useRef(new Map<string, SharedAttachment[]>());
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const mentionMembers = useMemo(() => contacts.filter(contact => contact.kind === "person" && room?.memberIds.includes(contact.id)), [contacts, room]);
@@ -54,7 +62,6 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   useEffect(() => {
     let alive = true;
     historyRef.current = emptySharedHistory(); setHistory(historyRef.current);
-    uploadedBySend.current.clear();
     setRoom(null); setEligibleBots([]); setError(""); setHistoryError(""); setOlderError("");
     setHistoryLoading(true); setPreferences(null);
     void Promise.all([
@@ -86,7 +93,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
 
   const markRead = useCallback(async () => {
     const saved = preferencesRef.current;
-    if (!ready || !saved || readPending.current || !mounted.current) return;
+    if (!ready || !saved || readPending.current || !mounted.current || !visibleTailId || historyRef.current.messages.at(-1)?.id !== visibleTailId) return;
     const readSequence = sharedReadSequenceToSave(historyRef.current.sequence, saved.readSequence, document.visibilityState === "visible", document.hasFocus());
     if (readSequence === null) return;
     readPending.current = true;
@@ -103,7 +110,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       window.dispatchEvent(new Event("multiplayer:refresh"));
     } catch { /* Preserve unread state and retry while the conversation is foreground. */ }
     finally { readPending.current = false; }
-  }, [ready, roomId]);
+  }, [ready, roomId, visibleTailId]);
   useEffect(() => { void markRead(); }, [markRead, history.sequence, preferences?.readSequence]);
   useEffect(() => {
     const refreshRead = () => void markRead();
@@ -131,6 +138,15 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
     finally { if (mounted.current) setPreferencePending(false); }
   };
 
+  const annotateMessage = async (id: string, patch: { reaction?: string; active?: boolean; pinned?: boolean }) => {
+    try {
+      const result = await api<{ message: SharedMessage }>(`/api/multiplayer/rooms/${roomId}/messages/${id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch),
+      });
+      if (mounted.current) { applyHistory({ messages: [result.message] }, "mutation"); setHistoryError(""); }
+    } catch (cause) { if (mounted.current) setHistoryError(errorText(cause, "Could not update this message. Try again.")); }
+  };
+
   const changeMessage = useCallback(async (id: string, text: string | null) => {
     const message = historyRef.current.messages.find(item => item.id === id);
     if (!message || senderId(message) !== selfId || message.deletedAt) throw new Error("This message cannot be changed.");
@@ -154,10 +170,11 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       try {
         const result = await api<SharedHistoryPage>(`/api/multiplayer/rooms/${roomId}/messages?${first ? "latest=1" : `after=${historyRef.current.sequence}&version=${historyRef.current.version}`}&limit=200`);
         if (!alive) return;
+        setTyping(result.typing ?? []);
         applyHistory(result, first ? "latest" : "after");
         first = false;
         setHistoryLoading(false); setHistoryError("");
-      } catch (cause) { if (alive) { setHistoryLoading(false); setHistoryError(errorText(cause, "Conversation is offline.")); } }
+      } catch (cause) { if (alive) { setTyping([]); setHistoryLoading(false); setHistoryError(errorText(cause, "Conversation is offline.")); } }
       finally { busy = false; }
     };
     void refresh();
@@ -234,24 +251,20 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   const send = useCallback(async (text: string, files: File[], sendId: string, options?: { replyTo?: string }) => {
     const problem = files.map(sharedAttachmentError).find(Boolean);
     if (problem) throw new Error(problem);
-    let attachments = uploadedBySend.current.get(sendId);
-    if (!attachments) {
-      attachments = [];
-      for (const file of files) {
-        const data = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
-          reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
-          reader.readAsDataURL(file);
-        });
-        const result = await api<{ attachment: SharedAttachment }>(`/api/multiplayer/rooms/${roomId}/attachments`, {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: file.name, mime: file.type || "application/octet-stream", data }),
-        });
-        attachments.push(result.attachment);
-      }
-      uploadedBySend.current.set(sendId, attachments);
-    }
+    const uploads = sharedRoomUploads<SharedAttachment>(`${selfId}:${roomId}`);
+    const attachments = await uploads.collect(files, async file => {
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
+        reader.readAsDataURL(file);
+      });
+      const result = await api<{ attachment: SharedAttachment }>(`/api/multiplayer/rooms/${roomId}/attachments`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: file.name, mime: file.type || "application/octet-stream", data }),
+      });
+      return result.attachment;
+    });
     const mentioned = sharedMentionTargets(text, mentionRoster);
     const botTargets = eligibleBots.filter(bot => mentioned.includes(bot.id)).map(bot => bot.id);
     const humanMentions = mentionMembers.filter(person => mentioned.includes(person.id)).map(person => person.id);
@@ -259,13 +272,12 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, sendId, attachments, ...(options?.replyTo ? { replyTo: options.replyTo } : {}), botTargets, humanMentions }),
     });
-    uploadedBySend.current.delete(sendId);
     try {
       const result = await api<SharedHistoryPage>(`/api/multiplayer/rooms/${roomId}/messages?after=${historyRef.current.sequence}&version=${historyRef.current.version}&limit=200`);
       if (!mounted.current) return;
       applyHistory(result, "after");
     } catch { /* the poll will load the accepted send without replaying it */ }
-  }, [roomId, mentionRoster, mentionMembers, eligibleBots, applyHistory]);
+  }, [roomId, selfId, mentionRoster, mentionMembers, eligibleBots, applyHistory]);
 
   const direct = room ? isDirectSharedRoom(room) : false;
   const peerId = direct ? room?.memberIds.find(id => id !== selfId) : undefined;
@@ -324,11 +336,11 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   };
 
   if (!projected || !room || !selfId) return <main className="flex flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary"><p role={error ? "alert" : "status"}>{error || "Loading conversation…"}</p>{error && <button type="button" onClick={() => setLoadAttempt(value => value + 1)} className="rounded-lg bg-raised px-3 py-2 text-ink">Retry</button>}</main>;
-  const banner = <>{historyLoading && <p role="status" className="px-4 py-2 text-center text-xs text-ink-secondary">Loading messages…</p>}{historyError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{historyError}<button type="button" onClick={() => window.dispatchEvent(new Event("multiplayer:retry-history"))} className="underline">Retry</button></div>}{olderError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{olderError}<button type="button" disabled={olderLoading} onClick={() => void loadOlder()} className="underline">Retry earlier messages</button></div>}{botsError && <p role="status" className="px-4 py-1 text-center text-xs text-ink-secondary">{botsError}</p>}</>;
+  const banner = <>{typing.length > 0 && <p role="status" className="px-4 py-1 text-xs text-ink-secondary">{typing.map(id => contacts.find(contact => contact.id === id)?.name ?? "A member").join(", ")} {typing.length === 1 ? "is" : "are"} typing…</p>}{historyLoading && <p role="status" className="px-4 py-2 text-center text-xs text-ink-secondary">Loading messages…</p>}{historyError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{historyError}<button type="button" onClick={() => window.dispatchEvent(new Event("multiplayer:retry-history"))} className="underline">Retry</button></div>}{olderError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{olderError}<button type="button" disabled={olderLoading} onClick={() => void loadOlder()} className="underline">Retry earlier messages</button></div>}{botsError && <p role="status" className="px-4 py-1 text-center text-xs text-ink-secondary">{botsError}</p>}</>;
   return <>
-    <ChatView bot={projected} shared={{ send, faces, mentionBots, mentionPeople, onOpenDetails: () => setDetailsOpen(true), onOpenSearch: () => { setDetailsOpen(true); setSearchFocus(value => value + 1); }, banner,
+    <ChatView bot={projected} shared={{ onTyping, selfId, annotateMessage, onLatestVisible: setVisibleTailId, send, faces, mentionBots, mentionPeople, onOpenDetails: () => setDetailsOpen(true), onOpenSearch: () => { setDetailsOpen(true); setSearchFocus(value => value + 1); }, banner,
       editMessage: (id, text) => changeMessage(id, text), deleteMessage: id => changeMessage(id, null),
-      messageMeta: Object.fromEntries(messages.map(message => [message.id, { editedAt: message.editedAt, deletedAt: message.deletedAt }])),
+      messageMeta: Object.fromEntries(messages.map(message => [message.id, { editedAt: message.editedAt, deletedAt: message.deletedAt, reactions: message.reactions, pinnedBy: message.pinnedBy }])),
       changeRevision: history.changeRevision,
       loadOlder, olderLoading, historyLoading,
       actions: <button type="button" aria-label="Conversation details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><PanelRight size={18} /></button>,

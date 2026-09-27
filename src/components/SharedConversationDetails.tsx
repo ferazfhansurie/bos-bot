@@ -67,6 +67,7 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
           {!canManage && <p className="mt-2 text-xs text-ink-secondary">Only the owner can change members.</p>}
         </form>}
         <section aria-label="Conversation members">
+          <p className="mb-3 text-xs leading-relaxed text-ink-secondary">New members can see this conversation’s retained history and files. Removing someone stops future access; it cannot erase copies they already saved.</p>
           <h3 className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-ink"><Users size={16} />Members · {members.length}</h3>
           <div className="space-y-3">{members.map(member => <div key={member.id} className="flex items-center gap-3">
             {member.avatar ? <PersonPhoto src={member.avatar} size={34} /> : <GroupMark members={[member]} size={34} />}

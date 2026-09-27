@@ -1,3 +1,4 @@
+import { useSharedDelivery } from "@/lib/shared-delivery";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { ArrowUp, BookOpen, Clock, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
@@ -6,6 +7,8 @@ import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
 import {
   draftRevision,
+  restoreComposerDraft,
+  replyDraft,
   appendDraftAttachments,
   changeDraftAttachmentPending,
   forgetFailedComposerSend,
@@ -161,18 +164,16 @@ export function Composer({
   // Goal mode is opt-in and one-shot so the next ordinary channel message
   // cannot accidentally start another multi-turn team run.
   const [channelMode, setChannelMode] = useComposerChannelMode(draftId);
-  const sharedSendId = useRef<string | null>(null);
-  const sharedSendReplyId = useRef<string | undefined>(undefined);
-  const currentSharedReplyId = useRef(replyTo?.id);
-  currentSharedReplyId.current = replyTo?.id;
-  const sharedDraftVersion = useRef(0);
+  const { delivery: sharedDelivery, files: sharedFiles, status: sharedStatus, error: sharedError } = useSharedDelivery(draftId);
+  const sharedSending = sharedStatus === "sending";
+  const [sharedIntakeError, setSharedError] = useState("");
   const editText = useCallback(
     (next: string) => {
       markDraftEdited(draftId);
-      if (shared) { sharedDraftVersion.current += 1; sharedSendId.current = null; }
+      if (shared) sharedDelivery.edit();
       setText(next);
     },
-    [draftId, setText, shared],
+    [draftId, setText, shared, sharedDelivery],
   );
   const editAttachments = useCallback(
     (next: SetStateAction<Attachment[]>) => {
@@ -222,14 +223,10 @@ export function Composer({
   );
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
-  const [sharedFiles, setSharedFiles] = useState<File[]>([]);
   const editSharedFiles = (change: (previous: File[]) => File[]) => {
-    sharedDraftVersion.current += 1;
-    sharedSendId.current = null;
-    setSharedFiles(change);
+    markDraftEdited(draftId);
+    sharedDelivery.setFiles(change);
   };
-  const [sharedSending, setSharedSending] = useState(false);
-  const [sharedError, setSharedError] = useState("");
   const [caret, setCaret] = useState(0);
   const [highlight, setHighlight] = useState(0);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null); // Esc'd this @
@@ -550,22 +547,16 @@ export function Composer({
     if (locked || attachmentPending) return;
     if (shared) {
       if ((!text.trim() && !sharedFiles.length) || sharedSending) return;
-      const sendId = sharedSendId.current && sharedSendReplyId.current === replyTo?.id ? sharedSendId.current : crypto.randomUUID();
-      sharedSendId.current = sendId;
-      sharedSendReplyId.current = replyTo?.id;
       const sentReplyId = replyTo?.id;
-      const version = sharedDraftVersion.current;
-      setSharedSending(true);
-      setSharedError("");
-      void shared.send(text.trim(), sharedFiles, sendId, sentReplyId ? { replyTo: sentReplyId } : undefined).then(() => {
-        if (sharedDraftVersion.current === version && currentSharedReplyId.current === sentReplyId) {
-          sharedSendId.current = null;
-          setText("");
-          setSharedFiles([]);
-          onConsumeReply?.();
-        }
-      }).catch(error => setSharedError(error instanceof Error ? error.message : "Message was not sent."))
-        .finally(() => setSharedSending(false));
+      const revision = draftRevision(draftId);
+      void sharedDelivery.send(text.trim(), sentReplyId,
+        snapshot => shared.send(snapshot.text, snapshot.files, snapshot.sendId, snapshot.replyTo ? { replyTo: snapshot.replyTo } : undefined),
+        () => {
+          // Notify a newly mounted composer too, and never overwrite edits
+          // made while this send was uploading in another conversation.
+          if (draftRevision(draftId) === revision) restoreComposerDraft(draftId, { text: "", attachments: [] });
+          if (replyDraft(threadId) === sentReplyId) onConsumeReply?.();
+        });
       return;
     }
     if (
@@ -901,7 +892,13 @@ export function Composer({
             />
           </div>
         )}
-        {sharedError && <div role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{sharedError}</div>}
+        {sharedIntakeError && <div role="alert" className="mb-2 px-3 text-xs text-danger">{sharedIntakeError}</div>}
+        {shared && sharedStatus === "sending" && <div role="status" className="mb-2 px-3 text-xs text-ink-secondary">Sending…</div>}
+        {shared && sharedStatus === "sent" && <div role="status" className="mb-2 px-3 text-xs text-ink-secondary">Sent</div>}
+        {shared && sharedStatus === "failed" && <div role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">
+          Couldn’t confirm this send. Your message and files are kept. {sharedError}
+          <button type="button" className="ml-2 font-medium underline" onClick={send}>Retry send</button>
+        </div>}
         {sharedFiles.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{sharedFiles.map(file => <span key={`${file.name}-${file.lastModified}`} className="flex items-center gap-1 rounded-lg bg-raised px-2 py-1 text-xs">{file.name}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => editSharedFiles(previous => previous.filter(item => item !== file))}><X size={13} /></button></span>)}</div>}
         {!shared && <ComposerAttachments
           items={attachments}
@@ -1025,6 +1022,7 @@ export function Composer({
           value={text}
           onChange={(e) => {
             editText(e.target.value);
+            shared?.onTyping?.(Boolean(e.target.value.trim()));
             setCaret(e.target.selectionStart ?? e.target.value.length);
             setDismissedAt(null);
             setDismissedSlashAt(null);

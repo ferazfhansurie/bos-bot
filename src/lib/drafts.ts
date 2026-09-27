@@ -16,6 +16,7 @@ const draftRevisions = new Map<string, number>();
 // so task navigation and a rejected send can resolve the original message
 // without duplicating message contents in storage.
 const replyDrafts = new Map<string, string>();
+const replyDraftListeners = new Map<string, Set<() => void>>();
 type ChannelMode = "chat" | "goal";
 type DraftRestore = { text: string; attachments: Attachment[]; channelMode?: ChannelMode };
 type DraftRestoreListener = (draft: DraftRestore) => void;
@@ -165,6 +166,7 @@ export function setDraftAttachments(store: Store, id: string, attachments: Attac
 
 export function rememberReplyDraft(threadId: string, messageId: string): void {
   replyDrafts.set(threadId, messageId);
+  for (const listener of replyDraftListeners.get(threadId) ?? []) listener();
 }
 
 export function replyDraft(threadId: string): string | undefined {
@@ -173,6 +175,7 @@ export function replyDraft(threadId: string): string | undefined {
 
 export function clearReplyDraft(threadId: string): void {
   replyDrafts.delete(threadId);
+  for (const listener of replyDraftListeners.get(threadId) ?? []) listener();
 }
 
 export function selectReplyDraft(draftId: string, threadId: string, messageId: string): void {
@@ -213,6 +216,14 @@ export function useReplyDraft<T extends { id: string }>(
       return { threadId, message: resolveReplyMessage(threadId, messages) };
     });
   }, [messages, threadId]);
+
+  useEffect(() => {
+    const changed = () => setReplyState({ threadId, message: resolveReplyMessage(threadId, messages) });
+    let listeners = replyDraftListeners.get(threadId);
+    if (!listeners) { listeners = new Set(); replyDraftListeners.set(threadId, listeners); }
+    listeners.add(changed);
+    return () => { listeners.delete(changed); if (!listeners.size) replyDraftListeners.delete(threadId); };
+  }, [threadId, messages]);
 
   const selectReply = useCallback((message: T) => {
     selectReplyDraft(draftId, threadId, message.id);

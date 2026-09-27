@@ -26,7 +26,7 @@ struct SharedConversationSearch: View {
                 Picker("Message type", selection: $kind) {
                     Text("All messages").tag("all"); Text("People").tag("people")
                     Text("Bots").tag("bots"); Text("Files").tag("files")
-                    Text("Links").tag("links"); Text("Bot results").tag("results")
+                    Text("Links").tag("links"); Text("Bot results").tag("results"); Text("Pinned").tag("pinned")
                 }
                 Picker("From", selection: $author) {
                     Text("Anyone").tag("")

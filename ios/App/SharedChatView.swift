@@ -21,10 +21,19 @@ struct SharedChatView: View {
     @State private var botsLoading = false
     private var currentRoom: SharedRoomSummary { updatedRoom ?? room }
     private var conversationName: String { currentRoom.displayName(contacts: contacts, selfID: selfID) }
+    @State private var typing: [String] = []
+    @State private var typingAt = Date.distantPast
     @State private var messages: [SharedChatMessage] = []
-    @State private var draft = ""
-    @State private var pendingSendID: String?
-    @State private var sending = false
+    @StateObject private var composer: SharedDeliveryDraft
+    private var draft: String { get { composer.text } nonmutating set { composer.text = newValue } }
+    private var sending: Bool { composer.sending }
+    private var pendingFiles: [PendingSharedFile] { get { composer.files } nonmutating set { composer.files = newValue } }
+    private var replyTarget: SharedChatMessage? { get { composer.reply } nonmutating set { composer.reply = newValue } }
+
+    init(room: SharedRoomSummary, selfID: String, contacts: [SharedContact]) {
+        self.room = room; self.selfID = selfID; self.contacts = contacts
+        _composer = StateObject(wrappedValue: SharedChatDrafts.get(roomID: room.id, actorID: selfID))
+    }
     @State private var error: String?
     @State private var connectionError: String?
     @State private var sequence = 0
@@ -35,7 +44,6 @@ struct SharedChatView: View {
     @State private var followingBottom = true
     @State private var scrollHeight: CGFloat = 0
     @State private var readSequence = 0
-    @State private var replyTarget: SharedChatMessage?
     @State private var editingMessage: SharedChatMessage?
     @State private var editText = ""
     @State private var deletingMessage: SharedChatMessage?
@@ -44,8 +52,6 @@ struct SharedChatView: View {
     @State private var showingPhotoPicker = false
     @State private var showingFileImporter = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var pendingFiles: [PendingSharedFile] = []
-    @State private var uploadedFiles: [UUID: SharedAttachment] = [:]
     @State private var filePreview: FilePreviewItem?
     @FocusState private var composerFocused: Bool
 
@@ -77,6 +83,18 @@ struct SharedChatView: View {
                             HStack(alignment: .bottom) {
                                 if mine { Spacer(minLength: 44) }
                                 VStack(alignment: .leading, spacing: 4) {
+                                    if message.deletedAt == nil {
+                                        if message.pinnedBy != nil { Label("Pinned", systemImage: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
+                                        if let reactions = message.reactions, !reactions.isEmpty {
+                                            HStack(spacing: 6) {
+                                                ForEach(reactions.keys.sorted(), id: \.self) { emoji in
+                                                    Button("\(emoji) \(reactions[emoji]?.count ?? 0)") { Task { await annotate(message, reaction: emoji) } }
+                                                        .font(.caption).buttonStyle(.bordered)
+                                                        .accessibilityLabel("\(emoji), \(reactions[emoji]?.count ?? 0) reactions")
+                                                }
+                                            }
+                                        }
+                                    }
                                     if !mine { Text(senderName(message))
                                         .font(.caption2).foregroundStyle(.secondary) }
                                     if let replyID = message.replyReference, let quoted = messages.first(where: { $0.id == replyID }) {
@@ -118,6 +136,12 @@ struct SharedChatView: View {
                             .contextMenu {
                                 if message.deletedAt == nil {
                                     Button { replyTarget = message; composerFocused = true } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
+                                    Menu("React") {
+                                        ForEach(["👍", "❤️", "😂", "🎉", "👀", "✅"], id: \.self) { emoji in
+                                            Button(emoji) { Task { await annotate(message, reaction: emoji) } }
+                                        }
+                                    }
+                                    Button(message.pinnedBy == nil ? "Pin message" : "Unpin message") { Task { await annotate(message, pinned: message.pinnedBy == nil) } }
                                     Button { UIPasteboard.general.string = message.text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                     if mine {
                                         Button { editText = message.text; editingMessage = message } label: { Label("Edit", systemImage: "pencil") }
@@ -194,6 +218,16 @@ struct SharedChatView: View {
                     Button { self.error = nil } label: { Image(systemName: "xmark.circle") }.accessibilityLabel("Dismiss error")
                 }.padding(.horizontal, 16).padding(.vertical, 8)
             }
+            if composer.sending {
+                Text("Sending…").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).accessibilityAddTraits(.updatesFrequently)
+            } else if let sendError = composer.error {
+                HStack {
+                    Text(sendError).font(.caption).foregroundStyle(.red)
+                    Button("Retry send") { Task { await send() } }.font(.caption.weight(.medium))
+                }.padding(.horizontal, 16).padding(.vertical, 8)
+            } else if composer.sent {
+                Text("Sent").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+            }
             if !pendingFiles.isEmpty {
                 ScrollView(.horizontal) {
                     HStack {
@@ -201,7 +235,7 @@ struct SharedChatView: View {
                             HStack {
                                 Image(systemName: file.mime.hasPrefix("image/") ? "photo" : file.mime.hasPrefix("video/") ? "video" : "doc")
                                 Text(file.name).lineLimit(1)
-                                Button { pendingFiles.removeAll { $0.id == file.id }; uploadedFiles.removeValue(forKey: file.id) } label: { Image(systemName: "xmark.circle.fill") }
+                                Button { composer.removeFile(file.id) } label: { Image(systemName: "xmark.circle.fill") }
                             }.font(.caption).padding(8).background(Color.secondary.opacity(0.14), in: Capsule())
                         }
                     }.padding(.horizontal, 16)
@@ -249,11 +283,15 @@ struct SharedChatView: View {
                 Text("Chat with your people. @mention a bot when you need help.")
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.vertical, 6)
             }
+            if !typing.isEmpty {
+                Text(typing.map { id in contacts.first(where: { $0.id == id })?.name ?? "A member" }.joined(separator: ", ") + (typing.count == 1 ? " is typing…" : " are typing…"))
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+            }
             ChatComposerBar(
-                draft: $draft, showingPlus: $showingPlus, dictation: dictation,
+                draft: $composer.text, showingPlus: $showingPlus, dictation: dictation,
                 focus: $composerFocused, name: conversationName, busy: sending,
                 hasAttachments: !pendingFiles.isEmpty, supportsVoiceChat: false,
-                onDraftChange: { _ in pendingSendID = nil },
+                onDraftChange: { _ in composer.edited(); signalTyping() },
                 onSend: { Task { await send() } }, onVoice: {}
             )
             .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
@@ -272,7 +310,6 @@ struct SharedChatView: View {
             draft = Dictation.draft(base: dictation.base, transcript: spoken)
         }
         .onDisappear { dictation.stop() }
-        .onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: "bos.shared-draft.\(room.id)") }
         .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await refresh(); if atBottom { await markRead() } } } }
         .alert("Edit message", isPresented: Binding(get: { editingMessage != nil }, set: { if !$0 { editingMessage = nil } })) {
             TextField("Message", text: $editText)
@@ -299,7 +336,6 @@ struct SharedChatView: View {
                 changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: { try await showMessage(id: $0.messageId, sequence: $0.sequence) }, showRequestMessage: showMessage, bots: availableBots)
         }
         .task(id: room.id) {
-            draft = UserDefaults.standard.string(forKey: "bos.shared-draft.\(room.id)") ?? ""
             messages = []
             sequence = 0
             version = 0
@@ -346,7 +382,7 @@ struct SharedChatView: View {
     private func insertMention(_ choice: SharedMentionChoice) {
         guard let at = draft.lastIndex(of: "@") else { return }
         draft = String(draft[..<at]) + "@" + choice.label + " "
-        pendingSendID = nil
+        composer.edited()
         composerFocused = true
     }
 
@@ -356,6 +392,13 @@ struct SharedChatView: View {
             return owner.isEmpty ? bot.name : "\(bot.name) · \(owner)"
         }
         return contacts.first { $0.id == message.actor.id }?.name ?? (message.actor.kind == "bot" ? "Bot" : "Member")
+    }
+
+    private func signalTyping() {
+        let active = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !active || Date().timeIntervalSince(typingAt) >= 2 else { return }
+        typingAt = Date()
+        Task { if let client = try? session.sharedMessageTransport() { try? await client.sharedTyping(roomId: room.id, active: active) } }
     }
 
     private func refreshBots() async {
@@ -369,6 +412,7 @@ struct SharedChatView: View {
     private func refresh() async {
         do {
             let page = try await session.sharedMessagePage(roomId: room.id, after: sequence, version: version, latest: sequence == 0)
+            typing = page.typing ?? []
             let next = page.messages
             guard !Task.isCancelled else { return }
             if sequence == 0 { hasMore = page.hasMore ?? false }
@@ -379,7 +423,7 @@ struct SharedChatView: View {
             let existing = Set(messages.map(\.id))
             messages.append(contentsOf: next.filter { !existing.contains($0.id) })
             connectionError = nil
-        } catch { if !Task.isCancelled { connectionError = error.localizedDescription } }
+        } catch { if !Task.isCancelled { typing = []; connectionError = error.localizedDescription } }
     }
 
     private func loadOlder() async {
@@ -438,6 +482,15 @@ struct SharedChatView: View {
         catch { /* retry when the visible conversation refreshes */ }
     }
 
+    private func annotate(_ message: SharedChatMessage, reaction: String? = nil, pinned: Bool? = nil) async {
+        do {
+            let client = try session.sharedMessageTransport()
+            let updated = try await client.annotateSharedMessage(roomId: room.id, messageId: message.id, reaction: reaction,
+                active: reaction.map { !(message.reactions?[$0]?.contains(selfID) ?? false) }, pinned: pinned)
+            messages = messages.map { $0.id == updated.id ? updated : $0 }
+        } catch { self.error = error.localizedDescription }
+    }
+
     private func edit(_ message: SharedChatMessage, text: String?) async {
         do {
             let edited = try await session.editSharedMessage(roomId: room.id, messageId: message.id, text: text)
@@ -448,31 +501,17 @@ struct SharedChatView: View {
     }
 
     private func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !pendingFiles.isEmpty, !sending else { return }
-        sending = true
-        error = nil
-        let sendID = pendingSendID ?? UUID().uuidString
-        pendingSendID = sendID
         do {
-            var refs: [SharedAttachment] = []
-            for file in pendingFiles {
-                if let uploaded = uploadedFiles[file.id] { refs.append(uploaded); continue }
-                let uploaded = try await session.uploadSharedAttachment(roomId: room.id, name: file.name, mime: file.mime, data: file.data)
-                uploadedFiles[file.id] = uploaded
-                refs.append(uploaded)
-            }
-            try await session.sendSharedMessage(roomId: room.id, text: text, sendId: sendID, attachments: refs, replyTo: replyTarget?.id)
-            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
-            pendingFiles = []
-            uploadedFiles = [:]
-            pendingSendID = nil
-            replyTarget = nil
-            atBottom = true
-            followingBottom = true
-            await refresh()
-        } catch { self.error = "Message wasn’t sent. Your text and attachments are still here. " + error.localizedDescription }
-        sending = false
+            // Capture this host's client once; switching computers during an
+            // upload must never redirect the remaining files or message.
+            let client = try session.sharedMessageTransport()
+            let accepted = await composer.send(upload: { file in
+                try await client.uploadSharedAttachment(roomId: room.id, name: file.name, mime: file.mime, data: file.data)
+            }, deliver: { snapshot, id, attachments in
+                try await client.sendSharedMessage(roomId: room.id, text: snapshot.text, sendId: id, attachments: attachments, replyTo: snapshot.replyTo)
+            })
+            if accepted { atBottom = true; followingBottom = true; await refresh() }
+        } catch { self.error = error.localizedDescription }
     }
 
     private func importPhotos(_ items: [PhotosPickerItem]) async {
@@ -506,7 +545,7 @@ struct SharedChatView: View {
         let limit = mime.hasPrefix("image/") ? 10 : 25
         guard !data.isEmpty && data.count <= limit * 1024 * 1024 && pendingFiles.count < 4 else { error = "Attachment must be under \(limit) MB"; return }
         pendingFiles.append(PendingSharedFile(id: UUID(), name: name, mime: mime, data: data))
-        pendingSendID = nil
+        composer.edited()
     }
 
     private func openAttachment(_ attachment: SharedAttachment) async {
@@ -522,11 +561,26 @@ struct SharedChatView: View {
     }
 }
 
-private struct PendingSharedFile: Identifiable {
-    let id: UUID
-    let name: String
-    let mime: String
-    let data: Data
+@MainActor private enum SharedChatDrafts {
+    static var drafts: [String: SharedDeliveryDraft] = [:]
+    static func get(roomID: String, actorID: String) -> SharedDeliveryDraft {
+        let identity = actorID + ":" + roomID
+        if let draft = drafts[identity] { return draft }
+        let key = "bos.shared-draft." + identity
+        let defaults = UserDefaults.standard
+        let text = defaults.string(forKey: key) ?? defaults.string(forKey: "bos.shared-draft." + roomID) ?? ""
+        let draft = SharedDeliveryDraft(text: text, saveText: { value in defaults.set(value, forKey: key) })
+        defaults.set(text, forKey: key)
+        defaults.removeObject(forKey: "bos.shared-draft." + roomID)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-shared-delivery-preview"), roomID == "preview-shared-room", actorID == "preview-home:person:owner" {
+            draft.text = "Review this fixture attachment"
+            draft.files = [PendingSharedFile(name: "delivery-check.txt", mime: "text/plain", data: Data("Synthetic delivery fixture".utf8))]
+        }
+        #endif
+        drafts[identity] = draft
+        return draft
+    }
 }
 
 /// One shared-room activity line (kind "activity"): the tool's spoken phrase

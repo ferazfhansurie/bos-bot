@@ -753,6 +753,11 @@ final class Session: ObservableObject {
         return try await client.sharedMessages(roomId: roomId, after: sequence)
     }
 
+    func sharedMessageTransport() throws -> CompanionClient {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return client
+    }
+
     func sendSharedMessage(roomId: String, text: String, sendId: String, attachments: [SharedAttachment] = [], replyTo: String? = nil) async throws {
         guard let client else { throw APIError.transport("Computer is offline") }
         try await client.sendSharedMessage(roomId: roomId, text: text, sendId: sendId, attachments: attachments, replyTo: replyTo)

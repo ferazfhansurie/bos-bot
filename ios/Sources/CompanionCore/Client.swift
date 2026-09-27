@@ -754,9 +754,21 @@ public struct CompanionClient: Sendable {
         return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/files", query: query), as: SharedFilesResponse.self)
     }
 
+    public func annotateSharedMessage(roomId: String, messageId: String, reaction: String? = nil, active: Bool? = nil, pinned: Bool? = nil) async throws -> SharedChatMessage {
+        var body: [String: Any] = [:]
+        if let reaction { body["reaction"] = reaction }
+        if let active { body["active"] = active }
+        if let pinned { body["pinned"] = pinned }
+        return try await send(makeRequest("PATCH", "/api/multiplayer/rooms/\(roomId)/messages/\(messageId)", body: body), as: SharedMessageResponse.self).message
+    }
+
     public func editSharedMessage(roomId: String, messageId: String, text: String?) async throws -> SharedChatMessage {
         let body: [String: Any]? = text.map { ["text": $0] }
         return try await send(makeRequest(text == nil ? "DELETE" : "PATCH", "/api/multiplayer/rooms/\(roomId)/messages/\(messageId)", body: body), as: SharedMessageResponse.self).message
+    }
+
+    public func sharedTyping(roomId: String, active: Bool) async throws {
+        _ = try await send(makeRequest("PATCH", "/api/multiplayer/rooms/\(roomId)/preferences", body: ["typing": active]), as: SharedConversationPreferences.self)
     }
 
     public func sharedPreferences(roomId: String, readSequence: Int? = nil, notifications: String? = nil) async throws -> SharedConversationPreferences {

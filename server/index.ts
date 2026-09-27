@@ -1,3 +1,4 @@
+import { SharedTyping } from "./shared-typing.ts";
 import { sharedMentionTargets } from "../shared/shared-mentions.ts";
 // OpenMausBot server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
@@ -554,6 +555,7 @@ function ownerPhotoData(): string | null {
 const sharedRooms = new SharedRoomRepository(join(DATA_DIR, "shared-rooms.json"), ENVIRONMENT_ID);
 const sharedAttachments = new SharedAttachmentStore();
 const sharedBotTasks = new SharedBotTasks(join(DATA_DIR, "shared-bot-tasks.json"));
+const sharedTyping = new SharedTyping();
 const sharedRequests = new SharedRequestStore(join(DATA_DIR, "shared-requests.json"));
 const sharedRoomTrust = new SharedRoomTrust(join(DATA_DIR, "shared-room-trust.json"));
 function signInAllowList() {
@@ -12191,7 +12193,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (target.kind === "bot" && actorId !== multiplayerActors.ownerId) return json(res, 403, { error: "this bot is not available to you" });
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session ended" });
         const members = [actorId, targetId];
-        const existing = sharedRooms.listFor(actorId).find(room => room.memberIds.length === 2 && members.every(id => room.memberIds.includes(id)));
+        const existing = sharedRooms.listFor(actorId).find(room => room.kind !== "group" && room.memberIds.length === 2 && members.every(id => room.memberIds.includes(id)));
         if (existing) return json(res, 200, { room: existing });
         return json(res, 201, { room: sharedRooms.create(target.name, members, Date.now(), actorId, "direct") });
       }
@@ -12265,6 +12267,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!sharedRooms.roomFor(m[1], actorId)) return json(res, 404, { error: "conversation unavailable" });
         if (method === "GET") return json(res, 200, sharedRooms.preferencesFor(m[1], actorId));
         const body = await readBody(req, 1024);
+        if (body.typing !== undefined) {
+          if (typeof body.typing !== "boolean") return json(res, 400, { error: "invalid typing state" });
+          sharedTyping.update(m[1], actorId, body.typing);
+        }
         try { return json(res, 200, sharedRooms.updatePreferences(m[1], actorId, { readSequence: body.readSequence, notifications: body.notifications })); }
         catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "invalid preferences" }); }
       }
@@ -12272,7 +12278,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (m && (method === "PATCH" || method === "DELETE")) {
         if (!sharedRooms.roomFor(m[1], actorId)) return json(res, 404, { error: "conversation unavailable" });
         const body = method === "PATCH" ? await readBody(req, 100_000) : null;
-        try { return json(res, 200, { message: sharedRooms.editMessage(m[1], actorId, m[2], method === "DELETE" ? null : body?.text) }); }
+        try { return json(res, 200, { message: method === "PATCH" && (body?.reaction !== undefined || body?.pinned !== undefined)
+          ? sharedRooms.annotateMessage(m[1], actorId, m[2], body)
+          : sharedRooms.editMessage(m[1], actorId, m[2], method === "DELETE" ? null : body?.text) }); }
         catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "message unavailable" }); }
       }
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/bots$/);
@@ -12360,20 +12368,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "invalid room cursor" });
         }
         if (!sharedRooms.roomFor(m[1], actorId)) return json(res, 404, { error: "room unavailable" });
+        const typing = sharedTyping.list(m[1], actorId, sharedRooms.roomFor(m[1], actorId)!.memberIds);
         const beforeValue = url.searchParams.get("before");
         if (beforeValue !== null) {
           const before = Number(beforeValue);
           if (!Number.isSafeInteger(before) || before < 1) return json(res, 400, { error: "invalid history cursor" });
           const messages = sharedRooms.allMessages(m[1]).filter(message => message.sequence < before).slice(-limit);
-          return json(res, 200, { messages, hasMore: (messages[0]?.sequence ?? 1) > 1, version: sharedRooms.roomFor(m[1], actorId)?.messageVersion ?? 0 });
+          return json(res, 200, { messages, typing, hasMore: (messages[0]?.sequence ?? 1) > 1, version: sharedRooms.roomFor(m[1], actorId)?.messageVersion ?? 0 });
         }
         if (url.searchParams.get("latest") === "1") {
           const messages = sharedRooms.latestFor(m[1], actorId, limit);
-          return json(res, 200, { messages, hasMore: (messages[0]?.sequence ?? 1) > 1, version: sharedRooms.roomFor(m[1], actorId)?.messageVersion ?? 0 });
+          return json(res, 200, { messages, typing, hasMore: (messages[0]?.sequence ?? 1) > 1, version: sharedRooms.roomFor(m[1], actorId)?.messageVersion ?? 0 });
         }
         const version = Number(url.searchParams.get("version") ?? 0);
         if (!Number.isSafeInteger(version) || version < 0) return json(res, 400, { error: "invalid change cursor" });
-        return json(res, 200, { messages: sharedRooms.messagesAfter(m[1], actorId, after, limit), ...sharedRooms.changesAfter(m[1], actorId, version) });
+        return json(res, 200, { typing, messages: sharedRooms.messagesAfter(m[1], actorId, after, limit), ...sharedRooms.changesAfter(m[1], actorId, version) });
       }
       if (m && method === "POST") {
         const roomId = m[1];
@@ -12411,6 +12420,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             humanMentions: previous?.humanMentions ?? humanMentions });
         }
         catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "invalid message" }); }
+        sharedTyping.update(roomId, actorId, false);
         if (result.created) {
           const room = sharedRooms.roomFor(m[1], actorId)!;
           for (const memberId of room.memberIds) {

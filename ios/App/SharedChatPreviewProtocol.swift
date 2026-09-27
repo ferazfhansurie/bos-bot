@@ -24,6 +24,9 @@ final class SharedChatPreviewProtocol: URLProtocol {
 private final class SharedChatPreviewState: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled: Set<String> = []
+    private var sentMessages: [[String: Any]] = []
+    private var sentUploads: [String: [String: Any]] = [:]
+    private var droppedAcknowledgement = false
     private let owner = "preview-home:person:owner"
     private let teammate = "preview-maya:person:owner"
     private let roomId = "preview-shared-room"
@@ -46,7 +49,20 @@ private final class SharedChatPreviewState: @unchecked Sendable {
             if sequence == 219 { row["text"] = "The launch plan is ready: invite the team, share the board, and review the first bot result."; row["responseTo"] = "shared-message-218" }
             if sequence == 220 { row["text"] = "Latest message — ready for the alpha walkthrough." }
             return row
+        } + sentMessages
+    }
+    private func body(_ request: URLRequest) -> [String: Any] {
+        var data = request.httpBody ?? Data()
+        if data.isEmpty, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                if count <= 0 { break }
+                data.append(bytes, count: count)
+            }
         }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
     }
     private func botRequest(_ id: String, source: Int, state: String, other: Bool = false) -> [String: Any] {
         var value: [String: Any] = ["id": id, "roomId": roomId, "sourceId": "shared-message-\(source)", "sourceSequence": source,
@@ -74,6 +90,26 @@ private final class SharedChatPreviewState: @unchecked Sendable {
         }
         if path == roomPath + "/bots" { return (200, ["bots": [["id": "preview-home:bot:pepper", "name": "Pepper", "ownerName": "Alex"], ["id": "preview-maya:bot:willow", "name": "Willow", "ownerName": "Maya", "availability": "ready"], ["id": "preview-home:bot:maya", "name": "Maya", "ownerName": "Alex"]]]) }
         if path == roomPath + "/preferences" { return (200, ["readSequence": 220, "notifications": "all"]) }
+        if path == roomPath + "/attachments" && method == "POST" {
+            let input = body(request), id = UUID().uuidString
+            let file: [String: Any] = ["id": id, "name": input["name"] ?? "fixture.txt", "mime": input["mime"] ?? "text/plain", "size": Data(base64Encoded: input["data"] as? String ?? "")?.count ?? 0]
+            sentUploads[id] = ["attachment": file, "data": input["data"] ?? ""]
+            return (201, ["attachment": file])
+        }
+        if path == roomPath + "/messages" && method == "POST" {
+            let input = body(request)
+            let sendID = input["sendId"] as? String ?? ""
+            if let previous = sentMessages.first(where: { $0["sendId"] as? String == sendID }) { return (200, ["message": previous, "created": false]) }
+            var row: [String: Any] = ["id": "sent-" + sendID, "roomId": roomId, "sequence": 221 + sentMessages.count, "actor": actor(), "text": input["text"] ?? "", "at": Date().timeIntervalSince1970 * 1000, "sendId": sendID, "attachments": input["attachments"] ?? []]
+            if let reply = input["replyTo"] { row["replyTo"] = reply }
+            sentMessages.append(row)
+            if ProcessInfo.processInfo.arguments.contains("-shared-delivery-preview") && !droppedAcknowledgement {
+                droppedAcknowledgement = true
+                return (503, ["error": "Fixture lost the acknowledgement after accepting the message. Retry safely."])
+            }
+            return (201, ["message": row, "created": true])
+        }
+        if path.hasPrefix(roomPath + "/attachments/"), let upload = sentUploads[request.url!.lastPathComponent] { return (200, upload) }
         if path == roomPath + "/messages" && method == "GET" {
             let limit = min(200, max(1, Int(query["limit"] ?? "200") ?? 200))
             let rows: [[String: Any]]

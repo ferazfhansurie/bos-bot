@@ -44,3 +44,25 @@ only a message's author can edit or remove it. group owners manage membership an
 faeez’s and putri’s current 0.1.84 servers are reachable but lack the new shared isolation capability. update those hosts before accepting cross-mac bot conversations.
 
 no public-ready, notification-delivery or cross-device reliability claim should be made solely from a successful build.
+
+
+## revision 5 / iphone build 54 — 28 september 2026
+
+added member reactions, shared pins and pinned-history search, expiring typing indicators,
+human mentions with owner-aware bot selection, request tracking and cancellation, retained
+history search, and recoverable shared attachment sends across conversation navigation.
+fixed two-person groups being reused as direct messages and unseen desktop messages being
+marked read while reading scrollback. group details disclose history access for new members.
+
+this is an assisted alpha candidate. the host mac must be available. faeez's older host
+requires its own update; this release does not bypass access or protocol checks. private
+bot tools, credentials and instructions are not granted by mentioning a bot in a group.
+
+remaining release gates: developer-id/notarization and testflight distribution, real
+closed-app push and network transitions, independent accessibility/visual qa, and client
+onboarding acceptance. unsent attachment bytes and uncertain retry state survive navigation
+within a running app, but are not yet guaranteed across app termination. detailed remaining
+features and acceptance are tracked in the final alpha checklist; this is not a declaration
+that all requested work is complete.
+
+support and privacy requests: ferazfhansurie@gmail.com. no public release was published.

@@ -41,6 +41,7 @@ struct SharedConversationDetails: View {
                     }
                 }
                 Section("People") {
+                    Text("New members can see retained history and files. Removing someone stops future access; copies they already saved cannot be erased.").font(.caption).foregroundStyle(.secondary)
                     ForEach(displayed.memberIds, id: \.self) { id in
                         HStack(spacing: 12) {
                             let contact = contacts.first { $0.id == id }
