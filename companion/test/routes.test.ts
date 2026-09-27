@@ -115,6 +115,12 @@ describe("what the app may do", () => {
 });
 
 describe("what it may not", () => {
+  it("allows authenticated file indexes but no file-index writes or extra paths", () => {
+    expect(ask("GET", "/api/multiplayer/rooms/room-1/files")).toBeNull();
+    expect(ask("GET", "/api/multiplayer/rooms/room-1/files", false)?.status).toBe(401);
+    expect(allowed("POST", "/api/multiplayer/rooms/room-1/files")).toBe(false);
+    expect(allowed("GET", "/api/multiplayer/rooms/room-1/files/anything")).toBe(false);
+  });
   it("refuses host configuration, and says where it happens", () => {
     for (const [method, path] of [
       ["PUT", "/api/config"],

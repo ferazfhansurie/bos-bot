@@ -14,6 +14,8 @@ struct SharedChatView: View {
 
     @State private var updatedRoom: SharedRoomSummary?
     @State private var showingDetails = false
+    @State private var fileMessageFocus: String?
+    @State private var pendingFileMessage: String?
     @State private var availableBots: [SharedEligibleBot] = []
     @State private var botsError: String?
     @State private var botsLoading = false
@@ -141,6 +143,7 @@ struct SharedChatView: View {
                     if atBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
                 }
                 .onPreferenceChange(SharedChatBottomKey.self) { bottom in
+                    guard !loadingOlder && pendingFileMessage == nil else { return }
                     atBottom = bottom > 0 && bottom <= scrollHeight + 24
                     if atBottom { Task { await markRead() } }
                 }
@@ -155,6 +158,9 @@ struct SharedChatView: View {
                                 .background(.regularMaterial, in: Capsule())
                         }.buttonStyle(.plain).padding(12)
                     }
+                }
+                .onChange(of: fileMessageFocus) { _, id in
+                    if let id { withAnimation { proxy.scrollTo(id, anchor: .center) }; fileMessageFocus = nil }
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
@@ -274,9 +280,11 @@ struct SharedChatView: View {
             FilePreviewView(item: preview) { filePreview = nil }
                 .onDisappear { preview.cleanUp() }
         }
-        .sheet(isPresented: $showingDetails) {
+        .sheet(isPresented: $showingDetails, onDismiss: {
+            if let id = pendingFileMessage { atBottom = false; fileMessageFocus = id; pendingFileMessage = nil }
+        }) {
             SharedConversationDetails(room: currentRoom, selfID: selfID, contacts: contacts,
-                changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() })
+                changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: showFileMessage)
         }
         .task(id: room.id) {
             draft = UserDefaults.standard.string(forKey: "bos.shared-draft.\(room.id)") ?? ""
@@ -376,6 +384,29 @@ struct SharedChatView: View {
             messages = page.messages.filter { !ids.contains($0.id) } + messages
             hasMore = page.hasMore ?? false
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func showFileMessage(_ file: SharedFile) async throws {
+        guard !loadingOlder else { throw APIError.transport("Earlier messages are loading. Try again in a moment.") }
+        loadingOlder = true
+        atBottom = false
+        defer { loadingOlder = false }
+        for _ in 0..<20 {
+            if messages.contains(where: { $0.id == file.messageId }) { break }
+            guard let first = messages.first, hasMore, first.sequence > file.sequence else { break }
+            let page = try await session.sharedMessagePage(roomId: room.id, before: first.sequence)
+            try Task.checkCancellation()
+            let ids = Set(messages.map(\.id))
+            version = min(version, page.version ?? version)
+            messages = page.messages.filter { !ids.contains($0.id) } + messages
+            hasMore = page.hasMore ?? false
+            if (messages.first?.sequence ?? first.sequence) >= first.sequence { break }
+        }
+        guard messages.contains(where: { $0.id == file.messageId }) else {
+            throw APIError.transport(hasMore ? "This message is further back. Tap Show message again to continue loading." : "This message is no longer available.")
+        }
+        pendingFileMessage = file.messageId
+        showingDetails = false
     }
 
     private func markRead() async {

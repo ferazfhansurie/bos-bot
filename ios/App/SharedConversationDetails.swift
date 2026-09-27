@@ -9,6 +9,7 @@ struct SharedConversationDetails: View {
     let contacts: [SharedContact]
     let changed: (SharedRoomSummary) -> Void
     let exited: () -> Void
+    let showMessage: (SharedFile) async throws -> Void
     @State private var current: SharedRoomSummary?
     @State private var name = ""
     @State private var saving = false
@@ -65,6 +66,11 @@ struct SharedConversationDetails: View {
                             }
                         } label: { Label("Add people", systemImage: "person.badge.plus") }
                     }
+                }
+                Section {
+                    NavigationLink {
+                        SharedConversationFiles(roomId: displayed.id, selfID: selfID, contacts: contacts, showMessage: showMessage)
+                    } label: { Label("Shared files", systemImage: "paperclip") }
                 }
                 Section("Notifications") {
                     Picker("Notify me", selection: $notifications) {
@@ -128,6 +134,85 @@ struct SharedConversationDetails: View {
             if delete { try await session.deleteSharedRoom(displayed) }
             else { try await session.leaveSharedRoom(id: displayed.id, revision: displayed.revision ?? 1) }
             exited()
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct SharedConversationFiles: View {
+    @EnvironmentObject private var session: Session
+    let roomId: String
+    let selfID: String
+    let contacts: [SharedContact]
+    let showMessage: (SharedFile) async throws -> Void
+    @State private var files: [SharedFile] = []
+    @State private var before: Int?
+    @State private var hasMore = false
+    @State private var loaded = false
+    @State private var loading = false
+    @State private var opening = false
+    @State private var error: String?
+    @State private var preview: FilePreviewItem?
+
+    var body: some View {
+        List {
+            if loaded && files.isEmpty {
+                ContentUnavailableView("No shared files yet", systemImage: "paperclip", description: Text("Images and documents shared in this conversation will appear here."))
+            }
+            ForEach(files) { file in
+                VStack(alignment: .leading, spacing: 8) {
+                    Button { Task { await open(file.attachment) } } label: {
+                        Label(file.attachment.name, systemImage: file.attachment.mime.hasPrefix("image/") ? "photo" : "doc")
+                            .font(.body.weight(.medium)).lineLimit(2)
+                    }.buttonStyle(.borderless).disabled(opening)
+                    Text("\(author(file)) · \(Date(timeIntervalSince1970: file.at / 1000).formatted(date: .abbreviated, time: .omitted)) · \(ByteCountFormatter.string(fromByteCount: Int64(file.attachment.size), countStyle: .file))")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Show message") { Task {
+                        opening = true; error = nil
+                        defer { opening = false }
+                        do { try await showMessage(file) }
+                        catch { self.error = error.localizedDescription }
+                    } }.buttonStyle(.borderless).font(.caption).disabled(opening)
+                }.padding(.vertical, 4)
+            }
+            if loading || opening { ProgressView(opening ? "Opening…" : "Loading files…") }
+            if let error { Text(error).font(.subheadline).foregroundStyle(.red) }
+            if !loading && (!loaded || hasMore) { Button(error == nil ? "Load earlier files" : "Try again") { Task { await load() } } }
+        }
+        .navigationTitle("Shared files")
+        .task { if !loaded { await load() } }
+        .fullScreenCover(item: $preview) { item in
+            FilePreviewView(item: item) { preview = nil }.onDisappear { item.cleanUp() }
+        }
+    }
+
+    private func author(_ file: SharedFile) -> String {
+        file.actor.id == selfID ? "You" : contacts.first { $0.id == file.actor.id }?.name ?? (file.actor.kind == "bot" ? "Bot" : "Member")
+    }
+    private func load() async {
+        guard !loading else { return }
+        loading = true; error = nil
+        defer { loading = false }
+        do {
+            let page = try await session.sharedFiles(roomId: roomId, before: before)
+            try Task.checkCancellation()
+            let existing = Set(files.map(\.id))
+            files.append(contentsOf: page.files.filter { !existing.contains($0.id) })
+            before = page.before; hasMore = page.hasMore; loaded = true
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+    private func open(_ attachment: SharedAttachment) async {
+        guard !opening else { return }
+        opening = true; error = nil
+        defer { opening = false }
+        do {
+            let response = try await session.sharedAttachment(roomId: roomId, attachmentId: attachment.id)
+            try Task.checkCancellation()
+            guard let data = Data(base64Encoded: response.data) else { throw APIError.transport("Invalid attachment") }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BOSFilePreviews/\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(URL(fileURLWithPath: attachment.name).lastPathComponent)
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            preview = FilePreviewItem(downloaded: DownloadedFile(data: data, filename: attachment.name, contentType: attachment.mime, localURL: url))
         } catch { self.error = error.localizedDescription }
     }
 }

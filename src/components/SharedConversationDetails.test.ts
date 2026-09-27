@@ -6,7 +6,7 @@ import type { SharedRoom } from "./shared-conversation";
 
 const room: SharedRoom = { id: "group", homeId: "home", name: "Design", kind: "group", memberIds: ["home:person:owner", "away:person:owner"], createdBy: "home:person:owner" };
 const render = (selfId: string, patch: Partial<SharedRoom> = {}) => renderToStaticMarkup(createElement(SharedConversationDetails, {
-  room: { ...room, ...patch }, selfId, title: "Design", pending: false, error: "", onClose() {}, onChange: async () => true,
+  room: { ...room, ...patch }, selfId, title: "Design", pending: false, error: "", onClose() {}, onShowMessage: async () => {}, onChange: async () => true,
   contacts: [
     { id: "home:person:owner", name: "Firaz", kind: "person" },
     { id: "away:person:owner", name: "Faeez", kind: "person" },

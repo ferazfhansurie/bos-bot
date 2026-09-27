@@ -4,13 +4,13 @@ import { api } from "@/state/store";
 
 export interface SharedAttachment { id: string; name: string; mime: string; size: number }
 
-export function SharedAttachmentTile({ roomId, attachment }: { roomId: string; attachment: SharedAttachment }) {
+export function SharedAttachmentTile({ roomId, attachment, compact = false }: { roomId: string; attachment: SharedAttachment; compact?: boolean }) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const isImage = attachment.mime.startsWith("image/");
   const isVideo = attachment.mime.startsWith("video/");
   useEffect(() => {
-    if (!isImage && !isVideo) return;
+    if (compact || (!isImage && !isVideo)) return;
     let alive = true;
     let objectUrl = "";
     void api<{ data: string }>(`/api/multiplayer/rooms/${roomId}/attachments/${attachment.id}`).then(result => {
@@ -20,7 +20,7 @@ export function SharedAttachmentTile({ roomId, attachment }: { roomId: string; a
       setUrl(objectUrl);
     }).catch(() => { if (alive) setError("Preview unavailable"); });
     return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [roomId, attachment.id, attachment.mime, isImage, isVideo]);
+  }, [roomId, attachment.id, attachment.mime, isImage, isVideo, compact]);
   const download = async () => {
     try {
       let target = url;

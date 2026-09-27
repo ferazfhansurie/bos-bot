@@ -12168,6 +12168,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!room) return json(res, 404, { error: "conversation unavailable" });
         return json(res, 200, { bots: sharedRoomBots(room, actorId) });
       }
+      m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/files$/);
+      if (m && method === "GET") {
+        if (!sharedRooms.roomFor(m[1], actorId)) return json(res, 404, { error: "conversation unavailable" });
+        try {
+          return json(res, 200, sharedRooms.filesFor(m[1], actorId,
+            Number(url.searchParams.get("before") ?? Number.MAX_SAFE_INTEGER), Number(url.searchParams.get("limit") ?? 30)));
+        } catch { return json(res, 400, { error: "invalid file cursor" }); }
+      }
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/trust$/);
       if (m) {
         const room = sharedRooms.roomFor(m[1], actorId);

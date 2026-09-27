@@ -9,6 +9,11 @@ export interface SharedRoom {
 export type SharedNotifications = "all" | "mentions" | "muted";
 export interface SharedPreferences { readSequence: number; notifications: SharedNotifications }
 export interface SharedAttachment { id: string; name: string; mime: string; size: number }
+export interface SharedFile {
+  attachment: SharedAttachment; messageId: string; sequence: number;
+  actor: { homeId: string; kind: string; localId: string }; at: number;
+}
+export interface SharedFilesPage { files: SharedFile[]; hasMore: boolean; before: number | null }
 export interface SharedMessage {
   id: string; sequence: number; sendId: string;
   actor: { homeId: string; kind: string; localId: string };

@@ -9,6 +9,31 @@ const root = mkdtempSync(join(tmpdir(), "omb-shared-rooms-"));
 afterEach(() => rmSync(root, { force: true, recursive: true }));
 
 describe("shared room repository", () => {
+  it("pages published files by source message and revokes access with membership", () => {
+    const path = join(root, "files", "rooms.json");
+    const repo = new SharedRoomRepository(path, "home");
+    const actor = { homeId: "home", kind: "person" as const, localId: "owner" };
+    const owner = contactId(actor), member = "away:person:owner";
+    const room = repo.create("Files", [owner, member]);
+    const attachment = (id: string) => ({ id, name: `${id}.txt`, mime: "text/plain", size: 5 });
+    const old = repo.append(room.id, owner, { actor, text: "old", sendId: "old", attachments: [attachment("first")] }).message;
+    repo.append(room.id, owner, { actor, text: "no file", sendId: "text" });
+    const removed = repo.append(room.id, owner, { actor, text: "remove", sendId: "removed", attachments: [attachment("removed")] }).message;
+    repo.editMessage(room.id, owner, removed.id, null);
+    const recent = repo.append(room.id, owner, { actor, text: "recent", sendId: "recent", attachments: [attachment("second"), attachment("third")] }).message;
+    const page = repo.filesFor(room.id, member, Number.MAX_SAFE_INTEGER, 1);
+    expect(page.files.map(file => file.attachment.id)).toEqual(["second", "third"]);
+    expect(page.files.every(file => file.messageId === recent.id)).toBe(true);
+    expect(page.hasMore).toBe(true);
+    expect(page.before).toBe(recent.sequence);
+    expect(repo.filesFor(room.id, member, page.before!, 1)).toMatchObject({ files: [{ messageId: old.id }], hasMore: false });
+    expect(new SharedRoomRepository(path, "home").filesFor(room.id, owner).files).toHaveLength(3);
+    for (const before of [0, -1, NaN, 1.2]) expect(() => repo.filesFor(room.id, owner, before)).toThrow("invalid file cursor");
+    expect(() => repo.filesFor(room.id, owner, 100, 51)).toThrow("invalid file cursor");
+    expect(() => repo.filesFor(room.id, "unknown:person:owner")).toThrow("conversation unavailable");
+    repo.updateRoom(room.id, owner, 1, { memberIds: [owner, "other:person:owner"] });
+    expect(() => repo.filesFor(room.id, member)).toThrow("conversation unavailable");
+  });
   it("exposes revision 1 for legacy rooms so clients can delete them", () => {
     const file = join(root, "legacy", "rooms.json");
     const owner = "firaz-home:person:owner";

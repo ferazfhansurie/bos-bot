@@ -1476,7 +1476,11 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
-          if (resume) setBottomFollow(true);
+          // Opening a bounded search/source window changes scrollHeight.
+          // Its synthetic scroll event must not re-arm bottom-follow before
+          // useFocusMessage has landed on the requested row.
+          const landing = state.focusMessage && !state.focusMessage.consumed && state.focusMessage.threadId === bot.threadId;
+          if (resume && !landing) setBottomFollow(true);
         }}
       >
         <div

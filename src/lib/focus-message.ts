@@ -50,6 +50,7 @@ export function useFocusMessage(threadId: string, ready: boolean) {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let flashTimer: ReturnType<typeof setTimeout> | null = null;
+    let frame: number | null = null;
     let target: HTMLElement | null = null;
     const attempt = () => {
       if (cancelled) return;
@@ -68,9 +69,12 @@ export function useFocusMessage(threadId: string, ready: boolean) {
       dispatch({ type: "focusMessageConsumed", nonce: focus.nonce });
       flashTimer = setTimeout(() => target?.classList.remove(...FLASH_CLASSES), 1800);
     };
-    attempt();
+    // Let the focused window and any newly fetched history commit before
+    // scrolling. A simultaneous prepend can otherwise overwrite the jump.
+    frame = requestAnimationFrame(() => { frame = requestAnimationFrame(attempt); });
     return () => {
       cancelled = true;
+      if (frame !== null) cancelAnimationFrame(frame);
       if (retryTimer) clearTimeout(retryTimer);
       if (flashTimer) clearTimeout(flashTimer);
       target?.classList.remove(...FLASH_CLASSES);

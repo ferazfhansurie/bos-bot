@@ -174,6 +174,9 @@ desktop routing, cancellation, and computer authority cleanup.
 
 ## Evidence
 
+The [shared files fixture](shared-files.md) checks published attachments, linked-home
+routes and navigation to a source outside the initial history page.
+
 The [shared request fixture](shared-requests.md) checks two request-linked bot
 answers in a human-only group, source-message navigation and settled activity.
 

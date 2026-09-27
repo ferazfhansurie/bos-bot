@@ -113,6 +113,20 @@ public struct SharedAttachment: Codable, Hashable, Identifiable, Sendable {
     public let size: Int
 }
 
+public struct SharedFile: Codable, Hashable, Identifiable, Sendable {
+    public let attachment: SharedAttachment
+    public let messageId: String
+    public let sequence: Int
+    public let actor: SharedActor
+    public let at: Double
+    public var id: String { "\(messageId):\(attachment.id)" }
+}
+public struct SharedFilesResponse: Codable, Sendable {
+    public let files: [SharedFile]
+    public let hasMore: Bool
+    public let before: Int?
+}
+
 public struct SharedAttachmentResponse: Codable, Sendable { public let attachment: SharedAttachment }
 public struct SharedAttachmentData: Codable, Sendable {
     public let attachment: SharedAttachment

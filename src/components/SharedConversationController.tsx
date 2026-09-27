@@ -6,7 +6,7 @@ import type { MascotBodyId } from "../../shared/mascot-bodies";
 import { ChatView } from "./ChatView";
 import { SharedConversationDetails } from "./SharedConversationDetails";
 import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork } from "./shared-conversation";
-import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedAttachmentError, isDirectSharedRoom, sharedBotTargets, sharedMentionBots, type SharedRoom, type SharedContact, type SharedEligibleBot, type SharedAttachment, type SharedMessage, type SharedHistoryPage, type SharedPreferences, type SharedNotifications } from "./shared-conversation";
+import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedAttachmentError, isDirectSharedRoom, sharedBotTargets, sharedMentionBots, type SharedRoom, type SharedContact, type SharedEligibleBot, type SharedAttachment, type SharedFile, type SharedMessage, type SharedHistoryPage, type SharedPreferences, type SharedNotifications } from "./shared-conversation";
 function senderId(message: SharedMessage) { return `${message.actor.homeId}:${message.actor.kind}:${message.actor.localId}`; }
 function errorText(cause: unknown, fallback: string) { return cause instanceof Error ? cause.message : fallback; }
 
@@ -199,6 +199,26 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
     finally { if (mounted.current) setOlderLoading(false); }
   }, [roomId, messages, olderLoading, hasMore, applyHistory]);
 
+  const showFileMessage = async (file: SharedFile) => {
+    if (olderLoading) throw new Error("Earlier messages are still loading. Try again in a moment.");
+    setOlderLoading(true);
+    try {
+      // Keep history contiguous: inserting a single old message would skip the
+      // intervening pages on the next normal scroll-back.
+      for (let page = 0; page < 20 && !historyRef.current.messages.some(message => message.id === file.messageId); page++) {
+        const before = historyRef.current.messages[0]?.sequence;
+        if (!before || !historyRef.current.hasMore || before <= file.sequence) break;
+        const result = await api<SharedHistoryPage>(`/api/multiplayer/rooms/${roomId}/messages?before=${before}&limit=200`);
+        if (!mounted.current) return;
+        applyHistory(result, "before");
+        if ((historyRef.current.messages[0]?.sequence ?? before) >= before) break;
+      }
+      if (!historyRef.current.messages.some(message => message.id === file.messageId)) throw new Error(historyRef.current.hasMore ? "This message is further back. Tap Show message again to continue loading." : "This message is no longer available.");
+      setDetailsOpen(false);
+      dispatch({ type: "focusMessage", threadId: `shared:${roomId}`, messageId: file.messageId });
+    } finally { if (mounted.current) setOlderLoading(false); }
+  };
+
   const send = useCallback(async (text: string, files: File[], sendId: string, options?: { replyTo?: string }) => {
     const problem = files.map(sharedAttachmentError).find(Boolean);
     if (problem) throw new Error(problem);
@@ -300,6 +320,6 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       actions: <button type="button" aria-label="Conversation details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><PanelRight size={18} /></button>,
     }} />
     {detailsOpen && <SharedConversationDetails room={room} selfId={selfId} contacts={contacts} title={projected.name} pending={changing} error={changeError} onClose={() => setDetailsOpen(false)} onChange={changeRoom}
-      preferences={preferences} preferencePending={preferencePending} preferenceError={preferenceError} onNotificationsChange={changeNotifications} />}
+      preferences={preferences} preferencePending={preferencePending} preferenceError={preferenceError} onNotificationsChange={changeNotifications} onShowMessage={showFileMessage} />}
   </>;
 }

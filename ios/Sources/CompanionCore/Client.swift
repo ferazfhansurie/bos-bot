@@ -730,6 +730,12 @@ public struct CompanionClient: Sendable {
         return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/messages", query: query), as: SharedMessagesResponse.self)
     }
 
+    public func sharedFiles(roomId: String, before: Int? = nil) async throws -> SharedFilesResponse {
+        var query = [URLQueryItem(name: "limit", value: "30")]
+        if let before { query.append(URLQueryItem(name: "before", value: String(before))) }
+        return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/files", query: query), as: SharedFilesResponse.self)
+    }
+
     public func editSharedMessage(roomId: String, messageId: String, text: String?) async throws -> SharedChatMessage {
         let body: [String: Any]? = text.map { ["text": $0] }
         return try await send(makeRequest(text == nil ? "DELETE" : "PATCH", "/api/multiplayer/rooms/\(roomId)/messages/\(messageId)", body: body), as: SharedMessageResponse.self).message

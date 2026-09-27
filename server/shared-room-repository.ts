@@ -177,6 +177,21 @@ export class SharedRoomRepository {
     return log.all().slice(-limit);
   }
 
+  /** Page by source message so files from one message never straddle cursors.
+   * Only published, non-removed messages enter the index; staged uploads do not. */
+  filesFor(roomId: string, actorId: string, before = Number.MAX_SAFE_INTEGER, limit = 30) {
+    const log = this.rooms.get(roomId);
+    if (!log || !log.room.memberIds.includes(actorId)) throw new Error("conversation unavailable");
+    if (!Number.isSafeInteger(before) || before < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error("invalid file cursor");
+    const sources = log.all().filter(message => message.sequence < before && !message.deletedAt && message.kind !== "activity" && message.attachments?.length).reverse();
+    const page = sources.slice(0, limit);
+    return {
+      files: page.flatMap(message => message.attachments!.map(attachment => ({ attachment, messageId: message.id, sequence: message.sequence, actor: message.actor, at: message.at }))),
+      hasMore: sources.length > limit,
+      before: page.at(-1)?.sequence ?? null,
+    };
+  }
+
   messageFor(roomId: string, actorId: string, messageId: string): SharedTextMessage | null {
     const log = this.rooms.get(roomId);
     if (!log || !log.room.memberIds.includes(actorId)) return null;

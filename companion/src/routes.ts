@@ -134,6 +134,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "PUT", path: /^\/api\/multiplayer\/profile-photo$/ },
   { method: "GET", path: /^\/api\/multiplayer\/rooms$/ },
   { method: "GET", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/bots$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/files$/ },
   { method: "GET", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/preferences$/ },
   { method: "PATCH", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/preferences$/ },
   { method: "PATCH", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/messages\/[\w-]+$/ },

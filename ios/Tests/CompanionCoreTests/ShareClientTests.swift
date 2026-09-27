@@ -73,6 +73,21 @@ final class ShareClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testSharedFileIndexKeepsSourceAndPagination() async throws {
+        ShareRequestStub.responseBody = Data(#"{"files":[{"attachment":{"id":"file-a","name":"brief.txt","mime":"text/plain","size":12},"messageId":"message-a","sequence":42,"actor":{"homeId":"home","kind":"person","localId":"owner"},"at":1000}],"hasMore":true,"before":42}"#.utf8)
+        let page = try await client.sharedFiles(roomId: "room-a", before: 100)
+        XCTAssertEqual(page.files.first?.id, "message-a:file-a")
+        XCTAssertEqual(page.files.first?.actor.id, "home:person:owner")
+        XCTAssertEqual(page.before, 42)
+        XCTAssertTrue(page.hasMore)
+        let url = try XCTUnwrap(ShareRequestStub.capturedRequest?.url)
+        XCTAssertEqual(url.path, "/api/multiplayer/rooms/room-a/files")
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertTrue(query.contains(URLQueryItem(name: "before", value: "100")))
+        XCTAssertTrue(query.contains(URLQueryItem(name: "limit", value: "30")))
+        XCTAssertEqual(ShareRequestStub.capturedRequest?.httpMethod, "GET")
+    }
+
     func testComposesSharedContentAndEscapesUploadedPaths() throws {
         let url = try XCTUnwrap(URL(string: "https://example.com/story"))
 
