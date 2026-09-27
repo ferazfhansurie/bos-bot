@@ -20,6 +20,8 @@ export class SharedBotTasks {
     }
   }
 
+  hasThread(threadId: string): boolean { return [...this.tasks.values()].includes(threadId); }
+
   get(roomId: string, botId: string): string | undefined { return this.tasks.get(`${roomId}:${botId}`); }
 
   set(roomId: string, botId: string, threadId: string): void {

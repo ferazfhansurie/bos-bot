@@ -709,7 +709,7 @@ export function SettingsModal() {
             {section === "companion" && (
               <>
                 <RemoteComputerSection />
-                {!remoteActive && <CustomDomainSettings />}
+                {!remoteActive && <details className="rounded-xl border border-hairline/40 px-4 py-3"><summary className="cursor-pointer text-sm text-ink-secondary">Advanced hosting</summary><div className="mt-4"><CustomDomainSettings /></div></details>}
                 {/* mints an admin/client session token for anything that isn't the phone companion
                     flow (MCP clients, `openmausbot pair`, a second desktop app), and pairs phones to a
                     hosted server. Shown for the desktop app's own server (#950) AND when this desktop is

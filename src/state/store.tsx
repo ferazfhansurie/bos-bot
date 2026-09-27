@@ -2784,6 +2784,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   rawDispatch({ type: "consumePendingQueued", threadId: body.threadId, queueId });
                 }
               }
+              if (body?.queued === true) showError(body.reason || "This message is queued for the next reply; the running turn did not accept it.");
               action.onSettled?.();
             })
             .catch((error) => {

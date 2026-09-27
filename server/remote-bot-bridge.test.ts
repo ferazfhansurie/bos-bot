@@ -29,6 +29,8 @@ class FakeHome {
   extraBots: Array<Record<string, unknown>> = [];
   failRoomTurn = false;
   afterSendActivityCount = 0;
+  supportsIsolation = true;
+  afterThreadCreated: (() => void) | null = null;
 
   bot(): Record<string, unknown> {
     return {
@@ -52,6 +54,7 @@ class FakeHome {
     const method = init.method ?? "GET";
     this.calls.push({ method, path: url.pathname, search: url.search, body, headers, raw });
     const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+    if (url.pathname === "/.well-known/openmausbot/environment") return json(200, { sharedConversationIsolation: this.supportsIsolation ? 1 : undefined });
     if (url.pathname === "/api/events") {
       this.streamUrls.push(url);
       const stream = new ReadableStream<Uint8Array>({ start: (controller) => { this.streams.push(controller); } });
@@ -70,6 +73,7 @@ class FakeHome {
       this.tasks.push(task);
       this.threads.set(threadId, []);
       this.selected = threadId;
+      this.afterThreadCreated?.();
       return json(201, { task, bot: this.bot() });
     }
     let match = /^\/api\/bots\/pixie\/tasks\/([\w-]+)$/.exec(url.pathname);
@@ -202,6 +206,27 @@ describe("RemoteBotBridge", () => {
     expect(visible!.threadId).toBe(pending);
     expect((await route("GET", `/api/threads/rt-${KEY}-bridge-1/messages`)).status).toBe(404);
     expect(fake.calls.some((call) => call.path === "/api/bots/pixie/messages" && (call.body as { sendId?: string }).sendId === "room-send-1")).toBe(true);
+  });
+
+  it("requires an updated peer before creating or sending a shared task", async () => {
+    await bridge.listBots(0);
+    fake.supportsIsolation = false;
+    const result = await route("POST", `/api/bots/${botId}/messages`, { text: "hello", threadId: pending });
+    expect(result.status).toBe(426);
+    expect(jsonOf(result).error).toContain("Update BOS on Putri");
+    expect(taskCreates()).toBe(0);
+    expect(fake.calls.some(call => call.path === "/api/bots/pixie/messages")).toBe(false);
+  });
+
+  it("does not send when access changes while creating a shared thread", async () => {
+    await bridge.listBots(0);
+    let allowed = true;
+    fake.afterThreadCreated = () => { allowed = false; };
+    await expect(bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "revoked-before-send",
+      onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000, shouldContinue: () => allowed,
+    })).rejects.toThrow("shared request access changed");
+    expect(fake.calls.some(call => call.path === "/api/bots/pixie/messages")).toBe(false);
   });
 
   it("rejects a failed terminal turn instead of posting its partial text", async () => {

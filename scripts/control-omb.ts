@@ -357,6 +357,7 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
     // failure paths (exit-early, dead-session, hang...) through the real
     // server. Nothing else from the parent shell reaches the fixture.
     FAKE_CLAUDE_MODE: parentEnv.FAKE_CLAUDE_MODE || "happy",
+    FAKE_CLAUDE_VERSION: parentEnv.FAKE_CLAUDE_VERSION || "2.1.280",
     FAKE_CLAUDE_DUMP: join(dataDir, "fake-claude-dump.json"),
     // Keep the environment hermetic while allowing POSIX to resolve the
     // fake CLI's `#!/usr/bin/env node` shebang. Windows resolves that same

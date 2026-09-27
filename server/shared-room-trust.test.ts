@@ -2,20 +2,25 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SharedRoomTrust, sharedRoomTargets } from "./shared-room-trust.ts";
+import { SharedRoomTrust, sharedRoomTargets, sharedRoomBotCandidates } from "./shared-room-trust.ts";
 
 const bots = [{ name: "Ultron" }, { name: "Pixie" }, { name: "Jarvis" }];
 
 describe("sharedRoomTargets", () => {
-  it("routes a person's message without a mention to the lead bot", () => {
-    expect(sharedRoomTargets(bots, "what's on today", false)).toEqual([{ name: "Ultron" }]);
+  it("keeps an ordinary human message between people", () => {
+    expect(sharedRoomTargets(bots, "what's on today", false)).toEqual([]);
   });
   it("routes to every mentioned bot, case-insensitively", () => {
     expect(sharedRoomTargets(bots, "@pixie and @JARVIS, thoughts?", false)).toEqual([{ name: "Pixie" }, { name: "Jarvis" }]);
   });
-  it("routes @everyone to all bots", () => {
-    expect(sharedRoomTargets(bots, "@everyone hi", false)).toHaveLength(3);
+  it("does not interpret human broadcast mentions as bot invocations", () => {
+    expect(sharedRoomTargets(bots, "@everyone hi", false)).toEqual([]);
     expect(sharedRoomTargets(bots, "@everyone hi", true)).toEqual([]);
+  });
+  it("ignores code, quoted content, links, escaped mentions and partial names", () => {
+    for (const text of ["`@Ultron`", "> @Ultron hello", "```text\n@Ultron\n```", "[@Ultron](https://example.com)", "mail@Ultron", "@UltronPlus", "@Ultron-test"]) {
+      expect(sharedRoomTargets(bots, text, false), text).toEqual([]);
+    }
   });
   it("requires an owner-qualified mention when bot names collide", () => {
     const twins = [{ name: "Koda", ownerName: "Firaz" }, { name: "Koda", ownerName: "Faeez" }];
@@ -25,9 +30,9 @@ describe("sharedRoomTargets", () => {
   it("ignores partial names and emails", () => {
     expect(sharedRoomTargets(bots, "mail pixie@example.com or @pixies", true)).toEqual([]);
   });
-  it("a bot's reply only reaches bots it mentions", () => {
+  it("never routes a bot reply into another bot", () => {
     expect(sharedRoomTargets(bots, "done, nothing else needed", true)).toEqual([]);
-    expect(sharedRoomTargets(bots, "@ultron can you check firaz's calendar?", true)).toEqual([{ name: "Ultron" }]);
+    expect(sharedRoomTargets(bots, "@ultron can you check firaz's calendar?", true)).toEqual([]);
   });
 });
 
@@ -45,4 +50,14 @@ describe("SharedRoomTrust", () => {
     new SharedRoomTrust(file).set("a", "helper");
     expect(() => new SharedRoomTrust(join(file, "missing"))).not.toThrow();
   });
+});
+
+it("offers linked teammates' bots to the owner without granting strangers the owner's links", () => {
+  const room = { id: "room", homeId: "firaz", name: "People", createdAt: 1, memberIds: ["firaz:person:owner", "putri:person:owner"], createdBy: "firaz:person:owner" };
+  const local = ["firaz:bot:ultron"];
+  const linked = ["putri:bot:pixie", "faeez:bot:koda"];
+  expect(sharedRoomBotCandidates(room, "firaz:person:owner", "firaz", local, linked)).toEqual([...local, ...linked]);
+  expect(sharedRoomBotCandidates(room, "putri:person:owner", "firaz", local, linked)).toEqual(["putri:bot:pixie"]);
+  const forged = { ...room, createdBy: "stranger:person:owner", memberIds: ["stranger:person:owner", ...local] };
+  expect(sharedRoomBotCandidates(forged, "stranger:person:owner", "firaz", local, linked)).toEqual([]);
 });

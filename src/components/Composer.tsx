@@ -60,6 +60,7 @@ import {
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
 import { mentionChoicesForQuery } from "@/lib/mentions";
 import { botControlAvailable, mentionableBots } from "@/lib/remote-bot";
+import { sharedAttachmentError, type SharedComposer } from "./shared-conversation";
 import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@/lib/thread-refs";
 import {
   composerSlashTrigger,
@@ -102,7 +103,7 @@ export function Composer({
   bot?: Bot;
   group?: Group;
   members?: Bot[];
-  shared?: { send: (text: string, files: File[], sendId: string) => Promise<void> };
+  shared?: SharedComposer;
   onEditLast?: () => void;
   replyTo?: Message | null;
   onClearReply?: () => void;
@@ -120,7 +121,7 @@ export function Composer({
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
   // configured default responder.
-  const busy = group ? Boolean(group.working || group.busyBotId) : Boolean(bot?.busy);
+  const busy = !shared && (group ? Boolean(group.working || group.busyBotId) : Boolean(bot?.busy));
   // an engine with a live session takes a message INTO the running turn;
   // for those the composer never locks — the server steers instead of 409.
   // A room steers through its busy speaker's engine, mirroring how the
@@ -161,6 +162,9 @@ export function Composer({
   // cannot accidentally start another multi-turn team run.
   const [channelMode, setChannelMode] = useComposerChannelMode(draftId);
   const sharedSendId = useRef<string | null>(null);
+  const sharedSendReplyId = useRef<string | undefined>(undefined);
+  const currentSharedReplyId = useRef(replyTo?.id);
+  currentSharedReplyId.current = replyTo?.id;
   const sharedDraftVersion = useRef(0);
   const editText = useCallback(
     (next: string) => {
@@ -263,7 +267,7 @@ export function Composer({
   const slash = composerSlashTrigger(text, caret);
   const locale = activeLocale();
   const commandCandidates = useMemo(() => {
-    if (!slash || slash.start === dismissedSlashAt) return [];
+    if (shared || !slash || slash.start === dismissedSlashAt) return [];
     const supportsAgents = (candidate?: Bot) =>
       Boolean(
         candidate &&
@@ -301,14 +305,16 @@ export function Composer({
         command.id.startsWith(query) ||
         command.description.toLowerCase().includes(query),
     );
-  }, [slash, dismissedSlashAt, group, members, bot, state.config, state.instances, locale]);
+  }, [slash, dismissedSlashAt, group, members, bot, state.config, state.instances, locale, shared]);
   const commandPickerOpen = commandCandidates.length > 0;
 
   // Tag another bot; the agent reaches it via ask_bot.
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
-    const pool: MentionChoice[] = group
+    const pool: MentionChoice[] = shared
+      ? shared.mentionBots.map(member => ({ id: member.id, name: member.name, bot: member }))
+      : group
       ? [
           ...(!group.dm ? [{ id: "__everyone__", name: "everyone" }] : []),
           ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
@@ -316,7 +322,7 @@ export function Composer({
       : mentionableBots(state.bots, bot?.id)
           .map((member) => ({ id: member.id, name: member.name, bot: member }));
     return mentionChoicesForQuery(pool, mention.query);
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members]);
+  }, [mention, dismissedAt, state.bots, bot?.id, group, members, shared]);
   const mentionPickerOpen = candidates.length > 0;
 
   useEffect(
@@ -474,7 +480,9 @@ export function Composer({
     if (!picked?.length) return;
     if (shared) {
       const next = Array.from(picked);
-      if (next.some(file => file.size > 25 * 1024 * 1024)) { setSharedError("Each attachment must be under 25 MB."); return; }
+      const problem = next.map(sharedAttachmentError).find(Boolean);
+      if (problem) { setSharedError(problem); return; }
+      setSharedError("");
       editSharedFiles(previous => [...previous, ...next].slice(0, 4));
       return;
     }
@@ -542,16 +550,19 @@ export function Composer({
     if (locked || attachmentPending) return;
     if (shared) {
       if ((!text.trim() && !sharedFiles.length) || sharedSending) return;
-      const sendId = sharedSendId.current ?? crypto.randomUUID();
+      const sendId = sharedSendId.current && sharedSendReplyId.current === replyTo?.id ? sharedSendId.current : crypto.randomUUID();
       sharedSendId.current = sendId;
+      sharedSendReplyId.current = replyTo?.id;
+      const sentReplyId = replyTo?.id;
       const version = sharedDraftVersion.current;
       setSharedSending(true);
       setSharedError("");
-      void shared.send(text.trim(), sharedFiles, sendId).then(() => {
-        if (sharedDraftVersion.current === version) {
+      void shared.send(text.trim(), sharedFiles, sendId, sentReplyId ? { replyTo: sentReplyId } : undefined).then(() => {
+        if (sharedDraftVersion.current === version && currentSharedReplyId.current === sentReplyId) {
           sharedSendId.current = null;
           setText("");
           setSharedFiles([]);
+          onConsumeReply?.();
         }
       }).catch(error => setSharedError(error instanceof Error ? error.message : "Message was not sent."))
         .finally(() => setSharedSending(false));
@@ -627,6 +638,9 @@ export function Composer({
       e.preventDefault();
       if (shared) {
         if (!imageFiles.length) { setSharedError("Could not read the pasted image."); return; }
+        const problem = imageFiles.map(sharedAttachmentError).find(Boolean);
+        if (problem) { setSharedError(problem); return; }
+        setSharedError("");
         editSharedFiles(previous => [...previous, ...imageFiles].slice(0, 4));
         return;
       }
@@ -849,7 +863,7 @@ export function Composer({
                 )}
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
                 <span className="shrink-0 text-xs text-ink-secondary">
-                  {peer.bot ? t("composer.mention.agent") : t("composer.mention.channel")}
+                  {shared && peer.bot ? peer.bot.title : peer.bot ? t("composer.mention.agent") : t("composer.mention.channel")}
                 </span>
               </button>
             ))}
@@ -1000,7 +1014,7 @@ export function Composer({
           )}
           <MentionTextarea
           inputRef={inputRef}
-          peers={group ? members ?? [] : state.bots.filter((member) => member.id !== bot?.id)}
+          peers={shared ? shared.mentionBots : group ? members ?? [] : state.bots.filter((member) => member.id !== bot?.id)}
           everyone={Boolean(group && !group.dm)}
           // the message is composed in the writer's language, not the UI's
           dir="auto"
@@ -1089,6 +1103,8 @@ export function Composer({
               ? t("composer.placeholder.attaching")
               : recording
               ? t("composer.placeholder.listening")
+              : shared
+                ? "Message… @mention your bots here"
               : busy && canSteer
                 ? pendingCount > 0
                   ? t("composer.placeholder.steerQueued", { name: busyName })
@@ -1140,7 +1156,8 @@ export function Composer({
         {hasContent && !locked && (
           <button
             onClick={send}
-            disabled={attachmentPending}
+            disabled={attachmentPending || sharedSending}
+            aria-busy={sharedSending || undefined}
             aria-label={
               busy && canSteer
                   ? t("composer.send.steer")

@@ -1,3 +1,5 @@
+import { parseContactId, type SharedRoom } from "../shared/multiplayer.ts";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
@@ -40,26 +42,50 @@ export class SharedRoomTrust {
   }
 }
 
-/** Which bots a message is addressed to: every @named bot, @everyone for
- * all of them, else the room's lead bot for a person's message. */
+/** Only explicit human mentions invoke bots. Code, quotes, links and bot output
+ * are inert. Ambiguous names require the owner-qualified picker label. */
+export function sharedMentionText(text: string): string {
+  const parts: string[] = [];
+  type Node = { type: string; value?: string; children?: Node[]; position?: { start: { offset?: number }; end: { offset?: number } } };
+  const walk = (node: Node) => {
+    if (["code", "inlineCode", "blockquote", "link", "image", "html"].includes(node.type)) return;
+    if (node.type === "text") parts.push(node.position?.start.offset !== undefined && node.position.end.offset !== undefined ? text.slice(node.position.start.offset, node.position.end.offset) : node.value ?? "");
+    else node.children?.forEach(walk);
+  };
+  walk(fromMarkdown(text) as Node);
+  return parts.join("\n").replace(/"[^"\n]*"|“[^”\n]*”/g, "");
+}
+
 export function sharedRoomTargets<T extends { name: string; ownerName?: string }>(bots: T[], text: string, fromBot: boolean): T[] {
-  const lower = text.toLowerCase();
-  if (!fromBot && /(^|[^\w@])@(everyone|all|bots)\b/.test(lower)) return bots;
-  const named = bots.filter(bot => {
-    const ambiguous = bots.filter(other => other.name.toLowerCase() === bot.name.toLowerCase()).length > 1;
-    const aliases = ambiguous && bot.ownerName ? [`@${bot.name.toLowerCase()} · ${bot.ownerName.toLowerCase()}`] :
-      ambiguous ? [] : [`@${bot.name.toLowerCase()}`];
-    for (const at of aliases) {
+  if (fromBot) return [];
+  const lower = sharedMentionText(text).toLocaleLowerCase();
+  return bots.filter(bot => {
+    const ambiguous = bots.filter(other => other.name.toLocaleLowerCase() === bot.name.toLocaleLowerCase()).length > 1;
+    const aliases = bot.ownerName ? [`@${bot.name} · ${bot.ownerName}`, ...(!ambiguous ? [`@${bot.name}`] : [])] : ambiguous ? [] : [`@${bot.name}`];
+    return aliases.some(alias => {
+      const at = alias.toLocaleLowerCase();
       let index = lower.indexOf(at);
       while (index >= 0) {
         const before = index === 0 ? " " : lower[index - 1]!;
         const after = lower[index + at.length] ?? " ";
-        if (!/[\w@]/.test(before) && !/\w/.test(after)) return true;
+        if (!/[\p{L}\p{N}_@\\]/u.test(before) && !/[\p{L}\p{N}_-]/u.test(after)) return true;
         index = lower.indexOf(at, index + 1);
       }
-    }
-    return false;
+      return false;
+    });
   });
-  if (named.length || fromBot || /(^|[^\w@])@[\w]/.test(lower)) return named;
-  return bots.slice(0, 1);
+}
+
+/** Existing direct access grants also apply to mentions, without bot membership. */
+export function sharedRoomBotCandidates(room: SharedRoom, actorId: string | undefined, homeId: string, localBotIds: string[], linkedBotIds: string[]): string[] {
+  const actor = parseContactId(actorId);
+  const granted = actor?.kind === "person" && actor.localId === "owner"
+    ? actor.homeId === homeId ? [...localBotIds, ...linkedBotIds]
+      : linkedBotIds.filter(id => parseContactId(id)?.homeId === actor.homeId)
+    : [];
+  const legacy = room.memberIds.filter(id => {
+    const bot = parseContactId(id);
+    return bot?.kind === "bot" && (room.createdBy === `${bot.homeId}:person:owner` || (!room.createdBy && room.homeId === bot.homeId));
+  });
+  return [...new Set([...granted, ...legacy])];
 }

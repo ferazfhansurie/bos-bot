@@ -36,6 +36,8 @@ struct AgentProfileView: View {
     @State private var selectedEffort: String?
     @State private var savedModel: ModelSelection
     @State private var busy = false
+    @State private var pendingModel: ModelSelection?
+    @State private var confirmingModelReset = false
     @State private var player: AVAudioPlayer?
     @State private var baseline: ProfileFormSnapshot
 
@@ -203,6 +205,26 @@ struct AgentProfileView: View {
                     }
                     .pickerStyle(.segmented)
 
+                    if crop == .mascot {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 16) {
+                            ForEach(FlatBotMark.ids, id: \.self) { body in
+                                Button {
+                                    Task { await selectBody(body) }
+                                } label: {
+                                    FlatBotMark(color: current.color, bodyId: body)
+                                        .frame(width: 58, height: 58)
+                                        .padding(6)
+                                        .overlay(Circle().stroke((current.mascotBody ?? "circle") == body ? Color.secondary : Color.clear, lineWidth: 2))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(busy)
+                                .accessibilityLabel(FlatBotMark.names[body] ?? body)
+                                .accessibilityAddTraits((current.mascotBody ?? "circle") == body ? .isSelected : [])
+                            }
+                        }
+                        .padding(.vertical, 12)
+                    }
+
                     PhotosPicker(selection: $photo, matching: .images) {
                         Label("Upload image", systemImage: "photo.badge.plus")
                     }
@@ -233,7 +255,7 @@ struct AgentProfileView: View {
                     } footer: {
                         Text(imageGenerationReady
                              ? "Generation uses the shared image provider configured on your computer. No provider key is sent to or stored on this device."
-                             : "To generate images, configure the shared image provider in OpenMausBot on your computer. Provider keys cannot be added from this device.")
+                             : "To generate images, configure the shared image provider in BOS on your computer. Provider keys cannot be added from this device.")
                     }
                 }
 
@@ -347,7 +369,7 @@ struct AgentProfileView: View {
                         } else if usesChatterbox {
                             Text("Any OpenAI-compatible server running Chatterbox works, no key needed. Save its address and model id above.")
                         } else if usesFishAudio {
-                            Text("Add the shared Fish Audio key in OpenMausBot on your computer. The key is never returned to iOS.")
+                            Text("Add the shared Fish Audio key in BOS on your computer. The key is never returned to iOS.")
                         } else {
                             Text("Add the shared ElevenLabs key in this agent's profile on the computer. The key is never returned to iOS.")
                         }
@@ -372,22 +394,37 @@ struct AgentProfileView: View {
                 }
             }
             .navigationTitle("Bot settings")
+            .alert("Switch with Ask permissions?", isPresented: $confirmingModelReset) {
+                Button("Cancel", role: .cancel) { pendingModel = nil }
+                Button("Switch with Ask") {
+                    guard let selection = pendingModel else { return }
+                    pendingModel = nil
+                    Task { await saveModel(selection: selection, resetApprovalToAsk: true) }
+                }
+            } message: {
+                Text("This model needs different permissions. Switching will set this conversation to Ask, so actions may require your approval.")
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
             }
             .overlay { if busy { ProgressView().controlSize(.large) } }
             .task {
-                async let status = session.configStatus()
-                async let options = session.voiceOptions()
-                async let catalog = loadModelCatalog()
-                async let environment = session.serverEnvironment()
-                let (loadedConfig, loadedVoices, loadedInstances) = await (status, options, catalog)
+                // Avoid async-let teardown in this SwiftUI view task: the
+                // release runtime aborts in asyncLet_finish_after_task_completion.
+                let loadedConfig = await session.configStatus()
+                guard !Task.isCancelled else { return }
+                let loadedVoices = await session.voiceOptions()
+                guard !Task.isCancelled else { return }
+                let loadedInstances = await loadModelCatalog()
+                guard !Task.isCancelled else { return }
+                let environment = await session.serverEnvironment()
+                guard !Task.isCancelled else { return }
                 config = loadedConfig
                 engine = loadedConfig?.voiceProvider ?? .elevenlabs
                 chatterboxURL = loadedConfig?.tts?.baseUrl ?? ""
                 chatterboxModel = loadedConfig?.tts?.model ?? ""
-                hostIsMac = (await environment)?.platform == "darwin"
+                hostIsMac = environment?.platform == "darwin"
                 voices = loadedVoices
                 instances = loadedInstances
                 modelsLoaded = true
@@ -485,11 +522,15 @@ struct AgentProfileView: View {
         session.canAdminister ? await session.modelInstances() : []
     }
 
-    private func saveModel() async {
+    private func saveModel(selection: ModelSelection? = nil, resetApprovalToAsk: Bool = false) async {
         guard canApplyModel else { return }
         busy = true
         defer { busy = false }
-        if let updated = await session.updateModel(modelDraft, for: current) {
+        let requested = selection ?? modelDraft
+        if let updated = await session.updateModel(requested, for: current, resetApprovalToAsk: resetApprovalToAsk, needsConfirmation: {
+            pendingModel = requested
+            confirmingModelReset = true
+        }) {
             let model = updated.projected(forThread: bot.threadId)?.currentTaskModelSelection ?? modelDraft
             selectedInstanceID = model.instanceId
             selectedModelID = model.model
@@ -520,6 +561,15 @@ struct AgentProfileView: View {
         switch effort.lowercased() {
         case "xhigh": "X-High"
         default: effort.capitalized
+        }
+    }
+
+    private func selectBody(_ body: String) async {
+        busy = true
+        defer { busy = false }
+        if let updated = await session.updateProfile(BotProfilePatch(avatarCrop: .mascot, mascotBody: body), for: current) {
+            crop = updated.avatarCrop ?? .mascot
+            baseline.crop = crop
         }
     }
 

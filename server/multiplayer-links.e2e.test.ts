@@ -51,7 +51,7 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     const forwarded = await links.forwardShared("/api/multiplayer/me", "GET");
     expect(forwarded).toMatchObject({ status: 200, body: { actorId } });
     const room = await links.forwardShared("/api/multiplayer/rooms", "POST", {
-      name: "Firaz and Pixie", memberIds: [actorId, `${added.homeId}:bot:${bot.body.bot.id}`],
+      name: "Firaz and Pixie", memberIds: [actorId, `${added.homeId}:person:owner`],
     });
     expect(room.status).toBe(201);
     expect((await links.forwardShared("/api/multiplayer/rooms", "GET")).body).toMatchObject({ rooms: [(room.body as any).room] });

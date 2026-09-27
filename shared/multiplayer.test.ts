@@ -29,4 +29,18 @@ describe("multiplayer identity and log", () => {
     log.append({ actor: putri, text: "one", sendId: "s-1" }, "m-1", 1);
     expect(() => log.append({ actor: putri, text: "two", sendId: "s-1" }, "m-2", 2)).toThrow("send id conflict");
   });
+  it("lets only an explicitly invoked bot respond without joining the human conversation", () => {
+    const humans = { ...room, memberIds: [firaz, putri].map(contactId) };
+    const log = new SharedRoomLog(humans);
+    const ask = { actor: putri, text: "@Pixie help", sendId: "ask", botTargets: [contactId(pixie)] };
+    log.append(ask, "request", 1);
+    expect(() => log.append({ actor: pixie, text: "unsolicited", sendId: "no" }, "no", 2)).toThrow();
+    expect(() => log.append({ actor: pixie, text: "wrong request", responseTo: "other", sendId: "wrong" }, "wrong", 2)).toThrow();
+    expect(log.append({ actor: pixie, text: "answer", responseTo: "request", sendId: "answer" }, "answer", 2).created).toBe(true);
+    expect(humans.memberIds).not.toContain(contactId(pixie));
+    const revoked = new SharedRoomLog({ ...humans, memberIds: [contactId(firaz)] }, log.all());
+    expect(() => revoked.append({ actor: pixie, text: "late answer", responseTo: "request", sendId: "late" }, "late", 3)).toThrow();
+    expect(() => log.append({ ...ask, botTargets: [] }, "changed", 4)).toThrow("send id conflict");
+  });
+
 });

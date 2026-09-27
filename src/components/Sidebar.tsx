@@ -441,6 +441,8 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
   const [shared, setShared] = useState<{ actorId: string; homeId: string; contacts: SharedPickContact[] } | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const [memberMode, setMemberMode] = useState<"people" | "bots">("people");
+  const [loadingPeople, setLoadingPeople] = useState(true);
   // A bot relayed from a linked Mac has a virtual id the room APIs do not know.
   const bots = state.bots.filter((b) => !b.hidden && !b.remote);
   useEffect(() => {
@@ -448,10 +450,11 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
     void (async () => {
       try {
         const me = await api<{ actorId: string | null; homeId: string }>("/api/multiplayer/me");
-        if (!me.actorId) return;
+        if (!me.actorId) { if (alive) setMemberMode("bots"); return; }
         const roster = await api<{ contacts: SharedPickContact[] }>("/api/multiplayer/contacts");
-        if (alive) setShared({ actorId: me.actorId, homeId: me.homeId, contacts: roster.contacts.filter(contact => contact.id !== me.actorId && (contact.kind === "person" || !contact.id.startsWith(`${me.homeId}:bot:`))) });
-      } catch { /* Older servers keep the existing local group picker. */ }
+        if (alive) setShared({ actorId: me.actorId, homeId: me.homeId, contacts: roster.contacts.filter(contact => contact.id !== me.actorId && contact.kind === "person") });
+      } catch { if (alive) { setError("Could not load people. Close and reopen to retry."); setMemberMode("bots"); } }
+      finally { if (alive) setLoadingPeople(false); }
     })();
     return () => { alive = false; };
   }, []);
@@ -464,13 +467,12 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
     });
   const create = async () => {
     if (!picked.size || creating) return;
-    const remotePicked = [...picked].filter(id => id.includes(":person:") || id.includes(":bot:"));
-    if (remotePicked.length && shared) {
+    if (memberMode === "people" && shared) {
       setCreating(true); setError("");
       try {
-        const memberIds = [...picked].map(id => id.includes(":") ? id : `${shared.homeId}:bot:${id}`);
+        const memberIds = [...picked].filter(id => shared.contacts.some(contact => contact.id === id && contact.kind === "person"));
         const result = await api<{ room: { id: string } }>("/api/multiplayer/rooms", {
-          method: "POST", body: JSON.stringify({ name: name.trim() || "Group chat", memberIds: [shared.actorId, ...memberIds] }),
+          method: "POST", body: JSON.stringify({ kind: "group", name: name.trim() || "Group chat", memberIds: [shared.actorId, ...memberIds] }),
         });
         window.dispatchEvent(new Event("multiplayer:refresh"));
         dispatch({ type: "selectSharedRoom", roomId: result.room.id });
@@ -479,6 +481,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
       finally { setCreating(false); }
       return;
     }
+    if (memberMode !== "bots") return;
     dispatch({
       type: "createGroup",
       memberIds: [...picked],
@@ -494,7 +497,8 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div className="w-[340px] rounded-2xl border border-hairline/50 bg-card p-4 shadow-2xl">
-        <div className="mb-3 text-[15px] font-semibold text-ink">{t("sidebar.newChannel.title")}</div>
+        <div className="mb-3 flex items-center justify-between"><h2 className="text-[15px] font-semibold text-ink">{memberMode === "people" ? "New group chat" : t("sidebar.newChannel.title")}</h2><button type="button" aria-label="Close new group" onClick={onClose} className="rounded-md p-1 text-ink-secondary hover:bg-control"><X size={16} /></button></div>
+        {shared && <div className="mb-3 flex gap-1 rounded-lg bg-control p-1" role="group" aria-label="Group type">{(["people", "bots"] as const).map(mode => <button key={mode} type="button" aria-pressed={memberMode === mode} onClick={() => { setMemberMode(mode); setPicked(new Set()); setError(""); }} className={cn("flex-1 rounded-md px-3 py-1.5 text-xs", memberMode === mode ? "bg-panel text-ink" : "text-ink-secondary")}>{mode === "people" ? "People" : "Bot channel"}</button>)}</div>}
         <input
           autoFocus
           maxLength={100}
@@ -507,7 +511,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
           placeholder={t("sidebar.newChannel.name")}
           className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
         />
-        <input
+        {memberMode === "bots" && <input
           value={section}
           maxLength={60}
           onChange={(e) => setSection(e.target.value)}
@@ -518,14 +522,17 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
           placeholder={t("sidebar.newChannel.context")}
           aria-label={t("sidebar.newChannel.contextAria")}
           className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
-        />
-        <BotPickerList
+        />}
+        {memberMode === "bots" && <BotPickerList
           bots={bots}
           picked={picked}
           onToggle={toggle}
           emptyHint={t("sidebar.newChannel.emptyHint")}
-        />
-        {shared && shared.contacts.length > 0 && <div className="mt-2 flex max-h-56 flex-col gap-0.5 overflow-y-auto border-t border-hairline/40 pt-2">
+        />}
+        {memberMode === "people" && <p className="mb-2 text-xs leading-relaxed text-ink-secondary">@mention your bots here — no need to add them</p>}
+        {memberMode === "people" && loadingPeople && <p role="status" className="py-3 text-sm text-ink-secondary">Loading people…</p>}
+        {memberMode === "people" && shared?.contacts.length === 0 && <p className="py-3 text-sm text-ink-secondary">Connect a person to start a group chat.</p>}
+        {memberMode === "people" && shared && shared.contacts.length > 0 && <div className="mt-2 flex max-h-56 flex-col gap-0.5 overflow-y-auto border-t border-hairline/40 pt-2">
           {[...shared.contacts].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "person" ? -1 : 1)).map(contact => (
             <button key={contact.id} type="button" onClick={() => toggle(contact.id)} role="checkbox" aria-label={contact.name} aria-checked={picked.has(contact.id)}
               className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-raised/50">

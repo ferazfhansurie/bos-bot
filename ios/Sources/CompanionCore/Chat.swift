@@ -86,6 +86,20 @@ public enum Chat: Identifiable, Hashable {
         return false
     }
 
+    /// A bot that lives on another linked Mac. Owner-only flows (settings,
+    /// computer, steer, always-allow, secrets, overview, export) are refused
+    /// for it by the server, so the UI hides them.
+    public var isRemoteBot: Bool {
+        if case let .bot(bot) = self { return bot.remote != nil }
+        return false
+    }
+
+    /// The linked Mac's display name for a remote bot, nil otherwise.
+    public var remoteHomeName: String? {
+        if case let .bot(bot) = self { return bot.remote?.homeName }
+        return nil
+    }
+
     public var supportsTasks: Bool {
         switch self {
         case .bot: return true
@@ -97,7 +111,10 @@ public enum Chat: Identifiable, Hashable {
 
     public var subtitle: String {
         switch self {
-        case let .bot(bot): return bot.title
+        case let .bot(bot):
+            guard let home = bot.remote?.homeName, !home.isEmpty else { return bot.title }
+            let title = bot.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return title.isEmpty ? "on \(home)" : "\(title) · on \(home)"
         case let .room(room): return "\(room.memberIds.count) bots"
         }
     }

@@ -97,6 +97,14 @@ final class BotModelClientTests: XCTestCase {
         XCTAssertNil(updated.modelSelection.effort)
     }
 
+    func testConfirmedPermissionResetIsExplicitAndThreadScoped() async throws {
+        _ = try await client.updateModel(botId: "bot-1", selection: ModelSelection(instanceId: "codex", model: "gpt-5"), threadId: "thread-a", resetApprovalToAsk: true)
+        let data = try XCTUnwrap(BotModelRequestStub.capturedBody)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(body["resetApprovalToAsk"] as? Bool, true)
+        XCTAssertEqual(BotModelRequestStub.capturedRequest?.url?.path, "/api/bots/bot-1/tasks/thread-a")
+    }
+
     func testThreadModelWriteStaysPinnedWhenTheServerSelectsAnotherThread() async throws {
         BotModelRequestStub.responseBody = Data(#"""
         {"bot":{

@@ -47,6 +47,7 @@ export class SharedAttachmentStore {
     }
     const bytes = Buffer.from(base64, "base64");
     if (bytes.length < 1 || bytes.length > 25 * 1024 * 1024) throw new Error("shared attachment exceeds 25 MB");
+    if (mime.startsWith("image/") && bytes.length > 10 * 1024 * 1024) throw new Error("images must be under 10 MB");
     if (!matchesBytes(mime, bytes)) throw new Error("attachment bytes do not match its type");
     const now = Date.now();
     const recent = [...this.items.values()].filter(item => item.roomId === roomId && item.actorId === actorId && (item.createdAt ?? 0) > now - 24 * 60 * 60_000);

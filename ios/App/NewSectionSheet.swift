@@ -41,7 +41,8 @@ struct NewSectionSheet: View {
     }
 
     private var bots: [Bot] {
-        session.state.bots.filter { $0.hidden != true }
+        // Remote bots live in another Mac's sidebar; sections are local only.
+        session.state.bots.filter { $0.hidden != true && $0.remote == nil }
     }
 
     private var trimmedName: String {

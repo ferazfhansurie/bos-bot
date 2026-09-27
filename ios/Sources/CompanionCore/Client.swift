@@ -416,7 +416,7 @@ public struct PairingRouteError: Error, LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         let routes = attemptedHosts.joined(separator: ", ")
-        return "Couldn’t reach this computer through any available route (\(routes)). Keep Phone access turned on in OpenMausBot, then try again."
+        return "Couldn’t reach this computer through any available route (\(routes)). Keep Phone access turned on in BOS, then try again."
     }
 }
 
@@ -670,6 +670,107 @@ public struct CompanionClient: Sendable {
         let (data, response) = try await perform(request)
         try Self.check(response, data)
         return (try? JSONDecoder().decode(SendReceipt.self, from: data)) ?? SendReceipt()
+    }
+
+    public func sharedMe() async throws -> SharedMe {
+        try await send(makeRequest("GET", "/api/multiplayer/me"), as: SharedMe.self)
+    }
+
+    public func registerPushToken(_ token: String, environment: String) async throws {
+        try await send(makeRequest("POST", "/api/multiplayer/push-token", body: ["token": token, "environment": environment]))
+    }
+
+    public func sharedContacts() async throws -> [SharedContact] {
+        try await send(makeRequest("GET", "/api/multiplayer/contacts"), as: SharedContactsResponse.self).contacts
+    }
+
+    public func setProfilePhoto(_ jpegBase64: String?) async throws {
+        let value: Any = jpegBase64.map { $0 as Any } ?? NSNull()
+        try await send(makeRequest("PUT", "/api/multiplayer/profile-photo", body: ["photo": value]))
+    }
+
+    public func sharedRooms() async throws -> [SharedRoomSummary] {
+        try await send(makeRequest("GET", "/api/multiplayer/rooms"), as: SharedRoomsResponse.self).rooms
+    }
+
+    public func openSharedDM(targetId: String) async throws -> SharedRoomSummary {
+        let request = try makeRequest("POST", "/api/multiplayer/dm", body: ["targetId": targetId])
+        return try await send(request, as: SharedRoomResponse.self).room
+    }
+
+    public func createSharedRoom(name: String, memberIds: [String]) async throws -> SharedRoomSummary {
+        let request = try makeRequest("POST", "/api/multiplayer/rooms", body: ["name": name, "memberIds": memberIds])
+        return try await send(request, as: SharedRoomResponse.self).room
+    }
+
+    public func sharedBots(roomId: String) async throws -> [SharedEligibleBot] {
+        try await send(makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/bots"), as: SharedEligibleBotsResponse.self).bots
+    }
+
+    public func updateSharedRoom(id: String, revision: Int, name: String? = nil, memberIds: [String]? = nil) async throws -> SharedRoomSummary {
+        var body: [String: Any] = ["revision": revision]
+        if let name { body["name"] = name }
+        if let memberIds { body["memberIds"] = memberIds }
+        return try await send(makeRequest("PATCH", "/api/multiplayer/rooms/\(id)", body: body), as: SharedRoomResponse.self).room
+    }
+
+    public func leaveSharedRoom(id: String, revision: Int) async throws {
+        try await send(makeRequest("POST", "/api/multiplayer/rooms/\(id)/leave", body: ["revision": revision]))
+    }
+
+    public func deleteSharedRoom(id: String, revision: Int) async throws {
+        let room = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        try await send(makeRequest("DELETE", "/api/multiplayer/rooms/\(room)", body: ["revision": revision]))
+    }
+
+    public func sharedMessagePage(roomId: String, after: Int = 0, version: Int = 0, before: Int? = nil, latest: Bool = false) async throws -> SharedMessagesResponse {
+        var query = [URLQueryItem(name: "after", value: String(after)), URLQueryItem(name: "version", value: String(version)), URLQueryItem(name: "limit", value: "200")]
+        if let before { query.append(URLQueryItem(name: "before", value: String(before))) }
+        if latest { query.append(URLQueryItem(name: "latest", value: "1")) }
+        return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/messages", query: query), as: SharedMessagesResponse.self)
+    }
+
+    public func editSharedMessage(roomId: String, messageId: String, text: String?) async throws -> SharedChatMessage {
+        let body: [String: Any]? = text.map { ["text": $0] }
+        return try await send(makeRequest(text == nil ? "DELETE" : "PATCH", "/api/multiplayer/rooms/\(roomId)/messages/\(messageId)", body: body), as: SharedMessageResponse.self).message
+    }
+
+    public func sharedPreferences(roomId: String, readSequence: Int? = nil, notifications: String? = nil) async throws -> SharedConversationPreferences {
+        var body: [String: Any] = [:]
+        if let readSequence { body["readSequence"] = readSequence }
+        if let notifications { body["notifications"] = notifications }
+        return try await send(makeRequest(body.isEmpty ? "GET" : "PATCH", "/api/multiplayer/rooms/\(roomId)/preferences", body: body.isEmpty ? nil : body), as: SharedConversationPreferences.self)
+    }
+
+    public func sharedMessages(roomId: String, after sequence: Int) async throws -> [SharedChatMessage] {
+        let id = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? roomId
+        return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(id)/messages", query: [
+            URLQueryItem(name: "after", value: String(sequence)),
+            URLQueryItem(name: "limit", value: "200")
+        ]), as: SharedMessagesResponse.self).messages
+    }
+
+    public func sendSharedMessage(roomId: String, text: String, sendId: String, attachments: [SharedAttachment] = [], replyTo: String? = nil) async throws {
+        let id = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? roomId
+        let encoded = try JSONEncoder().encode(attachments)
+        let rows = try JSONSerialization.jsonObject(with: encoded)
+        var body: [String: Any] = ["text": text, "sendId": sendId, "attachments": rows]
+        if let replyTo { body["replyTo"] = replyTo }
+        try await send(makeRequest("POST", "/api/multiplayer/rooms/\(id)/messages", body: body))
+    }
+
+    public func uploadSharedAttachment(roomId: String, name: String, mime: String, data: Data) async throws -> SharedAttachment {
+        let id = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? roomId
+        let request = try makeRequest("POST", "/api/multiplayer/rooms/\(id)/attachments", body: [
+            "name": name, "mime": mime, "data": data.base64EncodedString()
+        ])
+        return try await send(request, as: SharedAttachmentResponse.self).attachment
+    }
+
+    public func sharedAttachment(roomId: String, attachmentId: String) async throws -> SharedAttachmentData {
+        let room = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? roomId
+        let id = attachmentId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? attachmentId
+        return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(room)/attachments/\(id)"), as: SharedAttachmentData.self)
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
@@ -968,6 +1069,10 @@ public struct CompanionClient: Sendable {
         })
     }
 
+    public func providerUsage() async throws -> ProviderUsageResponse {
+        try await send(try makeRequest("GET", "/api/provider-usage"), as: ProviderUsageResponse.self)
+    }
+
     public func config() async throws -> ConfigStatus {
         try await send(try makeRequest("GET", "/api/config"), as: ConfigStatus.self)
     }
@@ -1176,14 +1281,14 @@ public struct CompanionClient: Sendable {
 
     /// A captured thread uses the task route, which cannot change siblings or
     /// the profile default. Omitting it retains the legacy narrow model API.
-    public func updateModel(botId: String, selection: ModelSelection, threadId: String? = nil) async throws -> Bot {
+    public func updateModel(botId: String, selection: ModelSelection, threadId: String? = nil, resetApprovalToAsk: Bool = false) async throws -> Bot {
         guard Self.validRouteID(botId) else { throw APIError.badURL }
         if let threadId {
             guard Self.validRouteID(threadId) else { throw APIError.badURL }
             let model = try JSONSerialization.jsonObject(with: JSONEncoder().encode(selection))
             return try await send(
                 try makeRequest("PATCH", "/api/bots/\(botId)/tasks/\(threadId)", body: [
-                    "modelSelection": model, "requireAvailableModel": true,
+                    "modelSelection": model, "requireAvailableModel": true, "resetApprovalToAsk": resetApprovalToAsk,
                 ]),
                 as: BotResponse.self
             ).bot
@@ -1457,7 +1562,7 @@ public struct CompanionClient: Sendable {
             guard message?.localizedCaseInsensitiveContains(Self.alreadyDrainedQueueMessage) == true else {
                 throw APIError.status(
                     code: 404,
-                    message: "This computer is too old to take back a queued message. Update OpenMausBot on it."
+                    message: "This computer is too old to take back a queued message. Update BOS on it."
                 )
             }
         }

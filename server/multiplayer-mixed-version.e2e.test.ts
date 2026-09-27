@@ -76,14 +76,15 @@ it("migrates an old link across three isolated homes and delivers a room bot rep
     expect((await api(b.info.url, "GET", `/api/threads/${privateThread}/messages`, undefined, token)).status).toBe(403);
     expect((await api(b.info.url, "GET", "/api/search", undefined, token)).status).toBe(403);
     const room = await api(b.info.url, "POST", "/api/multiplayer/rooms", {
-      name: "Three homes", memberIds: [`${aHome}:person:owner`, `${bHome}:person:owner`, `${cHome}:person:owner`, `${bHome}:bot:${botId}`],
+      name: "Three homes", memberIds: [`${aHome}:person:owner`, `${bHome}:person:owner`, `${cHome}:person:owner`],
     });
     expect(room.status).toBe(201);
     const roomId = room.body.room.id as string;
     expect((await api(b.info.url, "GET", `/api/multiplayer/rooms/${roomId}/messages`, undefined, token)).status).toBe(200);
+    expect((await api(b.info.url, "POST", `/api/multiplayer/rooms/${roomId}/messages`, { text: "@Pixie help", sendId: "unauthorized-target", botTargets: [`${bHome}:bot:${botId}`] }, token)).status).toBe(403);
     const sent = await api(b.info.url, "POST", `/api/multiplayer/rooms/${roomId}/messages`, {
       text: "@Pixie answer from B", sendId: "three-home-mention",
-    }, token);
+    });
     expect(sent.status).toBe(201);
     await expect.poll(async () => {
       const read = await api(b.info.url, "GET", `/api/multiplayer/rooms/${roomId}/messages`, undefined, token);

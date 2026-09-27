@@ -142,6 +142,15 @@ describe("CodexDriver turns (fake app-server)", () => {
     await removeTempDir(scratch);
   });
 
+  it("fails closed for shared context before any Codex process or turn, even with full access and resume", async () => {
+    await create({ fullAuto: true });
+    expect(instance.adapter.capabilities.sharedContextIsolation).toBe(true);
+    await expect(instance.adapter.sendTurn({ threadId: "shared", text: "read host files", approvalMode: "full",
+      resumeCursor: "private-session", sharedContext: { mode: "conversation-only" } })).rejects.toThrow("verified Codex 0.155.1");
+    expect(recorder.events).toEqual([]);
+    expect(await instance.adapter.steer?.("shared", "continue")).toEqual("refused");
+  });
+
   it("names the signed-in ChatGPT account from Codex's protocol and offers sign-out", async () => {
     const codexHome = join(scratch, ".codex");
     mkdirSync(codexHome, { recursive: true });
@@ -1464,7 +1473,36 @@ describe("CodexDriver turns (fake app-server)", () => {
     await expect.poll(() => processIsAlive(snapshot.pid), { timeout: 5_000 }).toBe(false);
   }, 20_000);
 
-  it("reports an explicitly refused steer as refused so the caller queues, and keeps the child alive", async () => {
+  it.each(["look at this", ""])("steers native images with text %j and preserves the active turn", async (text) => {
+    const dump = join(scratch, "codex-image-steer.json");
+    const imagePath = join(scratch, "private-steer.png");
+    writeFileSync(imagePath, Buffer.from("iVBORw0KGgo=", "base64"));
+    const images = [{ path: imagePath, mime: "image/png" as const, bytes: 8 }];
+    const threadId = `t-image-steer-${text ? "text" : "only"}`;
+    process.env.FAKE_CODEX_DUMP = dump;
+    mkdirSync(NATIVE_DIR, { recursive: true });
+    await create({ mode: "approval" });
+    expect(instance.adapter.capabilities.nativeImageSteer).toBe(true);
+    await instance.adapter.sendTurn({ threadId, text: "one" });
+    const opened = await recorder.until((e) => e.type === "request.opened");
+
+    await expect(instance.adapter.steer!(threadId, text, { images })).resolves.toBe("steered");
+    const snapshot = JSON.parse(readFileSync(dump, "utf8"));
+    expect(snapshot.calls.find((c: any) => c.method === "turn/steer")?.params).toEqual({
+      threadId: "codex-thread-1",
+      expectedTurnId: "turn-1",
+      input: [...(text ? [{ type: "text", text }] : []), { type: "localImage", path: imagePath }],
+    });
+    expect(snapshot.calls.some((c: any) => c.method === "turn/interrupt")).toBe(false);
+    expect(processIsAlive(snapshot.pid)).toBe(true);
+    const nativeLog = readFileSync(join(NATIVE_DIR, `${threadId}.ndjson`), "utf8");
+    expect(nativeLog).toContain("[private attachment path omitted]");
+    expect(nativeLog).not.toContain(imagePath);
+    await instance.adapter.respondToRequest(threadId, opened.requestId!, { behavior: "deny" });
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: true });
+  }, 20_000);
+
+  it.each([false, true])("reports an explicitly refused steer as refused and keeps the child alive (images=%s)", async (withImages) => {
     const dump = join(scratch, "codex-steer-refused.json");
     process.env.FAKE_CODEX_DUMP = dump;
     process.env.FAKE_CODEX_STEER_ERROR = JSON.stringify({ code: -32000, message: "active turn is not steerable" });
@@ -1472,7 +1510,9 @@ describe("CodexDriver turns (fake app-server)", () => {
     await instance.adapter.sendTurn({ threadId: "t-codex-steer-refused", text: "one" });
     await recorder.until((e) => e.type === "request.opened");
 
-    await expect(instance.adapter.steer?.("t-codex-steer-refused", "queued words")).resolves.toBe("refused");
+    await expect(instance.adapter.steer?.("t-codex-steer-refused", "queued words", {
+      images: withImages ? [{ path: join(scratch, "refused.png"), mime: "image/png", bytes: 8 }] : [],
+    })).resolves.toBe("refused");
     expect(processIsAlive(JSON.parse(readFileSync(dump, "utf8")).pid)).toBe(true);
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
 
@@ -1519,7 +1559,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     await expect(instance.adapter.steer?.("t-codex-idle", "hi")).resolves.toBe("refused");
   });
 
-  it("a steer that times out after delivery is indeterminate, never a re-queueable refusal", async () => {
+  it.each([false, true])("a steer timeout is indeterminate, never a re-queueable refusal (images=%s)", async (withImages) => {
     const dump = join(scratch, "codex-steer-hang.json");
     process.env.FAKE_CODEX_DUMP = dump;
     // The fake accepts turn/steer and never answers: delivery happened, the
@@ -1530,13 +1570,36 @@ describe("CodexDriver turns (fake app-server)", () => {
     await instance.adapter.sendTurn({ threadId: "t-codex-steer-hang", text: "one" });
     await recorder.until((e) => e.type === "request.opened");
 
-    await expect(instance.adapter.steer?.("t-codex-steer-hang", "maybe folded words")).resolves.toBe("indeterminate");
+    await expect(instance.adapter.steer?.("t-codex-steer-hang", "maybe folded words", {
+      images: withImages ? [{ path: join(scratch, "timeout.png"), mime: "image/png", bytes: 8 }] : [],
+    })).resolves.toBe("indeterminate");
     // nothing was killed and no error surfaced: the turn keeps running
     expect(processIsAlive(JSON.parse(readFileSync(dump, "utf8")).pid)).toBe(true);
     expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
 
     await instance.adapter.interruptTurn("t-codex-steer-hang");
     await recorder.until((e) => e.type === "turn.completed");
+  }, 20_000);
+
+  it("reports an image steer racing turn completion as indeterminate", async () => {
+    const dump = join(scratch, "codex-image-steer-race.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    process.env.FAKE_CODEX_STEER_HANG = "1";
+    await create({ mode: "approval" });
+    const threadId = "t-codex-image-steer-race";
+    await instance.adapter.sendTurn({ threadId, text: "one" });
+    const opened = await recorder.until((e) => e.type === "request.opened");
+    const result = instance.adapter.steer!(threadId, "", {
+      images: [{ path: join(scratch, "race.png"), mime: "image/png", bytes: 8 }],
+    });
+    await expect.poll(() => JSON.parse(readFileSync(dump, "utf8")).calls
+      .some((c: any) => c.method === "turn/steer")).toBe(true);
+    await instance.adapter.respondToRequest(threadId, opened.requestId!, { behavior: "deny" });
+    await expect(result).resolves.toBe("indeterminate");
+    await recorder.until((e) => e.type === "turn.completed");
+    await expect(instance.adapter.steer!(threadId, "", {
+      images: [{ path: join(scratch, "late.png"), mime: "image/png", bytes: 8 }],
+    })).resolves.toBe("refused");
   }, 20_000);
 
   it("Stop interrupts through the protocol and reports no signal error", async () => {

@@ -41,6 +41,18 @@ struct PreparedPhoneCredential: Equatable, Sendable {
 
 @MainActor
 final class Session: ObservableObject {
+
+    /// App Store and TestFlight builds carry no embedded provisioning profile and
+    /// receive production APNs tokens; development-signed builds embed a profile
+    /// whose entitlements name the sandbox.
+    static let apnsEnvironment: String = {
+        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+              let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .isoLatin1) else { return "production" }
+        guard let key = text.range(of: "<key>aps-environment</key>"),
+              let value = text.range(of: "<string>", range: key.upperBound..<text.endIndex) else { return "production" }
+        return text[value.upperBound...].hasPrefix("development") ? "development" : "production"
+    }()
     enum Status: Equatable {
         case unpaired
         case connecting
@@ -137,6 +149,7 @@ final class Session: ObservableObject {
     /// A saved connection exists, but its token could not be read yet. Keeps
     /// "the keychain is locked" from being mistaken for "not paired".
     private var restorePending = false
+    var isRestoringSavedPairing: Bool { restorePending && connection == nil }
     /// A notification can cold-launch the app before protected Keychain data
     /// is available. Retain the last explicitly tapped destination until the
     /// paired client can be rebuilt after unlock.
@@ -161,6 +174,13 @@ final class Session: ObservableObject {
         _ = NotificationCoordinator.shared
         NotificationCoordinator.shared.responseHandler = { [weak self] target in
             Task { @MainActor in await self?.openNotification(target) }
+        }
+        NotificationCoordinator.shared.pushTokenHandler = { [weak self] token in
+            Task { @MainActor in await self?.registerPushToken(token) }
+        }
+        NotificationCoordinator.shared.sharedRoomHandler = { roomID in
+            UserDefaults.standard.set(roomID, forKey: "bos.pendingSharedRoomPush")
+            NotificationCenter.default.post(name: .sharedRoomPushTapped, object: roomID)
         }
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
@@ -225,7 +245,16 @@ final class Session: ObservableObject {
     /// only the first should ever send someone back to the pairing screen.
     private func restore() {
         restorePending = false
+        do {
+            try OpenMausSharedConnectionStore.recoverRegistry()
+        } catch {
+            restorePending = true
+            status = .offline("Unlock this iPhone to restore its saved Mac connection.")
+            return
+        }
         registry = OpenMausSharedConnectionStore.loadRegistry()
+        // Upgrade existing pairings before a future uninstall loses preferences.
+        OpenMausSharedConnectionStore.saveRegistry(registry)
         connections = registry.connections
         // The Share extension can target any saved computer, not only the
         // one active at launch. Move every inactive pre-extension token into
@@ -404,7 +433,7 @@ final class Session: ObservableObject {
             _ = try await probe.environment()
         } catch APIError.status(404, _) {
             throw APIError.transport(
-                "\(connection.displayAddress) isn't an OpenMausBot server. Check the address and try again."
+                "\(connection.displayAddress) isn't an BOS server. Check the address and try again."
             )
         }
     }
@@ -620,6 +649,88 @@ final class Session: ObservableObject {
         while status == .connecting, !Task.isCancelled, Date() < deadline {
             try? await Task.sleep(nanoseconds: 120_000_000)
         }
+    }
+
+    func sharedRoster() async throws -> (SharedMe, [SharedContact], [SharedRoomSummary]) {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        let me = try await client.sharedMe()
+        guard me.actorId != nil else { return (me, [], []) }
+        async let contacts = client.sharedContacts()
+        async let rooms = client.sharedRooms()
+        return try await (me, contacts, rooms)
+    }
+
+    func setProfilePhoto(_ jpegBase64: String?) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        try await client.setProfilePhoto(jpegBase64)
+    }
+
+    func openSharedDM(targetId: String) async throws -> SharedRoomSummary {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.openSharedDM(targetId: targetId)
+    }
+
+    func createSharedRoom(name: String, memberIds: [String]) async throws -> SharedRoomSummary {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.createSharedRoom(name: name, memberIds: memberIds)
+    }
+
+    func sharedBots(roomId: String) async throws -> [SharedEligibleBot] {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.sharedBots(roomId: roomId)
+    }
+
+    func updateSharedRoom(id: String, revision: Int, name: String? = nil, memberIds: [String]? = nil) async throws -> SharedRoomSummary {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.updateSharedRoom(id: id, revision: revision, name: name, memberIds: memberIds)
+    }
+
+    func leaveSharedRoom(id: String, revision: Int) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        try await client.leaveSharedRoom(id: id, revision: revision)
+    }
+
+    func deleteSharedRoom(_ room: SharedRoomSummary) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        guard let revision = room.revision else {
+            throw APIError.transport("Update BOS on your Mac to delete group chats.")
+        }
+        try await client.deleteSharedRoom(id: room.id, revision: revision)
+    }
+
+    func sharedMessagePage(roomId: String, after: Int = 0, version: Int = 0, before: Int? = nil, latest: Bool = false) async throws -> SharedMessagesResponse {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.sharedMessagePage(roomId: roomId, after: after, version: version, before: before, latest: latest)
+    }
+
+    func editSharedMessage(roomId: String, messageId: String, text: String?) async throws -> SharedChatMessage {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.editSharedMessage(roomId: roomId, messageId: messageId, text: text)
+    }
+
+    func sharedPreferences(roomId: String, readSequence: Int? = nil, notifications: String? = nil) async throws -> SharedConversationPreferences {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.sharedPreferences(roomId: roomId, readSequence: readSequence, notifications: notifications)
+    }
+
+    func sharedMessages(roomId: String, after sequence: Int) async throws -> [SharedChatMessage] {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.sharedMessages(roomId: roomId, after: sequence)
+    }
+
+    func sendSharedMessage(roomId: String, text: String, sendId: String, attachments: [SharedAttachment] = [], replyTo: String? = nil) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        try await client.sendSharedMessage(roomId: roomId, text: text, sendId: sendId, attachments: attachments, replyTo: replyTo)
+    }
+
+    func uploadSharedAttachment(roomId: String, name: String, mime: String, data: Data) async throws -> SharedAttachment {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.uploadSharedAttachment(roomId: roomId, name: name, mime: mime, data: data)
+    }
+
+    func sharedAttachment(roomId: String, attachmentId: String) async throws -> SharedAttachmentData {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.sharedAttachment(roomId: roomId, attachmentId: attachmentId)
     }
 
     /// Ask the harness to include this bot's computer in the stream, for as
@@ -969,7 +1080,7 @@ final class Session: ObservableObject {
                 do {
                     capable = try await client.imageCapableInstanceIDs()
                 } catch APIError.status(code: 404, message: _) {
-                    actionError = "Update OpenMausBot on this computer before sending images."
+                    actionError = "Update BOS on this computer before sending images."
                     return false
                 }
                 guard imageSupported(by: chat, capableInstances: capable) else {
@@ -1234,7 +1345,7 @@ final class Session: ObservableObject {
     ) throws -> DownloadedFile {
         let manager = FileManager.default
         let root = manager.temporaryDirectory
-            .appendingPathComponent("OpenMausBotFilePreviews", isDirectory: true)
+            .appendingPathComponent("BOSFilePreviews", isDirectory: true)
         let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try Task.checkCancellation()
         try manager.createDirectory(
@@ -1268,13 +1379,14 @@ final class Session: ObservableObject {
 
     private static func removeStaleFilePreviews() {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("OpenMausBotFilePreviews", isDirectory: true)
+            .appendingPathComponent("BOSFilePreviews", isDirectory: true)
         try? FileManager.default.removeItem(at: root)
     }
 
     func answer(chat: Chat, card: OptionCard, choice: String, rememberingPermission: Bool = true) async {
         guard let requestId = card.requestId else { return }
-        if rememberingPermission, card.shouldRememberPermission(for: choice), case let .bot(bot) = chat {
+        // A bot on another Mac refuses always-allow; its answer is one-off only.
+        if rememberingPermission, card.shouldRememberPermission(for: choice), case let .bot(bot) = chat, bot.remote == nil {
             await alwaysAllow(bot: bot, card: card)
         }
         await answer(
@@ -1733,14 +1845,21 @@ final class Session: ObservableObject {
         }
     }
 
-    func updateModel(_ selection: ModelSelection, for bot: Bot) async -> Bot? {
+    func updateModel(_ selection: ModelSelection, for bot: Bot, resetApprovalToAsk: Bool = false, needsConfirmation: (() -> Void)? = nil) async -> Bot? {
         guard let client else { return nil }
         do {
-            let updated = try await client.updateModel(botId: bot.id, selection: selection, threadId: bot.threadId)
+            let updated = try await client.updateModel(botId: bot.id, selection: selection, threadId: bot.threadId, resetApprovalToAsk: resetApprovalToAsk)
             guard !Task.isCancelled else { return nil }
             state.apply(.bot(updated))
             return updated
         } catch {
+            if !Task.isCancelled, !resetApprovalToAsk,
+               case let APIError.status(code, message) = error,
+               code == 400, message?.contains("(resetApprovalToAsk)") == true,
+               let needsConfirmation {
+                needsConfirmation()
+                return nil
+            }
             if !Task.isCancelled { actionError = error.localizedDescription }
             return nil
         }
@@ -1871,6 +1990,11 @@ final class Session: ObservableObject {
         }
     }
 
+    func loadProviderUsage() async throws -> [ProviderUsageAccount] {
+        guard let client else { return [] }
+        return try await client.providerUsage().accounts
+    }
+
     // MARK: - Routines
 
     func loadRoutines() async -> (routines: [Routine], runs: [RoutineRun]) {
@@ -1882,10 +2006,15 @@ final class Session: ObservableObject {
     func loadRoutineRunAvailability() async -> RoutineRunAvailability? {
         guard let client else { return nil }
         do {
-            async let config = client.config()
-            async let instances = client.instances()
-            return try await RoutineRunAvailability(config: config, instances: instances)
+            // Avoid the release-runtime async-let cleanup abort observed in
+            // the routine editor on iOS. Preserve cancellation between requests.
+            let config = try await client.config()
+            try Task.checkCancellation()
+            let instances = try await client.instances()
+            try Task.checkCancellation()
+            return RoutineRunAvailability(config: config, instances: instances)
         } catch {
+            guard !(error is CancellationError), (error as? URLError)?.code != .cancelled else { return nil }
             actionError = error.localizedDescription
             return nil
         }
@@ -2089,6 +2218,15 @@ final class Session: ObservableObject {
     func refreshNotificationAuthorization() async {
         notificationAuthorization = await NotificationCoordinator.shared.authorizationStatus()
         notificationAuthorizationResolved = true
+        if notificationAuthorization == .authorized || notificationAuthorization == .provisional {
+            UIApplication.shared.registerForRemoteNotifications()
+            if let token = UserDefaults.standard.string(forKey: "bos.apnsToken") { await registerPushToken(token) }
+        }
+    }
+
+    private func registerPushToken(_ token: String) async {
+        guard let client else { return }
+        try? await client.registerPushToken(token, environment: Self.apnsEnvironment)
     }
 
     func enableNotifications() async {

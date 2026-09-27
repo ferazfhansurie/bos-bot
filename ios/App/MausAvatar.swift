@@ -11,6 +11,7 @@
 // `MausFaceEngine` — same tables, same numbers, same face.
 import CompanionCore
 import SwiftUI
+import UIKit
 
 enum MausPalette {
     /// src/lib/mascot.ts — MAUS_COLORS
@@ -25,6 +26,9 @@ enum MausPalette {
         "yellow": "#D8A729",
         "teal": "#01A492",
         "coral": "#E5634E",
+        "white": "#FFFFFF",
+        "brown": "#885E36",
+        "gray": "#808080",
     ]
 
     static func color(_ name: String) -> Color {
@@ -83,18 +87,9 @@ struct MausAvatar: View {
     @State private var engine = MausFaceEngine()
 
     var body: some View {
-        // Even an opted-in face stops when the app is not active: nothing is
-        // watching, and in the background the redraws only cost battery.
-        let live = animated && !reduceMotion && scenePhase == .active
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !live)) { timeline in
-            Canvas { context, canvasSize in
-                engine.setState(state, now: timeline.date)
-                if live { engine.step(now: timeline.date) }
-                engine.draw(in: &context, size: canvasSize, color: color, bodyId: bodyId, bodyMotion: live, comets: comets, at: timeline.date)
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
+        FlatBotMark(color: color, bodyId: bodyId)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }
 
@@ -111,13 +106,9 @@ struct MausFaceStill: View {
     var at: Date = Date()
 
     var body: some View {
-        Canvas { context, canvasSize in
-            let engine = MausFaceEngine()
-            engine.setState(state, now: Date(timeIntervalSinceReferenceDate: 0))
-            engine.draw(in: &context, size: canvasSize, color: color, bodyId: bodyId, bodyMotion: false, comets: comets, at: at)
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
+        FlatBotMark(color: color, bodyId: bodyId)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }
 
@@ -621,5 +612,204 @@ extension Color {
         #else
         return self
         #endif
+    }
+}
+
+// The eight flat bodies share one fixed face on desktop and phone.
+struct FlatBotMark: View {
+    let color: String
+    var bodyId: String?
+    static let ids = ["circle", "blob", "squircle", "capsule", "cursor", "hexagon", "star", "drop"]
+    static let names = ["circle": "Circle", "blob": "Oval", "squircle": "Square", "capsule": "Capsule", "cursor": "Triangle", "hexagon": "Hexagon", "star": "Cloud", "drop": "Drop"]
+    static let outlines: [String: String] = [
+        "circle": "M 50 10 C 72 10 90 28 90 50 C 90 72 72 90 50 90 C 28 90 10 72 10 50 C 10 28 28 10 50 10 Z",
+        "blob": "M 51 12 C 75 8 88 32 90 53 C 91 77 69 91 47 88 C 22 87 8 70 11 50 C 14 30 29 15 51 12 Z",
+        "squircle": "M 31 14 C 42 12 61 12 71 14 C 83 15 86 21 87 33 C 89 44 89 62 87 73 C 86 84 80 87 68 88 C 55 89 40 89 28 87 C 17 86 14 79 13 67 C 12 53 12 40 14 28 C 15 18 20 15 31 14 Z",
+        "capsule": "M 34 22 C 14 22 7 33 7 50 C 7 67 18 78 34 78 C 45 78 60 78 69 78 C 87 78 94 66 94 50 C 94 33 83 22 67 22 Z",
+        "cursor": "M 44 12 C 47 7 53 7 57 13 C 66 27 80 51 90 72 C 95 83 89 88 79 88 C 60 89 37 89 20 88 C 8 88 6 82 12 72 C 22 51 35 27 44 12 Z",
+        "hexagon": "M 45 10 C 48 8 52 8 55 10 C 63 14 73 20 82 26 C 86 28 87 31 87 36 C 87 45 87 58 87 65 C 87 70 85 73 81 75 C 72 80 62 86 55 90 C 52 92 48 92 45 90 C 35 85 26 79 18 74 C 14 72 13 69 13 64 C 13 54 13 44 13 35 C 13 30 15 28 19 25 Z",
+        "star": "M 20 38 C 17 17 42 3 57 17 C 74 7 89 21 87 39 C 108 57 94 83 74 82 C 61 97 40 97 27 84 C 3 90 -3 58 20 38 Z",
+        "drop": "M 46 9 C 49 5 52 6 55 10 C 64 21 87 46 87 64 C 87 84 71 95 51 95 C 29 95 14 81 15 63 C 16 46 37 20 46 9 Z",
+        "shield": "M 45 10 C 48 8 52 8 55 10 C 63 14 73 20 82 26 C 86 28 87 31 87 36 C 87 45 87 58 87 65 C 87 70 85 73 81 75 C 72 80 62 86 55 90 C 52 92 48 92 45 90 C 35 85 26 79 18 74 C 14 72 13 69 13 64 C 13 54 13 44 13 35 C 13 30 15 28 19 25 Z",
+        "diamond": "M 31 14 C 42 12 61 12 71 14 C 83 15 86 21 87 33 C 89 44 89 62 87 73 C 86 84 80 87 68 88 C 55 89 40 89 28 87 C 17 86 14 79 13 67 C 12 53 12 40 14 28 C 15 18 20 15 31 14 Z"
+    ]
+    static func path(_ data: String) -> Path {
+        let tokens = data.split(separator: " ").map(String.init)
+        var p = Path(); var i = 0
+        func point(_ index: Int) -> CGPoint {
+            CGPoint(x: Double(tokens[index]) ?? 0, y: Double(tokens[index + 1]) ?? 0)
+        }
+        while i < tokens.count {
+            switch tokens[i] {
+            case "M": p.move(to: point(i + 1)); i += 3
+            case "C": p.addCurve(to: point(i + 5), control1: point(i + 1), control2: point(i + 3)); i += 7
+            case "Z": p.closeSubpath(); i += 1
+            default: i += 1
+            }
+        }
+        return p
+    }
+    var body: some View {
+        Canvas { context, size in
+            context.scaleBy(x: size.width / 100, y: size.height / 100)
+            context.fill(Self.path(Self.outlines[bodyId ?? "circle"] ?? Self.outlines["circle"]!), with: .color(MausPalette.color(color)))
+            var eyes = Path()
+            eyes.move(to: CGPoint(x: 51, y: 43)); eyes.addLine(to: CGPoint(x: 54, y: 52))
+            eyes.move(to: CGPoint(x: 73, y: 39)); eyes.addLine(to: CGPoint(x: 76, y: 48))
+            context.stroke(eyes, with: .color(Color(hex: "#151515")), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+        }
+    }
+}
+
+/// A person's photo with its light backdrop cut away so it sits on the
+/// background like a bot mascot does. Mirrors `cutout` in
+/// `src/components/Avatar.tsx`.
+@MainActor
+enum PersonCutout {
+    private static var cache: [String: UIImage] = [:]
+
+    static func image(dataURL: String) -> UIImage? {
+        if let hit = cache[dataURL] { return hit }
+        guard let encoded = dataURL.split(separator: ",", maxSplits: 1).last,
+              let data = Data(base64Encoded: String(encoded)),
+              let photo = UIImage(data: data) else { return nil }
+        let result = cut(photo) ?? photo
+        cache[dataURL] = result
+        return result
+    }
+
+    static func isCut(_ image: UIImage) -> Bool { image.accessibilityIdentifier == "person-cutout" }
+
+    private static func cut(_ photo: UIImage) -> UIImage? {
+        guard let source = photo.cgImage else { return nil }
+        let scale = min(1, 256 / CGFloat(max(source.width, source.height)))
+        let width = max(1, Int((CGFloat(source.width) * scale).rounded()))
+        let height = max(1, Int((CGFloat(source.height) * scale).rounded()))
+        let total = width * height
+        var pixels = [UInt8](repeating: 0, count: total * 4)
+        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        func light(_ at: Int) -> Bool {
+            let r = pixels[at * 4], g = pixels[at * 4 + 1], b = pixels[at * 4 + 2]
+            let low = min(r, g, b), high = max(r, g, b)
+            return low > 185 && high - low < 14
+        }
+        var backdrop = [UInt8](repeating: 0, count: total)
+        var seen = [UInt8](repeating: 0, count: total)
+        var stack: [Int] = []
+        for x in 0..<width { stack.append(x); stack.append((height - 1) * width + x) }
+        for y in 0..<height { stack.append(y * width); stack.append(y * width + width - 1) }
+        while let at = stack.popLast() {
+            if seen[at] == 1 { continue }
+            seen[at] = 1
+            if pixels[at * 4 + 3] > 0 && !light(at) { continue }
+            backdrop[at] = 1
+            let x = at % width
+            if x > 0 { stack.append(at - 1) }
+            if x < width - 1 { stack.append(at + 1) }
+            if at >= width { stack.append(at - width) }
+            if at < width * (height - 1) { stack.append(at + width) }
+        }
+
+        let radius = 4
+        func morph(_ mask: [UInt8], grow: Bool) -> [UInt8] {
+            var out = [UInt8](repeating: 0, count: total)
+            for y in 0..<height {
+                for x in 0..<width {
+                    var value: UInt8 = grow ? 0 : 1
+                    search: for dy in -radius...radius {
+                        let yy = y + dy
+                        if yy < 0 || yy >= height { continue }
+                        for dx in -radius...radius {
+                            let xx = x + dx
+                            if xx < 0 || xx >= width || dx * dx + dy * dy > radius * radius { continue }
+                            let on = mask[yy * width + xx] == 1
+                            if grow && on { value = 1; break search }
+                            if !grow && !on { value = 0; break search }
+                        }
+                    }
+                    out[y * width + x] = value
+                }
+            }
+            return out
+        }
+        let subject = backdrop.map { $0 == 1 ? UInt8(0) : UInt8(1) }
+        let kept = morph(morph(subject, grow: true), grow: false)
+        var cleared = 0
+        for at in 0..<total where kept[at] == 0 {
+            // Premultiplied alpha: clear every channel.
+            pixels[at * 4] = 0; pixels[at * 4 + 1] = 0; pixels[at * 4 + 2] = 0; pixels[at * 4 + 3] = 0
+            cleared += 1
+        }
+        if cleared == 0 { return nil }
+        guard let output = context.makeImage() else { return nil }
+        let image = UIImage(cgImage: output)
+        image.accessibilityIdentifier = "person-cutout"
+        return image
+    }
+}
+
+/// Renders a person's avatar like a bot mascot: the cutout with no circle,
+/// or the plain photo in a circle when the cutout found no backdrop.
+struct PersonPhotoView: View {
+    let dataURL: String
+    let size: CGFloat
+
+    var body: some View {
+        if let image = PersonCutout.image(dataURL: dataURL) {
+            if PersonCutout.isCut(image) {
+                Image(uiImage: image).resizable().scaledToFit().frame(width: size, height: size)
+            } else {
+                Image(uiImage: image).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
+            }
+        }
+    }
+}
+
+/// A group's face: up to three members overlapping, bare like the mascots.
+/// Mirrors `GroupMark` in `src/components/Avatar.tsx`.
+struct GroupMarkView: View {
+    let members: [SharedContact]
+    let size: CGFloat
+
+    private struct Slot { let x: CGFloat; let y: CGFloat; let s: CGFloat }
+
+    var body: some View {
+        let shown = Array(members.prefix(3))
+        let slots: [Slot] = shown.count == 2
+            ? [Slot(x: 0, y: 0.06, s: 0.66), Slot(x: 0.36, y: 0.32, s: 0.64)]
+            : [Slot(x: 0.24, y: 0, s: 0.52), Slot(x: 0, y: 0.44, s: 0.54), Slot(x: 0.46, y: 0.44, s: 0.54)]
+        ZStack(alignment: .topLeading) {
+            if shown.count <= 1 {
+                if let only = shown.first { face(only, size) }
+                else { Image(systemName: "person.2.fill").font(.system(size: size * 0.4)).frame(width: size, height: size) }
+            } else {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, member in
+                    face(member, (slots[index].s * size).rounded())
+                        .offset(x: slots[index].x * size, y: slots[index].y * size)
+                        .zIndex(Double(index))
+                }
+            }
+        }
+        .frame(width: size, height: size, alignment: .topLeading)
+    }
+
+    @ViewBuilder private func face(_ member: SharedContact, _ px: CGFloat) -> some View {
+        if member.kind == "bot" {
+            MausAvatar(color: member.color ?? "green", size: px, bodyId: member.mascotBody, animated: false)
+        } else if let avatar = member.avatar, PersonCutout.image(dataURL: avatar) != nil {
+            PersonPhotoView(dataURL: avatar, size: px)
+        } else {
+            ProfileAvatar(name: member.name, size: px)
+        }
+    }
+
+    /// Everyone but me first, so the mark shows who else is here.
+    static func faces(_ room: SharedRoomSummary, contacts: [SharedContact], selfID: String?) -> [SharedContact] {
+        let order = room.memberIds.filter { $0 != selfID } + (selfID.map { [$0] } ?? [])
+        return order.compactMap { id in contacts.first { $0.id == id } }
     }
 }

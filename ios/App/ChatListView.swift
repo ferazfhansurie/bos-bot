@@ -5,12 +5,17 @@
 // keeps Updates, search, organization and new-bot actions within one thumb's
 // reach while everything scrolls beneath the glass.
 import SwiftUI
+import PhotosUI
 import CompanionCore
 
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
     @State private var query = ""
-    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.full.rawValue
+    @State private var showingProfile = false
+    @State private var profilePhoto: PhotosPickerItem?
+    @AppStorage("bos.personalAvatar") private var personalAvatar = ""
+
+    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     /// Driven so that making a bot can open it. Value-based navigation alone
     /// cannot push without a tap, and a new bot appearing silently at the
     /// bottom of the roster is a poor answer to pressing +.
@@ -21,15 +26,22 @@ struct ChatListView: View {
     @State private var showingUpdates = false
     @State private var showingWalkie = false
     @State private var showingNewGroup = false
+    @State private var showingNewBot = false
+    @State private var creatingBot = false
     @State private var showingNewSection = false
     @State private var expandedBots = Set<String>()
     @State private var collapsedFolders = Set<String>()
     @State private var creatingThreads = Set<String>()
     @State private var managingThreads: Chat?
+    @State private var sharedMe: SharedMe?
+    @State private var sharedContacts: [SharedContact] = []
+    @State private var sharedRooms: [SharedRoomSummary] = []
+    @State private var groupPendingDeletion: SharedRoomSummary?
+    @State private var groupDeleteError: String?
     @FocusState private var searchFocused: Bool
 
     /// Room for the floating bar, so the last row can scroll clear of it.
-    private static let barClearance: CGFloat = 96
+    private static let barClearance: CGFloat = 20
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -37,6 +49,14 @@ struct ChatListView: View {
             VStack(spacing: 0) {
                 header
                 StatusBanner()
+                if searchOpen {
+                    HStack {
+                        TextField("Search bots and messages", text: $query)
+                            .focused($searchFocused)
+                        Button("Done") { query = ""; searchOpen = false }
+                    }
+                    .padding(.horizontal, 20).padding(.bottom, 12)
+                }
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -81,7 +101,7 @@ struct ChatListView: View {
                     }
                     .padding(.bottom, Self.barClearance)
                 }
-                .refreshable { await session.refresh() }
+                .refreshable { await session.refresh(); await refreshShared() }
                 .overlay {
                     if rosterIsEmpty {
                         ContentUnavailableView(
@@ -99,9 +119,6 @@ struct ChatListView: View {
             // top-aligned: the roster fills downward from the header
             .frame(maxWidth: CompanionLayout.rosterWidth, maxHeight: .infinity, alignment: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .overlay(alignment: .bottom) {
-                bottomBar.frame(maxWidth: CompanionLayout.rosterWidth)
-            }
             // a bot that stopped for you grows out of the island
             .overlay(alignment: .top) {
                 if CompanionLayout.supportsIslandPresentation {
@@ -113,7 +130,29 @@ struct ChatListView: View {
             }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .interactiveBackSwipe()
             .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
+            .navigationDestination(for: SharedRoomSummary.self) { room in
+                SharedChatView(room: room, selfID: sharedMe?.actorId ?? "", contacts: sharedContacts)
+            }
+            .task(id: session.connection?.id) {
+                while !Task.isCancelled {
+                    await refreshShared()
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .sharedRoomPushTapped)) { event in
+                guard let roomID = event.object as? String else { return }
+                if let room = sharedRooms.first(where: { $0.id == roomID }) {
+                    UserDefaults.standard.removeObject(forKey: "bos.pendingSharedRoomPush")
+                    path.append(room)
+                } else { Task { await refreshShared() } }
+            }
+            .task(id: "\(session.connection?.id ?? "")|\(personalAvatar.hashValue)") {
+                guard session.connection != nil else { return }
+                try? await session.setProfilePhoto(personalAvatar.isEmpty ? nil : personalAvatar)
+                await refreshShared()
+            }
             .onChange(of: session.notificationChat) { _, chat in
                 guard let chat else { return }
                 path.append(chat)
@@ -154,14 +193,66 @@ struct ChatListView: View {
                 }
                 .environmentObject(session)
             }
+            .sheet(isPresented: $showingNewBot) {
+                NavigationStack {
+                    Form {
+                        Section {
+                            Text("Create a new bot, then choose its name, model and profile in settings.")
+                            Button(creatingBot ? "Creating…" : "Create bot") { confirmCreateBot() }
+                                .disabled(creatingBot)
+                        }
+                    }
+                    .navigationTitle("New bot")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { showingNewBot = false }.disabled(creatingBot)
+                        }
+                    }
+                }
+                .interactiveDismissDisabled(creatingBot)
+                .presentationDetents([.medium])
+            }
             .sheet(isPresented: $showingNewGroup) {
-                NewGroupSheet { room in
+                NewGroupSheet(created: { room in
                     showingNewGroup = false
                     path.append(Chat.room(room))
-                }
+                }, sharedContacts: sharedContacts, sharedMe: sharedMe, createdShared: { room in
+                    showingNewGroup = false
+                    sharedRooms.append(room)
+                    path.append(room)
+                })
             }
             .sheet(isPresented: $showingNewSection) {
                 NewSectionSheet()
+            }
+            .confirmationDialog("Delete group for everyone?", isPresented: Binding(
+                get: { groupPendingDeletion != nil },
+                set: { if !$0 { groupPendingDeletion = nil } }
+            ), titleVisibility: .visible) {
+                Button("Delete group", role: .destructive) {
+                    guard let room = groupPendingDeletion else { return }
+                    groupPendingDeletion = nil
+                    Task {
+                        do {
+                            try await session.deleteSharedRoom(room)
+                            sharedRooms.removeAll { $0.id == room.id }
+                            await refreshShared()
+                        } catch {
+                            groupDeleteError = error.localizedDescription
+                            await refreshShared()
+                        }
+                    }
+                }
+            } message: {
+                Text("This removes the group and its messages for all members.")
+            }
+            .alert("Could not delete group", isPresented: Binding(
+                get: { groupDeleteError != nil },
+                set: { if !$0 { groupDeleteError = nil } }
+            )) {
+                Button("OK", role: .cancel) { groupDeleteError = nil }
+            } message: {
+                Text(groupDeleteError ?? "")
             }
             .sheet(item: $managingThreads) { chat in
                 TaskManagerView(chat: chat) { threadId in
@@ -196,40 +287,77 @@ struct ChatListView: View {
     /// right, and where you are in between. The avatar is identity, not a
     /// second hidden route to the same screen.
     private var header: some View {
-        HStack(alignment: .center) {
-            ProfileAvatar(name: session.connection?.name ?? "You", size: 30)
-                .frame(width: 44, height: 44)
-                .glassCapsule(interactive: false)
-                .accessibilityLabel(session.connection.map { LocalizedStringKey("Connected to \($0.name)") }
-                    ?? "Connected to your computer")
-
-            Spacer(minLength: 8)
-
-            VStack(spacing: 2) {
-                Text("Threads")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                Text(headerSubtitle)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(1)
+        HStack {
+            Button { showingProfile = true } label: { personalAvatarView }
+                .buttonStyle(.plain).accessibilityLabel("Your profile and settings")
+            Spacer()
+            searchButton
+            if session.canAdminister {
+                Menu {
+                    Button("New group", systemImage: "person.3", action: openNewGroup)
+                    Button("New bot", systemImage: "square.and.pencil", action: createBot)
+                    Button("New section", systemImage: "folder.badge.plus", action: openNewSection)
+                        .disabled(!hasVisibleBots)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassCapsule()
+                .accessibilityLabel("Create")
+            } else {
+                GlassButton(systemImage: "plus", size: 48, weight: .medium, action: openNewGroup)
+                    .accessibilityLabel("New group")
             }
-
-            Spacer(minLength: 8)
-
-            NavigationLink { SettingsView() } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.plain)
-            .glassCapsule()
-            .accessibilityLabel("Settings")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 20)
+        .sheet(isPresented: $showingProfile) {
+            NavigationStack {
+                Form {
+                    Section {
+                        PhotosPicker(selection: $profilePhoto, matching: .images) {
+                            HStack { personalAvatarView; Text("Change profile photo") }
+                        }
+                        if !personalAvatar.isEmpty {
+                            Button("Remove photo", role: .destructive) {
+                                personalAvatar = ""
+                                Task { try? await session.setProfilePhoto(nil); await refreshShared() }
+                            }
+                        }
+                    }
+                    Section {
+                        NavigationLink("Settings & computers") { SettingsView() }
+                    }
+                }
+                .navigationTitle("Your profile")
+                .toolbar { ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingProfile = false }
+                } }
+                .onChange(of: profilePhoto) { _, item in
+                    Task {
+                        guard let data = try? await item?.loadTransferable(type: Data.self),
+                              let photo = UIImage(data: data) else { return }
+                        let ratio = min(256 / photo.size.width, 256 / photo.size.height)
+                        let size = CGSize(width: photo.size.width * ratio, height: photo.size.height * ratio)
+                        let thumbnail = UIGraphicsImageRenderer(size: size).image { _ in
+                            photo.draw(in: CGRect(origin: .zero, size: size))
+                        }
+                        personalAvatar = thumbnail.jpegData(compressionQuality: 0.85)?.base64EncodedString() ?? ""
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var personalAvatarView: some View {
+        if PersonCutout.image(dataURL: personalAvatar) != nil {
+            PersonPhotoView(dataURL: personalAvatar, size: 44)
+        } else {
+            ProfileAvatar(name: session.connection?.name ?? "You", size: 44)
+        }
     }
 
     private var headerSubtitle: String {
@@ -249,7 +377,57 @@ struct ChatListView: View {
     /// same rule and order as the thread tree, so the inbox can never
     /// disagree with it.
     private var attention: [AttentionThread] {
-        crossBotAttentionThreads(session.state.bots)
+        crossBotAttentionThreads(session.state.bots).filter { ["waiting-on-you", "dead", "no-signal"].contains($0.task.activity ?? "") }
+    }
+
+    private func refreshShared() async {
+        let connectionID = session.connection?.id
+        guard connectionID != nil else {
+            sharedMe = nil; sharedContacts = []; sharedRooms = []
+            return
+        }
+        do {
+            let (me, contacts, rooms) = try await session.sharedRoster()
+            guard session.connection?.id == connectionID else { return }
+            sharedMe = me
+            sharedContacts = contacts
+            sharedRooms = rooms
+            cacheNotificationAvatars(contacts)
+            if let roomID = UserDefaults.standard.string(forKey: "bos.pendingSharedRoomPush"),
+               let room = rooms.first(where: { $0.id == roomID }) {
+                UserDefaults.standard.removeObject(forKey: "bos.pendingSharedRoomPush")
+                path.append(room)
+            }
+        } catch {
+            guard session.connection?.id == connectionID else { return }
+            sharedMe = nil; sharedContacts = []; sharedRooms = []
+        }
+    }
+
+    @MainActor private func cacheNotificationAvatars(_ contacts: [SharedContact]) {
+        for contact in contacts {
+            if contact.kind == "bot" {
+                let renderer = ImageRenderer(content: MausAvatar(color: contact.color ?? "green", size: 128,
+                                                                  bodyId: contact.mascotBody, animated: false)
+                    .frame(width: 128, height: 128))
+                if let data = renderer.uiImage?.pngData() {
+                    NotificationAvatarCache.store(data, for: contact.id)
+                }
+            } else if let avatar = contact.avatar,
+                      let encoded = avatar.split(separator: ",", maxSplits: 1).last,
+                      let data = Data(base64Encoded: String(encoded)),
+                      let photo = (PersonCutout.image(dataURL: avatar) ?? UIImage(data: data))?.pngData() {
+                NotificationAvatarCache.store(photo, for: contact.id)
+            }
+        }
+        for bot in session.state.bots {
+            let renderer = ImageRenderer(content: MausAvatar(color: bot.color, size: 128,
+                                                              bodyId: bot.mascotBody, animated: false)
+                .frame(width: 128, height: 128))
+            if let data = renderer.uiImage?.pngData() {
+                NotificationAvatarCache.store(data, for: "bot:\(bot.id)")
+            }
+        }
     }
 
     @ViewBuilder
@@ -270,51 +448,116 @@ struct ChatListView: View {
             }
         }
 
-        if let chief = session.state.unsectionedChief {
-            botRows(summaries(for: [chief]))
-        }
-
-        let pinned = summaries(for: session.state.pinnedBots)
-        if !pinned.isEmpty {
-            sectionLabel(Text("Pinned"))
-                .padding(.top, 2)
-                .padding(.bottom, 4)
-            botRows(pinned)
-        }
-
-        channelsStrip(
-            title: "Groups",
-            rooms: session.state.unsectionedChannels,
-            showsCreate: true
-        )
-
-        if !session.state.botChats.isEmpty {
-            channelsStrip(title: "Bot threads", rooms: session.state.botChats, showsCreate: false)
-        }
-
-        let unsectioned = summaries(for: session.state.unsectionedBots)
-        if !unsectioned.isEmpty {
-            sectionLabel(Text("Bots"))
-                .padding(.top, 18)
-                .padding(.bottom, 4)
-            botRows(unsectioned)
-        }
-
-        ForEach(session.state.sidebarSections) { section in
-            VStack(alignment: .leading, spacing: 0) {
-                sectionLabel(Text(verbatim: section.name))
-                    .padding(.top, 18)
-                    .padding(.bottom, section.chiefs.isEmpty && !section.channels.isEmpty ? 10 : 4)
-                if !section.chiefs.isEmpty {
-                    botRows(summaries(for: section.chiefs))
+        sectionLabel(Text("Chats")).padding(.top, 18).padding(.bottom, 4)
+        ForEach(orderedConversations) { entry in
+            switch entry {
+            case .local(let summary): botRows([summary])
+            case .contact(let contact): contactRow(contact)
+            case .room(let room):
+                Button { path.append(room) } label: {
+                    sharedConversationRow(name: room.name, subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0) {
+                        GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 52)
+                    }
                 }
-                if !section.channels.isEmpty {
-                    channelTiles(section.channels, showsCreate: false)
-                        .padding(.top, section.chiefs.isEmpty ? 0 : 8)
-                        .padding(.bottom, section.bots.isEmpty ? 4 : 8)
+                .buttonStyle(.plain)
+                .contextMenu {
+                    if room.isGroup {
+                        Button("Delete group", systemImage: "trash", role: .destructive) {
+                            groupPendingDeletion = room
+                        }
+                    }
                 }
-                botRows(summaries(for: section.bots))
             }
+        }
+    }
+
+    private enum ConversationEntry: Identifiable {
+        case local(ChatSummary), contact(SharedContact), room(SharedRoomSummary)
+        var id: String {
+            switch self {
+            case .local(let summary): return "local:\(summary.id)"
+            case .contact(let contact): return "contact:\(contact.id)"
+            case .room(let room): return "room:\(room.id)"
+            }
+        }
+    }
+
+    private var orderedConversations: [ConversationEntry] {
+        let selfID = sharedMe?.actorId ?? ""
+        // Only people are shared-room contacts. A linked Mac's bots now arrive
+        // through /api/bots as ordinary (remote) bots and render as local rows.
+        let remoteContacts = sharedContacts.filter { contact in
+            contact.id != selfID && contact.kind == "person"
+        }
+        let contactIDs = Set(remoteContacts.map(\.id))
+        let directRooms = sharedRooms.filter { $0.memberIds.count == 2 && !$0.isGroup && $0.memberIds.contains(selfID) }
+        let entries: [(ConversationEntry, Double)] =
+            session.state.chatSummaries(activity: activity).filter { if case .bot = $0.chat { return true }; return false }
+                .map { (.local($0), $0.lastActivity) }
+            + remoteContacts.map { contact in
+                (.contact(contact), directRooms.first(where: { $0.memberIds.contains(contact.id) })?.lastActivity ?? 0)
+            }
+            + sharedRooms.filter { room in !room.memberIds.contains(where: contactIDs.contains) || room.memberIds.count != 2 || room.isGroup }
+                .map { (.room($0), $0.lastActivity ?? 0) }
+        return entries.sorted { left, right in
+            if left.1 != right.1 { return left.1 > right.1 }
+            return left.0.id < right.0.id
+        }.map(\.0)
+    }
+
+    private func contactRow(_ contact: SharedContact) -> some View {
+        let room = sharedRooms.first { $0.memberIds.count == 2 && !$0.isGroup && $0.memberIds.contains(sharedMe?.actorId ?? "") && $0.memberIds.contains(contact.id) }
+        return Button {
+            Task {
+                do {
+                    let room = try await session.openSharedDM(targetId: contact.id)
+                    if !sharedRooms.contains(where: { $0.id == room.id }) { sharedRooms.append(room) }
+                    path.append(room)
+                } catch { session.actionError = error.localizedDescription }
+            }
+        } label: {
+            sharedConversationRow(name: contact.name, subtitle: contact.title, preview: room?.preview ?? "", at: room?.lastActivity ?? 0, unreadCount: room?.unreadCount ?? 0) {
+                contactAvatar(contact, size: 52)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sharedConversationRow<Avatar: View>(name: String, subtitle: String?, preview: String, at: Double, unreadCount: Int = 0, @ViewBuilder avatar: () -> Avatar) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Color.clear.frame(width: 22)
+            HStack(alignment: .top, spacing: 14) {
+                avatar().padding(.top, 12)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(name).font(.system(size: 17, weight: .semibold)).foregroundStyle(Color.primary).lineLimit(1).layoutPriority(1)
+                        Spacer(minLength: 4)
+                        if unreadCount > 0 { Text(unreadCount > 99 ? "99+" : String(unreadCount)).font(.caption.weight(.semibold)).foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 3).background(Color.accentColor, in: Capsule()).accessibilityLabel("\(unreadCount) unread messages") }
+                        if at > 0 { Text(RelativeStamp.list(at)).font(.system(size: 15)).foregroundStyle(Color.secondary).fixedSize() }
+                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.secondary.opacity(0.5))
+                    }
+                    if let subtitle, !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(subtitle).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.secondary).lineLimit(2)
+                    }
+                    Text(preview.isEmpty ? " " : preview).font(.system(size: 15)).foregroundStyle(Color.secondary).lineLimit(1)
+                }
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .bottom) { Divider() }
+            }
+            .padding(.trailing, 16)
+        }
+        .padding(.leading, 6)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder private func contactAvatar(_ contact: SharedContact, size: CGFloat) -> some View {
+        if contact.kind == "bot" {
+            MausAvatar(color: contact.color ?? "green", size: size, bodyId: contact.mascotBody, animated: false)
+        } else if let avatar = contact.avatar, PersonCutout.image(dataURL: avatar) != nil {
+            PersonPhotoView(dataURL: avatar, size: size)
+        } else {
+            ProfileAvatar(name: contact.name, size: size)
         }
     }
 
@@ -357,7 +600,7 @@ struct ChatListView: View {
                 NavigationLink(value: summary.chat) {
                     ChatRow(
                         chat: summary.chat,
-                        preview: summary.preview,
+                        preview: summary.chat.busy ? "Working…" : summary.preview,
                         at: summary.lastActivity,
                         state: MausState.forChat(summary.chat, in: session.state),
                         waiting: waitingChats.contains(summary.chat.id),
@@ -365,28 +608,7 @@ struct ChatListView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                if case let .bot(bot) = summary.chat {
-                    BotThreadTree(
-                        botID: bot.id, query: $query,
-                        expanded: Binding(
-                            get: { expandedBots.contains(bot.id) },
-                            set: { value in
-                                if value { expandedBots.insert(bot.id) } else { expandedBots.remove(bot.id) }
-                            }
-                        ),
-                        collapsedFolders: $collapsedFolders,
-                        creating: Binding(
-                            get: { creatingThreads.contains(bot.id) },
-                            set: { value in
-                                if value { creatingThreads.insert(bot.id) } else { creatingThreads.remove(bot.id) }
-                            }
-                        )
-                    ) { chat in
-                        path.append(chat)
-                    } manage: { chat in
-                        managingThreads = chat
-                    }
-                }
+
             }
         }
     }
@@ -465,6 +687,7 @@ struct ChatListView: View {
             // a chat-only phone is not shown buttons the server would refuse.
             if session.canAdminister {
                 Menu {
+                    Button("New group", systemImage: "person.3", action: openNewGroup)
                     Button("New section", systemImage: "folder.badge.plus", action: openNewSection)
                         .disabled(!hasVisibleBots)
                     Button("New bot", systemImage: "square.and.pencil", action: createBot)
@@ -524,14 +747,27 @@ struct ChatListView: View {
         session.state.bots.contains { $0.hidden != true }
     }
 
+    private func openNewGroup() {
+        Haptics.selection()
+        showingNewGroup = true
+    }
+
     private func openNewSection() {
         Haptics.selection()
         showingNewSection = true
     }
 
     private func createBot() {
+        showingNewBot = true
+    }
+
+    private func confirmCreateBot() {
+        guard !creatingBot else { return }
+        creatingBot = true
         Task {
+            defer { creatingBot = false }
             if let bot = await session.createBot() {
+                showingNewBot = false
                 Haptics.success()
                 path.append(Chat.bot(bot))
             }
@@ -541,7 +777,7 @@ struct ChatListView: View {
     // MARK: - Data
 
     /// The reader's activity level, which the roster preview folds by.
-    private var activity: ActivityDetail { ActivityDetail(rawValue: activityDetail) ?? .full }
+    private var activity: ActivityDetail { .hidden }
 
     private var chats: [ChatSummary] {
         let all = session.state.chatSummaries(activity: activity)
@@ -581,7 +817,7 @@ struct ChatListView: View {
 
     private var rosterIsEmpty: Bool {
         if query.isEmpty {
-            return session.state.bots.allSatisfy { $0.hidden == true } && session.state.rooms.isEmpty
+            return session.state.bots.allSatisfy { $0.hidden == true } && session.state.rooms.isEmpty && sharedContacts.isEmpty && sharedRooms.isEmpty
         }
         return chats.isEmpty && searchHits.isEmpty && !searching
     }
@@ -736,17 +972,6 @@ struct ChatRow: View {
                             .lineLimit(1)
                             .layoutPriority(1)
 
-                        // the bot's job, the way the desktop shows it
-                        if !chat.subtitle.isEmpty {
-                            Text(chat.subtitle)
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.secondary)
-                                .lineLimit(1)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                        }
-
                         Spacer(minLength: 4)
 
                         Text(RelativeStamp.list(at))
@@ -756,6 +981,14 @@ struct ChatRow: View {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color.secondary.opacity(0.5))
+                    }
+
+                    if chat.isBot, !chat.subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text(chat.subtitle)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     HStack(alignment: .top, spacing: 8) {

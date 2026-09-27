@@ -48,11 +48,11 @@ struct BotActivityWidget: Widget {
                     }
                 }
             } compactLeading: {
-                MausFaceStill(color: context.attributes.color, state: MausState(rawValue: context.state.face) ?? .idle, size: 24)
+                ActivityBotFace(context: context, size: 24)
             } compactTrailing: {
                 compactTrailing(context)
             } minimal: {
-                MausFaceStill(color: context.attributes.color, state: MausState(rawValue: context.state.face) ?? .idle, size: 22)
+                ActivityBotFace(context: context, size: 22)
             }
             .keylineTint(MausPalette.color(context.attributes.color))
         }
@@ -153,12 +153,65 @@ private struct OrbitingFace: View {
         ZStack {
             ProgressView(timerInterval: context.state.since...context.state.since.addingTimeInterval(60), countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
                 .progressViewStyle(.circular)
-                .tint(AngularGradient(colors: [
-                    Color(hex: "#A855F7"), Color(hex: "#38BDF8"), Color(hex: "#34D399"),
-                    Color(hex: "#FACC15"), Color(hex: "#FB923C"), Color(hex: "#F43F5E"), Color(hex: "#A855F7"),
-                ], center: .center))
+                .tint(context.attributes.botId == "59d5f871-db6c-4850-b966-a04ecc033279"
+                    ? .white : MausPalette.color(context.attributes.color))
                 .frame(width: size + 4, height: size + 4)
-            MausFaceStill(color: context.attributes.color, state: MausState(rawValue: context.state.face) ?? .idle, size: size, comets: true, at: Date())
+            ActivityBotFace(context: context, size: size, comets: true)
+        }
+    }
+}
+
+private struct ActivityBotFace: View {
+    let context: ActivityViewContext<BotActivityAttributes>
+    let size: CGFloat
+    var comets = false
+
+    var body: some View {
+        Group {
+            if context.attributes.botId == "59d5f871-db6c-4850-b966-a04ecc033279" {
+                JarvisCloudFace()
+            } else {
+                MausFaceStill(
+                    color: context.attributes.color,
+                    state: MausState(rawValue: context.state.face) ?? .idle,
+                    size: size,
+                    bodyId: context.attributes.mascotBody,
+                    comets: comets,
+                    at: Date()
+                )
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityLabel("\(context.attributes.name) avatar")
+    }
+}
+
+/// Vector artwork survives the widget's Live Activity snapshot renderer.
+/// Asset-catalog images can be replaced with a blank privacy placeholder here.
+private struct JarvisCloudFace: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let side = min(proxy.size.width, proxy.size.height)
+            ZStack {
+                Ellipse().fill(.white)
+                    .frame(width: side * 0.86, height: side * 0.59)
+                    .offset(y: side * 0.13)
+                Circle().fill(.white)
+                    .frame(width: side * 0.60, height: side * 0.60)
+                    .offset(x: -side * 0.13, y: -side * 0.11)
+                Circle().fill(.white)
+                    .frame(width: side * 0.53, height: side * 0.53)
+                    .offset(x: side * 0.21, y: -side * 0.10)
+                Capsule().fill(.black)
+                    .frame(width: side * 0.075, height: side * 0.20)
+                    .rotationEffect(.degrees(-18))
+                    .offset(x: -side * 0.12, y: side * 0.12)
+                Capsule().fill(.black)
+                    .frame(width: side * 0.075, height: side * 0.20)
+                    .rotationEffect(.degrees(-18))
+                    .offset(x: side * 0.18, y: side * 0.10)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }
 }

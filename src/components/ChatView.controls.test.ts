@@ -46,6 +46,40 @@ const bot: Bot = {
 };
 
 describe("thread control placement", () => {
+  it("keeps human shared chats free of bot-only controls and preserves bot author labels", () => {
+    const markup = renderToStaticMarkup(createElement(ChatView, {
+      bot: { ...bot, id: "shared:room", threadId: "shared:room", name: "Faeez", tasks: undefined, busy: true, hasMore: true,
+        messages: [{ id: "reply", role: "bot", kind: "text", at: 1, text: "Here is the comparison.", from: { botId: "remote:bot:koda", name: "Koda", color: "blue" } }] },
+      shared: { send: async () => {}, mentionBots: [], faces: [{ id: "person", name: "Faeez", kind: "person" }], loadOlder: async () => {} },
+    }));
+    expect(markup).toContain("Koda");
+    expect(markup).toContain("Here is the comparison.");
+    expect(markup).toContain("Load earlier messages");
+    expect(markup).not.toContain('aria-label="Stop turn"');
+    expect(markup).not.toContain("data-test-model-control");
+    expect(markup).not.toContain("data-test-approval-control");
+    expect(markup).toContain('aria-label="Reply to message"');
+    expect(markup).toContain("Message… @mention your bots here");
+  });
+  it("shows shared own-message edits/removal, reply quotes, edited labels and tombstones", () => {
+    const markup = renderToStaticMarkup(createElement(ChatView, {
+      bot: { ...bot, id: "shared:room", threadId: "shared:room", tasks: undefined, busy: false,
+        messages: [
+          { id: "original", role: "bot", kind: "text", at: 1, text: "Could you check this?", from: { botId: "person", name: "Faeez", color: "blue" } },
+          { id: "mine", parentId: "original", role: "user", kind: "text", at: 2, text: "Updated answer", replyToId: "original" },
+          { id: "removed", parentId: "mine", role: "user", kind: "text", at: 3, text: "Private removed content" },
+        ], activeLeafId: "removed" },
+      shared: { send: async () => {}, mentionBots: [], editMessage: async () => {}, deleteMessage: async () => {},
+        messageMeta: { mine: { editedAt: 5 }, removed: { deletedAt: 6 } } },
+    }));
+    expect(markup.match(/aria-label="Edit message"/g)).toHaveLength(1);
+    expect(markup.match(/aria-label="Remove message"/g)).toHaveLength(1);
+    expect(markup).toContain("Replying to Faeez");
+    expect(markup).toContain(">edited</div>");
+    expect(markup).toContain("Message removed");
+    expect(markup).not.toContain("Private removed content");
+    expect(markup).not.toContain('aria-label="Regenerate response"');
+  });
   it("keeps the composer inert until the deleted thread's replacement transcript arrives", () => {
     const markup = renderToStaticMarkup(createElement(ChatView, { bot: { ...bot, awaitingThreadSnapshot: true } }));
     expect(markup).toMatch(/<textarea[^>]*disabled=""[^>]*aria-busy="true"/);

@@ -9,8 +9,9 @@
 //
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and preserves that history or reports a failed resume.
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { stripWorkspaceCredentialEnv } from "../config.ts";
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
@@ -25,6 +26,7 @@ import type {
   RuntimeEvent,
   RuntimeEventListener,
   SendTurnInput,
+  SteerOptions,
   SteerOutcome,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
@@ -436,7 +438,7 @@ function codexNativeLogMessage(message: unknown): unknown {
   if (record.method === "thread/inject_items") {
     return { ...record, params: { ...params, items: "[developer instruction update omitted]" } };
   }
-  if (record.method !== "turn/start") return message;
+  if (record.method !== "turn/start" && record.method !== "turn/steer") return message;
   const input = (params as Record<string, unknown>).input;
   if (!Array.isArray(input)) return message;
   return {
@@ -593,7 +595,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
        * "refused" when this attempt has nothing steerable; the caller
        * queues. "indeterminate" when delivery happened but the answer did
        * not come back — the caller must not re-queue those words. */
-      steer?: (text: string) => Promise<SteerOutcome>;
+      steer?: (text: string, options?: SteerOptions) => Promise<SteerOutcome>;
       turnId: string;
       asks: Map<string, (behavior: "allow" | "deny" | "answer", message?: string, source?: "user" | "timeout" | "system") => void>;
     }
@@ -609,6 +611,121 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       turnId,
       createdAt: new Date().toISOString(),
     });
+
+    // The native app-server merges host instructions before a turn starts.
+    // Shared turns instead use a fresh exec invocation, with an auth-only home.
+    // Pin this security contract to the runtime verified by offline native
+    // probes: omitted tools alone are insufficient (apply_patch can still be
+    // called), so a deny-all filesystem profile remains authoritative.
+    const sendSharedTurn = async (turn: SendTurnInput) => {
+      if (turn.sharedContext?.mode !== "conversation-only") throw new Error("Unsupported shared conversation policy.");
+      if (active.has(turn.threadId)) throw new Error("a turn is already running on this thread");
+      const env = childEnv();
+      const version = await new Promise<string | null>((done) => {
+        execCli(config.cli, ["--version"], { timeout: 8000, env }, (error, stdout) => done(error ? null : stdout.trim()));
+      });
+      if (process.platform !== "darwin" || version !== "codex-cli 0.155.1") {
+        throw new Error("Shared conversations require the verified Codex 0.155.1 runtime on macOS. This runtime has not been verified for isolated shared access; no turn was sent.");
+      }
+      if (active.has(turn.threadId)) throw new Error("a turn is already running on this thread");
+      const selection = config.managed
+        ? { model: turn.model ?? null, modelProvider: "openmaus_company" }
+        : decodeCodexSelection(turn.model ?? models.default);
+      const providerArgs = config.managed ? managedCodexArgs(config.managed) : codexLocalProviderArgs(env, turn.model);
+      const accountHome = resolve(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"));
+      const authPath = join(accountHome, "auth.json");
+      if (!config.managed && (!selection.modelProvider || selection.modelProvider === "openai") && !existsSync(authPath)) {
+        throw new Error("Shared Codex conversations require a native file-backed sign-in. This account has no auth.json; keychain-only authentication is not supported by the isolated shared runtime. No turn was sent.");
+      }
+      const directory = mkdtempSync(join(tmpdir(), "omb-codex-shared-"));
+      const cwd = join(directory, "room");
+      const sharedHome = join(directory, "codex");
+      let child: ReturnType<typeof spawnCli>;
+      try {
+        mkdirSync(cwd, { mode: 0o700 });
+        mkdirSync(sharedHome, { mode: 0o700 });
+        // The harness never parses or copies credentials. The native runtime
+        // reads only this account file; private configs, histories and AGENTS
+        // files are not mounted into its temporary home.
+        if (!config.managed && existsSync(authPath)) symlinkSync(authPath, join(sharedHome, "auth.json"));
+        for (const key of Object.keys(env)) if (key.startsWith("CODEX_")) delete env[key];
+        env.CODEX_HOME = sharedHome;
+        const instructions = join(directory, "instructions.txt");
+        writeFileSync(instructions, turn.system || "Answer the shared conversation using only the supplied messages and images. Native tools are unavailable.", { mode: 0o600 });
+        const disabled = ["apps", "browser_use", "browser_use_external", "computer_use", "hooks", "image_generation",
+          "code_mode_host", "memories", "multi_agent", "multi_agent_v2", "plugins", "remote_plugin", "shell_snapshot",
+          "shell_tool", "skill_search", "skill_mcp_dependency_install", "tool_suggest", "unified_exec", "view_image",
+          "workspace_dependencies", "chronicle", "sleep_tool", "goals"];
+        const overrides = [
+          'approval_policy="never"', 'default_permissions="bos_shared"',
+          'permissions.bos_shared.filesystem={ ":root"="deny" }', 'permissions.bos_shared.network.enabled=false',
+          'features.code_mode=true', 'features.skip_host_skill_discovery=true', 'skills.include_instructions=false',
+          'project_doc_max_bytes=0', 'developer_instructions=""', 'web_search="disabled"', 'suppress_unstable_features_warning=true',
+          `model_instructions_file=${JSON.stringify(instructions)}`,
+          ...(selection.modelProvider ? [`model_provider=${JSON.stringify(selection.modelProvider)}`] : []),
+          ...(turn.effort ? [`model_reasoning_effort=${JSON.stringify(turn.effort)}`] : []),
+        ];
+        const args = ["exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check",
+          ...providerArgs, ...disabled.flatMap((feature) => ["--disable", feature]), ...overrides.flatMap((value) => ["-c", value]),
+          ...(selection.model ? ["--model", selection.model] : []),
+          ...(turn.images ?? []).flatMap((image) => ["--image", image.path]), "--", "-"];
+        child = spawnCli(config.cli, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+      } catch (error) {
+        rmSync(directory, { recursive: true, force: true });
+        throw error;
+      }
+      const { threadId } = turn;
+      const turnId = newId();
+      let stopped = false;
+      let completed = false;
+      let failed = false;
+      let settled = false;
+      let buffer = "";
+      let usage: { input: number; output: number; cachedInput?: number } | undefined;
+      const stop = async () => { stopped = true; return killCliTree(child); };
+      active.set(threadId, { turnId, asks: new Map(), stop });
+      emit({ ...base(threadId, turnId), type: "turn.started" });
+      const line = (raw: string) => {
+        let event: any;
+        try { event = JSON.parse(raw); } catch { return; }
+        if (stopped || settled) return;
+        if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+          emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: event.item.text });
+          emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: event.item.text });
+        } else if (event.type === "turn.completed") {
+          completed = true;
+          if (event.usage) usage = { input: Number(event.usage.input_tokens) || 0, output: Number(event.usage.output_tokens) || 0,
+            cachedInput: Number(event.usage.cached_input_tokens) || 0 };
+        } else if (event.type === "turn.failed" || event.type === "error") {
+          failed = true;
+          emit({ ...base(threadId, turnId), type: "runtime.error", message: "Codex could not complete the isolated shared turn. Check the selected model and native sign-in, then retry." });
+        }
+      };
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        buffer += chunk;
+        let end;
+        while ((end = buffer.indexOf("\n")) !== -1) { const raw = buffer.slice(0, end); buffer = buffer.slice(end + 1); line(raw); }
+      });
+      // Do not expose native diagnostics: they can quote authentication paths.
+      child.stderr.resume();
+      child.on("error", () => { failed = true; });
+      child.on("close", (code) => { void (async () => {
+        if (settled) return;
+        if (buffer.trim()) line(buffer);
+        const reaped = await killCliTree(child, 0);
+        settled = true;
+        if (reaped) rmSync(directory, { recursive: true, force: true });
+        if (active.get(threadId)?.turnId === turnId) active.delete(threadId);
+        const ok = !stopped && !failed && completed && code === 0 && reaped;
+        emit({ ...base(threadId, turnId), type: "turn.completed", ok,
+          stopReason: stopped ? "interrupted" : ok ? null : !reaped ? "shutdown_timeout" : "exit_before_result", ...(usage ? { usage } : {}) });
+      })(); });
+      child.stdin.on("error", () => { failed = true; void killCliTree(child); });
+      const prompt = turn.recoveryText ?? turn.text;
+      child.stdin.end(prompt || (turn.images?.length ? "Please respond to the attached image." : ""));
+      return { turnId };
+    };
 
     const sendTurn = async (turn: SendTurnInput) => {
       if (config.managed) {
@@ -627,6 +744,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           throw new Error("Company model access is unavailable: CODEX_HOME is missing. Reconnect your organization; personal billing will not be used.");
         }
       }
+      if (turn.sharedContext !== undefined) return sendSharedTurn(turn);
       // One driver instance serves many threads. Interrupt state belongs to
       // this turn so activity elsewhere cannot cancel or revive its retry.
       let stopRequested = false;
@@ -843,14 +961,19 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // transport, or a turn that settles while the answer is in flight is
       // "indeterminate": the words may already be running, so the caller must
       // not re-queue them.
-      const steerActiveTurn = async (text: string): Promise<SteerOutcome> => {
+      const steerActiveTurn = async (text: string, options?: SteerOptions): Promise<SteerOutcome> => {
         if (state.settled || abandoned || stopRequested || !codexThreadId || !codexTurnId) return "refused";
         if (child.exitCode !== null || child.signalCode !== null) return "refused";
         try {
           const steerTimeoutMs = Math.max(1, Number(process.env.FAKE_CODEX_STEER_TIMEOUT_MS ?? 10_000) || 10_000);
           await request("turn/steer", {
             threadId: codexThreadId,
-            input: [{ type: "text", text }],
+            // Verified with codex-cli 0.155.1's generated v2/TurnSteerParams
+            // schema: input is UserInput[], including text and localImage.
+            input: [
+              ...(text || !options?.images?.length ? [{ type: "text" as const, text }] : []),
+              ...(options?.images ?? []).map((image) => ({ type: "localImage" as const, path: image.path })),
+            ],
             expectedTurnId: codexTurnId,
           }, steerTimeoutMs);
           return "steered";
@@ -1571,6 +1694,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       provider: DRIVER_KIND,
       capabilities: {
         sessionModelSwitch: "unsupported",
+        sharedContextIsolation: true,
         queueing: true,
         computerMcp: true,
         localComputerMcp: true,
@@ -1581,6 +1705,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         browserMcp: true,
         images: true,
         nativeImageInput: true,
+        nativeImageSteer: true,
         effortLevels: ["low", "medium", "high", "xhigh", "max"],
         strictResume: true,
       },
@@ -1588,9 +1713,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       interruptTurn: async (threadId) => {
         await active.get(threadId)?.stop();
       },
-      steer: async (threadId, text) => {
+      steer: async (threadId, text, options) => {
         const turn = active.get(threadId);
-        return turn?.steer ? await turn.steer(text) : "refused";
+        return turn?.steer ? await turn.steer(text, options) : "refused";
       },
       respondToRequest: async (threadId, requestId, decision) => {
         const turn = active.get(threadId);

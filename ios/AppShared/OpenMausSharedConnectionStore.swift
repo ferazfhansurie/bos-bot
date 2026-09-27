@@ -27,6 +27,28 @@ enum OpenMausSharedConnectionStore {
     static let registryKey = "companion.connections.v1"
     static let legacyConnectionKey = "companion.connection"
 
+    private static let recoveryAccount = "bos.connection-registry.v1"
+
+    /// Reinstall loses preferences, while this device's Keychain can survive.
+    /// A read failure must propagate: never replace a locked backup with empty.
+    static func recoverRegistry(
+        sharedDefaults: UserDefaults? = OpenMausSharedConfiguration.sharedDefaults,
+        fallbackDefaults: UserDefaults = .standard,
+        readBackup: () throws -> String? = { try OpenMausSharedKeychain.token(for: recoveryAccount) }
+    ) throws {
+        let current = resolve(
+            sharedRegistryData: sharedDefaults?.data(forKey: registryKey),
+            fallbackRegistryData: fallbackDefaults.data(forKey: registryKey),
+            legacyConnectionData: fallbackDefaults.data(forKey: legacyConnectionKey)
+        )
+        guard current.source == .empty else { return }
+        guard let backup = try readBackup() else { return }
+        let data = Data(backup.utf8)
+        _ = try JSONDecoder().decode(CompanionConnectionRegistry.self, from: data)
+        sharedDefaults?.set(data, forKey: registryKey)
+        fallbackDefaults.set(data, forKey: registryKey)
+    }
+
     static func resolve(
         sharedRegistryData: Data?,
         fallbackRegistryData: Data?,
@@ -97,8 +119,13 @@ enum OpenMausSharedConnectionStore {
     static func saveRegistry(
         _ registry: CompanionConnectionRegistry,
         sharedDefaults: UserDefaults? = OpenMausSharedConfiguration.sharedDefaults,
-        fallbackDefaults: UserDefaults = .standard
+        fallbackDefaults: UserDefaults = .standard,
+        writeBackup: (String) throws -> Void = { try OpenMausSharedKeychain.save($0, for: recoveryAccount) }
     ) {
+        // Include an empty registry as a tombstone after explicit Forget.
+        if let data = try? JSONEncoder().encode(registry), let text = String(data: data, encoding: .utf8) {
+            try? writeBackup(text)
+        }
         guard !registry.connections.isEmpty else {
             sharedDefaults?.removeObject(forKey: registryKey)
             fallbackDefaults.removeObject(forKey: registryKey)

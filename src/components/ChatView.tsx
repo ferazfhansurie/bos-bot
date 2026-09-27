@@ -1,4 +1,4 @@
-import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Search,
   Square,
+  Trash2,
   Webhook,
   X,
 } from "lucide-react";
@@ -59,6 +60,47 @@ import { QuestionCard } from "./QuestionCard";
 import { Composer } from "./Composer";
 import { ConversationHeader } from "./ConversationChrome";
 import { SharedAttachmentTile } from "./SharedAttachmentTile";
+import type { SharedComposer } from "./shared-conversation";
+import { ConfirmDialog } from "./ConfirmDialog";
+
+interface SharedChatOptions extends SharedComposer {
+  faces?: GroupMarkMember[]; actions?: ReactNode; banner?: ReactNode; onOpenDetails?: () => void;
+  loadOlder?: () => Promise<void>; olderLoading?: boolean; historyLoading?: boolean;
+  editMessage?: (id: string, text: string) => Promise<void>;
+  deleteMessage?: (id: string) => Promise<void>;
+  messageMeta?: Record<string, { editedAt?: number; deletedAt?: number }>;
+  changeRevision?: number;
+  onRequestDelete?: (id: string) => void;
+  editingPending?: boolean; editingError?: string;
+}
+
+/** Preserve the visible message across remote edits without changing the
+ * ordinary new-message follow and older-page scroll behavior. */
+class SharedTranscriptAnchor extends Component<{
+  revision: number; scroll: RefObject<HTMLDivElement | null>; following: RefObject<boolean>; children: ReactNode;
+}> {
+  private rows() {
+    return [...(this.props.scroll.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? [])].flatMap(row => {
+      const element = row.getBoundingClientRect().height > 0 ? row
+        : [...row.querySelectorAll<HTMLElement>("*")].find(child => child.getBoundingClientRect().height > 0);
+      return element ? [{ id: row.dataset.mid, element }] : [];
+    });
+  }
+  getSnapshotBeforeUpdate(previous: Readonly<typeof this.props>) {
+    const viewport = this.props.scroll.current;
+    if (!viewport || this.props.following.current || previous.revision === this.props.revision) return null;
+    const bounds = viewport.getBoundingClientRect();
+    const anchor = this.rows().find(row => row.element.getBoundingClientRect().bottom > bounds.top);
+    return anchor ? { id: anchor.id, top: anchor.element.getBoundingClientRect().top } : null;
+  }
+  componentDidUpdate(_previous: Readonly<typeof this.props>, _state: unknown, anchor: { id?: string; top: number } | null) {
+    const viewport = this.props.scroll.current;
+    if (!viewport || !anchor) return;
+    const row = this.rows().find(candidate => candidate.id === anchor.id);
+    if (row) viewport.scrollTop += row.element.getBoundingClientRect().top - anchor.top;
+  }
+  render() { return this.props.children; }
+}
 import { ChatFindBar } from "./ChatFindBar";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
@@ -214,10 +256,14 @@ function BubbleEditor({
   initial,
   onCancel,
   onSubmit,
+  pending = false,
+  error,
+  saveLabel,
 }: {
   initial: string;
   onCancel: () => void;
   onSubmit: (text: string) => void;
+  pending?: boolean; error?: string; saveLabel?: string;
 }) {
   const [draft, setDraft] = useState(initial);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -228,13 +274,15 @@ function BubbleEditor({
     el.setSelectionRange(el.value.length, el.value.length);
   }, []);
   const submit = () => {
-    if (draft.trim()) onSubmit(draft.trim());
+    if (draft.trim() && !pending) onSubmit(draft.trim());
   };
   return (
     <div className="w-full max-w-[min(42rem,78%)] rounded-2xl border border-hairline/40 bg-bubble-user px-4 py-3">
       <textarea
         ref={ref}
         value={draft}
+        disabled={pending}
+        aria-label="Edit message"
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           // isComposing: an IME confirm-Enter must not submit the edit
@@ -247,19 +295,21 @@ function BubbleEditor({
         rows={Math.min(10, Math.max(2, draft.split("\n").length))}
         className="w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink focus:outline-none"
       />
+      {error && <p role="alert" className="mt-2 text-xs text-danger">{error}</p>}
       <div className="mt-2 flex items-center justify-end gap-2">
         <button
           onClick={onCancel}
+          disabled={pending}
           className="rounded-full px-3 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
         >
           {t("common.cancel")}
         </button>
         <button
           onClick={submit}
-          disabled={!draft.trim()}
+          disabled={!draft.trim() || pending}
           className="rounded-full bg-accent px-3 py-1 text-[13px] font-medium text-white disabled:opacity-40"
         >
-          {t("chat.send")}
+          {pending ? "Saving…" : saveLabel ?? t("chat.send")}
         </button>
       </div>
     </div>
@@ -279,7 +329,7 @@ function Bubble({
   onRegenerate,
   replyTarget,
   onReply,
-  shared = false,
+  shared,
 }: {
   bot: Bot;
   message: Message;
@@ -293,7 +343,7 @@ function Bubble({
   onRegenerate?: () => void;
   replyTarget?: Message;
   onReply: () => void;
-  shared?: boolean;
+  shared?: SharedChatOptions;
 }) {
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
@@ -301,9 +351,9 @@ function Bubble({
   // start_thread) is that bot speaking, not the person: it takes the
   // bot side of the chat under the peer's name, with the model-facing
   // provenance note stripped from what the reader sees.
-  const peer = peerLine(message);
+  const peer = shared ? null : peerLine(message);
   const user = message.role === "user" && !peer;
-  const mentionPeers = useMemo(() => state.bots.filter((peer) => peer.id !== bot.id), [state.bots, bot.id]);
+  const mentionPeers = useMemo(() => shared?.mentionBots ?? state.bots.filter((peer) => peer.id !== bot.id), [shared, state.bots, bot.id]);
   const [expanded, setExpanded] = useState(false);
   const [viewRaw, setViewRaw] = useState(false);
   const speech = useSpeech();
@@ -315,19 +365,25 @@ function Bubble({
   const attachments = user && !webhookView ? splitTranscriptAttachments(text) : null;
   const visibleText = webhookView?.task ?? attachments?.display ?? text;
   const hasAttachments = Boolean(attachments && (attachments.images.length || attachments.files.length));
+  const sharedMeta = shared?.messageMeta?.[message.id];
   const collapsible =
     user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
+
+  if (sharedMeta?.deletedAt) return <div className={cn("flex w-full flex-col", user ? "items-end" : "items-start")}>
+    {!user && message.from && <div className="mb-1 text-[11px] text-ink-secondary">{message.from.name}</div>}
+    <div className="rounded-2xl bg-card px-4 py-2.5 text-sm italic text-ink-secondary">Message removed</div>
+  </div>;
 
   if (user && editing && !webhookView && !hasAttachments) {
     return (
       <div className="flex w-full justify-end">
-        <BubbleEditor initial={text} onCancel={onCancelEdit} onSubmit={onSubmitEdit} />
+        <BubbleEditor initial={text} onCancel={onCancelEdit} onSubmit={onSubmitEdit} pending={shared?.editingPending} error={shared?.editingError} saveLabel={shared ? "Save changes" : undefined} />
       </div>
     );
   }
 
   // "‹ 2/3 ›" under an edited message — every fork it belongs to
-  const versions = user ? messageVersions(bot, message) : [message];
+  const versions = user && !shared ? messageVersions(bot, message) : [message];
   const versionIndex = versions.findIndex((v) => v.id === message.id);
   const switchTo = (v: Message | undefined) => {
     if (v && !bot.busy) dispatch({ type: "switchBranch", botId: bot.id, threadId: bot.threadId, messageId: v.id });
@@ -342,7 +398,7 @@ function Bubble({
           <MessageActions side="user">
             {/* editing rewinds the thread, so it waits for the turn to end —
                 same rule as the version switcher below */}
-            {!shared && botControlAvailable(bot, "edit") && message.kind === "text" && !webhookView && !hasAttachments && !bot.busy && (
+            {(shared ? Boolean(shared.editMessage) : botControlAvailable(bot, "edit") && !bot.busy) && message.kind === "text" && !webhookView && !hasAttachments && (
               <button
                 onClick={onStartEdit}
                 aria-label={t("chat.editMessage")}
@@ -353,7 +409,7 @@ function Bubble({
               </button>
             )}
             {Boolean(visibleText.trim()) && <CopyButton text={visibleText} className="opacity-100" />}
-            {!shared && <button
+            <button
               type="button"
               onClick={onReply}
               aria-label={t("chat.replyToMessage")}
@@ -361,7 +417,8 @@ function Bubble({
               className={messageActionClass}
             >
               <MessageSquareReply size={14} />
-            </button>}
+            </button>
+            {shared?.deleteMessage && <button type="button" onClick={() => shared.onRequestDelete?.(message.id)} aria-label="Remove message" title="Remove message" className={cn(messageActionClass, "text-danger")}><Trash2 size={14} /></button>}
             {!shared && <button
               onClick={() =>
                 dispatch({
@@ -403,6 +460,7 @@ function Bubble({
               />
             </div>
           )}
+          {shared && message.replyToId && !replyTarget && <div className="mb-2 rounded-lg border-s-2 border-accent/60 bg-inset/70 px-2.5 py-1.5 text-xs text-ink-secondary">Reply to an earlier message</div>}
           {shared && message.sharedAttachments?.map(attachment => <SharedAttachmentTile key={attachment.id} roomId={bot.threadId.slice("shared:".length)} attachment={attachment} />)}
           {user && webhookView ? (
             <div className="min-w-[300px] max-w-[520px]">
@@ -454,6 +512,7 @@ function Bubble({
               ) : null}
             </MessageBoundary>
           )}
+          {sharedMeta?.editedAt && <div className="mt-1 text-[10px] text-ink-secondary" title={new Date(sharedMeta.editedAt).toLocaleString()}>edited</div>}
         </div>
         {!user && (
           <MessageActions side="bot" forceOpen={viewRaw || speaking}>
@@ -472,7 +531,7 @@ function Bubble({
                 <RefreshCw size={14} />
               </button>
             )}
-            {!shared && <button
+            <button
               type="button"
               onClick={onReply}
               aria-label={t("chat.replyToMessage")}
@@ -480,7 +539,7 @@ function Bubble({
               className={messageActionClass}
             >
               <MessageSquareReply size={14} />
-            </button>}
+            </button>
             {!shared && <button
               onClick={() =>
                 dispatch({
@@ -612,7 +671,7 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit,
   onRegenerate,
   onReply,
-  shared = false,
+  shared,
 }: {
   bot: Bot;
   messages: Message[];
@@ -632,13 +691,13 @@ const MessagesList = memo(function MessagesList({
   onSubmitEdit: (id: string, text: string) => void;
   onRegenerate?: () => void;
   onReply: (message: Message) => void;
-  shared?: boolean;
+  shared?: SharedChatOptions;
 }) {
   const { state, dispatch } = useStore();
   const showToolCalls = showToolCallsEnabled(state.config);
   // Finished tool chips become compact runs; settled assistant narration
   // becomes one reversible turn row while the terminal answer stays visible.
-  const items = useMemo(() => groupTranscript(messages), [messages, locale]);
+  const items = useMemo(() => shared ? messages.map(message => ({ kind: "message" as const, message })) : groupTranscript(messages), [messages, locale, shared]);
   // Where this conversation works, for the place icon on screen and page tools.
   const place = effectivePlace(bot, bot.tasks?.find((task) => task.threadId === bot.threadId));
   const newestMessageId = messages.at(-1)?.id;
@@ -649,10 +708,10 @@ const MessagesList = memo(function MessagesList({
   const focusedId = focus && !focus.consumed && focus.threadId === bot.threadId ? focus.messageId : null;
   return (
     <>
-      {messages.length === 0 && !bot.busy && (
+      {messages.length === 0 && !bot.busy && !shared?.historyLoading && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 py-24 text-center">
-          <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />
-          {bot.remote ? <div className="text-[17px] font-semibold text-ink">{bot.name}</div> : <RenameTitle
+          {shared?.faces ? <GroupMark members={shared.faces} size={64} /> : <BotAvatar bot={bot} state="idle" size={64} motion="none" motionKey={0} />}
+          {shared || bot.remote ? <div className="text-[17px] font-semibold text-ink">{bot.name}</div> : <RenameTitle
             value={bot.name}
             onCommit={(name) => {
               if (window.ogb?.remoteClient?.active) {
@@ -667,7 +726,7 @@ const MessagesList = memo(function MessagesList({
             inputClassName="rounded bg-inset px-1.5 py-0.5 text-center text-[17px] font-semibold"
           />}
           <div className="max-w-[360px] text-[14px] text-ink-secondary">
-            {bot.description || t("chat.emptyPrompt")}
+            {shared ? "@mention your bots here — no need to add them" : bot.description || t("chat.emptyPrompt")}
           </div>
         </div>
       )}
@@ -882,7 +941,7 @@ function PinnedBanner({
   );
 }
 
-export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: (text: string, files: File[], sendId: string) => Promise<void>; faces?: GroupMarkMember[]; actions?: ReactNode } }) {
+export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedChatOptions }) {
   const bot = useMemo(() => currentTaskBot(profile), [profile]);
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
@@ -912,14 +971,14 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
   useEffect(() => setFindOpen(false), [bot.threadId]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      if (!shared && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         setFindOpen(true);
       }
     };
     window.addEventListener("keydown", onFind);
     return () => window.removeEventListener("keydown", onFind);
-  }, []);
+  }, [shared]);
 
   // only the active branch is rendered; forks stay reachable via ‹ › nav
   const messages = useMemo(() => visibleMessages(bot), [bot]);
@@ -976,17 +1035,51 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
 
   // one message at a time may be in edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [sharedEditPending, setSharedEditPending] = useState(false);
+  const [sharedEditError, setSharedEditError] = useState("");
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  const [removePending, setRemovePending] = useState(false);
+  const [removeError, setRemoveError] = useState("");
+  const messageMutationPending = useRef(false);
   useEffect(() => setEditingId(null), [bot.id, bot.threadId]);
+  useEffect(() => {
+    if (shared && replyTo && shared.messageMeta?.[replyTo.id]?.deletedAt) clearReply();
+    if (shared && editingId && shared.messageMeta?.[editingId]?.deletedAt) setEditingId(null);
+  }, [shared, replyTo, clearReply, editingId]);
   // stable handler identities — MessagesList is memo'd on them
-  const startEdit = useCallback((id: string) => setEditingId(id), []);
+  const startEdit = useCallback((id: string) => { setSharedEditError(""); setEditingId(id); }, []);
   const cancelEdit = useCallback(() => setEditingId(null), []);
   const submitEdit = useCallback(
     (messageId: string, text: string) => {
+      if (shared) {
+        if (!shared.editMessage || messageMutationPending.current) return;
+        messageMutationPending.current = true;
+        setSharedEditPending(true); setSharedEditError("");
+        void shared.editMessage(messageId, text).then(() => setEditingId(null))
+          .catch(cause => setSharedEditError(cause instanceof Error ? cause.message : "Could not save changes."))
+          .finally(() => { messageMutationPending.current = false; setSharedEditPending(false); });
+        return;
+      }
       setEditingId(null); // closes the editor first — a double Enter can't fork twice
       dispatch({ type: "editMessage", botId: bot.id, threadId: bot.threadId, messageId, text });
     },
-    [bot.id, bot.threadId, dispatch],
+    [bot.id, bot.threadId, dispatch, shared],
   );
+  const removeSharedMessage = () => {
+    if (!removeTarget || !shared?.deleteMessage || messageMutationPending.current) return;
+    messageMutationPending.current = true; setRemovePending(true); setRemoveError("");
+    void shared.deleteMessage(removeTarget).then(() => setRemoveTarget(null))
+      .catch(cause => setRemoveError(cause instanceof Error ? cause.message : "Could not remove message."))
+      .finally(() => { messageMutationPending.current = false; setRemovePending(false); });
+  };
+  const renderedShared = shared ? {
+    ...shared, editingPending: sharedEditPending, editingError: sharedEditError,
+    onRequestDelete: (id: string) => {
+      if (messages.some(message => message.id === id && message.role === "user") && !shared.messageMeta?.[id]?.deletedAt) {
+        setRemoveError(""); setRemoveTarget(id);
+      }
+    },
+  } : undefined;
   const lastUserMessage = useMemo(
     () => [...messages].reverse().find((m) => m.role === "user" && m.kind === "text" && !peerLine(m)),
     [messages],
@@ -1136,11 +1229,12 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
   // exactly like expanding the local window, so the same height capture keeps
   // the viewport still — here it is applied when the transcript grows at the
   // front rather than when the boundary moves.
-  const olderPending = Boolean(state.loadingOlder[bot.threadId]);
+  const olderPending = shared ? Boolean(shared.olderLoading) : Boolean(state.loadingOlder[bot.threadId]);
   const loadOlder = () => {
     preExpandHeight.current = scrollRef.current ? { key: transcriptKey, height: scrollRef.current.scrollHeight } : null;
     setBottomFollow(false);
-    dispatch({ type: "loadOlderMessages", threadId: bot.threadId });
+    if (shared) void shared.loadOlder?.();
+    else dispatch({ type: "loadOlderMessages", threadId: bot.threadId });
   };
   const oldestId = messages[0]?.id;
   useLayoutEffect(() => {
@@ -1185,20 +1279,24 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+      <ConfirmDialog open={removeTarget !== null} title="Remove this message?"
+        body={removeError || "The message will be replaced with a removed-message notice for everyone. This cannot be undone."}
+        confirmLabel={removePending ? "Removing…" : "Remove message"}
+        onCancel={() => { if (!removePending) setRemoveTarget(null); }} onConfirm={removeSharedMessage} />
       {/* Call mode covers the thread while the bot is on the line */}
       <CallOverlay bot={bot} />
       {/* Header */}
       <ConversationHeader style={headerDragStyle}>
-        <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-1.5 py-1" style={headerNoDragStyle}>
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1" style={headerNoDragStyle}>
           <button
-            onClick={() => { if (local) dispatch({ type: "toggleSettings", open: true }); }}
+            onClick={() => { if (shared) shared.onOpenDetails?.(); else if (local) dispatch({ type: "toggleSettings", open: true }); }}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
-            title={t("chat.openProfile")}
-            aria-label={t("chat.openProfileAria", { name: bot.name })}
+            title={shared ? "Conversation details" : t("chat.openProfile")}
+            aria-label={shared ? `Open ${bot.name} conversation details` : t("chat.openProfileAria", { name: bot.name })}
           >
             {/* a person's photo arrives as a data: image, which bot avatars
                 refuse by design; show it the same size a bot avatar sits */}
-            {shared?.faces && shared.faces.length > 1 ? (
+            {shared?.faces && shared.faces.length > 0 ? (
               <GroupMark members={shared.faces} size={34} />
             ) : shared && bot.avatarUrl?.startsWith("data:image/") ? (
               <PersonPhoto src={bot.avatarUrl} size={28} testId="shared-person-avatar" />
@@ -1212,7 +1310,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
               />
             )}
           </button>
-          {!local ? <span className="truncate text-[15px] font-semibold text-ink">{bot.name}</span> : <RenameTitle
+          {shared ? <button type="button" onClick={shared.onOpenDetails} className="truncate text-[15px] font-semibold text-ink hover:underline">{bot.name}</button> : !local ? <span className="truncate text-[15px] font-semibold text-ink">{bot.name}</span> : <RenameTitle
             value={bot.name}
             onCommit={(name) => {
               if (window.ogb?.remoteClient?.active) {
@@ -1244,7 +1342,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
           style={controlsShiftStyle}
         >
           {shared?.actions}
-          <button
+          {!shared && <button
             onClick={() => setFindOpen((open) => !open)}
             aria-label={t("chat.find")}
             aria-pressed={findOpen}
@@ -1255,7 +1353,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
             title={t("chat.findShortcut")}
           >
             <Search size={18} />
-          </button>
+          </button>}
           {!remoteHint && <ExportTranscriptMenu
             title={bot.name}
             messages={messages}
@@ -1275,8 +1373,8 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
             </button>
           )}
           {!shared && <TaskPicker bot={bot} />}
-          {local && <UsageChip bot={bot} />}
-          {local && !remoteClient && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
+          {local && <div className="@max-3xl/chathead:hidden"><UsageChip bot={bot} /></div>}
+          {local && !remoteClient && <div className="@max-3xl/chathead:hidden"><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}
           {!shared && <CallButton bot={bot} />}
           {local && <button
             data-tour="computer"
@@ -1294,7 +1392,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
             aria-label={t("chat.inspector")}
             aria-pressed={state.inspectorOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "rounded-md p-1.5 hover:bg-raised @max-3xl/chathead:hidden",
               state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title={t("chat.inspectorHint")}
@@ -1304,13 +1402,15 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
         </div>
       </ConversationHeader>
 
+      {shared?.banner}
+
       {!shared && <BotActivityPicker bot={bot} />}
       {routineExecution && <div className="mx-5 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[11.5px] text-ink-secondary">
         <span className="min-w-0 flex-1 truncate">{t("routines.executionDetails", { name: routineExecution.routineName })}</span>
         {canOpenResults && resultsThreadId && <button type="button" onClick={() => openNotificationTarget(dispatch, { botId: bot.id, threadId: resultsThreadId }, state)} className="rounded px-2 py-1 text-accent hover:bg-raised">{t("routines.results.back")}</button>}
         <button type="button" onClick={() => dispatch({ type: "showRoutines", section: "logs", routineId: routineExecution.routineId, botId: bot.id })} className="rounded px-2 py-1 hover:bg-raised hover:text-ink">{t("routines.logs")}</button>
       </div>}
-      {findOpen && <ChatFindBar threadId={bot.threadId} onClose={() => setFindOpen(false)} />}
+      {!shared && findOpen && <ChatFindBar threadId={bot.threadId} onClose={() => setFindOpen(false)} />}
 
       {/* Error banner */}
       {state.error && (
@@ -1406,9 +1506,10 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
               </button>
             </div>
           ) : null}
+          <SharedTranscriptAnchor revision={shared?.changeRevision ?? 0} scroll={scrollRef} following={followRef}>
           <MessagesList
             bot={bot}
-            shared={Boolean(shared)}
+            shared={renderedShared}
             locale={activeLocale()}
             messages={windowedMessages}
             transcript={messages}
@@ -1423,6 +1524,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
             onRegenerate={local ? regenerate : undefined}
             onReply={selectReply}
           />
+          </SharedTranscriptAnchor>
           {laterCount > 0 && (
             <div className="flex justify-center">
               <button
@@ -1505,11 +1607,12 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: { send: 
         key={bot.threadId}
         bot={profile}
         shared={shared}
-        replyTo={replyTo}
+        locked={shared?.historyLoading}
+        replyTo={shared && replyTo ? messages.find(message => message.id === replyTo.id) ?? replyTo : replyTo}
         onClearReply={clearReply}
         onConsumeReply={consumeReply}
         onRestoreReply={restoreReply}
-        onEditLast={!remoteHint && lastUserMessage && !lastUserMessageHasAttachments && !bot.busy
+        onEditLast={local && lastUserMessage && !lastUserMessageHasAttachments && !bot.busy
           ? () => setEditingId(lastUserMessage.id)
           : undefined}
       />

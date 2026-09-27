@@ -30,6 +30,7 @@ import type {
   RuntimeEvent,
   RuntimeEventListener,
   SendTurnInput,
+  SteerOptions,
   SteerOutcome,
 } from "../contracts.ts";
 import { gateServer, resultBudget } from "../mcp-gate-config.ts";
@@ -1076,6 +1077,24 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const retryState = new Map<string, { attempt: number; cancelled: boolean; rebuilt?: boolean }>();
 
     const sendTurn = async (turn: SendTurnInput, logicalTurnId?: string) => {
+      const shared = turn.sharedContext !== undefined;
+      if (shared) {
+        if (turn.sharedContext?.mode !== "conversation-only") throw new Error("Unsupported shared conversation policy.");
+        if (!cliVersionChecked) {
+          cliVersion = parseClaudeCliVersion(await readCliVersion(environment()) ?? "");
+          cliVersionChecked = true;
+        }
+        // Verified against the installed 2.1.280 CLI help. Never silently
+        // drop security flags on older or unidentified runtimes.
+        if (!cliVersion || !versionAtLeast(cliVersion, [2, 1, 280])) {
+          throw new Error("Shared conversations require Claude Code 2.1.280 or newer for enforced conversation-only access. Update Claude Code; no turn was sent.");
+        }
+        // Private context cannot cross this boundary through a retained
+        // process, native resume, project config, or an integration mount.
+        turn = { ...turn, text: turn.recoveryText ?? turn.text, sessionReset: true,
+          resumeCursor: undefined, recoveryText: undefined, approvalMode: "ask",
+          integrations: undefined, mcpFromUserConfig: false };
+      }
       if (config.managed && (!turn.model || turn.model.includes("::") || !config.configDir ||
           !input.environment.ANTHROPIC_API_KEY || !input.environment.ANTHROPIC_BASE_URL)) {
         throw new Error("Company model access is unavailable. Reconnect your organization; personal billing will not be used.");
@@ -1132,7 +1151,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         "--include-partial-messages",
         "--permission-mode", permissionMode,
       ];
-      if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
+      if (shared) args.push("--tools", "", "--restricted", "--safe-mode", "--strict-mcp-config",
+        "--setting-sources", "", "--disable-slash-commands", "--no-chrome", "--no-session-persistence");
+      else if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       if (config.disallowedTools?.length) {
         args.push("--disallowedTools", config.disallowedTools.join(","));
       }
@@ -1145,7 +1166,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
       }
       const isolated = !inheritsUserConfig(turnEnvironment);
-      if (isolated) {
+      if (isolated && !shared) {
         // A bot gets the tools and instructions its owner gave it, not
         // whatever this machine's Claude Code happens to be set up with.
         // Without these the CLI silently adds, to EVERY turn of every bot:
@@ -1257,7 +1278,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // of MCP servers, so a server the bot's OWN project declares would
       // otherwise vanish with the machine's. Merge it last: a project file
       // can add servers but never shadow a harness-owned mount.
-      if (isolated && turn.cwd) {
+      if (isolated && turn.cwd && !shared) {
         for (const [name, server] of Object.entries(projectMcpServers(turn.cwd))) {
           if (Object.hasOwn(mcpServers, name)) continue;
           mcpServers[name] = server;
@@ -1279,12 +1300,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // Keep ask_user available even in Full access. Native bypass skips
       // permission prompts, not questions requiring a person's answer.
       let broker: Awaited<ReturnType<typeof createPermissionBroker>> | undefined;
-      const socketPath = permissionSocketPath(threadId, botId);
-      if (permissionMode !== "bypassPermissions") {
+      const socketPath = shared ? null : permissionSocketPath(threadId, botId);
+      if (!shared && permissionMode !== "bypassPermissions") {
         args.push("--permission-prompt-tool", "mcp__ogb__approve");
       }
-      mcpServers.ogb = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG }, alwaysLoad: true };
-      allowed.push("mcp__ogb");
+      if (!shared) {
+        mcpServers.ogb = { command: process.execPath, args: [PERM_PROXY_PATH, socketPath], env: { ...NODE_ENV_FLAG }, alwaysLoad: true };
+        allowed.push("mcp__ogb");
+      }
       // The MCP config carries credentials — a Composio consumer key in a
       // header, the box token in the computer proxy's env, the comms token in
       // the agents proxy's env. On argv every one of those is world-readable
@@ -1292,14 +1315,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // accepts a FILE for this flag, so the secrets go in a 0600 file that
       // is removed when the turn settles.
       let mcpConfigPath: string | null = null;
-      if (Object.keys(mcpServers).length) {
+      if (shared || Object.keys(mcpServers).length) {
         mcpConfigPath = join(mkdtempSync(join(tmpdir(), "omb-mcp-")), "mcp.json");
         args.push("--mcp-config", mcpConfigPath);
-        args.push("--allowedTools", allowed.join(","));
+        if (!shared) args.push("--allowedTools", allowed.join(","));
       }
 
       const env = environment(turnModel);
-      const authSettings = isolated && !injected.injected
+      const authSettings = (isolated || shared) && !injected.injected
         ? readClaudeAuthSettings(env, input.environment) : {};
       // Harness hooks (item 0.2): one helper command for the events the
       // harness observes. The helper reads its bearer from a per-thread file
@@ -1327,7 +1350,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // boundary. Native background workers cannot outlive that boundary;
       // parallel bot work must use the harness's durable delegate_bot path.
       env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
-      const cwd = turn.cwd ?? homedir();
+      const sharedCwd = shared ? mkdtempSync(join(tmpdir(), "omb-shared-")) : null;
+      const cwd = sharedCwd ?? turn.cwd ?? homedir();
       // Everything that shapes the process, minus session/turn-specific temp
       // paths. Their contents are represented directly in the key instead.
       const privateFileFlags = new Set(["--mcp-config", "--settings"]);
@@ -1397,6 +1421,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // Any bind, private-config or synchronous spawn failure must release
       // them here rather than leave a live listener or credential temp file.
       const cleanupUnownedLaunch = () => {
+        if (sharedCwd) rmSync(sharedCwd, { recursive: true, force: true });
         broker?.close();
         broker = undefined;
         if (mcpConfigPath) {
@@ -1570,7 +1595,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // many later turns on this thread, and each must start fresh.
         retryState.delete(threadId);
         emit({ ...base(threadId, t.turnId), type: "turn.completed", ok, stopReason, cost, ...(usage ? { usage } : {}) });
-        if (session.child.exitCode === null && !session.closing) armIdle(threadId);
+        if (shared) closeSession(threadId, "shared conversation turn ended");
+        else if (session.child.exitCode === null && !session.closing) armIdle(threadId);
       };
       const currentTurnId = () => session.turn?.turnId ?? turnId;
 
@@ -1734,6 +1760,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           return;
         }
         if (closeFinalized) return;
+        if (sharedCwd) rmSync(sharedCwd, { recursive: true, force: true });
         closeFinalized = true;
         // a turn still running when the process died is a failed turn; a
         // process that exited between turns (idle close, contract change)
@@ -1940,7 +1967,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     /** A user message into the running turn: the CLI delivers it before its
      * next model call. "refused" when nothing is running here to steer or
      * the stdin write provably failed; the caller queues those words. */
-    const steer = async (threadId: string, text: string): Promise<SteerOutcome> => {
+    const steer = async (threadId: string, text: string, options?: SteerOptions): Promise<SteerOutcome> => {
+      // This adapter only verifies text steering. Never silently drop images.
+      if (options?.images?.length) return "refused";
       const s = sessions.get(threadId);
       if (!s || !s.turn || s.turn.settled || s.closing || s.child.exitCode !== null) return "refused";
       return (await writeUser(s, threadId, claudeUserMessage(text, undefined))) ? "steered" : "refused";
@@ -2042,6 +2071,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         provider: DRIVER_KIND,
         capabilities: {
           sessionModelSwitch: "in-session",
+          sharedContextIsolation: true,
           agentsMcp: true,
         customMcp: true,
           computerMcp: true,
@@ -2050,6 +2080,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           browserMcp: true,
           images: true,
           nativeImageInput: true,
+          nativeImageSteer: false,
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
           queueing: true,
           // Only while this CLI can be told to refresh a resumed session's

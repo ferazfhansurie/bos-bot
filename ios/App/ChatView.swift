@@ -28,6 +28,7 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var draft = ""
     @State private var showingTasks = false
+    @State private var showingWalkie = false
     @State private var showingComputer = false
     @State private var showingPlus = false
     @State private var showingProfile = false
@@ -63,7 +64,7 @@ struct ChatView: View {
 
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @AppStorage(PrefKey.islandSeen) private var islandSeen = ""
-    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.full.rawValue
+    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.quickReplies) private var quickReplies = ""
 
     init(chat: Chat) {
@@ -117,8 +118,26 @@ struct ChatView: View {
 
     /// The transcript as the reader has asked to see it: every chip, folded
     /// runs, or none at all.
+    ///
+    /// The steps of a turn that is still running are not in here — they
+    /// belong to the working indicator below the transcript, which shows
+    /// them as they land. They fold into a normal run row the moment the
+    /// turn settles, so nothing is drawn twice and nothing disappears.
     private var rows: [TranscriptRow] {
-        transcriptRows(messages, detail: ActivityDetail(rawValue: activityDetail) ?? .full)
+        let detail = ActivityDetail(rawValue: activityDetail) ?? .reduced
+        let settled = liveSteps.isEmpty ? messages : Array(messages.dropLast(liveSteps.count))
+        return transcriptRows(settled, detail: detail)
+    }
+
+    /// The tail of activity belonging to the turn in flight.
+    private var liveSteps: [Message] {
+        guard current.busy, (ActivityDetail(rawValue: activityDetail) ?? .reduced) != .hidden else { return [] }
+        var tail: [Message] = []
+        for message in messages.reversed() {
+            guard message.kind == .activity else { break }
+            tail.insert(message, at: 0)
+        }
+        return tail
     }
 
     /// The composer's chip row, as edited in Settings.
@@ -155,9 +174,9 @@ struct ChatView: View {
                     // height exact and the anchor land on the newest message.
                     // A thread holds 50 messages until you ask for more, so
                     // there is nothing here worth being lazy about.
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 14) {
                         // room for the floating face when scrolled to the top
-                        Color.clear.frame(height: 72)
+                        Color.clear.frame(height: 4)
 
                         if session.state.hasMore[threadId] == true {
                             Button("Load earlier messages") {
@@ -211,16 +230,12 @@ struct ChatView: View {
                         if let live = session.state.streaming[threadId], !live.isEmpty {
                             StreamingBubble(text: live, reasoning: nil, color: current.color)
                                 .id(Self.liveBubbleId)
-                        } else if let thinking = session.state.reasoning[threadId], !thinking.isEmpty {
-                            // Only while there is no answer yet. Once tokens
-                            // of the reply exist, the reasoning is behind us
-                            // and showing both is just noise.
-                            StreamingBubble(text: nil, reasoning: thinking, color: current.color)
-                                .id(Self.liveBubbleId)
                         } else if current.busy {
-                            TypingIndicatorView(tintColor: MausPalette.color(current.color))
-                                .id(Self.liveBubbleId)
-                                .accessibilityLabel("\(current.name) is working")
+                            WorkingSteps(
+                                items: liveSteps,
+                                startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000)
+                            )
+                            .id(Self.liveBubbleId)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -237,56 +252,6 @@ struct ChatView: View {
                 // a system bar is; the transcript starts on that line and
                 // scrolls under the face and name, which float over it.
                 .safeAreaInset(edge: .top, spacing: 0) { headerBar }
-                .overlay(alignment: .top) { headerFace }
-                .overlay(alignment: .top) {
-                    // One face, in one layer, measured from the screen's top
-                    // edge: it sits in the island while that is open and
-                    // glides into its header slot when the island lets go.
-                    let topInset = IslandGeometry.topInset
-                    let hasIsland = IslandGeometry.hasIsland(topInset: topInset)
-                    let islandSide: CGFloat = 220
-                    // centred in the part of the square the hardware island does not cover
-                    let islandFaceCentre = IslandGeometry.top + IslandGeometry.size.height + (islandSide - IslandGeometry.size.height) / 2
-                    let headerFaceCentre = topInset + 26
-                    let faceSize = 60 + 72 * facePhase
-                    let faceCentre = headerFaceCentre + (islandFaceCentre - headerFaceCentre) * facePhase
-                    ZStack(alignment: .top) {
-                        if islandVisible {
-                            IslandShell(expanded: islandExpanded, hasIsland: hasIsland, expandedSize: CGSize(width: islandSide, height: islandSide)) {
-                                Color.clear
-                            }
-                        }
-                        ChatAvatarView(chat: current, size: faceSize, state: MausState.forChat(current, in: session.state), animated: MausState.forChat(current, in: session.state).showsActivity || islandExpanded, comets: islandExpanded)
-                            .offset(y: faceCentre - faceSize / 2)
-                            .allowsHitTesting(false)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .ignoresSafeArea(edges: .top)
-                    .allowsHitTesting(false)
-                }
-                .task {
-                    // grow, hold a beat, shrink — the face rides along
-                    guard CompanionLayout.supportsIslandPresentation, !reduceMotion else { return }
-                    // The intro is a greeting, and a greeting repeated every
-                    // time you open a chat stops being one.
-                    let intro = IslandIntro(rawValue: islandIntro) ?? .oncePerBot
-                    switch intro {
-                    case .never:
-                        return
-                    case .oncePerBot:
-                        guard !IslandSeen.contains(islandIntroID, in: islandSeen) else { return }
-                        islandSeen = IslandSeen.adding(islandIntroID, to: islandSeen)
-                    case .always:
-                        break
-                    }
-                    islandVisible = true
-                    try? await Task.sleep(for: .milliseconds(40))
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { islandExpanded = true; facePhase = 1 }
-                    try? await Task.sleep(for: .milliseconds(1000))
-                    withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) { islandExpanded = false; facePhase = 0 }
-                    try? await Task.sleep(for: .milliseconds(600))
-                    islandVisible = false
-                }
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
@@ -425,6 +390,12 @@ struct ChatView: View {
         .onChange(of: dictation.isListening) { _, listening in
             if listening { composerFocused = false }
         }
+        .fullScreenCover(isPresented: $showingWalkie) {
+            WalkieView { selected in
+                showingWalkie = false
+                if selected.id == current.id { selectedThreadId = selected.threadId }
+            }.environmentObject(session)
+        }
         .sheet(isPresented: $showingTasks) {
             if current.supportsTasks {
                 TaskManagerView(chat: current) { selectedThreadId = $0 }
@@ -465,133 +436,16 @@ struct ChatView: View {
     /// Back on the left with the rest-of-app unread count, threads and the
     /// bot's computer on the right — a blurred strip to the top edge.
     private var headerBar: some View {
-        HStack(alignment: .top) {
-            Button { dismiss() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                    if unreadElsewhere > 0 {
-                        Text("\(unreadElsewhere)")
-                            .font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 7)
-                            .frame(minWidth: 22, minHeight: 22)
-                            .background(Capsule().fill(Color.secondary.opacity(0.22)))
-                    }
-                }
-                .foregroundStyle(Color.primary)
-                .padding(.leading, 12)
-                .padding(.trailing, unreadElsewhere > 0 ? 8 : 12)
-                .frame(height: 44)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .glassCapsule()
-            .accessibilityLabel("Back")
-
-            Spacer(minLength: 4)
-
-            HStack(spacing: 8) {
-                if current.supportsTasks {
-                    Button {
-                        showingTasks = true
-                    } label: {
-                        Label("Threads", systemImage: "square.stack")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Color.primary)
-                            .padding(.horizontal, 12)
-                            .frame(height: 44)
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .glassCapsule()
-                    .accessibilityIdentifier("header-threads")
-                }
-                if case .bot = current {
-                    GlassButton(systemImage: "display", size: 44, weight: .medium) {
-                        showingComputer = true
-                    }
-                    .accessibilityLabel("Watch \(current.name)'s computer")
-                } else {
-                    Color.clear.frame(width: 44, height: 44)
-                }
-            }
+        ChatHeaderBar(name: current.name, unreadElsewhere: unreadElsewhere,
+                      canOpenThreads: current.supportsTasks,
+                      // A bot on another Mac has no settings or computer the
+                      // server will open for this phone.
+                      canOpenSettings: current.isBot && !current.isRemoteBot,
+                      canWatchComputer: current.isBot && !current.isRemoteBot, onBack: { dismiss() },
+                      onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
+                      onComputer: { showingComputer = true }) {
+            ChatAvatarView(chat: current, size: 30, state: .idle, animated: false)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
-        .frame(maxWidth: CompanionLayout.headerWidth)
-        .frame(maxWidth: .infinity)
-        .background(
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .mask(
-                    VStack(spacing: 0) {
-                        Color.black
-                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 20)
-                    }
-                )
-                .padding(.bottom, -20)
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
-        )
-    }
-
-    /// The bot's face over its name pill, floating over the transcript
-    /// between the two buttons.
-    private var headerFace: some View {
-        VStack(spacing: 6) {
-            // Always here, following the island's face while that one is
-            // the source: when the island lets go, this one flies home.
-            // The face itself is drawn by the island layer above so there is
-            // still only one animated avatar. This transparent seat becomes
-            // its independent profile button once the opening transition has
-            // settled.
-            if case .bot = current {
-                Button { showingProfile = true } label: {
-                    Color.clear
-                        .frame(width: 60, height: 60)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .allowsHitTesting(!islandVisible)
-                .accessibilityHidden(islandVisible)
-                .accessibilityLabel("Open \(current.name) settings")
-                .accessibilityHint("Changes this bot's model, profile, notifications, and voice")
-            } else {
-                Color.clear.frame(width: 60, height: 60)
-            }
-            Button {
-                if current.supportsTasks { showingTasks = true }
-                else { showingPlus = true }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(current.name)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                    if current.supportsTasks || !current.subtitle.isEmpty {
-                        Text(current.supportsTasks ? current.threadTitle : current.subtitle)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.secondary)
-                            .lineLimit(1)
-                    }
-                    Image(systemName: current.supportsTasks ? "chevron.down" : "ellipsis")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Color.secondary)
-                }
-                .padding(.leading, 12)
-                .padding(.trailing, 10)
-                .frame(height: 32)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .glassCapsule()
-            .accessibilityLabel(current.supportsTasks ? "Switch thread: \(current.threadTitle)" : "Open \(current.name) thread options")
-            .accessibilityHint("Choose a conversation or start a new thread")
-            .accessibilityIdentifier("thread-switcher")
-        }
-        .padding(.top, -4)
     }
 
     // MARK: - The + sheet
@@ -599,66 +453,9 @@ struct ChatView: View {
     /// What the composer's + opens: a glass sheet of the things you can do
     /// here, each with a line saying what it does. Rises above the composer;
     /// tapping anywhere else, or the × the + became, puts it away.
-    @ViewBuilder
-    private var plusSheet: some View {
-        if showingPlus {
-            ZStack(alignment: .bottom) {
-                Color.black.opacity(0.35)
-                    .ignoresSafeArea()
-                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showingPlus = false } }
+    private var plusSheet: some View { ChatActionSheet(showing: $showingPlus, actions: plusActions) }
 
-                VStack(spacing: 0) {
-                    ForEach(plusActions) { action in
-                        Button {
-                            withAnimation(.snappy(duration: 0.28)) { showingPlus = false }
-                            action.run()
-                        } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: action.systemImage)
-                                    .font(.system(size: 20, weight: .medium))
-                                    .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    .frame(width: 44, height: 44)
-                                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(action.title)
-                                        .font(.system(size: 19, weight: .medium))
-                                        .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    Text(action.subtitle)
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(Color.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 18)
-                            .frame(height: 64)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(action.disabled)
-                        .opacity(action.disabled ? 0.45 : 1)
-                    }
-                }
-                .padding(.vertical, 10)
-                .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
-                .glassSheet(cornerRadius: 30)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 70)
-                .frame(maxWidth: .infinity)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            .transition(.opacity)
-        }
-    }
-
-    private struct PlusAction: Identifiable {
-        let id: String
-        let systemImage: String
-        let title: LocalizedStringKey
-        let subtitle: LocalizedStringKey
-        var destructive = false
-        var disabled = false
-        let run: () -> Void
-    }
+    private typealias PlusAction = ChatActionSheet.Action
 
     private var plusActions: [PlusAction] {
         let canAddAttachment = attachments.count < AttachmentPolicy.maximumItems
@@ -686,14 +483,16 @@ struct ChatView: View {
                 id: "tasks", systemImage: "square.stack", title: "Threads",
                 subtitle: "Switch, rename or remove one"
             ) { showingTasks = true })
-            out.append(PlusAction(
-                id: "settings", systemImage: "gearshape", title: "Bot settings",
-                subtitle: "Model, profile, voice and notifications"
-            ) { showingProfile = true })
-            out.append(PlusAction(
-                id: "computer", systemImage: "display", title: "Watch computer",
-                subtitle: "Live view of what \(bot.name) is doing"
-            ) { showingComputer = true })
+            if bot.remote == nil {
+                out.append(PlusAction(
+                    id: "settings", systemImage: "gearshape", title: "Bot settings",
+                    subtitle: "Model, profile, voice and notifications"
+                ) { showingProfile = true })
+                out.append(PlusAction(
+                    id: "computer", systemImage: "display", title: "Watch computer",
+                    subtitle: "Live view of what \(bot.name) is doing"
+                ) { showingComputer = true })
+            }
         }
         if case let .room(room) = current, room.dm != true {
             out.append(PlusAction(
@@ -706,6 +505,8 @@ struct ChatView: View {
                 subtitle: "Switch, rename or remove one"
             ) { showingTasks = true })
         }
+        // Export is refused for a bot on another Mac.
+        if !current.isRemoteBot {
         out.append(PlusAction(
             id: "share", systemImage: "doc.plaintext", title: "Share transcript",
             subtitle: "This thread as Markdown"
@@ -726,6 +527,7 @@ struct ChatView: View {
                 }
             }
         })
+        }
         if current.busy, case let .bot(bot) = current {
             out.append(PlusAction(
                 id: "stop", systemImage: "stop.fill", title: "Interrupt",
@@ -1131,7 +933,9 @@ struct ChatView: View {
                 CommandSkillHUDView(
                     text: $draft,
                     isVisible: $showCommandHUD,
-                    commands: current.isBot
+                    commands: current.isRemoteBot
+                        ? CommandSkillHUDView.defaultCommands.filter { $0.id != "computer" && $0.id != "steer" }
+                        : current.isBot
                         ? CommandSkillHUDView.defaultCommands
                         : CommandSkillHUDView.defaultCommands.filter {
                             $0.id != "computer" && (current.supportsTasks || $0.id != "tasks")
@@ -1174,128 +978,238 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            GlassGroup(spacing: 10) {
-                HStack(alignment: .bottom, spacing: 10) {
-                    Button {
-                        dictation.stop()
-                        composerFocused = false
-                        withAnimation(.snappy(duration: 0.28)) { showingPlus.toggle() }
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(showingPlus ? Color(uiColor: .systemBackground) : Color.primary)
-                            .rotationEffect(.degrees(showingPlus ? 45 : 0))
-                            .frame(width: 44, height: 44)
-                            .background(Circle().fill(showingPlus ? Color.primary : Color.clear))
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .glassCapsule()
-                    .disabled(preparingAttachments || sendingMessage)
-                    .accessibilityLabel(showingPlus ? "Close" : "More")
-
-                    HStack(alignment: .bottom, spacing: 6) {
-                        Button {
-                            dictation.stop()
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                                showCommandHUD.toggle()
-                            }
-                            Haptics.selection()
-                        } label: {
-                            Image(systemName: "command")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(showCommandHUD ? Color.primary : Color.secondary)
-                                .frame(width: 30, height: 32)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(preparingAttachments || sendingMessage)
-                        .accessibilityLabel("Slash commands")
-                        .padding(.leading, 6)
-                        .padding(.bottom, 6)
-
-                        TextField(
-                            sendingMessage ? "Sending…" : dictation.isListening ? "Listening…" : "Ask \(current.name)",
-                            text: $draft,
-                            axis: .vertical
-                        )
-                            .lineLimit(1...5)
-                            .font(.system(size: 17))
-                            .padding(.vertical, 11)
-                            .focused($composerFocused)
-                            .accessibilityIdentifier("message-input")
-                            // Partial transcripts rebuild from a frozen base;
-                            // prevent competing edits without dimming the text.
-                            .allowsHitTesting(
-                                !dictation.isListening && !dictation.isStarting
-                                    && !preparingAttachments && !sendingMessage
-                            )
-                            .onChange(of: draft) { _, value in
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    showCommandHUD = value.hasPrefix("/")
-                                }
-                            }
-                            // The software keyboard's Return inserts a newline,
-                            // like Messages; only the arrow button sends. A
-                            // hardware Return still sends, Shift-Return breaks
-                            // the line. onKeyPress never sees the software
-                            // keyboard, so this cannot turn its Return into a send.
-                            .onKeyPress(.return, phases: .down) { press in
-                                if press.modifiers.contains(.shift) { return .ignored }
-                                submit()
-                                return .handled
-                            }
-
-                        Button {
-                            composerFocused = false
-                            dictation.toggle(capturing: draft)
-                        } label: {
-                            Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
-                                .frame(width: 32, height: 32)
-                                .background(
-                                    Circle().fill(
-                                        dictation.isListening
-                                            ? Color.red.opacity(0.2)
-                                            : Color.secondary.opacity(0.12)
-                                    )
-                                )
-                                .symbolEffect(.pulse, isActive: dictation.isListening)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(preparingAttachments || sendingMessage)
-                        .padding(.bottom, 6)
-                        .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
-
-                        Button { submit() } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(canSend ? Color.white : Color.secondary)
-                                .frame(width: 32, height: 32)
-                                .background(
-                                    Circle().fill(canSend ? BubbleColor.mine : Color.secondary.opacity(0.18))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSend)
-                        .padding(.trailing, 6)
-                        .padding(.bottom, 6)
-                        .animation(.easeOut(duration: 0.15), value: canSend)
-                    }
-                    .frame(minHeight: 44)
-                    // A capsule at one line (44pt tall, 22pt corners) that
-                    // keeps those 22pt corners as the draft grows, the way
-                    // Messages does. A true Capsule would round to half the
-                    // height, and a five-line draft became a giant pill.
-                    .glassSheet(cornerRadius: 22)
+            ChatComposerBar(
+                draft: $draft, showingPlus: $showingPlus, dictation: dictation,
+                focus: $composerFocused, name: current.name,
+                busy: preparingAttachments || sendingMessage,
+                hasAttachments: !attachments.isEmpty, supportsVoiceChat: true,
+                onDraftChange: { value in
+                    withAnimation(.easeInOut(duration: 0.15)) { showCommandHUD = value.hasPrefix("/") }
+                },
+                onSend: { submit() },
+                onVoice: {
+                    UserDefaults.standard.set(current.id, forKey: "walkie.target")
+                    showingWalkie = true
                 }
-            }
+            )
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
         .frame(maxWidth: CompanionLayout.chatWidth)
         .frame(maxWidth: .infinity)
+    }
+}
+
+struct ChatHeaderBar<Avatar: View>: View {
+    let name: String
+    let unreadElsewhere: Int
+    let canOpenThreads: Bool
+    let canOpenSettings: Bool
+    let canWatchComputer: Bool
+    let onBack: () -> Void
+    let onThreads: () -> Void
+    let onSettings: () -> Void
+    let onComputer: () -> Void
+    @ViewBuilder let avatar: () -> Avatar
+
+    var body: some View {
+        HStack(alignment: .top) {
+            Button(action: onBack) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
+                    if unreadElsewhere > 0 {
+                        Text("\(unreadElsewhere)").font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22)
+                            .background(Capsule().fill(Color.secondary.opacity(0.22)))
+                    }
+                }
+                .foregroundStyle(Color.primary)
+                .padding(.leading, 12).padding(.trailing, unreadElsewhere > 0 ? 8 : 12)
+                .frame(height: 44).contentShape(Capsule())
+            }
+            .buttonStyle(.plain).glassCapsule().accessibilityLabel("Back")
+            Spacer(minLength: 4)
+            if !canOpenThreads && canOpenSettings {
+                Button(action: onSettings) {
+                    HStack(spacing: 8) {
+                        avatar()
+                        Text(name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                    }.padding(.horizontal, 12).frame(height: 44)
+                }
+                .buttonStyle(.plain).glassCapsule()
+                .accessibilityLabel("\(name), conversation details")
+                .accessibilityIdentifier("chat-options")
+            } else {
+            Menu {
+                if canOpenThreads { Button("Threads", systemImage: "square.stack", action: onThreads) }
+                if canOpenSettings { Button("Bot settings", systemImage: "gearshape", action: onSettings) }
+            } label: {
+                HStack(spacing: 8) {
+                    avatar()
+                    Text(name).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                }
+                .padding(.horizontal, 12).frame(height: 44)
+            }
+            .buttonStyle(.plain).glassCapsule()
+            .accessibilityLabel("\(name), threads and settings")
+            .accessibilityIdentifier("chat-options")
+            }
+            Spacer(minLength: 4)
+            if canWatchComputer {
+                GlassButton(systemImage: "display", size: 44, weight: .medium, action: onComputer)
+                    .accessibilityLabel("Watch \(name)'s computer")
+            } else {
+                Color.clear.frame(width: 44, height: 44)
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+        .frame(maxWidth: CompanionLayout.headerWidth).frame(maxWidth: .infinity)
+        .background(
+            Rectangle().fill(.ultraThinMaterial)
+                .mask(VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 20)
+                })
+                .padding(.bottom, -20).ignoresSafeArea(edges: .top).allowsHitTesting(false)
+        )
+    }
+}
+
+struct ChatActionSheet: View {
+    struct Action: Identifiable {
+        let id: String
+        let systemImage: String
+        let title: LocalizedStringKey
+        let subtitle: LocalizedStringKey
+        var destructive = false
+        var disabled = false
+        let run: () -> Void
+    }
+
+    @Binding var showing: Bool
+    let actions: [Action]
+
+    @ViewBuilder var body: some View {
+        if showing {
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(0.35).ignoresSafeArea()
+                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showing = false } }
+                VStack(spacing: 0) {
+                    ForEach(actions) { action in
+                        Button {
+                            withAnimation(.snappy(duration: 0.28)) { showing = false }
+                            action.run()
+                        } label: {
+                            HStack(spacing: 16) {
+                                Image(systemName: action.systemImage)
+                                    .font(.system(size: 20, weight: .medium))
+                                    .foregroundStyle(action.destructive ? Color.red : Color.primary)
+                                    .frame(width: 44, height: 44)
+                                    .background(Circle().fill(Color.primary.opacity(0.10)))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(action.title).font(.system(size: 19, weight: .medium))
+                                        .foregroundStyle(action.destructive ? Color.red : Color.primary)
+                                    Text(action.subtitle).font(.system(size: 13)).foregroundStyle(Color.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 18).frame(height: 64).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).disabled(action.disabled)
+                        .opacity(action.disabled ? 0.45 : 1)
+                    }
+                }
+                .padding(.vertical, 10)
+                .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
+                .glassSheet(cornerRadius: 30)
+                .padding(.horizontal, 12).padding(.bottom, 70)
+                .frame(maxWidth: .infinity)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }.transition(.opacity)
+        }
+    }
+}
+
+struct ChatComposerBar: View {
+    @Binding var draft: String
+    @Binding var showingPlus: Bool
+    @ObservedObject var dictation: SpeechDictation
+    let focus: FocusState<Bool>.Binding
+    let name: String
+    let busy: Bool
+    let hasAttachments: Bool
+    let supportsVoiceChat: Bool
+    let onDraftChange: (String) -> Void
+    let onSend: () -> Void
+    let onVoice: () -> Void
+
+    private var canSend: Bool {
+        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments) && !busy
+    }
+
+    var body: some View {
+        GlassGroup(spacing: 10) {
+            HStack(alignment: .bottom, spacing: 10) {
+                Button {
+                    dictation.stop()
+                    focus.wrappedValue = false
+                    withAnimation(.snappy(duration: 0.28)) { showingPlus.toggle() }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(showingPlus ? Color(uiColor: .systemBackground) : Color.primary)
+                        .rotationEffect(.degrees(showingPlus ? 45 : 0))
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(showingPlus ? Color.primary : Color.clear))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain).glassCapsule().disabled(busy)
+                .accessibilityLabel(showingPlus ? "Close" : "More")
+
+                HStack(alignment: .bottom, spacing: 6) {
+                    TextField(busy ? "Sending…" : dictation.isListening ? "Listening…" : "Message \(name)…", text: $draft, axis: .vertical)
+                        .lineLimit(1...5).font(.system(size: 17))
+                        .padding(.vertical, 11).padding(.leading, 16)
+                        .focused(focus)
+                        .accessibilityIdentifier("message-input")
+                        .allowsHitTesting(!dictation.isListening && !dictation.isStarting && !busy)
+                        .onChange(of: draft) { _, value in onDraftChange(value) }
+                        .onKeyPress(.return, phases: .down) { press in
+                            if press.modifiers.contains(.shift) { return .ignored }
+                            if canSend { onSend() }
+                            return .handled
+                        }
+                    Button {
+                        focus.wrappedValue = false
+                        dictation.toggle(capturing: draft)
+                    } label: {
+                        Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(dictation.isListening ? Color.red.opacity(0.2) : Color.secondary.opacity(0.12)))
+                            .symbolEffect(.pulse, isActive: dictation.isListening)
+                    }
+                    .buttonStyle(.plain).disabled(busy).padding(.bottom, 6)
+                    .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+                    Button {
+                        if canSend { onSend() }
+                        else if supportsVoiceChat { dictation.stop(); onVoice() }
+                    } label: {
+                        Image(systemName: canSend ? "arrow.up" : supportsVoiceChat ? "waveform" : "arrow.up")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(canSend ? Color.white : Color.secondary)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(canSend ? BubbleColor.mine : Color.secondary.opacity(0.18)))
+                    }
+                    .buttonStyle(.plain).disabled(busy || (!canSend && !supportsVoiceChat))
+                    .accessibilityLabel(canSend ? "Send message" : "Voice chat")
+                    .padding(.trailing, 6).padding(.bottom, 6)
+                }
+                .frame(minHeight: 44).glassSheet(cornerRadius: 22)
+            }
+        }
     }
 }
 
@@ -1435,15 +1349,21 @@ struct MessageRow: View {
                 CardView(chat: chat, message: message)
             }
         case .secret:
-            if let secret = message.secret {
+            if let secret = message.secret, let home = chat.remoteHomeName {
+                // Secrets are sealed for the Mac that owns the bot; this
+                // phone is paired to a different one.
+                RemoteOnlyNoteCard(title: secret.label ?? "API credential", home: home, pending: secret.isPending, tint: MausPalette.color(message.from?.color ?? chat.color))
+            } else if let secret = message.secret {
                 CredentialRequestCardView(chat: chat, message: message, secret: secret)
             } else if let text = message.text, !text.isEmpty {
                 TextBubble(message: message, chat: chat, tailed: endsRun, openLink: openLink)
             }
         case .activity:
-            ActivityChip(tool: message.tool, threadRef: message.threadRef, openThread: openThread)
+            ActivityChip(message: message, threadRef: message.threadRef, openThread: openThread)
         case .screen:
             ScreenShot(threadId: chat.threadId, message: message)
+        case .digest:
+            EmptyView()
         case .unknown:
             // A message kind from a newer computer. Almost everything the
             // harness sends carries `text`, so showing it is usually the
@@ -1577,7 +1497,7 @@ struct TextBubble: View {
             if mine { Spacer(minLength: 56) }
 
             VStack(alignment: .leading, spacing: 4) {
-                if let speaker, !mine {
+                if let speaker, !mine, !chat.isBot {
                     Text(speaker.name)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(MausPalette.color(speaker.color))
@@ -1606,7 +1526,7 @@ struct TextBubble: View {
                     }
                     if !shared.text.isEmpty {
                         Text(shared.text)
-                            .font(.system(size: 17))
+                            .font(.system(size: 18))
                             .foregroundStyle(BubbleColor.mineText)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1625,13 +1545,13 @@ struct TextBubble: View {
             .background(
                 Group {
                     if !customCard {
-                        SpeechBubble(tail: tailed ? (mine ? .trailing : .leading) : .none)
+                        RoundedRectangle(cornerRadius: 22)
                             .fill(mine ? BubbleColor.mine : BubbleColor.theirs)
                     }
                 }
             )
             // leave room for the tail below, so the next row does not sit on it
-            .padding(.bottom, !customCard && tailed ? SpeechBubble.tailDrop() : 0)
+            .padding(.bottom, 0)
 
             if !mine { Spacer(minLength: 44) }
         }
@@ -1640,36 +1560,50 @@ struct TextBubble: View {
 
 /// A tool the bot ran. Deliberately quiet — these are the bulk of a busy
 /// transcript and they are context, not content.
+/// One step on its own — a chip the fold left alone, or a failure, which
+/// never folds. Same row as the steps inside a run's sheet, so a reader
+/// learns one shape.
 struct ActivityChip: View {
-    let tool: ToolActivity?
+    let message: Message
     /// The thread this chip opened, when it opened one.
     var threadRef: ThreadRef? = nil
     var openThread: ((ThreadRef) -> Void)? = nil
 
     var body: some View {
-        if let tool {
-            let receipt = SkillExecutionReceiptView(
-                skillName: tool.name,
-                status: tool.ok.map { $0 ? "success" : "error" } ?? "running"
-            )
-            .padding(.leading, 2)
-
-            if let threadRef, let openThread {
-                // The receipt's own button has nothing to expand here, so the
-                // whole chip is the link to the thread it names.
-                Button {
-                    Haptics.selection()
-                    openThread(threadRef)
-                } label: {
-                    receipt.allowsHitTesting(false)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(tool.name)
-                .accessibilityHint("Opens the thread")
-            } else {
-                receipt
-            }
+        if message.tool != nil {
+            ToolStepRow(step: toolStep(from: message), threadRef: threadRef, openThread: openThread)
+                .padding(.leading, 2)
         }
+    }
+}
+
+/// Stands in for an owner-only flow (secret entry, connector setup) on a bot
+/// that lives on another linked Mac: the server refuses those from here, so
+/// the phone says where to finish it instead of offering a dead form.
+struct RemoteOnlyNoteCard: View {
+    let title: String
+    let home: String
+    let pending: Bool
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: pending ? "lock.shield" : "checkmark.shield")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "API credential" : title)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(pending ? "Finish this on \(home)." : "Handled on \(home).")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1899,7 +1833,7 @@ struct CredentialRequestCardView: View {
                     Label("Pair again to enter here", systemImage: "qrcode")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(tint)
-                    Text("This pairing predates secure phone entry. Scan a fresh QR from OpenMausBot, or finish this request on your computer.")
+                    Text("This pairing predates secure phone entry. Scan a fresh QR from BOS, or finish this request on your computer.")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2111,6 +2045,15 @@ struct CardView: View {
     /// choice above so the two cannot drift apart.
     private static func isRefusal(_ option: String) -> Bool { OptionCard.isRefusal(option) }
 
+    /// The card's options as buttons. A bot on another Mac refuses
+    /// always-allow, so an "Always allow" choice is dropped and only the
+    /// one-off answers remain.
+    private var visibleOptions: [String] {
+        guard let card = message.card else { return [] }
+        guard chat.isRemoteBot else { return card.options }
+        return card.options.filter { !card.shouldRememberPermission(for: $0) }
+    }
+
     private var tint: Color { MausPalette.color(chat.color) }
 
     var body: some View {
@@ -2177,7 +2120,7 @@ struct CardView: View {
 
                 if card.isPending {
                     HStack(spacing: 8) {
-                        ForEach(card.options, id: \.self) { option in
+                        ForEach(visibleOptions, id: \.self) { option in
                             Button {
                                 Haptics.selection()
                                 answering = true
@@ -2210,7 +2153,7 @@ struct CardView: View {
                     // wider than the computer would have. The same goes for
                     // the answer: it is one of the options the card offered,
                     // never a string invented here.
-                    if card.allowKey != nil, let allow = allowChoice, case let .bot(bot) = chat {
+                    if card.allowKey != nil, let allow = allowChoice, case let .bot(bot) = chat, bot.remote == nil {
                         Button("Always allow this tool") {
                             Haptics.selection()
                             answering = true
@@ -2331,8 +2274,7 @@ struct StreamingBubble: View {
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 11)
-            .background(SpeechBubble(tail: .leading).fill(BubbleColor.theirs))
-            .padding(.bottom, SpeechBubble.tailDrop())
+            .background(RoundedRectangle(cornerRadius: 22).fill(BubbleColor.theirs))
             Spacer(minLength: 44)
         }
         // No `.textSelection` on purpose: selecting text that is still growing

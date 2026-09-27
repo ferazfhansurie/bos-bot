@@ -113,7 +113,7 @@ final class QueuedSendClientTests: XCTestCase {
         } catch let error as APIError {
             XCTAssertEqual(
                 error.errorDescription,
-                "This computer is too old to take back a queued message. Update OpenMausBot on it."
+                "This computer is too old to take back a queued message. Update BOS on it."
             )
         } catch {
             XCTFail("expected an APIError, got \(error)")
@@ -134,5 +134,15 @@ final class QueuedSendClientTests: XCTestCase {
         let request = try XCTUnwrap(QueuedCancelStub.capturedRequest)
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.url?.path, "/api/bots/bot-1/messages")
+    }
+
+    func testDeleteSharedGroupSendsRevisionToScopedRoomRoute() async throws {
+        try await client.deleteSharedRoom(id: "room-1", revision: 3)
+        let request = try XCTUnwrap(QueuedCancelStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.path, "/api/multiplayer/rooms/room-1")
+        let body = try XCTUnwrap(QueuedCancelStub.capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Int])
+        XCTAssertEqual(json["revision"], 3)
     }
 }

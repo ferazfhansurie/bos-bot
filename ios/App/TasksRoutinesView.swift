@@ -250,7 +250,8 @@ private struct RoutineEditorView: View {
                     TextField("Routine name", text: $name)
                     Picker("Agent", selection: $botId) {
                         Text("Choose an agent").tag("")
-                        ForEach(session.state.bots.filter { $0.hidden != true }) { bot in Text(bot.name).tag(bot.id) }
+                        // Routines are refused for a bot on another Mac.
+                        ForEach(session.state.bots.filter { $0.hidden != true && $0.remote == nil }) { bot in Text(bot.name).tag(bot.id) }
                     }
                     TextField("What should the agent do?", text: $prompt, axis: .vertical).lineLimit(4...10)
                 }
@@ -277,7 +278,7 @@ private struct RoutineEditorView: View {
                     if runOn == .maus {
                         Text("Uses this agent's selected model and computer setting on the paired computer.")
                     } else if runAvailability?.cloudReady == true {
-                        Text("Runs the agent and its tools inside its Box virtual machine. The VM wakes automatically for each run; keep OpenMausBot running so its scheduler can launch the job.")
+                        Text("Runs the agent and its tools inside its Box virtual machine. The VM wakes automatically for each run; keep BOS running so its scheduler can launch the job.")
                     } else {
                         Text("This existing Cloud VM choice is preserved, but it cannot run until the paired computer has a configured Box API key and an available Box agent.")
                     }
@@ -355,7 +356,7 @@ private struct RoutineEditorView: View {
                         DatePicker("Starting", selection: $intervalAnchor)
                     } else {
                         Label(
-                            "This routine uses a schedule added by a newer OpenMausBot. Choose One time, Selected days, or Every X minutes before saving.",
+                            "This routine uses a schedule added by a newer BOS. Choose One time, Selected days, or Every X minutes before saving.",
                             systemImage: "exclamationmark.triangle"
                         )
                         .font(.footnote)
@@ -404,7 +405,7 @@ private struct RoutineEditorView: View {
                         )
                 }
             }
-            .onAppear { if botId.isEmpty { botId = session.state.bots.first(where: { $0.hidden != true })?.id ?? "" } }
+            .onAppear { if botId.isEmpty { botId = session.state.bots.first(where: { $0.hidden != true && $0.remote == nil })?.id ?? "" } }
             .onChange(of: kind) { _, nextKind in
                 guard nextKind == .interval, !intervalTimeoutDefaultApplied else { return }
                 timeoutMinutes = timeoutMinutes ?? 30

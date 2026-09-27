@@ -1,29 +1,27 @@
-OpenMausMobile is the private iPhone companion for OpenMausBot on your computer.
+BOS for iPhone is a companion to the BOS desktop app on your Mac. It gives you your bots, your shared rooms and your approvals when you are away from the computer.
 
-Keep your AI team moving when you step away from your desk:
+• Chat with your bots, and with shared rooms of people and their bots
+• Answer approvals and questions when a bot asks for them
+• Follow replies as they stream in
+• Check on tasks and routines
+• Search your conversation history
+• Dictate messages, or hold to talk and hear the reply read aloud
+• Send text, links, photos and files to a bot from the Share sheet in other apps
 
-• Answer approvals and questions
-• Securely provide requested API keys with Password AutoFill
-• Follow replies as they stream
-• Send messages to bots and rooms
-• Switch and manage task contexts
-• Search the complete local transcript history
-• Edit messages and move between conversation versions
-• Share transcripts as Markdown or JSON
-• Watch a bot’s computer when you need context
+YOUR MAC STAYS IN CHARGE
 
-YOUR COMPUTER STAYS IN CHARGE
+BOS on iPhone connects to BOS running on your own Mac. Your bots, conversations and files live on that Mac. The phone shows and acts on them; it does not keep its own copy of your history.
 
-OpenMausMobile connects to the companion service on your own computer. Your bot transcripts remain in OpenMausBot’s local storage; the optional hosted connection transports them to your computer without creating a developer-hosted transcript copy.
+PAIRING
 
-When a bot requests a supported API key, the phone can send it over Secure phone access or Tailscale, encrypted for the paired computer. Apple Passwords is built in, and other enabled Password AutoFill providers work too. The value is never added to chat or retained by OpenMausMobile.
+Scan the QR code shown in BOS on your Mac to pair. You can remove a paired phone from the Mac at any time.
 
-PAIR ONCE, REVOKE ANY TIME
+APPROVALS
 
-Pair with a short-lived code from OpenMausBot’s Companion panel. The computer stores only a hash of the phone credential and lets you revoke the device at any time.
+When a bot pauses for your approval or a question, you can answer it from your phone.
 
-USE IT AT HOME OR AWAY
+REQUIREMENTS
 
-Bonjour finds your computer on a trusted local network. For remote access, use Tailscale on both devices or enable the optional email-verified HTTPS connection in OpenMausBot’s desktop Companion settings.
+Requires BOS for macOS, available at bos.aihlete.com. The phone connects over your local network, or from elsewhere over Tailscale (optional, not affiliated with BOS). Your Mac must be awake with BOS running. Spoken replies use your own ElevenLabs API key, stored in the phone's Keychain.
 
-Requires OpenMausBot running on a Mac, Windows, or Linux computer. Tailscale is optional and is not affiliated with OpenMausBot.
+BOS is based on the open-source OpenMausBot project.

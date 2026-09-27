@@ -9,6 +9,22 @@ const root = mkdtempSync(join(tmpdir(), "omb-shared-rooms-"));
 afterEach(() => rmSync(root, { force: true, recursive: true }));
 
 describe("shared room repository", () => {
+  it("exposes revision 1 for legacy rooms so clients can delete them", () => {
+    const file = join(root, "legacy", "rooms.json");
+    const owner = "firaz-home:person:owner";
+    const repo = new SharedRoomRepository(file, "firaz-home");
+    const room = repo.create("Legacy group", [owner, "putri-home:person:owner"]);
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    delete saved.rooms[0].room.revision;
+    writeFileSync(file, JSON.stringify(saved));
+    const before = readFileSync(file, "utf8");
+    const loaded = new SharedRoomRepository(file, "firaz-home");
+    expect(loaded.summariesFor(owner)[0]?.revision).toBe(1);
+    expect(loaded.roomFor(room.id, owner)?.revision).toBe(1);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    loaded.deleteRoom(room.id, owner, loaded.summariesFor(owner)[0]!.revision!);
+    expect(new SharedRoomRepository(file, "firaz-home").listFor(owner)).toEqual([]);
+  });
   it("quarantines a bad saved entry while retaining valid room history", () => {
     const file = join(root, "quarantine", "rooms.json");
     const firaz = { homeId: "firaz-home", kind: "person" as const, localId: "owner" };

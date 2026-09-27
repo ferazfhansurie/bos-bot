@@ -40,6 +40,13 @@ export interface SharedTextMessage {
   sendId: string;
   /** For a bot answer, the request that caused the turn. */
   responseTo?: string;
+  replyTo?: string;
+  editedAt?: number;
+  deletedAt?: number;
+  changeSequence?: number;
+  humanMentions?: string[];
+  /** Canonical bot identities authorized for this human request, never members. */
+  botTargets?: string[];
   attachments?: SharedAttachment[];
   kind?: "text" | "activity";
   tool?: { name: string; ok?: boolean; spoken?: string };
@@ -52,12 +59,14 @@ export interface SharedRoom {
   homeId: string;
   name: string;
   memberIds: string[];
+  kind?: "direct" | "group";
   createdAt: number;
   createdBy?: string;
   revision?: number;
+  messageVersion?: number;
 }
 
-export type SharedSendInput = Pick<SharedTextMessage, "actor" | "text" | "sendId" | "responseTo" | "attachments" | "kind" | "tool">;
+export type SharedSendInput = Pick<SharedTextMessage, "actor" | "text" | "sendId" | "responseTo" | "replyTo" | "humanMentions" | "botTargets" | "attachments" | "kind" | "tool">;
 
 export function validateSharedSend(input: unknown): SharedSendInput {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid shared send");
@@ -70,6 +79,12 @@ export function validateSharedSend(input: unknown): SharedSendInput {
   const parsed = parseContactId(`${key.homeId}:${key.kind}:${key.localId}`);
   if (!parsed) throw new Error("invalid actor");
   if (typeof value.text !== "string" || value.text.length > 20_000) throw new Error("invalid message text");
+  if (value.replyTo !== undefined && (typeof value.replyTo !== "string" || !ID.test(value.replyTo))) throw new Error("invalid reply reference");
+  const humanMentions = value.humanMentions;
+  if (humanMentions !== undefined && (!Array.isArray(humanMentions) || humanMentions.length > 50 || humanMentions.some(id => parseContactId(id)?.kind !== "person"))) throw new Error("invalid human mentions");
+  const targets = value.botTargets;
+  if (targets !== undefined && (parsed.kind !== "person" || !Array.isArray(targets) || targets.length > 10 ||
+      new Set(targets).size !== targets.length || targets.some(id => parseContactId(id)?.kind !== "bot"))) throw new Error("invalid bot targets");
   const attachments = value.attachments;
   if (attachments !== undefined && (!Array.isArray(attachments) || attachments.length > 4 || attachments.some(item =>
       !item || typeof item !== "object" || Array.isArray(item) || !ID.test(item.id) ||
@@ -91,6 +106,9 @@ export function validateSharedSend(input: unknown): SharedSendInput {
   if (typeof value.sendId !== "string" || !ID.test(value.sendId)) throw new Error("invalid send id");
   if (value.responseTo !== undefined && (typeof value.responseTo !== "string" || !ID.test(value.responseTo))) throw new Error("invalid response id");
   return { actor: parsed, text: value.text.trim(), sendId: value.sendId,
+    ...(value.replyTo ? { replyTo: value.replyTo as string } : {}),
+    ...(humanMentions ? { humanMentions: humanMentions as string[] } : {}),
+    ...(targets ? { botTargets: targets as string[] } : {}),
     ...(kind === "activity" ? { kind, tool } : {}),
     ...(attachments ? { attachments: attachments as SharedAttachment[] } : {}),
     ...(value.responseTo ? { responseTo: value.responseTo as string } : {}) };
@@ -120,18 +138,26 @@ export class SharedRoomLog {
   append(raw: unknown, id: string, at: number): { message: SharedTextMessage; created: boolean } {
     const input = validateSharedSend(raw);
     const actorId = contactId(input.actor);
-    if (!this.room.memberIds.includes(actorId)) throw new Error("actor is not in this room");
+    const request = input.responseTo ? this.messages.find(message => message.id === input.responseTo) : undefined;
+    const invoked = input.actor.kind === "bot" && request?.actor.kind === "person" &&
+      request.botTargets?.includes(actorId) && this.room.memberIds.includes(contactId(request.actor));
+    if (!this.room.memberIds.includes(actorId) && !invoked) throw new Error("actor is not in this room");
     const previous = this.messages.find(message => contactId(message.actor) === actorId && message.sendId === input.sendId);
     if (previous) {
-      if (previous.text !== input.text || previous.responseTo !== input.responseTo || previous.kind !== input.kind ||
+      if (previous.text !== input.text || previous.responseTo !== input.responseTo || previous.replyTo !== input.replyTo || previous.kind !== input.kind ||
+          JSON.stringify(previous.botTargets ?? []) !== JSON.stringify(input.botTargets ?? []) ||
           JSON.stringify(previous.tool ?? null) !== JSON.stringify(input.tool ?? null) ||
           JSON.stringify(previous.attachments ?? []) !== JSON.stringify(input.attachments ?? [])) throw new Error("send id conflict");
       return { message: previous, created: false };
     }
+    if (input.replyTo && !this.messages.some(message => message.id === input.replyTo && !message.deletedAt)) throw new Error("reply message unavailable");
     if (!ID.test(id) || !Number.isSafeInteger(at) || at < 0) throw new Error("invalid message identity");
     const message: SharedTextMessage = {
       id, roomId: this.room.id, sequence: this.messages.length + 1,
       actor: input.actor, text: input.text, at, sendId: input.sendId,
+      ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+      ...(input.humanMentions ? { humanMentions: input.humanMentions } : {}),
+      ...(input.botTargets ? { botTargets: input.botTargets } : {}),
       ...(input.kind ? { kind: input.kind } : {}),
       ...(input.tool ? { tool: input.tool } : {}),
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),

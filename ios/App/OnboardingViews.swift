@@ -128,13 +128,13 @@ struct UnpairedHomeView: View {
                     VStack(spacing: 8) {
                         Text("Connect when you're ready")
                             .font(.title2.bold())
-                        Text("Pair this device with OpenMausBot to see your chats and respond to your bots.")
+                        Text("Pair this device with BOS to see your chats and respond to your bots.")
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Text("On your computer, open OpenMausBot → Settings → Phone.")
+                    Text("On your computer, open BOS → Settings → Phone.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -156,7 +156,7 @@ struct UnpairedHomeView: View {
                 .padding(.vertical, 14)
                 .background(.ultraThinMaterial)
             }
-            .navigationTitle("OpenMausBot")
+            .navigationTitle("BOS")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
@@ -194,7 +194,7 @@ struct NotificationOnboardingView: View {
                 VStack(spacing: 10) {
                     Text("Stay in the loop")
                         .font(.largeTitle.bold())
-                    Text("Get alerts while OpenMausBot is open or was recently in the background. Alerts stop after iOS fully suspends or closes the app.")
+                    Text("Get alerts while BOS is open or was recently in the background. Alerts stop after iOS fully suspends or closes the app.")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

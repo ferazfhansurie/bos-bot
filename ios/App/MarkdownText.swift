@@ -48,7 +48,7 @@ struct MarkdownText: View {
         switch block {
         case let .paragraph(text):
             inline(text, tail: tail)
-                .font(.system(size: 17))
+                .font(.system(size: 18))
                 .fixedSize(horizontal: false, vertical: true)
 
         case let .heading(level, text):
@@ -71,7 +71,7 @@ struct MarkdownText: View {
                     .fill(Color.secondary.opacity(0.4))
                     .frame(width: 3)
                 inline(text, tail: tail)
-                    .font(.system(size: 17))
+                    .font(.system(size: 18))
                     .foregroundStyle(Color.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -107,10 +107,10 @@ struct MarkdownText: View {
     private func marker(_ symbol: String, indent: Int, text: String, tail: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(symbol)
-                .font(.system(size: 17))
+                .font(.system(size: 18))
                 .foregroundStyle(Color.secondary)
                 .frame(minWidth: 16, alignment: .trailing)
-            inline(text, tail: tail).font(.system(size: 17))
+            inline(text, tail: tail).font(.system(size: 18))
         }
         .padding(.leading, CGFloat(indent) * 14)
         .fixedSize(horizontal: false, vertical: true)

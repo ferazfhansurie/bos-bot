@@ -1,5 +1,8 @@
 import Foundation
 import UserNotifications
+import UIKit
+
+extension Notification.Name { static let sharedRoomPushTapped = Notification.Name("bos.sharedRoomPushTapped") }
 import CompanionCore
 
 /// The on-device notification surface. Delivery comes from live or replayed
@@ -11,6 +14,8 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     /// Set by `Session`; kept as an id-only value so the notification layer
     /// does not know about SwiftUI navigation or mutable fleet state.
     var responseHandler: ((NotificationTarget) -> Void)?
+    var pushTokenHandler: ((String) -> Void)?
+    var sharedRoomHandler: ((String) -> Void)?
 
     private override init() {
         super.init()
@@ -22,7 +27,9 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     }
 
     func requestAuthorization() async -> Bool {
-        (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) == true
+        let allowed = (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) == true
+        if allowed { await MainActor.run { UIApplication.shared.registerForRemoteNotifications() } }
+        return allowed
     }
 
     func deliver(_ notification: NotificationFrame, sequence: Int?) {
@@ -66,7 +73,8 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
             guard let key = pair.key as? String, let value = pair.value as? String else { return }
             result[key] = value
         }
-        if let target = NotificationTarget(payload: strings) { responseHandler?(target) }
+        if let roomID = strings["roomId"] { sharedRoomHandler?(roomID) }
+        else if let target = NotificationTarget(payload: strings) { responseHandler?(target) }
         completionHandler()
     }
 }

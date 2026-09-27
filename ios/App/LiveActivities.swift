@@ -53,7 +53,7 @@ final class LiveActivityCoordinator {
                 face: face.rawValue,
                 kind: update.kind == .needsYou ? "needsYou" : "working",
                 headline: update.kind == .needsYou ? "\(bot.name) needs you" : "\(bot.name) is working",
-                line: update.line.isEmpty ? (update.card?.title ?? "") : update.line,
+                line: Self.lockScreenLine(update.line.isEmpty ? (update.card?.title ?? "") : update.line),
                 threadId: update.chat.threadId,
                 card: update.card,
                 since: since[bot.id]?.at ?? Date()
@@ -70,13 +70,16 @@ final class LiveActivityCoordinator {
                     sound: .default
                 )
                 : nil
-            if let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.id }) {
+            if let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.id && $0.attributes.mascotBody == bot.mascotBody }) {
                 let newAsk = update.kind == .needsYou && (
                     lastSent[bot.id]?.threadId != content.threadId || lastSent[bot.id]?.requestId != content.requestId
                 )
                 Task { await activity.update(.init(state: content, staleDate: nil), alertConfiguration: newAsk ? alert : nil) }
             } else {
-                let attributes = BotActivityAttributes(botId: bot.id, threadId: bot.threadId, name: bot.name, color: bot.color)
+                for old in Activity<BotActivityAttributes>.activities where old.attributes.botId == bot.id {
+                    Task { await old.end(nil, dismissalPolicy: .immediate) }
+                }
+                let attributes = BotActivityAttributes(botId: bot.id, threadId: bot.threadId, name: bot.name, color: bot.color, mascotBody: bot.mascotBody)
                 _ = try? Activity.request(attributes: attributes, content: .init(state: content, staleDate: nil), pushType: nil)
                 // a fresh activity cannot alert on request; one immediate alerting update does it
                 if let alert, let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.id }) {
@@ -91,5 +94,13 @@ final class LiveActivityCoordinator {
             since.removeValue(forKey: activity.attributes.botId)
             Task { await activity.end(nil, dismissalPolicy: .immediate) }
         }
+    }
+
+    private static func lockScreenLine(_ line: String) -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("/bin/") || trimmed.hasPrefix("/usr/bin/") || trimmed.hasPrefix("python3 ") || trimmed.hasPrefix("zsh ") {
+            return "working on your request"
+        }
+        return trimmed
     }
 }

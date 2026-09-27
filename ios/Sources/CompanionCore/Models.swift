@@ -119,6 +119,18 @@ public struct ToolActivity: Codable, Hashable, Sendable {
     public var spoken: String?
     /// Marks an error fixed by installing something, not by retrying.
     public var setup: Bool?
+    /// The one line the provider gave about the call — a path, a command,
+    /// a query. What the step row shows beside its verb.
+    public var summary: String?
+    /// The arguments the tool was called with, bounded by the harness.
+    public var input: String?
+    /// The result, once the call lands. Present only when the harness
+    /// captured it.
+    public var output: String?
+    /// The provider's item id. Its presence is what separates a real tool
+    /// call from one of the harness's own receipts ("Messaged @Helper"),
+    /// which are sentences rather than steps.
+    public var itemId: String?
 }
 
 /// The thread an activity chip opened — "Opened thread #Title on Scout" —
@@ -169,7 +181,7 @@ public struct CommChip: Codable, Hashable, Sendable {
 
 public struct Message: Codable, Hashable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable {
-        case text, options, activity, screen, secret
+        case text, options, activity, screen, secret, digest
         /// A kind this build has never heard of.
         ///
         /// Not decorative. `kind` is not optional, so without this a single
@@ -421,6 +433,13 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var activeLeafId: String?
     /// Paged responses only: there is more transcript above what you got.
     public var hasMore: Bool?
+    /// Present only for a bot that lives on another linked Mac and is proxied
+    /// through this home ("remote bot"). Local bots have no `remote` key.
+    public var remote: BotRemote?
+
+    /// A bot on another Mac: chat, threads and replies are proxied, but its
+    /// settings, computer, secrets and similar owner-only flows are refused.
+    public var isRemote: Bool { remote != nil }
 
     /// Routine results are ordinary tasks; only their per-run executions are hidden.
     public var visibleTasks: [BotTask] {
@@ -457,6 +476,19 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
             view.hasMore = nil
         }
         return view
+    }
+}
+
+/// Where a remote bot actually lives. `ownerName` can be null on the wire.
+public struct BotRemote: Codable, Hashable, Sendable {
+    public var homeId: String
+    public var homeName: String
+    public var ownerName: String?
+
+    public init(homeId: String, homeName: String, ownerName: String? = nil) {
+        self.homeId = homeId
+        self.homeName = homeName
+        self.ownerName = ownerName
     }
 }
 
@@ -1303,4 +1335,22 @@ public struct MessageImageAttachment: Codable, Hashable, Sendable {
     public var kind: String
     public var path: String?
     public var mime: String?
+}
+
+public struct ProviderUsageResponse: Decodable, Sendable {
+    public let accounts: [ProviderUsageAccount]
+}
+
+public struct ProviderUsageAccount: Decodable, Sendable, Identifiable {
+    public let provider: String
+    public let account: String
+    public let fiveHour: ProviderUsageWindow?
+    public let sevenDay: ProviderUsageWindow
+    public let status: String
+    public var id: String { "\(provider):\(account)" }
+}
+
+public struct ProviderUsageWindow: Decodable, Sendable {
+    public let usedPercent: Double?
+    public let resetsAt: Double?
 }

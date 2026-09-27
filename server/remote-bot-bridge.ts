@@ -642,14 +642,21 @@ export class RemoteBotBridge {
     return refused();
   }
 
-  private async send(home: Home, botId: string, input: Record<string, any>, room = false): Promise<BridgeResponse> {
+  private async send(home: Home, botId: string, input: Record<string, any>, room = false, shouldContinue?: () => boolean): Promise<BridgeResponse> {
     const text = typeof input.text === "string" ? input.text : "";
     if (!text.trim()) return failure(400, "text required");
+    const check = () => { if (shouldContinue && !shouldContinue()) throw new BridgeError(409, "shared request access changed"); };
+    check();
+    await this.requireSharedReceiver(home);
+    if (this.options.replaceLinkToken && !home.peerMigrated) await this.refreshSnapshot(home);
+    check();
     // The first real message is what opens a thread on the other Mac.
     const threadId = (await this.threadFor(home, botId, input.threadId, true, room))!;
     const sendId = typeof input.sendId === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(input.sendId) ? input.sendId : undefined;
     const run = async (): Promise<BridgeResponse> => {
-      const rewritten = await this.rewriteAttachments(home, threadId, text);
+      check();
+      const rewritten = await this.rewriteAttachments(home, threadId, text, check);
+      check();
       const result = await this.call(home, "POST", `/api/bots/${botId}/messages`, {
         text: rewritten, threadId,
         ...(sendId ? { sendId } : {}),
@@ -689,19 +696,28 @@ export class RemoteBotBridge {
     onThread: (threadId: string) => void;
     onActivity: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void;
     deadlineMs: number;
+    shouldContinue?: () => boolean;
   }): Promise<{ reply: string }> {
     const home = this.homes.get(input.homeId);
     if (!home || !home.state.bots[input.remoteBotId]) throw new BridgeError(404, "that bot is no longer shared");
+    if (input.shouldContinue && !input.shouldContinue()) throw new BridgeError(409, "shared request access changed");
+    await this.requireSharedReceiver(home);
+    if (this.options.replaceLinkToken && !home.peerMigrated) await this.refreshSnapshot(home);
+    if (input.shouldContinue && !input.shouldContinue()) throw new BridgeError(409, "shared request access changed");
     let threadId = input.threadId && home.state.threads[input.threadId]?.botId === input.remoteBotId ? input.threadId : undefined;
     if (!threadId) {
       threadId = await this.createThread(home, input.remoteBotId, input.title.slice(0, 200), true);
       this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, input.remoteBotId) });
       input.onThread(threadId);
     }
-    const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true);
+    const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true, input.shouldContinue);
     if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
     const delivered = new Map<string, string>();
     while (Date.now() < input.deadlineMs) {
+      if (input.shouldContinue && !input.shouldContinue()) {
+        await this.call(home, "POST", `/api/bots/${input.remoteBotId}/interrupt`, { threadId }).catch(() => null);
+        throw new BridgeError(409, "shared request access changed");
+      }
       let before: string | undefined;
       let messages: Array<Record<string, any>> = [];
       // The latest page can lose the initiating message during a long turn.
@@ -750,7 +766,7 @@ export class RemoteBotBridge {
   /** Re-upload every composer attachment to B and point the tag at B's copy.
    * A's upload id is reused, so B stores the same basename: a retry is
    * idempotent and the transcript image resolves to this Mac's copy too. */
-  private async rewriteAttachments(home: Home, threadId: string, text: string): Promise<string> {
+  private async rewriteAttachments(home: Home, threadId: string, text: string, check: () => void = () => {}): Promise<string> {
     const tags = [...text.matchAll(TAG)];
     if (!tags.length) return text;
     const root = resolve(this.options.attachmentsDir);
@@ -763,14 +779,15 @@ export class RemoteBotBridge {
       }
       if (replacements.has(tag[0])) continue;
       const displayName = tag[3] === undefined ? name : decodeAttribute(tag[3]);
-      const remotePath = await this.upload(home, threadId, path, displayName);
+      check();
+      const remotePath = await this.upload(home, threadId, path, displayName, check);
       const nameAttribute = tag[3] === undefined ? "" : ` name="${tag[3]}"`;
       replacements.set(tag[0], `<${tag[1]} path="${escapeAttribute(remotePath)}"${nameAttribute} />`);
     }
     return text.replace(TAG, (whole) => replacements.get(whole) ?? whole);
   }
 
-  private async upload(home: Home, threadId: string, path: string, displayName: string): Promise<string> {
+  private async upload(home: Home, threadId: string, path: string, displayName: string, check: () => void = () => {}): Promise<string> {
     let info;
     try { info = await stat(path); } catch { throw new BridgeError(400, "that attachment is no longer on this Mac"); }
     if (!info.isFile()) throw new BridgeError(400, "that attachment is no longer on this Mac");
@@ -780,6 +797,7 @@ export class RemoteBotBridge {
     const extension = extname(file).toLowerCase();
     const stem = file.slice(0, -extension.length);
     const uploadId = UUID.test(stem) ? `uploadId=${stem.toLowerCase()}` : "";
+    check();
     const imageMime = IMAGE_MIMES[extension];
     let result;
     if (imageMime) {
@@ -945,8 +963,17 @@ export class RemoteBotBridge {
 
   // ── snapshot and threads ──────────────────────────────────────────────
 
+  private async requireSharedReceiver(home: Home): Promise<void> {
+    const identity = await this.call(home, "GET", "/.well-known/openmausbot/environment");
+    if (identity.status !== 200 || identity.body?.sharedConversationIsolation !== 1) {
+      const message = `Update BOS on ${home.link.ownerName ?? home.link.name}'s Mac to use shared bot conversations.`;
+      throw Object.assign(new BridgeError(426, message), { sharedExplanation: message });
+    }
+  }
+
   private async refreshSnapshot(home: Home): Promise<void> {
     if (this.options.replaceLinkToken && !home.peerMigrated) {
+      await this.requireSharedReceiver(home);
       const threads = Object.entries(home.state.threads).map(([threadId, entry]) => ({ botId: entry.botId, threadId }));
       const migrated = await this.call(home, "POST", "/api/multiplayer/peer-migrate", { threads });
       if (migrated.status !== 200 || migrated.body?.scoped !== true) {

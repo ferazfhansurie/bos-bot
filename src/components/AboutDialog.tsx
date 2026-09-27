@@ -8,7 +8,6 @@ import {
   APP_REPOSITORY,
   DOCS_URL,
   LICENSE_URL,
-  RELEASES_URL,
   appVersion,
   openExternalLink,
   platformLabel,
@@ -54,12 +53,11 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
           {platform ? ` · ${platform}` : ""}
         </p>
         <p className="mt-3 text-[13px] leading-relaxed text-ink-secondary">
-          An open-source desktop home for your agents. Apache 2.0 licensed.
+          A shared place for people and their bots. Built on OpenMausBot, under the Apache 2.0 license.
         </p>
         <div className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[13px]">
-          <AboutLink href={APP_REPOSITORY} label="GitHub" />
-          <AboutLink href={DOCS_URL} label="Docs" />
-          <AboutLink href={RELEASES_URL} label="Releases" />
+          <AboutLink href={APP_REPOSITORY} label="Upstream source" />
+          <AboutLink href={DOCS_URL} label="Technical docs" />
           <AboutLink href={LICENSE_URL} label="License" />
         </div>
         <button

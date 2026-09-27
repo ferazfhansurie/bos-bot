@@ -17,6 +17,8 @@ let package = Package(
         .library(name: "CompanionCore", targets: ["CompanionCore"])
     ],
     targets: [
+        .target(name: "PairingPersistence", dependencies: ["CompanionCore"], path: "AppShared", sources: ["OpenMausSharedConnectionStore.swift", "OpenMausSharedConfiguration.swift", "OpenMausSharedKeychain.swift"]),
+        .testTarget(name: "PairingPersistenceTests", dependencies: ["PairingPersistence", "CompanionCore"]),
         .target(name: "CompanionCore"),
         .testTarget(
             name: "CompanionCoreTests",

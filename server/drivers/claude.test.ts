@@ -363,6 +363,65 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await removeTempDir(scratch);
   });
 
+  it("enforces shared conversation-only access despite full mode, tools, integrations and a private cursor", async () => {
+    const dump = join(scratch, "shared.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280", OMB_CLAUDE_INHERIT_USER_CONFIG: "1" },
+      { permissionMode: "bypassPermissions", tools: ["Bash", "Read"] });
+    writeFileSync(join(scratch, ".mcp.json"), JSON.stringify({ mcpServers: { private: { command: "do-not-run" } } }));
+    const imagePath = join(scratch, "attached.png");
+    const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    writeFileSync(imagePath, image);
+    await instance.adapter.sendTurn({
+      threadId: "shared-policy", text: "latest", recoveryText: "shared history and latest",
+      resumeCursor: "private-native-session", cwd: scratch, approvalMode: "full", mcpFromUserConfig: true,
+      sharedContext: { mode: "conversation-only" }, images: [{ path: imagePath, mime: "image/png", bytes: image.length }],
+      integrations: { custom: { private: { command: "do-not-run", args: [], env: {} } }, hooks: { url: "http://localhost:1", token: "private-hook" } },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const value = (flag: string) => seen.argv[seen.argv.indexOf(flag) + 1];
+    expect(value("--tools")).toBe("");
+    expect(value("--setting-sources")).toBe("");
+    expect(value("--permission-mode")).toBe("default");
+    for (const flag of ["--restricted", "--safe-mode", "--strict-mcp-config", "--disable-slash-commands", "--no-chrome", "--no-session-persistence"]) expect(seen.argv).toContain(flag);
+    expect(seen.argv).not.toContain("--resume");
+    expect(seen.argv).not.toContain("--permission-prompt-tool");
+    expect(seen.mcpConfig).toEqual({ mcpServers: {} });
+    expect(seen.env.OMB_HOOK_TOKEN_FILE).toBeUndefined();
+    expect(JSON.stringify(seen.prompt)).toContain("shared history and latest");
+    expect(JSON.stringify(seen.prompt)).toContain(image.toString("base64"));
+    expect(JSON.stringify(seen)).not.toContain("private-native-session");
+  });
+
+  it.each(["2.1.279", "unidentified"])("refuses shared turns on unverified Claude version %s before launching a turn", async (version) => {
+    const dump = join(scratch, "not-launched.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: version });
+    await expect(instance.adapter.sendTurn({ threadId: "shared-old", text: "private files?", sharedContext: { mode: "conversation-only" } }))
+      .rejects.toThrow("Claude Code 2.1.280");
+    expect(existsSync(dump)).toBe(false);
+    expect(recorder.events).toEqual([]);
+  });
+
+  it("rebuilds shared turns instead of reusing a private live process", async () => {
+    const dump = join(scratch, "fresh-shared.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280" });
+    const first = await instance.adapter.sendTurn({ threadId: "boundary", text: "private conversation" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
+    const privatePid = JSON.parse(readFileSync(dump, "utf8")).pid;
+    const next = await instance.adapter.sendTurn({ threadId: "boundary", text: "shared conversation", sharedContext: { mode: "conversation-only" } });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === next.turnId);
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.pid).not.toBe(privatePid);
+    expect(JSON.stringify(seen.prompt)).not.toContain("private conversation");
+    const third = await instance.adapter.sendTurn({ threadId: "boundary", text: "private again" });
+    await recorder.until((e) => e.type === "turn.completed" && e.turnId === third.turnId);
+    const normal = JSON.parse(readFileSync(dump, "utf8"));
+    expect(normal.pid).not.toBe(seen.pid);
+    expect(normal.argv).not.toContain("--safe-mode");
+    expect(normal.argv).not.toContain("--no-session-persistence");
+    expect(normal.mcpConfig.mcpServers.ogb).toBeDefined();
+  });
+
   it("normalizes a full turn into the canonical event sequence", async () => {
     await create();
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-happy", text: "hi", model: "claude-sonnet-5" });
@@ -1711,6 +1770,11 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-steer", text: "first" });
     await recorder.until((e) => e.type === "item.completed" && e.itemType === "tool");
     expect(instance.adapter.capabilities.queueing).toBe(true);
+    expect(instance.adapter.capabilities.nativeImageSteer).toBe(false);
+    await expect(instance.adapter.steer!("t-steer", "image must wait", {
+      images: [{ path: join(scratch, "image.png"), mime: "image/png", bytes: 8 }],
+    })).resolves.toBe("refused");
+    expect(existsSync(received)).toBe(false);
     await expect(instance.adapter.steer!("t-steer", "and also this")).resolves.toBe("steered");
     // Hold the turn until the child has consumed the steer; an 800ms timer
     // can finish before a loaded CI runner resumes this test's continuation.

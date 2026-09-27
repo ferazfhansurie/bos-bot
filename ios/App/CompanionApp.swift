@@ -9,17 +9,35 @@ import SwiftUI
 import CompanionCore
 import UserNotifications
 
+final class PushAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        UserDefaults.standard.set(token, forKey: "bos.apnsToken")
+        Task { @MainActor in NotificationCoordinator.shared.pushTokenHandler?(token) }
+    }
+}
+
 @main
 struct CompanionApp: App {
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @StateObject private var session = Session()
     @Environment(\.scenePhase) private var scenePhase
     @State private var liveActivities = LiveActivityCoordinator()
     @AppStorage(PrefKey.language) private var language = AppLanguage.system.rawValue
+    @AppStorage(PrefKey.appearance) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(PrefKey.theme) private var theme = AppTheme.midnight.rawValue
+    @AppStorage(PrefKey.themeApplied) private var themeApplied = AppTheme.midnight.rawValue
+
+    init() {
+        ThemeSurfaces.install()
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
+                .tint((AppTheme(rawValue: theme) ?? .midnight).accent)
                 // One modifier is the whole language seam. SwiftUI resolves a
                 // `LocalizedStringKey` against the environment's locale, so
                 // every `Text("…")`, `Button("…")`, `Section("…")` and
@@ -37,7 +55,10 @@ struct CompanionApp: App {
                 // view state below, which is the right trade for something a
                 // person changes deliberately and almost never. `session` lives
                 // on the App, not here, so the connection survives.
-                .id(language)
+                // A theme lives in UIKit's background colours, which views
+                // resolve once; the appearance screen commits a new one on
+                // the way out, and re-identifying here repaints everything.
+                .id("\(language)|\(themeApplied)")
                 .onAppear {
                     OpenMausSharedInbox.removeDirectories(olderThan: 60 * 60)
                     session.connect()
@@ -62,12 +83,17 @@ struct CompanionApp: App {
 
 struct RootView: View {
     @EnvironmentObject private var session: Session
+    @AppStorage("companion.onboarding.introSeen") private var hasSeenIntro = false
+    @State private var showingIntro = false
     @AppStorage("companion.onboarding.welcomeSeen") private var hasSeenWelcome = false
     @AppStorage("companion.onboarding.notificationsSeen") private var hasSeenNotificationPrompt = false
     @AppStorage(CompanionOnboardingPreferences.pendingNotificationOnboardingKey)
     private var notificationOnboardingPending = false
     var body: some View {
         Group {
+            if session.isRestoringSavedPairing {
+                ProgressView("Restoring your saved Mac connection…")
+            } else {
             switch route {
             case .welcome:
                 CompanionWelcomeView(
@@ -119,7 +145,23 @@ struct RootView: View {
                 )
             }
         }
+        }
         .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .overlay {
+            if showingIntro {
+                FirstLaunchIntro()
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
+        }
+        .task {
+            guard !hasSeenIntro,
+                  !ProcessInfo.processInfo.arguments.contains("-store-preview") else { return }
+            hasSeenIntro = true
+            showingIntro = true
+            try? await Task.sleep(for: .seconds(1.8))
+            withAnimation(.easeInOut(duration: 0.45)) { showingIntro = false }
+        }
         .onChange(of: session.pairingInvite) { _, invite in
             guard invite != nil else { return }
             hasSeenWelcome = true
@@ -190,6 +232,53 @@ struct RootView: View {
     private func startPairing() {
         hasSeenWelcome = true
         session.beginPairing()
+    }
+}
+
+private struct FirstLaunchIntro: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var appeared = false
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+            VStack(spacing: 18) {
+                ZStack {
+                    Circle()
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 112, height: 112)
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
+                        .font(.system(size: 42, weight: .medium))
+                        .foregroundStyle(.blue)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .scaleEffect(appeared ? 1 : 0.82)
+                Text("BOS")
+                    .font(.system(size: 43, weight: .bold, design: .rounded))
+                    .tracking(-1.5)
+                    .foregroundStyle(.primary)
+                Text("Your bots, closer.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 12)
+
+            VStack {
+                Spacer()
+                Text("Created by OpenMausBot")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 32)
+            }
+            .opacity(appeared ? 1 : 0)
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.7, dampingFraction: 0.82)) {
+                appeared = true
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

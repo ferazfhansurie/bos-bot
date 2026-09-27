@@ -80,7 +80,7 @@ struct PairingView: View {
             .fullScreenCover(isPresented: $showingScanner) {
                 PairingScannerSheet { payload in
                     guard let url = URL(string: payload), let invite = PairingInvite.parse(url) else {
-                        return "That isn't an OpenMausBot pairing QR code."
+                        return "That isn't an BOS pairing QR code."
                     }
                     accept(invite)
                     return nil
@@ -106,7 +106,7 @@ struct PairingView: View {
                 Text("Connect to your computer")
                     .font(.title.bold())
                     .multilineTextAlignment(.center)
-                Text("Scan the QR code in OpenMausBot. We'll securely choose the best way to connect.")
+                Text("Scan the QR code in BOS. We'll securely choose the best way to connect.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -295,7 +295,7 @@ struct PairingView: View {
 
             if let credential = scannedCredential {
                 if !connectionIsProtected(connection) {
-                    Text("Only continue on a network you trust. Local connections are authenticated but are not encrypted by OpenMausBot.")
+                    Text("Only continue on a network you trust. Local connections are authenticated but are not encrypted by BOS.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

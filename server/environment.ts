@@ -25,6 +25,7 @@ export interface EnvironmentDescriptor {
   version: string;
   /** Host-to-host room and peer-session protocol. Absent on pre-hardening Macs. */
   multiplayerProtocol: 1;
+  sharedConversationIsolation: 1;
   capabilities: {
     /** Pairing and sessions are available (this build). */
     remoteSessions: true;
@@ -128,6 +129,7 @@ export function environmentDescriptor(input: { environmentId: string; desktopMan
     platform: process.platform,
     version: serverVersion(),
     multiplayerProtocol: 1,
+    sharedConversationIsolation: 1,
     capabilities: {
       remoteSessions: true,
       // Never advertise a protocol this server would refuse: the routes are

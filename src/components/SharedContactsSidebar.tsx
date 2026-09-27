@@ -7,9 +7,10 @@ import type { SidebarDensity } from "@/lib/sidebar-preferences";
 import type { ReactNode } from "react";
 import { readSessionState } from "@/lib/session";
 import { GroupMark, PersonPhoto } from "./Avatar";
+import { isDirectSharedRoom, sharedRoomUnread } from "./shared-conversation";
 
 interface Contact { id: string; name: string; kind: "person" | "bot"; homeId?: string; homeName?: string; title?: string; avatar?: string | null; color?: string | null; mascotBody?: string | null }
-interface Room { id: string; name: string; memberIds: string[]; lastActivity?: number; preview?: string }
+interface Room { id: string; name: string; kind?: "direct" | "group"; memberIds: string[]; lastActivity?: number; preview?: string; unreadCount?: number; readSequence?: number; notifications?: "all" | "mentions" | "muted" }
 export interface LocalConversationRow { id: string; at: number; element: ReactNode }
 
 /** Remote people and person rooms share the conversation list with local bots.
@@ -69,7 +70,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   useEffect(() => {
     if (state.activeView !== "shared" || !state.selectedSharedRoomId) return;
     const room = rooms.find(item => item.id === state.selectedSharedRoomId);
-    if (!room?.lastActivity || seenRooms[room.id] >= room.lastActivity) return;
+    if (!room?.lastActivity || typeof room.unreadCount === "number" || document.visibilityState !== "visible" || !document.hasFocus() || seenRooms[room.id] >= room.lastActivity) return;
     setSeenRooms(previous => {
       const next = { ...previous, [room.id]: room.lastActivity! };
       try { globalThis.localStorage?.setItem("bos.shared-room-seen", JSON.stringify(next)); } catch { /* private browsing */ }
@@ -92,18 +93,20 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     } catch { setError("Could not open chat"); }
     finally { setBusyId(null); }
   };
-  const visibleRooms = rooms.filter(room => !(room.memberIds.length === 2 && room.memberIds.includes(selfId ?? "") && room.memberIds.some(id => contacts.some(contact => contact.id === id))));
+  const visibleRooms = rooms.filter(room => !(isDirectSharedRoom(room) && room.memberIds.includes(selfId ?? "") && room.memberIds.some(id => contacts.some(contact => contact.id === id))));
   // everyone but me first, so the mark shows who else is here
   const roomFaces = (room: Room) => [...room.memberIds.filter(id => id !== selfId), ...(selfId ? [selfId] : [])]
     .map(id => contacts.find(contact => contact.id === id)).filter((contact): contact is Contact => Boolean(contact));
   const roomName = (room: Room) => room.name === "Group chat"
     ? room.memberIds.filter(id => id !== selfId).map(id => contacts.find(contact => contact.id === id)?.name).filter(Boolean).join(", ") || room.name
     : room.name;
-  const roomUnread = (room: Room) => !(state.activeView === "shared" && state.selectedSharedRoomId === room.id) && (room.lastActivity ?? 0) > (seenRooms[room.id] ?? 0);
+  const roomUnread = (room: Room) => typeof room.unreadCount === "number"
+    ? sharedRoomUnread(room, 0)
+    : !(state.activeView === "shared" && state.selectedSharedRoomId === room.id) && sharedRoomUnread(room, seenRooms[room.id] ?? 0);
   const visibleContacts = contacts.filter(contact => contact.id !== selfId && contact.kind === "person");
   const unifiedContacts = visibleContacts;
   if (placement === "unified") {
-    const directRoom = (contact: Contact) => rooms.find(room => room.memberIds.length === 2 && room.memberIds.includes(selfId ?? "") && room.memberIds.includes(contact.id));
+    const directRoom = (contact: Contact) => rooms.find(room => isDirectSharedRoom(room) && room.memberIds.includes(selfId ?? "") && room.memberIds.includes(contact.id));
     const entries: Array<{ id: string; at: number; element: ReactNode }> = [
       ...localRows,
       ...unifiedContacts.map(contact => {

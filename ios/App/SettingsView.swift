@@ -7,9 +7,10 @@ import UIKit
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
     @State private var enablingNotifications = false
-    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.full.rawValue
+    @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @AppStorage(PrefKey.language) private var language = AppLanguage.system.rawValue
+    @AppStorage(PrefKey.appearance) private var appearance = AppAppearance.system.rawValue
     private let onConnect: (() -> Void)?
 
     init(onConnect: (() -> Void)? = nil) {
@@ -43,6 +44,14 @@ struct SettingsView: View {
                 }
             }
 
+            if session.connection != nil {
+                Section("Subscription limits") {
+                    NavigationLink { ProviderUsageView() } label: {
+                        Label("Claude & Codex", systemImage: "chart.bar.fill")
+                    }
+                }
+            }
+
             Section {
                 if notificationsAreEnabled {
                     notificationRow
@@ -61,7 +70,7 @@ struct SettingsView: View {
                     .accessibilityHint(notificationAccessibilityHint)
                 }
             } footer: {
-                Text("Alerts arrive while OpenMausBot is open or was recently in the background. Closed-app delivery is not available yet.")
+                Text("Alerts arrive while BOS is open or was recently in the background. Closed-app delivery is not available yet.")
             }
 
             Section {
@@ -105,6 +114,21 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink {
+                    AppearancePickerView()
+                } label: {
+                    Label {
+                        HStack {
+                            Text("Appearance")
+                            Spacer()
+                            Text(AppAppearance(rawValue: appearance)?.label ?? "Automatic")
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        SettingsIcon(symbol: "circle.lefthalf.filled", color: .indigo)
+                    }
+                }
+
                 Picker(selection: $language) {
                     ForEach(AppLanguage.allCases) { option in
                         Text(option.label).tag(option.rawValue)
@@ -117,7 +141,7 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                Text("Changes the language inside OpenMausMobile. Buttons drawn by iOS itself follow the phone's language, which you can set for this app in iOS Settings.")
+                Text("Automatic appearance follows this device's display setting. Language changes inside BOS; iOS buttons follow the device language.")
             }
 
             if session.connection != nil {
@@ -146,6 +170,13 @@ struct SettingsView: View {
                         }
                     }
                 }
+            }
+            Section("Help & feedback") {
+                Link(destination: URL(string: "mailto:ferazfhansurie@gmail.com?subject=BOS%20alpha%20feedback")!) {
+                    Label("Contact BOS", systemImage: "envelope")
+                }
+                Text("For help, alpha feedback or privacy requests: ferazfhansurie@gmail.com").font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Include your app version and steps to reproduce. Please leave out passwords, keys and private conversations.").font(.footnote).foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Settings")
@@ -187,6 +218,182 @@ struct SettingsView: View {
     private var computerStatusText: Text {
         guard session.connections.count > 1 else { return statusText }
         return statusText + Text(verbatim: " · ") + Text("\(session.connections.count) saved")
+    }
+}
+
+private struct AppearancePickerView: View {
+    @AppStorage(PrefKey.appearance) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(PrefKey.theme) private var theme = AppTheme.midnight.rawValue
+    @AppStorage(PrefKey.themeApplied) private var themeApplied = AppTheme.midnight.rawValue
+    @Environment(\.colorScheme) private var scheme
+
+    private var selectedTheme: AppTheme { AppTheme(rawValue: theme) ?? .midnight }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Make BOS yours.")
+                    .font(.title2.bold())
+                Text("Pick a theme, then how bright you want it.")
+                    .foregroundStyle(.secondary)
+                Text("Theme")
+                    .font(.headline)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    ForEach(AppTheme.allCases, id: \.rawValue) { option in
+                        ThemeCard(theme: option, scheme: scheme, selected: theme == option.rawValue) {
+                            withAnimation(.easeInOut(duration: 0.2)) { theme = option.rawValue }
+                            ThemeSurfaces.apply(option)
+                        }
+                    }
+                }
+                Text("Brightness")
+                    .font(.headline)
+                ForEach(AppAppearance.allCases, id: \.rawValue) { option in
+                    Button {
+                        appearance = option.rawValue
+                    } label: {
+                        HStack(spacing: 18) {
+                            Group {
+                                if option == .system {
+                                    HStack(spacing: 2) {
+                                        AppearancePreview(scheme: .light, theme: selectedTheme)
+                                        AppearancePreview(scheme: .dark, theme: selectedTheme)
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 15))
+                                } else {
+                                    AppearancePreview(scheme: option.colorScheme ?? .light, theme: selectedTheme)
+                                }
+                            }
+                            .frame(width: 112, height: 112)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(option.label)
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                Text(option == .system
+                                     ? "Follows this device's display setting"
+                                     : option == .light ? "Bright and clear" : "Easy on the eyes")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: appearance == option.rawValue ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundStyle(appearance == option.rawValue ? selectedTheme.accent : Color.secondary)
+                        }
+                        .padding(14)
+                        .background(ThemeSwatch.surface(selectedTheme, scheme, \.composer, fallback: Color(uiColor: .secondarySystemGroupedBackground)),
+                                    in: RoundedRectangle(cornerRadius: 22))
+                        .overlay(RoundedRectangle(cornerRadius: 22)
+                            .strokeBorder(appearance == option.rawValue ? selectedTheme.accent : Color.secondary.opacity(0.15), lineWidth: appearance == option.rawValue ? 2 : 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(appearance == option.rawValue ? .isSelected : [])
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
+        }
+        // The rest of the app picks the new theme up when this screen closes;
+        // this screen paints its own page so the choice shows straight away.
+        .background(ThemeSwatch.surface(selectedTheme, scheme, \.panel, fallback: Color(uiColor: .systemGroupedBackground)).ignoresSafeArea())
+        .toolbarBackground(ThemeSwatch.surface(selectedTheme, scheme, \.panel, fallback: Color(uiColor: .systemGroupedBackground)), for: .navigationBar)
+        .navigationTitle("Appearance")
+        .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { themeApplied = theme }
+    }
+}
+
+private enum ThemeSwatch {
+    static func surface(_ theme: AppTheme, _ scheme: ColorScheme, _ key: KeyPath<ThemePalette, UInt32>, fallback: Color) -> Color {
+        guard let palette = theme.palette(scheme == .dark ? .dark : .light) else { return fallback }
+        return Color(uiColor: UIColor(hex: palette[keyPath: key]))
+    }
+}
+
+private struct ThemeCard: View {
+    let theme: AppTheme
+    let scheme: ColorScheme
+    let selected: Bool
+    let action: () -> Void
+
+    private var accent: Color { Color(uiColor: theme.accentUIColor.resolvedColor(with: traits)) }
+    private var traits: UITraitCollection { UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light) }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                AppearancePreview(scheme: scheme, theme: theme, compact: true)
+                    .frame(height: 92)
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(theme.label).font(.headline).foregroundStyle(.primary)
+                        Text(theme.caption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? accent : Color.secondary.opacity(0.5))
+                }
+            }
+            .padding(10)
+            .background(ThemeSwatch.surface(theme, scheme, \.composer, fallback: Color(uiColor: .secondarySystemGroupedBackground)),
+                        in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(selected ? accent : Color.secondary.opacity(0.15), lineWidth: selected ? 2 : 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(theme.label))
+        .accessibilityHint(Text(theme.caption))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct AppearancePreview: View {
+    let scheme: ColorScheme
+    let theme: AppTheme
+    var compact = false
+
+    private var dark: Bool { scheme == .dark }
+    private var traits: UITraitCollection { UITraitCollection(userInterfaceStyle: dark ? .dark : .light) }
+    private func resolved(_ color: UIColor) -> Color { Color(uiColor: color.resolvedColor(with: traits)) }
+
+    private var page: Color {
+        if let palette = theme.palette(dark ? .dark : .light) { return Color(uiColor: UIColor(hex: palette.app)) }
+        return dark ? Color(red: 0.07, green: 0.07, blue: 0.08) : .white
+    }
+    private var accent: Color { resolved(theme.accentUIColor) }
+    private var theirs: Color { resolved(theme.bubbleUIColor) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
+            HStack(spacing: 5) {
+                Circle().fill(accent).frame(width: compact ? 12 : 15, height: compact ? 12 : 15)
+                RoundedRectangle(cornerRadius: 2).fill(dark ? Color.white.opacity(0.85) : Color.black.opacity(0.8))
+                    .frame(width: compact ? 32 : 39, height: compact ? 4 : 5)
+            }
+            .padding(.bottom, compact ? 1 : 3)
+            bubble(width: 67, mine: false)
+            bubble(width: 55, mine: true)
+            if !compact { bubble(width: 72, mine: false) }
+            Spacer(minLength: 0)
+            RoundedRectangle(cornerRadius: 9)
+                .fill(dark ? Color.white.opacity(0.12) : Color.black.opacity(0.07))
+                .frame(height: compact ? 10 : 13)
+        }
+        .padding(compact ? 9 : 11)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(page, in: RoundedRectangle(cornerRadius: compact ? 12 : 15))
+        .overlay(RoundedRectangle(cornerRadius: compact ? 12 : 15).strokeBorder(.primary.opacity(0.12)))
+        .shadow(color: .black.opacity(compact ? 0.06 : 0.12), radius: compact ? 3 : 6, y: compact ? 1 : 3)
+        .environment(\.colorScheme, scheme)
+    }
+
+    private func bubble(width: CGFloat, mine: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(mine ? accent : theirs)
+            .frame(width: compact ? width * 0.8 : width, height: compact ? 11 : 14)
+            .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
     }
 }
 
@@ -302,7 +509,7 @@ struct ConnectedComputersView: View {
                                 pendingRemoval = computer
                             }
                         }
-                        .accessibilityHint("Switches OpenMausMobile to this computer")
+                        .accessibilityHint("Switches BOS to this computer")
                     }
                 }
             }
@@ -470,7 +677,7 @@ struct ConnectionSecurityView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes the connection from this device only. It does not revoke this device on your Mac. To remove Mac-side access, open OpenMausBot → Settings → Phone and remove it there.")
+            Text("This removes the connection from this device only. It does not revoke this device on your Mac. To remove Mac-side access, open BOS → Settings → Phone and remove it there.")
         }
     }
 
@@ -481,7 +688,7 @@ struct ConnectionSecurityView: View {
         case .live:
             return Text("This computer is connected and responding normally.")
         case .connecting:
-            return Text("OpenMausBot is trying the saved connection automatically.")
+            return Text("BOS is trying the saved connection automatically.")
         case let .offline(reason):
             return Text(verbatim: reason)
         case .unauthorized:

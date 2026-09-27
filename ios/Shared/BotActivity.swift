@@ -17,6 +17,8 @@ struct BotActivityAttributes: ActivityAttributes {
     var name: String
     /// MausPalette colour name.
     var color: String
+    /// Optional so activities created by older app builds still decode.
+    var mascotBody: String?
 }
 
 /// Answer from the island or the lock screen. A `LiveActivityIntent` runs in

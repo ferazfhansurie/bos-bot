@@ -2693,7 +2693,8 @@ app.whenReady().then(async () => {
     // cannot impersonate the person operating the desktop app.
     installDesktopMutationHeader();
   }
-  if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
+  // Packaged macOS apps use the bundle icon so the Dock matches Finder.
+  if (process.platform === "darwin" && !app.isPackaged) app.dock.setIcon(APP_ICON);
   secureCredentials = await loadSecureCredentials();
   // The AssemblyAI key only fed the removed Teach a skill recorder, and its
   // set/clear handler went with it; drop the orphaned secret rather than

@@ -326,6 +326,21 @@ posixOnly("mid-turn steering e2e", () => {
       expectedTurnId: "turn-1",
     });
 
+    const imagePath = join(home, ".openmausbot", "attachments", "123e4567-e89b-42d3-a456-426614174099.png");
+    mkdirSync(dirname(imagePath), { recursive: true });
+    writeFileSync(imagePath, "image steering fixture");
+    for (const caption of ["look at this", ""]) {
+      const text = `${caption}\n\n<attached-image path="${imagePath}" name="steer.png" />`;
+      const imageReceipt = await api("POST", `/api/bots/${created.id}/messages`, { text });
+      expect(imageReceipt.status).toBe(202);
+      expect(imageReceipt.body).toMatchObject({ steered: true });
+      const rows = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const call = rows.filter(row => row.dir === "out" && row.msg?.method === "turn/steer").at(-1)?.msg;
+      expect(call.params.expectedTurnId).toBe("turn-1");
+      expect(call.params.input.some((item: any) => item.type === "localImage")).toBe(true);
+      expect(JSON.stringify(call)).not.toContain(imagePath);
+    }
+
     // Stop ends the turn through the protocol: no signal error anywhere
     await api("POST", `/api/bots/${created.id}/interrupt`);
     await waitFor(async () => (await getBot(created.id)).busy === false, "the steered codex turn to settle");

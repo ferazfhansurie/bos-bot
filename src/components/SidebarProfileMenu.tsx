@@ -19,10 +19,11 @@ import {
   RefreshCw,
   Settings as SettingsIcon,
   Smartphone,
+  Mail,
 } from "lucide-react";
 
 import { InitialsAvatar, PersonPhoto } from "./Avatar";
-import { DiscordIcon } from "./DiscordIcon";
+import { SupportDialog } from "./SupportDialog";
 import { AboutDialog } from "./AboutDialog";
 import { SidebarPopoverMenu, type SidebarMenuItem } from "./SidebarPopoverMenu";
 import { ShortcutHint } from "./ShortcutHint";
@@ -31,7 +32,7 @@ import { useStore } from "@/state/store";
 import { useUpdaterState, type UpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
-import { FEEDBACK_URL, HELP_CENTER_URL, openExternalLink } from "@/lib/app-links";
+
 
 /** "Milind Soni" → "MS", "milind" → "M", "you@x.dev" → "Y", unset → "?" */
 export function profileInitials(profile?: { name?: string; email?: string }): string {
@@ -192,6 +193,7 @@ export function SidebarProfileMenu() {
   const phone = useSidebarPhoneStatus();
   const update = useUpdateItem();
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
   const triggerRef = useRef<HTMLSpanElement>(null);
 
   const profile = state.config?.profile;
@@ -237,13 +239,13 @@ export function SidebarProfileMenu() {
       key: "help",
       label: t("sidebar.menu.help"),
       icon: <HelpCircle size={18} />,
-      onSelect: () => void openExternalLink(HELP_CENTER_URL),
+      onSelect: () => setSupportOpen(true),
     },
     {
       key: "feedback",
       label: t("sidebar.menu.feedback"),
-      icon: <DiscordIcon size={17} />,
-      onSelect: () => void openExternalLink(FEEDBACK_URL),
+      icon: <Mail size={17} />,
+      onSelect: () => setSupportOpen(true),
     },
   ];
 
@@ -280,6 +282,7 @@ export function SidebarProfileMenu() {
         )}
       />
       <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      <SupportDialog open={supportOpen} onClose={() => setSupportOpen(false)} />
     </>
   );
 }

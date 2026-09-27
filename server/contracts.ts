@@ -61,6 +61,12 @@ export interface TurnImageInput {
   bytes: number;
 }
 
+/** Optional native input for a live steer. Images must already be admitted
+ * by the harness, exactly as for SendTurnInput.images. */
+export interface SteerOptions {
+  images?: readonly TurnImageInput[];
+}
+
 // ── instance configuration envelope ────────────────────────────────────
 // `driver` is any slug — NOT validated against known drivers; unknown
 // drivers round-trip and surface as unavailable shadow snapshots so a
@@ -101,6 +107,10 @@ export interface SendTurnInput {
    * collide with another bot's live session or broker (see #1017). */
   botId?: string;
   text: string;
+  /** Untrusted shared/peer conversation. Adapters must enforce isolation from
+   * host files, private native sessions, configuration instructions and tools.
+   * Unsupported adapters must reject before launching a provider turn. */
+  sharedContext?: { mode: "conversation-only" };
   /** Per-bot approval policy, reasserted by providers on every turn so a
    * resumed native session cannot retain a stale, more permissive mode. */
   approvalMode?: ApprovalMode;
@@ -233,6 +243,9 @@ export interface ProviderAdapter {
   readonly provider: DriverKind;
   readonly capabilities: {
     sessionModelSwitch: "in-session" | "unsupported";
+    /** Supports the enforced sharedContext policy. Absent/false must fail
+     * closed at dispatch; prompt instructions alone do not qualify. */
+    sharedContextIsolation?: boolean;
     /** True when the driver mounts turn.integrations.agents as MCP tools —
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
@@ -260,6 +273,9 @@ export interface ProviderAdapter {
      * input. Image-capable legacy drivers may instead read the attachment
      * path kept in `text`; central dispatch strips that tag only here. */
     nativeImageInput?: boolean;
+    /** True only when steer consumes admitted images as native input in the
+     * running turn. Absent/false means image messages must wait for a turn. */
+    nativeImageSteer?: boolean;
     /** Effort levels this driver can pass to its CLI, ascending. Absent =
      * the driver cannot set effort, so the app never offers the control —
      * same rule as computerMcp: never show a knob the driver cannot turn. */
@@ -313,6 +329,8 @@ export interface ProviderAdapter {
   ): Promise<RequestOutcome>;
   /** Deliver a user message into the RUNNING turn on this thread. Only
    * drivers with `capabilities.queueing` implement it.
+   * Pass images only when `capabilities.nativeImageSteer` is true; otherwise
+   * queue the complete message, preserving both text and attachments.
    *
    * - "steered" — the engine accepted the input into the live turn.
    * - "refused" — provably NOT delivered (no live turn, explicit RPC
@@ -322,7 +340,7 @@ export interface ProviderAdapter {
    *   timed out after accept, transport failed, or the turn settled while
    *   the answer was in flight). The caller must NOT re-queue: the words
    *   may already be running, and replaying them would execute them twice. */
-  steer?(threadId: ThreadId, text: string): Promise<SteerOutcome>;
+  steer?(threadId: ThreadId, text: string, options?: SteerOptions): Promise<SteerOutcome>;
   hasSession(threadId: ThreadId): boolean;
   stopAll(): Promise<void>;
   onEvent(listener: RuntimeEventListener): () => void;
