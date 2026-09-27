@@ -175,3 +175,43 @@ public extension SharedEligibleBot {
     }
 }
 public struct SharedEligibleBotsResponse: Codable, Sendable { public let bots: [SharedEligibleBot] }
+
+
+public struct SharedBotRequest: Codable, Identifiable, Sendable {
+    public let id: String
+    public let roomId: String
+    public let sourceId: String
+    public let sourceSequence: Int?
+    public let requesterId: String
+    public let botId: String
+    public let botName: String
+    public let ownerId: String
+    public let ownerName: String
+    public let state: String
+    public let createdAt: Double
+    public let updatedAt: Double
+    public let resultId: String?
+    public let resultSequence: Int?
+    public let explanation: String?
+    public var isActive: Bool { ["accepted", "queued", "working", "waiting-approval"].contains(state) }
+    public func canCancel(actorId: String) -> Bool { isActive && (requesterId == actorId || ownerId == actorId) }
+    public var stateLabel: String {
+        switch state {
+        case "accepted": return "Accepted"
+        case "queued": return "Queued"
+        case "working": return "Working"
+        case "waiting-approval": return "Waiting for owner"
+        case "completed": return "Completed"
+        case "failed": return "Failed"
+        case "offline": return "Unavailable"
+        case "cancelled": return "Stopped"
+        default: return "Outcome unknown"
+        }
+    }
+}
+public struct SharedRequestsResponse: Codable, Sendable {
+    public let requests: [SharedBotRequest]
+    public let hasMore: Bool
+    public let before: Int?
+}
+public struct SharedRequestResponse: Codable, Sendable { public let request: SharedBotRequest }

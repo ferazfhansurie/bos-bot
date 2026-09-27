@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Bell, LogOut, Trash2, Users, X } from "lucide-react";
 import { GroupMark, PersonPhoto } from "./Avatar";
+import { SharedConversationRequests } from "./SharedConversationRequests";
 import { SharedConversationFiles } from "./SharedConversationFiles";
 import type { SharedFile } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { isDirectSharedRoom, type SharedContact, type SharedRoom, type SharedPreferences, type SharedNotifications } from "./shared-conversation";
 
 export function SharedConversationDetails({ room, selfId, contacts, title, pending, error, onClose, onChange, preferences, preferencePending, preferenceError, onNotificationsChange, onShowMessage }: {
-  onShowMessage: (file: SharedFile) => Promise<void>;
+  onShowMessage: (file: Pick<SharedFile, "messageId" | "sequence">) => Promise<void>;
   room: SharedRoom; selfId: string; contacts: SharedContact[]; title: string;
   pending: boolean; error: string; onClose: () => void;
   onChange: (method: "PATCH" | "DELETE" | "POST", suffix: string, patch?: Record<string, unknown>) => Promise<boolean>;
@@ -89,6 +90,7 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
           {preferencePending && <p role="status" className="mt-2 text-xs text-ink-secondary">Saving…</p>}
           {preferenceError && <p role="alert" className="mt-2 text-xs text-danger">{preferenceError}</p>}
         </section>}
+        <SharedConversationRequests key={`requests:${room.id}`} roomId={room.id} selfId={selfId} contacts={contacts} onShowMessage={onShowMessage} />
         <SharedConversationFiles key={room.id} roomId={room.id} selfId={selfId} contacts={contacts} onShowMessage={onShowMessage} />
         {error && <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
         <div className="space-y-2 border-t border-hairline/40 pt-4">

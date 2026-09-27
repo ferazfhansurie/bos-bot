@@ -24,6 +24,8 @@ import { tailnetOrigin } from "./tailnet-origin.ts";
 import { BOS_JARVIS } from "../shared/bos-jarvis.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
+import { SharedRequestStore } from "./shared-request-store.ts";
+import { sharedRequestIsActive } from "../shared/shared-request.ts";
 import { SharedRoomTrust, isSharedRoomTrustLevel, sharedRoomTargets, sharedMentionText, sharedRoomBotCandidates, type SharedRoomTrustLevel } from "./shared-room-trust.ts";
 import { SharedAttachmentStore } from "./shared-attachment-store.ts";
 import { ApnsPush } from "./apns-push.ts";
@@ -550,6 +552,7 @@ function ownerPhotoData(): string | null {
 const sharedRooms = new SharedRoomRepository(join(DATA_DIR, "shared-rooms.json"), ENVIRONMENT_ID);
 const sharedAttachments = new SharedAttachmentStore();
 const sharedBotTasks = new SharedBotTasks(join(DATA_DIR, "shared-bot-tasks.json"));
+const sharedRequests = new SharedRequestStore(join(DATA_DIR, "shared-requests.json"));
 const sharedRoomTrust = new SharedRoomTrust(join(DATA_DIR, "shared-room-trust.json"));
 function signInAllowList() {
   const current = loadConfig().signIn;
@@ -5904,6 +5907,7 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
 const MAX_SHARED_ROOM_HOPS = 4;
 const sharedRoomLocks = new Set<string>();
 const sharedBotLocks = new Set<string>();
+const runningSharedRequests = new Set<string>();
 
 interface SharedRoomBot { key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string; availability?: "ready" | "offline" | "update-required" | "reconnect-required" }
 
@@ -5996,7 +6000,7 @@ async function sharedRoomAttachmentPrompt(room: SharedRoom, source: SharedTextMe
 }
 
 async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt: string, source: SharedTextMessage, senderName: string,
-  _level: SharedRoomTrustLevel, progress: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void, deadline: number, shouldContinue: () => boolean): Promise<string> {
+  _level: SharedRoomTrustLevel, progress: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void, deadline: number, shouldContinue: () => boolean, onDispatch: () => void): Promise<string> {
   const bot = store.bot(target.key.localId);
   if (!bot || bot.hidden) throw new Error("local shared bot is unavailable");
   const taskKey = `${bot.id}-${createHash("sha256").update(`${contactId(source.actor)}:${room.revision ?? 1}`).digest("hex").slice(0, 16)}`;
@@ -6017,6 +6021,7 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
   }
   if (!shouldContinue()) throw new Error("shared request access changed");
   const recoveredUserMessage = store.messagesFor(threadId).findLast(message => message.role === "user" && message.sendId === source.id);
+  onDispatch();
   await startTurn(bot.id, prompt, { threadId, sendId: source.id,
     ...(recoveredUserMessage ? { userMessage: recoveredUserMessage } : {}), sender: { name: senderName } });
   const delivered = new Map<string, string>();
@@ -6069,15 +6074,41 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
   const level = initiator.actor.kind === "person" && contactId(initiator.actor) === multiplayerActors.ownerId
     ? sharedRoomTrustLevel(room) : "helper";
   await Promise.all(targets.map(async target => {
+    const requestRecord = sharedRequests.ensure({ roomId: room.id, roomRevision: room.revision ?? 1,
+      sourceId: source.id, requesterId: contactId(source.actor), botId: target.id, botName: target.name.slice(0, 200),
+      ownerId: `${target.key.homeId}:person:owner`, ownerName: target.ownerName.slice(0, 200), createdAt: source.at });
+    if (!sharedRequestIsActive(requestRecord.state) || runningSharedRequests.has(requestRecord.id)) return;
+    runningSharedRequests.add(requestRecord.id);
+    const active = () => sharedRequestIsActive(sharedRequests.get(requestRecord.id)!.state);
+    try {
+    sharedRequests.transition(requestRecord.id, "queued");
     const roomLock = `${room.id}:${target.id}`;
-    const queueDeadline = Date.now() + roomTurnTimeoutMinutes(cfg) * 60_000;
+    const queueDeadline = requestRecord.createdAt + roomTurnTimeoutMinutes(cfg) * 60_000;
     while (sharedRoomLocks.has(roomLock) || sharedBotLocks.has(target.id)) {
-      if (Date.now() >= queueDeadline) return;
+      if (!active()) return;
+      if (Date.now() >= queueDeadline) {
+        sharedRequests.transition(requestRecord.id, "failed", { explanation: "The bot did not become available before this request expired. Send a new request to try again." });
+        return;
+      }
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     const currentRoom = sharedRooms.roomFor(room.id, contactId(source.actor));
     const currentRequest = sharedRooms.messageFor(room.id, contactId(source.actor), source.id);
-    if (!currentRoom || !currentRequest || currentRequest.deletedAt || currentRequest.editedAt || !sharedRoomBots(currentRoom, contactId(source.actor)).some(bot => bot.id === target.id)) return;
+    if (!active()) return;
+    if (Date.now() >= queueDeadline) {
+      sharedRequests.transition(requestRecord.id, "failed", { explanation: "This queued request expired before the bot could start. Send a new request to try again." });
+      return;
+    }
+    if (!currentRoom || !currentRequest || currentRequest.deletedAt || currentRequest.editedAt ||
+        (currentRoom.revision ?? 1) !== requestRecord.roomRevision || !sharedRoomBots(currentRoom, contactId(source.actor)).some(bot => bot.id === target.id)) {
+      sharedRequests.transition(requestRecord.id, "cancelled", { explanation: "Stopped because the conversation, bot access or request changed." });
+      return;
+    }
+    const availability = sharedRoomBots(currentRoom, contactId(source.actor)).find(bot => bot.id === target.id)?.availability;
+    if (availability && availability !== "ready") {
+      sharedRequests.transition(requestRecord.id, "offline", { explanation: availability === "update-required" ? "The bot owner's Mac needs an update before it can answer here." : availability === "reconnect-required" ? "The bot owner needs to reconnect their Mac before it can answer here." : "The bot owner's Mac is offline. Send a new request when it reconnects." });
+      return;
+    }
     const executionRoom = currentRoom;
     sharedRoomLocks.add(roomLock);
     sharedBotLocks.add(target.id);
@@ -6086,7 +6117,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
     const valid = () => {
       const latestRoom = sharedRooms.roomFor(room.id, contactId(source.actor));
       const latestRequest = sharedRooms.messageFor(room.id, contactId(source.actor), source.id);
-      return latestRoom && latestRequest && !latestRequest.deletedAt && !latestRequest.editedAt &&
+      return active() && latestRoom && latestRequest && !latestRequest.deletedAt && !latestRequest.editedAt &&
         latestRoom.revision === executionRoom.revision && sharedRoomBots(latestRoom, contactId(source.actor)).some(bot => bot.id === target.id);
     };
     const append = (input: { text: string; sendId: string; kind?: "activity"; tool?: { name: string; ok?: boolean; spoken?: string } }) => {
@@ -6097,6 +6128,11 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
     const seenProgress = new Set<string>();
     const progress = (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => {
       if (!tool?.name) return;
+      const current = sharedRequests.get(requestRecord.id)!;
+      if (current.dispatchedAt && sharedRequestIsActive(current.state)) {
+        if (tool.name === "waiting for approval") sharedRequests.transition(current.id, "waiting-approval");
+        else if (current.state === "waiting-approval" && tool.name !== "still working") sharedRequests.transition(current.id, "working");
+      }
       const status = tool.ok === undefined ? "start" : tool.ok ? "ok" : "failed";
       const key = `${id}:${status}`;
       if (seenProgress.has(key)) return;
@@ -6113,7 +6149,11 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
     };
     const timeoutMinutes = roomTurnTimeoutMinutes(cfg);
     const deadline = Date.now() + timeoutMinutes * 60_000;
-    progress(`turn-${target.key.localId}`, { name: "working", spoken: `${target.name} is working on this` });
+    const onDispatch = () => {
+      if (!valid()) throw new Error("shared request access changed");
+      sharedRequests.transition(requestRecord.id, "working");
+      progress(`turn-${target.key.localId}`, { name: "working", spoken: `${target.name} is working on this` });
+    };
     const stillWorking = setTimeout(() => progress(`still-${target.key.localId}`, { name: "still working", spoken: `${target.name} is still working on this` }), 5 * 60_000);
     let reply = "";
     try {
@@ -6123,10 +6163,10 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
         reply = (await remoteBots.roomTurn({
           homeId: target.key.homeId, remoteBotId: target.key.localId, threadId: sharedBotTasks.get(room.id, taskKey),
           title: `room · ${executionRoom.name}`, text: prompt, sendId: source.id, deadlineMs: deadline, shouldContinue: () => Boolean(valid()),
-          onThread: threadId => sharedBotTasks.set(room.id, taskKey, threadId), onActivity: progress,
+          onThread: threadId => sharedBotTasks.set(room.id, taskKey, threadId), onActivity: progress, onDispatch,
         })).reply;
       } else {
-        reply = await runLocalRoomTurn(executionRoom, target, prompt, source, senderName, level, progress, deadline, () => Boolean(valid()));
+        reply = await runLocalRoomTurn(executionRoom, target, prompt, source, senderName, level, progress, deadline, () => Boolean(valid()), onDispatch);
       }
     } catch (error) {
       settleActivities(false);
@@ -6134,18 +6174,26 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
       const explanation = error && typeof error === "object" && "sharedExplanation" in error && typeof error.sharedExplanation === "string" ? error.sharedExplanation : `${target.name} could not complete that reply. Please try again.`;
       try { append({ text: "", kind: "activity", tool: { name: "reply failed", ok: false, spoken: explanation }, sendId: `failed-${source.id}-${target.key.localId}`.slice(0, 120) }); }
       catch { /* nothing more to report */ }
+      const dispatched = sharedRequests.get(requestRecord.id)?.dispatchedAt;
+      const knownFailure = !dispatched || (error instanceof Error && error.message === "the shared bot could not finish its turn") || (error && typeof error === "object" && "sharedExplanation" in error);
+      const accessChanged = !valid();
+      sharedRequests.transition(requestRecord.id, accessChanged ? "cancelled" : knownFailure ? "failed" : "outcome-unknown", {
+        explanation: accessChanged ? "Stopped because the conversation, bot access or request changed."
+          : knownFailure ? explanation : "The connection changed after this bot started. Its outcome is unknown; it will not run again automatically." });
       return;
     } finally {
       clearTimeout(stillWorking);
     }
     if (!reply) {
       settleActivities(false);
-      try { append({ text: `that took longer than ${timeoutMinutes} minutes, so i stopped waiting. ask again to pick it back up.`, sendId: `timeout-${source.id}-${target.key.localId}`.slice(0, 120) }); }
+      try { append({ text: `that took longer than ${timeoutMinutes} minutes, so i requested a stop. the outcome is unknown; this request will not run again automatically.`, sendId: `timeout-${source.id}-${target.key.localId}`.slice(0, 120) }); }
       catch { /* nothing more to report */ }
+      sharedRequests.transition(requestRecord.id, "outcome-unknown", { explanation: "The bot exceeded its time limit. A stop was requested; this request will not run again automatically." });
       return;
     }
     settleActivities(true);
     const saved = append({ text: reply, sendId: `reply-${source.id}-${target.key.localId}`.slice(0, 120) });
+    sharedRequests.transition(requestRecord.id, "completed", { resultId: saved.message.id });
     if (!saved.created) return;
     for (const memberId of room.memberIds) {
       if (people.some(person => person.id === memberId) && sharedRoomShouldNotify(room.id, memberId, source)) {
@@ -6155,31 +6203,93 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
     }
     // Only a person may initiate another bot invocation.
     } finally {
-      const latest = sharedRooms.roomFor(room.id, contactId(source.actor));
-      const request = sharedRooms.messageFor(room.id, contactId(source.actor), source.id);
-      if (latest && (latest.revision !== executionRoom.revision || request?.deletedAt || request?.editedAt)) {
-        // This fixed status contains no provider content and clears the working
-        // indicator when an audience/request change suppresses publication.
-        try { sharedRooms.append(room.id, target.id, { actor: target.key, responseTo: source.id, text: "", kind: "activity",
-          sendId: `activity-${source.id}-turn-${target.key.localId}-failed`.slice(0, 120),
-          tool: { name: "working", ok: false, spoken: "Stopped because the conversation or request changed. Send a new request to continue." } }); } catch { /* access was revoked */ }
-      }
       sharedRoomLocks.delete(roomLock);
       sharedBotLocks.delete(target.id);
+    }
+    } catch (error) {
+      const latest = sharedRooms.roomFor(room.id, contactId(source.actor));
+      const latestSource = sharedRooms.messageFor(room.id, contactId(source.actor), source.id);
+      const changed = !latest || !latestSource || latestSource.editedAt || latestSource.deletedAt ||
+        (latest.revision ?? 1) !== requestRecord.roomRevision || !sharedRoomBots(latest, contactId(source.actor)).some(bot => bot.id === target.id);
+      sharedRequests.transition(requestRecord.id, changed ? "cancelled" : "outcome-unknown", { explanation: changed
+        ? "Stopped because the conversation, bot access or request changed."
+        : "This request could not be confirmed. It will not run again automatically." });
+      throw error;
+    } finally {
+      const finished = sharedRequests.get(requestRecord.id)!;
+      if (!sharedRequestIsActive(finished.state) && finished.state !== "completed") {
+        // A fixed status can settle a revoked/cancelled request without publishing
+        // provider content into its changed audience.
+        try { sharedRooms.append(room.id, target.id, { actor: target.key, responseTo: source.id, text: "", kind: "activity",
+          sendId: `activity-${source.id}-turn-${target.key.localId}-failed`.slice(0, 120),
+          tool: { name: "working", ok: false, spoken: finished.explanation ?? "This request stopped." } }); } catch { /* access was revoked or already settled */ }
+      }
+      runningSharedRequests.delete(requestRecord.id);
     }
   }));
 }
 
 async function recoverSharedRoomTurns(): Promise<void> {
-  await remoteBots.listBots(0);
+  // Reconcile the durable publication first: a crash can land between the room
+  // journal append and the request receipt. Never dispatch an uncertain turn twice.
+  for (const record of sharedRequests.all()) {
+    if (!sharedRequestIsActive(record.state)) continue;
+    const result = sharedRooms.allMessages(record.roomId).find(message =>
+      message.responseTo === record.sourceId && contactId(message.actor) === record.botId &&
+      message.sendId === `reply-${record.sourceId}-${parseContactId(record.botId)!.localId}`.slice(0, 120));
+    if (result) sharedRequests.transition(record.id, "completed", { resultId: result.id });
+    else if (record.dispatchedAt) sharedRequests.transition(record.id, "outcome-unknown", {
+      explanation: "The host restarted after this bot started. Its outcome is unknown; it will not run again automatically." });
+  }
   const maxAge = roomTurnTimeoutMinutes(cfg) * 60_000;
   const pending = sharedRooms.allRooms().flatMap(room => sharedRooms.allMessages(room.id)
-    .filter(message => message.kind !== "activity" && Date.now() - message.at < maxAge)
+    .filter(message => message.actor.kind === "person" && message.kind !== "activity" && Date.now() - message.at < maxAge)
     .map(message => ({ room, message })))
     .sort((a, b) => a.message.at - b.message.at).slice(-50);
+  for (const record of sharedRequests.all()) {
+    if (record.state !== "accepted" && record.state !== "queued") continue;
+    const room = sharedRooms.roomFor(record.roomId, record.requesterId);
+    const message = sharedRooms.messageFor(record.roomId, record.requesterId, record.sourceId);
+    if (!room || !message || message.editedAt || message.deletedAt || (room.revision ?? 1) !== record.roomRevision) {
+      sharedRequests.transition(record.id, "cancelled", { explanation: "Stopped because the conversation or request changed." });
+    } else if (!pending.some(item => item.message.id === message.id)) pending.push({ room, message });
+  }
+  await remoteBots.listBots(0);
+  for (const record of sharedRequests.all()) {
+    if (record.state !== "accepted" && record.state !== "queued") continue;
+    const room = sharedRooms.roomFor(record.roomId, record.requesterId);
+    if (!room || !sharedRoomBots(room, record.requesterId).some(bot => bot.id === record.botId)) {
+      sharedRequests.transition(record.id, "cancelled", { explanation: "This bot is no longer available to the requester." });
+    }
+  }
   for (const { room, message } of pending) {
+    // Older builds did not persist dispatch receipts. Any bot activity is
+    // evidence that retrying this legacy request would be unsafe.
+    for (const target of sharedRoomBots(room, contactId(message.actor)).filter(bot => message.botTargets?.includes(bot.id))) {
+      const responses = sharedRooms.allMessages(room.id).filter(item => item.responseTo === message.id && contactId(item.actor) === target.id);
+      if (!responses.length) continue;
+      const record = sharedRequests.ensure({ roomId: room.id, roomRevision: room.revision ?? 1,
+        sourceId: message.id, requesterId: contactId(message.actor), botId: target.id, botName: target.name.slice(0, 200),
+        ownerId: `${target.key.homeId}:person:owner`, ownerName: target.ownerName.slice(0, 200), createdAt: message.at });
+      if (runningSharedRequests.has(record.id)) continue;
+      const result = responses.find(item => item.sendId === `reply-${message.id}-${target.key.localId}`.slice(0, 120));
+      if (result) sharedRequests.transition(record.id, "completed", { resultId: result.id });
+      else if (sharedRequestIsActive(record.state)) sharedRequests.transition(record.id, "outcome-unknown", {
+        explanation: "This request was interrupted before its outcome could be confirmed. It will not run again automatically." });
+    }
     void runSharedBotTurn(room, message).catch(error =>
       console.warn(`room recovery failed for ${room.id}: ${error instanceof Error ? error.message : "unknown"}`));
+  }
+  for (const record of sharedRequests.all()) {
+    if (record.state === "outcome-unknown" || record.state === "cancelled") {
+      const bot = parseContactId(record.botId)!;
+      try { sharedRooms.append(record.roomId, record.botId, { actor: bot, responseTo: record.sourceId, text: "", kind: "activity",
+        sendId: `activity-${record.sourceId}-turn-${bot.localId}-failed`.slice(0, 120),
+        tool: { name: "working", ok: false, spoken: record.explanation ?? "This request was interrupted." } }); } catch { /* access was revoked or already settled */ }
+    }
+    if ((record.state === "accepted" || record.state === "queued") && Date.now() - record.createdAt >= maxAge) {
+      sharedRequests.transition(record.id, "failed", { explanation: "This queued request expired before the bot could start. Send a new request to try again." });
+    }
   }
 }
 
@@ -12188,6 +12298,29 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           sharedRoomTrust.set(room.id, body.level);
           return json(res, 200, { level: body.level });
         }
+      }
+      const requestRoute = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/requests(?:\/([\w-]+)\/cancel)?$/);
+      if (requestRoute && (method === "GET" && !requestRoute[2] || method === "POST" && requestRoute[2])) {
+        const room = sharedRooms.roomFor(requestRoute[1], actorId);
+        if (!room) return json(res, 404, { error: "conversation unavailable" });
+        if (method === "GET") {
+          const before = Number(url.searchParams.get("before") ?? Number.MAX_SAFE_INTEGER);
+          const limit = Number(url.searchParams.get("limit") ?? 50);
+          if (!Number.isSafeInteger(before) || before < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return json(res, 400, { error: "invalid request cursor" });
+          const sequences = new Map(sharedRooms.allMessages(room.id).map(message => [message.id, message.sequence]));
+          const all = sharedRequests.forRoom(room.id).filter(record => (sequences.get(record.sourceId) ?? Infinity) < before)
+            .sort((a, b) => sequences.get(b.sourceId)! - sequences.get(a.sourceId)! || a.id.localeCompare(b.id));
+          const requests = all.slice(0, limit);
+          const last = requests.at(-1);
+          // A source may invoke several bots. Never split that source across pages.
+          if (last) requests.push(...all.slice(limit).filter(record => record.sourceId === last.sourceId));
+          return json(res, 200, { requests: requests.map(record => ({ ...record, sourceSequence: sequences.get(record.sourceId), resultSequence: record.resultId ? sequences.get(record.resultId) : undefined })), hasMore: all.length > requests.length,
+            before: last ? sharedRooms.messageFor(room.id, actorId, last.sourceId)?.sequence : undefined });
+        }
+        const record = sharedRequests.get(requestRoute[2]);
+        if (!record || record.roomId !== room.id) return json(res, 404, { error: "request unavailable" });
+        if (record.requesterId !== actorId && record.ownerId !== actorId) return json(res, 403, { error: "only the requester or bot owner can stop this request" });
+        return json(res, 200, { request: sharedRequests.cancel(record.id, actorId) });
       }
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/messages$/);
       let attachmentRoute = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/attachments$/);

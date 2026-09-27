@@ -10,6 +10,7 @@ struct SharedConversationDetails: View {
     let changed: (SharedRoomSummary) -> Void
     let exited: () -> Void
     let showMessage: (SharedFile) async throws -> Void
+    let showRequestMessage: (String, Int) async throws -> Void
     @State private var current: SharedRoomSummary?
     @State private var name = ""
     @State private var saving = false
@@ -71,6 +72,11 @@ struct SharedConversationDetails: View {
                     NavigationLink {
                         SharedConversationFiles(roomId: displayed.id, selfID: selfID, contacts: contacts, showMessage: showMessage)
                     } label: { Label("Shared files", systemImage: "paperclip") }
+                }
+                Section {
+                    NavigationLink {
+                        SharedConversationRequests(roomId: displayed.id, selfID: selfID, contacts: contacts, showMessage: showRequestMessage)
+                    } label: { Label("Bot requests", systemImage: "checklist") }
                 }
                 Section("Notifications") {
                     Picker("Notify me", selection: $notifications) {
@@ -214,5 +220,89 @@ private struct SharedConversationFiles: View {
             try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             preview = FilePreviewItem(downloaded: DownloadedFile(data: data, filename: attachment.name, contentType: attachment.mime, localURL: url))
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+
+private struct SharedConversationRequests: View {
+    @EnvironmentObject private var session: Session
+    let roomId: String
+    let selfID: String
+    let contacts: [SharedContact]
+    let showMessage: (String, Int) async throws -> Void
+    @State private var page: SharedRequestsResponse?
+    @State private var before: Int?
+    @State private var busy = false
+    @State private var acting = false
+    @State private var error: String?
+    var body: some View {
+        List {
+            if let page {
+                if page.requests.isEmpty {
+                    ContentUnavailableView("No bot requests yet", systemImage: "checklist", description: Text("Mention a bot to start work together. Its progress and results will appear here."))
+                }
+                ForEach(page.requests) { request in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(request.botName).font(.headline)
+                            Spacer()
+                            Text(request.stateLabel).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text("\(request.ownerName)’s bot · requested by \(request.requesterId == selfID ? "you" : contacts.first(where: { $0.id == request.requesterId })?.name ?? "a member")")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let explanation = request.explanation { Text(explanation).font(.subheadline).foregroundStyle(.secondary) }
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 20) { actions(request) }
+                            VStack(alignment: .leading, spacing: 12) { actions(request) }
+                        }.font(.subheadline).disabled(acting)
+                    }.padding(.vertical, 4)
+                }
+                if before != nil { Button("Recent requests") { before = nil } }
+                if page.hasMore { Button("Earlier requests") { before = page.before } }
+            } else if error == nil { ProgressView("Loading requests…") }
+            if let error { Text(error).font(.subheadline).foregroundStyle(.red); Button("Retry") { Task { await refresh() } } }
+        }
+        .navigationTitle("Bot requests")
+        .task(id: before) {
+            page = nil
+            while !Task.isCancelled {
+                await refresh()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+    @ViewBuilder private func actions(_ request: SharedBotRequest) -> some View {
+        if let sequence = request.sourceSequence {
+            Button("Show request") { open(request.sourceId, sequence: sequence) }.buttonStyle(.borderless)
+        }
+        if let id = request.resultId, let sequence = request.resultSequence {
+            Button("Show result") { open(id, sequence: sequence) }.buttonStyle(.borderless)
+        }
+        if request.canCancel(actorId: selfID) {
+            Button("Stop", role: .destructive) { Task {
+                acting = true; error = nil
+                defer { acting = false }
+                do { _ = try await session.cancelSharedRequest(roomId: roomId, requestId: request.id); await refresh() }
+                catch { self.error = error.localizedDescription }
+            } }.buttonStyle(.borderless)
+        }
+    }
+    private func open(_ id: String, sequence: Int) {
+        Task {
+            acting = true; error = nil
+            defer { acting = false }
+            do { try await showMessage(id, sequence) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    private func refresh() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let next = try await session.sharedRequests(roomId: roomId, before: before)
+            try Task.checkCancellation()
+            page = next; error = nil
+        } catch { if !Task.isCancelled { self.error = "Could not refresh bot requests. Check your connection and try again." } }
     }
 }

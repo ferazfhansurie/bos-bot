@@ -703,6 +703,16 @@ final class Session: ObservableObject {
         return try await client.sharedMessagePage(roomId: roomId, after: after, version: version, before: before, latest: latest)
     }
 
+    func sharedRequests(roomId: String, before: Int? = nil) async throws -> SharedRequestsResponse {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.sharedRequests(roomId: roomId, before: before)
+    }
+
+    func cancelSharedRequest(roomId: String, requestId: String) async throws -> SharedBotRequest {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.cancelSharedRequest(roomId: roomId, requestId: requestId)
+    }
+
     func sharedFiles(roomId: String, before: Int? = nil) async throws -> SharedFilesResponse {
         guard let client else { throw APIError.transport("Computer is offline") }
         return try await client.sharedFiles(roomId: roomId, before: before)

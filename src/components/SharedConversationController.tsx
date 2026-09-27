@@ -199,10 +199,17 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
     finally { if (mounted.current) setOlderLoading(false); }
   }, [roomId, messages, olderLoading, hasMore, applyHistory]);
 
-  const showFileMessage = async (file: SharedFile) => {
+  const showFileMessage = async (file: Pick<SharedFile, "messageId" | "sequence">) => {
     if (olderLoading) throw new Error("Earlier messages are still loading. Try again in a moment.");
     setOlderLoading(true);
     try {
+      for (let page = 0; page < 20 && file.sequence > historyRef.current.sequence; page++) {
+        const after = historyRef.current.sequence;
+        const result = await api<SharedHistoryPage>(`/api/multiplayer/rooms/${roomId}/messages?after=${after}&version=${historyRef.current.version}&limit=200`);
+        if (!mounted.current) return;
+        applyHistory(result, "after");
+        if (historyRef.current.sequence <= after) break;
+      }
       // Keep history contiguous: inserting a single old message would skip the
       // intervening pages on the next normal scroll-back.
       for (let page = 0; page < 20 && !historyRef.current.messages.some(message => message.id === file.messageId); page++) {

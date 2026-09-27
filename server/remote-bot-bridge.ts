@@ -705,6 +705,7 @@ export class RemoteBotBridge {
     onActivity: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void;
     deadlineMs: number;
     shouldContinue?: () => boolean;
+    onDispatch?: () => void;
   }): Promise<{ reply: string }> {
     const home = this.homes.get(input.homeId);
     if (!home || !home.state.bots[input.remoteBotId]) throw new BridgeError(404, "that bot is no longer shared");
@@ -718,6 +719,7 @@ export class RemoteBotBridge {
       this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, input.remoteBotId) });
       input.onThread(threadId);
     }
+    input.onDispatch?.();
     const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true, input.shouldContinue);
     if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
     const delivered = new Map<string, string>();

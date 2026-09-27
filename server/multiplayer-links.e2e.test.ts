@@ -58,6 +58,9 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     const roomPath = `/api/multiplayer/rooms/${(room.body as any).room.id}`;
     expect(await links.forwardShared(`${roomPath}/bots`, "GET")).toMatchObject({ status: 200, body: { bots: [] } });
     expect(await links.forwardShared(`${roomPath}/preferences`, "PATCH", { notifications: "muted" })).toMatchObject({ status: 200, body: { notifications: "muted" } });
+    expect(await links.forwardShared(`${roomPath}/requests?limit=20`, "GET")).toMatchObject({ status: 200, body: { requests: [] } });
+    expect(await links.forwardShared(`${roomPath}/requests/missing/cancel`, "POST", {})).toMatchObject({ status: 404 });
+    await expect(links.forwardShared(`${roomPath}/requests/missing/replay`, "POST", {})).rejects.toThrow("invalid shared chat route");
     const uploaded = await links.forwardShared(`${roomPath}/attachments`, "POST", { name: "brief.txt", mime: "text/plain", data: Buffer.from("shared brief").toString("base64") });
     expect(uploaded.status).toBe(201);
     expect(await links.forwardShared(`${roomPath}/files`, "GET")).toMatchObject({ status: 200, body: { files: [] } });

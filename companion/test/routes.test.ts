@@ -33,6 +33,14 @@ describe("credentials", () => {
 });
 
 describe("what the app may do", () => {
+  it("allows scoped request reads and stop commands only", () => {
+    expect(ask("GET", "/api/multiplayer/rooms/r/requests")).toBeNull();
+    expect(ask("POST", "/api/multiplayer/rooms/r/requests/q/cancel")).toBeNull();
+    expect(ask("POST", "/api/multiplayer/rooms/r/requests/q/cancel", false)?.status).toBe(401);
+    expect(allowed("POST", "/api/multiplayer/rooms/r/requests")).toBe(false);
+    expect(allowed("POST", "/api/multiplayer/rooms/r/requests/q/replay")).toBe(false);
+  });
+
   // Every request in ios/Sources/CompanionCore/Client.swift. If one of these
   // fails, a screen on the phone is broken.
   const calls: Array<[string, string]> = [

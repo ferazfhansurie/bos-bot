@@ -2,6 +2,20 @@ import XCTest
 @testable import CompanionCore
 
 final class SharedConversationTests: XCTestCase {
+    func testRequestOwnershipAndUnknownStatesFailClosed() throws {
+        let json = #"{"requests":[{"id":"q","roomId":"room","sourceId":"source","sourceSequence":4,"requesterId":"alice","botId":"home:bot:bot","botName":"Helper","ownerId":"owner","ownerName":"Owner","state":"queued","createdAt":1,"updatedAt":2}],"hasMore":false,"before":4}"#
+        let page = try JSONDecoder().decode(SharedRequestsResponse.self, from: Data(json.utf8))
+        let request = try XCTUnwrap(page.requests.first)
+        XCTAssertTrue(request.canCancel(actorId: "alice"))
+        XCTAssertTrue(request.canCancel(actorId: "owner"))
+        XCTAssertFalse(request.canCancel(actorId: "other"))
+        XCTAssertEqual(request.sourceSequence, 4)
+        let future = try JSONDecoder().decode(SharedRequestsResponse.self, from: Data(json.replacingOccurrences(of: "queued", with: "future-state").utf8)).requests[0]
+        XCTAssertFalse(future.isActive)
+        XCTAssertFalse(future.canCancel(actorId: "owner"))
+        XCTAssertEqual(future.stateLabel, "Outcome unknown")
+    }
+
     func testSettledWorkKeepsBotAndRequestIdentity() throws {
         func row(_ id: String, _ sequence: Int, home: String = "one", request: String = "request-a", state: String = "start") throws -> SharedChatMessage {
             let json = """

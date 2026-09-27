@@ -290,7 +290,7 @@ struct SharedChatView: View {
             if let id = pendingFileMessage { atBottom = false; fileMessageFocus = id; pendingFileMessage = nil }
         }) {
             SharedConversationDetails(room: currentRoom, selfID: selfID, contacts: contacts,
-                changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: showFileMessage)
+                changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: { try await showMessage(id: $0.messageId, sequence: $0.sequence) }, showRequestMessage: showMessage)
         }
         .task(id: room.id) {
             draft = UserDefaults.standard.string(forKey: "bos.shared-draft.\(room.id)") ?? ""
@@ -393,15 +393,27 @@ struct SharedChatView: View {
         } catch { self.error = error.localizedDescription }
     }
 
-    private func showFileMessage(_ file: SharedFile) async throws {
+    private func showMessage(id: String, sequence targetSequence: Int) async throws {
         guard !loadingOlder else { throw APIError.transport("Earlier messages are loading. Try again in a moment.") }
         loadingOlder = true
         followingBottom = false
         atBottom = false
         defer { loadingOlder = false }
+        for _ in 0..<20 where targetSequence > sequence {
+            let after = sequence
+            let page = try await session.sharedMessagePage(roomId: room.id, after: sequence, version: version)
+            try Task.checkCancellation()
+            let changes = Dictionary(uniqueKeysWithValues: (page.changes ?? []).map { ($0.id, $0) })
+            messages = messages.map { changes[$0.id] ?? $0 }
+            let ids = Set(messages.map(\.id))
+            messages.append(contentsOf: page.messages.filter { !ids.contains($0.id) })
+            sequence = max(sequence, page.messages.last?.sequence ?? sequence)
+            version = page.version ?? version
+            if sequence <= after { break }
+        }
         for _ in 0..<20 {
-            if messages.contains(where: { $0.id == file.messageId }) { break }
-            guard let first = messages.first, hasMore, first.sequence > file.sequence else { break }
+            if messages.contains(where: { $0.id == id }) { break }
+            guard let first = messages.first, hasMore, first.sequence > targetSequence else { break }
             let page = try await session.sharedMessagePage(roomId: room.id, before: first.sequence)
             try Task.checkCancellation()
             let ids = Set(messages.map(\.id))
@@ -410,10 +422,10 @@ struct SharedChatView: View {
             hasMore = page.hasMore ?? false
             if (messages.first?.sequence ?? first.sequence) >= first.sequence { break }
         }
-        guard messages.contains(where: { $0.id == file.messageId }) else {
+        guard messages.contains(where: { $0.id == id }) else {
             throw APIError.transport(hasMore ? "This message is further back. Tap Show message again to continue loading." : "This message is no longer available.")
         }
-        pendingFileMessage = file.messageId
+        pendingFileMessage = id
         showingDetails = false
     }
 

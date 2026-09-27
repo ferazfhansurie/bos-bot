@@ -102,6 +102,7 @@ describe("scopes", () => {
       ["GET", "/api/bots"], ["GET", "/api/threads/t/messages"], ["GET", "/api/search"], ["GET", "/api/events"],
       ["GET", "/api/config"], ["GET", "/api/webhooks"], ["POST", "/api/tts/speak"],
       ["GET", "/api/multiplayer/rooms/r/files"],
+      ["GET", "/api/multiplayer/rooms/r/requests"], ["POST", "/api/multiplayer/rooms/r/requests/q/cancel"],
       ["GET", "/api/auth/session"], ["POST", "/api/auth/stream-ticket"], ["POST", "/api/auth/logout"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
