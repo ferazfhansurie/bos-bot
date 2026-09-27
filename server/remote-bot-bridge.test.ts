@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { REMOTE_BOT_UNAVAILABLE } from "../shared/wire.ts";
-import { homeKey, isRemoteBotPath, RemoteBotBridge, type BridgeLink, type BridgeResponse } from "./remote-bot-bridge.ts";
+import { homeKey, isRemoteBotPath, RemoteBotBridge, type BridgeLink, type BridgeResponse, type RemoteBotBridgeOptions } from "./remote-bot-bridge.ts";
 
 const TOKEN = "omb_sess_linktoken-secret";
 const HOME = "home-putri";
@@ -30,6 +30,7 @@ class FakeHome {
   failRoomTurn = false;
   afterSendActivityCount = 0;
   supportsIsolation = true;
+  identityStatus = 200;
   afterThreadCreated: (() => void) | null = null;
 
   bot(): Record<string, unknown> {
@@ -54,7 +55,9 @@ class FakeHome {
     const method = init.method ?? "GET";
     this.calls.push({ method, path: url.pathname, search: url.search, body, headers, raw });
     const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
-    if (url.pathname === "/.well-known/openmausbot/environment") return json(200, { sharedConversationIsolation: this.supportsIsolation ? 1 : undefined });
+    if (url.pathname === "/.well-known/openmausbot/environment") return json(this.identityStatus, { sharedConversationIsolation: this.supportsIsolation ? 1 : undefined });
+    if (url.pathname === "/api/multiplayer/peer-migrate") return json(200, { scoped: true });
+    if (url.pathname === "/api/multiplayer/peer-rotate") return json(200, { rotated: false });
     if (url.pathname === "/api/events") {
       this.streamUrls.push(url);
       const stream = new ReadableStream<Uint8Array>({ start: (controller) => { this.streams.push(controller); } });
@@ -144,7 +147,7 @@ describe("RemoteBotBridge", () => {
   let queueChanges: number;
   let bridge: RemoteBotBridge;
   const link: BridgeLink = { homeId: HOME, origin: "https://putri.tail1234.ts.net", token: TOKEN, name: "Putri's Mac", ownerName: "Putri" };
-  const make = () => new RemoteBotBridge({
+  const make = (options: Partial<RemoteBotBridgeOptions> = {}) => new RemoteBotBridge({
     file: join(dir, "remote-bots.json"),
     links: () => [link],
     broadcast: (frame) => frames.push(JSON.parse(JSON.stringify(frame))),
@@ -157,6 +160,7 @@ describe("RemoteBotBridge", () => {
     reconnectDelaysMs: [5],
     idleTimeoutMs: 2000,
     log: () => {},
+    ...options,
   });
   const botId = `rb-${KEY}-pixie`;
   const route = (method: string, path: string, body?: unknown, search = "") =>
@@ -206,6 +210,24 @@ describe("RemoteBotBridge", () => {
     expect(visible!.threadId).toBe(pending);
     expect((await route("GET", `/api/threads/rt-${KEY}-bridge-1/messages`)).status).toBe(404);
     expect(fake.calls.some((call) => call.path === "/api/bots/pixie/messages" && (call.body as { sendId?: string }).sendId === "room-send-1")).toBe(true);
+  });
+
+  it("distinguishes upgrade and authentication failures from offline, then clears them after recovery", async () => {
+    await bridge.listBots(0); // Persist the cached roster, as an existing linked Mac has.
+    bridge.stop();
+    fake.supportsIsolation = false;
+    bridge = make({ replaceLinkToken: () => {} });
+    bridge.start();
+    await expect.poll(async () => (await bridge.listBots(0))[0]?.remote?.availability).toBe("update-required");
+    expect(taskCreates()).toBe(0);
+    expect(bridge.roomBot(HOME, "pixie")?.availability).toBe("update-required");
+    fake.identityStatus = 401;
+    await expect.poll(async () => (await bridge.listBots(0))[0]?.remote?.availability).toBe("reconnect-required");
+    fake.identityStatus = 200;
+    fake.supportsIsolation = true;
+    await expect.poll(async () => (await bridge.listBots(0))[0]?.remote?.availability).toBe("ready");
+    expect(frames.some(frame => frame.bot?.remote?.availability === "update-required")).toBe(true);
+    expect(taskCreates()).toBe(0);
   });
 
   it("requires an updated peer before creating or sending a shared task", async () => {

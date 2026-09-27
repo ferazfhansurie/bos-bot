@@ -26,6 +26,20 @@ final class StoreTests: XCTestCase {
 
     // MARK: - Hydration
 
+    func testRosterIsLoadedOnlyAfterAnAcceptedSnapshot() throws {
+        var state = CompanionState()
+        XCTAssertFalse(state.rosterLoaded)
+        state.apply(.hello(cursor: "test:1", resumed: false))
+        XCTAssertFalse(state.rosterLoaded)
+        let empty = try JSONDecoder().decode(Fleet.self, from: Data(#"{"bots":[],"groups":[]}"#.utf8))
+        XCTAssertFalse(state.hydrate(empty, ifCursorMatches: "stale:1"))
+        XCTAssertFalse(state.rosterLoaded)
+        state.hydrate(empty)
+        XCTAssertTrue(state.rosterLoaded)
+        XCTAssertTrue(state.bots.isEmpty)
+        XCTAssertFalse(CompanionState().rosterLoaded)
+    }
+
     func testHydrateIndexesEveryThread() throws {
         let state = try hydrated()
         XCTAssertFalse(state.bots.isEmpty)

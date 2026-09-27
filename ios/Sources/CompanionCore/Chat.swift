@@ -94,6 +94,11 @@ public enum Chat: Identifiable, Hashable {
         return false
     }
 
+    public var remoteConnectionNotice: String? {
+        if case let .bot(bot) = self { return bot.remote?.connectionNotice }
+        return nil
+    }
+
     /// The linked Mac's display name for a remote bot, nil otherwise.
     public var remoteHomeName: String? {
         if case let .bot(bot) = self { return bot.remote?.homeName }
@@ -114,7 +119,10 @@ public enum Chat: Identifiable, Hashable {
         case let .bot(bot):
             guard let home = bot.remote?.homeName, !home.isEmpty else { return bot.title }
             let title = bot.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            return title.isEmpty ? "on \(home)" : "\(title) · on \(home)"
+            let state = bot.remote?.availability == "update-required" ? "update required"
+                : bot.remote?.availability == "reconnect-required" ? "reconnect required"
+                : bot.remote?.online == false ? "offline" : nil
+            return [title.isEmpty ? nil : title, state, "on \(home)"].compactMap { $0 }.joined(separator: " · ")
         case let .room(room): return "\(room.memberIds.count) bots"
         }
     }

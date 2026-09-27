@@ -5,6 +5,17 @@ import XCTest
 @testable import CompanionCore
 
 final class RemoteBotTests: XCTestCase {
+    func testConnectionReasonIsOptionalAndSurvivesWireDecoding() throws {
+        let old = try JSONDecoder().decode(BotRemote.self, from: Data(#"{"homeId":"h","homeName":"Studio"}"#.utf8))
+        XCTAssertNil(old.connectionNotice)
+        let update = try JSONDecoder().decode(BotRemote.self, from: Data(#"{"homeId":"h","homeName":"Studio","ownerName":"Putri","online":false,"availability":"update-required"}"#.utf8))
+        XCTAssertTrue(update.connectionNotice?.contains("Update BOS on Putri") == true)
+        let reconnect = BotRemote(homeId: "h", homeName: "Studio", online: false, availability: "reconnect-required")
+        XCTAssertTrue(reconnect.connectionNotice?.contains("Reconnect Studio") == true)
+        let ready = BotRemote(homeId: "h", homeName: "Studio", online: true, availability: "ready")
+        XCTAssertNil(ready.connectionNotice)
+    }
+
     private func fixtureBotJSON() throws -> [String: Any] {
         let url = try XCTUnwrap(
             Bundle.module.url(forResource: "bots-full", withExtension: "json", subdirectory: "Fixtures")

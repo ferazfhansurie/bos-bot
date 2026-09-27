@@ -779,6 +779,7 @@ export interface AppState {
    * same message be focused twice in a row */
   focusMessage: { threadId: string; messageId: string; nonce: number; consumed: boolean } | null;
   connected: boolean;
+  rosterLoaded?: boolean;
   error: string | null;
   /** a quiet, non-error line above the transcript; clears itself */
   notice: { kind: "thread-gone"; botName: string | null } | null;
@@ -1248,6 +1249,7 @@ export function reducer(state: AppState, action: Action): AppState {
         state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
       const hydrated = {
         ...state,
+        rosterLoaded: true,
         bots: action.bots,
         groups: action.groups,
         sections: action.sections ?? [],

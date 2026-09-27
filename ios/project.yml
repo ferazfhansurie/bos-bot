@@ -48,7 +48,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "48"
+        CURRENT_PROJECT_VERSION: "50"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         # The catalog lives in App/, which is already a source path.
@@ -166,7 +166,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.notification-service
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "48"
+        CURRENT_PROJECT_VERSION: "50"
         SWIFT_VERSION: "5.9"
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: true
@@ -203,7 +203,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.share
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "48"
+        CURRENT_PROJECT_VERSION: "50"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -264,7 +264,7 @@ targets:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.widgets
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "48"
+        CURRENT_PROJECT_VERSION: "50"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
         SKIP_INSTALL: true

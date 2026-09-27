@@ -5905,7 +5905,7 @@ const MAX_SHARED_ROOM_HOPS = 4;
 const sharedRoomLocks = new Set<string>();
 const sharedBotLocks = new Set<string>();
 
-interface SharedRoomBot { key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string }
+interface SharedRoomBot { key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string; availability?: "ready" | "offline" | "update-required" | "reconnect-required" }
 
 function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
   const owner = cfg.profile?.name?.trim() || "Owner";
@@ -5923,7 +5923,7 @@ function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
     }
     const remote = remoteBots.roomBot(key.homeId, key.localId);
     const link = links.get(key.homeId);
-    return remote && link ? [{ key: bot, id, name: remote.name, remote: true, ownerName: link.ownerName ?? link.name }] : [];
+    return remote && link ? [{ key: bot, id, name: remote.name, remote: true, ownerName: link.ownerName ?? link.name, availability: remote.availability }] : [];
   });
 }
 

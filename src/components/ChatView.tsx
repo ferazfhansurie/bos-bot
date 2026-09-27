@@ -113,7 +113,7 @@ import { RenameTitle } from "./RenameTitle";
 import { BotActivityPicker, TaskPicker } from "./TaskPicker";
 import { ModelPicker } from "./ModelPicker";
 import { ExportTranscriptMenu } from "./ExportTranscriptMenu";
-import { botControlAvailable, remoteBotHint } from "@/lib/remote-bot";
+import { botControlAvailable, remoteBotHint, remoteBotNotice } from "@/lib/remote-bot";
 
 import { SpeakButton } from "./SpeakButton";
 import { CallButton, CallOverlay } from "./CallView";
@@ -1403,6 +1403,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       </ConversationHeader>
 
       {shared?.banner}
+      {!shared && remoteBotNotice(bot) && <div role="status" className="mx-5 my-2 rounded-xl border border-hairline/40 bg-raised px-3 py-2 text-sm text-ink-secondary">{remoteBotNotice(bot)}</div>}
 
       {!shared && <BotActivityPicker bot={bot} />}
       {routineExecution && <div className="mx-5 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[11.5px] text-ink-secondary">

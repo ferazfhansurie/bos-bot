@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { botControlAvailable, mentionableBots, remoteBotHint, type BotControl } from "./remote-bot";
+import { botControlAvailable, mentionableBots, remoteBotHint, remoteBotNotice, type BotControl } from "./remote-bot";
 
 const remote = { homeId: "home-1", homeName: "Studio", ownerName: "Putri" };
 
 describe("remote bot controls", () => {
+  it("explains update and reconnect failures without calling a reachable Mac offline", () => {
+    const outdated = { remote: { ...remote, online: false, availability: "update-required" as const } };
+    expect(remoteBotHint(outdated)).toBe("update required · on Putri's Mac");
+    expect(remoteBotNotice(outdated)).toContain("Update BOS on Putri's Mac");
+    expect(remoteBotNotice({ remote: { ...remote, availability: "reconnect-required" } })).toContain("Reconnect");
+    expect(remoteBotNotice({ remote: { ...remote, online: false } })).toContain("Keep BOS open");
+    expect(remoteBotNotice({ remote: { ...remote, online: true, availability: "ready" } })).toBeNull();
+    expect(remoteBotNotice({})).toBeNull();
+  });
   it("hides this-Mac-only controls for a relayed bot", () => {
     const bot = { remote };
     const hidden: BotControl[] = ["settings", "computer", "inspector", "folders", "steer", "alwaysAllow", "voiceSetup", "mention"];

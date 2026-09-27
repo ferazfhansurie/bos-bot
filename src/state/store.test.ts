@@ -2076,3 +2076,11 @@ describe("conversation model variant discoveries", () => {
     expect(state.bots[0].tasks![0].modelSelection?.variant).toBe("minimal");
   });
 });
+
+it("only finishes initial chat loading when the roster snapshot arrives", () => {
+  const connected = reducer(initialState, { type: "connected", value: true });
+  expect(connected.rosterLoaded).not.toBe(true);
+  const loaded = reducer(connected, { type: "hydrate", bots: [], groups: [], computerControl: {} });
+  expect(loaded.rosterLoaded).toBe(true);
+  expect(reducer(loaded, { type: "connected", value: false }).rosterLoaded).toBe(true);
+});

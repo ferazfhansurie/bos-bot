@@ -277,15 +277,13 @@ function Shell() {
         <ChatView bot={bot} />
       ) : (
         <main className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary">
-          <Loader2 size={20} className="animate-spin" />
-          <div className="text-[14px]">
-            {state.connected ? "No bots yet" : "Connecting to the bot server…"}
+          {!state.rosterLoaded && <Loader2 size={20} className="animate-spin" />}
+          <div role="status" className="text-[14px]">
+            {state.rosterLoaded ? "Your chats start here" : state.connected ? "Loading your chats…" : "Connecting to BOS…"}
           </div>
-          {!state.connected && (
-            <div className="text-[12px]">
-              Start it with <code className="rounded bg-raised px-1.5 py-0.5">pnpm dev:server</code>
-            </div>
-          )}
+          {state.rosterLoaded ? (
+            <button type="button" onClick={() => dispatch({ type: "toggleNewBot", open: true })} className="rounded-xl bg-accent px-4 py-2 text-sm text-on-accent">Create your first bot</button>
+          ) : <p className="text-xs">Your saved chats will appear when the connection is ready.</p>}
         </main>
       )}
       {/* The panels below are siblings, so their keys must differ even

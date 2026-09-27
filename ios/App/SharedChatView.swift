@@ -212,6 +212,7 @@ struct SharedChatView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("@" + bot.name).font(.subheadline.weight(.medium))
                                     if let owner = bot.ownerName { Text(owner + "’s bot").font(.caption).foregroundStyle(.secondary) }
+                                    if let status = bot.availabilityLabel { Text(status).font(.caption2).foregroundStyle(.secondary) }
                                 }.padding(.horizontal, 12).padding(.vertical, 8)
                                     .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                             }.buttonStyle(.plain)

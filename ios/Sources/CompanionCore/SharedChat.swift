@@ -112,8 +112,17 @@ public struct SharedEligibleBot: Codable, Hashable, Identifiable, Sendable {
     public let id: String
     public let name: String
     public let ownerName: String?
+    public let availability: String?
 }
 public extension SharedEligibleBot {
+    var availabilityLabel: String? {
+        switch availability {
+        case "offline": return "Host offline"
+        case "update-required": return "Update required"
+        case "reconnect-required": return "Reconnect required"
+        default: return nil
+        }
+    }
     static func matching(_ bots: [SharedEligibleBot], query: String) -> [SharedEligibleBot] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return bots.filter { term.isEmpty || $0.name.localizedCaseInsensitiveContains(term) || ($0.ownerName?.localizedCaseInsensitiveContains(term) ?? false) }

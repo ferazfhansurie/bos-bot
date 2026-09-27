@@ -104,15 +104,26 @@ struct ChatListView: View {
                 .refreshable { await session.refresh(); await refreshShared() }
                 .overlay {
                     if rosterIsEmpty {
-                        ContentUnavailableView(
-                            query.isEmpty ? "No bots yet" : "Nothing matches",
-                            systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
-                            description: Text(
-                                query.isEmpty
-                                    ? "Bots you create on your computer show up here."
-                                    : "No thread matches \u{201C}\(query)\u{201D}."
+                        if query.isEmpty && !session.state.rosterLoaded {
+                            ContentUnavailableView {
+                                Label("Your chats are not loaded yet", systemImage: "wifi.slash")
+                            } description: {
+                                Text("Keep BOS open on your Mac. Your chats will appear when the connection is ready.")
+                            } actions: {
+                                Button("Try again") { Task { await session.refresh(); await refreshShared() } }
+                                    .buttonStyle(.bordered)
+                            }
+                        } else {
+                            ContentUnavailableView(
+                                query.isEmpty ? "Your chats start here" : "Nothing matches",
+                                systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
+                                description: Text(
+                                    query.isEmpty
+                                        ? "Use + to start a conversation or create a bot."
+                                        : "No thread matches \u{201C}\(query)\u{201D}."
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }

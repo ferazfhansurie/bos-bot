@@ -129,6 +129,7 @@ interface Home {
   cursor: string | null;
   running: boolean;
   connected: boolean;
+  availability?: RemoteBotOrigin["availability"];
   peerMigrated?: boolean;
   announcedOrigin?: string;
   announcedAt?: number;
@@ -298,10 +299,17 @@ export class RemoteBotBridge {
     }
   }
 
-  private setConnected(home: Home, online: boolean): void {
-    if (home.connected === online) return;
+  private setConnected(home: Home, online: boolean, availability: RemoteBotOrigin["availability"] = "offline"): void {
+    const next = online ? "ready" : availability;
+    if (home.connected === online && home.availability === next) return;
     home.connected = online;
+    home.availability = next;
     for (const botId of Object.keys(home.state.bots)) this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, botId) });
+  }
+
+  private connectionFailed(home: Home, error: unknown): void {
+    const status = error instanceof BridgeError ? error.status : 0;
+    this.setConnected(home, false, status === 426 ? "update-required" : status === 401 || status === 403 ? "reconnect-required" : "offline");
   }
 
   /** Match runtimes to the current links; starts a stream for a new link. */
@@ -682,10 +690,10 @@ export class RemoteBotBridge {
 
   /** A shared room member on a linked Mac: the contact's home and bot id, or
    * null when that Mac is not linked or does not share the bot. */
-  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string } | null {
+  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string; availability?: RemoteBotOrigin["availability"] } | null {
     const home = this.homes.get(homeId);
     const bot = home?.state.bots[remoteBotId];
-    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot") } : null;
+    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
   }
 
   /** Run one shared-room turn on a linked Mac's bot. The turn goes to a
@@ -859,7 +867,7 @@ export class RemoteBotBridge {
     const tasks = this.threadsOf(home, remoteBotId).map((threadId) => this.virtualTask(home, threadId));
     const selected = this.selectedThread(home, remoteBotId);
     const task = selected ? tasks.find((candidate) => candidate.threadId === this.threadId(home, selected)) : undefined;
-    const remote: RemoteBotOrigin = { homeId: home.link.homeId, homeName: home.link.name, ownerName: home.link.ownerName, online: home.connected };
+    const remote: RemoteBotOrigin = { homeId: home.link.homeId, homeName: home.link.name, ownerName: home.link.ownerName, online: home.connected, availability: home.availability };
     return {
       id: this.botId(home, remoteBotId),
       threadId: selected ? this.threadId(home, selected) : this.placeholder(home, remoteBotId),
@@ -965,15 +973,22 @@ export class RemoteBotBridge {
 
   private async requireSharedReceiver(home: Home): Promise<void> {
     const identity = await this.call(home, "GET", "/.well-known/openmausbot/environment");
+    if (identity.status === 401 || identity.status === 403) {
+      const error = new BridgeError(identity.status, `Reconnect ${home.link.name} in People & workspaces.`);
+      this.connectionFailed(home, error);
+      throw error;
+    }
+    if (identity.status >= 500) throw new BridgeError(502, "The other Mac is temporarily unavailable.");
     if (identity.status !== 200 || identity.body?.sharedConversationIsolation !== 1) {
       const message = `Update BOS on ${home.link.ownerName ?? home.link.name}'s Mac to use shared bot conversations.`;
+      this.setConnected(home, false, "update-required");
       throw Object.assign(new BridgeError(426, message), { sharedExplanation: message });
     }
   }
 
   private async refreshSnapshot(home: Home): Promise<void> {
+    if (this.options.replaceLinkToken) await this.requireSharedReceiver(home);
     if (this.options.replaceLinkToken && !home.peerMigrated) {
-      await this.requireSharedReceiver(home);
       const threads = Object.entries(home.state.threads).map(([threadId, entry]) => ({ botId: entry.botId, threadId }));
       const migrated = await this.call(home, "POST", "/api/multiplayer/peer-migrate", { threads });
       if (migrated.status !== 200 || migrated.body?.scoped !== true) {
@@ -1311,7 +1326,7 @@ export class RemoteBotBridge {
       if (!home.peerMigrated && this.options.replaceLinkToken) {
         try { await this.refreshSnapshot(home); }
         catch (error) {
-          this.setConnected(home, false);
+          this.connectionFailed(home, error);
           this.log(`${home.link.name}: peer migration failed (${error instanceof Error ? error.message : "unknown"})`);
           await new Promise(resolveWait => setTimeout(resolveWait, delays[Math.min(attempt++, delays.length - 1)]));
           continue;
@@ -1324,7 +1339,7 @@ export class RemoteBotBridge {
             .map(([threadId]) => this.hydrate(home, threadId, true).catch(() => {})));
           this.setConnected(home, true);
         } catch (error) {
-          this.setConnected(home, false);
+          this.connectionFailed(home, error);
           this.log(`${home.link.name}: peer refresh failed (${error instanceof Error ? error.message : "unknown"})`);
         }
         await new Promise<void>(resolveWait => {

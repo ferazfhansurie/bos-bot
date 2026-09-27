@@ -135,7 +135,7 @@ final class FailoverTests: XCTestCase {
     func testRefusedConnectionPointsAtTheCompanionToggle() {
         let message = ConnectionAdvice.message(for: .cannotConnectToHost, host: "192.168.1.42", port: 8810)
         XCTAssertTrue(message.contains("port 8810"))
-        XCTAssertTrue(message.contains("Settings → Phone"))
+        XCTAssertTrue(message.contains("Settings → Remote access"))
     }
 
     func testTimeoutBlamesTheRouteNotTheApp() {

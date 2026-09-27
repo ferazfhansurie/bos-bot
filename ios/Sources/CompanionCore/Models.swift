@@ -485,10 +485,24 @@ public struct BotRemote: Codable, Hashable, Sendable {
     public var homeName: String
     public var ownerName: String?
 
-    public init(homeId: String, homeName: String, ownerName: String? = nil) {
+    public var online: Bool?
+    public var availability: String?
+
+    public var connectionNotice: String? {
+        let host = ownerName.map { "\($0)’s Mac" } ?? homeName
+        switch availability {
+        case "update-required": return "Update BOS on \(host) before messaging this bot. Your chat history stays here."
+        case "reconnect-required": return "Reconnect \(host) in People & workspaces to message this bot."
+        default: return online == false ? "\(host) is unavailable. Keep BOS open there and check its connection. Your draft stays here." : nil
+        }
+    }
+
+    public init(homeId: String, homeName: String, ownerName: String? = nil, online: Bool? = nil, availability: String? = nil) {
         self.homeId = homeId
         self.homeName = homeName
         self.ownerName = ownerName
+        self.online = online
+        self.availability = availability
     }
 }
 

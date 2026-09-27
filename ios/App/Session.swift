@@ -875,7 +875,7 @@ final class Session: ObservableObject {
                 }
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
-                status = .offline("Lost the connection.")
+                status = .offline(failureMessage(for: URLError(.networkConnectionLost)))
             } catch let error as APIError where error.isUnauthorized {
                 log.error("stream refused: unauthorized")
                 status = .unauthorized

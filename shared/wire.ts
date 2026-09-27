@@ -272,6 +272,7 @@ export interface RemoteBotOrigin {
   ownerName: string | null;
   /** False while the home Mac's event stream is disconnected. */
   online?: boolean;
+  availability?: "ready" | "offline" | "update-required" | "reconnect-required";
 }
 
 /** Error text every relay-refused bot route answers with (HTTP 403). */

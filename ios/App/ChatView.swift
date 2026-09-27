@@ -164,6 +164,11 @@ struct ChatView: View {
         // middle of the screen with black beneath it. Here the scroll area is
         // explicitly told to take everything the composer does not.
         VStack(spacing: 0) {
+            if let notice = chat.remoteConnectionNotice {
+                Text(notice).font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                    .background(Color.secondary.opacity(0.08))
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     // VStack, not LazyVStack. A lazy stack does not know how

@@ -20,6 +20,8 @@ public struct SidebarSection: Identifiable, Hashable, Sendable {
 }
 
 public struct CompanionState: Sendable {
+    /// An empty snapshot is different from a roster we have not received yet.
+    public private(set) var rosterLoaded = false
     public var bots: [Bot] = []
     public var rooms: [Room] = []
     /// Transcripts by thread, which is the key both bots and rooms share.
@@ -230,6 +232,7 @@ public struct CompanionState: Sendable {
 
     /// Replace everything from a `GET /api/bots` response.
     public mutating func hydrate(_ fleet: Fleet, waitingThreads: [String: ThreadPage] = [:]) {
+        rosterLoaded = true
         bots = fleet.bots
         rooms = fleet.groups
         messages.removeAll()

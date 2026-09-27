@@ -67,6 +67,7 @@ export interface SharedContact {
 }
 export interface SharedEligibleBot {
   id: string; name: string; ownerName: string; color?: Bot["color"];
+  availability?: "ready" | "offline" | "update-required" | "reconnect-required";
   mascotBody?: Bot["mascotBody"]; avatarUrl?: string | null;
 }
 export interface SharedComposer {
@@ -86,7 +87,7 @@ export function sharedMentionBots(bots: readonly SharedEligibleBot[]): Bot[] {
   return bots.map((bot, index) => ({
     id: bot.id, threadId: `shared-bot:${bot.id}`,
     name: labels[index],
-    title: `${bot.ownerName}'s bot`, description: "", notifications: false,
+    title: `${bot.ownerName}'s bot${bot.availability && bot.availability !== "ready" ? ` · ${bot.availability.replaceAll("-", " ")}` : ""}`, description: "", notifications: false,
     color: bot.color ?? "blue", mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl,
     unread: false, busy: false, modelSelection: { instanceId: "shared", model: "shared" },
     messages: [], activeLeafId: null,
