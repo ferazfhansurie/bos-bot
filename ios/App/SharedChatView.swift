@@ -32,6 +32,7 @@ struct SharedChatView: View {
     @State private var hasMore = false
     @State private var loadingOlder = false
     @State private var atBottom = true
+    @State private var followingBottom = true
     @State private var scrollHeight: CGFloat = 0
     @State private var readSequence = 0
     @State private var replyTarget: SharedChatMessage?
@@ -79,7 +80,7 @@ struct SharedChatView: View {
                                     if !mine { Text(senderName(message))
                                         .font(.caption2).foregroundStyle(.secondary) }
                                     if let replyID = message.replyReference, let quoted = messages.first(where: { $0.id == replyID }) {
-                                        Button { withAnimation { proxy.scrollTo(replyID, anchor: .center) } } label: {
+                                        Button { followingBottom = false; withAnimation { proxy.scrollTo(replyID, anchor: .center) } } label: {
                                             VStack(alignment: .leading, spacing: 3) {
                                                 Text("Replying to \(quoted.actor.id == selfID ? "you" : senderName(quoted))").font(.caption2.weight(.medium))
                                                 Text(quoted.deletedAt == nil ? quoted.text : "Message removed").font(.caption).lineLimit(2)
@@ -135,22 +136,27 @@ struct SharedChatView: View {
                     .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
+                .simultaneousGesture(DragGesture(minimumDistance: 4)
+                    .onChanged { value in if value.translation.height > 4 { followingBottom = false } }
+                    .onEnded { _ in if atBottom { followingBottom = true } })
                 .coordinateSpace(name: "shared-scroll")
                 .background(GeometryReader { geometry in
                     Color.clear.onChange(of: geometry.size.height, initial: true) { _, height in scrollHeight = height }
                 })
                 .onChange(of: scrollHeight) { _, _ in
-                    if atBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
+                    if followingBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
                 }
                 .onPreferenceChange(SharedChatBottomKey.self) { bottom in
                     guard !loadingOlder && pendingFileMessage == nil else { return }
                     atBottom = bottom > 0 && bottom <= scrollHeight + 24
+                    if followingBottom && !atBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
                     if atBottom { Task { await markRead() } }
                 }
                 .safeAreaInset(edge: .top, spacing: 0) { header }
                 .overlay(alignment: .bottomTrailing) {
                     if !atBottom && !messages.isEmpty {
                         Button {
+                            followingBottom = true
                             withAnimation { proxy.scrollTo("shared-bottom", anchor: .bottom) }
                         } label: {
                             Label("Latest messages", systemImage: "arrow.down")
@@ -165,7 +171,7 @@ struct SharedChatView: View {
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: messages.count) { _, _ in
-                    if atBottom, let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }; Task { await markRead() } }
+                    if followingBottom, let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }; Task { await markRead() } }
                 }
             }
             if connectionError != nil {
@@ -375,6 +381,7 @@ struct SharedChatView: View {
     private func loadOlder() async {
         guard let first = messages.first, !loadingOlder else { return }
         loadingOlder = true
+        followingBottom = false
         defer { loadingOlder = false }
         do {
             let page = try await session.sharedMessagePage(roomId: room.id, before: first.sequence)
@@ -389,6 +396,7 @@ struct SharedChatView: View {
     private func showFileMessage(_ file: SharedFile) async throws {
         guard !loadingOlder else { throw APIError.transport("Earlier messages are loading. Try again in a moment.") }
         loadingOlder = true
+        followingBottom = false
         atBottom = false
         defer { loadingOlder = false }
         for _ in 0..<20 {
@@ -447,6 +455,7 @@ struct SharedChatView: View {
             pendingSendID = nil
             replyTarget = nil
             atBottom = true
+            followingBottom = true
             await refresh()
         } catch { self.error = "Message wasn’t sent. Your text and attachments are still here. " + error.localizedDescription }
         sending = false
