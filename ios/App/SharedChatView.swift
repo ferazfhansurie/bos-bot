@@ -130,6 +130,9 @@ struct SharedChatView: View {
                 .background(GeometryReader { geometry in
                     Color.clear.onChange(of: geometry.size.height, initial: true) { _, height in scrollHeight = height }
                 })
+                .onChange(of: scrollHeight) { _, _ in
+                    if atBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
+                }
                 .onPreferenceChange(SharedChatBottomKey.self) { bottom in
                     atBottom = bottom > 0 && bottom <= scrollHeight + 24
                     if atBottom { Task { await markRead() } }
