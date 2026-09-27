@@ -265,7 +265,7 @@ public struct SharedRequestResponse: Codable, Sendable { public let request: Sha
 
 
 /// Everything that affects message identity is captured before an upload awaits.
-public struct SharedSendDraft: Equatable, Sendable {
+public struct SharedSendDraft: Codable, Equatable, Sendable {
     public let text: String
     public let fileIDs: [UUID]
     public let replyTo: String?

@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 import UIKit
 import PhotosUI
@@ -569,7 +570,9 @@ struct SharedChatView: View {
         let key = "bos.shared-draft." + identity
         let defaults = UserDefaults.standard
         let text = defaults.string(forKey: key) ?? defaults.string(forKey: "bos.shared-draft." + roomID) ?? ""
-        let draft = SharedDeliveryDraft(text: text, saveText: { value in defaults.set(value, forKey: key) })
+        let scope = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("SharedDrafts/" + scope, isDirectory: true)
+        let draft = SharedDeliveryDraft(text: text, directory: directory, saveText: { value in defaults.set(value, forKey: key) })
         defaults.set(text, forKey: key)
         defaults.removeObject(forKey: "bos.shared-draft." + roomID)
         #if DEBUG
