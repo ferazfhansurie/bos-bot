@@ -1,3 +1,4 @@
+import { sharedMentionTargets } from "../shared/shared-mentions.ts";
 // OpenMausBot server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
@@ -12389,18 +12390,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         let result;
         try {
           const room = sharedRooms.roomFor(roomId, actorId)!;
+          const previous = sharedRooms.allMessages(roomId).find(message => message.sendId === body.sendId && contactId(message.actor) === actorId);
           const available = sharedRoomBots(room, actorId);
-          let targets = sharedRoomTargets(available, body.text, false).map(bot => bot.id);
+          const people = multiplayerActors.people(cfg.profile?.name ?? "Owner").filter(person => room.memberIds.includes(person.id));
+          const mentioned = sharedMentionTargets(body.text, [...people.map(person => ({ ...person, kind: "person" as const })), ...available.map(bot => ({ ...bot, kind: "bot" as const }))]);
+          let targets = available.filter(bot => mentioned.includes(bot.id)).map(bot => bot.id);
+          const humanMentions = /(^|\s)@everyone\b/i.test(sharedMentionText(body.text)) ? people.map(person => person.id) : people.filter(person => mentioned.includes(person.id)).map(person => person.id);
+          if (!previous && body.humanMentions !== undefined && (!Array.isArray(body.humanMentions) || body.humanMentions.some((id: unknown) => typeof id !== "string" || !humanMentions.includes(id)))) {
+            return json(res, 403, { error: "person mention is unavailable; choose it again" });
+          }
           // Legacy direct bot chats still answer directly. Human chats never do.
-          if (room.kind !== "group" && room.memberIds.length === 2 && room.memberIds.some(id => parseContactId(id)?.kind === "bot") && !targets.length && !body.text.includes("@")) targets = available.filter(bot => room.memberIds.includes(bot.id)).map(bot => bot.id);
-          if (body.botTargets !== undefined && (!Array.isArray(body.botTargets) || body.botTargets.some((id: unknown) => typeof id !== "string" || !targets.includes(id)))) {
+          const directBotReply = room.kind !== "group" && room.memberIds.length === 2 && room.memberIds.some(id => parseContactId(id)?.kind === "bot") && !targets.length && !body.text.includes("@");
+          if (directBotReply) targets = available.filter(bot => room.memberIds.includes(bot.id)).map(bot => bot.id);
+          if (!previous && body.botTargets !== undefined && (!Array.isArray(body.botTargets) || body.botTargets.some((id: unknown) => typeof id !== "string" || !targets.includes(id)))) {
             return json(res, 403, { error: "bot mention is unavailable; choose it again" });
           }
-          const previous = sharedRooms.allMessages(roomId).find(message => message.sendId === body.sendId && contactId(message.actor) === actorId);
           // A retry keeps the original routing even after bot names change.
-          const botTargets = previous?.botTargets ?? targets;
+          const botTargets = previous?.botTargets ?? (directBotReply ? targets : body.botTargets ?? targets);
           result = sharedRooms.append(roomId, actorId, { actor, text: body.text, sendId: body.sendId, attachments: body.attachments, botTargets, replyTo: body.replyTo,
-            humanMentions: /(^|\s)@everyone\b/i.test(sharedMentionText(body.text)) ? room.memberIds.filter(id => parseContactId(id)?.kind === "person") : sharedRoomTargets(multiplayerActors.people(cfg.profile?.name ?? "Owner").filter(person => room.memberIds.includes(person.id)), body.text, false).map(person => person.id) });
+            humanMentions: previous?.humanMentions ?? humanMentions });
         }
         catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "invalid message" }); }
         if (result.created) {

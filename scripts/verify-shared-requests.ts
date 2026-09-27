@@ -12,7 +12,7 @@ try {
   const paired = await api("POST", "/api/auth/pair", { code: pairing.code, label: "Fixture teammate" });
   const teammate = "fixture-teammate:person:owner";
   await api("POST", "/api/multiplayer/actor-bindings", { sessionId: paired.session.id, personId: teammate, name: "Maya" });
-  for (const name of ["Pepper", "Willow"]) await runControlOmb(["new-bot", "--name", name, "--url", fixture.info.url]);
+  for (const name of ["Pepper", "Willow", "Maya"]) await runControlOmb(["new-bot", "--name", name, "--url", fixture.info.url]);
   const { bots } = await api("GET", "/api/bots?messages=0");
   const { room } = await api("POST", "/api/multiplayer/rooms", { name: "Launch crew", memberIds: [me.actorId, teammate] });
   const route = `/api/multiplayer/rooms/${room.id}/messages`;

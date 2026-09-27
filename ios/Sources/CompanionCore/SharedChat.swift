@@ -180,6 +180,44 @@ public extension SharedEligibleBot {
         return bots.filter { term.isEmpty || $0.name.localizedCaseInsensitiveContains(term) || ($0.ownerName?.localizedCaseInsensitiveContains(term) ?? false) }
     }
 }
+/// Shared picker labels are disambiguated across both people and bots.
+public struct SharedMentionChoice: Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let kind: String
+    public let ownerName: String?
+    public let availabilityLabel: String?
+    public var label: String
+    public var detail: String { kind == "person" ? "Person" : (ownerName.map { $0 + "’s bot" } ?? "Bot") }
+
+    public static func choices(contacts: [SharedContact], memberIDs: [String], bots: [SharedEligibleBot]) -> [SharedMentionChoice] {
+        let roster = contacts.filter { $0.kind == "person" && memberIDs.contains($0.id) }.map {
+            SharedMentionChoice(id: $0.id, name: $0.name, kind: "person", ownerName: nil, availabilityLabel: nil, label: $0.name)
+        } + bots.map {
+            SharedMentionChoice(id: $0.id, name: $0.name, kind: "bot", ownerName: $0.ownerName, availabilityLabel: $0.availabilityLabel, label: $0.name)
+        }
+        func qualifier(_ item: SharedMentionChoice) -> String {
+            item.kind == "person" ? "person" : (item.ownerName.flatMap { $0.isEmpty ? nil : $0 } ?? "bot")
+        }
+        return roster.map { item in
+            var result = item
+            let same = roster.filter { $0.name.lowercased() == item.name.lowercased() }
+            if same.count > 1 {
+                result.label = item.name + " · " + qualifier(item)
+                if same.filter({ qualifier($0).lowercased() == qualifier(item).lowercased() }).count > 1 {
+                    result.label += " · " + item.id
+                }
+            }
+            return result
+        }
+    }
+
+    public static func matching(_ choices: [SharedMentionChoice], query: String) -> [SharedMentionChoice] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return choices.filter { term.isEmpty || $0.label.localizedCaseInsensitiveContains(term) || $0.detail.localizedCaseInsensitiveContains(term) }
+    }
+}
+
 public struct SharedEligibleBotsResponse: Codable, Sendable { public let bots: [SharedEligibleBot] }
 
 

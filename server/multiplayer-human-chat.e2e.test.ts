@@ -22,7 +22,7 @@ it("invokes an owned bot inside a human group without giving it membership", asy
     await api("POST", "/api/bots", { name: "Spare", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true });
     const direct = await api("POST", "/api/multiplayer/dm", { targetId: botId });
     expect(direct.status).toBe(201);
-    const directSend = await api("POST", `/api/multiplayer/rooms/${direct.body.room.id}/messages`, { text: "hello", sendId: "direct-only" });
+    const directSend = await api("POST", `/api/multiplayer/rooms/${direct.body.room.id}/messages`, { text: "hello", sendId: "direct-only", botTargets: [] });
     expect(directSend.body.message.botTargets).toEqual([botId]);
     const created = await api("POST", "/api/multiplayer/rooms", { name: "Humans", memberIds: [me.actorId, teammate] });
     expect(created.status).toBe(201);

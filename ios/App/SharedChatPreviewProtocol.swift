@@ -72,7 +72,7 @@ private final class SharedChatPreviewState: @unchecked Sendable {
             return (200, ["rooms": [["id": roomId, "homeId": "preview-home", "name": "Launch crew", "kind": "group", "createdBy": owner,
                 "memberIds": [owner, teammate], "createdAt": at, "lastActivity": at + 220_000, "preview": "Ready for the alpha walkthrough.", "revision": 1]]])
         }
-        if path == roomPath + "/bots" { return (200, ["bots": [["id": "preview-home:bot:pepper", "name": "Pepper", "ownerName": "Alex"], ["id": "preview-maya:bot:willow", "name": "Willow", "ownerName": "Maya", "availability": "ready"]]]) }
+        if path == roomPath + "/bots" { return (200, ["bots": [["id": "preview-home:bot:pepper", "name": "Pepper", "ownerName": "Alex"], ["id": "preview-maya:bot:willow", "name": "Willow", "ownerName": "Maya", "availability": "ready"], ["id": "preview-home:bot:maya", "name": "Maya", "ownerName": "Alex"]]]) }
         if path == roomPath + "/preferences" { return (200, ["readSequence": 220, "notifications": "all"]) }
         if path == roomPath + "/messages" && method == "GET" {
             let limit = min(200, max(1, Int(query["limit"] ?? "200") ?? 200))

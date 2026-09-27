@@ -2,6 +2,16 @@ import XCTest
 @testable import CompanionCore
 
 final class SharedConversationTests: XCTestCase {
+    func testHumanAndBotPickerLabelsDoNotCollide() throws {
+        let contacts = try JSONDecoder().decode(SharedContactsResponse.self, from: Data(#"{"contacts":[{"id":"m","name":"Maya","kind":"person"},{"id":"outside","name":"Absent","kind":"person"}]}"#.utf8)).contacts
+        let bots = try JSONDecoder().decode(SharedEligibleBotsResponse.self, from: Data(#"{"bots":[{"id":"a:bot:m","name":"Maya","ownerName":"Alex"},{"id":"p:bot:p","name":"Pixie","ownerName":"Putri"}]}"#.utf8)).bots
+        let choices = SharedMentionChoice.choices(contacts: contacts, memberIDs: ["m"], bots: bots)
+        XCTAssertEqual(choices.map(\.label), ["Maya · person", "Maya · Alex", "Pixie"])
+        XCTAssertEqual(SharedMentionChoice.matching(choices, query: "person").map(\.id), ["m"])
+        XCTAssertEqual(SharedMentionChoice.matching(choices, query: "putri").map(\.id), ["p:bot:p"])
+        XCTAssertFalse(choices.contains { $0.id == "outside" })
+    }
+
     func testRequestOwnershipAndUnknownStatesFailClosed() throws {
         let json = #"{"requests":[{"id":"q","roomId":"room","sourceId":"source","sourceSequence":4,"requesterId":"alice","botId":"home:bot:bot","botName":"Helper","ownerId":"owner","ownerName":"Owner","state":"queued","createdAt":1,"updatedAt":2}],"hasMore":false,"before":4}"#
         let page = try JSONDecoder().decode(SharedRequestsResponse.self, from: Data(json.utf8))

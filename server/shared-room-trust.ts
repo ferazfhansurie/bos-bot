@@ -1,5 +1,6 @@
 import { parseContactId, type SharedRoom } from "../shared/multiplayer.ts";
-import { fromMarkdown } from "mdast-util-from-markdown";
+import { sharedMentionText } from "../shared/shared-mentions.ts";
+export { sharedMentionText } from "../shared/shared-mentions.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
@@ -44,18 +45,6 @@ export class SharedRoomTrust {
 
 /** Only explicit human mentions invoke bots. Code, quotes, links and bot output
  * are inert. Ambiguous names require the owner-qualified picker label. */
-export function sharedMentionText(text: string): string {
-  const parts: string[] = [];
-  type Node = { type: string; value?: string; children?: Node[]; position?: { start: { offset?: number }; end: { offset?: number } } };
-  const walk = (node: Node) => {
-    if (["code", "inlineCode", "blockquote", "link", "image", "html"].includes(node.type)) return;
-    if (node.type === "text") parts.push(node.position?.start.offset !== undefined && node.position.end.offset !== undefined ? text.slice(node.position.start.offset, node.position.end.offset) : node.value ?? "");
-    else node.children?.forEach(walk);
-  };
-  walk(fromMarkdown(text) as Node);
-  return parts.join("\n").replace(/"[^"\n]*"|“[^”\n]*”/g, "");
-}
-
 export function sharedRoomTargets<T extends { name: string; ownerName?: string }>(bots: T[], text: string, fromBot: boolean): T[] {
   if (fromBot) return [];
   const lower = sharedMentionText(text).toLocaleLowerCase();

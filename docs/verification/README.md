@@ -205,3 +205,6 @@ printed path. Never kill processes by name and never delete a broad temp root.
 
 The [shared search fixture](shared-search.md) checks full retained history, content
 filters, current membership and source navigation on desktop and native iOS.
+
+The [shared mention fixture](shared-mentions.md) checks human/bot name collisions,
+notification recipient metadata, exact bot selection and retries after renaming.

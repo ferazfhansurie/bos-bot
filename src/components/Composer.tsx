@@ -313,7 +313,7 @@ export function Composer({
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
     const pool: MentionChoice[] = shared
-      ? shared.mentionBots.map(member => ({ id: member.id, name: member.name, bot: member, searchText: member.title }))
+      ? [...(shared.mentionPeople ?? []).map(person => ({ ...person, searchText: "Person" })), ...shared.mentionBots.map(member => ({ id: member.id, name: member.name, bot: member, searchText: member.title }))]
       : group
       ? [
           ...(!group.dm ? [{ id: "__everyone__", name: "everyone" }] : []),
@@ -837,7 +837,7 @@ export function Composer({
           <div
             ref={mentionListRef}
             role="listbox"
-            aria-label={t("composer.mention.aria")}
+            aria-label={shared ? "Mention a person or bot" : t("composer.mention.aria")}
             className="absolute bottom-full left-2 z-20 mb-2 max-h-72 w-72 overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-hairline/40 bg-raised shadow-lg"
           >
             {candidates.map((peer, i) => (
@@ -866,7 +866,7 @@ export function Composer({
                 )}
                 <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
                 <span className="shrink-0 text-xs text-ink-secondary">
-                  {shared && peer.bot ? peer.bot.title : peer.bot ? t("composer.mention.agent") : t("composer.mention.channel")}
+                  {shared ? peer.bot?.title ?? "Person" : peer.bot ? t("composer.mention.agent") : t("composer.mention.channel")}
                 </span>
               </button>
             ))}
@@ -1017,7 +1017,7 @@ export function Composer({
           )}
           <MentionTextarea
           inputRef={inputRef}
-          peers={shared ? shared.mentionBots : group ? members ?? [] : state.bots.filter((member) => member.id !== bot?.id)}
+          peers={shared ? [...(shared.mentionPeople ?? []), ...shared.mentionBots] : group ? members ?? [] : state.bots.filter((member) => member.id !== bot?.id)}
           everyone={Boolean(group && !group.dm)}
           // the message is composed in the writer's language, not the UI's
           dir="auto"
@@ -1107,7 +1107,7 @@ export function Composer({
               : recording
               ? t("composer.placeholder.listening")
               : shared
-                ? "Message… @mention your bots here"
+                ? "Message… @mention a person or bot"
               : busy && canSteer
                 ? pendingCount > 0
                   ? t("composer.placeholder.steerQueued", { name: busyName })

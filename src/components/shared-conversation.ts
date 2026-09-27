@@ -1,5 +1,5 @@
 import type { Bot } from "@/state/store";
-import { fromMarkdown } from "mdast-util-from-markdown";
+import { sharedMentionLabel, sharedMentionTargets } from "../../shared/shared-mentions";
 
 export interface SharedRoom {
   id: string; homeId: string; name: string; memberIds: string[];
@@ -108,6 +108,7 @@ export interface SharedEligibleBot {
 export interface SharedComposer {
   send: (text: string, files: File[], sendId: string, options?: { replyTo?: string }) => Promise<void>;
   mentionBots: Bot[];
+  mentionPeople?: { id: string; name: string }[];
 }
 
 export function isDirectSharedRoom(room: Pick<SharedRoom, "kind" | "memberIds">): boolean {
@@ -116,9 +117,9 @@ export function isDirectSharedRoom(room: Pick<SharedRoom, "kind" | "memberIds">)
 
 /** Only the room's authorized roster becomes composer choices. A name shared
  * by two owners must have an explicit owner in its inserted mention. */
-export function sharedMentionBots(bots: readonly SharedEligibleBot[]): Bot[] {
-  const count = (name: string) => bots.filter(bot => bot.name.toLocaleLowerCase() === name.toLocaleLowerCase()).length;
-  const labels = bots.map(bot => count(bot.name) > 1 ? `${bot.name} · ${bot.ownerName}` : bot.name);
+export function sharedMentionBots(bots: readonly SharedEligibleBot[], people: readonly SharedContact[] = []): Bot[] {
+  const roster = [...people, ...bots.map(bot => ({ ...bot, kind: "bot" as const }))];
+  const labels = bots.map(bot => sharedMentionLabel({ ...bot, kind: "bot" }, roster));
   return bots.map((bot, index) => ({
     id: bot.id, threadId: `shared-bot:${bot.id}`,
     name: labels[index],
@@ -129,28 +130,6 @@ export function sharedMentionBots(bots: readonly SharedEligibleBot[]): Bot[] {
   }));
 }
 
-export function sharedBotTargets(text: string, bots: readonly Bot[]): string[] {
-  // Match the server's inert markdown contexts so mentioning a bot in code
-  // or a quote cannot turn an ordinary send into an invalid explicit target.
-  const parts: string[] = [];
-  type Node = { type: string; value?: string; children?: Node[]; position?: { start: { offset?: number }; end: { offset?: number } } };
-  const walk = (node: Node) => {
-    if (["code", "inlineCode", "blockquote", "link", "image", "html"].includes(node.type)) return;
-    if (node.type === "text") parts.push(node.position?.start.offset !== undefined && node.position.end.offset !== undefined
-      ? text.slice(node.position.start.offset, node.position.end.offset) : node.value ?? "");
-    else node.children?.forEach(walk);
-  };
-  walk(fromMarkdown(text) as Node);
-  const lower = parts.join("\n").replace(/"[^"\n]*"|“[^”\n]*”/g, "").toLocaleLowerCase();
-  return [...new Set(bots.filter(bot => {
-    const alias = `@${bot.name}`.toLocaleLowerCase();
-    let index = lower.indexOf(alias);
-    while (index >= 0) {
-      const before = lower[index - 1] ?? " ";
-      const after = lower[index + alias.length] ?? " ";
-      if (!/[\p{L}\p{N}_@\\]/u.test(before) && !/[\p{L}\p{N}_-]/u.test(after)) return true;
-      index = lower.indexOf(alias, index + 1);
-    }
-    return false;
-  }).map(bot => bot.id))];
+export function sharedBotTargets(text: string, bots: readonly Pick<Bot, "id" | "name">[]): string[] {
+  return sharedMentionTargets(text, bots.map(bot => ({ ...bot, kind: "bot" })));
 }

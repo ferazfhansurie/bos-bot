@@ -218,7 +218,7 @@ struct SharedChatView: View {
                 }.padding(12).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16)
             }
             if let query = mentionQuery, !sending {
-                let matches = SharedEligibleBot.matching(availableBots, query: query)
+                let matches = SharedMentionChoice.matching(mentionChoices, query: query)
                 if availableBots.isEmpty {
                     HStack {
                         Text(botsLoading ? "Loading bots…" : botsError ?? "No bots are shared with you yet.").font(.caption).foregroundStyle(.secondary)
@@ -226,18 +226,18 @@ struct SharedChatView: View {
                         if botsError != nil { Button("Retry") { Task { await refreshBots() } }.font(.caption) }
                     }.padding(.horizontal, 16).padding(.vertical, 8)
                 }
-                if !availableBots.isEmpty && matches.isEmpty {
-                    Text("No bots match. Search by bot name or owner.")
+                if !mentionChoices.isEmpty && matches.isEmpty {
+                    Text("No matches. Search by person, bot or owner.")
                         .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 8)
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(matches) { bot in
-                            Button { insertMention(bot) } label: {
+                        ForEach(matches) { choice in
+                            Button { insertMention(choice) } label: {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("@" + bot.name).font(.subheadline.weight(.medium))
-                                    if let owner = bot.ownerName { Text(owner + "’s bot").font(.caption).foregroundStyle(.secondary) }
-                                    if let status = bot.availabilityLabel { Text(status).font(.caption2).foregroundStyle(.secondary) }
+                                    Text("@" + choice.label).font(.subheadline.weight(.medium))
+                                    Text(choice.detail).font(.caption).foregroundStyle(.secondary)
+                                    if let status = choice.availabilityLabel { Text(status).font(.caption2).foregroundStyle(.secondary) }
                                 }.padding(.horizontal, 12).padding(.vertical, 8)
                                     .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                             }.buttonStyle(.plain)
@@ -331,23 +331,21 @@ struct SharedChatView: View {
         }
     }
 
+    private var mentionChoices: [SharedMentionChoice] {
+        SharedMentionChoice.choices(contacts: contacts, memberIDs: currentRoom.memberIds, bots: availableBots)
+    }
+
     private var mentionQuery: String? {
         guard let at = draft.lastIndex(of: "@") else { return nil }
         if at != draft.startIndex && !draft[draft.index(before: at)].isWhitespace { return nil }
         let query = String(draft[draft.index(after: at)...])
-        if availableBots.contains(where: { bot in
-            let alias = availableBots.filter { $0.name.lowercased() == bot.name.lowercased() }.count > 1
-                ? bot.name + " · " + (bot.ownerName ?? "Owner") : bot.name
-            return query.lowercased().hasPrefix(alias.lowercased() + " ")
-        }) { return nil }
-        return query.contains("\n") || query.count > 60 ? nil : query
+        if mentionChoices.contains(where: { query.lowercased().hasPrefix($0.label.lowercased() + " ") }) { return nil }
+        return query.contains("\n") || query.count > 200 ? nil : query
     }
 
-    private func insertMention(_ bot: SharedEligibleBot) {
+    private func insertMention(_ choice: SharedMentionChoice) {
         guard let at = draft.lastIndex(of: "@") else { return }
-        let ambiguous = availableBots.filter { $0.name.lowercased() == bot.name.lowercased() }.count > 1
-        let alias = ambiguous ? bot.name + " · " + (bot.ownerName ?? "Owner") : bot.name
-        draft = String(draft[..<at]) + "@" + alias + " "
+        draft = String(draft[..<at]) + "@" + choice.label + " "
         pendingSendID = nil
         composerFocused = true
     }

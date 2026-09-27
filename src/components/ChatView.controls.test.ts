@@ -59,7 +59,7 @@ describe("thread control placement", () => {
     expect(markup).not.toContain("data-test-model-control");
     expect(markup).not.toContain("data-test-approval-control");
     expect(markup).toContain('aria-label="Reply to message"');
-    expect(markup).toContain("Message… @mention your bots here");
+    expect(markup).toContain("Message… @mention a person or bot");
   });
   it("shows shared own-message edits/removal, reply quotes, edited labels and tombstones", () => {
     const markup = renderToStaticMarkup(createElement(ChatView, {
