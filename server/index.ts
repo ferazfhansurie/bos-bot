@@ -6243,7 +6243,7 @@ async function recoverSharedRoomTurns(): Promise<void> {
   }
   const maxAge = roomTurnTimeoutMinutes(cfg) * 60_000;
   const pending = sharedRooms.allRooms().flatMap(room => sharedRooms.allMessages(room.id)
-    .filter(message => message.actor.kind === "person" && message.kind !== "activity" && Date.now() - message.at < maxAge)
+    .filter(message => message.actor.kind === "person" && message.kind !== "activity" && Date.now() - message.at < maxAge && sharedRequests.mayRecover(room.id, message.sequence))
     .map(message => ({ room, message })))
     .sort((a, b) => a.message.at - b.message.at).slice(-50);
   for (const record of sharedRequests.all()) {

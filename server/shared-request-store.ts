@@ -32,6 +32,7 @@ function validate(value: SharedRequest): void {
 /** Write before dispatch. A terminal receipt cannot be reopened by a send retry. */
 export class SharedRequestStore {
   private readonly records = new Map<string, SharedRequest>();
+  private readonly recoveryThrough = new Map<string, number>();
   private readonly file: string;
   constructor(file: string) {
     this.file = file;
@@ -39,6 +40,13 @@ export class SharedRequestStore {
     // Fail closed: losing dispatch receipts must never turn into duplicate work.
     const saved = JSON.parse(readFileSync(file, "utf8"));
     if (saved?.version !== 1 || !Array.isArray(saved.requests)) throw new Error("invalid shared request store");
+    if (saved.recoveryThrough !== undefined) {
+      if (!saved.recoveryThrough || typeof saved.recoveryThrough !== "object" || Array.isArray(saved.recoveryThrough)) throw new Error("invalid shared request recovery barrier");
+      for (const [roomId, sequence] of Object.entries(saved.recoveryThrough)) {
+        if (!idPattern.test(roomId) || !Number.isSafeInteger(sequence) || Number(sequence) < 0) throw new Error("invalid shared request recovery barrier");
+        this.recoveryThrough.set(roomId, Number(sequence));
+      }
+    }
     for (const record of saved.requests) {
       validate(record);
       if (this.records.has(record.id)) throw new Error("duplicate shared request record");
@@ -48,6 +56,28 @@ export class SharedRequestStore {
   get(id: string): SharedRequest | undefined { const record = this.records.get(id); return record && { ...record }; }
   all(): SharedRequest[] { return [...this.records.values()].map(record => ({ ...record })); }
   forRoom(roomId: string): SharedRequest[] { return this.all().filter(record => record.roomId === roomId).sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id)); }
+  mayRecover(roomId: string, sourceSequence: number): boolean { return sourceSequence > (this.recoveryThrough.get(roomId) ?? 0); }
+  /** A restored archive is history, never authority to resume old work. The
+   * barrier also covers legacy messages and the journal-before-ledger gap. */
+  holdForRestore(roomSequences: ReadonlyMap<string, number>): void {
+    for (const [id, sequence] of roomSequences) {
+      if (!idPattern.test(id) || !Number.isSafeInteger(sequence) || sequence < 0) throw new Error("invalid shared request recovery barrier");
+    }
+    const previousRecords = new Map(this.records), previousBarriers = new Map(this.recoveryThrough);
+    for (const [id, sequence] of roomSequences) this.recoveryThrough.set(id, Math.max(sequence, this.recoveryThrough.get(id) ?? 0));
+    for (const [id, record] of this.records) {
+      if (!sharedRequestIsActive(record.state)) continue;
+      this.records.set(id, { ...record, state: record.dispatchedAt ? "outcome-unknown" : "cancelled", updatedAt: Date.now(),
+        explanation: record.dispatchedAt ? "This request was active in a restored backup. Its outcome is unknown; it will not run again automatically." : "This queued request was not resumed after restoring a backup. Send a new request when ready." });
+    }
+    try { this.persist(); }
+    catch (error) {
+      this.records.clear(); this.recoveryThrough.clear();
+      for (const [id, record] of previousRecords) this.records.set(id, record);
+      for (const [id, sequence] of previousBarriers) this.recoveryThrough.set(id, sequence);
+      throw error;
+    }
+  }
   ensure(input: RequestInput): SharedRequest {
     const id = sharedRequestId(input.roomId, input.sourceId, input.botId);
     const previous = this.get(id);
@@ -75,12 +105,15 @@ export class SharedRequestStore {
     const previous = this.records.get(record.id);
     this.records.set(record.id, record);
     try {
-      mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
-      writeFileAtomic(this.file, JSON.stringify({ version: 1, requests: [...this.records.values()] }), { mode: 0o600 });
+      this.persist();
     } catch (error) {
       if (previous) this.records.set(record.id, previous); else this.records.delete(record.id);
       throw error;
     }
     return { ...record };
+  }
+  private persist(): void {
+    mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    writeFileAtomic(this.file, JSON.stringify({ version: 1, requests: [...this.records.values()], recoveryThrough: Object.fromEntries(this.recoveryThrough) }), { mode: 0o600 });
   }
 }

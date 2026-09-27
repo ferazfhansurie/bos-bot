@@ -1209,7 +1209,7 @@ struct ChatComposerBar: View {
                             .background(Circle().fill(canSend ? BubbleColor.mine : Color.secondary.opacity(0.18)))
                     }
                     .buttonStyle(.plain).disabled(busy || (!canSend && !supportsVoiceChat))
-                    .accessibilityLabel(canSend ? "Send message" : "Voice chat")
+                    .accessibilityLabel(canSend || !supportsVoiceChat ? "Send message" : "Voice chat")
                     .padding(.trailing, 6).padding(.bottom, 6)
                 }
                 .frame(minHeight: 44).glassSheet(cornerRadius: 22)

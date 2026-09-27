@@ -287,7 +287,7 @@ struct SharedChatView: View {
                 .onDisappear { preview.cleanUp() }
         }
         .sheet(isPresented: $showingDetails, onDismiss: {
-            if let id = pendingFileMessage { atBottom = false; fileMessageFocus = id; pendingFileMessage = nil }
+            if let id = pendingFileMessage { fileMessageFocus = id; pendingFileMessage = nil }
         }) {
             SharedConversationDetails(room: currentRoom, selfID: selfID, contacts: contacts,
                 changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: { try await showMessage(id: $0.messageId, sequence: $0.sequence) }, showRequestMessage: showMessage)
@@ -387,7 +387,6 @@ struct SharedChatView: View {
             let page = try await session.sharedMessagePage(roomId: room.id, before: first.sequence)
             let ids = Set(messages.map(\.id))
             version = min(version, page.version ?? version)
-            atBottom = false
             messages = page.messages.filter { !ids.contains($0.id) } + messages
             hasMore = page.hasMore ?? false
         } catch { self.error = error.localizedDescription }
@@ -397,7 +396,6 @@ struct SharedChatView: View {
         guard !loadingOlder else { throw APIError.transport("Earlier messages are loading. Try again in a moment.") }
         loadingOlder = true
         followingBottom = false
-        atBottom = false
         defer { loadingOlder = false }
         for _ in 0..<20 where targetSequence > sequence {
             let after = sequence
@@ -430,7 +428,7 @@ struct SharedChatView: View {
     }
 
     private func markRead() async {
-        guard scenePhase == .active, atBottom, sequence > readSequence else { return }
+        guard scenePhase == .active, !loadingOlder, pendingFileMessage == nil, atBottom, sequence > readSequence else { return }
         let seen = sequence
         do { readSequence = try await session.sharedPreferences(roomId: room.id, readSequence: seen).readSequence }
         catch { /* retry when the visible conversation refreshes */ }

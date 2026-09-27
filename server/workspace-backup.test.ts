@@ -1,3 +1,5 @@
+import { SharedRoomRepository } from "./shared-room-repository.ts";
+import { SharedRequestStore } from "./shared-request-store.ts";
 import { createCipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,6 +81,14 @@ describe("encrypted full workspace backups", () => {
   it("round-trips WAL conversations, binary files, drafts and IDs; preserves destination identity and connections", async () => {
     const source = directory();
     const db = fixture(source);
+    const sharedRooms = new SharedRoomRepository(join(source, "shared-rooms.json"), "source-home");
+    const actor = { homeId: "source-home", kind: "person" as const, localId: "owner" };
+    const room = sharedRooms.create("Restored conversation", ["source-home:person:owner", "teammate:person:owner"]);
+    const sharedMessage = sharedRooms.append(room.id, "source-home:person:owner", { actor, text: "@Helper queued", sendId: "restore-shared", botTargets: ["source-home:bot:helper"] }).message;
+    const sharedRequests = new SharedRequestStore(join(source, "shared-requests.json"));
+    const sharedRequest = sharedRequests.ensure({ roomId: room.id, roomRevision: 1, sourceId: sharedMessage.id, requesterId: "source-home:person:owner",
+      botId: "source-home:bot:helper", botName: "Helper", ownerId: "source-home:person:owner", ownerName: "Owner", createdAt: sharedMessage.at });
+    sharedRequests.transition(sharedRequest.id, "queued");
     // Production closes its sole live message handle after draining writes,
     // while the maintenance gate is held. No server mutation can reopen it.
     db.close();
@@ -156,6 +166,11 @@ describe("encrypted full workspace backups", () => {
       expect(readJson(join(target, "webhooks.json")).webhooks[0].secretHash).not.toBe("a".repeat(64));
       expect(readJson(join(target, "calendar-calls.json")).calls[0].nextRunAt).toBeNull();
       expect(readJson(join(target, "delegations.json"))).toEqual({});
+      const restoredRequests = new SharedRequestStore(join(target, "shared-requests.json"));
+      expect(restoredRequests.get(sharedRequest.id)?.state).toBe("cancelled");
+      expect(restoredRequests.mayRecover(room.id, sharedMessage.sequence)).toBe(false);
+      expect(restoredRequests.mayRecover(room.id, sharedMessage.sequence + 1)).toBe(true);
+      expect(new SharedRoomRepository(join(target, "shared-rooms.json"), "source-home").allMessages(room.id)[0]?.id).toBe(sharedMessage.id);
       expect(readJson(join(target, "delegation-receipts.json"))).toEqual([{ id: "receipt" }]);
       const receipt = readLastWorkspaceRestore(target)!;
       expect(receipt.id).toBe(staged.id);

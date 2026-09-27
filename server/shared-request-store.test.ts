@@ -67,3 +67,21 @@ it("rejects an owner identity unrelated to the bot home", () => {
   const { store } = fixture();
   expect(() => store.ensure({ ...input, ownerId: input.requesterId })).toThrow("invalid shared request");
 });
+
+
+it("restores shared history without reactivating queued or uncertain work", () => {
+  const { file, store } = fixture();
+  const queued = store.ensure(input);
+  const working = store.ensure({ ...input, sourceId: "working" });
+  store.transition(working.id, "working");
+  const complete = store.ensure({ ...input, sourceId: "complete" });
+  store.transition(complete.id, "completed", { resultId: "result" });
+  store.holdForRestore(new Map([[input.roomId, 20]]));
+  const restored = new SharedRequestStore(file);
+  expect(restored.get(queued.id)?.state).toBe("cancelled");
+  expect(restored.get(working.id)?.state).toBe("outcome-unknown");
+  expect(restored.get(complete.id)).toMatchObject({ state: "completed", resultId: "result" });
+  expect(restored.mayRecover(input.roomId, 20)).toBe(false);
+  expect(restored.mayRecover(input.roomId, 21)).toBe(true);
+  expect(restored.mayRecover("new-room", 1)).toBe(true);
+});

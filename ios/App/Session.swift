@@ -184,6 +184,18 @@ final class Session: ObservableObject {
         }
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-shared-chat-preview") {
+            let preview = Connection(id: "shared-preview", name: "Offline alpha preview", host: "shared-preview.invalid", port: 8810)
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [SharedChatPreviewProtocol.self]
+            connection = preview
+            connections = [preview]
+            client = CompanionClient(connection: preview, token: "shared-preview-token", session: URLSession(configuration: configuration))
+            state.hydrate(Fleet(bots: [], groups: []))
+            UserDefaults.standard.removeObject(forKey: "bos.shared-draft.preview-shared-room")
+            status = .live
+            return
+        }
         if (arguments.contains("-store-preview") || arguments.contains("-computer-switcher-preview")),
            let url = Bundle.main.url(
                forResource: arguments.contains("-images-preview") ? "ImagePreview" : (arguments.contains("-threads-preview") ? "ThreadPreview" : "StorePreview"),
@@ -611,6 +623,9 @@ final class Session: ObservableObject {
 
     /// Called when the app comes to the front, and once at launch.
     func connect() {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-shared-chat-preview") { status = .live; return }
+#endif
         // A restore that found the keychain locked left `client` nil on
         // purpose. Coming to the front is the moment worth retrying on: the
         // app is on screen, so the phone is in someone's hand and unlocked.

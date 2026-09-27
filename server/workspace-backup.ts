@@ -16,6 +16,8 @@ import { writeFileAtomic } from "./atomic.ts";
 import { escapeAttribute, splitTranscriptAttachments } from "../src/lib/composer-attachments.ts";
 import { WORKSPACE_BACKUP_CLIENT_KEYS } from "../shared/workspace-backup-client.ts";
 import { excludedWorkspaceAuthPath, portableWorkspaceConfig, restoredWorkspaceConfig } from "./workspace-backup-policy.ts";
+import { SharedRoomLog, type SharedRoom, type SharedTextMessage } from "../shared/multiplayer.ts";
+import { SharedRequestStore } from "./shared-request-store.ts";
 import type { WorkspaceBackupClientState, WorkspaceBackupPrivateMetadata, WorkspaceBackupSummary } from "../shared/workspace-backup.ts";
 
 export type { WorkspaceBackupSummary, WorkspaceBackupPrivateMetadata } from "../shared/workspace-backup.ts";
@@ -726,6 +728,33 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
       }
     }
   });
+  if (existsSync(join(prepared, "shared-rooms.json")) || existsSync(join(prepared, "shared-requests.json"))) {
+    const requests = new SharedRequestStore(join(prepared, "shared-requests.json"));
+    const sequences = new Map<string, number>();
+    const roomFile = join(prepared, "shared-rooms.json");
+    if (existsSync(roomFile)) {
+      // Read without repository recovery/quarantine: a backup's original home
+      // identity may differ from this destination. Never rewrite its history.
+      const snapshot = privateJson(roomFile);
+      if (!record(snapshot) || snapshot.version !== 1 || !Array.isArray(snapshot.rooms)) throw new Error("Invalid shared conversations in workspace backup.");
+      const logs = new Map<string, SharedRoomLog>();
+      for (const entry of snapshot.rooms) {
+        if (!record(entry) || !record(entry.room) || !Array.isArray(entry.messages)) throw new Error("Invalid shared conversation in workspace backup.");
+        const log = new SharedRoomLog(entry.room as unknown as SharedRoom, entry.messages as SharedTextMessage[]);
+        if (logs.has(log.room.id)) throw new Error("Duplicate shared conversation in workspace backup.");
+        logs.set(log.room.id, log);
+      }
+      if (existsSync(`${roomFile}.events`)) for (const line of readFileSync(`${roomFile}.events`, "utf8").split("\n")) {
+        if (!line) continue;
+        const event = JSON.parse(line);
+        const log = logs.get(event.roomId);
+        if (!log || log.append(event.input, event.id, event.at).message.id !== event.id) throw new Error("Invalid shared conversation journal in workspace backup.");
+      }
+      for (const [id, log] of logs) sequences.set(id, log.all().at(-1)?.sequence ?? 0);
+    }
+    requests.holdForRestore(sequences);
+  }
+
   changeJson("webhooks.json", (value) => {
     if (!record(value)) throw new Error("Invalid webhook definitions in workspace backup.");
     const destination = existsSync(join(dataDir, "webhooks.json")) ? privateJson(join(dataDir, "webhooks.json")) : {};
