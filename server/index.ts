@@ -26,6 +26,7 @@ import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
 import { SharedRequestStore } from "./shared-request-store.ts";
 import { sharedRequestIsActive, sharedRequestProgress } from "../shared/shared-request.ts";
+import type { SharedSearchKind } from "../shared/shared-search.ts";
 import { SharedRoomTrust, isSharedRoomTrustLevel, sharedRoomTargets, sharedMentionText, sharedRoomBotCandidates, type SharedRoomTrustLevel } from "./shared-room-trust.ts";
 import { SharedAttachmentStore } from "./shared-attachment-store.ts";
 import { ApnsPush } from "./apns-push.ts";
@@ -12278,6 +12279,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const room = sharedRooms.roomFor(m[1], actorId);
         if (!room) return json(res, 404, { error: "conversation unavailable" });
         return json(res, 200, { bots: sharedRoomBots(room, actorId) });
+      }
+      m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/search$/);
+      if (m && method === "GET") {
+        if (!sharedRooms.roomFor(m[1], actorId)) return json(res, 404, { error: "conversation unavailable" });
+        try {
+          return json(res, 200, sharedRooms.searchFor(m[1], actorId, {
+            query: url.searchParams.get("q") ?? "", kind: (url.searchParams.get("kind") ?? "all") as SharedSearchKind,
+            author: url.searchParams.get("author") ?? "", before: Number(url.searchParams.get("before") ?? Number.MAX_SAFE_INTEGER),
+            limit: Number(url.searchParams.get("limit") ?? 30),
+          }));
+        } catch { return json(res, 400, { error: "invalid conversation search" }); }
       }
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/files$/);
       if (m && method === "GET") {

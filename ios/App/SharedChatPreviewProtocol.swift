@@ -82,6 +82,23 @@ private final class SharedChatPreviewState: @unchecked Sendable {
             else { let after = Int(query["after"] ?? "0") ?? 0; rows = Array(messages.filter { ($0["sequence"] as! Int) > after }.prefix(limit)) }
             return (200, ["messages": rows, "changes": [], "version": 0, "hasMore": (rows.first?["sequence"] as? Int ?? 1) > 1])
         }
+        if path == roomPath + "/search" && method == "GET" {
+            let needle = (query["q"] ?? "").lowercased()
+            let kind = query["kind"] ?? "all", author = query["author"] ?? ""
+            let before = Int(query["before"] ?? "") ?? Int.max
+            let limit = Int(query["limit"] ?? "20") ?? 20
+            let found = messages.reversed().filter { message in
+                let actor = message["actor"] as! [String: String]
+                let id = "\(actor["homeId"]!):\(actor["kind"]!):\(actor["localId"]!)"
+                let text = message["text"] as! String
+                let files = message["attachments"] as? [[String: Any]] ?? []
+                if message["sequence"] as! Int >= before || (!author.isEmpty && author != id) { return false }
+                if kind == "people" && actor["kind"] != "person" || kind == "bots" && actor["kind"] != "bot" || kind == "files" && files.isEmpty || kind == "links" && !text.contains("https://") || kind == "results" && message["responseTo"] == nil { return false }
+                return needle.isEmpty || (text + files.compactMap { $0["name"] as? String }.joined()).lowercased().contains(needle)
+            }
+            let rows = Array(found.prefix(limit))
+            return (200, ["messages": rows, "hasMore": found.count > limit, "before": rows.last?["sequence"] ?? NSNull()])
+        }
         if path == roomPath + "/files" { return (200, ["files": [["attachment": attachment, "messageId": "shared-message-1", "sequence": 1, "actor": actor(true, home: "preview-maya"), "at": at]], "hasMore": false, "before": 1]) }
         if path == roomPath + "/attachments/launch-board" { return (200, ["attachment": attachment, "data": image.base64EncodedString()]) }
         if path == roomPath + "/requests" { return (200, ["requests": [botRequest("complete", source: 218, state: "completed"), botRequest("teammate", source: 217, state: "working", other: true), botRequest("queued", source: 216, state: "queued")], "hasMore": false, "before": 216]) }

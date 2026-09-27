@@ -63,7 +63,7 @@ struct SharedChatView: View {
                             Button(loadingOlder ? "Loading…" : "Load earlier messages") { Task { await loadOlder() } }
                                 .font(.caption).disabled(loadingOlder).frame(maxWidth: .infinity).padding(.vertical, 12)
                         }
-                        Color.clear.frame(height: 8)
+                        Color.clear.frame(height: 8).id("shared-top")
                         ForEach(SharedChatMessage.visible(messages)) { message in
                             let mine = message.actor.id == selfID
                             if message.isActivity {
@@ -166,7 +166,13 @@ struct SharedChatView: View {
                     }
                 }
                 .onChange(of: fileMessageFocus) { _, id in
-                    if let id { withAnimation { proxy.scrollTo(id, anchor: .center) }; fileMessageFocus = nil }
+                    if let id {
+                        withAnimation {
+                            if id == messages.first?.id { proxy.scrollTo("shared-top", anchor: .top) }
+                            else { proxy.scrollTo(id, anchor: .center) }
+                        }
+                        fileMessageFocus = nil
+                    }
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
@@ -290,7 +296,7 @@ struct SharedChatView: View {
             if let id = pendingFileMessage { fileMessageFocus = id; pendingFileMessage = nil }
         }) {
             SharedConversationDetails(room: currentRoom, selfID: selfID, contacts: contacts,
-                changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: { try await showMessage(id: $0.messageId, sequence: $0.sequence) }, showRequestMessage: showMessage)
+                changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: { try await showMessage(id: $0.messageId, sequence: $0.sequence) }, showRequestMessage: showMessage, bots: availableBots)
         }
         .task(id: room.id) {
             draft = UserDefaults.standard.string(forKey: "bos.shared-draft.\(room.id)") ?? ""

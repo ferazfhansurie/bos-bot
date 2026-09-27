@@ -64,7 +64,7 @@ import type { SharedComposer } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 interface SharedChatOptions extends SharedComposer {
-  faces?: GroupMarkMember[]; actions?: ReactNode; banner?: ReactNode; onOpenDetails?: () => void;
+  faces?: GroupMarkMember[]; actions?: ReactNode; banner?: ReactNode; onOpenDetails?: () => void; onOpenSearch?: () => void;
   loadOlder?: () => Promise<void>; olderLoading?: boolean; historyLoading?: boolean;
   editMessage?: (id: string, text: string) => Promise<void>;
   deleteMessage?: (id: string) => Promise<void>;
@@ -971,9 +971,9 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   useEffect(() => setFindOpen(false), [bot.threadId]);
   useEffect(() => {
     const onFind = (event: KeyboardEvent) => {
-      if (!shared && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
-        setFindOpen(true);
+        if (shared) shared.onOpenSearch?.(); else setFindOpen(true);
       }
     };
     window.addEventListener("keydown", onFind);
@@ -1342,8 +1342,8 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           style={controlsShiftStyle}
         >
           {shared?.actions}
-          {!shared && <button
-            onClick={() => setFindOpen((open) => !open)}
+          {<button
+            onClick={() => shared ? shared.onOpenSearch?.() : setFindOpen((open) => !open)}
             aria-label={t("chat.find")}
             aria-pressed={findOpen}
             className={cn(

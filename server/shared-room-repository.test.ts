@@ -9,6 +9,42 @@ const root = mkdtempSync(join(tmpdir(), "omb-shared-rooms-"));
 afterEach(() => rmSync(root, { force: true, recursive: true }));
 
 describe("shared room repository", () => {
+  it("searches retained history with stable cursors, filters and current membership", () => {
+    const path = join(root, "search", "rooms.json");
+    const repo = new SharedRoomRepository(path, "home");
+    const actor = { homeId: "home", kind: "person" as const, localId: "owner" };
+    const bot = { homeId: "home", kind: "bot" as const, localId: "helper" };
+    const owner = contactId(actor), member = "away:person:owner";
+    const room = repo.create("Search", [owner, member]);
+    const first = repo.append(room.id, owner, { actor, text: "CAFÉ + plan", sendId: "first", botTargets: [contactId(bot)] }).message;
+    for (let i = 0; i < 205; i += 1) repo.append(room.id, owner, { actor, text: `Team update ${i}`, sendId: `update-${i}` });
+    const file = repo.append(room.id, owner, { actor, text: "The board", sendId: "file", attachments: [{ id: "board", name: "café-plan.png", mime: "image/png", size: 5 }] }).message;
+    const link = repo.append(room.id, owner, { actor, text: "https://example.com/plan", sendId: "link" }).message;
+    const result = repo.append(room.id, contactId(bot), { actor: bot, text: "Your café plan", responseTo: first.id, sendId: "result" }).message;
+    repo.append(room.id, contactId(bot), { actor: bot, text: "café tool progress", responseTo: first.id, kind: "activity", tool: { name: "working" }, sendId: "progress" });
+    const removed = repo.append(room.id, owner, { actor, text: "café removed", sendId: "removed" }).message;
+    repo.editMessage(room.id, owner, removed.id, null);
+    const page = repo.searchFor(room.id, member, { query: "cafe\u0301", limit: 2 });
+    expect(page.messages.map(message => message.id)).toEqual([result.id, file.id]);
+    expect(page.hasMore).toBe(true);
+    expect(repo.searchFor(room.id, member, { query: "CAFÉ", before: page.before!, limit: 2 }).messages.map(message => message.id)).toEqual([first.id]);
+    expect(repo.searchFor(room.id, member, { query: "+" }).messages.map(message => message.id)).toEqual([first.id]);
+    expect(repo.searchFor(room.id, member, { kind: "files" }).messages.map(message => message.id)).toEqual([file.id]);
+    expect(repo.searchFor(room.id, member, { kind: "links" }).messages.map(message => message.id)).toEqual([link.id]);
+    for (const kind of ["bots", "results"] as const) expect(repo.searchFor(room.id, member, { kind }).messages.map(message => message.id)).toEqual([result.id]);
+    expect(repo.searchFor(room.id, member, { kind: "people", query: "café" }).messages.map(message => message.id)).toEqual([file.id, first.id]);
+    expect(repo.searchFor(room.id, member, { author: contactId(bot) }).messages.map(message => message.id)).toEqual([result.id]);
+    repo.editMessage(room.id, owner, first.id, "Revised brief");
+    expect(repo.searchFor(room.id, owner, { query: "+ plan" }).messages).toEqual([]);
+    expect(new SharedRoomRepository(path, "home").searchFor(room.id, owner, { query: "Revised" }).messages[0]?.id).toBe(first.id);
+    for (const options of [{ query: "a".repeat(201) }, { before: 0 }, { limit: 51 }, { author: "invalid" }, { kind: "unknown" }]) {
+      expect(() => repo.searchFor(room.id, owner, options as any)).toThrow("invalid conversation search");
+    }
+    repo.updateRoom(room.id, owner, 1, { memberIds: [owner, "other:person:owner"] });
+    expect(() => repo.searchFor(room.id, member)).toThrow("conversation unavailable");
+    expect(() => repo.searchFor("missing", owner)).toThrow("conversation unavailable");
+  });
+
   it("pages published files by source message and revokes access with membership", () => {
     const path = join(root, "files", "rooms.json");
     const repo = new SharedRoomRepository(path, "home");

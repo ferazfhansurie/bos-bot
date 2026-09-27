@@ -127,6 +127,12 @@ public struct SharedFilesResponse: Codable, Sendable {
     public let before: Int?
 }
 
+public struct SharedSearchResponse: Codable, Sendable {
+    public let messages: [SharedChatMessage]
+    public let hasMore: Bool
+    public let before: Int?
+}
+
 public struct SharedAttachmentResponse: Codable, Sendable { public let attachment: SharedAttachment }
 public struct SharedAttachmentData: Codable, Sendable {
     public let attachment: SharedAttachment

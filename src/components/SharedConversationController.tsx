@@ -37,6 +37,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   const [botsError, setBotsError] = useState("");
   const [changeError, setChangeError] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [searchFocus, setSearchFocus] = useState(0);
   const [changing, setChanging] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [olderLoading, setOlderLoading] = useState(false);
@@ -319,14 +320,14 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   if (!projected || !room || !selfId) return <main className="flex flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary"><p role={error ? "alert" : "status"}>{error || "Loading conversation…"}</p>{error && <button type="button" onClick={() => setLoadAttempt(value => value + 1)} className="rounded-lg bg-raised px-3 py-2 text-ink">Retry</button>}</main>;
   const banner = <>{historyLoading && <p role="status" className="px-4 py-2 text-center text-xs text-ink-secondary">Loading messages…</p>}{historyError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{historyError}<button type="button" onClick={() => window.dispatchEvent(new Event("multiplayer:retry-history"))} className="underline">Retry</button></div>}{olderError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{olderError}<button type="button" disabled={olderLoading} onClick={() => void loadOlder()} className="underline">Retry earlier messages</button></div>}{botsError && <p role="status" className="px-4 py-1 text-center text-xs text-ink-secondary">{botsError}</p>}</>;
   return <>
-    <ChatView bot={projected} shared={{ send, faces, mentionBots, onOpenDetails: () => setDetailsOpen(true), banner,
+    <ChatView bot={projected} shared={{ send, faces, mentionBots, onOpenDetails: () => setDetailsOpen(true), onOpenSearch: () => { setDetailsOpen(true); setSearchFocus(value => value + 1); }, banner,
       editMessage: (id, text) => changeMessage(id, text), deleteMessage: id => changeMessage(id, null),
       messageMeta: Object.fromEntries(messages.map(message => [message.id, { editedAt: message.editedAt, deletedAt: message.deletedAt }])),
       changeRevision: history.changeRevision,
       loadOlder, olderLoading, historyLoading,
       actions: <button type="button" aria-label="Conversation details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><PanelRight size={18} /></button>,
     }} />
-    {detailsOpen && <SharedConversationDetails room={room} selfId={selfId} contacts={contacts} title={projected.name} pending={changing} error={changeError} onClose={() => setDetailsOpen(false)} onChange={changeRoom}
+    {detailsOpen && <SharedConversationDetails eligibleBots={eligibleBots} searchFocus={searchFocus} room={room} selfId={selfId} contacts={contacts} title={projected.name} pending={changing} error={changeError} onClose={() => setDetailsOpen(false)} onChange={changeRoom}
       preferences={preferences} preferencePending={preferencePending} preferenceError={preferenceError} onNotificationsChange={changeNotifications} onShowMessage={showFileMessage} />}
   </>;
 }

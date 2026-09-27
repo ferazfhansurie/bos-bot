@@ -3,11 +3,14 @@ import { Bell, LogOut, Trash2, Users, X } from "lucide-react";
 import { GroupMark, PersonPhoto } from "./Avatar";
 import { SharedConversationRequests } from "./SharedConversationRequests";
 import { SharedConversationFiles } from "./SharedConversationFiles";
-import type { SharedFile } from "./shared-conversation";
+import { SharedConversationSearch } from "./SharedConversationSearch";
+import type { SharedFile, SharedEligibleBot } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { isDirectSharedRoom, type SharedContact, type SharedRoom, type SharedPreferences, type SharedNotifications } from "./shared-conversation";
 
-export function SharedConversationDetails({ room, selfId, contacts, title, pending, error, onClose, onChange, preferences, preferencePending, preferenceError, onNotificationsChange, onShowMessage }: {
+export function SharedConversationDetails({ room, selfId, contacts, title, pending, error, onClose, onChange, preferences, preferencePending, preferenceError, onNotificationsChange, onShowMessage, searchFocus = 0, eligibleBots = [] }: {
+  eligibleBots?: SharedEligibleBot[];
+  searchFocus?: number;
   onShowMessage: (file: Pick<SharedFile, "messageId" | "sequence">) => Promise<void>;
   room: SharedRoom; selfId: string; contacts: SharedContact[]; title: string;
   pending: boolean; error: string; onClose: () => void;
@@ -30,7 +33,7 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
   useEffect(() => setName(room.name), [room.name]);
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeRef.current?.focus();
+    if (!searchFocus) closeRef.current?.focus();
     return () => { if (opener?.isConnected) opener.focus(); };
   }, []);
   const apply = async () => {
@@ -90,6 +93,7 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
           {preferencePending && <p role="status" className="mt-2 text-xs text-ink-secondary">Saving…</p>}
           {preferenceError && <p role="alert" className="mt-2 text-xs text-danger">{preferenceError}</p>}
         </section>}
+        <SharedConversationSearch bots={eligibleBots} focusToken={searchFocus} key={`search:${room.id}`} roomId={room.id} selfId={selfId} contacts={contacts} onShowMessage={onShowMessage} />
         <SharedConversationRequests key={`requests:${room.id}`} roomId={room.id} selfId={selfId} contacts={contacts} onShowMessage={onShowMessage} />
         <SharedConversationFiles key={room.id} roomId={room.id} selfId={selfId} contacts={contacts} onShowMessage={onShowMessage} />
         {error && <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}

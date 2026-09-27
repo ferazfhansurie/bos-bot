@@ -613,6 +613,8 @@ public struct CompanionClient: Sendable {
         else { throw APIError.badURL }
         components.path = path
         components.queryItems = query.isEmpty ? nil : query
+        // URLComponents leaves + literal; servers decode it as a form space.
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         guard let url = components.url else { throw APIError.badURL }
 
         var request = URLRequest(url: url)
@@ -728,6 +730,12 @@ public struct CompanionClient: Sendable {
         if let before { query.append(URLQueryItem(name: "before", value: String(before))) }
         if latest { query.append(URLQueryItem(name: "latest", value: "1")) }
         return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/messages", query: query), as: SharedMessagesResponse.self)
+    }
+
+    public func searchSharedMessages(roomId: String, text: String, kind: String = "all", author: String = "", before: Int? = nil) async throws -> SharedSearchResponse {
+        var query = [URLQueryItem(name: "q", value: text), URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "author", value: author), URLQueryItem(name: "limit", value: "20")]
+        if let before { query.append(URLQueryItem(name: "before", value: String(before))) }
+        return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/search", query: query), as: SharedSearchResponse.self)
     }
 
     public func sharedRequests(roomId: String, before: Int? = nil) async throws -> SharedRequestsResponse {

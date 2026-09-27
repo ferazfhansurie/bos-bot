@@ -70,6 +70,11 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     expect(await links.forwardShared(`${roomPath}/files?limit=1`, "GET")).toMatchObject({ status: 200, body: { files: [{ messageId, attachment: { name: "brief.txt" } }], hasMore: false } });
     expect(await links.forwardShared(`${roomPath}/files?before=0`, "GET")).toMatchObject({ status: 400 });
     expect(await links.forwardShared(`${roomPath}/messages/${messageId}`, "PATCH", { text: "Updated brief" })).toMatchObject({ status: 200, body: { message: { text: "Updated brief" } } });
+    expect(await links.forwardShared(`${roomPath}/search?q=Updated+brief&kind=people`, "GET")).toMatchObject({ status: 200, body: { messages: [{ id: messageId }], hasMore: false } });
+    expect(await links.forwardShared(`${roomPath}/search?q=${encodeURIComponent("café + 中文")}`, "GET")).toMatchObject({ status: 200, body: { messages: [] } });
+    expect(await links.forwardShared(`${roomPath}/search?kind=files`, "GET")).toMatchObject({ status: 200, body: { messages: [{ id: messageId }] } });
+    expect(await links.forwardShared(`${roomPath}/search?kind=unknown`, "GET")).toMatchObject({ status: 400 });
+    await expect(links.forwardShared(`${roomPath}/search/extra?q=hi`, "GET")).rejects.toThrow("invalid shared chat route");
     expect(await links.forwardShared(`${roomPath}/messages/${messageId}`, "DELETE")).toMatchObject({ status: 200 });
     expect(await links.forwardShared(`${roomPath}/files`, "GET")).toMatchObject({ status: 200, body: { files: [] } });
     await expect(links.forwardShared(`${roomPath}/files/extra`, "GET")).rejects.toThrow("invalid shared chat route");
@@ -79,6 +84,7 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     expect(await links.forwardShared(`/api/multiplayer/rooms/${(room.body as any).room.id}`, "DELETE", { revision: 2 })).toMatchObject({ status: 200 });
     expect((await links.forwardShared("/api/multiplayer/rooms", "GET")).body).toMatchObject({ rooms: [] });
     expect(await links.forwardShared(`${roomPath}/files`, "GET")).toMatchObject({ status: 404 });
+    expect(await links.forwardShared(`${roomPath}/search`, "GET")).toMatchObject({ status: 404 });
     expect(await links.reannounce(added.homeId, "https://putri-new.ts.net")).toBe(true);
     expect(links.bridgeLinks()[0].origin).toBe("https://putri-new.ts.net");
     await expect(links.reannounce(added.homeId, "https://putri.other.ts.net")).rejects.toThrow("same private tailnet");

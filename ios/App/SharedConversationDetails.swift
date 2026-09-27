@@ -11,6 +11,7 @@ struct SharedConversationDetails: View {
     let exited: () -> Void
     let showMessage: (SharedFile) async throws -> Void
     let showRequestMessage: (String, Int) async throws -> Void
+    var bots: [SharedEligibleBot] = []
     @State private var current: SharedRoomSummary?
     @State private var name = ""
     @State private var saving = false
@@ -69,6 +70,9 @@ struct SharedConversationDetails: View {
                     }
                 }
                 Section {
+                    NavigationLink {
+                        SharedConversationSearch(roomId: displayed.id, selfID: selfID, contacts: contacts, bots: bots, showMessage: showRequestMessage)
+                    } label: { Label("Search conversation", systemImage: "magnifyingglass") }
                     NavigationLink {
                         SharedConversationFiles(roomId: displayed.id, selfID: selfID, contacts: contacts, showMessage: showMessage)
                     } label: { Label("Shared files", systemImage: "paperclip") }

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, truncateSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+import { searchSharedMessages, type SharedSearchOptions } from "../shared/shared-search.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { quarantineSaved } from "./quarantine-saved.ts";
 import { contactId, parseContactId, SharedRoomLog, validateSharedSend, type SharedRoom, type SharedTextMessage } from "../shared/multiplayer.ts";
@@ -190,6 +191,12 @@ export class SharedRoomRepository {
       hasMore: sources.length > limit,
       before: page.at(-1)?.sequence ?? null,
     };
+  }
+
+  searchFor(roomId: string, actorId: string, options: SharedSearchOptions = {}) {
+    const log = this.rooms.get(roomId);
+    if (!log || !log.room.memberIds.includes(actorId)) throw new Error("conversation unavailable");
+    return searchSharedMessages(log.all(), options);
   }
 
   messageFor(roomId: string, actorId: string, messageId: string): SharedTextMessage | null {

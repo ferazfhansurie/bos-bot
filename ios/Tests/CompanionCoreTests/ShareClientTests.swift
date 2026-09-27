@@ -73,6 +73,22 @@ final class ShareClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testSharedSearchEncodesTextAndKeepsResultCursor() async throws {
+        ShareRequestStub.responseBody = Data(#"{"messages":[{"id":"hit","roomId":"room-a","sequence":42,"actor":{"homeId":"home","kind":"person","localId":"owner"},"text":"café + 中文","at":1000,"sendId":"send"}],"hasMore":true,"before":42}"#.utf8)
+        let page = try await client.searchSharedMessages(roomId: "room-a", text: "café + 中文", kind: "people", author: "home:person:owner", before: 100)
+        XCTAssertEqual(page.messages.first?.id, "hit")
+        XCTAssertEqual(page.before, 42)
+        XCTAssertTrue(page.hasMore)
+        let url = try XCTUnwrap(ShareRequestStub.capturedRequest?.url)
+        XCTAssertEqual(url.path, "/api/multiplayer/rooms/room-a/search")
+        XCTAssertTrue(url.absoluteString.contains("%2B"))
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertTrue(query.contains(URLQueryItem(name: "q", value: "café + 中文")))
+        XCTAssertTrue(query.contains(URLQueryItem(name: "author", value: "home:person:owner")))
+        XCTAssertTrue(query.contains(URLQueryItem(name: "before", value: "100")))
+        XCTAssertEqual(ShareRequestStub.capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer paired-token")
+    }
+
     func testSharedFileIndexKeepsSourceAndPagination() async throws {
         ShareRequestStub.responseBody = Data(#"{"files":[{"attachment":{"id":"file-a","name":"brief.txt","mime":"text/plain","size":12},"messageId":"message-a","sequence":42,"actor":{"homeId":"home","kind":"person","localId":"owner"},"at":1000}],"hasMore":true,"before":42}"#.utf8)
         let page = try await client.sharedFiles(roomId: "room-a", before: 100)

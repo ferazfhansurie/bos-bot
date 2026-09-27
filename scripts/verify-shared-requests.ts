@@ -16,7 +16,8 @@ try {
   const { bots } = await api("GET", "/api/bots?messages=0");
   const { room } = await api("POST", "/api/multiplayer/rooms", { name: "Launch crew", memberIds: [me.actorId, teammate] });
   const route = `/api/multiplayer/rooms/${room.id}/messages`;
-  await api("POST", route, { text: "Two requests, one conversation.", sendId: "human-intro" });
+  await api("POST", route, { text: "Original café + plan: https://example.com/launch", sendId: "human-intro" });
+  for (let index = 0; index < 205; index += 1) await api("POST", route, { text: `Team update ${index + 1}`, sendId: `team-update-${index}` });
   for (const name of ["Pepper", "Willow"]) {
     const bot = bots.find((candidate: { name: string }) => candidate.name === name);
     await api("POST", route, { text: `@${name} ${name === "Pepper" ? "summarize the launch checklist" : "review the onboarding copy"}`,
@@ -25,7 +26,7 @@ try {
   const deadline = Date.now() + 20_000;
   let replies = 0;
   while (Date.now() < deadline) {
-    const page = await api("GET", route);
+    const page = await api("GET", `${route}?latest=1&limit=200`);
     replies = page.messages.filter((message: { actor: { kind: string }; kind?: string; responseTo?: string }) => message.actor.kind === "bot" && message.kind !== "activity" && message.responseTo).length;
     if (replies === 2) break;
     await new Promise(resolve => setTimeout(resolve, 100));
