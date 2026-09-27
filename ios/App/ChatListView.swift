@@ -455,7 +455,7 @@ struct ChatListView: View {
             case .contact(let contact): contactRow(contact)
             case .room(let room):
                 Button { path.append(room) } label: {
-                    sharedConversationRow(name: room.name, subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0) {
+                    sharedConversationRow(name: room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? ""), subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0) {
                         GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 52)
                     }
                 }

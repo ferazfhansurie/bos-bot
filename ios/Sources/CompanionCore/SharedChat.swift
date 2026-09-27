@@ -29,6 +29,13 @@ public struct SharedRoomSummary: Codable, Hashable, Identifiable, Sendable {
     public let unreadCount: Int?
     public let readSequence: Int?
     public let notifications: String?
+
+    public func displayName(contacts: [SharedContact], selfID: String) -> String {
+        let others = memberIds.filter { $0 != selfID }.compactMap { id in contacts.first { $0.id == id }?.name }
+        if !isGroup, memberIds.count == 2, let peer = others.first { return peer }
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (title.isEmpty || title == "Group chat") && !others.isEmpty ? others.joined(separator: ", ") : title.isEmpty ? "Group chat" : title
+    }
 }
 
 public struct SharedActor: Codable, Hashable, Sendable {
@@ -105,5 +112,11 @@ public struct SharedEligibleBot: Codable, Hashable, Identifiable, Sendable {
     public let id: String
     public let name: String
     public let ownerName: String?
+}
+public extension SharedEligibleBot {
+    static func matching(_ bots: [SharedEligibleBot], query: String) -> [SharedEligibleBot] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return bots.filter { term.isEmpty || $0.name.localizedCaseInsensitiveContains(term) || ($0.ownerName?.localizedCaseInsensitiveContains(term) ?? false) }
+    }
 }
 public struct SharedEligibleBotsResponse: Codable, Sendable { public let bots: [SharedEligibleBot] }

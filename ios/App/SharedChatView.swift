@@ -18,11 +18,13 @@ struct SharedChatView: View {
     @State private var botsError: String?
     @State private var botsLoading = false
     private var currentRoom: SharedRoomSummary { updatedRoom ?? room }
+    private var conversationName: String { currentRoom.displayName(contacts: contacts, selfID: selfID) }
     @State private var messages: [SharedChatMessage] = []
     @State private var draft = ""
     @State private var pendingSendID: String?
     @State private var sending = false
     @State private var error: String?
+    @State private var connectionError: String?
     @State private var sequence = 0
     @State private var version = 0
     @State private var hasMore = false
@@ -133,13 +135,37 @@ struct SharedChatView: View {
                     if atBottom { Task { await markRead() } }
                 }
                 .safeAreaInset(edge: .top, spacing: 0) { header }
+                .overlay(alignment: .bottomTrailing) {
+                    if !atBottom && !messages.isEmpty {
+                        Button {
+                            withAnimation { proxy.scrollTo("shared-bottom", anchor: .bottom) }
+                        } label: {
+                            Label("Latest messages", systemImage: "arrow.down")
+                                .font(.caption.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(.regularMaterial, in: Capsule())
+                        }.buttonStyle(.plain).padding(12)
+                    }
+                }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: messages.count) { _, _ in
                     if atBottom, let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }; Task { await markRead() } }
                 }
             }
-            if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal, 16) }
+            if connectionError != nil {
+                HStack {
+                    Label("Can’t refresh this chat. Your draft is saved.", systemImage: "wifi.slash")
+                    Spacer()
+                    Button("Retry") { Task { await refresh(); await refreshBots() } }
+                }.font(.caption).padding(.horizontal, 16).padding(.vertical, 8)
+            }
+            if let error {
+                HStack {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                    Spacer()
+                    Button { self.error = nil } label: { Image(systemName: "xmark.circle") }.accessibilityLabel("Dismiss error")
+                }.padding(.horizontal, 16).padding(.vertical, 8)
+            }
             if !pendingFiles.isEmpty {
                 ScrollView(.horizontal) {
                     HStack {
@@ -164,6 +190,7 @@ struct SharedChatView: View {
                 }.padding(12).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16)
             }
             if let query = mentionQuery, !sending {
+                let matches = SharedEligibleBot.matching(availableBots, query: query)
                 if availableBots.isEmpty {
                     HStack {
                         Text(botsLoading ? "Loading bots…" : botsError ?? "No bots are shared with you yet.").font(.caption).foregroundStyle(.secondary)
@@ -171,9 +198,13 @@ struct SharedChatView: View {
                         if botsError != nil { Button("Retry") { Task { await refreshBots() } }.font(.caption) }
                     }.padding(.horizontal, 16).padding(.vertical, 8)
                 }
+                if !availableBots.isEmpty && matches.isEmpty {
+                    Text("No bots match. Search by bot name or owner.")
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 8)
+                }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(availableBots.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { bot in
+                        ForEach(matches) { bot in
                             Button { insertMention(bot) } label: {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("@" + bot.name).font(.subheadline.weight(.medium))
@@ -191,7 +222,7 @@ struct SharedChatView: View {
             }
             ChatComposerBar(
                 draft: $draft, showingPlus: $showingPlus, dictation: dictation,
-                focus: $composerFocused, name: currentRoom.name, busy: sending,
+                focus: $composerFocused, name: conversationName, busy: sending,
                 hasAttachments: !pendingFiles.isEmpty, supportsVoiceChat: false,
                 onDraftChange: { _ in pendingSendID = nil },
                 onSend: { Task { await send() } }, onVoice: {}
@@ -250,7 +281,7 @@ struct SharedChatView: View {
     }
 
     private var header: some View {
-        ChatHeaderBar(name: currentRoom.name, unreadElsewhere: 0,
+        ChatHeaderBar(name: conversationName, unreadElsewhere: 0,
                       canOpenThreads: false, canOpenSettings: true, canWatchComputer: false,
                       onBack: { dismiss() }, onThreads: {}, onSettings: { showingDetails = true }, onComputer: {}) {
             headerAvatar
@@ -273,6 +304,11 @@ struct SharedChatView: View {
         guard let at = draft.lastIndex(of: "@") else { return nil }
         if at != draft.startIndex && !draft[draft.index(before: at)].isWhitespace { return nil }
         let query = String(draft[draft.index(after: at)...])
+        if availableBots.contains(where: { bot in
+            let alias = availableBots.filter { $0.name.lowercased() == bot.name.lowercased() }.count > 1
+                ? bot.name + " · " + (bot.ownerName ?? "Owner") : bot.name
+            return query.lowercased().hasPrefix(alias.lowercased() + " ")
+        }) { return nil }
         return query.contains("\n") || query.count > 60 ? nil : query
     }
 
@@ -305,8 +341,8 @@ struct SharedChatView: View {
             if let last = next.last { sequence = last.sequence }
             let existing = Set(messages.map(\.id))
             messages.append(contentsOf: next.filter { !existing.contains($0.id) })
-            error = nil
-        } catch { self.error = error.localizedDescription }
+            connectionError = nil
+        } catch { if !Task.isCancelled { connectionError = error.localizedDescription } }
     }
 
     private func loadOlder() async {
@@ -343,6 +379,7 @@ struct SharedChatView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !pendingFiles.isEmpty, !sending else { return }
         sending = true
+        error = nil
         let sendID = pendingSendID ?? UUID().uuidString
         pendingSendID = sendID
         do {
@@ -361,7 +398,7 @@ struct SharedChatView: View {
             replyTarget = nil
             atBottom = true
             await refresh()
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = "Message wasn’t sent. Your text and attachments are still here. " + error.localizedDescription }
         sending = false
     }
 

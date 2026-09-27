@@ -26,7 +26,7 @@ struct SharedConversationDetails: View {
                 Section {
                     VStack(spacing: 12) {
                         GroupMarkView(members: GroupMarkView.faces(displayed, contacts: contacts, selfID: selfID), size: 68)
-                        Text(displayed.name).font(.title2.weight(.semibold))
+                        Text(displayed.displayName(contacts: contacts, selfID: selfID)).font(.title2.weight(.semibold))
                         Text(displayed.isGroup ? "\(displayed.memberIds.count) people" : "Direct conversation").font(.subheadline).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity).padding(.vertical, 16)
                 }.listRowBackground(Color.clear)
@@ -58,7 +58,7 @@ struct SharedConversationDetails: View {
                             }
                         }
                     }
-                    if displayed.isGroup && canManage {
+                    if displayed.isGroup && canManage && contacts.contains(where: { $0.kind == "person" && !displayed.memberIds.contains($0.id) }) {
                         Menu {
                             ForEach(contacts.filter { $0.kind == "person" && !displayed.memberIds.contains($0.id) }) { contact in
                                 Button(contact.name) { Task { await update(members: displayed.memberIds + [contact.id]) } }

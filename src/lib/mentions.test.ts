@@ -33,6 +33,13 @@ describe("mention display ranges", () => {
 });
 
 describe("mention picker choices", () => {
+  it("finds teammates' bots by owner without changing the inserted bot name", () => {
+    const bots = [{ name: "Pixie", searchText: "Putri's bot" }, { name: "Koda", searchText: "Faeez's bot" }];
+    expect(mentionChoicesForQuery(bots, "putri")).toEqual([bots[0]]);
+    expect(mentionChoicesForQuery(bots, "FAEEZ")).toEqual([bots[1]]);
+    expect(mentionChoicesForQuery(bots, "unknown")).toEqual([]);
+    expect(mentionChoicesForQuery(bots, "Pixie ")).toEqual([]);
+  });
   const choices = ["everyone", "One", "Two", "Three", "Four", "Five", "Six"]
     .map((name, index) => ({ id: String(index), name }));
 

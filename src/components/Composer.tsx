@@ -81,7 +81,7 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-type MentionChoice = { id: string; name: string; bot?: Bot };
+type MentionChoice = { id: string; name: string; bot?: Bot; searchText?: string };
 
 interface ComposerDraftSnapshot extends ComposerSendSnapshot {
   reply: Message | null;
@@ -313,7 +313,7 @@ export function Composer({
   const candidates = useMemo(() => {
     if (!mention || mention.start === dismissedAt) return [];
     const pool: MentionChoice[] = shared
-      ? shared.mentionBots.map(member => ({ id: member.id, name: member.name, bot: member }))
+      ? shared.mentionBots.map(member => ({ id: member.id, name: member.name, bot: member, searchText: member.title }))
       : group
       ? [
           ...(!group.dm ? [{ id: "__everyone__", name: "everyone" }] : []),
@@ -829,6 +829,9 @@ export function Composer({
               </button>
             ))}
           </div>
+        )}
+        {shared && mention && mention.start !== dismissedAt && !mentionPickerOpen && mention.query.trim() && !/\s/.test(mention.query) && (
+          <p role="status" className="mb-2 rounded-xl bg-raised px-3 py-2 text-xs text-ink-secondary">No bots match. Search by bot name or owner.</p>
         )}
         {mentionPickerOpen && (
           <div
