@@ -5,6 +5,7 @@ import type { MausColor } from "@/lib/mascot";
 import type { MascotBodyId } from "../../shared/mascot-bodies";
 import { ChatView } from "./ChatView";
 import { SharedConversationDetails } from "./SharedConversationDetails";
+import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork } from "./shared-conversation";
 import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedAttachmentError, isDirectSharedRoom, sharedBotTargets, sharedMentionBots, type SharedRoom, type SharedContact, type SharedEligibleBot, type SharedAttachment, type SharedMessage, type SharedHistoryPage, type SharedPreferences, type SharedNotifications } from "./shared-conversation";
 function senderId(message: SharedMessage) { return `${message.actor.homeId}:${message.actor.kind}:${message.actor.localId}`; }
 function errorText(cause: unknown, fallback: string) { return cause instanceof Error ? cause.message : fallback; }
@@ -239,28 +240,21 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
     if (!room || !selfId) return null;
     const memberNames = room.memberIds.filter(id => id !== selfId).map(id => contacts.find(contact => contact.id === id)?.name).filter((name): name is string => Boolean(name));
     const display = peer?.name ?? (room.name === "Group chat" && memberNames.length ? memberNames.join(", ") : room.name);
-    const latestTool = new Map<string, number>();
-    messages.forEach((message, index) => {
-      const key = message.kind === "activity" ? message.sendId?.replace(/-(?:start|ok|failed)$/, "") : null;
-      if (key?.startsWith("activity-")) latestTool.set(key, index);
-    });
-    const visible = messages.filter((message, index) => {
-      const key = message.kind === "activity" ? message.sendId?.replace(/-(?:start|ok|failed)$/, "") : null;
-      return !key?.startsWith("activity-") || latestTool.get(key) === index;
-    });
+    const visible = sharedVisibleMessages(messages);
     const history: Message[] = visible.map((message, index) => {
       const actorId = senderId(message);
       const actor = contacts.find(contact => contact.id === actorId);
       const actorBot = eligibleBots.find(bot => bot.id === actorId);
       return {
         id: message.id, role: actorId === selfId ? "user" : "bot", kind: message.kind ?? "text",
-        text: message.deletedAt ? "Message removed" : message.text, tool: message.tool, at: message.at,
+        text: message.deletedAt ? "Message removed" : message.text,
+        tool: message.tool ? { ...message.tool, spoken: sharedActivityLabel(message) } : undefined, at: message.at,
         parentId: index > 0 ? visible[index - 1].id : null,
-        replyToId: message.deletedAt ? undefined : message.replyTo,
+        replyToId: sharedReplyReference(message),
         sharedAttachments: message.deletedAt ? undefined : message.attachments,
         from: actorId !== selfId ? {
           botId: actorId,
-          name: actor?.name ?? actorBot?.name ?? (message.actor.kind === "bot" ? "Bot" : "Member"),
+          name: actorBot ? `${actorBot.name} · ${actorBot.ownerName}` : actor?.name ?? (message.actor.kind === "bot" ? "Bot" : "Member"),
           color: (actor?.color ?? actorBot?.color ?? "blue") as MausColor,
         } : undefined,
       };
@@ -270,7 +264,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       title: peer?.title ?? "", description: "", notifications: true,
       color: (peer?.color ?? "blue") as MausColor, mascotBody: peer?.mascotBody as MascotBodyId | null,
       avatarUrl: peer?.avatar ?? null, unread: false,
-      busy: history.at(-1)?.kind === "activity" && history.at(-1)?.tool?.ok === undefined,
+      busy: sharedHasActiveWork(messages),
       modelSelection: { instanceId: "shared", model: "shared" },
       messages: history, activeLeafId: history.at(-1)?.id ?? null, hasMore,
     };

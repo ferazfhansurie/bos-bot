@@ -2,6 +2,23 @@ import XCTest
 @testable import CompanionCore
 
 final class SharedConversationTests: XCTestCase {
+    func testSettledWorkKeepsBotAndRequestIdentity() throws {
+        func row(_ id: String, _ sequence: Int, home: String = "one", request: String = "request-a", state: String = "start") throws -> SharedChatMessage {
+            let json = """
+            {"id":"\(id)","roomId":"room","sequence":\(sequence),"actor":{"homeId":"\(home)","kind":"bot","localId":"bot"},"text":"","at":1,"sendId":"activity-step-\(state)","responseTo":"\(request)","kind":"activity","tool":{"name":"working","spoken":"Pixie is working on this"\(state == "start" ? "" : ",\"ok\":true")}}
+            """
+            return try JSONDecoder().decode(SharedChatMessage.self, from: Data(json.utf8))
+        }
+        let start = try row("start", 1)
+        let otherOwner = try row("other-owner", 2, home: "two")
+        let otherRequest = try row("other-request", 3, request: "request-b")
+        let settled = try row("settled", 4, state: "ok")
+        XCTAssertEqual(SharedChatMessage.visible([start, otherOwner, otherRequest, settled]).map(\.id), ["other-owner", "other-request", "settled"])
+        XCTAssertEqual(settled.activityLabel, "Completed")
+        XCTAssertEqual(otherRequest.replyReference, "request-b")
+        XCTAssertEqual(start.activityLabel, "Pixie is working on this")
+    }
+
     func testHumanNamesReplaceOnlyPlaceholderGroupNames() throws {
         let contacts = try JSONDecoder().decode(SharedContactsResponse.self, from: Data(#"{"contacts":[{"id":"me","name":"Firaz","kind":"person"},{"id":"p","name":"Putri","kind":"person"},{"id":"f","name":"Faeez","kind":"person"}]}"#.utf8)).contacts
         let json = #"{"id":"r","homeId":"h","name":"Group chat","kind":"group","memberIds":["me","f","p"],"createdAt":1}"#

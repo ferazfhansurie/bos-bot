@@ -61,25 +61,32 @@ struct SharedChatView: View {
                                 .font(.caption).disabled(loadingOlder).frame(maxWidth: .infinity).padding(.vertical, 12)
                         }
                         Color.clear.frame(height: 8)
-                        ForEach(messages) { message in
+                        ForEach(SharedChatMessage.visible(messages)) { message in
                             let mine = message.actor.id == selfID
                             if message.isActivity {
                                 // A bot's tool/progress line: a compact step,
                                 // never a name label over an empty bubble.
                                 if let row = SharedActivityRow(message: message,
-                                                               actorName: contacts.first { $0.id == message.actor.id }?.name) {
+                                                               actorName: senderName(message)) {
                                     row.id(message.id)
                                 }
                             } else {
                             HStack(alignment: .bottom) {
                                 if mine { Spacer(minLength: 44) }
                                 VStack(alignment: .leading, spacing: 4) {
-                                    if !mine { Text(contacts.first { $0.id == message.actor.id }?.name ?? "Member")
+                                    if !mine { Text(senderName(message))
                                         .font(.caption2).foregroundStyle(.secondary) }
-                                    if let replyID = message.replyTo, let quoted = messages.first(where: { $0.id == replyID }) {
-                                        Text(quoted.deletedAt == nil ? quoted.text : "Message removed")
-                                            .font(.caption).lineLimit(2).foregroundStyle(.secondary)
-                                            .padding(8).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                                    if let replyID = message.replyReference, let quoted = messages.first(where: { $0.id == replyID }) {
+                                        Button { withAnimation { proxy.scrollTo(replyID, anchor: .center) } } label: {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text("Replying to \(quoted.actor.id == selfID ? "you" : senderName(quoted))").font(.caption2.weight(.medium))
+                                                Text(quoted.deletedAt == nil ? quoted.text : "Message removed").font(.caption).lineLimit(2)
+                                            }
+                                            .foregroundStyle(.secondary).padding(8)
+                                            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                                        }.buttonStyle(.plain)
+                                    } else if message.replyReference != nil {
+                                        Text("Reply to an earlier message").font(.caption).foregroundStyle(.secondary)
                                     }
                                     if message.deletedAt != nil {
                                         Text("Message removed").font(.subheadline).italic().foregroundStyle(.secondary).padding(12)
@@ -325,6 +332,14 @@ struct SharedChatView: View {
         composerFocused = true
     }
 
+    private func senderName(_ message: SharedChatMessage) -> String {
+        if let bot = availableBots.first(where: { $0.id == message.actor.id }) {
+            let owner = bot.ownerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return owner.isEmpty ? bot.name : "\(bot.name) · \(owner)"
+        }
+        return contacts.first { $0.id == message.actor.id }?.name ?? (message.actor.kind == "bot" ? "Bot" : "Member")
+    }
+
     private func refreshBots() async {
         guard !botsLoading else { return }
         botsLoading = availableBots.isEmpty
@@ -464,28 +479,23 @@ private struct PendingSharedFile: Identifiable {
 /// or name, with a quiet status glyph. Nil when there is nothing to show.
 private struct SharedActivityRow: View {
     let label: String
-    let failed: Bool
+    let outcome: Bool?
 
     init?(message: SharedChatMessage, actorName: String?) {
-        let spoken = message.tool?.spoken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = message.tool?.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let phrase = [spoken, text, name].compactMap { $0 }.first { !$0.isEmpty }
-        guard let phrase else { return nil }
+        guard let phrase = message.activityLabel else { return nil }
         if let actorName, !actorName.isEmpty { label = "\(actorName) · \(phrase)" } else { label = phrase }
-        failed = message.tool?.ok == false
+        outcome = message.tool?.ok
     }
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: failed ? "exclamationmark.circle" : "wrench.and.screwdriver")
+            Image(systemName: outcome == false ? "exclamationmark.circle" : outcome == true ? "checkmark.circle" : "clock")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(failed ? Color.orange : Color.secondary)
+                .foregroundStyle(outcome == false ? Color.orange : Color.secondary)
             Text(label)
                 .font(.system(size: 12))
                 .foregroundStyle(Color.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)

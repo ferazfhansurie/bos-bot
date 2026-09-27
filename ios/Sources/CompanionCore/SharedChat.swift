@@ -64,6 +64,38 @@ public struct SharedChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let tool: SharedTool?
 
     public var isActivity: Bool { kind == "activity" }
+
+    public var replyReference: String? {
+        deletedAt != nil ? nil : replyTo ?? (actor.kind == "bot" ? responseTo : nil)
+    }
+
+    public var activityLabel: String? {
+        if let tool, ["working", "still working"].contains(tool.name), let ok = tool.ok {
+            if ok { return "Completed" }
+            if let spoken = tool.spoken, spoken.range(of: "is (still )?working on this$", options: .regularExpression) == nil { return spoken }
+            return "Stopped"
+        }
+        return [tool?.spoken, text, tool?.name].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+    }
+
+    private var activityKey: String? {
+        guard actor.kind == "bot", isActivity, sendId.hasPrefix("activity-") else { return nil }
+        let receipt = sendId.replacingOccurrences(of: "-(start|ok|failed)$", with: "", options: .regularExpression)
+        return "\(actor.id):\(responseTo ?? ""):\(receipt)"
+    }
+
+    /// The settled update supersedes the start row without collapsing work
+    /// from another bot or another person's request.
+    public static func visible(_ messages: [SharedChatMessage]) -> [SharedChatMessage] {
+        var latest: [String: Int] = [:]
+        for (index, message) in messages.enumerated() {
+            if let key = message.activityKey { latest[key] = index }
+        }
+        return messages.enumerated().compactMap { index, message in
+            guard let key = message.activityKey else { return message }
+            return latest[key] == index ? message : nil
+        }
+    }
 }
 
 /// The tool behind a shared-room activity line.

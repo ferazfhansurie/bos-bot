@@ -174,6 +174,9 @@ desktop routing, cancellation, and computer authority cleanup.
 
 ## Evidence
 
+The [shared request fixture](shared-requests.md) checks two request-linked bot
+answers in a human-only group, source-message navigation and settled activity.
+
 The [Japanese desktop font recipe](japanese-desktop.md) checks real Firefox and
 XFCE glyph rendering in disposable managed desktops, including fresh recreation.
 

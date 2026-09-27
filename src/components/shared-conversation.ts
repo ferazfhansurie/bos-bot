@@ -14,7 +14,37 @@ export interface SharedMessage {
   actor: { homeId: string; kind: string; localId: string };
   text: string; at: number; attachments?: SharedAttachment[];
   kind?: "text" | "activity"; tool?: { name: string; ok?: boolean; spoken?: string };
+  responseTo?: string;
   replyTo?: string; editedAt?: number; deletedAt?: number; changeSequence?: number;
+}
+
+/** Keep a settled activity in the position of its latest update. Scope the
+ * receipt to its bot and request: two owners may use the same tool id. */
+export function sharedVisibleMessages(messages: readonly SharedMessage[]): SharedMessage[] {
+  const key = (message: SharedMessage) => message.actor.kind === "bot" && message.kind === "activity" && message.sendId.startsWith("activity-")
+    ? `${message.actor.homeId}:${message.actor.localId}:${message.responseTo ?? ""}:${message.sendId.replace(/-(?:start|ok|failed)$/, "")}` : null;
+  const latest = new Map<string, number>();
+  messages.forEach((message, index) => { const id = key(message); if (id) latest.set(id, index); });
+  return messages.filter((message, index) => { const id = key(message); return !id || latest.get(id) === index; });
+}
+
+export function sharedReplyReference(message: SharedMessage): string | undefined {
+  return message.deletedAt ? undefined : message.replyTo ?? (message.actor.kind === "bot" ? message.responseTo : undefined);
+}
+
+export function sharedActivityLabel(message: Pick<SharedMessage, "tool" | "text">): string {
+  const tool = message.tool;
+  if (tool && ["working", "still working"].includes(tool.name) && tool.ok !== undefined) {
+    return tool.ok ? "Completed" : tool.spoken && !/is (?:still )?working on this$/.test(tool.spoken) ? tool.spoken : "Stopped";
+  }
+  return tool?.spoken?.trim() || message.text.trim() || tool?.name.trim() || "";
+}
+
+export function sharedHasActiveWork(messages: readonly SharedMessage[]): boolean {
+  const answered = new Set(messages.filter(message => message.actor.kind === "bot" && message.responseTo && message.kind !== "activity")
+    .map(message => `${message.actor.homeId}:${message.actor.localId}:${message.responseTo}`));
+  return sharedVisibleMessages(messages).some(message => message.kind === "activity" && message.tool?.ok === undefined && Boolean(message.tool)
+    && !answered.has(`${message.actor.homeId}:${message.actor.localId}:${message.responseTo ?? ""}`));
 }
 export interface SharedHistoryPage { messages: SharedMessage[]; changes?: SharedMessage[]; version?: number; hasMore?: boolean }
 export interface SharedHistory {

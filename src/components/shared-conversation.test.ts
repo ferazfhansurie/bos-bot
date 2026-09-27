@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork } from "./shared-conversation";
 import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedRoomUnread, sharedAttachmentError, isDirectSharedRoom, sharedBotTargets, sharedMentionBots, type SharedMessage } from "./shared-conversation";
 
 describe("shared conversations", () => {
@@ -63,6 +64,23 @@ describe("shared messenger state", () => {
     const stalePoll = mergeSharedHistory(removed, { messages: [message(9)], version: 19 }, "after");
     expect(stalePoll.messages[1].deletedAt).toBe(100);
     expect(stalePoll.changeRevision).toBe(removed.changeRevision);
+  });
+
+  it("keeps simultaneous bot requests distinct when activities settle", () => {
+    const actor = { homeId: "one", kind: "bot", localId: "bot" };
+    const start = message(1, { actor, responseTo: "request-a", sendId: "activity-step-start", kind: "activity", tool: { name: "working", spoken: "Pixie is working on this" } });
+    const otherOwner = message(2, { ...start, id: "other-owner", sequence: 2, actor: { ...actor, homeId: "two" } });
+    const otherRequest = message(3, { ...start, id: "other-request", sequence: 3, responseTo: "request-b" });
+    const settled = message(4, { ...start, id: "settled", sequence: 4, sendId: "activity-step-ok", tool: { ...start.tool!, ok: true } });
+    expect(sharedVisibleMessages([start, otherOwner, otherRequest, settled]).map(row => row.id)).toEqual(["other-owner", "other-request", "settled"]);
+    expect(sharedActivityLabel(settled)).toBe("Completed");
+    expect(sharedHasActiveWork([start, settled, message(5)])).toBe(false);
+    expect(sharedHasActiveWork([start, otherRequest, settled, message(5)])).toBe(true);
+    expect(sharedHasActiveWork([start, message(6, { actor, responseTo: "request-a", text: "done" })])).toBe(false);
+    expect(sharedReplyReference(message(7, { actor, responseTo: "request-b" }))).toBe("request-b");
+    expect(sharedReplyReference(message(8, { actor, responseTo: "request-b", replyTo: "explicit" }))).toBe("explicit");
+    expect(sharedReplyReference(message(9, { actor, responseTo: "request-b", deletedAt: 10 }))).toBeUndefined();
+    expect(sharedActivityLabel({ text: "", tool: { name: "working", ok: false, spoken: "Stopped because access changed." } })).toBe("Stopped because access changed.");
   });
 
   it("keeps reply references and tombstones in chronological position", () => {
