@@ -33,3 +33,12 @@ export const sharedRequestLabels: Record<SharedRequestState, string> = {
   accepted: "Accepted", queued: "Queued", working: "Working", "waiting-approval": "Waiting for owner",
   completed: "Completed", failed: "Failed", offline: "Unavailable", cancelled: "Stopped", "outcome-unknown": "Outcome unknown",
 };
+
+/** Shared progress is a status, never a provider command or private tool output. */
+export function sharedRequestProgress(tool: { name: string; ok?: boolean; spoken?: string }, botName: string, ownerName: string): { name: string; ok?: boolean; spoken: string } {
+  const name = ["working", "still working", "waiting for approval"].includes(tool.name) ? tool.name : "step";
+  const spoken = name === "waiting for approval" ? `Waiting for ${ownerName} to approve on their Mac.`
+    : name === "step" ? (tool.ok === undefined ? `${botName} is working on a step.` : tool.ok ? "Step finished." : "Step stopped.")
+    : tool.ok === undefined ? `${botName} is working on this.` : tool.ok ? `${botName} finished working.` : `${botName} stopped working.`;
+  return { name, ...(tool.ok === undefined ? {} : { ok: tool.ok }), spoken };
+}

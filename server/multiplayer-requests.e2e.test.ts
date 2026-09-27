@@ -6,7 +6,9 @@ import { launchVerificationServer } from "../scripts/control-omb.ts";
 
 it("records, scopes and cancels exact shared requests without dispatching cancelled queued work", async () => {
   const gate = join("/tmp", `bos-requests-${randomUUID()}.gate`);
-  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: gate });
+  const privateToolDetail = "fixture-private-command /Users/fixture/private.txt";
+  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: gate,
+    FAKE_CLAUDE_TOOL_CALLS: JSON.stringify([{ name: "Bash", input: { command: privateToolDetail }, ok: true }]) });
   const api = async (method: string, path: string, body?: unknown, token?: string) => {
     const response = await fetch(`${fixture.info.url}${path}`, { method,
       headers: { "content-type": "application/json", origin: fixture.info.url, ...(token ? { authorization: `Bearer ${token}` } : {}) },
@@ -38,6 +40,15 @@ it("records, scopes and cancels exact shared requests without dispatching cancel
     const queued = (await requests()).find(item => item.sourceId === second.body.message.id);
     expect(queued.state).toBe("queued");
     expect(queued.dispatchedAt).toBeUndefined();
+    const otherRoom = (await api("POST", "/api/multiplayer/rooms", { name: "Another conversation", memberIds: [me.actorId, teammate] })).body.room;
+    const otherPath = `/api/multiplayer/rooms/${otherRoom.id}`;
+    const otherMessage = await api("POST", `${otherPath}/messages`, { text: "@Helper separate conversation", sendId: "other-room" });
+    expect(otherMessage.status).toBe(201);
+    const otherRequest = (await api("GET", `${otherPath}/requests`)).body.requests[0];
+    expect(otherRequest).toMatchObject({ state: "queued", sourceId: otherMessage.body.message.id });
+    expect(otherRequest.dispatchedAt).toBeUndefined();
+    expect((await api("POST", `${path}/requests/${otherRequest.id}/cancel`, {})).status).toBe(404);
+    expect((await api("POST", `${otherPath}/requests/${otherRequest.id}/cancel`, {})).body.request.state).toBe("cancelled");
     expect((await api("POST", `${path}/requests/${queued.id}/cancel`, {})).body.request.state).toBe("cancelled");
     expect((await api("POST", `${path}/requests/${working.id}/cancel`, {})).body.request.state).toBe("cancelled");
     await expect.poll(async () => (await api("GET", `${path}/messages`)).body.messages.some((item: any) => item.responseTo === first.body.message.id && item.tool?.name === "working" && item.tool.ok === false), { timeout: 10_000, interval: 100 }).toBe(true);
@@ -48,6 +59,7 @@ it("records, scopes and cancels exact shared requests without dispatching cancel
     expect(records.find(item => item.id === queued.id)).toMatchObject({ state: "cancelled" });
     expect(records.find(item => item.id === queued.id).dispatchedAt).toBeUndefined();
     const history = (await api("GET", `${path}/messages`)).body.messages;
+    expect(JSON.stringify(history)).not.toContain(privateToolDetail);
     expect(history.filter((item: any) => [first.body.message.id, second.body.message.id].includes(item.responseTo) && item.kind !== "activity")).toHaveLength(0);
     const complete = records.find(item => item.sourceId === third.body.message.id);
     expect(history.some((item: any) => item.id === complete.resultId)).toBe(true);
@@ -56,7 +68,8 @@ it("records, scopes and cancels exact shared requests without dispatching cancel
     expect((await api("GET", `${path}/requests?before=${third.body.message.sequence}&limit=1`)).body.requests[0].id).toBe(queued.id);
     expect((await api("GET", `${path}/requests?limit=101`)).status).toBe(400);
     const saved = JSON.parse(readFileSync(join(fixture.info.dataDir, "shared-requests.json"), "utf8"));
-    expect(saved.requests.filter((item: any) => item.state === "cancelled")).toHaveLength(2);
+    expect(saved.requests.filter((item: any) => item.state === "cancelled")).toHaveLength(3);
+    expect(saved.requests.find((item: any) => item.id === otherRequest.id).dispatchedAt).toBeUndefined();
     rmSync(gate);
     const revised = await api("POST", `${path}/messages`, { text: "@Helper original request", sendId: "revised" });
     await expect.poll(async () => (await requests()).find(item => item.sourceId === revised.body.message.id)?.state, { timeout: 10_000, interval: 100 }).toBe("working");

@@ -762,7 +762,7 @@ export class RemoteBotBridge {
         const ask = after.find((message) => message.kind === "options" && message.card?.requestId && !message.card.answered && !message.card.dismissed);
         if (ask && !delivered.has(`ask-${ask.id}`)) {
           delivered.set(`ask-${ask.id}`, "waiting");
-          input.onActivity(`ask-${ask.id}`, { name: "waiting for approval", spoken: `waiting for ${home.link.ownerName ?? "its owner"} to approve ${String(ask.card.tool ?? "a step")} on their Mac` });
+          input.onActivity(`ask-${ask.id}`, { name: "waiting for approval", spoken: `Waiting for ${home.link.ownerName ?? "its owner"} to approve on their Mac.` });
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 2500));

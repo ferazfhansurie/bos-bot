@@ -32,6 +32,8 @@ class FakeHome {
   supportsIsolation = true;
   identityStatus = 200;
   afterThreadCreated: (() => void) | null = null;
+  afterRoomSent: (() => void) | null = null;
+  awaitingRoomApproval = false;
 
   bot(): Record<string, unknown> {
     return {
@@ -119,8 +121,11 @@ class FakeHome {
       this.threads.get(b.threadId)?.push(message);
       if (b.sendId) this.threads.get(b.threadId)?.push(...Array.from({ length: this.afterSendActivityCount }, (_, index) =>
         ({ id: `activity-${index}`, role: "bot", kind: "activity", tool: { name: `step ${index}` }, at: Date.now() + index })));
-      if (b.sendId) this.threads.get(b.threadId)?.push({ id: `b${this.calls.length}`, role: "bot", kind: "text", text: this.failRoomTurn ? "partial work" : "reply from pixie", turnTerminal: true,
+      if (b.sendId && this.awaitingRoomApproval) this.threads.get(b.threadId)?.push({ id: "private-approval", role: "bot", kind: "options",
+        card: { requestId: "private-request", tool: SECRET, title: SECRET }, at: Date.now() });
+      if (b.sendId && !this.awaitingRoomApproval) this.threads.get(b.threadId)?.push({ id: `b${this.calls.length}`, role: "bot", kind: "text", text: this.failRoomTurn ? "partial work" : "reply from pixie", turnTerminal: true,
         ...(this.failRoomTurn ? { turnOutcome: { ok: false, stopReason: "claude exited 143" } } : {}), at: Date.now() + 1 });
+      this.afterRoomSent?.();
       return json(b.sendId ? 202 : 200, { ok: true, threadId: b.threadId, message, bot: this.bot() });
     }
     if (method === "POST" && /^\/api\/threads\/[\w-]+\/respond$/.test(url.pathname)) return json(200, { ok: true });
@@ -210,6 +215,39 @@ describe("RemoteBotBridge", () => {
     expect(visible!.threadId).toBe(pending);
     expect((await route("GET", `/api/threads/rt-${KEY}-bridge-1/messages`)).status).toBe(404);
     expect(fake.calls.some((call) => call.path === "/api/bots/pixie/messages" && (call.body as { sendId?: string }).sendId === "room-send-1")).toBe(true);
+  });
+
+  it("interrupts only the dispatched shared thread when its request is cancelled", async () => {
+    await bridge.listBots(0);
+    let allowed = true;
+    let dispatched = 0;
+    fake.afterRoomSent = () => { allowed = false; };
+    await expect(bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "cancel-exact",
+      onThread: () => {}, onActivity: () => {}, onDispatch: () => { dispatched += 1; },
+      shouldContinue: () => allowed, deadlineMs: Date.now() + 10_000,
+    })).rejects.toThrow("shared request access changed");
+    expect(dispatched).toBe(1);
+    expect(fake.calls.filter(call => call.path === "/api/bots/pixie/interrupt").map(call => call.body))
+      .toEqual([{ threadId: "bridge-1" }]);
+    expect(fake.threads.get("putri-thread")).toHaveLength(1);
+  });
+
+  it("keeps shared approval details private and stops the exact waiting task", async () => {
+    await bridge.listBots(0);
+    fake.awaitingRoomApproval = true;
+    let allowed = true;
+    const activity: unknown[] = [];
+    await expect(bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "approval-wait",
+      onThread: () => {}, onActivity: (_id, tool) => { activity.push(tool); allowed = false; },
+      shouldContinue: () => allowed, deadlineMs: Date.now() + 10_000,
+    })).rejects.toThrow("shared request access changed");
+    expect(activity).toEqual([{ name: "waiting for approval", spoken: "Waiting for Putri to approve on their Mac." }]);
+    expect(JSON.stringify(activity)).not.toContain(SECRET);
+    expect(fake.calls.filter(call => call.path === "/api/bots/pixie/interrupt").map(call => call.body))
+      .toEqual([{ threadId: "bridge-1" }]);
+    expect(fake.calls.some(call => call.path.endsWith("/respond"))).toBe(false);
   });
 
   it("distinguishes upgrade and authentication failures from offline, then clears them after recovery", async () => {

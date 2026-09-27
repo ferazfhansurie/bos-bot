@@ -25,7 +25,7 @@ import { BOS_JARVIS } from "../shared/bos-jarvis.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
 import { SharedRequestStore } from "./shared-request-store.ts";
-import { sharedRequestIsActive } from "../shared/shared-request.ts";
+import { sharedRequestIsActive, sharedRequestProgress } from "../shared/shared-request.ts";
 import { SharedRoomTrust, isSharedRoomTrustLevel, sharedRoomTargets, sharedMentionText, sharedRoomBotCandidates, type SharedRoomTrustLevel } from "./shared-room-trust.ts";
 import { SharedAttachmentStore } from "./shared-attachment-store.ts";
 import { ApnsPush } from "./apns-push.ts";
@@ -6128,6 +6128,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
     const seenProgress = new Set<string>();
     const progress = (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => {
       if (!tool?.name) return;
+      tool = sharedRequestProgress(tool, target.name, target.ownerName);
       const current = sharedRequests.get(requestRecord.id)!;
       if (current.dispatchedAt && sharedRequestIsActive(current.state)) {
         if (tool.name === "waiting for approval") sharedRequests.transition(current.id, "waiting-approval");
