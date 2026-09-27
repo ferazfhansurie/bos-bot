@@ -206,23 +206,35 @@ struct AgentProfileView: View {
                     .pickerStyle(.segmented)
 
                     if crop == .mascot {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 16) {
-                            ForEach(FlatBotMark.ids, id: \.self) { body in
-                                Button {
-                                    Task { await selectBody(body) }
-                                } label: {
-                                    FlatBotMark(color: current.color, bodyId: body)
-                                        .frame(width: 58, height: 58)
-                                        .padding(6)
-                                        .overlay(Circle().stroke((current.mascotBody ?? "circle") == body ? Color.secondary : Color.clear, lineWidth: 2))
+                        ForEach(FlatMascotBodies.groups, id: \.self) { group in
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(group).font(.subheadline).foregroundStyle(.secondary)
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 16) {
+                                    ForEach(FlatMascotBodies.all.filter { $0.group == group }, id: \.id) { body in
+                                        Button {
+                                            Task { await selectBody(body.id) }
+                                        } label: {
+                                            VStack(spacing: 4) {
+                                                FlatBotMark(color: current.color, bodyId: body.id)
+                                                    .frame(width: 58, height: 58)
+                                                    .padding(6)
+                                                    .overlay(Circle().stroke(FlatMascotBodies.body(current.mascotBody).id == body.id ? Color.secondary : Color.clear, lineWidth: 2))
+                                                Text(body.name).font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                                    .multilineTextAlignment(.center)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
+                                            .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(busy)
+                                        .accessibilityLabel(body.name)
+                                        .accessibilityAddTraits(FlatMascotBodies.body(current.mascotBody).id == body.id ? .isSelected : [])
+                                    }
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(busy)
-                                .accessibilityLabel(FlatBotMark.names[body] ?? body)
-                                .accessibilityAddTraits((current.mascotBody ?? "circle") == body ? .isSelected : [])
                             }
+                            .padding(.vertical, 8)
                         }
-                        .padding(.vertical, 12)
                     }
 
                     PhotosPicker(selection: $photo, matching: .images) {

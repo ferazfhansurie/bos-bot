@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot } from "@/state/store";
-import { MASCOT_BODY_IDS, MASCOT_BODIES } from "../../shared/mascot-bodies";
+import { FLAT_MASCOT_BODIES, FLAT_MASCOT_GROUPS } from "../../shared/flat-mascot-bodies";
 import { BotProfileAvatarCard } from "./BotProfileAvatarCard";
 
 function makeBot(overrides: Partial<Bot> = {}): Bot {
@@ -44,9 +44,11 @@ describe("BotProfileAvatarCard body picker", () => {
     expect(markup).toContain(">Body<");
     expect(markup).not.toContain(" expression</button>");
     expect(markup).not.toContain("Use idle expression");
-    for (const id of MASCOT_BODY_IDS.filter(id => id !== "shield" && id !== "diamond")) {
-      expect(markup).toContain(`aria-label="Use the ${({ cursor: "Triangle", star: "Cloud", blob: "Oval" } as Partial<Record<string, string>>)[id] ?? MASCOT_BODIES[id].name} body"`);
+    expect((markup.match(/aria-label="Use the .*? body"/g) ?? []).length).toBe(40);
+    for (const body of FLAT_MASCOT_BODIES) {
+      expect(markup).toContain(`aria-label="Use the ${body.name} body"`);
     }
+    for (const group of FLAT_MASCOT_GROUPS) expect(markup).toContain(`>${group}<`);
   });
 
   it("marks the current body pressed and the rest unpressed, defaulting to circle", () => {

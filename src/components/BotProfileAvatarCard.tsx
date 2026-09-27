@@ -15,7 +15,7 @@ import {
   botAvatarUrlFromStoredPath,
   type BotAvatarCrop,
 } from "../../shared/bot-avatar";
-import { MASCOT_BODIES } from "../../shared/mascot-bodies";
+import { FLAT_MASCOT_BODIES, FLAT_MASCOT_GROUPS, flatMascotBody } from "../../shared/flat-mascot-bodies";
 import { BotAvatar, MausAvatar } from "./Avatar";
 import { AvatarImageGenerator } from "./AvatarImageGenerator";
 import { useOrganizationBranding } from "@/lib/use-organization-branding";
@@ -225,26 +225,32 @@ export function BotProfileAvatarCard({
             <div className="mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
               Body
             </div>
-            <div className="grid grid-cols-4 gap-3">
-              {(["circle", "blob", "squircle", "capsule", "cursor", "hexagon", "star", "drop"] as const).map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  disabled={busy}
-                  aria-pressed={(bot.mascotBody ?? "circle") === id}
-                  aria-label={`Use the ${({ cursor: "Triangle", star: "Cloud", blob: "Oval" } as Partial<Record<string, string>>)[id] ?? MASCOT_BODIES[id].name} body`}
-                  onClick={() => onPatch({ mascotBody: id })}
-                  className={cn(
-                    "flex items-center justify-center rounded-lg py-1.5 disabled:opacity-50",
-                    (bot.mascotBody ?? "circle") === id
-                      ? "bg-control text-ink"
-                      : "text-ink-secondary hover:bg-control/60",
-                  )}
-                >
-                  <MausAvatar color={bot.color} bodyId={id} size={52} animated={false} trackPointer={false} />
-                </button>
-              ))}
-            </div>
+            {FLAT_MASCOT_GROUPS.map(group => (
+              <div key={group} className="mb-4 last:mb-0">
+                <div className="mb-2 text-[12px] text-ink-secondary">{group}</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {FLAT_MASCOT_BODIES.filter(body => body.group === group).map(body => (
+                    <button
+                      key={body.id}
+                      type="button"
+                      disabled={busy}
+                      aria-pressed={flatMascotBody(bot.mascotBody).id === body.id}
+                      aria-label={`Use the ${body.name} body`}
+                      onClick={() => onPatch({ mascotBody: body.id })}
+                      className={cn(
+                        "flex min-w-0 flex-col items-center justify-center rounded-lg px-1 py-2 disabled:opacity-50",
+                        flatMascotBody(bot.mascotBody).id === body.id
+                          ? "bg-control text-ink ring-1 ring-accent-border"
+                          : "text-ink-secondary hover:bg-control/60",
+                      )}
+                    >
+                      <MausAvatar color={bot.color} bodyId={body.id} size={52} animated={false} trackPointer={false} />
+                      <span className="mt-1 max-w-full break-words text-center text-[11px] leading-tight">{body.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
           </>
         )}
 

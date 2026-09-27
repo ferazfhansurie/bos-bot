@@ -23,7 +23,7 @@ const renderBot = (bot: Partial<BotAvatarProps["bot"]>) =>
 describe("MausAvatar body", () => {
   it("renders a different outline for every body", () => {
     const paths = MASCOT_BODY_IDS.filter(id => id !== "shield" && id !== "diamond").map(bodyId => render({ bodyId }).match(/<path d="([^"]+)"/)?.[1]);
-    expect(new Set(paths).size).toBe(8);
+    expect(new Set(paths).size).toBe(40);
   });
   it("keeps the same face regardless of saved expressions", () => {
     const faces = PICKABLE_STATES.map(state => render({ state }).match(/<path d="[^"]+"/g)?.slice(1).join());

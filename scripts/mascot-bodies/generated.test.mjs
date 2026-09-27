@@ -18,6 +18,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 // by `swift test`), not ios/App (the Xcode app target, which `swift test` never
 // builds) — see swift-catalog.test.mjs.
 const TS_PATH = "../../shared/mascot-bodies.ts";
+const FLAT_SWIFT_PATH = "../../ios/Sources/CompanionCore/FlatMascotBodies.swift";
 const SWIFT_PATH = "../../ios/Sources/CompanionCore/MausBodies.swift";
 const KOTLIN_PATH = "../../android/app/src/main/kotlin/com/openmausbot/companion/ui/MausBodies.kt";
 
@@ -53,6 +54,7 @@ describe("generated catalogs", () => {
     const before = {
       ts: read(TS_PATH),
       swift: read(SWIFT_PATH),
+      flatSwift: read(FLAT_SWIFT_PATH),
       kotlin: read(KOTLIN_PATH),
     };
 
@@ -75,6 +77,7 @@ describe("generated catalogs", () => {
     const after = {
       ts: read(TS_PATH),
       swift: read(SWIFT_PATH),
+      flatSwift: read(FLAT_SWIFT_PATH),
       kotlin: read(KOTLIN_PATH),
     };
 
@@ -84,9 +87,11 @@ describe("generated catalogs", () => {
     // dirty `git status` they have to go discover on their own.
     write(TS_PATH, before.ts);
     write(SWIFT_PATH, before.swift);
+    write(FLAT_SWIFT_PATH, before.flatSwift);
     write(KOTLIN_PATH, before.kotlin);
 
     const drifts = [
+      describeDrift("FlatMascotBodies.swift", before.flatSwift, after.flatSwift),
       describeDrift("shared/mascot-bodies.ts", before.ts, after.ts),
       describeDrift("ios/Sources/CompanionCore/MausBodies.swift", before.swift, after.swift),
       describeDrift("android/app/src/main/kotlin/com/openmausbot/companion/ui/MausBodies.kt", before.kotlin, after.kotlin),

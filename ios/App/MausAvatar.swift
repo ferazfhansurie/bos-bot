@@ -615,44 +615,16 @@ extension Color {
     }
 }
 
-// The eight flat bodies share one fixed face on desktop and phone.
+// One generated catalog keeps phone and desktop silhouettes identical.
 struct FlatBotMark: View {
     let color: String
     var bodyId: String?
-    static let ids = ["circle", "blob", "squircle", "capsule", "cursor", "hexagon", "star", "drop"]
-    static let names = ["circle": "Circle", "blob": "Oval", "squircle": "Square", "capsule": "Capsule", "cursor": "Triangle", "hexagon": "Hexagon", "star": "Cloud", "drop": "Drop"]
-    static let outlines: [String: String] = [
-        "circle": "M 50 10 C 72 10 90 28 90 50 C 90 72 72 90 50 90 C 28 90 10 72 10 50 C 10 28 28 10 50 10 Z",
-        "blob": "M 51 12 C 75 8 88 32 90 53 C 91 77 69 91 47 88 C 22 87 8 70 11 50 C 14 30 29 15 51 12 Z",
-        "squircle": "M 31 14 C 42 12 61 12 71 14 C 83 15 86 21 87 33 C 89 44 89 62 87 73 C 86 84 80 87 68 88 C 55 89 40 89 28 87 C 17 86 14 79 13 67 C 12 53 12 40 14 28 C 15 18 20 15 31 14 Z",
-        "capsule": "M 34 22 C 14 22 7 33 7 50 C 7 67 18 78 34 78 C 45 78 60 78 69 78 C 87 78 94 66 94 50 C 94 33 83 22 67 22 Z",
-        "cursor": "M 44 12 C 47 7 53 7 57 13 C 66 27 80 51 90 72 C 95 83 89 88 79 88 C 60 89 37 89 20 88 C 8 88 6 82 12 72 C 22 51 35 27 44 12 Z",
-        "hexagon": "M 45 10 C 48 8 52 8 55 10 C 63 14 73 20 82 26 C 86 28 87 31 87 36 C 87 45 87 58 87 65 C 87 70 85 73 81 75 C 72 80 62 86 55 90 C 52 92 48 92 45 90 C 35 85 26 79 18 74 C 14 72 13 69 13 64 C 13 54 13 44 13 35 C 13 30 15 28 19 25 Z",
-        "star": "M 20 38 C 17 17 42 3 57 17 C 74 7 89 21 87 39 C 108 57 94 83 74 82 C 61 97 40 97 27 84 C 3 90 -3 58 20 38 Z",
-        "drop": "M 46 9 C 49 5 52 6 55 10 C 64 21 87 46 87 64 C 87 84 71 95 51 95 C 29 95 14 81 15 63 C 16 46 37 20 46 9 Z",
-        "shield": "M 45 10 C 48 8 52 8 55 10 C 63 14 73 20 82 26 C 86 28 87 31 87 36 C 87 45 87 58 87 65 C 87 70 85 73 81 75 C 72 80 62 86 55 90 C 52 92 48 92 45 90 C 35 85 26 79 18 74 C 14 72 13 69 13 64 C 13 54 13 44 13 35 C 13 30 15 28 19 25 Z",
-        "diamond": "M 31 14 C 42 12 61 12 71 14 C 83 15 86 21 87 33 C 89 44 89 62 87 73 C 86 84 80 87 68 88 C 55 89 40 89 28 87 C 17 86 14 79 13 67 C 12 53 12 40 14 28 C 15 18 20 15 31 14 Z"
-    ]
-    static func path(_ data: String) -> Path {
-        let tokens = data.split(separator: " ").map(String.init)
-        var p = Path(); var i = 0
-        func point(_ index: Int) -> CGPoint {
-            CGPoint(x: Double(tokens[index]) ?? 0, y: Double(tokens[index + 1]) ?? 0)
-        }
-        while i < tokens.count {
-            switch tokens[i] {
-            case "M": p.move(to: point(i + 1)); i += 3
-            case "C": p.addCurve(to: point(i + 5), control1: point(i + 1), control2: point(i + 3)); i += 7
-            case "Z": p.closeSubpath(); i += 1
-            default: i += 1
-            }
-        }
-        return p
-    }
     var body: some View {
         Canvas { context, size in
+            let body = FlatMascotBodies.body(bodyId)
             context.scaleBy(x: size.width / 100, y: size.height / 100)
-            context.fill(Self.path(Self.outlines[bodyId ?? "circle"] ?? Self.outlines["circle"]!), with: .color(MausPalette.color(color)))
+            context.fill(Path(FlatMascotBodies.outline(bodyId)), with: .color(MausPalette.color(color)))
+            context.translateBy(x: body.faceX, y: body.faceY)
             var eyes = Path()
             eyes.move(to: CGPoint(x: 51, y: 43)); eyes.addLine(to: CGPoint(x: 54, y: 52))
             eyes.move(to: CGPoint(x: 73, y: 39)); eyes.addLine(to: CGPoint(x: 76, y: 48))

@@ -43,6 +43,7 @@
  * beyond type annotations the stripper can erase.
  */
 
+import { FLAT_MASCOT_BODIES, FLAT_MASCOT_GROUPS } from "../shared/flat-mascot-bodies.ts"
 import { writeFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
@@ -441,6 +442,38 @@ ${entries}
 `
 }
 
+/** The flat marks use their own fixed eyes; retain their original 100-unit paths. */
+function emitFlatSwift(): string {
+  const entries = FLAT_MASCOT_BODIES.map(body => `        Body(id: ${quote(body.id)}, name: ${quote(body.name)}, group: ${quote(body.group)}, path: ${quote(body.path)}, faceX: ${body.faceX}, faceY: ${body.faceY})`).join(",\n")
+  return `// GENERATED FILE — do not hand-edit. Run pnpm gen:bodies.
+// Source: shared/flat-mascot-bodies.ts. Same paths, order and faces as desktop.
+import CoreGraphics
+
+public enum FlatMascotBodies {
+    public struct Body {
+        public let id: String
+        public let name: String
+        public let group: String
+        public let path: String
+        public let faceX: CGFloat
+        public let faceY: CGFloat
+    }
+    public static let groups = [${FLAT_MASCOT_GROUPS.map(quote).join(", ")}]
+    public static let all: [Body] = [
+${entries}
+    ]
+    private static let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+    private static let paths = Dictionary(uniqueKeysWithValues: all.map { ($0.id, MausSilhouette.parse($0.path)) })
+
+    public static func body(_ id: String?) -> Body {
+        let key = id == "shield" ? "hexagon" : id == "diamond" ? "squircle" : id ?? "circle"
+        return byID[key] ?? byID["circle"]!
+    }
+    public static func outline(_ id: String?) -> CGPath { paths[body(id).id]! }
+}
+`
+}
+
 /* ----------------------------------------------------------- emitting (Android) */
 
 /** A Kotlin `Float` literal. JS prints integers bare and small values in exponent form; both are valid with an `f` suffix. */
@@ -619,6 +652,10 @@ function main(): void {
   )
   writeFileSync(swiftOut, emitSwift(baked))
   console.log(`wrote ${swiftOut}`)
+  const flatSwiftOut = fileURLToPath(new URL("../ios/Sources/CompanionCore/FlatMascotBodies.swift", import.meta.url))
+  writeFileSync(flatSwiftOut, emitFlatSwift())
+  console.log(`wrote ${flatSwiftOut}`)
+
 
   // The Android app module: its JVM unit tests (Robolectric) can parse the catalog the
   // way `swift test` can for CompanionCore, so the same drift guard covers it.

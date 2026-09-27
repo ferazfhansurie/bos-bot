@@ -4,6 +4,8 @@
 // so a future field cannot silently become remotely writable.
 import { describe, expect, it } from "vitest";
 
+import { MASCOT_BODY_IDS } from "../shared/mascot-bodies.ts";
+import { FLAT_MASCOT_BODIES } from "../shared/flat-mascot-bodies.ts";
 import { parseBotProfilePatch } from "./bot-profile.ts";
 
 describe("parseBotProfilePatch (strict — the paired boundary)", () => {
@@ -96,6 +98,10 @@ describe("parseBotProfilePatch (both modes)", () => {
 });
 
 describe("mascotBody", () => {
+  it("accepts every picker choice through the paired profile boundary", () => {
+    for (const body of FLAT_MASCOT_BODIES) expect(parseBotProfilePatch({ mascotBody: body.id }, true)).toEqual({ ok: true, patch: { mascotBody: body.id } });
+  });
+
   it("accepts a known body", () => {
     expect(parseBotProfilePatch({ mascotBody: "blob" } as never, true)).toEqual({
       ok: true,
@@ -107,7 +113,7 @@ describe("mascotBody", () => {
     expect(parseBotProfilePatch({ mascotBody: "hexagram" } as never, true)).toEqual({
       ok: false,
       error:
-        "mascotBody must be cursor, blob, circle, squircle, capsule, drop, shield, hexagon, diamond, or star",
+        `mascotBody must be ${MASCOT_BODY_IDS.slice(0, -1).join(", ")}, or ${MASCOT_BODY_IDS.at(-1)}`,
     });
   });
 });

@@ -11,6 +11,7 @@ import CompanionCore
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
     @State private var query = ""
+    @State private var pinnedChats = PinnedChats()
     @State private var showingProfile = false
     @State private var profilePhoto: PhotosPickerItem?
     @AppStorage("bos.personalAvatar") private var personalAvatar = ""
@@ -147,6 +148,7 @@ struct ChatListView: View {
                 SharedChatView(room: room, selfID: sharedMe?.actorId ?? "", contacts: sharedContacts)
             }
             .task(id: session.connection?.id) {
+                pinnedChats = PinnedChats.load(scope: session.connection?.id ?? "")
                 while !Task.isCancelled {
                     await refreshShared()
                     try? await Task.sleep(for: .seconds(3))
@@ -459,8 +461,10 @@ struct ChatListView: View {
             }
         }
 
+        if !pinnedConversations.isEmpty { pinnedConversationGrid }
+
         sectionLabel(Text("Chats")).padding(.top, 18).padding(.bottom, 4)
-        ForEach(orderedConversations) { entry in
+        ForEach(orderedConversations.filter { !pinnedChats.ids.contains($0.id) }) { entry in
             switch entry {
             case .local(let summary): botRows([summary])
             case .contact(let contact): contactRow(contact)
@@ -472,6 +476,7 @@ struct ChatListView: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
+                    pinButton(.room(room))
                     if room.isGroup {
                         Button("Delete group", systemImage: "trash", role: .destructive) {
                             groupPendingDeletion = room
@@ -479,6 +484,113 @@ struct ChatListView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var pinnedConversations: [ConversationEntry] {
+        // Search also exposes local bot rooms. Resolve their saved pins even
+        // though the ordinary recent list shows people, shared groups and bots.
+        let localRooms = session.state.chatSummaries(activity: activity).filter {
+            if case .room = $0.chat { return true }; return false
+        }.map(ConversationEntry.local)
+        let byID = Dictionary(uniqueKeysWithValues: (orderedConversations + localRooms).map { ($0.id, $0) })
+        return pinnedChats.visibleIDs(available: Set(byID.keys)).compactMap { byID[$0] }
+    }
+
+    private func togglePin(_ entry: ConversationEntry) {
+        pinnedChats.toggle(entry.id)
+        pinnedChats.save(scope: session.connection?.id ?? "")
+        Haptics.selection()
+    }
+
+    private func pinButton(_ entry: ConversationEntry) -> some View {
+        Button(pinnedChats.ids.contains(entry.id) ? "Unpin chat" : "Pin chat",
+               systemImage: pinnedChats.ids.contains(entry.id) ? "pin.slash" : "pin") { togglePin(entry) }
+    }
+
+    private var pinnedConversationGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: min(3, pinnedConversations.count)), spacing: 20) {
+            ForEach(pinnedConversations) { entry in
+                Button { openConversation(entry) } label: {
+                    VStack(spacing: 7) {
+                        ZStack(alignment: .topTrailing) {
+                            pinnedAvatar(entry).frame(width: 82, height: 82)
+                            if conversationBusy(entry) {
+                                ProgressView().controlSize(.small)
+                                    .padding(5).background(.background, in: Circle())
+                            } else if conversationUnread(entry) {
+                                Circle().fill(Color.accentColor).frame(width: 11, height: 11)
+                                    .overlay(Circle().stroke(.background, lineWidth: 2))
+                            }
+                        }
+                        Text(conversationName(entry)).font(.subheadline).foregroundStyle(.primary)
+                            .lineLimit(2).multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 118, alignment: .top)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(conversationName(entry)), pinned chat\(conversationBusy(entry) ? ", working" : conversationUnread(entry) ? ", unread" : "")")
+                .contextMenu {
+                    pinButton(entry)
+                    if pinnedChats.ids.first != entry.id {
+                        Button("Move to front", systemImage: "arrow.up.to.line") {
+                            pinnedChats.moveToFront(entry.id)
+                            pinnedChats.save(scope: session.connection?.id ?? "")
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 6)
+        .accessibilityIdentifier("pinned-chats")
+    }
+
+    @ViewBuilder private func pinnedAvatar(_ entry: ConversationEntry) -> some View {
+        switch entry {
+        case .local(let summary):
+            ChatAvatarView(chat: summary.chat, size: 82,
+                           state: MausState.forChat(summary.chat, in: session.state), animated: false)
+        case .contact(let contact): contactAvatar(contact, size: 82)
+        case .room(let room): GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 82)
+        }
+    }
+
+    private func conversationName(_ entry: ConversationEntry) -> String {
+        switch entry {
+        case .local(let summary): return summary.chat.name
+        case .contact(let contact): return contact.name
+        case .room(let room): return room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? "")
+        }
+    }
+    private func conversationBusy(_ entry: ConversationEntry) -> Bool {
+        if case .local(let summary) = entry { return summary.chat.busy }
+        return false
+    }
+    private func conversationUnread(_ entry: ConversationEntry) -> Bool {
+        switch entry {
+        case .local(let summary): return summary.chat.unread
+        case .room(let room): return (room.unreadCount ?? 0) > 0
+        case .contact(let contact):
+            return sharedRooms.contains { !$0.isGroup && $0.memberIds.count == 2 && $0.memberIds.contains(contact.id) && $0.memberIds.contains(sharedMe?.actorId ?? "") && ($0.unreadCount ?? 0) > 0 }
+        }
+    }
+    private func openConversation(_ entry: ConversationEntry) {
+        switch entry {
+        case .local(let summary): path.append(summary.chat)
+        case .room(let room): path.append(room)
+        case .contact(let contact): openContact(contact)
+        }
+    }
+    private func openContact(_ contact: SharedContact) {
+        let connectionID = session.connection?.id
+        Task {
+            do {
+                let room = try await session.openSharedDM(targetId: contact.id)
+                guard session.connection?.id == connectionID else { return }
+                if !sharedRooms.contains(where: { $0.id == room.id }) { sharedRooms.append(room) }
+                path.append(room)
+            } catch { session.actionError = error.localizedDescription }
         }
     }
 
@@ -518,20 +630,13 @@ struct ChatListView: View {
 
     private func contactRow(_ contact: SharedContact) -> some View {
         let room = sharedRooms.first { $0.memberIds.count == 2 && !$0.isGroup && $0.memberIds.contains(sharedMe?.actorId ?? "") && $0.memberIds.contains(contact.id) }
-        return Button {
-            Task {
-                do {
-                    let room = try await session.openSharedDM(targetId: contact.id)
-                    if !sharedRooms.contains(where: { $0.id == room.id }) { sharedRooms.append(room) }
-                    path.append(room)
-                } catch { session.actionError = error.localizedDescription }
-            }
-        } label: {
+        return Button { openContact(contact) } label: {
             sharedConversationRow(name: contact.name, subtitle: contact.title, preview: room?.preview ?? "", at: room?.lastActivity ?? 0, unreadCount: room?.unreadCount ?? 0) {
                 contactAvatar(contact, size: 52)
             }
         }
         .buttonStyle(.plain)
+        .contextMenu { pinButton(.contact(contact)) }
     }
 
     private func sharedConversationRow<Avatar: View>(name: String, subtitle: String?, preview: String, at: Double, unreadCount: Int = 0, @ViewBuilder avatar: () -> Avatar) -> some View {
@@ -619,6 +724,7 @@ struct ChatListView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .contextMenu { pinButton(.local(summary)) }
 
             }
         }

@@ -1,3 +1,5 @@
+import { FLAT_MASCOT_BODIES } from "../../shared/flat-mascot-bodies.ts"
+
 /**
  * The ten catalog outlines, as absolute cubic path data.
  *
@@ -303,5 +305,12 @@ export const BODY_DEFS: BodyDef[] = [
   // 0.831 face — clear headroom over the cursor's 0.791, which is what sets the clamp.
   { id: "star", name: "Star", d: buildStar(196, 196, 5, 0.55), viewBox: [0, 0, 200, 200] },
 ]
+
+// Extend the legacy animated catalog as well: persisted profile validation and
+// older renderers must recognize every new flat body id.
+const legacyIds = new Set(BODY_DEFS.map(body => body.id))
+for (const body of FLAT_MASCOT_BODIES) {
+  if (!legacyIds.has(body.id)) BODY_DEFS.push({ id: body.id, name: body.name, d: body.path, viewBox: [0, 0, 100, 100] })
+}
 
 export const BODY_IDS: string[] = BODY_DEFS.map(s => s.id)
