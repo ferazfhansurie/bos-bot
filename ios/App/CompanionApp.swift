@@ -21,6 +21,7 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
 struct CompanionApp: App {
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @StateObject private var session = Session()
+    @State private var showingLaunchSplash = true
     @Environment(\.scenePhase) private var scenePhase
     @State private var liveActivities = LiveActivityCoordinator()
     @AppStorage(PrefKey.language) private var language = AppLanguage.system.rawValue
@@ -59,6 +60,18 @@ struct CompanionApp: App {
                 // resolve once; the appearance screen commits a new one on
                 // the way out, and re-identifying here repaints everything.
                 .id("\(language)|\(themeApplied)")
+                .overlay {
+                    if showingLaunchSplash {
+                        LaunchSplashView { showingLaunchSplash = false }
+                            .background(Color(red: 13/255, green: 13/255, blue: 13/255))
+                            .ignoresSafeArea()
+                            .task {
+                                try? await Task.sleep(for: .seconds(6))
+                                guard !Task.isCancelled else { return }
+                                showingLaunchSplash = false
+                            }
+                    }
+                }
                 .onAppear {
                     OpenMausSharedInbox.removeDirectories(olderThan: 60 * 60)
                     session.connect()

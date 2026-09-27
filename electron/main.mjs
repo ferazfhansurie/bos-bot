@@ -1,3 +1,4 @@
+import { attachLaunchSplash } from "./launch-splash.mjs";
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -1869,6 +1870,7 @@ function showContextMenu(win, params) {
  *
  * @returns {void}
  */
+let launchSplashShown = false;
 function createWindow() {
   const waitsForSkinSync = process.platform === "win32";
   const primary = screen.getPrimaryDisplay();
@@ -1899,6 +1901,10 @@ function createWindow() {
         ...(app.isPackaged && !desktopRemoteAccess ? ["--omb-company-desktop=1"] : [])],
     },
   });
+  if (!launchSplashShown) {
+    launchSplashShown = true;
+    attachLaunchSplash(win, { WebContentsView, filePath: path.join(__dirname, "resources/bos-splash.html") });
+  }
   mainWindow = win;
   attachUpdaterWindow(win);
   if (waitsForSkinSync) {
