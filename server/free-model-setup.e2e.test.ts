@@ -134,3 +134,14 @@ it('hosted start-free registers an install token without any user key',async()=>
  expect((await api('POST',endpoint,{hosted:true})).status).toBe(200);
  expect(readFileSync(join(home,'registrations'),'utf8')).toBe('1');
 });
+it('start free moves idle bots off engines that cannot run, keeps working ones',async()=>{
+ const stuck=await api('POST','/api/bots',{name:'Fixture stuck',modelSelection:{instanceId:'codex',model:'gpt-fixture'}});
+ expect(stuck.status,JSON.stringify(stuck.body)).toBe(201);
+ const working=await api('POST','/api/bots',{name:'Fixture working',modelSelection:{instanceId:'claude',model:'claude-sonnet-5'}});
+ expect(working.status,JSON.stringify(working.body)).toBe(201);
+ const result=await api('POST',endpoint,{hosted:true});
+ expect(result.status,JSON.stringify(result.body)).toBe(200);expect(result.body.moved).toBeGreaterThanOrEqual(1);
+ const bots=(await api('GET','/api/bots')).body.bots;
+ expect(bots.find((x:any)=>x.id===stuck.body.bot.id).modelSelection).toMatchObject({instanceId:'bos-free',model:'openrouter/free'});
+ expect(bots.find((x:any)=>x.id===working.body.bot.id).modelSelection.instanceId).toBe('claude');
+});

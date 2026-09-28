@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ModelCatalog, ProviderSnapshot } from "./contracts.ts";
-import { selectDefaultModelSelection } from "./default-model-selection.ts";
+import { freeFallbackSelection, selectDefaultModelSelection, selectionUsable } from "./default-model-selection.ts";
 
 const codex = {
   instanceId: "codex",
@@ -72,5 +72,35 @@ describe("new bot default model selection", () => {
     expect(selectDefaultModelSelection([codex, claude])).toEqual({ instanceId: "claude", model: "claude-default" });
     expect(selectDefaultModelSelection([codex])).toEqual({ instanceId: "codex", model: "codex-default" });
     expect(selectDefaultModelSelection([])).toEqual({ instanceId: "", model: "" });
+  });
+});
+
+describe("free fallback", () => {
+  const free = { instanceId: "bos-free", driverKind: "openrouter-free", snapshot: { state: "available" } satisfies ProviderSnapshot,
+    models: { default: "openrouter/free", options: [] } };
+  const signedOut = { ...codex, snapshot: { state: "available" as const, authenticated: false } };
+
+  it("treats signed-out, unavailable and missing engines as unusable", () => {
+    expect(selectionUsable([signedOut, free], { instanceId: "codex", model: "gpt" })).toBe(false);
+    expect(selectionUsable([{ ...codex, snapshot: { state: "unavailable" as const } }], { instanceId: "codex", model: "gpt" })).toBe(false);
+    expect(selectionUsable([free], { instanceId: "codex", model: "gpt" })).toBe(false);
+    expect(selectionUsable([free], { instanceId: "", model: "" })).toBe(false);
+    expect(selectionUsable([codex], { instanceId: "codex", model: "codex-default" })).toBe(true);
+  });
+
+  it("offers BOS Free only when it can run", () => {
+    expect(freeFallbackSelection([signedOut, free], "bos-free")).toEqual({ instanceId: "bos-free", model: "openrouter/free" });
+    expect(freeFallbackSelection([{ ...free, snapshot: { state: "unavailable" as const } }], "bos-free")).toBeNull();
+    expect(freeFallbackSelection([codex], "bos-free")).toBeNull();
+  });
+});
+
+describe("unsaved default", () => {
+  it("prefers a signed-in engine over a signed-out Claude", () => {
+    const free = { instanceId: "bos-free", driverKind: "openrouter-free", snapshot: { state: "available" } satisfies ProviderSnapshot,
+      models: { default: "openrouter/free", options: [] } };
+    const signedOutClaude = { ...claude, snapshot: { state: "available" as const, authenticated: false } };
+    expect(selectDefaultModelSelection([signedOutClaude, free])).toEqual({ instanceId: "bos-free", model: "openrouter/free" });
+    expect(selectDefaultModelSelection([signedOutClaude])).toEqual({ instanceId: "claude", model: "claude-default" });
   });
 });

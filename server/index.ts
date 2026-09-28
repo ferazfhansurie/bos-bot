@@ -273,7 +273,7 @@ import {
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { ManagedDesktopProviders } from "./managed-desktop.ts";
-import { selectDefaultModelSelection } from "./default-model-selection.ts";
+import { freeFallbackSelection, selectDefaultModelSelection, selectionUsable } from "./default-model-selection.ts";
 import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { peerProvenanceNote, withPeerProvenance } from "./peer-provenance.ts";
 import { decideRoomPost, emptyRoomPostBudget, type RoomPostAttempt, type RoomPostBudget } from "./room-post-budget.ts";
@@ -1542,6 +1542,30 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, from
       finish({ status: "error", text: `(couldn't start that bot: ${err instanceof Error ? err.message : String(err)})` }),
     );
   });
+}
+
+/** Free setup rescues bots whose engine cannot run (preloaded on a signed-out
+ * CLI, say). Busy threads and elevated approval modes are left untouched. */
+function moveUnusableBotsToFree(instances: Awaited<ReturnType<typeof registry.describe>>, instanceId: string): number {
+  const fallback = freeFallbackSelection(instances, instanceId);
+  if (!fallback) return 0;
+  let moved = 0;
+  for (const bot of store.bots) {
+    const mode = approvalModeFor(bot);
+    if (mode === "full" || mode === "custom") continue;
+    const tasks = store.tasks(bot.id);
+    if (tasks.some((task) => threadBusy(bot.id, task.threadId))) continue;
+    if (!selectionUsable(instances, bot.modelSelection)) {
+      store.patchBot(bot.id, { modelSelection: structuredClone(fallback) });
+      moved++;
+    }
+    for (const task of tasks) {
+      if (task.modelSelection && !selectionUsable(instances, task.modelSelection)) {
+        store.patchTask(bot.id, task.threadId, { modelSelection: structuredClone(fallback) });
+      }
+    }
+  }
+  return moved;
 }
 
 // New bots honor setup's saved choice; unconfigured workspaces prefer Claude.
@@ -18417,9 +18441,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const instances=persistableInstanceConfigs(cfg);
         instances[instanceId]=hosted?{driver:"openrouter-free",displayName:"BOS Free",config:{key,model:"openrouter/free",hosted:true}}:{driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
         await persistProviderInstance(instanceId,instances);
+        const moved=moveUnusableBotsToFree(await registry.describe(),instanceId);
         broadcast({kind:"config",...configStatus()});
         res.setHeader("cache-control","no-store");
-        return json(res,200,{instances:await describeInstances()});
+        return json(res,200,{instances:await describeInstances(),moved});
       } finally {providerInstancesChanging.delete(instanceId);providerConfigBusy=false;}
     }
 
