@@ -46,11 +46,15 @@ export function sharedActivityLabel(message: Pick<SharedMessage, "tool" | "text"
   return tool?.spoken?.trim() || message.text.trim() || tool?.name.trim() || "";
 }
 
-export function sharedHasActiveWork(messages: readonly SharedMessage[]): boolean {
+export function sharedActiveBotIds(messages: readonly SharedMessage[]): string[] {
   const answered = new Set(messages.filter(message => message.actor.kind === "bot" && message.responseTo && message.kind !== "activity")
     .map(message => `${message.actor.homeId}:${message.actor.localId}:${message.responseTo}`));
-  return sharedVisibleMessages(messages).some(message => message.kind === "activity" && message.tool?.ok === undefined && Boolean(message.tool)
-    && !answered.has(`${message.actor.homeId}:${message.actor.localId}:${message.responseTo ?? ""}`));
+  return [...new Set(sharedVisibleMessages(messages).filter(message => message.actor.kind === "bot" && message.kind === "activity" && message.tool?.ok === undefined && Boolean(message.tool)
+    && !answered.has(`${message.actor.homeId}:${message.actor.localId}:${message.responseTo ?? ""}`))
+    .map(message => `${message.actor.homeId}:bot:${message.actor.localId}`))];
+}
+export function sharedHasActiveWork(messages: readonly SharedMessage[]): boolean {
+  return sharedActiveBotIds(messages).length > 0;
 }
 export interface SharedHistoryPage { typing?: string[]; messages: SharedMessage[]; changes?: SharedMessage[]; version?: number; hasMore?: boolean }
 export interface SharedHistory {
@@ -104,9 +108,10 @@ export interface SharedContact {
 export interface SharedEligibleBot {
   id: string; name: string; ownerName: string; color?: Bot["color"];
   availability?: "ready" | "offline" | "update-required" | "reconnect-required";
-  mascotBody?: Bot["mascotBody"]; avatarUrl?: string | null;
+  mascotBody?: Bot["mascotBody"]; avatarUrl?: string | null; avatarCrop?: Bot["avatarCrop"];
 }
 export interface SharedComposer {
+  activeBotIds?: string[];
   onTyping?: (active: boolean) => void;
   send: (text: string, files: File[], sendId: string, options?: { replyTo?: string }) => Promise<void>;
   mentionBots: Bot[];
@@ -126,7 +131,7 @@ export function sharedMentionBots(bots: readonly SharedEligibleBot[], people: re
     id: bot.id, threadId: `shared-bot:${bot.id}`,
     name: labels[index],
     title: `${bot.ownerName}'s bot${bot.availability && bot.availability !== "ready" ? ` · ${bot.availability.replaceAll("-", " ")}` : ""}`, description: "", notifications: false,
-    color: bot.color ?? "blue", mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl,
+    color: bot.color ?? "blue", mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop,
     unread: false, busy: false, modelSelection: { instanceId: "shared", model: "shared" },
     messages: [], activeLeafId: null,
   }));

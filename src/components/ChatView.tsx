@@ -369,6 +369,7 @@ function Bubble({
   const visibleText = webhookView?.task ?? attachments?.display ?? text;
   const hasAttachments = Boolean(attachments && (attachments.images.length || attachments.files.length));
   const sharedMeta = shared?.messageMeta?.[message.id];
+  const sharedSpeaker = shared?.mentionBots.find(candidate => candidate.id === message.from?.botId);
   const collapsible =
     user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
 
@@ -395,7 +396,11 @@ function Bubble({
   return (
     <div className={cn("group flex w-full flex-col", user ? "animate-msg-in items-end" : "items-start")}>
       {peer && <PeerLabel peer={peer} />}
-      {shared && !user && message.from && <div className="mb-1 pl-0.5 text-[11px] font-medium text-ink-secondary">{message.from.name}</div>}
+      {shared && !user && message.from && <div className="mb-1 flex items-center gap-1.5 pl-0.5 text-[11px] font-medium text-ink-secondary">
+        {sharedSpeaker && <BotAvatar
+          bot={sharedSpeaker} size={20} state="happy" animated={false} />}
+        {message.from.name}
+      </div>}
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
         {user && (
           <MessageActions side="user">
@@ -1103,7 +1108,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   const lastMessage = messages.at(-1);
   const toolInFlight = lastMessage?.kind === "activity" && lastMessage.tool?.ok === undefined;
   const activityLabel = liveActivityLabel(lastMessage);
-  const waiting = Boolean(
+  const waiting = shared ? Boolean(shared.activeBotIds?.length) : Boolean(
     bot.busy &&
       bot.activity !== "waiting-on-you" &&
       showWorkingDots(bot.busy, lastMessage),
@@ -1135,6 +1140,11 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
     }, 520);
   }, [lastMessage?.id, lastMessage?.role, lastMessage?.kind]);
   const presenceVisible = waiting || popping !== null;
+  // Room decoration is not the bot speaking. Keep simultaneous speakers separate.
+  const presenceBots = shared ? (shared.activeBotIds?.length
+    ? shared.activeBotIds.map(id => shared.mentionBots.find(candidate => candidate.id === id)
+      ?? { ...bot, id, name: "Bot", color: "blue" as const, mascotBody: null, avatarUrl: null })
+    : [shared.mentionBots.find(candidate => candidate.id === lastMessage?.from?.botId)].filter((candidate): candidate is Bot => Boolean(candidate))) : [bot];
   // Wall-clock anchor for the working row's elapsed readout — the server
   // stamps the turn's real start (turnStartedAt), so switching threads keeps
   // the count truthful; Date.now() only covers servers without the stamp.
@@ -1581,12 +1591,13 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               </div>
             </div>
           )}
-          <TurnPresence
+          {presenceBots.map(speaker => <TurnPresence
+            key={speaker.id}
             avatar={
               // BotAvatar, not a bare MausAvatar: an uploaded profile image
               // (and a chosen mascot body) must match the sidebar row.
               <BotAvatar
-                bot={bot}
+                bot={speaker}
                 state={toolInFlight ? "working" : "thinking"}
                 size={36}
                 forward={false}
@@ -1595,10 +1606,10 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               />
             }
             visible={presenceVisible}
-            label={activityLabel}
-            answering={popping !== null}
+            label={shared ? `${speaker.name} · ${activityLabel}` : activityLabel}
+            answering={popping !== null && (!shared || !shared.activeBotIds?.includes(speaker.id))}
             since={busySince}
-          />
+          />)}
         </div>
       </div>
 

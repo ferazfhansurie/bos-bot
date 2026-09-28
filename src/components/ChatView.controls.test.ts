@@ -1,6 +1,8 @@
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { flatMascotBody } from "../../shared/flat-mascot-bodies";
+import { MAUS_COLORS } from "@/lib/mascot";
 import type { Bot, InstanceInfo } from "@/state/store";
 import type { ApprovalModeSelector } from "./ApprovalModeSelector";
 import type { ModelPicker } from "./ModelPicker";
@@ -60,6 +62,41 @@ describe("thread control placement", () => {
     expect(markup).not.toContain("data-test-approval-control");
     expect(markup).toContain('aria-label="Reply to message"');
     expect(markup).toContain("Message… @mention a person or bot");
+  });
+  it("renders the actual shared bot body on replies and each active bot, preserving people", () => {
+    const speakers: Bot[] = [
+      { ...bot, tasks: undefined, id: "home:bot:koda", name: "Koda · Alex", color: "orange", mascotBody: "bear" },
+      { ...bot, tasks: undefined, id: "away:bot:koda", name: "Koda · Maya", color: "pink", mascotBody: "cat" },
+    ];
+    const markup = renderToStaticMarkup(createElement(ChatView, {
+      bot: { ...bot, id: "shared:room", threadId: "shared:room", name: "People room", color: "blue", tasks: undefined,
+        messages: [
+          { id: "reply", role: "bot", kind: "text", at: 1, text: "Bot reply", from: { botId: speakers[0]!.id, name: "Koda · Alex", color: "orange" } },
+          { id: "person", parentId: "reply", role: "bot", kind: "text", at: 2, text: "Human message after request", from: { botId: "away:person:owner", name: "Maya", color: "blue" } },
+        ], activeLeafId: "person" },
+      shared: { send: async () => {}, mentionBots: speakers, activeBotIds: speakers.map(speaker => speaker.id),
+        faces: [{ id: "away:person:owner", name: "Maya", kind: "person", avatar: "/api/attachments/person.png" }] },
+    }));
+    expect(markup).toContain('src="/api/attachments/person.png"');
+    expect(markup.match(/aria-label="Koda · Alex"/g)).toHaveLength(2); // reply + working
+    expect(markup.match(/aria-label="Koda · Maya"/g)).toHaveLength(1); // working
+    expect(markup.split(`d="${flatMascotBody("bear").path}" fill="${MAUS_COLORS.orange}"`).length - 1).toBe(2);
+    expect(markup.split(`d="${flatMascotBody("cat").path}" fill="${MAUS_COLORS.pink}"`).length - 1).toBe(1);
+    expect(markup).toContain("Koda · Alex · ");
+    expect(markup).toContain("Koda · Maya · ");
+    expect(markup).toContain("Human message after request");
+    expect(markup).not.toContain('aria-label="People room"');
+  });
+  it("uses a bot's uploaded avatar in shared replies and working status", () => {
+    const speaker = { ...bot, id: "home:bot:photo", name: "Photo bot", tasks: undefined, avatarUrl: "/api/attachments/bot.webp", avatarCrop: "circle" as const };
+    const markup = renderToStaticMarkup(createElement(ChatView, {
+      bot: { ...bot, id: "shared:room", threadId: "shared:room", tasks: undefined, messages: [
+        { id: "reply", role: "bot", kind: "text", at: 1, text: "Reply", from: { botId: speaker.id, name: speaker.name, color: "green" } },
+      ] },
+      shared: { send: async () => {}, mentionBots: [speaker], activeBotIds: [speaker.id] },
+    }));
+    expect(markup.match(/<img[^>]+src="\/api\/attachments\/bot.webp"/g)).toHaveLength(2);
+    expect(markup).toContain('border-radius:50%');
   });
   it("shows shared own-message edits/removal, reply quotes, edited labels and tombstones", () => {
     const markup = renderToStaticMarkup(createElement(ChatView, {

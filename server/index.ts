@@ -5913,7 +5913,7 @@ const sharedRoomLocks = new Set<string>();
 const sharedBotLocks = new Set<string>();
 const runningSharedRequests = new Set<string>();
 
-interface SharedRoomBot { key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string; availability?: "ready" | "offline" | "update-required" | "reconnect-required" }
+interface SharedRoomBot { color?: string; mascotBody?: string | null; avatarUrl?: string | null; avatarCrop?: string; key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string; availability?: "ready" | "offline" | "update-required" | "reconnect-required" }
 
 function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
   const owner = cfg.profile?.name?.trim() || "Owner";
@@ -5927,11 +5927,11 @@ function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
     const bot = { homeId: key.homeId, kind: "bot" as const, localId: key.localId };
     if (key.homeId === ENVIRONMENT_ID) {
       const local = store.bot(key.localId);
-      return local && !local.hidden ? [{ key: bot, id, name: local.name, remote: false, ownerName: owner }] : [];
+      return local && !local.hidden ? [{ key: bot, id, name: local.name, color: local.color, mascotBody: local.mascotBody, avatarUrl: local.avatarUrl, avatarCrop: local.avatarCrop, remote: false, ownerName: owner }] : [];
     }
     const remote = remoteBots.roomBot(key.homeId, key.localId);
     const link = links.get(key.homeId);
-    return remote && link ? [{ key: bot, id, name: remote.name, remote: true, ownerName: link.ownerName ?? link.name, availability: remote.availability }] : [];
+    return remote && link ? [{ key: bot, id, name: remote.name, color: remote.color, mascotBody: remote.mascotBody, avatarUrl: remote.avatarUrl, avatarCrop: remote.avatarCrop, remote: true, ownerName: link.ownerName ?? link.name, availability: remote.availability }] : [];
   });
 }
 

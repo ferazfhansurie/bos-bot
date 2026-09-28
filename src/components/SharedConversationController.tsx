@@ -7,7 +7,7 @@ import type { MausColor } from "@/lib/mascot";
 import type { MascotBodyId } from "../../shared/mascot-bodies";
 import { ChatView } from "./ChatView";
 import { SharedConversationDetails } from "./SharedConversationDetails";
-import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork } from "./shared-conversation";
+import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork, sharedActiveBotIds } from "./shared-conversation";
 import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedAttachmentError, isDirectSharedRoom, sharedMentionBots, type SharedRoom, type SharedContact, type SharedEligibleBot, type SharedAttachment, type SharedFile, type SharedMessage, type SharedHistoryPage, type SharedPreferences, type SharedNotifications } from "./shared-conversation";
 function senderId(message: SharedMessage) { return `${message.actor.homeId}:${message.actor.kind}:${message.actor.localId}`; }
 function errorText(cause: unknown, fallback: string) { return cause instanceof Error ? cause.message : fallback; }
@@ -301,7 +301,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
         from: actorId !== selfId ? {
           botId: actorId,
           name: actorBot ? `${actorBot.name} · ${actorBot.ownerName}` : actor?.name ?? (message.actor.kind === "bot" ? "Bot" : "Member"),
-          color: (actor?.color ?? actorBot?.color ?? "blue") as MausColor,
+          color: (actorBot?.color ?? actor?.color ?? "blue") as MausColor,
         } : undefined,
       };
     });
@@ -338,7 +338,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   if (!projected || !room || !selfId) return <main className="flex flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary"><p role={error ? "alert" : "status"}>{error || "Loading conversation…"}</p>{error && <button type="button" onClick={() => setLoadAttempt(value => value + 1)} className="rounded-lg bg-raised px-3 py-2 text-ink">Retry</button>}</main>;
   const banner = <>{typing.length > 0 && <p role="status" className="px-4 py-1 text-xs text-ink-secondary">{typing.map(id => contacts.find(contact => contact.id === id)?.name ?? "A member").join(", ")} {typing.length === 1 ? "is" : "are"} typing…</p>}{historyLoading && <p role="status" className="px-4 py-2 text-center text-xs text-ink-secondary">Loading messages…</p>}{historyError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{historyError}<button type="button" onClick={() => window.dispatchEvent(new Event("multiplayer:retry-history"))} className="underline">Retry</button></div>}{olderError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{olderError}<button type="button" disabled={olderLoading} onClick={() => void loadOlder()} className="underline">Retry earlier messages</button></div>}{botsError && <p role="status" className="px-4 py-1 text-center text-xs text-ink-secondary">{botsError}</p>}</>;
   return <>
-    <ChatView bot={projected} shared={{ onTyping, selfId, annotateMessage, onLatestVisible: setVisibleTailId, send, faces, mentionBots, mentionPeople, onOpenDetails: () => setDetailsOpen(true), onOpenSearch: () => { setDetailsOpen(true); setSearchFocus(value => value + 1); }, banner,
+    <ChatView bot={projected} shared={{ activeBotIds: sharedActiveBotIds(messages), onTyping, selfId, annotateMessage, onLatestVisible: setVisibleTailId, send, faces, mentionBots, mentionPeople, onOpenDetails: () => setDetailsOpen(true), onOpenSearch: () => { setDetailsOpen(true); setSearchFocus(value => value + 1); }, banner,
       editMessage: (id, text) => changeMessage(id, text), deleteMessage: id => changeMessage(id, null),
       messageMeta: Object.fromEntries(messages.map(message => [message.id, { editedAt: message.editedAt, deletedAt: message.deletedAt, reactions: message.reactions, pinnedBy: message.pinnedBy }])),
       changeRevision: history.changeRevision,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork } from "./shared-conversation";
+import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork, sharedActiveBotIds } from "./shared-conversation";
 import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedRoomUnread, sharedAttachmentError, isDirectSharedRoom, sharedBotTargets, sharedMentionBots, type SharedMessage } from "./shared-conversation";
 
 describe("shared conversations", () => {
@@ -112,5 +112,27 @@ describe("shared messenger state", () => {
     expect(sharedRoomUnread({ unreadCount: 3, lastActivity: 1 }, 100)).toBe(true);
     expect(sharedRoomUnread({ unreadCount: 0, lastActivity: 100 }, 1)).toBe(false);
     expect(sharedRoomUnread({ lastActivity: 100 }, 1)).toBe(true);
+  });
+});
+
+describe("shared speaker appearance", () => {
+  it("keeps same-name bots on different homes distinct and preserves all appearance fields", () => {
+    const choices = sharedMentionBots([
+      { id: "a:bot:same", name: "Helper", ownerName: "Alex", color: "orange", mascotBody: "bear", avatarUrl: "/api/attachments/avatar-one.png", avatarCrop: "circle" },
+      { id: "b:bot:same", name: "Helper", ownerName: "Maya", color: "pink", mascotBody: "cat", avatarCrop: "mascot" },
+    ]);
+    expect(choices[0]).toMatchObject({ id: "a:bot:same", color: "orange", mascotBody: "bear", avatarUrl: "/api/attachments/avatar-one.png", avatarCrop: "circle" });
+    expect(choices[1]).toMatchObject({ id: "b:bot:same", color: "pink", mascotBody: "cat" });
+  });
+  it("tracks simultaneous working speakers after another bot replies and a person speaks", () => {
+    const activity = (homeId: string, responseTo: string, sequence: number): SharedMessage => ({ id: `${homeId}-${sequence}`, sequence, sendId: "activity-work-start", actor: { homeId, kind: "bot", localId: "same" }, text: "Working", at: sequence, kind: "activity", tool: { name: "working" }, responseTo });
+    const messages: SharedMessage[] = [activity("a", "request-a", 1), activity("b", "request-b", 2)];
+    expect(sharedActiveBotIds(messages)).toEqual(["a:bot:same", "b:bot:same"]);
+    messages.push({ ...activity("a", "request-a", 3), kind: "text", text: "Done", tool: undefined });
+    messages.push({ ...activity("human", "", 4), kind: "text", actor: { homeId: "human", kind: "person", localId: "owner" }, tool: undefined });
+    expect(sharedActiveBotIds(messages)).toEqual(["b:bot:same"]);
+    expect(sharedHasActiveWork(messages)).toBe(true);
+    messages.push({ ...activity("b", "request-b", 5), sendId: "activity-work-ok", tool: { name: "working", ok: true } });
+    expect(sharedActiveBotIds(messages)).toEqual([]);
   });
 });

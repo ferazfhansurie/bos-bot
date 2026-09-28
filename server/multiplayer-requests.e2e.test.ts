@@ -22,8 +22,12 @@ it("records, scopes and cancels exact shared requests without dispatching cancel
     const teammate = "teammate-home:person:owner";
     expect((await api("POST", "/api/multiplayer/actor-bindings", { sessionId: paired.body.session.id, personId: teammate, name: "Teammate" })).status).toBe(200);
     const bot = (await api("POST", "/api/bots", { name: "Helper", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true })).body.bot;
+    expect((await api("PATCH", `/api/bots/${bot.id}`, { color: "orange", mascotBody: "bear", avatarCrop: "circle" })).status).toBe(200);
     const room = (await api("POST", "/api/multiplayer/rooms", { name: "Request tests", memberIds: [me.actorId, teammate] })).body.room;
     const path = `/api/multiplayer/rooms/${room.id}`;
+    expect((await api("GET", `${path}/bots`)).body.bots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: `${me.homeId}:bot:${bot.id}`, color: "orange", mascotBody: "bear", avatarCrop: "circle" }),
+    ]));
     const requests = async () => (await api("GET", `${path}/requests`)).body.requests as any[];
     const message = { text: "@Helper work on this", sendId: "first" };
     const first = await api("POST", `${path}/messages`, message);

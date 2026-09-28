@@ -37,7 +37,7 @@ class FakeHome {
 
   bot(): Record<string, unknown> {
     return {
-      id: "pixie", name: "Pixie", title: "Helper", description: "", color: "blue", avatarUrl: "/api/attachments/aaaa-bbbb.png",
+      id: "pixie", name: "Pixie", title: "Helper", description: "", color: "pink", mascotBody: "bear", avatarCrop: "circle", avatarUrl: "/api/attachments/aaaa-bbbb.png",
       modelSelection: { instanceId: "claude", model: "opus" }, notifications: true, createdAt: 5,
       soul: `${SECRET} soul`, cwd: `/Users/owner/${SECRET}`,
       threadId: this.selected, tasks: this.tasks, messages: this.threads.get(this.selected) ?? [],
@@ -199,6 +199,11 @@ describe("RemoteBotBridge", () => {
     expect(isRemoteBotPath(`/api/threads/rt-${KEY}-bridge-1/messages`)).toBe(true);
     expect(isRemoteBotPath("/api/bots/pixie/messages")).toBe(false);
     expect(isRemoteBotPath("/api/bots")).toBe(false);
+  });
+
+  it("carries the linked bot appearance into the shared-room roster without private fields", async () => {
+    await bridge.listBots(0);
+    expect(bridge.roomBot(HOME, "pixie")).toEqual({ virtualId: botId, name: "Pixie", color: "pink", mascotBody: "bear", avatarCrop: "circle", avatarUrl: "/api/attachments/aaaa-bbbb.png", availability: "offline" });
   });
 
   it("accepts an async 202 receipt and returns the shared-room reply", async () => {

@@ -690,10 +690,10 @@ export class RemoteBotBridge {
 
   /** A shared room member on a linked Mac: the contact's home and bot id, or
    * null when that Mac is not linked or does not share the bot. */
-  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string; availability?: RemoteBotOrigin["availability"] } | null {
+  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string; color: string; mascotBody?: string | null; avatarUrl: string | null; avatarCrop?: string; availability?: RemoteBotOrigin["availability"] } | null {
     const home = this.homes.get(homeId);
     const bot = home?.state.bots[remoteBotId];
-    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
+    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), color: bot.color, mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop, availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
   }
 
   /** Run one shared-room turn on a linked Mac's bot. The turn goes to a
