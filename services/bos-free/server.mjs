@@ -55,7 +55,9 @@ export function candidates(requested, models) {
   const first = requested === router || warm(requested) ? [requested] : [];
   return [...new Set([...first, router, ...rest])].slice(0, ATTEMPTS);
 }
-const retryable = (status) => status === 429 || status === 502 || status === 503;
+// requests are validated before they go upstream, so these are one free model refusing or failing; try the next one
+const retryable = (status) => [400, 403, 404, 408, 429, 500, 502, 503, 504].includes(status);
+const upstreamReason = (text) => { try { const e = JSON.parse(text).error || {}; return String(e.metadata?.raw || e.message || '').slice(0, 160); } catch { return ''; } };
 const limitedModel = (text) => /([a-zA-Z0-9_./-]+:free) is temporarily rate-limited/.exec(text)?.[1];
 
 const send = (res, status, body, headers = {}) => {
@@ -141,8 +143,10 @@ export const server = http.createServer(async (req, res) => {
               body: JSON.stringify(sanitize({ ...body, model: tries[i] })),
             });
           } catch (e) { if (ctl.signal.aborted || last) throw e; continue; }
-          if (!retryable(up.status) || last) break;
+          if (up.status < 400) break;
+          if (!retryable(up.status) || last) { console.log(`upstream ${up.status} ${tries[i]} final`); break; }
           const text = await up.text();
+          console.log(`upstream ${up.status} ${tries[i]} retry: ${upstreamReason(text)}`);
           cool(limitedModel(text) || tries[i]);
         }
       } catch (e) { refund(); throw e; }

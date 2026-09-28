@@ -12,10 +12,12 @@ const up = http.createServer((req, res) => {
     { id: 'openrouter/free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
     { id: 'busy/one:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
     { id: 'ok/two:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
+    { id: 'deny/three:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
     { id: 'paid/x', pricing: { prompt: '1', completion: '1' }, supported_parameters: ['tools'] },
   ] }));
   let b = ''; req.on('data', (c) => b += c); req.on('end', () => {
     const body = JSON.parse(b); seen.push(body.model);
+    if (body.model === 'deny/three:free') { res.statusCode = seen.length % 2 ? 403 : 400; return res.end(JSON.stringify({ error: { message: 'Provider returned error' } })); }
     if (limited.has(body.model)) { res.statusCode = 429; return res.end(JSON.stringify({ error: { message: 'Provider returned error', metadata: { raw: `${body.model === 'openrouter/free' ? 'busy/one:free' : body.model} is temporarily rate-limited upstream.` } } })); }
     res.end(JSON.stringify({ model: body.model, choices: [{ message: { content: 'ok' } }] }));
   });
@@ -54,5 +56,16 @@ test('free router retries rate-limited free models, never paid, counts once', as
   const allBusy = await chat(token, 'openrouter/free');
   assert.equal(allBusy.status, 429);
   assert.equal(await usage(token), 1, 'failed call refunded');
-  server.close(); up.close();
+});
+
+test('a free model refusing with 400/403 falls back to another free model', async () => {
+  try {
+    limited = new Set(); seen = [];
+    const { token } = await (await fetch(`${base}/register`, { method: 'POST' })).json();
+    const r = await chat(token, 'deny/three:free');
+    assert.equal(r.status, 200, 'refused or cooled model does not fail the turn');
+    assert.notEqual((await r.json()).model, 'deny/three:free');
+    assert(!seen.includes('paid/x'));
+    assert.equal(await usage(token), 4);
+  } finally { server.close(); up.close(); }
 });
