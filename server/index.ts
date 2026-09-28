@@ -28,7 +28,7 @@ import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
 import { onboardingChief } from "./onboarding-chief.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
-import { BOS_FREE_API, BOS_FREE_MODEL } from "./drivers/openrouter-free.ts";
+import { BOS_FREE_API, BOS_FREE_MODEL, BOS_FREE_NAME } from "./drivers/openrouter-free.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
 import { SharedRequestStore } from "./shared-request-store.ts";
@@ -11373,7 +11373,9 @@ async function describeInstances() {
   const configs = instanceConfigs(cfg);
   return (await registry.describe()).map((instance) => {
     const entry = configs[instance.instanceId];
-    const described = entry?.icon ? { ...instance, icon: entry.icon } : instance;
+    // hosted BOS Free set up before it carried an icon still shows the model it runs
+    const icon = entry?.icon ?? (entry?.driver === "openrouter-free" && (entry.config as { hosted?: unknown } | undefined)?.hosted === true ? { kind: "preset" as const, preset: "deepseek" as const } : undefined);
+    const described = icon ? { ...instance, icon } : instance;
     if (managedDesktop.owns(instance.instanceId)) return {
       ...described, readOnly: true, managed: managedDesktop.info(instance.instanceId),
       install: undefined, authentication: undefined, cli: undefined, cliCandidates: [],
@@ -18443,7 +18445,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res,401,{error:"Session ended"});
         if (busyProviderSelections().some(selection=>selection.instanceId===instanceId)) return json(res,409,{error:"Wait for your free-model tasks to finish before reconnecting."});
         const instances=persistableInstanceConfigs(cfg);
-        instances[instanceId]=hosted?{driver:"openrouter-free",displayName:"BOS Free GPT-6 Luna",config:{key,model:BOS_FREE_MODEL,hosted:true}}:{driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
+        instances[instanceId]=hosted?{driver:"openrouter-free",displayName:BOS_FREE_NAME,icon:{kind:"preset",preset:"deepseek"},config:{key,model:BOS_FREE_MODEL,hosted:true}}:{driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
         await persistProviderInstance(instanceId,instances);
         // Two probes: one slow sign-in check must not move a working bot.
         const firstProbe=await registry.describe();

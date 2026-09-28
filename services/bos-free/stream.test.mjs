@@ -26,7 +26,7 @@ const up = http.createServer((req, res) => {
 });
 await new Promise((r) => up.listen(0, '127.0.0.1', r));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bosfree-stream-'));
-Object.assign(process.env, { OPENAI_API_KEY: 'sk-owner', RETRY_BACKOFF_MS: '5', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', UPSTREAM_ATTEMPTS: '4' });
+Object.assign(process.env, { OPENROUTER_API_KEY: 'sk-owner', RETRY_BACKOFF_MS: '5', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', UPSTREAM_ATTEMPTS: '4' });
 const { server } = await import('./server.mjs');
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;
@@ -40,7 +40,7 @@ test('an error mid-stream before any answer is retried cleanly', async () => {
     const r = await chat(token, MODEL_ID, true);
     assert.equal(r.status, 200);
     const text = await r.text();
-    assert.deepEqual(seen, ['gpt-6-luna', 'gpt-6-luna']);
+    assert.deepEqual(seen, ['deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash']);
     assert(text.includes('hello there'), 'answer from the retry');
     assert(!text.includes('thinking about it'), 'failed attempt never reaches the app');
     assert(!text.includes('"error"'));

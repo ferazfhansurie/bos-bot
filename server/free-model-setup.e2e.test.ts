@@ -127,7 +127,7 @@ it('hosted start-free registers an install token without any user key',async()=>
  for(let i=0;result.status===409&&i<50;i++){await new Promise(r=>setTimeout(r,100));result=await api('POST',endpoint,{hosted:true});}
  expect(result.status,JSON.stringify(result.body)).toBe(200);
  expect(freeInstance(result.body)).toMatchObject({driverKind:'openrouter-free',snapshot:{state:'available'}});
- expect(saved().instances['bos-free']).toMatchObject({displayName:'BOS Free GPT-6 Luna',config:{model:'bos-free/gpt-6-luna:free',hosted:true}});
+ expect(saved().instances['bos-free']).toMatchObject({displayName:'BOS Free · DeepSeek V4 Flash',icon:{kind:'preset',preset:'deepseek'},config:{model:'bos-free/deepseek-v4-flash:free',hosted:true}});
  const token='bosf_'+'r'.repeat(40);
  for(const path of ['/api/instances','/api/config'])expect(JSON.stringify((await api('GET',path)).body)).not.toContain(token);
  expect(JSON.stringify(result.body)).not.toContain(token);

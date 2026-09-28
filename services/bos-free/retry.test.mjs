@@ -12,6 +12,7 @@ const up = http.createServer((req, res) => {
     calls++; const step = plan.shift() || 'ok';
     if (step === 'busy') { res.statusCode = 429; return res.end(JSON.stringify({ error: { message: 'Rate limit reached', code: 'rate_limit_exceeded' } })); }
     if (step === 'quota') { res.statusCode = 429; return res.end(JSON.stringify({ error: { message: 'You exceeded your current quota', code: 'insufficient_quota' } })); }
+    if (step === 'credit') { res.statusCode = 402; return res.end(JSON.stringify({ error: { message: 'Insufficient credits', code: 402 } })); }
     if (step === 'bad') { res.statusCode = 400; return res.end(JSON.stringify({ error: { message: 'Invalid schema', code: 'invalid_request_error' } })); }
     if (step === '5xx') { res.statusCode = 503; return res.end(JSON.stringify({ error: { message: 'overloaded' } })); }
     res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
@@ -19,14 +20,14 @@ const up = http.createServer((req, res) => {
 });
 await new Promise((r) => up.listen(0, '127.0.0.1', r));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bosfree-retry-'));
-Object.assign(process.env, { OPENAI_API_KEY: 'sk-owner', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', RETRY_BACKOFF_MS: '5' });
+Object.assign(process.env, { OPENROUTER_API_KEY: 'sk-owner', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', RETRY_BACKOFF_MS: '5' });
 const { server, MODEL_ID } = await import('./server.mjs');
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;
 const chat = (t) => fetch(`${base}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: MODEL_ID, messages: [{ role: 'user', content: 'x' }] }) });
 const usage = async (t) => (await (await fetch(`${base}/usage`, { headers: { authorization: `Bearer ${t}` } })).json()).install;
 
-test('busy and 5xx retry luna with backoff; quota and bad requests fail fast and refund', async () => {
+test('busy and 5xx retry with backoff; quota and bad requests fail fast and refund', async () => {
   try {
     const { token } = await (await fetch(`${base}/register`, { method: 'POST' })).json();
     plan = ['busy', '5xx']; calls = 0;
@@ -37,6 +38,8 @@ test('busy and 5xx retry luna with backoff; quota and bad requests fail fast and
     const q = await chat(token);
     assert.equal(q.status, 429); assert.equal(calls, 1, 'out of credit is not retried');
     assert.equal(await usage(token), 4, 'refunded');
+    plan = ['credit']; calls = 0;
+    assert.equal((await chat(token)).status, 402); assert.equal(calls, 1, 'no openrouter credit is not retried');
     plan = ['bad']; calls = 0;
     assert.equal((await chat(token)).status, 400); assert.equal(calls, 1, '400 is not retried');
     plan = ['busy', 'busy', 'busy']; calls = 0;

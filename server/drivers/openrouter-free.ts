@@ -6,7 +6,8 @@ const API='https://openrouter.ai/api/v1';
 export const BOS_FREE_API=process.env.BOS_FREE_URL||'https://bos-free.aihlete.com/api/v1';
 const DEFAULT_MODEL='openrouter/free';
 // the hosted relay serves one model; its id keeps the :free shape older installs accept
-export const BOS_FREE_MODEL='bos-free/gpt-6-luna:free';
+export const BOS_FREE_MODEL='bos-free/deepseek-v4-flash:free';
+export const BOS_FREE_NAME='BOS Free · DeepSeek V4 Flash';
 const isFreeId=(id:unknown):id is string=>typeof id==='string'&&(id===DEFAULT_MODEL||/^[a-zA-Z0-9_./-]+:free$/.test(id));
 const zero=(value:unknown)=>((typeof value==='string'&&value.trim()!=='')||typeof value==='number')&&Number.isFinite(Number(value))&&Number(value)===0;
 const record=(value:unknown):Record<string,unknown>|null=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;

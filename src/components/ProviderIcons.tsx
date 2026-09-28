@@ -154,6 +154,8 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <ComputerMark size={size} className={className} />;
     case "piAgent":
       return <PiMark size={size} className={className} />;
+    case "openrouter-free":
+      return <PresetProviderMark preset="openrouter" size={size} className={className} />;
     default:
       return (
         <span className="flex size-full items-center justify-center text-[10px] font-semibold tracking-tight text-ink-secondary">

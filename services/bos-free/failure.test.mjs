@@ -17,7 +17,7 @@ const up = http.createServer((req, res) => {
 });
 await new Promise((r) => up.listen(0, '127.0.0.1', r));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bosfree-fail-'));
-Object.assign(process.env, { OPENAI_API_KEY: 'sk-owner', RETRY_BACKOFF_MS: '5', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', UPSTREAM_ATTEMPTS: 'not-a-number' });
+Object.assign(process.env, { OPENROUTER_API_KEY: 'sk-owner', RETRY_BACKOFF_MS: '5', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', UPSTREAM_ATTEMPTS: 'not-a-number' });
 const { server } = await import('./server.mjs');
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;
@@ -28,7 +28,7 @@ test('network errors retry, disconnects refund, bad attempts env falls back', as
   const { token } = await (await fetch(`${base}/register`, { method: 'POST' })).json();
   const r = await chat(token);
   assert.equal(r.status, 200, 'connection reset retried');
-  assert.equal((await r.json()).model, 'gpt-6-luna');
+  assert.equal((await r.json()).model, 'deepseek/deepseek-v4.1-flash');
   assert.equal(await usage(token), 4);
   mode = 'hang';
   const ctl = new AbortController();

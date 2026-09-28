@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { api, useStore } from "@/state/store";
 import { engineReady } from "@/components/EngineLibrary";
 import { inputClass } from "./beats/shared";
+import { PresetProviderMark } from "@/components/ProviderIcons";
 
 /** Write-only connection form. Keys never enter chat, URLs or persisted browser state. */
 export function FreeModelSetup({compact=false}:{compact?:boolean}={}) {
@@ -17,16 +18,16 @@ export function FreeModelSetup({compact=false}:{compact?:boolean}={}) {
    const result=await api("/api/onboarding/free-model",{method:"POST",body:JSON.stringify(hosted?{hosted:true}:{key}),timeoutMs:30000});
    setKey("");dispatch({type:"instances",instances:result.instances??[]});
    const instance=result.instances?.find((item:{instanceId:string})=>item.instanceId==="bos-free");
-   if(!instance||!engineReady(instance))setError(hosted?"BOS Free is connected, but free models are unavailable right now. Check again shortly.":"Your key is saved, but free models are unavailable right now. Check again shortly.");
+   if(!instance||!engineReady(instance))setError(hosted?"BOS Free is connected, but it isn't answering right now. Check again shortly.":"Your key is saved, but free models are unavailable right now. Check again shortly.");
    else setOpen(false);
   } catch {setError(hosted?"BOS Free is unavailable right now. Try again shortly, or use your own OpenRouter key.":"Could not connect. Check your OpenRouter key and connection, then try again.");}
   finally {pending.current=false;setBusy(false);}
  };
  return <section className={compact?"rounded-lg border border-hairline p-2":"mt-4 rounded-xl border border-accent/40 bg-accent/5 p-4"} aria-label="Free models">
-  {!compact && <div className="flex items-center justify-between gap-3"><h3 className="font-semibold">Start free</h3><span className="text-xs text-ink-secondary">{ready?"Connected":"No paid-model fallback"}</span></div>}
-  {(!compact || open) && <p className="mt-2 text-sm text-ink-secondary">Start with BOS Free — no account or key needed. It uses free AI models with a small daily limit and may be busy at times. Only verified zero-price models are used; there is never a paid fallback.</p>}
+  {!compact && <div className="flex items-center justify-between gap-3"><h3 className="flex items-center gap-2 font-semibold"><PresetProviderMark preset="deepseek" size={18}/>Start free</h3><span className="text-xs text-ink-secondary">{ready?"Connected":"100 messages a day"}</span></div>}
+  {(!compact || open) && <p className="mt-2 text-sm text-ink-secondary">Start with BOS Free, powered by DeepSeek V4 Flash. No account or key needed, and it can use tools just like paid engines. Includes up to 100 messages a day.</p>}
   {!open?<div className={compact?"space-y-2":"mt-3 flex flex-wrap items-center gap-3"}>
-   <button className={compact?"ui-button w-full":"ui-button"} disabled={busy} onClick={()=>void connect(true)}>{busy?"Connecting…":ready?"Reconnect BOS Free":"Start free"}</button>
+   <button className={compact?"ui-button inline-flex w-full items-center justify-center gap-2":"ui-button inline-flex items-center gap-2"} disabled={busy} onClick={()=>void connect(true)}>{compact&&<PresetProviderMark preset="deepseek" size={14}/>}{busy?"Connecting…":ready?"Reconnect BOS Free":"Start free"}</button>
    <button className="text-sm text-accent underline" disabled={busy} onClick={()=>setOpen(true)}>Use my own OpenRouter key</button>
   </div>:<form className="mt-3 space-y-3" onSubmit={event=>{event.preventDefault();void connect(false);}}>
    <a className="text-sm text-accent underline" href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">Create an OpenRouter API key</a>
