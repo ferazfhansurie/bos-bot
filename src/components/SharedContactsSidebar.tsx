@@ -11,7 +11,7 @@ import { isDirectSharedRoom, sharedRoomUnread } from "./shared-conversation";
 
 interface Contact { id: string; name: string; kind: "person" | "bot"; homeId?: string; homeName?: string; title?: string; avatar?: string | null; color?: string | null; mascotBody?: string | null }
 interface Room { id: string; name: string; kind?: "direct" | "group"; memberIds: string[]; lastActivity?: number; preview?: string; unreadCount?: number; readSequence?: number; notifications?: "all" | "mentions" | "muted" }
-export interface LocalConversationRow { id: string; at: number; element: ReactNode }
+export interface LocalConversationRow { id: string; at: number; pinned?: boolean; element: ReactNode }
 
 /** Remote people and person rooms share the conversation list with local bots.
  * Bots on a linked Mac arrive through the bot list itself, never here. */
@@ -107,7 +107,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   const unifiedContacts = visibleContacts;
   if (placement === "unified") {
     const directRoom = (contact: Contact) => rooms.find(room => isDirectSharedRoom(room) && room.memberIds.includes(selfId ?? "") && room.memberIds.includes(contact.id));
-    const entries: Array<{ id: string; at: number; element: ReactNode }> = [
+    const entries: Array<{ id: string; at: number; pinned?: boolean; element: ReactNode }> = [
       ...localRows,
       ...unifiedContacts.map(contact => {
         const room = directRoom(contact);
@@ -145,7 +145,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
         <GroupMark members={roomFaces(room)} size={compact ? 44 : 48} />{!compact && <span className="min-w-0 flex-1"><span className="flex justify-between gap-2 text-[14px] font-semibold"><span className="truncate">{roomName(room)}</span>{(room.lastActivity ?? 0) > 0 && <span className="shrink-0 text-xs font-normal text-ink-secondary">{formatTime(room.lastActivity!)}</span>}</span><span className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[11px] text-ink-secondary">{room.preview ?? ""}</span>{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</span></span>}
       </button> })),
     ];
-    entries.sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
+    entries.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.at - a.at || a.id.localeCompare(b.id));
     return <section aria-label="Chats" className="px-1">{!compact && <div className="px-2 pb-1 text-[12px] font-semibold text-ink-secondary">Chats</div>}
       {entries.map(entry => <div key={entry.id}>{entry.element}</div>)}
       {owner && !compact && <button type="button" title="Connect people and workspaces" aria-label="Connect people and workspaces" onClick={() => setSettingUp(value => !value)} className="ml-2 mt-1 text-ink-secondary"><Settings2 size={16} /></button>}

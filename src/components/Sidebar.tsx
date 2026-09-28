@@ -1761,6 +1761,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   const recentLocalRows = [
     ...matchingBots.map((bot) => ({
       id: `bot:${bot.id}`,
+      pinned: Boolean(bot.pinned),
       at: lastNonReceipt(visibleMessages(bot))?.at ?? 0,
       element: <BotListItem bot={bot} density={density} onMenu={setMenu} />,
     })),

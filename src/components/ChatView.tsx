@@ -1472,18 +1472,20 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
         </div>
       )}
 
-      {/* Pinned message banner */}
-      <PinnedBanner
+      {/* Shared rooms store pins on messages; bot chats store one pin per task. */}
+      {shared ? <div className="max-h-36 overflow-y-auto">
+        {messages.filter(message => shared.messageMeta?.[message.id]?.pinnedBy && !shared.messageMeta?.[message.id]?.deletedAt).map(message => <PinnedBanner
+          key={message.id} bot={bot} pinnedId={message.id} messages={messages}
+          onJump={messageId => dispatch({ type: "focusMessage", threadId: bot.threadId, messageId })}
+          onUnpin={shared.annotateMessage ? () => { void shared.annotateMessage?.(message.id, { pinned: false }); } : undefined}
+        />)}
+      </div> : <PinnedBanner
         bot={bot}
         pinnedId={bot.pinnedMessageId}
         messages={messages}
-        onJump={(messageId) =>
-          dispatch({ type: "focusMessage", threadId: bot.threadId, messageId })
-        }
-        onUnpin={remoteClient ? undefined : () =>
-          dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { pinnedMessageId: "" } })
-        }
-      />
+        onJump={(messageId) => dispatch({ type: "focusMessage", threadId: bot.threadId, messageId })}
+        onUnpin={remoteClient ? undefined : () => dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { pinnedMessageId: "" } })}
+      />}
 
 
       {/* Messages + composer share one pane so bubbles scroll into the pill

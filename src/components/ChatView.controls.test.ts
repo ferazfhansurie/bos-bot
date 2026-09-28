@@ -177,3 +177,12 @@ describe("thread control placement", () => {
     delete window.ogb;
   });
 });
+
+ it("shows shared message pins in a jumpable banner", () => {
+    const markup = renderToStaticMarkup(createElement(ChatView, {
+      bot: { ...bot, id: "shared:room", threadId: "shared:room", busy: false, tasks: undefined,
+        messages: [{ id: "pinned", role: "bot", kind: "text", at: 1, text: "Pinned decision" }] },
+      shared: { send: async () => {}, mentionBots: [], faces: [], annotateMessage: async () => {}, messageMeta: { pinned: { pinnedBy: "person" } } },
+    }));
+    expect(markup).toContain('title="Jump to the pinned message"');
+ });
