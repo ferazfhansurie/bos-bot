@@ -757,7 +757,7 @@ export const NATIVE_DIR = join(DATA_DIR, "native");
 export function ensureDirs() {
   // one-time migration from the pre-rename data dir — bots, transcripts,
   // config and keys all carry over
-  if (!existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
+  if (process.env.OMB_DISABLE_LEGACY_MIGRATION !== "1" && !existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
     try {
       renameSync(LEGACY_DATA_DIR, DATA_DIR);
     } catch {

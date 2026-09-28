@@ -1,3 +1,4 @@
+import { STAGING } from "./release-channel.mjs";
 // In-app auto-updater (electron-updater). Downloads are user-driven; macOS
 // stages the downloaded ZIP immediately and the explicit restart applies it.
 // One state object is broadcast on every transition.
@@ -91,7 +92,7 @@ export function attachUpdaterWindow(mainWindow) {
 
 export function startUpdater() {
   // dev / unsigned builds can't auto-update — leave the banner dormant
-  if (!app.isPackaged) {
+  if (STAGING || !app.isPackaged) {
     updaterCoordinator = null;
     setState({ status: "idle" });
     return;

@@ -1,3 +1,6 @@
+import "./staging-bootstrap.mjs";
+import { stagingServerEnvironment } from "./staging-environment.mjs";
+import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEME } from "./release-channel.mjs";
 import { attachLaunchSplash } from "./launch-splash.mjs";
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { createRequire } from "node:module";
@@ -95,7 +98,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // resolve to ::1 and paint a black window
 const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 const DEFAULT_COMPOSIO_BROKER_URL = "https://openmausbot-composio.milindsoni201.workers.dev";
-let SERVER_PORT = 8799;
+let SERVER_PORT = SERVER_PORTS[0];
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 let desktopViewerWindow = null;
 let desktopViewerOwner = null;
@@ -190,7 +193,7 @@ function applyUnreadBadge(win = mainWindow) {
 // intercepting input. This app is not graphics-heavy, so reliability wins.
 if (process.platform === "linux") {
   app.disableHardwareAcceleration();
-  app.setDesktopName("ai.bos.bot.desktop");
+  app.setDesktopName(STAGING ? "ai.bos.bot.staging.desktop" : "ai.bos.bot.desktop");
 }
 
 // One instance per user: without this lock a second launch forks a second
@@ -715,6 +718,7 @@ function ensureManagedCompanionConnector() {
     guardianEntry: resolveManagedCompanionGuardian({ appPath: app.getAppPath() }),
     runtimeExecutable: process.execPath,
     runtimeRoot: path.join(app.getPath("userData"), "managed-companion-tunnel"),
+    ...(STAGING ? { originPort: 38812 } : {}),
     onChange: (status) => {
       slog(`managed companion connection ${status.status}`);
       if (!companionDesiredThisLaunch) return;
@@ -1196,7 +1200,7 @@ async function startServerOn(port) {
   if (desktopShutdownStarted) return { proc: null, abort: true };
   const entry = path.join(process.resourcesPath, "server", "index.js");
   const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), secureCredentials, {
-    ...process.env,
+    ...(STAGING ? stagingServerEnvironment(process.env, desktopDataDir()) : process.env),
     // The desktop parent owns the durable data-directory lease. Each utility
     // server gets only a private capability that validates that same live
     // owner; fallback-port children must not race to replace the parent lease.
@@ -1305,7 +1309,7 @@ async function startServerPackaged() {
   // server during teardown — one settle-and-retry covers it
   let everyPortForeignOwned = true;
   for (let attempt = 0; attempt < 2; attempt++) {
-    for (const port of [8799, 18799, 28799]) {
+    for (const port of SERVER_PORTS) {
       if (desktopShutdownStarted) return false;
       const started = await startServerOn(port);
       if (started.proc) {
@@ -2201,7 +2205,7 @@ ipcMain.handle("desktop:export-diagnostics", localOnly("desktop:export-diagnosti
 // renderer-controlled, so it must resolve inside ~/.openmausbot and be a
 // regular file — never a symlink escape or directory.
 ipcMain.handle("desktop:save-file", localOnly("desktop:save-file", async (event, rawPath) => {
-  return withSavableFile(rawPath, { home: os.homedir() }, async ({ defaultName, copyTo }) => {
+  return withSavableFile(rawPath, { home: os.homedir(), ...(STAGING ? { dataDir: desktopDataDir() } : {}) }, async ({ defaultName, copyTo }) => {
     const parent = BrowserWindow.fromWebContents(event.sender);
     const defaultPath = await defaultSaveName(app.getPath("downloads"), defaultName);
     const choice = await dialog.showSaveDialog(parent ?? undefined, {
@@ -2681,7 +2685,7 @@ app.whenReady().then(async () => {
       // config.json. The parent retains ownership across utility-child port
       // fallbacks and restarts for the entire desktop process lifetime.
       desktopDataDirLease = acquireDataDirLease(desktopDataDir(), {
-        legacyDataDir: path.join(app.getPath("home"), ".opengrokbot"),
+        ...(STAGING ? {} : { legacyDataDir: path.join(app.getPath("home"), ".opengrokbot") }),
       });
     } catch (error) {
       dialog.showErrorBox(
@@ -2693,7 +2697,7 @@ app.whenReady().then(async () => {
     }
   }
   if (app.isPackaged) {
-    app.setAsDefaultProtocolClient("openmausbot");
+    app.setAsDefaultProtocolClient(PACKAGE_SCHEME);
     // Chromium adds this capability below JavaScript, so renderer requests
     // can mutate the local harness while a Full-access shell using curl
     // cannot impersonate the person operating the desktop app.
@@ -2796,6 +2800,7 @@ app.whenReady().then(async () => {
     try {
       desktopCompanionRelay = await startDesktopCompanionRelay({
         access: desktopRemoteAccess,
+        ports: RELAY_PORTS,
         staticDir: app.isPackaged
           ? path.join(process.resourcesPath, "ui")
           : path.join(app.getAppPath(), "dist"),

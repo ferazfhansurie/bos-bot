@@ -1,0 +1,23 @@
+extends: ./electron-builder.yml
+appId: ai.bos.bot.staging
+productName: BOS Staging
+artifactName: BOS-Staging-${version}-${arch}.${ext}
+extraMetadata:
+  bosChannel: staging
+  name: bos-staging
+protocols:
+  - name: BOS Staging package install
+    schemes: [bosbot-staging]
+publish: null
+directories:
+  output: release-staging
+nsis:
+  shortcutName: BOS Staging
+  artifactName: BOS-Staging-${version}-setup.${ext}
+dmg:
+  artifactName: BOS-Staging-${version}-${arch}.dmg
+linux:
+  executableName: bos-staging
+  desktop:
+    entry:
+      Name: BOS Staging
