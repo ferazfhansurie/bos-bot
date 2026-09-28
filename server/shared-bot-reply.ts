@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { parseSharedResponseArtifacts } from "./shared-response-artifacts.ts";
 import { messageFileTargets, sharedFileReplyText } from "./message-file.ts";
 
 export interface SharedReplyFile { name: string; mime: string; data: string }
@@ -12,8 +13,9 @@ interface ReplyMessage {
  * Every file read remains an exact-message capability supplied by the caller. */
 export async function collectSharedBotReply(messages: ReplyMessage[], read: (message: ReplyMessage, href: string, generated: boolean) => Promise<SharedReplyFile>): Promise<SharedBotReply> {
   const terminal = messages.findLast(message => message.role === "bot" && message.turnTerminal);
-  let reply = sharedFileReplyText(terminal?.text ?? "");
-  const files: SharedReplyFile[] = [];
+  const artifacts = parseSharedResponseArtifacts(terminal?.text ?? "");
+  let reply = sharedFileReplyText(artifacts.text);
+  const files: SharedReplyFile[] = [...artifacts.files];
   const seen = new Set<string>();
   const failed = new Set<string>();
   const attempted = new Set<string>();
@@ -21,7 +23,7 @@ export async function collectSharedBotReply(messages: ReplyMessage[], read: (mes
     if (message.role !== "bot" || message.kind !== "text") continue;
     const candidates = [
       ...(message.attachments ?? []).filter(item => item.kind === "image").map(item => ({ href: item.path, generated: true })),
-      ...messageFileTargets(message.text ?? "").map(href => ({ href, generated: false })),
+      ...messageFileTargets(message === terminal ? artifacts.text : message.text ?? "").map(href => ({ href, generated: false })),
     ];
     for (const { href, generated } of candidates) {
       if (typeof href !== "string" || href.length > 8192) continue;
@@ -40,6 +42,7 @@ export async function collectSharedBotReply(messages: ReplyMessage[], read: (mes
       } catch { failed.add(href); }
     }
   }
+  if (artifacts.rejected) reply += `${reply ? "\n\n" : ""}The requested text files could not be attached because their format or size was unsupported.`;
   if (failed.size) reply += `${reply ? "\n\n" : ""}Some files could not be shared here. Only supported files from this conversation can be attached (up to four per reply).`;
   return { reply: reply || (files.length ? "Files attached." : ""), ...(files.length ? { files } : {}) };
 }

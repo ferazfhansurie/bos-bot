@@ -53,3 +53,17 @@ it("removes nested local targets without leaving dead images or host paths", () 
  expect(sharedFileReplyText("[report][file]\n\n[file]: /room/report.pdf")).toBe("report");
  expect(sharedFileReplyText("[web](https://example.com) and `[example](/room/example.txt)`")).toBe("[web](https://example.com) and `[example](/room/example.txt)`");
 });
+
+it("persists generated text artifacts as room-owned downloadable copies", async () => {
+ const dir = mkdtempSync(join(tmpdir(), "bos-generated-room-files-"));
+ try {
+  const result = await collectSharedBotReply([{id:"final",role:"bot",kind:"text",turnTerminal:true,text:'ready\n\n```bos-artifacts\n{"files":[{"name":"brief.md","content":"# fixture\\nroom only"}]}\n```'}],async()=>{throw new Error("no filesystem read authorized");});
+  expect(result.reply).toBe("ready");
+  const store = new SharedAttachmentStore(dir);
+  const file = result.files![0]!;
+  const attachment = store.save("room-1", "home:bot:test", file.name, file.mime, file.data);
+  const reloaded = new SharedAttachmentStore(dir);
+  expect(Buffer.from(reloaded.get("room-1", attachment.id)!.data, "base64").toString()).toBe("# fixture\nroom only");
+  expect(reloaded.get("other-room", attachment.id)).toBeNull();
+ } finally { rmSync(dir,{recursive:true,force:true}); }
+});

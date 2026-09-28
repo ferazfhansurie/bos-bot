@@ -41,6 +41,14 @@ import { customMcpServers,
 } from "./config.ts";
 
 describe("configuration boundaries", () => {
+  it("persists the bounded business brief without changing provider configuration", () => {
+    const patch = { onboarding: { businessBrief: { business: "Agency", customers: "Restaurants", outcome: "website", approach: "specialist" } } };
+    expect(parseConfigPatch(patch)).toEqual(patch);
+    expect(parseStoredConfig(patch)).toEqual(patch);
+    expect(providerReloadKeys(patch)).toEqual([]);
+    expect(() => parseConfigPatch({ onboarding: { businessBrief: { ...patch.onboarding.businessBrief, business: "x".repeat(1001) } } })).toThrow();
+    expect(() => parseConfigPatch({ onboarding: { businessBrief: { ...patch.onboarding.businessBrief, outcome: "publish" } } })).toThrow();
+  });
   it("validates context budgets and keeps changes independent of provider reload", () => {
     const context = { autoCompact: false, compactAt: 0.7, rebuildBytes: 32_000 };
     expect(parseStoredConfig({ context })).toEqual({ context });

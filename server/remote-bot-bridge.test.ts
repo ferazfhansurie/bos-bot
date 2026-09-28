@@ -405,6 +405,126 @@ describe("RemoteBotBridge", () => {
     expect(fake.streamUrls).toHaveLength(0);
   }, 15000);
 
+  it("polls incremental scoped replies, reports disconnects, and recovers without resending", async () => {
+    bridge = make({ replaceLinkToken: () => {}, activePollMs: 15, idlePollMs: 30 });
+    await bridge.listBots(0);
+    await firstSend();
+    const task = fake.tasks.find(task => task.threadId === "bridge-1")!;
+    task.busy = true;
+    const original = fake.fetcher;
+    let offline = false;
+    bridge.stop();
+    bridge = make({ replaceLinkToken: () => {}, activePollMs: 15, idlePollMs: 30,
+      fetcher: (async (input, init) => {
+        if (offline && new URL(String(input)).pathname === "/api/threads/bridge-1/messages") {
+          return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+        }
+        return original(input, init);
+      }) as typeof fetch });
+    bridge.start();
+    const partial = { id: "incremental", role: "bot", kind: "text", text: "first", at: Date.now() };
+    fake.threads.get("bridge-1")!.push(partial);
+    await until(() => frames.some(f => f.kind === "message" && f.message.id === "incremental"));
+    partial.text = "first and second";
+    await until(() => frames.some(f => f.kind === "message.patch" && f.message.text === "first and second"));
+    offline = true;
+    await until(() => bridge.homeForTest(HOME)?.connected === false);
+    partial.text = "complete";
+    offline = false;
+    await until(() => frames.some(f => f.kind === "message.patch" && f.message.text === "complete"));
+    expect(bridge.homeForTest(HOME)?.connected).toBe(true);
+    expect(fake.calls.filter(c => c.path === "/api/bots/pixie/messages")).toHaveLength(1);
+    expect(fake.streamUrls).toHaveLength(0);
+    expect(JSON.stringify(frames)).not.toContain(SECRET);
+  });
+
+  it("streams scoped incremental replies and reconnects without replaying a send", async () => {
+    const scopedStreams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const streamOrigins: string[] = [];
+    let currentLink = { ...link };
+    bridge = make({ links: () => [currentLink], idleTimeoutMs: 60_000, replaceLinkToken: () => {}, activePollMs: 15, idlePollMs: 30,
+      fetcher: (async (input, init) => {
+        if (new URL(String(input)).pathname === "/api/multiplayer/peer-events") {
+          streamOrigins.push(new URL(String(input)).origin);
+          return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+            scopedStreams.push(controller);
+            init?.signal?.addEventListener("abort", () => { try { controller.error(new Error("aborted")); } catch {} });
+          } }), { headers: { "content-type": "text/event-stream" } });
+        }
+        return fake.fetcher(input, init);
+      }) as typeof fetch });
+    await bridge.listBots(0);
+    await firstSend();
+    bridge.start();
+    await until(() => scopedStreams.length === 1);
+    const emit = (frame: unknown) => scopedStreams.at(-1)!.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+    emit({ kind: "runtime", event: { type: "content.delta", threadId: "bridge-1", payload: { delta: "live text" } } });
+    emit({ kind: "runtime", event: { type: "content.delta", threadId: "putri-thread", payload: { delta: SECRET } } });
+    await until(() => frames.some(f => f.kind === "runtime" && f.event.payload.delta === "live text"));
+    scopedStreams[0]!.close();
+    await until(() => scopedStreams.length === 2);
+    currentLink = { ...link, origin: "https://new-home.tail1234.ts.net" };
+    bridge.sync();
+    await until(() => scopedStreams.length === 3, 300);
+    expect(streamOrigins.at(-1)).toBe(currentLink.origin);
+    expect(fake.calls.filter(c => c.path === "/api/bots/pixie/messages")).toHaveLength(1);
+    expect(fake.streamUrls).toHaveLength(0);
+    expect(JSON.stringify(frames)).not.toContain(SECRET);
+  });
+
+  it("does not roll back a newer stream patch with a delayed polling snapshot", async () => {
+    let release!: () => void;
+    let entered = false;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    bridge = make({ replaceLinkToken: () => {}, activePollMs: 20, idlePollMs: 20,
+      fetcher: (async (input, init) => {
+        const response = await fake.fetcher(input, init);
+        if (new URL(String(input)).pathname === "/api/threads/bridge-1/messages" && !entered) { entered = true; await blocked; }
+        return response;
+      }) as typeof fetch });
+    await bridge.listBots(0);
+    await firstSend();
+    const message = { id: "patch-race", role: "bot", kind: "text", text: "old partial", at: 1 };
+    fake.threads.get("bridge-1")!.push(message);
+    bridge.start();
+    await until(() => entered);
+    bridge.handleFrame(bridge.homeForTest(HOME)!, { kind: "message", threadId: "bridge-1", message });
+    message.text = "new complete";
+    bridge.handleFrame(bridge.homeForTest(HOME)!, { kind: "message.patch", threadId: "bridge-1", message });
+    frames = [];
+    release();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(frames.some(frame => frame.kind === "message.patch" && frame.message.text === "old partial")).toBe(false);
+    expect(bridge.homeForTest(HOME)!.cache.get("bridge-1")!.messages.find(m => m.id === "patch-race")?.text).toBe("new complete");
+  });
+
+  it("shares concurrent peer migration and token rotation refreshes", async () => {
+    bridge = make({ replaceLinkToken: () => {}, fetcher: (async (input, init) => {
+      if (new URL(String(input)).pathname === "/api/multiplayer/peer-migrate") await new Promise(resolve => setTimeout(resolve, 20));
+      return fake.fetcher(input, init);
+    }) as typeof fetch });
+    await Promise.all([bridge.listBots(0), bridge.listBots(0), bridge.listBots(0)]);
+    expect(fake.calls.filter(call => call.path === "/api/multiplayer/peer-migrate")).toHaveLength(1);
+    expect(fake.calls.filter(call => call.path === "/api/multiplayer/peer-rotate")).toHaveLength(1);
+  });
+
+  it("does not mark a stopped peer online after an in-flight refresh finishes", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered = false;
+    bridge = make({ replaceLinkToken: () => {}, fetcher: (async (input, init) => {
+      if (new URL(String(input)).pathname === "/api/bots") { entered = true; await blocked; }
+      return fake.fetcher(input, init);
+    }) as typeof fetch });
+    bridge.start();
+    await until(() => entered);
+    bridge.stop();
+    release();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(bridge.homeForTest(HOME)?.connected).toBe(false);
+    expect(bridge.homeForTest(HOME)?.running).toBe(false);
+  });
+
   it("relays only frames for bridge threads, rewritten to virtual ids", async () => {
     bridge.start();
     await until(() => fake.streams.length === 1);

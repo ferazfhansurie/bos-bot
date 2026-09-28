@@ -295,6 +295,8 @@ const featureConfigSchema = z.object({
  * ids are short renderer-chosen slugs; the list is capped so a buggy client
  * cannot grow the file without bound. */
 const onboardingConfigSchema = z.object({
+  firstAssignment: z.object({ prepared: z.boolean().optional(), botId: z.string().regex(/^[\w-]+$/).max(80), threadId: z.string().regex(/^[\w-]+$/).max(80), sendId: z.string().regex(/^[A-Za-z0-9_-]{16,80}$/), text: z.string().min(1).max(5000), selection: z.object({ instanceId: z.string().min(1).max(120), model: z.string().min(1).max(200) }).strict() }).strict().optional(),
+  businessBrief: z.object({ business: z.string().max(1000), customers: z.string().max(500), outcome: z.enum(["website", "dashboard", "crm", "motion"]), approach: z.enum(["bos", "specialist"]) }).optional(),
   /** ISO timestamp of finishing (or skipping to the end of) the welcome flow. */
   completedAt: z.string().trim().max(40).optional(),
   /** Which welcome flow was completed; a newer flow may re-show itself. */
@@ -490,7 +492,7 @@ export interface AppConfig {
   /** Opt-in product experiments. Every flag defaults to disabled. */
   features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean };
   /** First-run progress; see onboardingConfigSchema. */
-  onboarding?: { completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[] };
+  onboarding?: { firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[] };
   /** Named browser sessions any bot can be pointed at. */
   browserProfiles?: BrowserProfile[];
   /** CDP target of a Chrome the operator already has running (a bare port,

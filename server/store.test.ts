@@ -870,12 +870,22 @@ describe("Store", () => {
     const store = new Store(selection);
     store.seedIfEmpty();
     expect(store.bots).toHaveLength(1);
+    expect(store.bots[0]).toMatchObject({ name: "BOS", chiefOfStaff: true });
     store.seedIfEmpty();
     expect(store.bots).toHaveLength(1);
 
     const reloaded = new Store(selection);
     reloaded.seedIfEmpty();
     expect(reloaded.bots).toHaveLength(1);
+  });
+
+  it("first-run setup leaves existing bots and authority untouched", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "My teammate", soul: "Existing instructions" });
+    const before = JSON.stringify(store.bots);
+    store.seedIfEmpty();
+    expect(JSON.stringify(store.bots)).toBe(before);
+    expect(store.bot(bot.id)?.chiefOfStaff).not.toBe(true);
   });
 
   it("chains appended messages and keeps the newest as active leaf", () => {

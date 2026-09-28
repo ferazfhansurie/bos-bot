@@ -1,3 +1,4 @@
+import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
 import { groupReplyTargets } from "../shared/group-replies.ts";
 import { SharedTyping } from "./shared-typing.ts";
 import { sharedMentionTargets } from "../shared/shared-mentions.ts";
@@ -20,6 +21,7 @@ import { autoCompactWindow } from "./drivers/claude.ts";
 import { SharedComputers, sharedComputerOperation, sharedComputerRegistration } from "./shared-computers.ts";
 import { MultiplayerActors } from "./multiplayer-actors.ts";
 import { PeerThreads, type PeerThread } from "./peer-threads.ts";
+import { peerEvent } from "./peer-events.ts";
 import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
@@ -3329,11 +3331,13 @@ interface SseClient {
   backpressured: boolean;
 }
 const sseClients = new Set<SseClient>();
+const peerSseClients = new Set<SseClient & { sessionId: string }>();
 function closeSessionStreams(sessionId: string): void {
   browserLive.closeForOwner(sessionId);
-  for (const client of sseClients) {
+  for (const client of [...sseClients, ...peerSseClients]) {
     if (client.sessionId !== sessionId) continue;
     sseClients.delete(client);
+    peerSseClients.delete(client as SseClient & { sessionId: string });
     try {
       client.res.end();
     } catch {
@@ -3393,6 +3397,21 @@ function broadcast(payload: Record<string, unknown>) {
   // Membership may also change through fleet/CLI config writes. Close stale
   // email streams before any further workspace data is delivered.
   sessions.revalidateEmailSessions();
+  for (const client of Array.from(peerSseClients)) {
+    if (!sessions.isLive(client.sessionId)) { client.res.end(); peerSseClients.delete(client); continue; }
+    const projected = peerEvent(payload, {
+      owns: threadId => {
+        const botId = peerThreads.botFor(client.sessionId, threadId);
+        const bot = botId ? store.bot(botId) : null;
+        return !!bot && !bot.hidden && store.tasks(bot.id).some(task => task.threadId === threadId);
+      },
+      botView: botId => {
+        const bot = store.bot(botId);
+        return bot && !bot.hidden ? peerBotView(bot, client.sessionId) : null;
+      },
+    });
+    if (projected && deliverSseFrame(client, String(projected.kind), `data: ${JSON.stringify(projected)}\n\n`) === "disconnected") peerSseClients.delete(client);
+  }
   const seq = ++lastSeq;
   const kind = String(payload.kind ?? "");
   const frame = `id: ${STREAM_ID}:${seq}\ndata: ${JSON.stringify({ ...payload, seq })}\n\n`;
@@ -7506,6 +7525,7 @@ async function startTurn(
         // first after the soul: the block names agent tools, so it only goes
         // to a turn whose engine actually mounted them (setupMode is already
         // false when they are not — see agentsMounted above)
+        { id: "shared-artifacts", label: "Room files", text: sharedContext ? SHARED_ARTIFACT_INSTRUCTIONS : "" },
         { id: "setup", label: "Setup", text: setupSystemPrompt(setupMode, { skills: skillAuthoring, cwd: liveBot?.cwd ?? bot.cwd }) },
         { id: "files", label: "File locations", text: !sharedContext && worksInWorkspace && opts?.runOn !== "cloud" ? workspaceLocationsPrompt(bot.id, cwd, liveBot?.cwd ?? bot.cwd) : "" },
         { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) },
@@ -11259,6 +11279,8 @@ function configStatus() {
     // first-run progress — not a secret; the app decides whether to show
     // the welcome tour from this, never from browser storage
     onboarding: {
+      businessBrief: cfg.onboarding?.businessBrief,
+      firstAssignment: cfg.onboarding?.firstAssignment,
       completedAt: cfg.onboarding?.completedAt ?? "",
       version: cfg.onboarding?.version ?? 0,
       reelSeen: cfg.onboarding?.reelSeen === true,
@@ -11283,6 +11305,7 @@ function configForAccess(status: ReturnType<typeof configStatus>, admin: boolean
   // source objects.
   return {
     ...status,
+    onboarding: { completedAt: status.onboarding.completedAt, version: status.onboarding.version, reelSeen: status.onboarding.reelSeen, hintsSeen: status.onboarding.hintsSeen },
     signIn: { admins: [], members: [] },
     vps: { configured: status.vps.configured, sshAlias: "" },
     profile: { name: status.profile.name, email: "", avatarUrl: status.profile.avatarUrl },
@@ -11888,6 +11911,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       peerThreads.recordAttachment(threadId, basename(saved.path));
       return json(res, 201, saved);
+    }
+
+    if (method === "GET" && path === "/api/multiplayer/peer-events") {
+      if (!peerSessionId) return json(res, 403, { error: "a scoped peer session is required" });
+      const client = { res, sessionId: peerSessionId, admin: false, screens: false, backpressured: false };
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+      // No global cursor or replay buffer crosses this authorization boundary.
+      // Every reconnect recovers committed messages through scoped HTTP reads.
+      res.write(`data: ${JSON.stringify({ kind: "hello", resumed: false })}\n\n`);
+      peerSseClients.add(client);
+      req.socket.setTimeout(0);
+      const keepalive = setInterval(() => {
+        if (!sessions.isLive(peerSessionId)) { res.end(); return; }
+        deliverSseFrame(client, "ping", `data: {"kind":"ping"}\n\n`);
+      }, SSE_HEARTBEAT_MS);
+      res.on("close", () => { clearInterval(keepalive); peerSseClients.delete(client); });
+      return;
     }
 
     // Shared-chat identities are explicit. A paired device called "Putri"

@@ -1,0 +1,84 @@
+{
+  "candidate": "bos-2026.09.28-staging-draft",
+  "source": {
+    "commit": "c2235de65df830428d742bc6e48481c07cae8917",
+    "clean": false,
+    "evidence": null
+  },
+  "identity": {
+    "staging": "ai.bos.bot.staging",
+    "live": "ai.bos.bot"
+  },
+  "channel": {
+    "name": "controlled-alpha",
+    "ownerVerified": false,
+    "endpoint": null,
+    "evidence": null
+  },
+  "tests": {
+    "passed": false,
+    "evidence": null
+  },
+  "review": {
+    "approved": false,
+    "evidence": null
+  },
+  "platforms": {
+    "macos": {
+      "sourceCommit": null,
+      "built": false,
+      "version": null,
+      "artifact": null,
+      "sha256": null,
+      "buildEvidence": null,
+      "signingEvidence": null,
+      "installed": false,
+      "deviceVerified": false,
+      "deviceEvidence": null
+    },
+    "ios": {
+      "sourceCommit": null,
+      "built": false,
+      "version": null,
+      "artifact": null,
+      "sha256": null,
+      "buildEvidence": null,
+      "signingEvidence": null,
+      "installed": false,
+      "deviceVerified": false,
+      "deviceEvidence": null
+    },
+    "windows": {
+      "sourceCommit": null,
+      "built": false,
+      "version": null,
+      "artifact": null,
+      "sha256": null,
+      "buildEvidence": null,
+      "signingEvidence": null,
+      "installed": false,
+      "deviceVerified": false,
+      "deviceEvidence": null
+    },
+    "android": {
+      "sourceCommit": null,
+      "built": false,
+      "version": null,
+      "artifact": null,
+      "sha256": null,
+      "buildEvidence": null,
+      "signingEvidence": null,
+      "installed": false,
+      "deviceVerified": false,
+      "deviceEvidence": null
+    }
+  },
+  "recovery": {
+    "owner": null,
+    "checkpoint": null,
+    "rollback": null
+  },
+  "approval": {
+    "evidence": null
+  }
+}

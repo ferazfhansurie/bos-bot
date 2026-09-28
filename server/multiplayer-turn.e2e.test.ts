@@ -94,3 +94,58 @@ it("delivers generated room images and documents as downloadable attachments wit
     expect(finals).toHaveLength(1); expect(finals[0].attachments).toEqual(answer.attachments);
   } finally { await fixture.close(); }
 }, 50_000);
+
+it("creates terminal text artifacts as room downloads and deduplicates retries without another bot turn", async () => {
+  const content = "# fixture\nroom only\n";
+  const envelope = `ready\n\n\`\`\`bos-artifacts\n${JSON.stringify({ files: [{ name: "brief.md", content }] })}\n\`\`\``;
+  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_REPLIES: JSON.stringify([envelope]), FAKE_CLAUDE_TOOL_CALLS: "[]" });
+  const api = async (method: string, path: string, body?: unknown) => {
+    const response = await fetch(`${fixture.info.url}${path}`, { method, headers: { "content-type": "application/json", origin: fixture.info.url }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(10_000) });
+    return { status: response.status, body: await response.json() as any };
+  };
+  try {
+    const created = await api("POST", "/api/bots", { name: "Text artifact bot", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true });
+    expect(created.status).toBe(201);
+    const bot = created.body.bot;
+    const me = (await api("GET", "/api/multiplayer/me")).body;
+    const room = (await api("POST", "/api/multiplayer/dm", { targetId: `${me.homeId}:bot:${bot.id}` })).body.room;
+    const path = `/api/multiplayer/rooms/${room.id}`;
+    const payload = { text: "create a downloadable markdown brief", sendId: "terminal-text-artifact" };
+    const sent = await api("POST", `${path}/messages`, payload);
+    expect(sent.status).toBe(201);
+    await expect.poll(async () => (await api("GET", `${path}/requests`)).body.requests.find((r: any) => r.sourceId === sent.body.message.id)?.state, { timeout: 20_000, interval: 200 }).toBe("completed");
+    const messages = (await api("GET", `${path}/messages`)).body.messages;
+    const answers = messages.filter((m: any) => m.responseTo === sent.body.message.id && m.kind !== "activity");
+    expect(answers).toHaveLength(1);
+    const answer = answers[0];
+    expect(answer.text).toBe("ready");
+    expect(answer.text).not.toContain("bos-artifacts");
+    expect(answer.attachments).toHaveLength(1);
+    const attachment = answer.attachments[0];
+    expect(attachment).toMatchObject({ name: "brief.md", mime: "text/markdown", size: Buffer.byteLength(content) });
+    const download = await api("GET", `${path}/attachments/${attachment.id}`);
+    expect(download.status).toBe(200);
+    expect(Buffer.from(download.body.data, "base64").toString("utf8")).toBe(content);
+    expect(download.body.attachment).toEqual(attachment);
+
+    const otherBot = (await api("POST", "/api/bots", { name: "Other room bot", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true })).body.bot;
+    const otherRoom = (await api("POST", "/api/multiplayer/dm", { targetId: `${me.homeId}:bot:${otherBot.id}` })).body.room;
+    expect(otherRoom.id).not.toBe(room.id);
+    expect((await api("GET", `/api/multiplayer/rooms/${otherRoom.id}/attachments/${attachment.id}`)).status).toBe(404);
+
+    const tasks = (await api("GET", "/api/bots?messages=0")).body.bots.find((b: any) => b.id === bot.id).tasks;
+    const thread = tasks.find((t: any) => t.title === `room · ${room.name}`);
+    expect(thread).toBeTruthy();
+    const transcript = (await api("GET", `/api/threads/${thread.threadId}/messages`)).body.messages;
+    expect(transcript.filter((m: any) => m.role === "bot" && m.turnTerminal)).toHaveLength(1);
+    const requestsBefore = (await api("GET", `${path}/requests`)).body.requests;
+    const retried = await api("POST", `${path}/messages`, payload);
+    expect(retried.status).toBe(200);
+    expect(retried.body.message.id).toBe(sent.body.message.id);
+    expect((await api("GET", `${path}/requests`)).body.requests).toEqual(requestsBefore);
+    expect((await api("GET", `/api/threads/${thread.threadId}/messages`)).body.messages).toEqual(transcript);
+    const after = (await api("GET", `${path}/messages`)).body.messages.filter((m: any) => m.responseTo === sent.body.message.id && m.kind !== "activity");
+    expect(after).toHaveLength(1);
+    expect(after[0].attachments).toEqual(answer.attachments);
+  } finally { await fixture.close(); }
+}, 50_000);

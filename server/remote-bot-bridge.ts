@@ -68,6 +68,9 @@ export interface RemoteBotBridgeOptions {
   /** Reconnect when the stream is silent this long (B pings every 15s). */
   idleTimeoutMs?: number;
   requestTimeoutMs?: number;
+  /** Scoped transcript polling cadence while a task is busy / idle. */
+  activePollMs?: number;
+  idlePollMs?: number;
   /** Bound on a GET /api/bots path that has to ask B before answering. */
   listTimeoutMs?: number;
   log?: (message: string) => void;
@@ -132,6 +135,11 @@ interface Home {
   connected: boolean;
   availability?: RemoteBotOrigin["availability"];
   peerMigrated?: boolean;
+  peerStreaming?: boolean;
+  peerStreamRetryAt?: number;
+  peerStreamAttempts?: number;
+  peerStreamAbort?: AbortController;
+  refreshing?: Promise<void>;
   announcedOrigin?: string;
   announcedAt?: number;
   abort: AbortController | null;
@@ -143,6 +151,7 @@ interface Home {
   queues: BotQueuedMessages;
   creating: Map<string, Promise<string>>;
   hydrating: Map<string, Promise<void>>;
+  threadRevisions: Map<string, number>;
 }
 
 const ID = /^[\w-]{1,128}$/;
@@ -296,6 +305,7 @@ export class RemoteBotBridge {
     for (const home of this.homes.values()) {
       home.running = false;
       home.abort?.abort();
+      home.peerStreamAbort?.abort();
       home.wake?.();
     }
   }
@@ -321,6 +331,7 @@ export class RemoteBotBridge {
       if (wanted.has(homeId)) continue;
       home.running = false;
       home.abort?.abort();
+      home.peerStreamAbort?.abort();
       home.wake?.();
       this.homes.delete(homeId);
       for (const botId of Object.keys(home.state.bots)) this.options.broadcast({ kind: "bot.deleted", botId: this.botId(home, botId) });
@@ -328,13 +339,19 @@ export class RemoteBotBridge {
     for (const link of links) {
       let home = this.homes.get(link.homeId);
       if (home) {
-        if (home.link.origin !== link.origin) { home.abort?.abort(); home.wake?.(); }
+        if (home.link.origin !== link.origin || home.link.token !== link.token) {
+          home.abort?.abort();
+          home.peerStreamAbort?.abort();
+          home.peerStreamRetryAt = 0;
+          home.peerStreamAttempts = 0;
+          home.wake?.();
+        }
         home.link = link;
       } else {
         home = {
           link, key: homeKey(link.homeId), state: this.saved.get(link.homeId) ?? emptyState(),
           cursor: null, running: false, connected: false, abort: null, wake: null, snapshotAt: 0,
-          remoteSelected: new Map(), cache: new Map(), queues: {}, creating: new Map(), hydrating: new Map(),
+          remoteSelected: new Map(), cache: new Map(), queues: {}, creating: new Map(), hydrating: new Map(), threadRevisions: new Map(),
         };
         this.saved.set(link.homeId, home.state);
         this.homes.set(link.homeId, home);
@@ -997,7 +1014,14 @@ export class RemoteBotBridge {
     }
   }
 
-  private async refreshSnapshot(home: Home): Promise<void> {
+  private refreshSnapshot(home: Home): Promise<void> {
+    if (home.refreshing) return home.refreshing;
+    const pending = this.loadSnapshot(home).finally(() => { if (home.refreshing === pending) home.refreshing = undefined; });
+    home.refreshing = pending;
+    return pending;
+  }
+
+  private async loadSnapshot(home: Home): Promise<void> {
     if (this.options.replaceLinkToken) await this.requireSharedReceiver(home);
     if (this.options.replaceLinkToken && !home.peerMigrated) {
       const threads = Object.entries(home.state.threads).map(([threadId, entry]) => ({ botId: entry.botId, threadId }));
@@ -1084,6 +1108,7 @@ export class RemoteBotBridge {
     delete home.state.threads[threadId];
     if (home.state.selected[entry.botId] === threadId) delete home.state.selected[entry.botId];
     home.cache.delete(threadId);
+    home.threadRevisions.delete(threadId);
     const virtual = this.threadId(home, threadId);
     if (home.queues[virtual]) {
       delete home.queues[virtual];
@@ -1207,27 +1232,30 @@ export class RemoteBotBridge {
     if (pending) return pending;
     const started = (async () => {
       if (!home.state.threads[threadId]) return;
+      const revision = home.threadRevisions.get(threadId) ?? 0;
       const result = await this.call(home, "GET", `/api/threads/${threadId}/messages?limit=${CACHE_MAX}`);
-      if (result.status !== 200 || !home.state.threads[threadId]) return;
+      if (result.status !== 200) throw new BridgeError(result.status, "the other Mac could not refresh this thread");
+      if (!home.state.threads[threadId] || revision !== (home.threadRevisions.get(threadId) ?? 0)) return;
       const messages = this.sanitizeAll(home, result.body?.messages);
       const activeLeafId = typeof result.body?.activeLeafId === "string" ? result.body.activeLeafId : null;
       const previous = home.cache.get(threadId);
       home.cache.set(threadId, { messages, hasMore: result.body?.hasMore === true, activeLeafId, hydrated: true });
-      if (!diff || !previous?.hydrated) return;
+      if (!diff) return;
       const virtual = this.threadId(home, threadId);
-      const known = new Map(previous.messages.map((message) => [message.id, JSON.stringify(message)]));
+      const known = new Map((previous?.messages ?? []).map((message) => [message.id, JSON.stringify(message)]));
       for (const message of messages) {
         const before = known.get(message.id);
         if (before === undefined) this.options.broadcast({ kind: "message", threadId: virtual, message });
         else if (before !== JSON.stringify(message)) this.options.broadcast({ kind: "message.patch", threadId: virtual, message });
       }
-      if (activeLeafId && activeLeafId !== previous.activeLeafId) this.options.broadcast({ kind: "thread", threadId: virtual, activeLeafId });
+      if (activeLeafId && activeLeafId !== previous?.activeLeafId) this.options.broadcast({ kind: "thread", threadId: virtual, activeLeafId });
     })().finally(() => home.hydrating.delete(threadId));
     home.hydrating.set(threadId, started);
     return started;
   }
 
   private remember(home: Home, threadId: string, message: WireMessage, patch: boolean): void {
+    home.threadRevisions.set(threadId, (home.threadRevisions.get(threadId) ?? 0) + 1);
     const cache = home.cache.get(threadId);
     if (!cache?.hydrated) return;
     const index = cache.messages.findIndex((candidate) => candidate.id === message.id);
@@ -1260,6 +1288,7 @@ export class RemoteBotBridge {
       case "thread": {
         const virtual = this.mapped(home, frame.threadId);
         if (!virtual || typeof frame.activeLeafId !== "string") return;
+        home.threadRevisions.set(frame.threadId, (home.threadRevisions.get(frame.threadId) ?? 0) + 1);
         const cache = home.cache.get(frame.threadId);
         if (cache) cache.hydrated = false;
         this.options.broadcast({ kind: "thread", threadId: virtual, activeLeafId: frame.activeLeafId });
@@ -1339,25 +1368,33 @@ export class RemoteBotBridge {
         catch (error) {
           this.connectionFailed(home, error);
           this.log(`${home.link.name}: peer migration failed (${error instanceof Error ? error.message : "unknown"})`);
-          await new Promise(resolveWait => setTimeout(resolveWait, delays[Math.min(attempt++, delays.length - 1)]));
+          await this.waitForPoll(home, delays[Math.min(attempt++, delays.length - 1)] ?? 30_000);
           continue;
         }
       }
       if (home.peerMigrated) {
+        if (!home.peerStreaming && Date.now() >= (home.peerStreamRetryAt ?? 0)) void this.scopedStream(home);
+        let waitMs = this.options.idlePollMs ?? 5_000;
         try {
           await this.refreshSnapshot(home);
-          await Promise.all([...home.cache.entries()].filter(([threadId, cache]) => cache.hydrated && home.state.threads[threadId])
-            .map(([threadId]) => this.hydrate(home, threadId, true).catch(() => {})));
+          if (this.stopped || !home.running) break;
+          const selected = new Set(Object.keys(home.state.bots).map(botId => this.selectedThread(home, botId)));
+          await Promise.all(Object.keys(home.state.threads)
+            .filter(threadId => !this.isRoomThread(home.state.threads[threadId]!) &&
+              (home.cache.get(threadId)?.hydrated || selected.has(threadId)))
+            .map(threadId => this.hydrate(home, threadId, true)));
+          if (this.stopped || !home.running) break;
           this.setConnected(home, true);
+          attempt = 0;
+          if (Object.values(home.state.threads).some(entry => entry.task?.busy)) waitMs = this.options.activePollMs ?? 1_000;
           for (const botId of Object.keys(home.state.bots)) this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, botId) });
         } catch (error) {
+          if (this.stopped || !home.running) break;
           this.connectionFailed(home, error);
+          waitMs = delays[Math.min(attempt++, delays.length - 1)] ?? 30_000;
           this.log(`${home.link.name}: peer refresh failed (${error instanceof Error ? error.message : "unknown"})`);
         }
-        await new Promise<void>(resolveWait => {
-          const timer = setTimeout(resolveWait, 5_000);
-          home.wake = () => { clearTimeout(timer); resolveWait(); };
-        });
+        await this.waitForPoll(home, waitMs);
         continue;
       }
       const controller = new AbortController();
@@ -1413,6 +1450,72 @@ export class RemoteBotBridge {
       });
     }
     home.running = false;
+  }
+
+  /** One scoped stream attempt. Polling remains the recovery source of truth
+   * and the bounded retry owner, including for older hosts without this route. */
+  private async scopedStream(home: Home): Promise<void> {
+    home.peerStreaming = true;
+    const origin = home.link.origin;
+    const token = home.link.token;
+    const controller = new AbortController();
+    home.peerStreamAbort = controller;
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const bump = () => { if (idle) clearTimeout(idle); idle = setTimeout(() => controller.abort(), this.options.idleTimeoutMs ?? 45_000); };
+    const delays = this.options.reconnectDelaysMs ?? [1000, 2000, 5000, 10_000, 30_000];
+    let retryMs = delays[Math.min(home.peerStreamAttempts ?? 0, delays.length - 1)] ?? 30_000;
+    try {
+      bump();
+      const response = await this.fetcher(new URL("/api/multiplayer/peer-events", origin), {
+        redirect: "error", signal: controller.signal,
+        headers: { authorization: `Bearer ${home.link.token}`, accept: "text/event-stream" },
+      });
+      if ([403, 404, 405].includes(response.status)) { retryMs = 60_000; return; }
+      if (!response.ok || !response.body || !response.headers.get("content-type")?.startsWith("text/event-stream")) throw new Error("peer stream unavailable");
+      reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (!this.stopped && home.running && !controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bump();
+        buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n?/g, "\n");
+        if (buffer.length > 4 * 1024 * 1024) throw new Error("peer stream frame too large");
+        let end: number;
+        while ((end = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+          const data = block.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).replace(/^ /, "")).join("\n");
+          let frame: unknown;
+          try { frame = JSON.parse(data); } catch { continue; }
+          if (!isObject(frame) || this.stopped || !home.running || controller.signal.aborted) continue;
+          if (frame.kind === "hello" || frame.kind === "ping") {
+            home.peerStreamAttempts = 0;
+            if (frame.kind === "hello") home.wake?.();
+          } else this.handleFrame(home, frame);
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) this.log(`${home.link.name}: scoped stream interrupted (${error instanceof Error ? error.message : "unknown"})`);
+    } finally {
+      if (idle) clearTimeout(idle);
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      reader?.releaseLock();
+      home.peerStreamAbort = undefined;
+      home.peerStreaming = false;
+      home.peerStreamAttempts = (home.peerStreamAttempts ?? 0) + 1;
+      home.peerStreamRetryAt = home.link.origin !== origin || home.link.token !== token ? 0 : Date.now() + retryMs;
+    }
+  }
+
+  private waitForPoll(home: Home, ms: number): Promise<void> {
+    if (this.stopped || !home.running) return Promise.resolve();
+    return new Promise(resolveWait => {
+      const done = () => { clearTimeout(timer); if (home.wake === done) home.wake = null; resolveWait(); };
+      const timer = setTimeout(done, Math.max(1, ms));
+      home.wake = done;
+    });
   }
 
   /** Returns true for a hello frame. */

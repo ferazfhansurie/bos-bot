@@ -1,3 +1,4 @@
+import { BOS_ONBOARDING_VERSION } from "../../shared/bos-onboarding.js";
 // First-run state and the welcome flow's beat machine, kept pure so the
 // decisions (show the tour? which beat is next? what to persist?) are unit
 // tested without React. The record itself lives in the workspace config on
@@ -6,6 +7,8 @@
 // see the same hints as already dismissed.
 
 export interface OnboardingStatus {
+  firstAssignment?: import("../../shared/bos-onboarding.js").FirstAssignment;
+  businessBrief?: import("../../shared/bos-onboarding.js").BusinessBrief;
   /** ISO timestamp; "" until the welcome flow has been finished or skipped. */
   completedAt: string;
   /** Which welcome flow was completed; a newer flow may re-show itself. */
@@ -16,7 +19,7 @@ export interface OnboardingStatus {
 
 /** Bump when the welcome flow changes enough that existing users should see
  * it again. Completions at an older version count as not done. */
-export const WELCOME_VERSION = 1;
+export const WELCOME_VERSION = BOS_ONBOARDING_VERSION;
 
 export const EMPTY_ONBOARDING: OnboardingStatus = {
   completedAt: "",

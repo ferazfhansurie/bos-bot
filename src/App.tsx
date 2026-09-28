@@ -1,3 +1,4 @@
+import { RecruitmentWelcome } from "@/components/onboarding/RecruitmentWelcome";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Menu } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
@@ -356,6 +357,7 @@ function WelcomeGate() {
   if (!state.welcomeOpen && !due) return null;
   const bot = state.bots.find((b) => !b.hidden) ?? null;
   const replay = state.welcomeOpen && !due;
+  if (due && bot?.name === "BOS" && bot.chiefOfStaff) return <RecruitmentWelcome bot={bot} onDone={() => { setDismissed(true); dispatch({ type: "toggleWelcome", open: false }); }} />;
   return (
     <WelcomeFlow
       bot={bot}

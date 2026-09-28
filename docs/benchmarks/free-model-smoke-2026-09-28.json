@@ -1,0 +1,10 @@
+{
+  "status": "offline-ready",
+  "tasks": [
+    "website",
+    "dashboard",
+    "onboarding"
+  ],
+  "winner": null,
+  "blocker": "Live inference not run. Official provider onboarding requires a key; provide OPENROUTER_API_KEY explicitly with --run and a free-model shortlist."
+}

@@ -1,3 +1,4 @@
+import { BOS_STARTER } from "../shared/bos-onboarding.ts";
 // Bot + thread persistence. bots.json holds bot records (including the
 // thread→instance binding and per-instance resume cursors — upstream's
 // ProviderSessionDirectory, recipe step 6: persist the binding from day
@@ -501,22 +502,6 @@ export class Store {
     // busy never survives a restart — no turn does either. Rooms saved
     // before default responders existed adopt their first member as lead.
     let botsMigrated = false;
-    let migratedRioThread: string | null = null;
-    if (this.bots.length === 1) {
-      const first = this.bots[0];
-      if (!first.title && !first.description && !first.soul) {
-        first.name = "Jarvis";
-        first.title = "AI co-founder";
-        first.description = "Your always-on BOS operator for planning, research, coordination, and execution.";
-        first.soul = [
-          "You are Jarvis, Firaz's direct and proactive AI co-founder inside BOS Bot.",
-          "Use the selected Claude or Codex subscription model and AIOS MCP tools when available.",
-          "Be concise, action-first, security-conscious, and clear about verified versus configured state.",
-        ].join("\n");
-        migratedRioThread = first.threadId;
-        botsMigrated = true;
-      }
-    }
     const browserProfileAliases = loadBrowserProfileIdAliases();
     const chiefSectionsSeen = new Set<string>();
     let groupsMigrated = false;
@@ -760,13 +745,6 @@ export class Store {
     for (const threadId of knownThreads) {
       const legacyFile = messagesFile(threadId);
       if (existsSync(legacyFile)) mdb.readThread(threadId, legacyFile);
-    }
-    if (migratedRioThread) {
-      this.appendMessage(migratedRioThread, {
-        role: "bot",
-        kind: "text",
-        text: "Hi, I'm Jarvis. BOS and AIOS are preloaded. What should we work on?",
-      });
     }
     this.registeringInitialSections = false;
   }
@@ -2252,10 +2230,12 @@ export class Store {
     return bot;
   }
 
-  /** First-run seed: one bot so the app never opens empty — it gets a
-   * random friendly name like every other bot. */
+  /** First-run seed: BOS coordinates the first assignment in a new workspace.
+   * Existing bots, roles and conversations are never migrated here. */
   seedIfEmpty() {
     if (this.bots.length) return;
-    this.createBot();
+    const bot = this.createBot(BOS_STARTER, { seedMessages: false });
+    this.setChiefOfStaff(bot.id);
+    this.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "I'm BOS, your first AI teammate. Tell me what your business does and who you help. We'll choose a useful first task, and I can work with you or help you recruit a specialist." });
   }
 }

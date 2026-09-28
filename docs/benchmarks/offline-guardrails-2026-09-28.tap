@@ -1,0 +1,82 @@
+TAP version 13
+# Subtest: only explicit free IDs with all known costs zero pass
+ok 1 - only explicit free IDs with all known costs zero pass
+  ---
+  duration_ms: 0.614458
+  type: 'test'
+  ...
+# Subtest: request cannot fall back or pay for prompt/output
+ok 2 - request cannot fall back or pay for prompt/output
+  ---
+  duration_ms: 0.558584
+  type: 'test'
+  ...
+# Subtest: scoring requires valid structured correct answers
+ok 3 - scoring requires valid structured correct answers
+  ---
+  duration_ms: 0.096541
+  type: 'test'
+  ...
+# Subtest: empty manifest cannot imply verified release
+ok 4 - empty manifest cannot imply verified release
+  ---
+  duration_ms: 0.174583
+  type: 'test'
+  ...
+# Subtest: live identity cannot equal staging identity
+ok 5 - live identity cannot equal staging identity
+  ---
+  duration_ms: 0.116958
+  type: 'test'
+  ...
+# Subtest: public inference stops globally at first auth failure without credentials or retry
+ok 6 - public inference stops globally at first auth failure without credentials or retry
+  ---
+  duration_ms: 0.973958
+  type: 'test'
+  ...
+# Subtest: price change closes circuit before inference request
+ok 7 - price change closes circuit before inference request
+  ---
+  duration_ms: 0.153666
+  type: 'test'
+  ...
+# Subtest: release artifact tampering is caught independently of manifest claims
+ok 8 - release artifact tampering is caught independently of manifest claims
+  ---
+  duration_ms: 2.941583
+  type: 'test'
+  ...
+# Subtest: authenticated run requires designated key before any request
+ok 9 - authenticated run requires designated key before any request
+  ---
+  duration_ms: 0.248042
+  type: 'test'
+  ...
+# Subtest: authenticated request uses designated key without reporting it
+ok 10 - authenticated request uses designated key without reporting it
+  ---
+  duration_ms: 0.358625
+  type: 'test'
+  ...
+# Subtest: shortlist is explicit, bounded and free-only before network
+ok 11 - shortlist is explicit, bounded and free-only before network
+  ---
+  duration_ms: 0.229333
+  type: 'test'
+  ...
+# Subtest: website smoke requires actual self-contained semantic html
+ok 12 - website smoke requires actual self-contained semantic html
+  ---
+  duration_ms: 0.160416
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 12
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 72.971833
