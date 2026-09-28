@@ -21,4 +21,5 @@ it("keeps recovery and provider setup available with no currently ready provider
   expect(html).toMatch(/<button(?![^>]*\sdisabled=)[^>]*>Resume my first assignment/);
   expect(html).toMatch(/<button(?![^>]*\sdisabled=)[^>]*>Back/);
   expect(html).toContain("Bakery");
+  expect(html).toContain("Saved provider: gone · old");
 });

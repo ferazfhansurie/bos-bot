@@ -41,7 +41,14 @@ export function RecruitmentWelcome({ bot, onDone }: { bot: Bot | null; onDone: (
       }
       const {config,assignment}=await startFirstAssignment(api,selected ? {botId:bot.id,threadId:bot.threadId,sendId:`onboarding_${bot.threadId}`,text:firstAssignment(brief),selection:{instanceId:selected.instanceId,model:selected.models.default}} : undefined);
       dispatch({type:"configStatus",config});openThread(dispatch,{botId:assignment.botId,threadId:assignment.threadId},state);onDone();
-    } catch(cause){setError(`${cause instanceof Error?cause.message:"Connection interrupted"}. Retry resumes the saved assignment without starting a second request.`);}
+    } catch(cause){
+      try {
+        const config=await api("/api/config",{timeoutMs:10000});
+        dispatch({type:"configStatus",config});
+        setStarted(Boolean(config.onboarding?.firstAssignment));
+      } catch { /* Keep the form locked until the saved intent can be reconciled. */ }
+      setError(`${cause instanceof Error?cause.message:"Connection interrupted"}. Retry resumes any saved assignment without starting a second request.`);
+    }
     finally{pending.current=false;setBusy(false);}
   };
   const later=async()=>{
@@ -74,7 +81,7 @@ export function RecruitmentWelcome({ bot, onDone }: { bot: Bot | null; onDone: (
       {step==="assignment" && <div className="mt-5 space-y-4">
         <p className="text-sm">For {brief.business}, we'll make {FIRST_OUTCOMES.find(item=>item.id===brief.outcome)?.deliverable}.</p>
         <label className="block text-sm">Who should lead?<select disabled={busy || started} value={brief.approach} onChange={event=>setBrief({...brief,approach:event.target.value as BusinessBrief["approach"]})} className={`${inputClass} mt-2`}><option value="specialist">BOS helps me recruit a specialist</option><option value="bos">Work directly with BOS</option></select></label>
-        {ready.length>0 ? <label className="block text-sm">Model provider<select disabled={busy || started} className={`${inputClass} mt-2`} value={selected?.instanceId} onChange={event=>setInstanceId(event.target.value)}>{ready.map(item=><option key={item.instanceId} value={item.instanceId}>{item.displayName}{item.snapshot.billing==="metered"?" · metered":""}</option>)}</select></label>:<p role="status">{started ? "Your assignment is saved. Resume to check its original request, or go back to reconnect its provider." : "Connect a model before starting this assignment."}</p>}
+        {started && state.config?.onboarding?.firstAssignment ? <p className="text-sm">Saved provider: {state.config.onboarding.firstAssignment.selection.instanceId} · {state.config.onboarding.firstAssignment.selection.model}</p> : ready.length>0 ? <label className="block text-sm">Model provider<select disabled={busy || started} className={`${inputClass} mt-2`} value={selected?.instanceId} onChange={event=>setInstanceId(event.target.value)}>{ready.map(item=><option key={item.instanceId} value={item.instanceId}>{item.displayName}{item.snapshot.billing==="metered"?" · metered":""}</option>)}</select></label>:<p role="status">{started ? "Your assignment is saved. Resume to check its original request, or go back to reconnect its provider." : "Connect a model before starting this assignment."}</p>}
         <p className="text-sm text-ink-secondary">BOS will carry your brief into the conversation, show what's actually built, and help you make the first revision.</p>
         <PrimaryButton disabled={busy || (!selected && !started) || !bot} onClick={()=>void start()}>{busy?"Starting…":started?"Resume my first assignment":"Start my first assignment"}</PrimaryButton>
       </div>}
