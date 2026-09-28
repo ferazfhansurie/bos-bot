@@ -20,6 +20,19 @@ export interface OpenedMessageFile {
   mime: string;
 }
 
+/** Bound reads even if a producer grows the file after it was opened. */
+export async function readOpenedMessageFile(file: OpenedMessageFile): Promise<Buffer> {
+  const bytes = Buffer.alloc(Math.min(file.bytes, MESSAGE_FILE_MAX_BYTES) + 1);
+  let size = 0;
+  while (size < bytes.length) {
+    const read = await file.handle.read(bytes, size, bytes.length - size, size);
+    if (!read.bytesRead) break;
+    size += read.bytesRead;
+  }
+  if (size > file.bytes || size > MESSAGE_FILE_MAX_BYTES) throw statusError(413, "file changed or exceeds the size limit");
+  return bytes.subarray(0, size);
+}
+
 export function messageFileRoots(options: {
   senderWorkspace: string;
   attachments: string;
@@ -139,6 +152,8 @@ type MarkdownNode = {
   identifier?: string;
   url?: string;
   value?: string;
+  alt?: string | null;
+  label?: string | null;
   position?: {
     start: { offset?: number };
     end: { offset?: number };
@@ -177,6 +192,46 @@ function renderedMarkdownTargets(markdown: string): string[] {
     if (target) links.push(target);
   }
   return links;
+}
+
+/** Only rendered local links, never URLs, code samples or arbitrary prose. */
+export function messageFileTargets(markdown: string): string[] {
+  return [...new Set(renderedMarkdownTargets(markdown).filter(target => {
+    try { referencedPathIdentity(target, false); return true; } catch { return false; }
+  }))];
+}
+
+/** Shared attachment cards replace local file links. Keep their labels,
+ * without broken inline images or host paths in the group transcript. */
+export function sharedFileReplyText(markdown: string): string {
+  const tree = fromMarkdown(markdown, { mdastExtensions: [windowsPathDestinations] }) as MarkdownNode;
+  const definitions = new Map<string, string>();
+  walkMarkdown(tree, node => {
+    if (node.type === "definition" && node.identifier && node.url && !definitions.has(node.identifier)) definitions.set(node.identifier, node.url);
+  });
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+  walkMarkdown(tree, node => {
+    const href = node.url ?? (node.identifier ? definitions.get(node.identifier) : undefined);
+    if (!href || !["link", "image", "linkReference", "imageReference", "definition"].includes(node.type)) return;
+    try { referencedPathIdentity(href, false); } catch { return; }
+    const start = node.position?.start.offset, end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return;
+    let label = node.alt ?? node.label ?? "";
+    if (node.children) {
+      label = "";
+      walkMarkdown(node, child => { if (child.type === "text" || child.type === "inlineCode") label += child.value ?? "";
+        else if (child.type === "image" || child.type === "imageReference") label += child.alt ?? ""; });
+    }
+    edits.push({ start, end, text: node.type === "definition" ? "" : label || "Attached file" });
+  });
+  const outermost: typeof edits = [];
+  for (const edit of edits.sort((a, b) => a.start - b.start || b.end - a.end)) {
+    if (outermost.at(-1)?.end && edit.start < outermost.at(-1)!.end) continue;
+    outermost.push(edit);
+  }
+  let output = markdown;
+  for (const edit of outermost.reverse()) output = output.slice(0, edit.start) + edit.text + output.slice(edit.end);
+  return output.trim();
 }
 
 /** Resolve the local image authored at one Markdown source offset. The

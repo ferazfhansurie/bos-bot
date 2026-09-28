@@ -222,6 +222,33 @@ describe("RemoteBotBridge", () => {
     expect(fake.calls.some((call) => call.path === "/api/bots/pixie/messages" && (call.body as { sendId?: string }).sendId === "room-send-1")).toBe(true);
   });
 
+  it("copies remote room files only through a scoped message download", async () => {
+    await bridge.listBots(0);
+    fake.afterRoomSent = () => {
+      const final = fake.threads.get("bridge-1")!.at(-1)!;
+      final.text = "[report](/shared/report.pdf)";
+    };
+    const original = fake.fetcher;
+    let scoped = true;
+    bridge.stop();
+    bridge = make({ fetcher: (async (input: any, init?: any) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/file")) {
+        expect(JSON.parse(init.body)).toMatchObject({ path: "/shared/report.pdf", sharedRoom: true });
+        return new Response("%PDF-1.4 fixture", { headers: { "content-type": "application/pdf", ...(scoped ? { "x-bos-shared-file": "1" } : {}) } });
+      }
+      return original(input, init);
+    }) as typeof fetch });
+    await bridge.listBots(0);
+    const result = await bridge.roomTurn({ homeId: HOME, remoteBotId: "pixie", title: "Room", text: "file", sendId: "room-file", onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000 });
+    expect(result.files).toEqual([{ name: "report.pdf", mime: "application/pdf", data: Buffer.from("%PDF-1.4 fixture").toString("base64") }]);
+    expect(result.reply).not.toContain("/shared/");
+    scoped = false;
+    const refused = await bridge.roomTurn({ homeId: HOME, remoteBotId: "pixie", threadId: "bridge-1", title: "Room", text: "another file", sendId: "old-receiver", onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000 });
+    expect(refused.files).toBeUndefined();
+    expect(refused.reply).toContain("Some files could not be shared");
+  });
+
   it("interrupts only the dispatched shared thread when its request is cancelled", async () => {
     await bridge.listBots(0);
     let allowed = true;

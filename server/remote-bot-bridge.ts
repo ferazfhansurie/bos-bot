@@ -34,7 +34,8 @@ import {
   type WireTask,
 } from "../shared/wire.ts";
 import { writeFileAtomic } from "./atomic.ts";
-import { messageImageTargetAt } from "./message-file.ts";
+import { collectSharedBotReply, type SharedBotReply } from "./shared-bot-reply.ts";
+import { messageImageTargetAt, MESSAGE_FILE_MAX_BYTES } from "./message-file.ts";
 
 export interface BridgeLink {
   homeId: string;
@@ -219,7 +220,7 @@ function safeBot(raw: Record<string, any>, previous?: SafeBot): SafeBot {
   };
 }
 
-const TASK_FIELDS = ["title", "createdAt", "titleFromFirstMessage", "archivedAt", "modelSelection", "approvalMode", "autoApprove",
+const TASK_FIELDS = ["title", "createdAt", "lastActivityAt", "titleFromFirstMessage", "archivedAt", "modelSelection", "approvalMode", "autoApprove",
   "unread", "rewound", "pinnedMessageId", "activity", "busy", "turnStartedAt", "usage"] as const;
 function safeTask(raw: Record<string, any>): WireTask {
   const task: Record<string, unknown> = { threadId: String(raw.threadId) };
@@ -707,7 +708,7 @@ export class RemoteBotBridge {
     deadlineMs: number;
     shouldContinue?: () => boolean;
     onDispatch?: () => void;
-  }): Promise<{ reply: string }> {
+  }): Promise<SharedBotReply> {
     const home = this.homes.get(input.homeId);
     if (!home || !home.state.bots[input.remoteBotId]) throw new BridgeError(404, "that bot is no longer shared");
     if (input.shouldContinue && !input.shouldContinue()) throw new BridgeError(409, "shared request access changed");
@@ -748,7 +749,9 @@ export class RemoteBotBridge {
       }
       const start = messages.findIndex((message) => message.sendId === input.sendId && message.role === "user");
       if (start >= 0) {
-        const after = messages.slice(start + 1);
+        const following = messages.slice(start + 1);
+        const nextUser = following.findIndex(message => message.role === "user");
+        const after = nextUser < 0 ? following : following.slice(0, nextUser);
         for (const message of after) {
           if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name) continue;
           const state = JSON.stringify(message.tool);
@@ -758,8 +761,13 @@ export class RemoteBotBridge {
         }
         const failed = after.find((message) => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false);
         if (failed) throw new BridgeError(502, "the shared bot could not finish its turn");
-        const settled = after.find((message) => message.role === "bot" && message.kind === "text" && message.text && message.turnTerminal);
-        if (settled) return { reply: String(settled.text) };
+        const settled = after.find((message) => message.role === "bot" && message.kind === "text" && message.turnTerminal);
+        if (settled) return collectSharedBotReply(after.slice(0, after.indexOf(settled) + 1) as any, async (message, href) => {
+          if (input.shouldContinue && !input.shouldContinue()) throw new BridgeError(409, "shared request access changed");
+          const result = await this.call(home, "POST", `/api/threads/${threadId}/messages/${encodeURIComponent(message.id)}/file`, { path: href, sharedRoom: true }, { bytes: true });
+          if (result.status !== 200 || !result.sharedFile || !result.bytes || !result.contentType) throw new Error("shared file unavailable; the owner's app may need updating");
+          return { name: basename(href.split(/[?#]/)[0]!), mime: result.contentType, data: result.bytes.toString("base64") };
+        });
         const ask = after.find((message) => message.kind === "options" && message.card?.requestId && !message.card.answered && !message.card.dismissed);
         if (ask && !delivered.has(`ask-${ask.id}`)) {
           delivered.set(`ask-${ask.id}`, "waiting");
@@ -1448,7 +1456,7 @@ export class RemoteBotBridge {
     path: string,
     body?: unknown,
     options: { bytes?: boolean; raw?: { bytes: Buffer; contentType: string } } = {},
-  ): Promise<{ status: number; body: any; json?: any; bytes?: Buffer; contentType?: string; disposition?: string }> {
+  ): Promise<{ status: number; body: any; json?: any; bytes?: Buffer; contentType?: string; disposition?: string; sharedFile?: boolean }> {
     const url = new URL(path, home.link.origin);
     if (url.origin !== new URL(home.link.origin).origin) throw new BridgeError(400, "invalid remote route");
     let response: Response;
@@ -1465,11 +1473,24 @@ export class RemoteBotBridge {
       throw new BridgeError(502, `${home.link.name} is offline`);
     }
     const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? undefined;
-    if (options.bytes && response.ok && contentType !== "application/json") {
+    if (options.bytes && response.ok && (contentType !== "application/json" || response.headers.get("x-bos-shared-file") === "1")) {
+      const reader = response.body?.getReader();
+      const chunks: Buffer[] = [];
+      let size = 0;
+      if (reader) try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > MESSAGE_FILE_MAX_BYTES) { await reader.cancel(); throw new BridgeError(413, "file exceeds 25 MB"); }
+          chunks.push(Buffer.from(value));
+        }
+      } finally { reader.releaseLock(); }
       return {
         status: response.status, body: null, contentType,
         disposition: response.headers.get("content-disposition") ?? undefined,
-        bytes: Buffer.from(await response.arrayBuffer()),
+        bytes: Buffer.concat(chunks),
+        sharedFile: response.headers.get("x-bos-shared-file") === "1",
       };
     }
     let parsed: any = null;

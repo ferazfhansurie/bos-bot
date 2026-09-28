@@ -8,7 +8,7 @@ import type { SharedAttachment } from "../shared/multiplayer.ts";
 interface Stored extends SharedAttachment { roomId: string; actorId: string; createdAt?: number }
 const SAFE_TYPES: Record<string, string> = {
   "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
-  "application/pdf": "pdf", "text/plain": "txt", "text/csv": "csv",
+  "application/pdf": "pdf", "text/plain": "txt", "text/csv": "csv", "text/markdown": "md", "text/tab-separated-values": "tsv", "application/json": "json",
   "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/wav": "wav", "video/mp4": "mp4",
 };
 
@@ -18,7 +18,7 @@ function matchesBytes(mime: string, bytes: Buffer): boolean {
   if (mime === "image/webp") return bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
   if (mime === "image/gif") return ["GIF87a", "GIF89a"].includes(bytes.toString("ascii", 0, 6));
   if (mime === "application/pdf") return bytes.toString("ascii", 0, 5) === "%PDF-";
-  if (mime === "text/plain" || mime === "text/csv") return !bytes.includes(0) && !bytes.subarray(0, 2).equals(Buffer.from("#!"));
+  if (mime.startsWith("text/") || mime === "application/json") return !bytes.includes(0) && !bytes.subarray(0, 2).equals(Buffer.from("#!"));
   if (mime === "audio/mpeg") return bytes.toString("ascii", 0, 3) === "ID3" || (bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0);
   if (mime === "audio/mp4" || mime === "video/mp4") return bytes.toString("ascii", 4, 8) === "ftyp";
   if (mime === "audio/wav") return bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WAVE";

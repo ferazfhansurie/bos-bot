@@ -31,9 +31,10 @@ import { SharedRequestStore } from "./shared-request-store.ts";
 import { sharedRequestIsActive, sharedRequestProgress } from "../shared/shared-request.ts";
 import type { SharedSearchKind } from "../shared/shared-search.ts";
 import { SharedRoomTrust, isSharedRoomTrustLevel, sharedRoomTargets, sharedMentionText, sharedRoomBotCandidates, type SharedRoomTrustLevel } from "./shared-room-trust.ts";
+import { collectSharedBotReply, type SharedBotReply } from "./shared-bot-reply.ts";
 import { SharedAttachmentStore } from "./shared-attachment-store.ts";
 import { ApnsPush } from "./apns-push.ts";
-import { contactId, parseContactId, type SharedRoom, type SharedTextMessage } from "../shared/multiplayer.ts";
+import { contactId, parseContactId, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
@@ -99,6 +100,7 @@ import {
   messageImageTargetAt,
   messageReferencesFile,
   openMessageFile,
+  readOpenedMessageFile,
 } from "./message-file.ts";
 import {
   avatarGenerationRequestSchema,
@@ -1777,10 +1779,11 @@ if (browserCleanupReferencesReconciled) browserCleanup.startPending();
  * than the desktop window did. Stripped here rather than at each call site
  * so a new broadcast cannot forget. */
 let activeCoordinationForThread = (_threadId: string): boolean => false;
-const wireTask = (task: TaskRecord): WireTask =>
-  activeCoordinationForThread(task.threadId) && !task.busy
-    ? { ...toWireTask(task), busy: true, activity: "working" as const }
-    : toWireTask(task);
+const wireTask = (task: TaskRecord): WireTask => {
+  const view = toWireTask(task);
+  const lastActivityAt = store.messagesTail(task.threadId, 1).messages.at(-1)?.at ?? task.createdAt;
+  return { ...view, lastActivityAt, ...(activeCoordinationForThread(task.threadId) && !task.busy ? { busy: true, activity: "working" as const } : {}) };
+};
 
 const wireBot = (bot: BotRecord): WireBot => {
   const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, ...rest } = bot;
@@ -6005,7 +6008,7 @@ async function sharedRoomAttachmentPrompt(room: SharedRoom, source: SharedTextMe
 }
 
 async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt: string, source: SharedTextMessage, senderName: string,
-  _level: SharedRoomTrustLevel, progress: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void, deadline: number, shouldContinue: () => boolean, onDispatch: () => void): Promise<string> {
+  _level: SharedRoomTrustLevel, progress: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void, deadline: number, shouldContinue: () => boolean, onDispatch: () => void): Promise<SharedBotReply> {
   const bot = store.bot(target.key.localId);
   if (!bot || bot.hidden) throw new Error("local shared bot is unavailable");
   const taskKey = `${bot.id}-${createHash("sha256").update(`${contactId(source.actor)}:${room.revision ?? 1}`).digest("hex").slice(0, 16)}`;
@@ -6034,21 +6037,29 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
     if (!shouldContinue()) { await interruptDirectThread(bot.id, threadId); throw new Error("shared request access changed"); }
     const messages = store.messagesFor(threadId);
     const start = messages.findIndex(message => message.sendId === source.id && message.role === "user");
-    if (start >= 0) for (const message of messages.slice(start + 1)) {
+    const following = start >= 0 ? messages.slice(start + 1) : [];
+    const nextUser = following.findIndex(message => message.role === "user");
+    const after = nextUser < 0 ? following : following.slice(0, nextUser);
+    if (start >= 0) for (const message of after) {
       if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name) continue;
       const state = JSON.stringify(message.tool);
       if (delivered.get(message.id) === state) continue;
       progress(message.id, message.tool);
       delivered.set(message.id, state);
     }
-    const failed = start >= 0 ? messages.slice(start + 1).find(message => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false) : undefined;
+    const failed = start >= 0 ? after.find(message => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false) : undefined;
     if (failed) throw new Error("the shared bot could not finish its turn");
-    const settled = start >= 0 ? messages.slice(start + 1).find(message => message.role === "bot" && message.kind === "text" && message.text && message.turnTerminal) : undefined;
-    if (settled?.text) return settled.text;
+    const settled = start >= 0 ? after.find(message => message.role === "bot" && message.kind === "text" && message.turnTerminal) : undefined;
+    if (settled) return collectSharedBotReply(after.slice(0, after.indexOf(settled) + 1), async (_message, href, generated) => {
+      if (!shouldContinue()) throw new Error("shared request access changed");
+      const file = await openMessageFile(href, [generated ? ATTACHMENTS_DIR : sandbox]);
+      try { return { name: file.name, mime: file.mime, data: (await readOpenedMessageFile(file)).toString("base64") }; }
+      finally { await file.handle.close(); }
+    });
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
   await interruptDirectThread(bot.id, threadId);
-  return "";
+  return { reply: "" };
 }
 
 async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Promise<void> {
@@ -6125,7 +6136,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
       return active() && latestRoom && latestRequest && !latestRequest.deletedAt && !latestRequest.editedAt &&
         latestRoom.revision === executionRoom.revision && sharedRoomBots(latestRoom, contactId(source.actor)).some(bot => bot.id === target.id);
     };
-    const append = (input: { text: string; sendId: string; kind?: "activity"; tool?: { name: string; ok?: boolean; spoken?: string } }) => {
+    const append = (input: { text: string; sendId: string; attachments?: SharedAttachment[]; kind?: "activity"; tool?: { name: string; ok?: boolean; spoken?: string } }) => {
       if (!valid()) throw new Error("conversation access or request changed while the bot was working");
       return sharedRooms.append(room.id, target.id, { actor: botActor, responseTo: source.id, ...input });
     };
@@ -6161,18 +6172,18 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
       progress(`turn-${target.key.localId}`, { name: "working", spoken: `${target.name} is working on this` });
     };
     const stillWorking = setTimeout(() => progress(`still-${target.key.localId}`, { name: "still working", spoken: `${target.name} is still working on this` }), 5 * 60_000);
-    let reply = "";
+    let output: SharedBotReply = { reply: "" };
     try {
       const prompt = sharedRoomPrompt(executionRoom, bots, target, source, senderName, level) + await sharedRoomAttachmentPrompt(executionRoom, source);
       if (target.remote) {
         const taskKey = `rb-${target.key.homeId}-${target.key.localId}-${createHash("sha256").update(`${contactId(source.actor)}:${executionRoom.revision ?? 1}`).digest("hex").slice(0, 16)}`.replace(/[^\w-]/g, "").slice(0, 200);
-        reply = (await remoteBots.roomTurn({
+        output = await remoteBots.roomTurn({
           homeId: target.key.homeId, remoteBotId: target.key.localId, threadId: sharedBotTasks.get(room.id, taskKey),
           title: `room · ${executionRoom.name}`, text: prompt, sendId: source.id, deadlineMs: deadline, shouldContinue: () => Boolean(valid()),
           onThread: threadId => sharedBotTasks.set(room.id, taskKey, threadId), onActivity: progress, onDispatch,
-        })).reply;
+        });
       } else {
-        reply = await runLocalRoomTurn(executionRoom, target, prompt, source, senderName, level, progress, deadline, () => Boolean(valid()), onDispatch);
+        output = await runLocalRoomTurn(executionRoom, target, prompt, source, senderName, level, progress, deadline, () => Boolean(valid()), onDispatch);
       }
     } catch (error) {
       settleActivities(false);
@@ -6190,7 +6201,14 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
     } finally {
       clearTimeout(stillWorking);
     }
-    if (!reply) {
+    let reply = output.reply;
+    const attachments: SharedAttachment[] = [];
+    for (const file of output.files ?? []) {
+      if (!valid()) break;
+      try { attachments.push(sharedAttachments.save(room.id, target.id, file.name, file.mime, file.data)); }
+      catch { reply += "\n\nA file could not be attached because its format, size or room limit is not supported."; }
+    }
+    if (!reply && !attachments.length) {
       settleActivities(false);
       try { append({ text: `that took longer than ${timeoutMinutes} minutes, so i requested a stop. the outcome is unknown; this request will not run again automatically.`, sendId: `timeout-${source.id}-${target.key.localId}`.slice(0, 120) }); }
       catch { /* nothing more to report */ }
@@ -6198,7 +6216,7 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage): Pr
       return;
     }
     settleActivities(true);
-    const saved = append({ text: reply, sendId: `reply-${source.id}-${target.key.localId}`.slice(0, 120) });
+    const saved = append({ text: reply, ...(attachments.length ? { attachments } : {}), sendId: `reply-${source.id}-${target.key.localId}`.slice(0, 120) });
     sharedRequests.transition(requestRecord.id, "completed", { resultId: saved.message.id });
     if (!saved.created) return;
     for (const memberId of room.memberIds) {
@@ -14865,6 +14883,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
       }
 
+      const sharedFile = body?.sharedRoom === true;
+      if (sharedFile) {
+        if (!sharedBotTasks.hasThread(threadId) && !peerThreads.hasThread(threadId)) return json(res, 403, { error: "not a shared conversation" });
+        if (peerSessionId && !peerThreads.botFor(peerSessionId, threadId)) return json(res, 403, { error: "thread is not part of this peer link" });
+        if (message.role !== "bot") return json(res, 403, { error: "not a bot reply" });
+        roots = [generatedImage ? ATTACHMENTS_DIR : join(DATA_DIR, "shared-room-files", threadId)];
+      }
       const file = await openMessageFile(href, roots);
       if ((streamsMessageImage || generatedImage) && !file.mime.startsWith("image/")) {
         await file.handle.close();
@@ -14873,6 +14898,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       res.writeHead(200, {
         "content-type": file.mime,
         "content-length": String(file.bytes),
+        ...(sharedFile ? { "x-bos-shared-file": "1" } : {}),
         ...(streamsMessageImage
           ? { "content-disposition": "inline" }
           : { "content-disposition": messageFileDisposition(messageFileDownloadName(downloadName, file.name)) }),

@@ -577,7 +577,7 @@ struct ChatListView: View {
     }
     private func openConversation(_ entry: ConversationEntry) {
         switch entry {
-        case .local(let summary): path.append(summary.chat)
+        case .local(let summary): path.append(homeChat(summary.chat))
         case .room(let room): path.append(room)
         case .contact(let contact): openContact(contact)
         }
@@ -709,11 +709,16 @@ struct ChatListView: View {
         }
     }
 
+    private func homeChat(_ chat: Chat) -> Chat {
+        if case let .bot(bot) = chat { return .bot((session.state.bot(bot.id) ?? bot).homeThread) }
+        return chat
+    }
+
     @ViewBuilder
     private func botRows(_ rows: [ChatSummary]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, summary in
             VStack(spacing: 0) {
-                NavigationLink(value: summary.chat) {
+                NavigationLink(value: homeChat(summary.chat)) {
                     ChatRow(
                         chat: summary.chat,
                         preview: summary.chat.busy ? "Working…" : summary.preview,

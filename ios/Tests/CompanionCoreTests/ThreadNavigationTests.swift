@@ -392,6 +392,20 @@ final class ThreadNavigationTests: XCTestCase {
         XCTAssertEqual(state.unreadCount, 0, "An unread internal run cannot mark an unknown visible thread unread.")
     }
 
+    func testHomeOpensWorkingThenMostRecentlyActiveWithoutChangingExplicitProjection() {
+        var old = task("old"); old.lastActivityAt = 100
+        var recent = task("recent"); recent.lastActivityAt = 500
+        var working = task("working"); working.lastActivityAt = 200; working.busy = true
+        var archived = task("archived"); archived.lastActivityAt = 900; archived.archivedAt = 0
+        var internalRun = task("internal"); internalRun.busy = true; internalRun.routineRunId = "run"
+        var bot = makeBot(tasks: [old, recent, working, archived, internalRun])
+        XCTAssertEqual(bot.homeThread.threadId, "working")
+        XCTAssertEqual(bot.projected(forThread: "old")?.threadId, "old")
+        working.busy = false; bot.tasks = [old, recent, working, archived, internalRun]
+        XCTAssertEqual(bot.homeThread.threadId, "recent")
+        XCTAssertEqual(makeBot().homeThread.threadId, "current")
+    }
+
     private func makeBot(tasks: [BotTask]? = nil) -> Bot {
         Bot(
             id: "bot", threadId: "current", name: "Scout", title: "Researcher",

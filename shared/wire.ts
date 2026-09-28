@@ -105,6 +105,7 @@ export interface TaskUsage {
  * session. Wire form: no resumeCursors or lastInstanceId — the harness's
  * own bookkeeping that no client has ever used. */
 export interface WireTask {
+  lastActivityAt?: number;
   threadId: string;
   title: string;
   createdAt: number;

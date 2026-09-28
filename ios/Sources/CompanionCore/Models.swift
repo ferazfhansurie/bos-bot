@@ -286,6 +286,7 @@ public struct BotProject: Codable, Hashable, Identifiable, Sendable {
 }
 
 public struct BotTask: Codable, Hashable, Sendable {
+    public var lastActivityAt: Double?
     public var threadId: String
     public var title: String
     public var createdAt: Double
@@ -444,6 +445,21 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     /// Routine results are ordinary tasks; only their per-run executions are hidden.
     public var visibleTasks: [BotTask] {
         (tasks ?? []).filter { $0.routineRunId == nil }
+    }
+
+    /// Used only when opening a bot from the home list. Explicit thread
+    /// navigation remains pinned to the requested thread.
+    public var homeThread: Bot {
+        let candidates = visibleTasks.filter { !$0.isArchived && !$0.isClosed }
+        let chosen = candidates.sorted { left, right in
+            if left.isWorking != right.isWorking { return left.isWorking }
+            let leftAt = left.lastActivityAt ?? left.createdAt
+            let rightAt = right.lastActivityAt ?? right.createdAt
+            if leftAt != rightAt { return leftAt > rightAt }
+            if (left.threadId == threadId) != (right.threadId == threadId) { return left.threadId == threadId }
+            return left.threadId < right.threadId
+        }.first
+        return chosen.flatMap { projected(forThread: $0.threadId) } ?? self
     }
 
     /// Older computers only send the profile default. Newer ones snapshot
