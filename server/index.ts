@@ -27,7 +27,8 @@ import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
 import { onboardingChief } from "./onboarding-chief.ts";
-import { verifyFreeModelKey } from "./free-model-setup.ts";
+import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
+import { BOS_FREE_API } from "./drivers/openrouter-free.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
 import { SharedRequestStore } from "./shared-request-store.ts";
@@ -18406,11 +18407,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       providerConfigBusy=true;
       providerInstancesChanging.add(instanceId);
       try {
-        const key=await verifyFreeModelKey(body?.key);
+        const hosted=body?.hosted===true;
+        // Reconnect keeps the existing install token; a fresh registration would reset caps.
+        const existing=persistableInstanceConfigs(cfg)[instanceId] as {config?:{hosted?:unknown;key?:unknown}}|undefined;
+        const reuse=hosted&&existing?.config?.hosted===true&&await hostedFreeTokenValid(BOS_FREE_API,existing.config.key);
+        const key=reuse?String(existing!.config!.key):hosted?await registerHostedFree(BOS_FREE_API):await verifyFreeModelKey(body?.key);
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res,401,{error:"Session ended"});
         if (busyProviderSelections().some(selection=>selection.instanceId===instanceId)) return json(res,409,{error:"Wait for your free-model tasks to finish before reconnecting."});
         const instances=persistableInstanceConfigs(cfg);
-        instances[instanceId]={driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
+        instances[instanceId]=hosted?{driver:"openrouter-free",displayName:"BOS Free",config:{key,model:"openrouter/free",hosted:true}}:{driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
         await persistProviderInstance(instanceId,instances);
         broadcast({kind:"config",...configStatus()});
         res.setHeader("cache-control","no-store");

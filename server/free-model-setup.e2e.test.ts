@@ -31,7 +31,7 @@ await import(${JSON.stringify(pathToFileURL(join(serverDir,'testing/fake-claude-
  const sessions=new SessionRegistry({file:join(dataDir,'sessions.json')});const paired=sessions.exchange({code:sessions.openPairing({scopes:['client']}).code,label:'read-only fixture',source:'fixture'});if(!paired.ok)throw Error('pair failed');clientToken=paired.token;
  const admin=sessions.exchange({code:sessions.openPairing({scopes:['admin','client']}).code,label:'revocation fixture',source:'fixture'});if(!admin.ok)throw Error('admin pair failed');adminToken=admin.token;adminSessionId=admin.session.id;
  const prelude=join(home,'offline.mjs');writeFileSync(prelude,`
-import {existsSync,writeFileSync} from 'node:fs';
+import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 const root=${JSON.stringify(home)};
 globalThis.fetch=async(url,init={})=>{
  const path=String(url);const json=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json'}});
@@ -40,6 +40,9 @@ globalThis.fetch=async(url,init={})=>{
   if(auth==='Bearer slow-fixture'||auth==='Bearer revoked-fixture'){writeFileSync(root+'/auth-waiting','yes');while(!existsSync(root+'/auth-release'))await new Promise(r=>setTimeout(r,10));}
   return auth==='Bearer bad-fixture'?json({error:'synthetic-private-response'},401):json({data:{limit_remaining:0}});
  }
+ if(path==='https://relay.fixture.invalid/api/v1/register'){writeFileSync(root+'/registrations',String(Number(existsSync(root+'/registrations')?readFileSync(root+'/registrations','utf8'):0)+1));return json({token:'bosf_'+'r'.repeat(40)});}
+ if(path==='https://relay.fixture.invalid/api/v1/usage')return json({install:20},init.headers?.Authorization==='Bearer bosf_'+'r'.repeat(40)?200:401);
+ if(path==='https://relay.fixture.invalid/api/v1/models')return init.headers?.Authorization==='Bearer bosf_'+'r'.repeat(40)?json({data:[{id:'openrouter/free',pricing:{prompt:'0',completion:'0'},supported_parameters:['tools']}]}):json({error:'unauthorized'},401);
  if(path==='https://openrouter.ai/api/v1/models')return json({data:[{id:'openrouter/free',pricing:{prompt:existsSync(root+'/catalog-bad')?'1':'0',completion:'0'},supported_parameters:['tools']}]});
  if(path==='https://openrouter.ai/api/v1/chat/completions'){
   writeFileSync(root+'/free-turn-active','yes');
@@ -48,7 +51,7 @@ globalThis.fetch=async(url,init={})=>{
  return json({error:'offline fixture'},503);
 };`);
  const port=await freePortBlock([0,1]);base=`http://127.0.0.1:${port}`;
- child=spawn(process.execPath,['--import',pathToFileURL(prelude).href,join(serverDir,'index.ts')],{cwd:join(serverDir,'..'),env:{PATH:process.env.PATH,...(process.env.PATHEXT?{PATHEXT:process.env.PATHEXT}:{}),...(process.env.SystemRoot?{SystemRoot:process.env.SystemRoot}:{}),HOME:home,USERPROFILE:home,OMB_DATA_DIR:dataDir,OMB_PORT:String(port),OMB_WEBHOOK_PORT:String(port+1)},stdio:['ignore','pipe','pipe']});
+ child=spawn(process.execPath,['--import',pathToFileURL(prelude).href,join(serverDir,'index.ts')],{cwd:join(serverDir,'..'),env:{PATH:process.env.PATH,...(process.env.PATHEXT?{PATHEXT:process.env.PATHEXT}:{}),...(process.env.SystemRoot?{SystemRoot:process.env.SystemRoot}:{}),HOME:home,USERPROFILE:home,OMB_DATA_DIR:dataDir,OMB_PORT:String(port),OMB_WEBHOOK_PORT:String(port+1),BOS_FREE_URL:'https://relay.fixture.invalid/api/v1'},stdio:['ignore','pipe','pipe']});
  child.stdout?.resume();child.stderr?.on('data',chunk=>{stderr=(stderr+chunk).slice(-16384);});
  const deadline=Date.now()+20000;
  for(;;){if(child.exitCode!==null)throw Error(stderr);try{if((await api('GET','/api/health')).body.pid===child.pid)break;}catch{}if(Date.now()>deadline)throw Error('fixture start timeout: '+stderr);await new Promise(resolve=>setTimeout(resolve,100));}
@@ -118,3 +121,16 @@ it('preserves a running sibling task and refuses replacement of an active free t
   expect((await api('POST',endpoint,{key:'replacement-fixture'})).status).toBe(409);expect(saved().instances['bos-free'].config.key).toBe(key);
  }finally{if(freeBot)await api('POST',`/api/bots/${freeBot.id}/interrupt`,{});await api('POST',`/api/bots/${bot.id}/interrupt`,{});}
 },20000);
+it('hosted start-free registers an install token without any user key',async()=>{
+ expect((await api('POST',endpoint,{hosted:true},{authorization:`Bearer ${clientToken}`})).status).toBe(403);
+ let result=await api('POST',endpoint,{hosted:true});
+ for(let i=0;result.status===409&&i<50;i++){await new Promise(r=>setTimeout(r,100));result=await api('POST',endpoint,{hosted:true});}
+ expect(result.status,JSON.stringify(result.body)).toBe(200);
+ expect(freeInstance(result.body)).toMatchObject({driverKind:'openrouter-free',snapshot:{state:'available'}});
+ expect(saved().instances['bos-free']).toMatchObject({displayName:'BOS Free',config:{model:'openrouter/free',hosted:true}});
+ const token='bosf_'+'r'.repeat(40);
+ for(const path of ['/api/instances','/api/config'])expect(JSON.stringify((await api('GET',path)).body)).not.toContain(token);
+ expect(JSON.stringify(result.body)).not.toContain(token);
+ expect((await api('POST',endpoint,{hosted:true})).status).toBe(200);
+ expect(readFileSync(join(home,'registrations'),'utf8')).toBe('1');
+});

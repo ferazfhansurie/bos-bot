@@ -35,4 +35,15 @@ describe('OpenRouter free driver',()=>{
   const key='synthetic-secret';const fetch=vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response({data:[row]}):response({error:key},429));vi.stubGlobal('fetch',fetch);
   const inst=await create(key);await expect(inst.generateText!('synthetic')).rejects.toThrow('HTTP 429');expect(fetch.mock.calls.length).toBe(3);await inst.dispose();
  });
+ it('hosted mode uses the BOS relay with the install token only',async()=>{
+  const fetch=vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response({data:[row]}):response({choices:[{message:{content:'ok'}}]}));vi.stubGlobal('fetch',fetch);
+  expect(OpenRouterFreeDriver.decodeConfig({key:'bosf_x',hosted:true})).toEqual({model:'openrouter/free',hosted:true,key:'bosf_x'});
+  expect(()=>OpenRouterFreeDriver.decodeConfig({hosted:'yes'})).toThrow();
+  const inst=await OpenRouterFreeDriver.create({instanceId:'fixture-free',displayName:'Free fixture',enabled:true,config:{key:'bosf_fixture',model:'openrouter/free',hosted:true},environment:{OPENROUTER_API_KEY:'must-not-use'}});
+  expect(await inst.generateText!('synthetic')).toBe('ok');
+  const calls=fetch.mock.calls as unknown as Array<[string,RequestInit]>;
+  expect(calls.every(([url])=>url.startsWith('https://bos-free.aihlete.com/api/v1/'))).toBe(true);
+  const models=calls.find(x=>x[0].endsWith('/models'))!;expect((models[1].headers as Record<string,string>).Authorization).toBe('Bearer bosf_fixture');
+  expect(JSON.stringify(calls)).not.toContain('must-not-use');await inst.dispose();
+ });
 });

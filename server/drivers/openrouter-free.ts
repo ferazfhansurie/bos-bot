@@ -2,6 +2,8 @@
 import type { ModelCatalog, ProviderDriver } from '../contracts.ts';
 import { createOpenAIChatRuntime } from './openai-chat.ts';
 const API='https://openrouter.ai/api/v1';
+// BOS-hosted relay: owner key stays server-side; installs hold a capped per-install token.
+export const BOS_FREE_API=process.env.BOS_FREE_URL||'https://bos-free.aihlete.com/api/v1';
 const DEFAULT_MODEL='openrouter/free';
 const isFreeId=(id:unknown):id is string=>typeof id==='string'&&(id===DEFAULT_MODEL||/^[a-zA-Z0-9_./-]+:free$/.test(id));
 const zero=(value:unknown)=>((typeof value==='string'&&value.trim()!=='')||typeof value==='number')&&Number.isFinite(Number(value))&&Number(value)===0;
@@ -10,13 +12,14 @@ export function isFreeToolModel(value:unknown):boolean{
  const row=record(value);const pricing=record(row?.pricing);
  return !!row&&isFreeId(row.id)&&!!pricing&&zero(pricing.prompt)&&zero(pricing.completion)&&Object.values(pricing).every(zero)&&Array.isArray(row.supported_parameters)&&row.supported_parameters.includes('tools');
 }
-export interface OpenRouterFreeConfig {key?:string;model?:string;}
+export interface OpenRouterFreeConfig {key?:string;model?:string;hosted?:boolean;}
 function decodeConfig(raw:unknown):OpenRouterFreeConfig{
  const config=record(raw??{});if(!config)throw new Error('OpenRouter free config must be an object');
- if(Object.keys(config).some(key=>!['key','model'].includes(key)))throw new Error('OpenRouter free config accepts only key and model');
+ if(Object.keys(config).some(key=>!['key','model','hosted'].includes(key)))throw new Error('OpenRouter free config accepts only key, model and hosted');
+ if(config.hosted!==undefined&&typeof config.hosted!=='boolean')throw new Error('OpenRouter free hosted must be a boolean');
  if(config.key!==undefined&&typeof config.key!=='string')throw new Error('OpenRouter free key must be a string');
  const model=config.model??DEFAULT_MODEL;if(!isFreeId(model))throw new Error('OpenRouter free requires openrouter/free or an explicit :free model');
- return {model,...(typeof config.key==='string'&&config.key.trim()?{key:config.key.trim()}:{})};
+ return {model,...(config.hosted?{hosted:true}:{}),...(typeof config.key==='string'&&config.key.trim()?{key:config.key.trim()}:{})};
 }
 const safeError=(value:unknown):Error=>{
  const error=value instanceof Error?value:new Error('');
@@ -32,12 +35,12 @@ export const OpenRouterFreeDriver:ProviderDriver<OpenRouterFreeConfig>={
  install:{docsUrl:'https://openrouter.ai/keys',signInCommand:'Connect an OpenRouter API key in BOS Free setup.'},
  decodeConfig,defaultConfig:()=>decodeConfig({}),
  async create(input){
-  const config=decodeConfig(input.config);const apiKey=config.key??'';
+  const config=decodeConfig(input.config);const apiKey=config.key??'';const apiUrl=config.hosted?BOS_FREE_API:API;
   let catalog:ModelCatalog={default:config.model??DEFAULT_MODEL,options:[]};
   let catalogError='OpenRouter free catalog unavailable';
   const refresh=async(signal?:AbortSignal)=>{
    try{
-    const response=await fetch(`${API}/models`,{redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(8000)]):AbortSignal.timeout(8000)});
+    const response=await fetch(`${apiUrl}/models`,{redirect:'error',...(config.hosted?{headers:{Authorization:`Bearer ${apiKey}`}}:{}),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(8000)]):AbortSignal.timeout(8000)});
     if(!response.ok)throw new Error('catalog unavailable');
     const json=await response.json() as {data?:unknown};if(!Array.isArray(json.data))throw new Error('catalog unavailable');
     const seen=new Set<string>();const options:ModelCatalog['options']=[];
@@ -49,7 +52,7 @@ export const OpenRouterFreeDriver:ProviderDriver<OpenRouterFreeConfig>={
   };
   if(apiKey)await refresh().catch(()=>{});
   const runtime=createOpenAIChatRuntime({
-   input,driverKind:'openrouter-free',apiKey,apiUrl:API,tools:true,models:()=>catalog,
+   input,driverKind:'openrouter-free',apiKey,apiUrl,tools:true,models:()=>catalog,
    refreshModels:async()=>{if(apiKey)await refresh();},
    beforeRequest:async(model,signal)=>{
     if(!apiKey)throw new Error('OpenRouter free key required');

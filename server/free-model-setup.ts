@@ -16,3 +16,23 @@ export async function verifyFreeModelKey(raw: unknown): Promise<string> {
  } catch {throw Object.assign(new Error("OpenRouter returned an invalid connection response. Try again."),{status:502});}
  return key;
 }
+
+/** True when BOS Free still accepts an existing install token. */
+export async function hostedFreeTokenValid(apiUrl: string, token: unknown): Promise<boolean> {
+ if (typeof token!=="string" || !/^bosf_[A-Za-z0-9_-]{20,200}$/.test(token)) return false;
+ try { const response=await fetch(`${apiUrl}/usage`,{headers:{Authorization:`Bearer ${token}`},redirect:"error",signal:AbortSignal.timeout(10000)}); await response.body?.cancel(); return response.ok; }
+ catch { return false; }
+}
+
+/** Registers this install with BOS Free and returns its capped relay token. */
+export async function registerHostedFree(apiUrl: string): Promise<string> {
+ let response:Response;
+ try { response=await fetch(`${apiUrl}/register`,{method:"POST",redirect:"error",signal:AbortSignal.timeout(10000)}); }
+ catch {throw Object.assign(new Error("Could not reach BOS Free. Try again."),{status:502});}
+ if (response.status===429) throw Object.assign(new Error("BOS Free is busy right now. Try again later."),{status:429});
+ if (!response.ok) throw Object.assign(new Error("BOS Free is unavailable. Try again."),{status:502});
+ let token:unknown;
+ try { const text=await response.text(); if(text.length>4096)throw new Error(); token=JSON.parse(text)?.token; } catch {}
+ if (typeof token!=="string" || !/^bosf_[A-Za-z0-9_-]{20,200}$/.test(token)) throw Object.assign(new Error("BOS Free returned an invalid response. Try again."),{status:502});
+ return token;
+}
