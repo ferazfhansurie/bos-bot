@@ -60,6 +60,23 @@ const retryable = (status) => [400, 403, 404, 408, 429, 500, 502, 503, 504].incl
 const upstreamReason = (text) => { try { const e = JSON.parse(text).error || {}; return String(e.metadata?.raw || e.message || '').slice(0, 160); } catch { return ''; } };
 const limitedModel = (text) => /([a-zA-Z0-9_./-]+:free) is temporarily rate-limited/.exec(text)?.[1];
 
+const KEEPALIVE_MS = Math.max(1000, Number(process.env.KEEPALIVE_MS) || 10_000);
+const HOLD_MS = Math.max(1000, Number(process.env.HOLD_MS) || 40_000);
+const HOLD_BYTES = 512 * 1024;
+const bodyError = (text) => { try { const j = JSON.parse(text); return j && j.error ? (upstreamReason(text) || 'error') : ''; } catch { return ''; } };
+// 'error' = the provider failed this attempt; 'answer' = real output started, stream it through
+export function streamLine(line) {
+  if (!line.startsWith('data:')) return null;
+  const data = line.slice(5).trim();
+  if (data === '[DONE]') return 'answer';
+  let j; try { j = JSON.parse(data); } catch { return null; }
+  if (j && j.error) return 'error';
+  const choice = j?.choices?.[0]; const delta = choice?.delta || {};
+  if (choice?.finish_reason === 'error') return 'error';
+  if ((typeof delta.content === 'string' && delta.content) || (Array.isArray(delta.tool_calls) && delta.tool_calls.length) || choice?.finish_reason) return 'answer';
+  return null;
+}
+
 const send = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
   res.end(JSON.stringify(body));
@@ -132,10 +149,23 @@ export const server = http.createServer(async (req, res) => {
       const refund = () => { if (refunded) return; refunded = true; db.usage[id] = Math.max(0, (db.usage[id] || 0) - 1); db.ipUsage[ip] = Math.max(0, (db.ipUsage[ip] || 0) - 1); db.global = Math.max(0, db.global - 1); save(); };
       const ctl = new AbortController(); res.on('close', () => { if (!res.writableFinished) ctl.abort(); });
       const tries = candidates(body.model, models);
-      let up;
+      const stream = body.stream === true;
+      let opened = false; let keep = null;
+      const open = () => {
+        if (opened) return; opened = true;
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-bos-free-remaining': String(remaining(id).install) });
+        keep = setInterval(() => res.write(': bos-free\n\n'), KEEPALIVE_MS);
+      };
+      const stop = () => { if (keep) clearInterval(keep); keep = null; };
+      const fail = (status, text) => {
+        refund(); stop();
+        if (!opened) { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-bos-free-remaining': String(remaining(id).install) }); return res.end(text); }
+        res.write(`data: ${JSON.stringify({ error: { code: status, message: upstreamReason(text) || `HTTP ${status}` } })}\n\n`); return res.end();
+      };
       try {
         for (let i = 0; i < tries.length; i++) {
           const last = i === tries.length - 1;
+          let up;
           try {
             up = await fetch(`${UPSTREAM}/chat/completions`, {
               method: 'POST', signal: ctl.signal, redirect: 'error',
@@ -143,23 +173,49 @@ export const server = http.createServer(async (req, res) => {
               body: JSON.stringify(sanitize({ ...body, model: tries[i] })),
             });
           } catch (e) { if (ctl.signal.aborted || last) throw e; continue; }
-          if (up.status < 400) break;
-          if (!retryable(up.status) || last) { console.log(`upstream ${up.status} ${tries[i]} final`); break; }
-          const text = await up.text();
-          console.log(`upstream ${up.status} ${tries[i]} retry: ${upstreamReason(text)}`);
-          cool(limitedModel(text) || tries[i]);
+          if (up.status >= 400) {
+            const text = await up.text();
+            if (!retryable(up.status) || last) { console.log(`upstream ${up.status} ${tries[i]} final: ${upstreamReason(text)}`); return fail(up.status, text); }
+            console.log(`upstream ${up.status} ${tries[i]} retry: ${upstreamReason(text)}`);
+            cool(limitedModel(text) || tries[i]); continue;
+          }
+          const eventStream = stream && up.body && (up.headers.get('content-type') || '').includes('text/event-stream');
+          if (!eventStream) {
+            // a 200 whose JSON body is an error is a failed attempt, not a reply
+            const text = await up.text();
+            const reason = bodyError(text);
+            if (reason && !last) { console.log(`upstream 200-error ${tries[i]} retry: ${reason}`); cool(tries[i]); continue; }
+            if (reason) { console.log(`upstream 200-error ${tries[i]} final: ${reason}`); return fail(502, text); }
+            stop();
+            if (!opened) res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json', 'cache-control': 'no-store', 'x-bos-free-remaining': String(remaining(id).install) });
+            return res.end(text);
+          }
+          // Hold the stream until the model really answers, so an error sent mid-reasoning can move to the next free model.
+          open();
+          const reader = up.body.getReader(); const decoder = new TextDecoder();
+          const held = []; let size = 0; let pending = ''; let verdict = null; const since = Date.now();
+          while (!verdict) {
+            const { done, value } = await reader.read();
+            if (done) { verdict = 'end'; break; }
+            held.push(value); size += value.length; pending += decoder.decode(value, { stream: true });
+            let nl;
+            while (!verdict && (nl = pending.indexOf('\n')) >= 0) { verdict = streamLine(pending.slice(0, nl).trim()); pending = pending.slice(nl + 1); }
+            if (!verdict && (size > HOLD_BYTES || Date.now() - since > HOLD_MS)) verdict = 'answer';
+          }
+          if (verdict === 'error' && !last) { await reader.cancel().catch(() => {}); console.log(`upstream stream-error ${tries[i]} retry`); cool(tries[i]); continue; }
+          if (verdict === 'error') console.log(`upstream stream-error ${tries[i]} final`);
+          if (verdict === 'error' || (verdict === 'end' && !size)) refund();
+          stop();
+          for (const chunk of held) res.write(chunk);
+          for (;;) {
+            const { done, value } = await reader.read(); if (done) break;
+            if (res.destroyed) { await reader.cancel().catch(() => {}); break; }
+            if (!res.write(value)) await new Promise((resolve) => { res.once('drain', resolve); res.once('close', resolve); });
+          }
+          return res.end();
         }
-      } catch (e) { refund(); throw e; }
-      if (up.status >= 400) refund();
-      res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json', 'cache-control': 'no-store', 'x-bos-free-remaining': String(remaining(id).install) });
-      if (!up.body) return res.end();
-      const reader = up.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read(); if (done) break;
-        if (res.destroyed) { await reader.cancel().catch(() => {}); break; }
-        if (!res.write(value)) await new Promise((resolve) => { res.once('drain', resolve); res.once('close', resolve); });
-      }
-      return res.end();
+      } catch (e) { refund(); stop(); if (opened) { res.write(`data: ${JSON.stringify({ error: { code: 502, message: 'BOS Free upstream unavailable' } })}\n\n`); return res.end(); } throw e; }
+      return fail(502, '');
     }
     return send(res, 404, { error: { message: 'Not found' } });
   } catch (e) {
