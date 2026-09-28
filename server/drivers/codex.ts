@@ -624,8 +624,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const version = await new Promise<string | null>((done) => {
         execCli(config.cli, ["--version"], { timeout: 8000, env }, (error, stdout) => done(error ? null : stdout.trim()));
       });
-      if (process.platform !== "darwin" || version !== "codex-cli 0.155.1") {
-        throw new Error("Shared conversations require the verified Codex 0.155.1 runtime on macOS. This runtime has not been verified for isolated shared access; no turn was sent.");
+      if (process.platform !== "darwin" || !["codex-cli 0.155.1", "codex-cli 0.156.0"].includes(version ?? "")) {
+        throw new Error("Shared conversations require the verified Codex 0.155.1 or 0.156.0 runtime on macOS. This runtime has not been verified for isolated shared access; no turn was sent.");
       }
       if (active.has(turn.threadId)) throw new Error("a turn is already running on this thread");
       const selection = config.managed

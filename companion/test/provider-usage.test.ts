@@ -19,7 +19,7 @@ it('paired phone reaches real isolated usage endpoint', async () => {
   expect((await fetch(url)).status).toBe(401);
   const response=await fetch(url,{headers:{authorization:'Bearer fixture-token'}});
   expect(response.status).toBe(200);
-  const body=await response.json();expect(Array.isArray(body.accounts)).toBe(true);
+  const body=await response.json() as { accounts: unknown[] };expect(Array.isArray(body.accounts)).toBe(true);
   expect(body).toEqual(await (await fetch(`${fixture.info.url}/api/provider-usage`)).json());
  } finally {await new Promise<void>(resolve=>sidecar.close(()=>resolve()));await fixture.close();}
 },30000);

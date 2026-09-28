@@ -160,7 +160,7 @@ describe("resolveRequestAuth", () => {
       ["POST", "/api/bots"], ["POST", "/api/bots/b/messages"],
       ["POST", "/api/bots/b/read"], ["POST", "/api/bots/b/respond"],
       ["POST", "/api/bots/b/secret-cards/card/provide"],
-      ["GET", "/api/events"], ["PATCH", "/api/bots/b/profile"],
+      ["GET", "/api/events"], ["GET", "/api/provider-usage"], ["PATCH", "/api/bots/b/profile"],
     ]) expect(check(method, path).auth?.kind, path).toBe("loopback");
     const forged: Record<string, string>[] = [
       { "x-openmausbot-companion-auth": "" },
@@ -176,7 +176,8 @@ describe("resolveRequestAuth", () => {
     for (const [method, path] of [
       ["PUT", "/api/config"], ["POST", "/api/auth/pairing"],
       ["POST", "/api/internal/anything"], ["GET", "/api/auth/sessions"],
-      ["POST", "/api/not-yet-supported"],
+      ["POST", "/api/not-yet-supported"], ["POST", "/api/provider-usage"],
+      ["GET", "/api/provider-usage/credentials"],
     ]) expect(check(method, path).auth, path).toBeNull();
   });
 
