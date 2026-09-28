@@ -170,6 +170,17 @@ describe("Chat MCP session", () => {
     if (hasText) expect(result.text).toContain("partial result");
   });
 
+  it("retries a tool server that is slow to start once, with a clear message if it never starts", async () => {
+    vi.stubEnv("OMB_MCP_STARTUP_MS", "2000");
+    try {
+      const slowOnce = fixture(`if(message.method === "initialize") { const fs = process.getBuiltinModule("node:fs"); const mark = receipt + ".slow"; if(!fs.existsSync(mark)) { fs.writeFileSync(mark, "1"); continue; } }`);
+      const session = await slowOnce.mount();
+      expect(session.definitions.map((tool) => tool.function.name)).toEqual(["audit_write"]);
+      const neverStarts = fixture(`if(message.method === "initialize") continue;`);
+      await expect(neverStarts.mount()).rejects.toThrow("took too long to start; no tool was run");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("closes already mounted peers when another server fails startup", async () => {
     const ready = fixture();
     const failed = fixture(`if(message.method === "tools/list") { reply(message,{tools:"invalid"}); continue; }`);

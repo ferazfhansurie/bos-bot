@@ -27,9 +27,9 @@ const safeError=(value:unknown):Error=>{
  const status=error.message.match(/HTTP (\d{3})/);
  if(status?.[1]==='429')return new Error('Free models are busy or today\'s free limit is used up. Try again in a minute; no paid model is used (HTTP 429).');
  if(status?.[1]==='401')return new Error('The free connection needs reconnecting: Settings → Engines → Reconnect (HTTP 401).');
- if(status)return new Error(`OpenRouter free HTTP ${status[1]} — connection unavailable; no paid fallback`);
+ if(status)return new Error(`The free models couldn't answer this time. Try again in a moment; no paid model is used (HTTP ${status[1]}).`);
  if(['OpenRouter free key required','OpenRouter free model is not currently verified zero-price and tool-capable','OpenRouter free catalog unavailable'].includes(error.message))return new Error(error.message);
- return new Error('OpenRouter free request failed; no paid fallback');
+ return new Error('The free models couldn\'t answer this time. Try again in a moment; no paid model is used.');
 };
 export const OpenRouterFreeDriver:ProviderDriver<OpenRouterFreeConfig>={
  driverKind:'openrouter-free',

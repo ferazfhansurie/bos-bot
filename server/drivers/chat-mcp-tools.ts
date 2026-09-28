@@ -22,7 +22,10 @@ export interface ChatToolSession {
 }
 
 type Server = { command: string; args: string[]; env: Record<string, string> };
-const STARTUP_MS = 8_000;
+// A cold tool server can be slow while the machine is busy; startup has no side effects, so one fresh retry is safe.
+const startupMs = () => Math.max(100, Number(process.env.OMB_MCP_STARTUP_MS) || 15_000);
+const STARTUP_ATTEMPTS = 2;
+class McpStartupTimeout extends Error {}
 const CALL_MS = 10 * 60_000;
 const FRAME_BYTES = 2 * 1024 * 1024;
 const OUTPUT_BYTES = 50 * 1024;
@@ -152,14 +155,18 @@ class ChatMcpClient {
   }
 
   async tools(signal: AbortSignal): Promise<unknown[]> {
-    const deadline = Date.now() + STARTUP_MS;
+    const deadline = Date.now() + startupMs();
     const remaining = () => {
-      if (Date.now() >= deadline) throw new Error("MCP startup timed out");
+      if (Date.now() >= deadline) throw new McpStartupTimeout("A tool server took too long to start; no tool was run");
       return deadline - Date.now();
     };
-    const initialized = await this.call("initialize", {
+    const startup = (method: string, params: unknown) => this.call(method, params, signal, remaining()).catch((error: unknown) => {
+      if (!signal.aborted && error instanceof Error && /timed out/.test(error.message)) throw new McpStartupTimeout("A tool server took too long to start; no tool was run");
+      throw error;
+    });
+    const initialized = await startup("initialize", {
       protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "openmausbot-chat", version: "1" },
-    }, signal, remaining());
+    });
     if (!object(initialized)) throw new Error("MCP initialization returned an invalid result");
     if (signal.aborted) throw aborted();
     this.write({ jsonrpc: "2.0", method: "notifications/initialized" });
@@ -167,7 +174,7 @@ class ChatMcpClient {
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < MAX_PAGES; page += 1) {
-      const result = await this.call("tools/list", cursor ? { cursor } : {}, signal, remaining());
+      const result = await startup("tools/list", cursor ? { cursor } : {});
       if (!object(result) || !Array.isArray(result.tools)) throw new Error("MCP tools/list returned an invalid result");
       tools.push(...result.tools);
       if (tools.length > TOOL_COUNT) throw new Error("MCP tool count exceeds the 128-tool limit");
@@ -246,10 +253,16 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
     // Start independent servers concurrently; consume results in config order
     // so names and collision suffixes remain stable across startup timings.
     const mounts = await Promise.allSettled(servers.map(async ([name, descriptor]) => {
-      if (signal.aborted || closed) throw aborted();
-      const client = new ChatMcpClient(descriptor);
-      clients.push(client);
-      return { name, client, tools: await client.tools(signal) };
+      for (let attempt = 1; ; attempt += 1) {
+        if (signal.aborted || closed) throw aborted();
+        const client = new ChatMcpClient(descriptor);
+        clients.push(client);
+        try { return { name, client, tools: await client.tools(signal) }; }
+        catch (error) {
+          if (!(error instanceof McpStartupTimeout) || attempt >= STARTUP_ATTEMPTS) throw error;
+          await client.close().catch(() => {});
+        }
+      }
     }));
     for (const mount of mounts) {
       if (mount.status === "rejected") throw mount.reason;
