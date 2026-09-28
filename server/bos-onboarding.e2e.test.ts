@@ -42,3 +42,34 @@ it("starts the first business assignment on its pinned task and reconciles a los
     expect(visible.onboarding).not.toHaveProperty("businessBrief");
   }finally{await fixture.close();}
 },40000);
+
+it("keeps owner-supplied first bot identity and scopes idempotent coordinator setup to admins",async()=>{
+  const fixture=await launchVerificationServer();
+  const api=async(method:string,path:string,body?:unknown,token?:string)=>{
+    const response=await fetch(fixture.info.url+path,{method,headers:{"content-type":"application/json",origin:fixture.info.url,...(token?{authorization:`Bearer ${token}`}:{})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(15000)});
+    return {status:response.status,body:await response.json() as any};
+  };
+  try{
+    const before=(await api("GET","/api/bots")).body.bots;
+    for(const bot of before)expect((await api("DELETE",`/api/bots/${bot.id}`)).status).toBe(200);
+    expect((await api("GET","/api/bots")).body.bots).toHaveLength(0);
+    const created=await api("POST","/api/bots",{name:"My analyst",soul:"Only analyse my synthetic fixture reports.",description:"Fixture-owned analyst",modelSelection:{instanceId:"claude",model:"claude-sonnet-5"},requireAvailableModel:true});
+    expect(created.status).toBe(201);
+    expect(created.body.bot).toMatchObject({name:"My analyst",soul:"Only analyse my synthetic fixture reports.",description:"Fixture-owned analyst"});
+    expect(created.body.bot.chiefOfStaff).not.toBe(true);
+    const pairing=(await api("POST","/api/auth/pairing",{scopes:["client"]})).body;
+    const client=(await api("POST","/api/auth/pair",{code:pairing.code,label:"read-only onboarding fixture"})).body;
+    expect((await api("POST","/api/onboarding/chief",{},client.token)).status).toBe(403);
+    expect((await api("GET","/api/bots")).body.bots).toHaveLength(1);
+    const chief=await api("POST","/api/onboarding/chief",{});
+    expect(chief.status).toBe(200);expect(chief.body.bot).toMatchObject({name:"BOS",chiefOfStaff:true});
+    const repeated=await api("POST","/api/onboarding/chief",{});
+    expect(repeated.status).toBe(200);expect(repeated.body.bot.id).toBe(chief.body.bot.id);
+    const after=(await api("GET","/api/bots")).body.bots;
+    expect(after).toHaveLength(2);
+    expect(after.find((bot:any)=>bot.id===created.body.bot.id)).toMatchObject({name:"My analyst",soul:"Only analyse my synthetic fixture reports.",description:"Fixture-owned analyst"});
+    await api("PATCH",`/api/bots/${chief.body.bot.id}`,{name:"Jarvis",soul:"Keep this established coordinator."});
+    const existing=(await api("POST","/api/onboarding/chief",{})).body.bot;
+    expect(existing).toMatchObject({id:chief.body.bot.id,name:"Jarvis",soul:"Keep this established coordinator.",chiefOfStaff:true});
+  }finally{await fixture.close();}
+},40000);

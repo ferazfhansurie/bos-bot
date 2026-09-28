@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   beatWidth,
+  teamSetupBot,
   beatsFor,
   completionPatch,
   EMPTY_ONBOARDING,
@@ -94,5 +95,20 @@ describe("beat machine", () => {
   it("gives the engines beat the widest card", () => {
     expect(beatWidth("engines")).toBeGreaterThan(beatWidth("hello"));
     expect(beatWidth("bot")).toBeGreaterThan(beatWidth("hello"));
+  });
+});
+
+describe("team setup coordinator", () => {
+  it("uses an existing named chief instead of the first ordinary bot", () => {
+    const worker = { id: "worker", name: "BOS", chiefOfStaff: false };
+    const chief = { id: "chief", name: "Jarvis", chiefOfStaff: true };
+    expect(teamSetupBot([worker, chief], undefined)).toBe(chief);
+    expect(teamSetupBot([worker], undefined)).toBeNull();
+  });
+  it("preserves a saved assignment target, including hidden bots, and never substitutes a missing target", () => {
+    const saved = { id: "saved", hidden: true, chiefOfStaff: false };
+    const chief = { id: "chief", chiefOfStaff: true };
+    expect(teamSetupBot([chief, saved], { botId: "saved" })).toBe(saved);
+    expect(teamSetupBot([chief], { botId: "missing" })).toBeNull();
   });
 });

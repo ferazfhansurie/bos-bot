@@ -14,6 +14,8 @@ import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { EngineSetup, EngineUpdateNotice, EngineWarningNotice } from "./EngineSetup";
 import { AddClaudeAccount, ClaudeAccountSettings } from "./ClaudeAccountSettings";
+import { FreeModelSetup } from "./onboarding/FreeModelSetup";
+import { isFreeCloud } from "@/lib/engine-rail";
 import { CodexAccountSettings } from "./CodexAccountSettings";
 
 interface ProbeResult {
@@ -255,6 +257,10 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
     {!engineReady(instance) && <p className="mt-2 text-[12px] text-ink-secondary">{t("organization.engineUnavailable")}</p>}
   </EngineCard>;
 
+  if (isFreeCloud(instance)) return <EngineCard instance={instance}>
+    <p className="text-[13px] leading-relaxed text-ink-secondary">Use the free models connection above to connect or reconnect OpenRouter. Free models run in the cloud and have provider usage limits.</p>
+  </EngineCard>;
+
   return (
     <EngineCard instance={instance}>
       <ProviderIconPicker instance={instance} />
@@ -342,7 +348,7 @@ export function EnginesSettings() {
   // every KNOWN-driver instance has cliDefault; unknown-driver shadows have
   // neither unless an override was set. Including them keeps a Reset-able row
   // (and a Set CLI… path) for engines the running build doesn't recognize.
-  const rows = state.instances.filter((i) => i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable");
+  const rows = state.instances.filter((i) => isFreeCloud(i) || i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable");
 
   return (
     <div className="flex min-w-0 flex-col gap-6 pb-2">
@@ -353,6 +359,7 @@ export function EnginesSettings() {
         </div>
         <RefreshEngines />
       </div>
+      <FreeModelSetup />
       <EngineSections instances={rows} renderEngine={(instance) => <EngineRow instance={instance} />} />
       <div className="border-t border-hairline/40 pt-4"><AddClaudeAccount /></div>
     </div>

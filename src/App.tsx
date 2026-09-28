@@ -2,10 +2,9 @@ import { RecruitmentWelcome } from "@/components/onboarding/RecruitmentWelcome";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Menu } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
-import { WelcomeFlow } from "@/components/onboarding/WelcomeFlow";
 import { FirstConversationTour } from "@/components/onboarding/FirstConversationTour";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
-import { welcomeDue } from "@/lib/onboarding";
+import { welcomeDue, teamSetupBot } from "@/lib/onboarding";
 import { ThreadRefsProvider } from "@/components/ThreadRefs";
 import { emailGateDone, initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
@@ -355,21 +354,11 @@ function WelcomeGate() {
   // Organisation remains optional; closing Settings resumes the normal tour.
   if (state.appSettingsOpen && ["desktopWorkspaces", "organization"].includes(state.appSettingsSection)) return null;
   if (!state.welcomeOpen && !due) return null;
-  const bot = state.bots.find((b) => !b.hidden) ?? null;
-  const replay = state.welcomeOpen && !due;
-  if (due && bot?.name === "BOS" && bot.chiefOfStaff) return <RecruitmentWelcome bot={bot} onDone={() => { setDismissed(true); dispatch({ type: "toggleWelcome", open: false }); }} />;
-  return (
-    <WelcomeFlow
-      bot={bot}
-      replay={replay}
-      onDone={() => {
-        setDismissed(true);
-        dispatch({ type: "toggleWelcome", open: false });
-        // the first real finish hands over to the guided tour; a replay does not
-        if (!replay) dispatch({ type: "toggleTour", open: true });
-      }}
-    />
-  );
+  const bot = teamSetupBot(state.bots, state.config?.onboarding?.firstAssignment);
+  return <RecruitmentWelcome bot={bot} onDone={() => {
+    setDismissed(true);
+    dispatch({ type: "toggleWelcome", open: false });
+  }} />;
 }
 
 function Application() {

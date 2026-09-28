@@ -72,3 +72,34 @@ test('website smoke requires actual self-contained semantic html',()=>{
  assert.equal(score('website','{"sections":["hero","products","contact"]}'),0);
  assert.equal(score('website','<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>body{color:black}</style></head><body><main><h1>Sunrise Bakery</h1><section id="products">Bread Croissant Cake</section><a href="#contact">Order</a><section id="contact">hello@example.invalid</section></main></body></html>'),2);
 });
+
+test('private pilot narrows platforms only with explicit mode and local distribution evidence',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'bos-private-pilot-test-'));
+ try{
+  writeFileSync(join(dir,'artifact'),'fixture');writeFileSync(join(dir,'evidence'),'synthetic private pilot evidence');
+  const commit='b'.repeat(40);
+  const platform={sourceCommit:commit,built:true,version:'staging-fixture',artifact:'artifact',sha256:createHash('sha256').update('fixture').digest('hex'),buildEvidence:'evidence',signingEvidence:'evidence',installed:true,deviceVerified:true,deviceEvidence:'evidence'};
+  const manifest={mode:'private-pilot',source:{commit,clean:true,evidence:'evidence'},identity:{staging:'test.staging',live:'test.live'},channel:{name:'private-pilot',owner:'fixture owner',ownerVerified:true,distribution:'local-install',evidence:'evidence'},tests:{passed:true,evidence:'evidence'},review:{approved:true,evidence:'evidence'},platforms:{macos:{...platform},ios:{...platform},windows:{supported:false},android:{supported:false}},recovery:{checkpoint:'evidence',rollback:'evidence',owner:'fixture owner'},approval:{evidence:'evidence'}};
+  assert.deepEqual(validate(manifest,dir),[]);
+  const rejected=(mutate,expected)=>{const copy=structuredClone(manifest);mutate(copy);assert.ok(validate(copy,dir).some(error=>error.includes(expected)),expected);};
+  rejected(m=>delete m.mode,'windows: build unverified');
+  rejected(m=>m.mode='private-pilot-typo','mode:');
+  rejected(m=>m.mode='private-pilot-typo','windows: build unverified');
+  rejected(m=>m.channel.ownerVerified=false,'verified owner');
+  rejected(m=>m.channel.owner='','verified owner');
+  rejected(m=>m.channel.distribution='public-download','local-install');
+  rejected(m=>m.channel.evidence='missing','channel: existing evidence');
+  rejected(m=>delete m.platforms.windows.supported,'explicitly declare unsupported');
+  for(const name of ['macos','ios']){
+   rejected(m=>m.platforms[name].installed=false,`${name}: installed/device`);
+   rejected(m=>m.platforms[name].deviceVerified=false,`${name}: installed/device`);
+   rejected(m=>m.platforms[name].sourceCommit='c'.repeat(40),`${name}: artifact source`);
+   rejected(m=>m.platforms[name].sha256='0'.repeat(64),`${name}: artifact SHA-256`);
+  }
+  rejected(m=>m.review.approved=false,'independent review: approved');
+  rejected(m=>m.recovery.rollback='missing','rollback: existing evidence');
+  rejected(m=>m.recovery.owner='','recovery: single owner');
+  rejected(m=>m.source.clean=false,'source: immutable');
+  rejected(m=>m.approval.evidence='missing','candidate approval: existing evidence');
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});

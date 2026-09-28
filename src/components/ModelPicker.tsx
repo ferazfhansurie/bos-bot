@@ -10,9 +10,10 @@ import { useStore, currentTaskBot, type Bot, type InstanceInfo, type ModelSelect
 import type { EffortLevel } from "../../shared/wire";
 import type { ModelVariantOption } from "../../shared/runtime-events";
 import { filterCustomModels, partitionCustomModels, suggestedModels } from "@/lib/custom-models";
-import { isCustomOnly, splitEngineRail } from "@/lib/engine-rail";
+import { isCustomOnly, isFreeCloud, splitEngineRail } from "@/lib/engine-rail";
 import { InstanceProviderMark } from "./ProviderIcons";
 import { EngineSetup, EngineUpdateNotice, needsCli, needsSignIn } from "./EngineSetup";
+import { FreeModelSetup } from "./onboarding/FreeModelSetup";
 import { EngineGroupLabel } from "./EngineGroupLabel";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { approvalModeFor, modelSwitchNeedsAsk } from "../../shared/approval-mode";
@@ -22,7 +23,11 @@ import { COMPACT_SQUARE } from "@/lib/compact-chip";
 
 type ModelOption = InstanceInfo["models"]["options"][number];
 const COMPACT_MODEL_COUNT = 5;
-const BOS_DRIVER_KINDS = new Set(["claudeAgent", "codex"]);
+const BOS_DRIVER_KINDS = new Set(["claudeAgent", "codex", "openrouter-free"]);
+
+function catalogModels(instance: InstanceInfo | undefined) {
+  return instance?.models.options.filter(option => isFreeCloud(instance) || !option.custom) ?? [];
+}
 
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
   return instance?.models.options.find((option) => option.id === model)?.label ?? model;
@@ -35,6 +40,7 @@ function modelProvider(instance: InstanceInfo | undefined, model: string): strin
 export function engineStatus(instance: InstanceInfo): string {
   if (needsCli(instance)) return t("model.setupRequired");
   if (needsSignIn(instance)) return t("model.signInRequired");
+  if (isFreeCloud(instance)) return "Free";
   return instance.snapshot.version ?? t("model.ready");
 }
 
@@ -433,19 +439,19 @@ export function ModelPicker({
   };
 
   const openFor = (instance: InstanceInfo | undefined) => {
-    const official = instance?.models.options.filter((option) => !option.custom) ?? [];
+    const official = catalogModels(instance);
     const selectedIsCustom = instance?.models.options.some(
       (option) => option.id === selection.model && option.custom,
     );
-    setPane(selectedIsCustom || isCustomOnly(instance) || official.length === 0 ? "custom" : "main");
+    setPane(!isFreeCloud(instance) && (selectedIsCustom || isCustomOnly(instance) || official.length === 0) ? "custom" : "main");
     resetList();
   };
 
   const selectRail = (instance: InstanceInfo) => {
     if (instance.driverKind === "claudeAgent") lastClaudeIdRef.current = instance.instanceId;
     setRailId(instance.instanceId);
-    const official = instance.models.options.filter((option) => !option.custom);
-    setPane(isCustomOnly(instance) || official.length === 0 ? "custom" : "main");
+    const official = catalogModels(instance);
+    setPane(!isFreeCloud(instance) && (isCustomOnly(instance) || official.length === 0) ? "custom" : "main");
     resetList();
   };
 
@@ -473,8 +479,9 @@ export function ModelPicker({
     setOpen(false);
   };
 
-  const official = railInstance?.models.options.filter((option) => !option.custom) ?? [];
-  const custom = railInstance?.models.options.filter((option) => option.custom) ?? [];
+  const official = catalogModels(railInstance);
+  const freeCloud = isFreeCloud(railInstance);
+  const custom = freeCloud ? [] : railInstance?.models.options.filter((option) => option.custom) ?? [];
   const currentModel = selection.instanceId === railInstance?.instanceId ? selection.model : undefined;
   const filteredOfficial = filterCustomModels(official, query);
   const compactOfficial = railInstance
@@ -494,7 +501,7 @@ export function ModelPicker({
   const renderRow = (option: ModelOption) => (
     <ModelRow
       key={option.id}
-      option={option}
+      option={freeCloud ? { ...option, provider: "OpenRouter · Free" } : option}
       current={selection.instanceId === railInstance?.instanceId && selection.model === option.id}
       defaultId={railInstance?.models.default ?? ""}
       onPick={() => railInstance && pick(railInstance, option.id)}
@@ -655,7 +662,7 @@ export function ModelPicker({
                     </p>
                   )}
                   <div className="mt-0.5 text-[11.5px] text-ink-secondary">
-                    {pane === "custom" ? t("model.localHint") : t(threadId && scope === "thread" ? "model.chooseThreadHint" : "model.chooseHint")}
+                    {freeCloud ? "Free cloud models via OpenRouter. Provider usage limits apply." : pane === "custom" ? t("model.localHint") : t(threadId && scope === "thread" ? "model.chooseThreadHint" : "model.chooseHint")}
                   </div>
                 </div>
 
@@ -674,20 +681,20 @@ export function ModelPicker({
 
                 {blocked ? (
                   <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1">
-                    <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />
+                    {freeCloud ? <FreeModelSetup /> : <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />}
                     {railInstance.claudeAccount && needsSignIn(railInstance) && pane !== "custom" && (
                       <p className="mt-2 text-[11.5px] leading-relaxed text-ink-secondary">
                         {railInstance.claudeAccount.signInShell === "powershell" && `${t("engines.account.powershell")} `}
                         {t("engines.account.signInHint")}
                       </p>
                     )}
-                    <p className="mt-2 text-center text-[11.5px] text-ink-secondary/70">
+                    {!freeCloud && <p className="mt-2 text-center text-[11.5px] text-ink-secondary/70">
                       {pane === "main" && official.length > 0
                         ? official.length === 1
                           ? t("model.afterSetupOne")
                           : t("model.afterSetupMany", { count: official.length })
                         : t("model.localSoon")}
-                    </p>
+                    </p>}
                   </div>
                 ) : (
                   <>
@@ -791,7 +798,8 @@ export function ModelPicker({
                   />
                 )}
 
-                {pane === "main" && (
+                {freeCloud && !blocked && <div className="max-h-48 shrink-0 overflow-y-auto px-3 pb-3"><FreeModelSetup compact /></div>}
+                {pane === "main" && !freeCloud && (
                   <button
                     type="button"
                     aria-label={

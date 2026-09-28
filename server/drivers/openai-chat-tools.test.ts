@@ -6,7 +6,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDirs, NATIVE_DIR } from "../config.ts";
 import type { ProviderInstance, SendTurnInput } from "../contracts.ts";
@@ -14,6 +14,7 @@ import { removeTempDir } from "../testing/cleanup.ts";
 import { recordEvents } from "../testing/events.ts";
 import { GrokDriver } from "./grok.ts";
 import { MinimaxDriver } from "./minimax.ts";
+import { OpenRouterFreeDriver } from "./openrouter-free.ts";
 import { OpenAICompatDriver } from "./openai-compat.ts";
 
 interface ChatRequest {
@@ -29,7 +30,7 @@ interface ChatRequest {
 }
 
 type Script = (body: ChatRequest, response: ServerResponse, round: number) => void;
-type Provider = "openai-compat" | "grok" | "minimax";
+type Provider = "openai-compat" | "grok" | "minimax" | "openrouter-free";
 const API_KEY_CANARY = "fixture-credential-cda00ee8d8384f54";
 
 function deferred<T = void>() {
@@ -115,8 +116,19 @@ async function fixture(script: Script, provider: Provider = "openai-compat", api
   const origin = `http://127.0.0.1:${address.port}`;
   const helper = join(directory, "mcp.mjs");
   writeFileSync(helper, MCP_SCRIPT);
+  if (provider === "openrouter-free") {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (String(url) === "https://openrouter.ai/api/v1/models") return new Response(JSON.stringify({ data: [{ id: "fixture/model:free", pricing: { prompt: "0", completion: "0" }, supported_parameters: ["tools"] }] }), { headers: { "content-type": "application/json" } });
+      if (String(url) === "https://openrouter.ai/api/v1/chat/completions") return originalFetch(`${origin}/v1/chat/completions`, init);
+      return originalFetch(url, init);
+    });
+    cleanups.push(async () => { vi.unstubAllGlobals(); });
+  }
   const common = { instanceId: randomUUID(), displayName: "Tool contract fixture", enabled: true };
-  const instance: ProviderInstance = provider === "minimax"
+  const instance: ProviderInstance = provider === "openrouter-free"
+    ? await OpenRouterFreeDriver.create({ ...common, config: { key: apiKey, model: "fixture/model:free" }, environment: {} })
+    : provider === "minimax"
     ? await MinimaxDriver.create({ ...common, config: { url: `${origin}/v1` }, environment: { MINIMAX_API_KEY: apiKey } })
     : await (provider === "grok" ? GrokDriver : OpenAICompatDriver).create({
       ...common,
@@ -141,7 +153,7 @@ async function fixture(script: Script, provider: Provider = "openai-compat", api
   return {
     instance, recorder, requests, threadId, directory, integrations, effects, rpcStarted,
     start: (input: Partial<SendTurnInput> = {}) => instance.adapter.sendTurn({
-      threadId, text: "Store the synthetic receipt.", model: "fixture-model", integrations, ...input,
+      threadId, text: "Store the synthetic receipt.", model: provider === "openrouter-free" ? "fixture/model:free" : "fixture-model", integrations, ...input,
     }),
     completed: () => recorder.until((event) => event.type === "turn.completed"),
     async decide(behavior: "allow" | "deny" = "allow") {
@@ -153,7 +165,19 @@ async function fixture(script: Script, provider: Provider = "openai-compat", api
   };
 }
 
-describe.each<Provider>(["openai-compat", "grok", "minimax"])("%s structured tool contract", (provider) => {
+describe.each<Provider>(["openai-compat", "grok", "minimax", "openrouter-free"])("%s structured tool contract", (provider) => {
+  it("honors denial without executing the mounted tool", async () => {
+    const f = await fixture((_body, response, round) => {
+      if (round === 1) sse(response, [chunk({ tool_calls: [toolCall()] }, "tool_calls")]);
+      else answer(response, "The tool was denied.");
+    }, provider);
+    await f.start();
+    expect(await f.decide("deny")).toBe("rejected");
+    await f.completed();
+    expect(f.effects()).toEqual([]);
+    expect(f.requests[1].messages.at(-1)).toMatchObject({ role: "tool", content: expect.stringMatching(/denied/i) });
+  });
+
   it("handles content:null tool calls when a compatible endpoint returns a JSON completion", async () => {
     const f = await fixture((_body, response, round) => {
       response.setHeader("content-type", "application/json");

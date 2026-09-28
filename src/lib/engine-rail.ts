@@ -3,8 +3,12 @@
 // payloads stay in the top group. VibeCoder would join Local later.
 import type { InstanceInfo } from "@/state/store";
 
-export function isCustomOnly(instance: { access?: InstanceInfo["access"] } | undefined): boolean {
-  return instance?.access === "custom";
+export function isFreeCloud(instance: { driverKind?: string } | undefined): boolean {
+  return instance?.driverKind === "openrouter-free";
+}
+
+export function isCustomOnly(instance: { access?: InstanceInfo["access"]; driverKind?: string } | undefined): boolean {
+  return instance?.access === "custom" && !isFreeCloud(instance);
 }
 
 export function splitEngineRail<T>(instances: readonly T[]): {

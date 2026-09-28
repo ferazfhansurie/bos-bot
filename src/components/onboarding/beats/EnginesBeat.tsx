@@ -6,6 +6,7 @@
 // terminal and comes back. The guide reacts to the result.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, RefreshCw } from "lucide-react";
+import { FreeModelSetup } from "../FreeModelSetup";
 import { EngineSetup } from "@/components/EngineSetup";
 import { engineReady } from "@/components/EngineLibrary";
 import { InstanceProviderMark } from "@/components/ProviderIcons";
@@ -103,6 +104,8 @@ export function EnginesBeat({ onNext, setMascot, bump }: BeatProps) {
   return (
     <div className="flex min-h-0 flex-col">
       <p className="animate-rise mt-1 text-[13.5px] text-ink-secondary">{t("onboarding.engines.intro")}</p>
+
+      <FreeModelSetup />
 
       {/* the whole story in one line, and the way back after a terminal trip */}
       <div className="animate-rise mt-4 flex items-center justify-between gap-3" style={staggerIndex(1)}>

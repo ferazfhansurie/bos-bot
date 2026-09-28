@@ -84,6 +84,10 @@ interface RuntimeOptions<Config> {
   timeoutMs: number;
   nativeLog: NativeLog;
   refreshModels?: () => Promise<void>;
+  /** Provider-specific policy gate, run before every completion including tool rounds. */
+  beforeRequest?: (model: string, signal: AbortSignal) => Promise<void>;
+  sanitizeError?: (error: unknown) => Error;
+  redirect?: "error" | "follow" | "manual";
   generateModel?: () => string;
   reasoning?: boolean;
   billing?: "metered";
@@ -149,7 +153,10 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         ? AbortSignal.any([signal, timeoutController.signal])
         : timeoutController.signal;
 
+      await options.beforeRequest?.(model, activeSignal);
+      activeSignal.throwIfAborted();
       const response = await fetch(`${options.apiUrl}/chat/completions`, {
+        ...(options.redirect ? { redirect: options.redirect } : {}),
         method: "POST",
         headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({
@@ -284,6 +291,8 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
       activeSignal.throwIfAborted();
       if (!sawChoice) throw new ChatProtocolError("provider returned no streaming completion choice");
       return { text, reasoning, usage, toolCalls: calls.finish(finishReason, malformedFrame), finishReason, protocolReasoning, protocolReasoningDetails: details.blocks };
+    } catch (error) {
+      throw options.sanitizeError ? options.sanitizeError(error) : error;
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
     }

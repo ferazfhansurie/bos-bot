@@ -23,3 +23,14 @@ it("keeps recovery and provider setup available with no currently ready provider
   expect(html).toContain("Bakery");
   expect(html).toContain("Saved provider: gone · old");
 });
+
+it("uses the existing chief name without presenting a rename",()=>{
+  const html=renderToStaticMarkup(createElement(RecruitmentWelcome,{bot:{...bot,name:"Jarvis",chiefOfStaff:true},onDone:()=>{}}));
+  expect(html).toContain("Jarvis · your team coordinator");
+  expect(html).not.toContain("BOS · your first AI teammate");
+});
+it("can resume a saved assignment even when its bot is missing from the visible list",()=>{
+  fixture.state.config={onboarding:{completedAt:"2026-09-28",firstAssignment:{botId:"saved",threadId:"old",sendId:"onboarding_old",text:"original",selection:{instanceId:"gone",model:"old"},prepared:true}}};
+  const html=renderToStaticMarkup(createElement(RecruitmentWelcome,{bot:null,onDone:()=>{}}));
+  expect(html).toMatch(/<button(?![^>]*\sdisabled=)[^>]*>Resume my first assignment/);
+});

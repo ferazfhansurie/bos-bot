@@ -1396,12 +1396,16 @@ export class Store {
       /** false = no greeting/onboarding seed. Imported bots must not open
        * with a first-person greeting the user never asked for. */
       seedMessages?: boolean;
+      /** Internal owner onboarding only: persist profile and coordinator role together. */
+      chiefOfStaff?: boolean;
     } = {},
   ): BotRecord {
     this.rememberSections([profile.section]);
     const name = profile.name?.trim() || pickBotName(this.bots.map((b) => b.name));
     const section = sectionKey(profile.section);
+    if (opts.chiefOfStaff && this.bots.some(bot => bot.chiefOfStaff && sectionKey(bot.section) === section)) throw new Error("This team already has a coordinator");
     const bot: BotRecord = {
+      ...(opts.chiefOfStaff ? { chiefOfStaff: true } : {}),
       id: newId(),
       threadId: newId(),
       name,
@@ -1434,7 +1438,7 @@ export class Store {
       busy: false,
     }];
     this.bots.unshift(bot);
-    this.saveBots();
+    try { this.saveBots(); } catch (error) { this.bots = this.bots.filter(item => item !== bot); throw error; }
     // The folder exists from the first moment, so the user can open
     // SOUL.md before the bot has said a word. The record is canonical: a
     // mirror-write failure must never fail bot creation.

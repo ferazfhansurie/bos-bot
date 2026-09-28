@@ -126,3 +126,8 @@ export function reducedMotion(): boolean {
   if (typeof document !== "undefined" && document.documentElement.dataset.reducedMotion === "true") return true;
   return globalThis.window?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
+
+/** Recovery remains pinned to its original bot, never a replacement coordinator. */
+export function teamSetupBot<T extends { id: string; hidden?: boolean; chiefOfStaff?: boolean }>(bots: T[], saved?: { botId: string }): T | null {
+  return (saved ? bots.find(bot => bot.id === saved.botId) : bots.find(bot => !bot.hidden && bot.chiefOfStaff)) ?? null;
+}

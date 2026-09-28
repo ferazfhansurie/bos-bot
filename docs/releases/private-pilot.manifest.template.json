@@ -1,0 +1,68 @@
+{
+  "candidate": "bos-private-pilot-unverified",
+  "source": {
+    "commit": null,
+    "clean": false,
+    "evidence": null
+  },
+  "identity": {
+    "staging": "ai.bos.bot.staging",
+    "live": "ai.bos.bot"
+  },
+  "channel": {
+    "name": "private-pilot",
+    "owner": null,
+    "ownerVerified": false,
+    "distribution": "local-install",
+    "evidence": null
+  },
+  "tests": {
+    "passed": false,
+    "evidence": null
+  },
+  "review": {
+    "approved": false,
+    "evidence": null
+  },
+  "platforms": {
+    "macos": {
+      "sourceCommit": null,
+      "built": false,
+      "version": null,
+      "artifact": null,
+      "sha256": null,
+      "buildEvidence": null,
+      "signingEvidence": null,
+      "installed": false,
+      "deviceVerified": false,
+      "deviceEvidence": null
+    },
+    "ios": {
+      "sourceCommit": null,
+      "built": false,
+      "version": null,
+      "artifact": null,
+      "sha256": null,
+      "buildEvidence": null,
+      "signingEvidence": null,
+      "installed": false,
+      "deviceVerified": false,
+      "deviceEvidence": null
+    },
+    "windows": {
+      "supported": false
+    },
+    "android": {
+      "supported": false
+    }
+  },
+  "recovery": {
+    "owner": null,
+    "checkpoint": null,
+    "rollback": null
+  },
+  "approval": {
+    "evidence": null
+  },
+  "mode": "private-pilot"
+}

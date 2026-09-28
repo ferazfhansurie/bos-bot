@@ -236,7 +236,7 @@ function ReplayTourRow() {
           onClick={() => dispatch({ type: "toggleWelcome", open: true })}
           className="ui-button"
         >
-          {t("settings.welcome.replay")}
+          Set up my AI team
         </button>
       </div>
     </SettingRow>

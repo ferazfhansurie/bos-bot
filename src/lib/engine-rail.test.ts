@@ -19,3 +19,9 @@ describe("splitEngineRail", () => {
     expect(splitEngineRail(rows).custom).toEqual([]);
   });
 });
+
+it('places free cloud catalogs in Cloud despite custom connection metadata',()=>{
+ const free={instanceId:'bos-free',driverKind:'openrouter-free',access:'custom'};
+ const local={instanceId:'local',driverKind:'hermesAgent',access:'custom'};
+ expect(splitEngineRail([free,local])).toEqual({subscription:[free],custom:[local]});
+});

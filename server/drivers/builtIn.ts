@@ -3,8 +3,10 @@
 import type { AnyProviderDriver } from "../contracts.ts";
 import { ClaudeDriver } from "./claude.ts";
 import { CodexDriver } from "./codex.ts";
+import { OpenRouterFreeDriver } from "./openrouter-free.ts";
 
 export const BUILT_IN_DRIVERS: readonly AnyProviderDriver[] = [
   ClaudeDriver,
   CodexDriver,
+  OpenRouterFreeDriver,
 ];

@@ -26,7 +26,8 @@ import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
-import { BOS_JARVIS } from "../shared/bos-jarvis.ts";
+import { onboardingChief } from "./onboarding-chief.ts";
+import { verifyFreeModelKey } from "./free-model-setup.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
 import { SharedRequestStore } from "./shared-request-store.ts";
@@ -16051,7 +16052,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 400, { error: "requireAvailableModel requires modelSelection" });
       }
       const profileInput = Object.fromEntries(
-        ["name", "title", "description"]
+        ["name", "title", "description", "soul"]
           .filter((key) => body[key] !== undefined)
           .map((key) => [key, body[key]]),
       );
@@ -16078,18 +16079,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (store.bots.length >= MAX_WORKSPACE_BOTS) {
         return json(res, 409, { error: `this workspace is limited to ${MAX_WORKSPACE_BOTS} bots` });
       }
-      const firstBosBot = store.bots.length === 0;
       const bot = store.createBot({
         ...profile.patch,
-        ...(firstBosBot ? {
-          ...BOS_JARVIS,
-          soul: [
-            "You are Jarvis, Firaz's direct and proactive AI co-founder inside BOS Bot.",
-            "Use the available Claude or Codex subscription model selected for this thread.",
-            "Use AIOS MCP tools and durable workspace context when available.",
-            "Be concise, action-first, security-conscious, and explicit about what is verified versus merely configured.",
-          ].join("\n"),
-        } : {}),
         section,
         modelSelection: selection,
       });
@@ -18382,6 +18373,51 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { decisions: readDecisions(DATA_DIR, parsedLimit ?? 200) });
     }
 
+    const busyProviderSelections = () => store.bots.flatMap((bot) => {
+      const busyTasks = store.tasks(bot.id).filter((task) => threadBusy(bot.id, task.threadId));
+      const selections = busyTasks.map((task) => botForThread(bot.id, task.threadId)!.modelSelection);
+      // Rooms still run from the profile default; a direct thread does not.
+      if (activeGroupTurnForBot(bot.id) || (bot.busy && busyTasks.length === 0)) selections.push(bot.modelSelection);
+      return selections;
+    });
+
+    // Explicit owner action; default admin scope and no provider dispatch.
+    if (method === "POST" && path === "/api/onboarding/chief") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      const body=await readBody(req,2048);
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res,401,{error:"Session ended"});
+      let selection:ModelSelection|undefined;
+      if(body?.modelSelection!==undefined){
+        const checked=checkedModelSelection(body.modelSelection,undefined,true);
+        if(!checked.ok)return json(res,checked.status,{error:checked.error});
+        selection=checked.selection;
+      }
+      const bot = onboardingChief(store, MAX_WORKSPACE_BOTS, selection);
+      return json(res, 200, { bot: { ...wireBot(bot), messages: store.messagesFor(bot.threadId), activeLeafId: store.activeLeaf(bot.threadId) } });
+    }
+
+    if (method === "POST" && path === "/api/onboarding/free-model") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      if (providerConfigBusy) return json(res, 409, { error: "Provider settings are already being updated." });
+      const instanceId = "bos-free";
+      if (busyProviderSelections().some(selection=>selection.instanceId===instanceId)) return json(res, 409, { error: "Wait for your free-model tasks to finish before reconnecting." });
+      const body=await readBody(req, 2048);
+      if (providerConfigBusy) return json(res,409,{error:"Provider settings are already being updated."});
+      providerConfigBusy=true;
+      providerInstancesChanging.add(instanceId);
+      try {
+        const key=await verifyFreeModelKey(body?.key);
+        if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res,401,{error:"Session ended"});
+        if (busyProviderSelections().some(selection=>selection.instanceId===instanceId)) return json(res,409,{error:"Wait for your free-model tasks to finish before reconnecting."});
+        const instances=persistableInstanceConfigs(cfg);
+        instances[instanceId]={driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
+        await persistProviderInstance(instanceId,instances);
+        broadcast({kind:"config",...configStatus()});
+        res.setHeader("cache-control","no-store");
+        return json(res,200,{instances:await describeInstances()});
+      } finally {providerInstancesChanging.delete(instanceId);providerConfigBusy=false;}
+    }
+
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/instances") {
       // Rescan PATH first: this endpoint is how the app answers "what can I
@@ -18533,13 +18569,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // executable already configured for this Claude instance. The JSON gate
     // keeps a hostile page from triggering a local process with a simple
     // cross-origin form request.
-    const busyProviderSelections = () => store.bots.flatMap((bot) => {
-      const busyTasks = store.tasks(bot.id).filter((task) => threadBusy(bot.id, task.threadId));
-      const selections = busyTasks.map((task) => botForThread(bot.id, task.threadId)!.modelSelection);
-      // Rooms still run from the profile default; a direct thread does not.
-      if (activeGroupTurnForBot(bot.id) || (bot.busy && busyTasks.length === 0)) selections.push(bot.modelSelection);
-      return selections;
-    });
     const claudeUpdate = /^\/api\/instances\/([\w.-]+)\/claude-update$/.exec(path);
     if (method === "POST" && claudeUpdate) {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {

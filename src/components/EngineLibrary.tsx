@@ -3,6 +3,7 @@ import { ArrowUpRight, Check, ChevronDown, RefreshCw } from "lucide-react";
 import { useStore, type InstanceInfo } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { isFreeCloud } from "@/lib/engine-rail";
 import { InstanceProviderMark } from "./ProviderIcons";
 
 export function engineReady(instance: InstanceInfo): boolean {
@@ -22,7 +23,7 @@ const providers: Record<string, string> = {
 export function EngineCard({ instance, children }: { instance: InstanceInfo; children: ReactNode }) {
   const ready = engineReady(instance);
   const email = instance.snapshot.authenticated === true ? instance.snapshot.account?.email : undefined;
-  const subtitle = email ?? (instance.access === "custom"
+  const subtitle = isFreeCloud(instance) ? "OpenRouter · Free cloud models" : email ?? (instance.access === "custom"
     ? t("engines.library.custom")
     : providers[instance.driverKind] ?? instance.driverKind);
   // Some CLIs return their executable name rather than a version. Do not show

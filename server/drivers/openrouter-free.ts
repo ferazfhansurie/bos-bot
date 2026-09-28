@@ -1,0 +1,69 @@
+// Explicit, tool-capable zero-price OpenRouter connection. Never inherits keys.
+import type { ModelCatalog, ProviderDriver } from '../contracts.ts';
+import { createOpenAIChatRuntime } from './openai-chat.ts';
+const API='https://openrouter.ai/api/v1';
+const DEFAULT_MODEL='openrouter/free';
+const isFreeId=(id:unknown):id is string=>typeof id==='string'&&(id===DEFAULT_MODEL||/^[a-zA-Z0-9_./-]+:free$/.test(id));
+const zero=(value:unknown)=>((typeof value==='string'&&value.trim()!=='')||typeof value==='number')&&Number.isFinite(Number(value))&&Number(value)===0;
+const record=(value:unknown):Record<string,unknown>|null=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
+export function isFreeToolModel(value:unknown):boolean{
+ const row=record(value);const pricing=record(row?.pricing);
+ return !!row&&isFreeId(row.id)&&!!pricing&&zero(pricing.prompt)&&zero(pricing.completion)&&Object.values(pricing).every(zero)&&Array.isArray(row.supported_parameters)&&row.supported_parameters.includes('tools');
+}
+export interface OpenRouterFreeConfig {key?:string;model?:string;}
+function decodeConfig(raw:unknown):OpenRouterFreeConfig{
+ const config=record(raw??{});if(!config)throw new Error('OpenRouter free config must be an object');
+ if(Object.keys(config).some(key=>!['key','model'].includes(key)))throw new Error('OpenRouter free config accepts only key and model');
+ if(config.key!==undefined&&typeof config.key!=='string')throw new Error('OpenRouter free key must be a string');
+ const model=config.model??DEFAULT_MODEL;if(!isFreeId(model))throw new Error('OpenRouter free requires openrouter/free or an explicit :free model');
+ return {model,...(typeof config.key==='string'&&config.key.trim()?{key:config.key.trim()}:{})};
+}
+const safeError=(value:unknown):Error=>{
+ const error=value instanceof Error?value:new Error('');
+ if(error.name==='AbortError'||error.name==='TimeoutError')return new Error('OpenRouter free request interrupted or timed out');
+ const status=error.message.match(/HTTP (\d{3})/);if(status)return new Error(`OpenRouter free HTTP ${status[1]} — connection unavailable; no paid fallback`);
+ if(['OpenRouter free key required','OpenRouter free model is not currently verified zero-price and tool-capable','OpenRouter free catalog unavailable'].includes(error.message))return new Error(error.message);
+ return new Error('OpenRouter free request failed; no paid fallback');
+};
+export const OpenRouterFreeDriver:ProviderDriver<OpenRouterFreeConfig>={
+ driverKind:'openrouter-free',
+ metadata:{displayName:'OpenRouter Free',supportsMultipleInstances:true,access:'custom'},
+ models:{default:DEFAULT_MODEL,options:[]},
+ install:{docsUrl:'https://openrouter.ai/keys',signInCommand:'Connect an OpenRouter API key in BOS Free setup.'},
+ decodeConfig,defaultConfig:()=>decodeConfig({}),
+ async create(input){
+  const config=decodeConfig(input.config);const apiKey=config.key??'';
+  let catalog:ModelCatalog={default:config.model??DEFAULT_MODEL,options:[]};
+  let catalogError='OpenRouter free catalog unavailable';
+  const refresh=async(signal?:AbortSignal)=>{
+   try{
+    const response=await fetch(`${API}/models`,{redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(8000)]):AbortSignal.timeout(8000)});
+    if(!response.ok)throw new Error('catalog unavailable');
+    const json=await response.json() as {data?:unknown};if(!Array.isArray(json.data))throw new Error('catalog unavailable');
+    const seen=new Set<string>();const options:ModelCatalog['options']=[];
+    for(const value of json.data){if(!isFreeToolModel(value))continue;const row=value as {id:string;name?:unknown};if(seen.has(row.id))continue;seen.add(row.id);options.push({id:row.id,label:typeof row.name==='string'?row.name:row.id,custom:true});}
+    catalog={default:config.model??DEFAULT_MODEL,options};catalogError='';
+   }catch{
+    catalog={default:config.model??DEFAULT_MODEL,options:[]};catalogError='OpenRouter free catalog unavailable';throw new Error(catalogError);
+   }
+  };
+  if(apiKey)await refresh().catch(()=>{});
+  const runtime=createOpenAIChatRuntime({
+   input,driverKind:'openrouter-free',apiKey,apiUrl:API,tools:true,models:()=>catalog,
+   refreshModels:async()=>{if(apiKey)await refresh();},
+   beforeRequest:async(model,signal)=>{
+    if(!apiKey)throw new Error('OpenRouter free key required');
+    if(!isFreeId(model))throw new Error('OpenRouter free model is not currently verified zero-price and tool-capable');
+    await refresh(signal);
+    if(!catalog.options.some(option=>option.id===model))throw new Error('OpenRouter free model is not currently verified zero-price and tool-capable');
+   },
+   sanitizeError:safeError,redirect:'error',
+   requestBody:(model,messages,stream)=>({model,messages,stream,max_tokens:4096,stream_options:stream?{include_usage:true}:undefined,provider:{allow_fallbacks:false,require_parameters:true,max_price:{prompt:0,completion:0}}}),
+   httpErrorLabel:'OpenRouter free',missingKeyError:'OpenRouter free key required',unavailableReason:'OpenRouter free key required',timeoutMs:60_000,reasoning:true,includeUsageInCompleted:true,
+   nativeLog:{source:'openrouter-free.chat.completions',outgoing:(_turn,messages,model)=>({model,messageCount:messages.length}),incoming:({text,usage})=>({textLength:text.length,usage})},
+  });
+  // Catalog health and configured credentials are not an authenticated inference claim.
+  runtime.snapshot=async()=>!apiKey?{state:'unavailable',reason:'OpenRouter free key required'}:catalogError||!catalog.options.some(x=>x.id===catalog.default)?{state:'unavailable',reason:catalogError||'Selected free model is unavailable'}:{state:'available',version:null};
+  return runtime;
+ },
+};

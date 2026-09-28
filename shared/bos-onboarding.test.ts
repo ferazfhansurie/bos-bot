@@ -7,12 +7,16 @@ describe("first business assignment", () => {
     const text=firstAssignment(brief);
     expect(text).toContain(brief.business);expect(text).toContain(brief.customers);
     expect(text).toContain("recruit one specialist");expect(text).toContain("one revision");
+    expect(text).toContain("Carry out the setup now");
+    expect(text).toContain("coordinate_bots");
+    expect(text).toContain("pending review");
+    expect(text).toContain("reuse a suitable specialist");
     expect(text).toContain("Do not publish, spend or contact anyone without asking");
   });
   it("lets BOS own the work directly and states prototype limits",()=>{
     for(const outcome of FIRST_OUTCOMES){
       const text=firstAssignment({...brief,outcome:outcome.id,approach:"bos"});
-      expect(text).toContain("Work with me directly as BOS");expect(text).toContain(outcome.deliverable);
+      expect(text).toContain("Work with me directly as my team coordinator");expect(text).toContain(outcome.deliverable);
     }
   });
   it("rejects missing context and unknown outcomes",()=>{

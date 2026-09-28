@@ -75,3 +75,9 @@ describe("engine library", () => {
     }
   });
 });
+
+it('labels the free connection as OpenRouter cloud rather than local or custom',()=>{
+ const html=renderToStaticMarkup(createElement(EngineCard,{instance:instance({instanceId:'bos-free',driverKind:'openrouter-free',displayName:'BOS Free',access:'custom'}),children:null}));
+ expect(html).toContain('OpenRouter · Free cloud models');
+ expect(html).not.toContain('Custom endpoint');expect(html).not.toContain('Local');
+});
