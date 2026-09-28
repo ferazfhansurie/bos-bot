@@ -1545,22 +1545,26 @@ function askBotAndWait(targetBotId: string, message: string, depth: number, from
 }
 
 /** Free setup rescues bots whose engine cannot run (preloaded on a signed-out
- * CLI, say). Busy threads and elevated approval modes are left untouched. */
-function moveUnusableBotsToFree(instances: Awaited<ReturnType<typeof registry.describe>>, instanceId: string): number {
-  const fallback = freeFallbackSelection(instances, instanceId);
+ * CLI, say). An engine counts as unusable only when every probe agrees; busy,
+ * room-speaking and elevated-approval bots are left untouched, as are threads
+ * that chose their own working model. */
+function moveUnusableBotsToFree(probes: Awaited<ReturnType<typeof registry.describe>>[], instanceId: string): number {
+  const latest = probes[probes.length - 1];
+  const fallback = latest ? freeFallbackSelection(latest, instanceId) : null;
   if (!fallback) return 0;
+  const unusable = (selection: ModelSelection | undefined) => probes.every((probe) => !selectionUsable(probe, selection));
   let moved = 0;
   for (const bot of store.bots) {
     const mode = approvalModeFor(bot);
-    if (mode === "full" || mode === "custom") continue;
+    if (mode === "full" || mode === "custom" || activeGroupTurnForBot(bot.id)) continue;
     const tasks = store.tasks(bot.id);
     if (tasks.some((task) => threadBusy(bot.id, task.threadId))) continue;
-    if (!selectionUsable(instances, bot.modelSelection)) {
-      store.patchBot(bot.id, { modelSelection: structuredClone(fallback) });
-      moved++;
-    }
+    if (!unusable(bot.modelSelection)) continue;
+    const previous = bot.modelSelection.instanceId;
+    store.patchBot(bot.id, { modelSelection: structuredClone(fallback) });
+    moved++;
     for (const task of tasks) {
-      if (task.modelSelection && !selectionUsable(instances, task.modelSelection)) {
+      if (task.modelSelection?.instanceId === previous && unusable(task.modelSelection)) {
         store.patchTask(bot.id, task.threadId, { modelSelection: structuredClone(fallback) });
       }
     }
@@ -18441,7 +18445,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const instances=persistableInstanceConfigs(cfg);
         instances[instanceId]=hosted?{driver:"openrouter-free",displayName:"BOS Free",config:{key,model:"openrouter/free",hosted:true}}:{driver:"openrouter-free",displayName:"BOS Free · OpenRouter",config:{key,model:"openrouter/free"}};
         await persistProviderInstance(instanceId,instances);
-        const moved=moveUnusableBotsToFree(await registry.describe(),instanceId);
+        // Two probes: one slow sign-in check must not move a working bot.
+        const firstProbe=await registry.describe();
+        const moved=moveUnusableBotsToFree([firstProbe,await registry.describe()],instanceId);
         broadcast({kind:"config",...configStatus()});
         res.setHeader("cache-control","no-store");
         return json(res,200,{instances:await describeInstances(),moved});

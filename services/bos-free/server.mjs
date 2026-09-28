@@ -15,7 +15,7 @@ const CHAT_PER_IP = Number(process.env.CHAT_PER_IP_DAILY || 25);
 const UPSTREAM = process.env.UPSTREAM || 'https://openrouter.ai/api/v1';
 const MAX_BODY = 4 * 1024 * 1024;
 const MAX_TOKENS = 4096;
-const ATTEMPTS = Number(process.env.UPSTREAM_ATTEMPTS || 4);
+const ATTEMPTS = Math.max(1, Math.floor(Number(process.env.UPSTREAM_ATTEMPTS) || 4));
 const COOLDOWN_MS = Number(process.env.MODEL_COOLDOWN_MS || 60_000);
 if (!KEY) { console.error('OPENROUTER_API_KEY missing'); process.exit(1); }
 
@@ -51,7 +51,7 @@ export function candidates(requested, models) {
   if (requested !== 'openrouter/free') return [requested];
   const rest = models.map((m) => m.id).filter((id) => id !== requested && warm(id));
   for (let i = rest.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [rest[i], rest[j]] = [rest[j], rest[i]]; }
-  return [requested, ...rest].slice(0, Math.max(1, ATTEMPTS));
+  return [requested, ...rest].slice(0, ATTEMPTS);
 }
 const retryable = (status) => status === 429 || status === 502 || status === 503;
 const limitedModel = (text) => /([a-zA-Z0-9_./-]+:free) is temporarily rate-limited/.exec(text)?.[1];
@@ -123,21 +123,28 @@ export const server = http.createServer(async (req, res) => {
       if ((db.ipUsage[ip] || 0) >= CHAT_PER_IP) return send(res, 429, { error: { message: 'Daily BOS Free limit reached for this network' } }, { 'x-bos-free-remaining': '0' });
       if (db.global >= GLOBAL) return send(res, 429, { error: { message: 'BOS Free is at capacity today' } }, { 'x-bos-free-remaining': '0' });
       db.usage[id] = (db.usage[id] || 0) + 1; db.ipUsage[ip] = (db.ipUsage[ip] || 0) + 1; db.global += 1; save();
+      // Upstream refusals, network failures and disconnects before a reply don't spend the caller's allowance.
+      let refunded = false;
+      const refund = () => { if (refunded) return; refunded = true; db.usage[id] = Math.max(0, (db.usage[id] || 0) - 1); db.ipUsage[ip] = Math.max(0, (db.ipUsage[ip] || 0) - 1); db.global = Math.max(0, db.global - 1); save(); };
       const ctl = new AbortController(); res.on('close', () => { if (!res.writableFinished) ctl.abort(); });
       const tries = candidates(body.model, models);
       let up;
-      for (let i = 0; i < tries.length; i++) {
-        up = await fetch(`${UPSTREAM}/chat/completions`, {
-          method: 'POST', signal: ctl.signal, redirect: 'error',
-          headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', 'HTTP-Referer': 'https://bos.aihlete.com', 'X-Title': 'BOS Free' },
-          body: JSON.stringify(sanitize({ ...body, model: tries[i] })),
-        });
-        if (!retryable(up.status) || i === tries.length - 1) break;
-        const text = await up.text().catch(() => '');
-        cool(limitedModel(text) || tries[i]);
-      }
-      // Upstream refusals (rate limits, provider errors) don't spend the caller's allowance.
-      if (up.status >= 400) { db.usage[id] = Math.max(0, db.usage[id] - 1); db.ipUsage[ip] = Math.max(0, db.ipUsage[ip] - 1); db.global = Math.max(0, db.global - 1); save(); }
+      try {
+        for (let i = 0; i < tries.length; i++) {
+          const last = i === tries.length - 1;
+          try {
+            up = await fetch(`${UPSTREAM}/chat/completions`, {
+              method: 'POST', signal: ctl.signal, redirect: 'error',
+              headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', 'HTTP-Referer': 'https://bos.aihlete.com', 'X-Title': 'BOS Free' },
+              body: JSON.stringify(sanitize({ ...body, model: tries[i] })),
+            });
+          } catch (e) { if (ctl.signal.aborted || last) throw e; continue; }
+          if (!retryable(up.status) || last) break;
+          const text = await up.text();
+          cool(limitedModel(text) || tries[i]);
+        }
+      } catch (e) { refund(); throw e; }
+      if (up.status >= 400) refund();
       res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json', 'cache-control': 'no-store', 'x-bos-free-remaining': String(remaining(id).install) });
       if (!up.body) return res.end();
       const reader = up.body.getReader();
