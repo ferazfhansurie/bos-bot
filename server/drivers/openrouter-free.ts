@@ -5,6 +5,8 @@ const API='https://openrouter.ai/api/v1';
 // BOS-hosted relay: owner key stays server-side; installs hold a capped per-install token.
 export const BOS_FREE_API=process.env.BOS_FREE_URL||'https://bos-free.aihlete.com/api/v1';
 const DEFAULT_MODEL='openrouter/free';
+// the hosted relay serves one model; its id keeps the :free shape older installs accept
+export const BOS_FREE_MODEL='bos-free/gpt-6-luna:free';
 const isFreeId=(id:unknown):id is string=>typeof id==='string'&&(id===DEFAULT_MODEL||/^[a-zA-Z0-9_./-]+:free$/.test(id));
 const zero=(value:unknown)=>((typeof value==='string'&&value.trim()!=='')||typeof value==='number')&&Number.isFinite(Number(value))&&Number(value)===0;
 const record=(value:unknown):Record<string,unknown>|null=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
@@ -21,6 +23,16 @@ function decodeConfig(raw:unknown):OpenRouterFreeConfig{
  const model=config.model??DEFAULT_MODEL;if(!isFreeId(model))throw new Error('OpenRouter free requires openrouter/free or an explicit :free model');
  return {model,...(config.hosted?{hosted:true}:{}),...(typeof config.key==='string'&&config.key.trim()?{key:config.key.trim()}:{})};
 }
+const hostedError=(value:unknown):Error=>{
+ const error=value instanceof Error?value:new Error('');
+ if(error.name==='AbortError'||error.name==='TimeoutError')return new Error('BOS Free request interrupted or timed out');
+ const status=error.message.match(/HTTP (\d{3})/);
+ if(status?.[1]==='429')return new Error('BOS Free is busy or today\'s limit for this install is used up. Try again in a minute (HTTP 429).');
+ if(status?.[1]==='401')return new Error('The free connection needs reconnecting: Settings → Engines → Reconnect (HTTP 401).');
+ if(status)return new Error(`BOS Free couldn't answer this time. Try again in a moment (HTTP ${status[1]}).`);
+ if(['OpenRouter free key required','OpenRouter free catalog unavailable'].includes(error.message))return new Error(error.message.replace('OpenRouter free','BOS Free'));
+ return new Error('BOS Free couldn\'t answer this time. Try again in a moment.');
+};
 const safeError=(value:unknown):Error=>{
  const error=value instanceof Error?value:new Error('');
  if(error.name==='AbortError'||error.name==='TimeoutError')return new Error('OpenRouter free request interrupted or timed out');
@@ -48,7 +60,9 @@ export const OpenRouterFreeDriver:ProviderDriver<OpenRouterFreeConfig>={
     const json=await response.json() as {data?:unknown};if(!Array.isArray(json.data))throw new Error('catalog unavailable');
     const seen=new Set<string>();const options:ModelCatalog['options']=[];
     for(const value of json.data){if(!isFreeToolModel(value))continue;const row=value as {id:string;name?:unknown};if(seen.has(row.id))continue;seen.add(row.id);options.push({id:row.id,label:typeof row.name==='string'?row.name:row.id,custom:true});}
-    catalog={default:config.model??DEFAULT_MODEL,options};catalogError='';
+    // hosted installs set up before the relay moved to Luna keep an old id; the relay serves them with its own model
+    const model=config.model??DEFAULT_MODEL;
+    catalog={default:config.hosted&&!options.some(option=>option.id===model)&&options[0]?options[0].id:model,options};catalogError='';
    }catch{
     catalog={default:config.model??DEFAULT_MODEL,options:[]};catalogError='OpenRouter free catalog unavailable';throw new Error(catalogError);
    }
@@ -61,11 +75,11 @@ export const OpenRouterFreeDriver:ProviderDriver<OpenRouterFreeConfig>={
     if(!apiKey)throw new Error('OpenRouter free key required');
     if(!isFreeId(model))throw new Error('OpenRouter free model is not currently verified zero-price and tool-capable');
     await refresh(signal);
-    if(!catalog.options.some(option=>option.id===model))throw new Error('OpenRouter free model is not currently verified zero-price and tool-capable');
+    if(!config.hosted&&!catalog.options.some(option=>option.id===model))throw new Error('OpenRouter free model is not currently verified zero-price and tool-capable');
    },
-   sanitizeError:safeError,redirect:'error',
+   sanitizeError:config.hosted?hostedError:safeError,redirect:'error',
    requestBody:(model,messages,stream)=>({model,messages,stream,max_tokens:4096,stream_options:stream?{include_usage:true}:undefined,provider:{allow_fallbacks:false,require_parameters:true,max_price:{prompt:0,completion:0}}}),
-   httpErrorLabel:'OpenRouter free',missingKeyError:'OpenRouter free key required',unavailableReason:'OpenRouter free key required',timeoutMs:60_000,reasoning:true,includeUsageInCompleted:true,
+   httpErrorLabel:config.hosted?'BOS Free':'OpenRouter free',missingKeyError:'OpenRouter free key required',unavailableReason:'OpenRouter free key required',timeoutMs:60_000,reasoning:true,includeUsageInCompleted:true,
    nativeLog:{source:'openrouter-free.chat.completions',outgoing:(_turn,messages,model)=>({model,messageCount:messages.length}),incoming:({text,usage})=>({textLength:text.length,usage})},
   });
   // Catalog health and configured credentials are not an authenticated inference claim.

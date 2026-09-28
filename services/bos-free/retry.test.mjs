@@ -5,67 +5,42 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-let seen = []; let limited = new Set(['openrouter/free', 'busy/one:free']);
+let calls = 0; let plan = [];
 const up = http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
-  if (req.url.endsWith('/models')) return res.end(JSON.stringify({ data: [
-    { id: 'openrouter/free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-    { id: 'busy/one:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-    { id: 'ok/two:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-    { id: 'deny/three:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-    { id: 'paid/x', pricing: { prompt: '1', completion: '1' }, supported_parameters: ['tools'] },
-  ] }));
   let b = ''; req.on('data', (c) => b += c); req.on('end', () => {
-    const body = JSON.parse(b); seen.push(body.model);
-    if (body.model === 'deny/three:free') { res.statusCode = seen.length % 2 ? 403 : 400; return res.end(JSON.stringify({ error: { message: 'Provider returned error' } })); }
-    if (limited.has(body.model)) { res.statusCode = 429; return res.end(JSON.stringify({ error: { message: 'Provider returned error', metadata: { raw: `${body.model === 'openrouter/free' ? 'busy/one:free' : body.model} is temporarily rate-limited upstream.` } } })); }
-    res.end(JSON.stringify({ model: body.model, choices: [{ message: { content: 'ok' } }] }));
+    calls++; const step = plan.shift() || 'ok';
+    if (step === 'busy') { res.statusCode = 429; return res.end(JSON.stringify({ error: { message: 'Rate limit reached', code: 'rate_limit_exceeded' } })); }
+    if (step === 'quota') { res.statusCode = 429; return res.end(JSON.stringify({ error: { message: 'You exceeded your current quota', code: 'insufficient_quota' } })); }
+    if (step === 'bad') { res.statusCode = 400; return res.end(JSON.stringify({ error: { message: 'Invalid schema', code: 'invalid_request_error' } })); }
+    if (step === '5xx') { res.statusCode = 503; return res.end(JSON.stringify({ error: { message: 'overloaded' } })); }
+    res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }));
   });
 });
 await new Promise((r) => up.listen(0, '127.0.0.1', r));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bosfree-retry-'));
-Object.assign(process.env, { OPENROUTER_API_KEY: 'sk-owner', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10' });
-const { server } = await import('./server.mjs');
+Object.assign(process.env, { OPENAI_API_KEY: 'sk-owner', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', RETRY_BACKOFF_MS: '5' });
+const { server, MODEL_ID } = await import('./server.mjs');
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;
-const chat = (t, model) => fetch(`${base}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, messages: [{ role: 'user', content: 'x' }] }) });
+const chat = (t) => fetch(`${base}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: MODEL_ID, messages: [{ role: 'user', content: 'x' }] }) });
 const usage = async (t) => (await (await fetch(`${base}/usage`, { headers: { authorization: `Bearer ${t}` } })).json()).install;
 
-test('free router retries rate-limited free models, never paid, counts once', async () => {
-  const { token } = await (await fetch(`${base}/register`, { method: 'POST' })).json();
-  const r = await chat(token, 'openrouter/free');
-  assert.equal(r.status, 200);
-  assert.equal((await r.json()).model, 'ok/two:free');
-  assert(!seen.includes('paid/x'));
-  assert.equal(await usage(token), 4, 'one call counted');
-  seen = [];
-  const again = await chat(token, 'openrouter/free');
-  assert.equal(again.status, 200);
-  assert(!seen.includes('busy/one:free'), 'cooled model skipped');
-  seen = [];
-  const pinned = await chat(token, 'ok/two:free');
-  assert.equal(pinned.status, 200);
-  assert.deepEqual(seen, ['ok/two:free'], 'a chosen free model is tried first');
-  limited.delete('openrouter/free'); seen = [];
-  const busyPinned = await chat(token, 'busy/one:free');
-  assert.equal(busyPinned.status, 200, 'a busy chosen model falls back to other free models');
-  assert(!seen.includes('paid/x'));
-  limited.add('openrouter/free');
-  assert.equal(await usage(token), 1);
-  limited = new Set(['openrouter/free', 'busy/one:free', 'ok/two:free']); seen = [];
-  const allBusy = await chat(token, 'openrouter/free');
-  assert.equal(allBusy.status, 429);
-  assert.equal(await usage(token), 1, 'failed call refunded');
-});
-
-test('a free model refusing with 400/403 falls back to another free model', async () => {
+test('busy and 5xx retry luna with backoff; quota and bad requests fail fast and refund', async () => {
   try {
-    limited = new Set(); seen = [];
     const { token } = await (await fetch(`${base}/register`, { method: 'POST' })).json();
-    const r = await chat(token, 'deny/three:free');
-    assert.equal(r.status, 200, 'refused or cooled model does not fail the turn');
-    assert.notEqual((await r.json()).model, 'deny/three:free');
-    assert(!seen.includes('paid/x'));
+    plan = ['busy', '5xx']; calls = 0;
+    assert.equal((await chat(token)).status, 200, 'third try answers');
+    assert.equal(calls, 3);
+    assert.equal(await usage(token), 4, 'counted once');
+    plan = ['quota']; calls = 0;
+    const q = await chat(token);
+    assert.equal(q.status, 429); assert.equal(calls, 1, 'out of credit is not retried');
+    assert.equal(await usage(token), 4, 'refunded');
+    plan = ['bad']; calls = 0;
+    assert.equal((await chat(token)).status, 400); assert.equal(calls, 1, '400 is not retried');
+    plan = ['busy', 'busy', 'busy']; calls = 0;
+    assert.equal((await chat(token)).status, 429); assert.equal(calls, 3, 'bounded retries');
     assert.equal(await usage(token), 4);
   } finally { server.close(); up.close(); }
 });

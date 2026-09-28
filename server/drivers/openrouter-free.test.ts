@@ -46,4 +46,14 @@ describe('OpenRouter free driver',()=>{
   const models=calls.find(x=>x[0].endsWith('/models'))!;expect((models[1].headers as Record<string,string>).Authorization).toBe('Bearer bosf_fixture');
   expect(JSON.stringify(calls)).not.toContain('must-not-use');await inst.dispose();
  });
+ it('hosted installs pinned to an old free id move to the relay\'s Luna model',async()=>{
+  const luna={id:'bos-free/gpt-6-luna:free',name:'BOS Free GPT-6 Luna',pricing:{prompt:'0',completion:'0',request:'0'},supported_parameters:['tools']};
+  const fetch=vi.fn(async(url:unknown)=>String(url).endsWith('/models')?response({data:[luna]}):response({error:{message:'busy'}},429));vi.stubGlobal('fetch',fetch);
+  const inst=await OpenRouterFreeDriver.create({instanceId:'fixture-free',displayName:'Free fixture',enabled:true,config:{key:'bosf_fixture',model:'qwen/qwen3.8-27b:free',hosted:true},environment:{}});
+  expect(await inst.snapshot()).toMatchObject({state:'available'});
+  expect(inst.models.default).toBe(luna.id);
+  await expect(inst.generateText!('synthetic')).rejects.toThrow('BOS Free is busy');
+  expect(fetch.mock.calls.some(x=>String(x[0]).endsWith('/chat/completions'))).toBe(true);
+  await inst.dispose();
+ });
 });

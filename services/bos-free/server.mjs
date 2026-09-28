@@ -1,23 +1,25 @@
-// BOS Free: hosted zero-price OpenRouter relay. Holds the owner key server-side;
-// installs get per-install tokens with daily caps. Never forwards paid models.
+// BOS Free: hosted relay to OpenAI GPT-6 Luna. Holds the owner key server-side;
+// installs get per-install tokens with daily caps. Only the one BOS Free model is ever called.
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const PORT = Number(process.env.PORT || 3370);
-const KEY = process.env.OPENROUTER_API_KEY || '';
+const KEY = process.env.OPENAI_API_KEY || '';
 const DATA = process.env.BOS_FREE_DATA || path.join(process.cwd(), 'data.json');
-const PER_INSTALL = Number(process.env.PER_INSTALL_DAILY || 20);
-const GLOBAL = Number(process.env.GLOBAL_DAILY || 45);
+const PER_INSTALL = Number(process.env.PER_INSTALL_DAILY || 100);
+// owner budget: at ~$0.001-0.002 a turn, 2000 turns/day stays within a few dollars
+const GLOBAL = Number(process.env.GLOBAL_DAILY || 2000);
 const REG_PER_IP = Number(process.env.REGISTER_PER_IP_DAILY || 2);
-const CHAT_PER_IP = Number(process.env.CHAT_PER_IP_DAILY || 25);
-const UPSTREAM = process.env.UPSTREAM || 'https://openrouter.ai/api/v1';
+const CHAT_PER_IP = Number(process.env.CHAT_PER_IP_DAILY || 150);
+const UPSTREAM = process.env.UPSTREAM || 'https://api.openai.com/v1';
+const UPSTREAM_MODEL = process.env.BOS_FREE_MODEL || 'gpt-6-luna';
 const MAX_BODY = 4 * 1024 * 1024;
 const MAX_TOKENS = 4096;
-const ATTEMPTS = Math.max(1, Math.floor(Number(process.env.UPSTREAM_ATTEMPTS) || 4));
-const COOLDOWN_MS = Number(process.env.MODEL_COOLDOWN_MS || 60_000);
-if (!KEY) { console.error('OPENROUTER_API_KEY missing'); process.exit(1); }
+const ATTEMPTS = Math.max(1, Math.floor(Number(process.env.UPSTREAM_ATTEMPTS) || 3));
+const BACKOFF_MS = Number(process.env.RETRY_BACKOFF_MS ?? 800);
+if (!KEY) { console.error('OPENAI_API_KEY missing'); process.exit(1); }
 
 const today = () => new Date().toISOString().slice(0, 10);
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -26,39 +28,18 @@ try { db = { ...db, ...JSON.parse(fs.readFileSync(DATA, 'utf8')) }; } catch {}
 const save = () => { const t = DATA + '.tmp'; fs.writeFileSync(t, JSON.stringify(db), { mode: 0o600 }); fs.renameSync(t, DATA); };
 const roll = () => { if (db.day !== today()) { db.day = today(); db.global = 0; db.usage = {}; db.reg = {}; db.ipUsage = {}; save(); } };
 
+// Installed apps accept `openrouter/free` or an id ending in `:free`; the public id keeps that shape.
+export const MODEL_ID = 'bos-free/gpt-6-luna:free';
+export const MODEL = { id: MODEL_ID, name: 'BOS Free GPT-6 Luna', pricing: { prompt: '0', completion: '0', request: '0' }, supported_parameters: ['tools', 'tool_choice', 'reasoning'] };
+// Older installs still ask for the OpenRouter free ids; they all get Luna now.
 export const isFreeId = (id) => typeof id === 'string' && (id === 'openrouter/free' || /^[a-zA-Z0-9_./-]+:free$/.test(id));
-const zero = (v) => v !== undefined && v !== null && v !== '' && Number(v) === 0;
-export const isFreeToolModel = (m) => !!m && isFreeId(m.id) && m.pricing && Object.values(m.pricing).every(zero)
-  && Array.isArray(m.supported_parameters) && m.supported_parameters.includes('tools');
 
-let catalog = { at: 0, data: [] };
-async function freeCatalog() {
-  if (Date.now() - catalog.at < 10 * 60_000 && catalog.data.length) return catalog.data;
-  const r = await fetch(`${UPSTREAM}/models`, { signal: AbortSignal.timeout(8000) });
-  if (!r.ok) throw new Error('catalog');
-  const j = await r.json();
-  catalog = { at: Date.now(), data: (j.data || []).filter(isFreeToolModel) };
-  return catalog.data;
-}
-
-// Shared free pools rate-limit individual models often. For the free router,
-// a refused model cools down and the next verified free model is tried
-// before any byte reaches the caller; every candidate is still :free.
-const cooling = new Map();
-const cool = (id) => cooling.set(id, Date.now() + COOLDOWN_MS);
-const warm = (id) => !(cooling.get(id) > Date.now());
-export function candidates(requested, models) {
-  // a chosen free model goes first; if it is busy, other free models answer instead of failing the turn
-  const router = 'openrouter/free';
-  const rest = models.map((m) => m.id).filter((id) => id !== requested && id !== router && warm(id));
-  for (let i = rest.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [rest[i], rest[j]] = [rest[j], rest[i]]; }
-  const first = requested === router || warm(requested) ? [requested] : [];
-  return [...new Set([...first, router, ...rest])].slice(0, ATTEMPTS);
-}
-// requests are validated before they go upstream, so these are one free model refusing or failing; try the next one
-const retryable = (status) => [400, 403, 404, 408, 429, 500, 502, 503, 504].includes(status);
-const upstreamReason = (text) => { try { const e = JSON.parse(text).error || {}; return String(e.metadata?.raw || e.message || '').slice(0, 160); } catch { return ''; } };
-const limitedModel = (text) => /([a-zA-Z0-9_./-]+:free) is temporarily rate-limited/.exec(text)?.[1];
+// one model, so a busy or failing call retries the same model after a short backoff
+const retryable = (status) => [408, 409, 429, 500, 502, 503, 504].includes(status);
+const upstreamReason = (text) => { try { const e = JSON.parse(text).error || {}; return String(e.code || e.message || '').slice(0, 160); } catch { return ''; } };
+// out of credit or over the org budget: retrying cannot help
+const exhausted = (text) => /insufficient_quota|credit_balance_exhausted|billing_hard_limit/.test(text);
+const wait = (ms, signal) => new Promise((resolve) => { const t = setTimeout(resolve, ms); signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true }); });
 
 const KEEPALIVE_MS = Math.max(1000, Number(process.env.KEEPALIVE_MS) || 10_000);
 const HOLD_MS = Math.max(1000, Number(process.env.HOLD_MS) || 40_000);
@@ -93,8 +74,10 @@ const auth = (req) => {
 };
 const remaining = (id) => ({ install: Math.max(0, PER_INSTALL - (db.usage[id] || 0)), global: Math.max(0, GLOBAL - db.global), resetsAt: `${today()}T24:00:00Z` });
 
-// Only these request fields reach OpenRouter; plugins/models/route could incur cost.
-const ALLOWED = ['model', 'messages', 'stream', 'tools', 'tool_choice', 'temperature', 'top_p', 'stop', 'max_tokens', 'response_format', 'reasoning', 'stream_options', 'parallel_tool_calls', 'seed'];
+// Only these request fields reach OpenAI; anything else (models, plugins, web search, audio) is dropped.
+const ALLOWED = ['messages', 'stream', 'tools', 'tool_choice', 'stop', 'response_format', 'stream_options', 'parallel_tool_calls', 'seed'];
+const MESSAGE_KEYS = ['role', 'content', 'name', 'tool_calls', 'tool_call_id'];
+const EFFORTS = ['minimal', 'low', 'medium', 'high'];
 // Text-only content and function tools: file/image parts and server tools can bill add-ons.
 const textPart = (p) => p && typeof p === 'object' && p.type === 'text' && typeof p.text === 'string';
 export function validContent(body) {
@@ -110,8 +93,14 @@ export function validContent(body) {
 export function sanitize(body) {
   const out = {};
   for (const k of ALLOWED) if (body[k] !== undefined) out[k] = body[k];
-  out.max_tokens = Math.min(Number(out.max_tokens) || MAX_TOKENS, MAX_TOKENS);
-  out.provider = { allow_fallbacks: false, require_parameters: true, max_price: { prompt: 0, completion: 0, request: 0, image: 0 } };
+  // OpenRouter-only extras on history (reasoning, reasoning_details) are rejected by OpenAI
+  out.messages = body.messages.map((m) => Object.fromEntries(MESSAGE_KEYS.filter((k) => m[k] !== undefined).map((k) => [k, m[k]])));
+  out.model = UPSTREAM_MODEL;
+  out.max_completion_tokens = Math.min(Number(body.max_completion_tokens || body.max_tokens) || MAX_TOKENS, MAX_TOKENS);
+  const effort = body.reasoning_effort || body.reasoning?.effort;
+  if (EFFORTS.includes(effort)) out.reasoning_effort = effort;
+  if (out.stream === true) out.stream_options = { include_usage: true };
+  else delete out.stream_options;
   return out;
 }
 
@@ -132,13 +121,12 @@ export const server = http.createServer(async (req, res) => {
     const id = auth(req);
     if (!id) return send(res, 401, { error: { message: 'BOS Free token required' } });
     if (req.method === 'GET' && p === '/api/v1/usage') return send(res, 200, remaining(id));
-    if (req.method === 'GET' && p === '/api/v1/models') return send(res, 200, { data: await freeCatalog() });
+    if (req.method === 'GET' && p === '/api/v1/models') return send(res, 200, { data: [MODEL] });
     if (req.method === 'POST' && p === '/api/v1/chat/completions') {
       const body = await readJson(req);
       if (!body || typeof body !== 'object' || Array.isArray(body)) return send(res, 400, { error: { message: 'Invalid request' } });
       if (!validContent(body)) return send(res, 400, { error: { message: 'BOS Free supports text messages and function tools only' } });
-      const models = await freeCatalog();
-      if (!isFreeId(body.model) || !models.some((m) => m.id === body.model)) return send(res, 400, { error: { message: 'Only verified free models are available' } });
+      if (!isFreeId(body.model)) return send(res, 400, { error: { message: 'Only BOS Free GPT-6 Luna is available' } });
       if ((db.usage[id] || 0) >= PER_INSTALL) return send(res, 429, { error: { message: 'Daily BOS Free limit reached for this install' } }, { 'x-bos-free-remaining': '0' });
       const ip = sha(clientIp(req));
       if ((db.ipUsage[ip] || 0) >= CHAT_PER_IP) return send(res, 429, { error: { message: 'Daily BOS Free limit reached for this network' } }, { 'x-bos-free-remaining': '0' });
@@ -148,7 +136,7 @@ export const server = http.createServer(async (req, res) => {
       let refunded = false;
       const refund = () => { if (refunded) return; refunded = true; db.usage[id] = Math.max(0, (db.usage[id] || 0) - 1); db.ipUsage[ip] = Math.max(0, (db.ipUsage[ip] || 0) - 1); db.global = Math.max(0, db.global - 1); save(); };
       const ctl = new AbortController(); res.on('close', () => { if (!res.writableFinished) ctl.abort(); });
-      const tries = candidates(body.model, models);
+      const tries = Array.from({ length: ATTEMPTS }, () => UPSTREAM_MODEL);
       const stream = body.stream === true;
       let opened = false; let keep = null;
       const open = () => {
@@ -166,31 +154,32 @@ export const server = http.createServer(async (req, res) => {
         for (let i = 0; i < tries.length; i++) {
           const last = i === tries.length - 1;
           let up;
+          if (i) { await wait(BACKOFF_MS * i, ctl.signal); if (ctl.signal.aborted) throw new Error('aborted'); }
           try {
             up = await fetch(`${UPSTREAM}/chat/completions`, {
               method: 'POST', signal: ctl.signal, redirect: 'error',
-              headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', 'HTTP-Referer': 'https://bos.aihlete.com', 'X-Title': 'BOS Free' },
-              body: JSON.stringify(sanitize({ ...body, model: tries[i] })),
+              headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' },
+              body: JSON.stringify(sanitize(body)),
             });
           } catch (e) { if (ctl.signal.aborted || last) throw e; continue; }
           if (up.status >= 400) {
             const text = await up.text();
-            if (!retryable(up.status) || last) { console.log(`upstream ${up.status} ${tries[i]} final: ${upstreamReason(text)}`); return fail(up.status, text); }
+            if (!retryable(up.status) || exhausted(text) || last) { console.log(`upstream ${up.status} ${tries[i]} final: ${upstreamReason(text)}`); return fail(up.status, text); }
             console.log(`upstream ${up.status} ${tries[i]} retry: ${upstreamReason(text)}`);
-            cool(limitedModel(text) || tries[i]); continue;
+            continue;
           }
           const eventStream = stream && up.body && (up.headers.get('content-type') || '').includes('text/event-stream');
           if (!eventStream) {
             // a 200 whose JSON body is an error is a failed attempt, not a reply
             const text = await up.text();
             const reason = bodyError(text);
-            if (reason && !last) { console.log(`upstream 200-error ${tries[i]} retry: ${reason}`); cool(tries[i]); continue; }
+            if (reason && !last) { console.log(`upstream 200-error ${tries[i]} retry: ${reason}`); continue; }
             if (reason) { console.log(`upstream 200-error ${tries[i]} final: ${reason}`); return fail(502, text); }
             stop();
             if (!opened) res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json', 'cache-control': 'no-store', 'x-bos-free-remaining': String(remaining(id).install) });
             return res.end(text);
           }
-          // Hold the stream until the model really answers, so an error sent mid-reasoning can move to the next free model.
+          // Hold the stream until the model really answers, so an error sent before the reply can be retried cleanly.
           open();
           const reader = up.body.getReader(); const decoder = new TextDecoder();
           const held = []; let size = 0; let pending = ''; let verdict = null; const since = Date.now();
@@ -202,7 +191,7 @@ export const server = http.createServer(async (req, res) => {
             while (!verdict && (nl = pending.indexOf('\n')) >= 0) { verdict = streamLine(pending.slice(0, nl).trim()); pending = pending.slice(nl + 1); }
             if (!verdict && (size > HOLD_BYTES || Date.now() - since > HOLD_MS)) verdict = 'answer';
           }
-          if (verdict === 'error' && !last) { await reader.cancel().catch(() => {}); console.log(`upstream stream-error ${tries[i]} retry`); cool(tries[i]); continue; }
+          if (verdict === 'error' && !last) { await reader.cancel().catch(() => {}); console.log(`upstream stream-error ${tries[i]} retry`); continue; }
           if (verdict === 'error') console.log(`upstream stream-error ${tries[i]} final`);
           if (verdict === 'error' || (verdict === 'end' && !size)) refund();
           stop();

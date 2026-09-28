@@ -7,17 +7,12 @@ import path from 'node:path';
 
 let seen = [];
 const up = http.createServer((req, res) => {
-  if (req.url.endsWith('/models')) { res.setHeader('content-type','application/json'); return res.end(JSON.stringify({ data: [
-    { id: 'a/free-one:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-    { id: 'b/paid', pricing: { prompt: '0.001', completion: '0.002' }, supported_parameters: ['tools'] },
-    { id: 'stealth/zero', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-  ] })); }
-  let b=''; req.on('data',c=>b+=c); req.on('end',()=>{ seen.push({ auth: req.headers.authorization, body: JSON.parse(b) }); res.setHeader('content-type','application/json'); res.end(JSON.stringify({ choices:[{message:{content:'hi'}}] })); });
+  let b=''; req.on('data',c=>b+=c); req.on('end',()=>{ seen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(b) }); res.setHeader('content-type','application/json'); res.end(JSON.stringify({ choices:[{message:{content:'hi'}}] })); });
 });
 await new Promise(r=>up.listen(0,'127.0.0.1',r));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(),'bosfree-'));
-Object.assign(process.env,{ OPENROUTER_API_KEY:'sk-owner-secret', UPSTREAM:`http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir,'d.json'), PER_INSTALL_DAILY:'2', GLOBAL_DAILY:'3', REGISTER_PER_IP_DAILY:'2', CHAT_PER_IP_DAILY:'100' });
-const { server } = await import('./server.mjs');
+Object.assign(process.env,{ OPENAI_API_KEY:'sk-owner-secret', UPSTREAM:`http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir,'d.json'), PER_INSTALL_DAILY:'2', GLOBAL_DAILY:'3', REGISTER_PER_IP_DAILY:'2', CHAT_PER_IP_DAILY:'100' });
+const { server, MODEL_ID } = await import('./server.mjs');
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;
 const j = (r) => r.json();
@@ -29,29 +24,32 @@ test('relay', async () => {
   const { token } = await j(await reg());
   const { token: t2 } = await j(await reg());
   assert.equal((await reg()).status, 429, 'register rate limit');
-  const models = (await j(await fetch(`${base}/models`,{headers:{authorization:`Bearer ${token}`}}))).data.map(m=>m.id);
-  assert.deepEqual(models, ['a/free-one:free'], 'only :free zero-price tool models');
-  assert.equal((await chat(token,{model:'b/paid',messages:[]})).status, 400);
-  assert.equal((await chat(token,{model:'stealth/zero',messages:[]})).status, 400);
+  const models = (await j(await fetch(`${base}/models`,{headers:{authorization:`Bearer ${token}`}}))).data;
+  assert.deepEqual(models.map(m=>[m.id,m.name]), [[MODEL_ID,'BOS Free GPT-6 Luna']], 'one named model');
+  assert.equal((await chat(token,{model:'openai/gpt-5.5',messages:[]})).status, 400, 'other models rejected');
   assert.equal(seen.length, 0, 'rejected models never reach upstream');
-  assert.equal((await chat(token,{model:'a/free-one:free',messages:[{role:'user',content:[{type:'file',file:{file_data:'x'}}]}]})).status, 400, 'file parts rejected');
-  assert.equal((await chat(token,{model:'a/free-one:free',messages:[{role:'user',content:[{type:'image_url',image_url:{url:'x'}}]}]})).status, 400, 'image parts rejected');
-  assert.equal((await chat(token,{model:'a/free-one:free',messages:[],tools:[{type:'openrouter:web_search'}]})).status, 400, 'server tools rejected');
+  assert.equal((await chat(token,{model:MODEL_ID,messages:[{role:'user',content:[{type:'file',file:{file_data:'x'}}]}]})).status, 400, 'file parts rejected');
+  assert.equal((await chat(token,{model:MODEL_ID,messages:[{role:'user',content:[{type:'image_url',image_url:{url:'x'}}]}]})).status, 400, 'image parts rejected');
+  assert.equal((await chat(token,{model:MODEL_ID,messages:[],tools:[{type:'web_search'}]})).status, 400, 'server tools rejected');
   assert.equal((await fetch(`${base}/chat/completions`,{method:'POST',headers:{authorization:`Bearer ${token}`},body:'null'})).status, 400, 'null body');
   assert.equal(seen.length, 0);
-  const ok = await chat(token,{model:'a/free-one:free',messages:[{role:'user',content:[{type:'text',text:'x'}]}],tools:[{type:'function',function:{name:'f',parameters:{}}}],models:['b/paid'],plugins:[{id:'web'}],route:'fallback',max_tokens:99999,provider:{allow_fallbacks:true}});
+  const ok = await chat(token,{model:MODEL_ID,messages:[{role:'user',content:[{type:'text',text:'x'}]},{role:'assistant',content:'a',reasoning:'r',reasoning_details:[{}]}],tools:[{type:'function',function:{name:'f',parameters:{}}}],models:['b/paid'],plugins:[{id:'web'}],web_search_options:{},modalities:['audio'],n:4,service_tier:'priority',max_tokens:99999,provider:{allow_fallbacks:true},reasoning:{effort:'low'},temperature:0.2});
   assert.equal(ok.status, 200);
   const sent = seen[0];
+  assert.equal(sent.url, '/chat/completions');
   assert.equal(sent.auth, 'Bearer sk-owner-secret');
-  assert.equal(sent.body.models, undefined); assert.equal(sent.body.plugins, undefined); assert.equal(sent.body.route, undefined);
-  assert.equal(sent.body.max_tokens, 4096);
-  assert.equal(sent.body.provider.allow_fallbacks, false); assert.equal(sent.body.provider.max_price.completion, 0);
+  assert.equal(sent.body.model, 'gpt-6-luna', 'always the one upstream model');
+  for (const k of ['models','plugins','provider','web_search_options','modalities','n','service_tier','max_tokens','reasoning','temperature']) assert.equal(sent.body[k], undefined, k);
+  assert.equal(sent.body.max_completion_tokens, 4096);
+  assert.equal(sent.body.reasoning_effort, 'low');
+  assert.deepEqual(sent.body.messages[1], { role:'assistant', content:'a' }, 'openrouter-only history fields dropped');
   const body = await ok.text(); assert(!body.includes('sk-owner-secret'));
-  assert.equal((await chat(token,{model:'a/free-one:free',messages:[]})).status, 200);
-  assert.equal((await chat(token,{model:'a/free-one:free',messages:[]})).status, 429, 'per-install cap');
-  assert.equal((await chat(t2,{model:'a/free-one:free',messages:[]})).status, 200);
-  assert.equal((await chat(t2,{model:'a/free-one:free',messages:[]})).status, 429, 'global cap');
-  assert.equal((await chat('bosf_'+'x'.repeat(30),{model:'a/free-one:free',messages:[]})).status, 401);
+  assert.equal((await chat(token,{model:'openrouter/free',messages:[]})).status, 200, 'legacy free id still served by luna');
+  assert.equal(seen.at(-1).body.model, 'gpt-6-luna');
+  assert.equal((await chat(token,{model:MODEL_ID,messages:[]})).status, 429, 'per-install cap');
+  assert.equal((await chat(t2,{model:MODEL_ID,messages:[]})).status, 200);
+  assert.equal((await chat(t2,{model:MODEL_ID,messages:[]})).status, 429, 'global cap');
+  assert.equal((await chat('bosf_'+'x'.repeat(30),{model:MODEL_ID,messages:[]})).status, 401);
   const stored = fs.readFileSync(path.join(dir,'d.json'),'utf8'); assert(!stored.includes(token), 'tokens stored hashed');
   server.close(); up.close();
 });

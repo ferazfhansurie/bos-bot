@@ -8,20 +8,16 @@ import path from 'node:path';
 let mode = 'reset';
 const up = http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
-  if (req.url.endsWith('/models')) return res.end(JSON.stringify({ data: [
-    { id: 'openrouter/free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-    { id: 'ok/two:free', pricing: { prompt: '0', completion: '0' }, supported_parameters: ['tools'] },
-  ] }));
   let b = ''; req.on('data', (c) => b += c); req.on('end', () => {
     const model = JSON.parse(b).model;
-    if (model === 'openrouter/free' && mode === 'reset') return req.socket.destroy();
+    if (mode === 'reset') { mode = 'ok'; return req.socket.destroy(); }
     if (mode === 'hang') return;
     res.end(JSON.stringify({ model, choices: [{ message: { content: 'ok' } }] }));
   });
 });
 await new Promise((r) => up.listen(0, '127.0.0.1', r));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bosfree-fail-'));
-Object.assign(process.env, { OPENROUTER_API_KEY: 'sk-owner', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', UPSTREAM_ATTEMPTS: 'not-a-number' });
+Object.assign(process.env, { OPENAI_API_KEY: 'sk-owner', RETRY_BACKOFF_MS: '5', UPSTREAM: `http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir, 'd.json'), PER_INSTALL_DAILY: '5', GLOBAL_DAILY: '10', CHAT_PER_IP_DAILY: '10', UPSTREAM_ATTEMPTS: 'not-a-number' });
 const { server } = await import('./server.mjs');
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;
@@ -31,8 +27,8 @@ const usage = async (t) => (await (await fetch(`${base}/usage`, { headers: { aut
 test('network errors retry, disconnects refund, bad attempts env falls back', async () => {
   const { token } = await (await fetch(`${base}/register`, { method: 'POST' })).json();
   const r = await chat(token);
-  assert.equal(r.status, 200, 'reset on router retried on next free model');
-  assert.equal((await r.json()).model, 'ok/two:free');
+  assert.equal(r.status, 200, 'connection reset retried');
+  assert.equal((await r.json()).model, 'gpt-6-luna');
   assert.equal(await usage(token), 4);
   mode = 'hang';
   const ctl = new AbortController();
