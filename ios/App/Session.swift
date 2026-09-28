@@ -743,9 +743,9 @@ final class Session: ObservableObject {
         return try await client.editSharedMessage(roomId: roomId, messageId: messageId, text: text)
     }
 
-    func sharedPreferences(roomId: String, readSequence: Int? = nil, notifications: String? = nil) async throws -> SharedConversationPreferences {
+    func sharedPreferences(roomId: String, readSequence: Int? = nil, notifications: String? = nil, replyMode: String? = nil, replyBotId: String? = nil) async throws -> SharedConversationPreferences {
         guard let client else { throw APIError.transport("Computer is offline") }
-        return try await client.sharedPreferences(roomId: roomId, readSequence: readSequence, notifications: notifications)
+        return try await client.sharedPreferences(roomId: roomId, readSequence: readSequence, notifications: notifications, replyMode: replyMode, replyBotId: replyBotId)
     }
 
     func sharedMessages(roomId: String, after sequence: Int) async throws -> [SharedChatMessage] {

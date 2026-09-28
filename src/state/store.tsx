@@ -1522,12 +1522,14 @@ export function reducer(state: AppState, action: Action): AppState {
         // Later duplicate HTTP snapshots must not overwrite newer messages.
         return reducer(switching, { type: "taskSwitched", bot: { ...before, ...action.bot, computer: action.bot.computer, section: action.bot.section, messages: action.bot.messages, browserProfile: action.bot.browserProfile } });
       }
+      const openingRemoteThread = switchedThread && Boolean(before.remote) && before.threadId.includes("-pending-");
+      const openingMessages = openingRemoteThread ? before.messages.filter(message => message.id.startsWith("optimistic-")) : [];
       const patched = updateBot(switching, action.bot.id, (b) => ({
         ...b,
         ...action.bot,
         threadId: switchedThread ? action.bot.threadId : b.threadId,
-        activeLeafId: switchedThread ? null : b.activeLeafId,
-        awaitingThreadSnapshot: switchedThread || b.awaitingThreadSnapshot,
+        activeLeafId: switchedThread ? openingMessages.at(-1)?.id ?? null : b.activeLeafId,
+        awaitingThreadSnapshot: openingRemoteThread ? false : switchedThread || b.awaitingThreadSnapshot,
         // Complete bot frames omit this optional field after switching back
         // to Own browser (or deleting a shared profile). Do not retain the
         // previous profile's name and selection in another window.
@@ -1540,7 +1542,7 @@ export function reducer(state: AppState, action: Action): AppState {
         section: action.bot.section,
         // Clear immediately on deletion: old approvals must never be sent
         // to the replacement thread while waiting for its transcript.
-        messages: switchedThread ? [] : b.messages,
+        messages: switchedThread ? openingMessages : b.messages,
       }));
       return reconcileModelVariantSessions(patched);
     }
@@ -1890,6 +1892,10 @@ export function reducer(state: AppState, action: Action): AppState {
     case "threadActive": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
       if (!bot) return state;
+      // Remote polling can report the old parent while this send is still
+      // awaiting its receipt. Do not hide the locally pending message.
+      const pendingLeaf = bot.remote && bot.messages.find(message => message.id === bot.activeLeafId && message.id.startsWith("optimistic-"));
+      if (pendingLeaf && (pendingLeaf.parentId === action.activeLeafId || !bot.messages.some(message => message.id === action.activeLeafId))) return state;
       // The visible branch moved (an edit, a rewind, another client's switch).
       return updateBot(bumpTranscriptGeneration(state, action.threadId), bot.id, (b) => ({
         ...b,

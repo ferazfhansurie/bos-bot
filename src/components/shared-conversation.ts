@@ -1,3 +1,4 @@
+import type { GroupReplyPreference } from "../../shared/group-replies";
 import type { Bot } from "@/state/store";
 import { sharedMentionLabel, sharedMentionTargets } from "../../shared/shared-mentions";
 
@@ -7,7 +8,7 @@ export interface SharedRoom {
   unreadCount?: number; readSequence?: number; notifications?: SharedNotifications;
 }
 export type SharedNotifications = "all" | "mentions" | "muted";
-export interface SharedPreferences { readSequence: number; notifications: SharedNotifications }
+export interface SharedPreferences extends GroupReplyPreference { replyBotIds?: string[]; readSequence: number; notifications: SharedNotifications }
 export interface SharedAttachment { id: string; name: string; mime: string; size: number }
 export interface SharedFile {
   attachment: SharedAttachment; messageId: string; sequence: number;
@@ -111,11 +112,13 @@ export interface SharedEligibleBot {
   mascotBody?: Bot["mascotBody"]; avatarUrl?: string | null; avatarCrop?: Bot["avatarCrop"];
 }
 export interface SharedComposer {
+  replyBots?: Bot[];
+  replyMode?: GroupReplyPreference["replyMode"];
   activeBotIds?: string[];
   onTyping?: (active: boolean) => void;
   send: (text: string, files: File[], sendId: string, options?: { replyTo?: string }) => Promise<void>;
   mentionBots: Bot[];
-  mentionPeople?: { id: string; name: string }[];
+  mentionPeople?: { id: string; name: string; avatar?: string | null }[];
 }
 
 export function isDirectSharedRoom(room: Pick<SharedRoom, "kind" | "memberIds">): boolean {

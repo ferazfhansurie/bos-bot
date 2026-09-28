@@ -24,7 +24,7 @@ import {
   type ComposerSendSnapshot,
   type FailedComposerSend,
 } from "@/lib/drafts";
-import { BotAvatar } from "./Avatar";
+import { BotAvatar, PersonPhoto } from "./Avatar";
 import { ConversationComposerFrame } from "./ConversationChrome";
 import { MentionTextarea } from "./MentionTextarea";
 import { ComposerAttachments, pathForFile, uploadOnlyIntake } from "./ComposerAttachments";
@@ -84,7 +84,7 @@ function mentionQueryAt(text: string, caret: number): { start: number; query: st
   return { start: at, query };
 }
 
-type MentionChoice = { id: string; name: string; bot?: Bot; searchText?: string };
+type MentionChoice = { id: string; name: string; bot?: Bot; searchText?: string; avatar?: string | null };
 
 interface ComposerDraftSnapshot extends ComposerSendSnapshot {
   reply: Message | null;
@@ -829,7 +829,7 @@ export function Composer({
             ref={mentionListRef}
             role="listbox"
             aria-label={shared ? "Mention a person or bot" : t("composer.mention.aria")}
-            className="absolute bottom-full left-2 z-20 mb-2 max-h-72 w-72 overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-hairline/40 bg-raised shadow-lg"
+            className="absolute bottom-full left-2 z-20 mb-2 max-h-[min(28rem,60vh)] w-80 max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-hairline/40 bg-raised shadow-lg"
           >
             {candidates.map((peer, i) => (
               <button
@@ -848,10 +848,13 @@ export function Composer({
                   <BotAvatar
                     bot={peer.bot}
                     state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
-                    size={24}
+                    size={32}
+                    animated={false}
                   />
+                ) : peer.avatar ? (
+                  <PersonPhoto src={peer.avatar} size={32} />
                 ) : (
-                  <span className="flex size-6 items-center justify-center rounded-full bg-raised text-ink-secondary">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
                     <Users size={14} aria-hidden="true" />
                   </span>
                 )}
@@ -893,6 +896,10 @@ export function Composer({
           </div>
         )}
         {sharedIntakeError && <div role="alert" className="mb-2 px-3 text-xs text-danger">{sharedIntakeError}</div>}
+        {shared?.replyBots && <div className="mb-2 flex items-center gap-2 px-3 text-xs text-ink-secondary" aria-label="Current responder">
+          {shared.replyBots.map(peer => <span key={peer.id} className="flex items-center gap-1.5"><BotAvatar bot={peer} size={22} animated={false} />{peer.name}</span>)}
+          <span>{shared.replyBots.length ? "will reply · @someone else to switch" : shared.replyMode === "mentions" ? "Mention a bot for a reply" : "Bot replies paused · @a bot to start"}</span>
+        </div>}
         {shared && sharedStatus === "sending" && <div role="status" className="mb-2 px-3 text-xs text-ink-secondary">Sending…</div>}
         {shared && sharedStatus === "sent" && <div role="status" className="mb-2 px-3 text-xs text-ink-secondary">Sent</div>}
         {shared && sharedStatus === "failed" && <div role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">

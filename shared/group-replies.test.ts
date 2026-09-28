@@ -1,0 +1,11 @@
+import { expect, it } from "vitest";
+import { groupReplyTargets } from "./group-replies";
+import type { SharedTextMessage } from "./multiplayer";
+const actor = { homeId: "home", kind: "person" as const, localId: "owner" };
+const message = (patch: Partial<SharedTextMessage>) => ({ actor, text: "hello", id: "m", at: 1, sequence: 1, sendId: "s", ...patch }) as SharedTextMessage;
+const resolve = (patch: Partial<Parameters<typeof groupReplyTargets>[0]> = {}) => groupReplyTargets({ actorId: "home:person:owner", preference: {}, available: ["a", "b"], explicitBots: [], humanMentions: [], history: [message({ botTargets: ["a"] })], ...patch });
+it("follows the last bot and switches on explicit mention", () => { expect(resolve()).toEqual(["a"]); expect(resolve({ explicitBots: ["b"] })).toEqual(["b"]); });
+it("pauses for a person until a bot is mentioned again", () => { expect(resolve({ humanMentions: ["person"] })).toEqual([]); expect(resolve({ history: [message({ botTargets: ["a"] }), message({ humanMentions: ["person"] }), message({})] })).toEqual([]); });
+it("keeps other members' selections separate", () => { expect(resolve({ history: [message({ botTargets: ["a"] }), message({ actor: { ...actor, homeId: "other" }, botTargets: ["b"] })] })).toEqual(["a"]); });
+it("never falls back to a removed bot or a different older speaker", () => { expect(resolve({ available: ["b"] })).toEqual([]); });
+it("supports fixed and mentions-only without overriding explicit people", () => { expect(resolve({ preference: { replyMode: "fixed", replyBotId: "b" } })).toEqual(["b"]); expect(resolve({ preference: { replyMode: "mentions" } })).toEqual([]); expect(resolve({ preference: { replyMode: "fixed", replyBotId: "b" }, humanMentions: ["person"] })).toEqual([]); });

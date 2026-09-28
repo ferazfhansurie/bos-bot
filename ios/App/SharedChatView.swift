@@ -45,6 +45,7 @@ struct SharedChatView: View {
     @State private var followingBottom = true
     @State private var scrollHeight: CGFloat = 0
     @State private var readSequence = 0
+    @State private var replyPreferences: SharedConversationPreferences?
     @State private var editingMessage: SharedChatMessage?
     @State private var editText = ""
     @State private var deletingMessage: SharedChatMessage?
@@ -218,6 +219,15 @@ struct SharedChatView: View {
                     Spacer()
                     Button { self.error = nil } label: { Image(systemName: "xmark.circle") }.accessibilityLabel("Dismiss error")
                 }.padding(.horizontal, 16).padding(.vertical, 8)
+            }
+            if currentRoom.isGroup, let preference = replyPreferences {
+                HStack(spacing: 6) {
+                    ForEach(availableBots.filter { preference.replyBotIds?.contains($0.id) == true }) { bot in
+                        MausAvatar(color: bot.color ?? "blue", size: 22, bodyId: bot.mascotBody, animated: false)
+                        Text(bot.name)
+                    }
+                    Text(preference.replyBotIds?.isEmpty == false ? "will reply · @someone else to switch" : "Mention a bot for a reply")
+                }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 4)
             }
             if composer.sending {
                 Text("Sending…").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).accessibilityAddTraits(.updatesFrequently)
@@ -424,6 +434,7 @@ struct SharedChatView: View {
             let existing = Set(messages.map(\.id))
             messages.append(contentsOf: next.filter { !existing.contains($0.id) })
             connectionError = nil
+            if currentRoom.isGroup { replyPreferences = try await session.sharedPreferences(roomId: room.id) }
         } catch { if !Task.isCancelled { typing = []; connectionError = error.localizedDescription } }
     }
 

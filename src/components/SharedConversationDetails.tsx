@@ -8,7 +8,7 @@ import type { SharedFile, SharedEligibleBot } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { isDirectSharedRoom, type SharedContact, type SharedRoom, type SharedPreferences, type SharedNotifications } from "./shared-conversation";
 
-export function SharedConversationDetails({ room, selfId, contacts, title, pending, error, onClose, onChange, preferences, preferencePending, preferenceError, onNotificationsChange, onShowMessage, searchFocus = 0, eligibleBots = [] }: {
+export function SharedConversationDetails({ room, selfId, contacts, title, pending, error, onClose, onChange, preferences, preferencePending, preferenceError, onNotificationsChange, onRepliesChange, onShowMessage, searchFocus = 0, eligibleBots = [] }: {
   eligibleBots?: SharedEligibleBot[];
   searchFocus?: number;
   onShowMessage: (file: Pick<SharedFile, "messageId" | "sequence">) => Promise<void>;
@@ -16,6 +16,7 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
   pending: boolean; error: string; onClose: () => void;
   onChange: (method: "PATCH" | "DELETE" | "POST", suffix: string, patch?: Record<string, unknown>) => Promise<boolean>;
   preferences?: SharedPreferences | null; preferencePending?: boolean; preferenceError?: string;
+  onRepliesChange?: (value: Pick<SharedPreferences, "replyMode" | "replyBotId">) => Promise<void>;
   onNotificationsChange?: (value: SharedNotifications) => Promise<void>;
 }) {
   const [name, setName] = useState(room.name);
@@ -85,6 +86,20 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
 
         </section>
         <p className="rounded-xl bg-accent/10 px-3 py-3 text-[13px] leading-relaxed text-ink-secondary">@mention your bots here — no need to add them</p>
+        {!direct && onRepliesChange && <section aria-label="Bot replies">
+          <label htmlFor="shared-replies" className="mb-2 block text-[13px] font-semibold text-ink">Who replies to you</label>
+          <select id="shared-replies" value={preferences?.replyMode ?? "follow"} disabled={!preferences || preferencePending}
+            onChange={event => void onRepliesChange({ replyMode: event.target.value as SharedPreferences["replyMode"] })}
+            className="w-full rounded-lg bg-control px-3 py-2 text-sm text-ink disabled:opacity-50">
+            <option value="follow">Follow my last @bot</option><option value="fixed">Use a chosen bot</option><option value="mentions">Only when I @mention</option>
+          </select>
+          {preferences?.replyMode === "fixed" && <select aria-label="Reply bot" value={preferences.replyBotId ?? ""} disabled={preferencePending}
+            onChange={event => void onRepliesChange({ replyBotId: event.target.value || null })}
+            className="mt-2 w-full rounded-lg bg-control px-3 py-2 text-sm text-ink">
+            <option value="">Choose a bot</option>{eligibleBots.map(bot => <option key={bot.id} value={bot.id}>{bot.name} · {bot.ownerName}</option>)}
+          </select>}
+          <p className="mt-2 text-xs text-ink-secondary">Applies to your messages in this group. In follow mode, mentioning a person pauses bot replies until you mention a bot again.</p>
+        </section>}
         {onNotificationsChange && <section aria-label="Conversation notifications">
           <label htmlFor="shared-notifications" className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-ink"><Bell size={16} />Notifications</label>
           <select id="shared-notifications" value={preferences?.notifications ?? "all"} disabled={!preferences || preferencePending}

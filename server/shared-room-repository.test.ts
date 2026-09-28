@@ -9,6 +9,19 @@ const root = mkdtempSync(join(tmpdir(), "omb-shared-rooms-"));
 afterEach(() => rmSync(root, { force: true, recursive: true }));
 
 describe("shared room repository", () => {
+  it("persists per-person reply preferences without losing notification state", () => {
+    const file = join(root, "reply-preferences", "rooms.json");
+    const repo = new SharedRoomRepository(file, "home");
+    const owner = "home:person:owner", peer = "other:person:owner";
+    const room = repo.create("Replies", [owner, peer]);
+    repo.updatePreferences(room.id, owner, { notifications: "muted", replyMode: "fixed", replyBotId: "home:bot:helper" });
+    repo.updatePreferences(room.id, owner, { readSequence: 0 });
+    const restored = new SharedRoomRepository(file, "home");
+    expect(restored.preferencesFor(room.id, owner)).toMatchObject({ notifications: "muted", replyMode: "fixed", replyBotId: "home:bot:helper" });
+    expect(restored.preferencesFor(room.id, peer).replyMode).toBeUndefined();
+    expect(() => repo.updatePreferences(room.id, owner, { replyMode: "invalid" as any })).toThrow("invalid reply mode");
+  });
+
   it("searches retained history with stable cursors, filters and current membership", () => {
     const path = join(root, "search", "rooms.json");
     const repo = new SharedRoomRepository(path, "home");

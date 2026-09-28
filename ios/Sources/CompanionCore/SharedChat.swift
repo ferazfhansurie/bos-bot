@@ -159,11 +159,16 @@ public struct SharedMessagesResponse: Codable, Sendable {
 }
 public struct SharedMessageResponse: Codable, Sendable { public let message: SharedChatMessage }
 public struct SharedConversationPreferences: Codable, Sendable {
+    public let replyMode: String?
+    public let replyBotId: String?
+    public let replyBotIds: [String]?
     public let readSequence: Int
     public let notifications: String
 }
 
 public struct SharedEligibleBot: Codable, Hashable, Identifiable, Sendable {
+    public let color: String?
+    public let mascotBody: String?
     public let id: String
     public let name: String
     public let ownerName: String?

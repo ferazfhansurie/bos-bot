@@ -57,7 +57,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   const mentionMembers = useMemo(() => contacts.filter(contact => contact.kind === "person" && room?.memberIds.includes(contact.id)), [contacts, room]);
   const mentionRoster = useMemo(() => [...mentionMembers, ...eligibleBots.map(bot => ({ ...bot, kind: "bot" as const }))], [mentionMembers, eligibleBots]);
   const mentionBots = useMemo(() => sharedMentionBots(eligibleBots, mentionMembers), [eligibleBots, mentionMembers]);
-  const mentionPeople = useMemo(() => mentionMembers.map(person => ({ id: person.id, name: sharedMentionLabel(person, mentionRoster) })), [mentionMembers, mentionRoster]);
+  const mentionPeople = useMemo(() => mentionMembers.map(person => ({ id: person.id, name: sharedMentionLabel(person, mentionRoster), avatar: person.avatar })), [mentionMembers, mentionRoster]);
 
   useEffect(() => {
     let alive = true;
@@ -103,7 +103,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       });
       if (!mounted.current) return;
       setPreferences(previous => {
-        const next = { ...(previous ?? saved), readSequence: Math.max(previous?.readSequence ?? 0, result.readSequence) };
+        const next = { ...(previous ?? saved), ...result, readSequence: Math.max(previous?.readSequence ?? 0, result.readSequence) };
         preferencesRef.current = next;
         return next;
       });
@@ -120,6 +120,18 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
     return () => { window.removeEventListener("focus", refreshRead); document.removeEventListener("visibilitychange", refreshRead); window.clearInterval(timer); };
   }, [markRead]);
 
+  const changeReplies = async (patch: Pick<SharedPreferences, "replyMode" | "replyBotId">) => {
+    if (preferencePending) return;
+    setPreferencePending(true); setPreferenceError("");
+    try {
+      const result = await api<SharedPreferences>(`/api/multiplayer/rooms/${roomId}/preferences`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch),
+      });
+      if (mounted.current) { setPreferences(result); preferencesRef.current = result; }
+    } catch (error) { if (mounted.current) setPreferenceError(error instanceof Error ? error.message : "Could not save reply settings"); }
+    finally { if (mounted.current) setPreferencePending(false); }
+  };
+
   const changeNotifications = async (notifications: SharedNotifications) => {
     if (preferencePending) return;
     setPreferencePending(true); setPreferenceError("");
@@ -129,7 +141,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       });
       if (!mounted.current) return;
       setPreferences(previous => {
-        const next = { notifications: result.notifications, readSequence: Math.max(previous?.readSequence ?? 0, result.readSequence) };
+        const next = { ...result, readSequence: Math.max(previous?.readSequence ?? 0, result.readSequence) };
         preferencesRef.current = next;
         return next;
       });
@@ -276,6 +288,8 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       const result = await api<SharedHistoryPage>(`/api/multiplayer/rooms/${roomId}/messages?after=${historyRef.current.sequence}&version=${historyRef.current.version}&limit=200`);
       if (!mounted.current) return;
       applyHistory(result, "after");
+      const nextPreferences = await api<SharedPreferences>(`/api/multiplayer/rooms/${roomId}/preferences`);
+      if (mounted.current) { setPreferences(nextPreferences); preferencesRef.current = nextPreferences; }
     } catch { /* the poll will load the accepted send without replaying it */ }
   }, [roomId, selfId, mentionRoster, mentionMembers, eligibleBots, applyHistory]);
 
@@ -338,7 +352,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
   if (!projected || !room || !selfId) return <main className="flex flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary"><p role={error ? "alert" : "status"}>{error || "Loading conversation…"}</p>{error && <button type="button" onClick={() => setLoadAttempt(value => value + 1)} className="rounded-lg bg-raised px-3 py-2 text-ink">Retry</button>}</main>;
   const banner = <>{typing.length > 0 && <p role="status" className="px-4 py-1 text-xs text-ink-secondary">{typing.map(id => contacts.find(contact => contact.id === id)?.name ?? "A member").join(", ")} {typing.length === 1 ? "is" : "are"} typing…</p>}{historyLoading && <p role="status" className="px-4 py-2 text-center text-xs text-ink-secondary">Loading messages…</p>}{historyError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{historyError}<button type="button" onClick={() => window.dispatchEvent(new Event("multiplayer:retry-history"))} className="underline">Retry</button></div>}{olderError && <div role="alert" className="flex items-center justify-center gap-3 bg-danger/10 px-4 py-2 text-xs text-danger">{olderError}<button type="button" disabled={olderLoading} onClick={() => void loadOlder()} className="underline">Retry earlier messages</button></div>}{botsError && <p role="status" className="px-4 py-1 text-center text-xs text-ink-secondary">{botsError}</p>}</>;
   return <>
-    <ChatView bot={projected} shared={{ activeBotIds: sharedActiveBotIds(messages), onTyping, selfId, annotateMessage, onLatestVisible: setVisibleTailId, send, faces, mentionBots, mentionPeople, onOpenDetails: () => setDetailsOpen(true), onOpenSearch: () => { setDetailsOpen(true); setSearchFocus(value => value + 1); }, banner,
+    <ChatView bot={projected} shared={{ replyBots: direct ? undefined : mentionBots.filter(bot => preferences?.replyBotIds?.includes(bot.id)), replyMode: preferences?.replyMode, activeBotIds: sharedActiveBotIds(messages), onTyping, selfId, annotateMessage, onLatestVisible: setVisibleTailId, send, faces, mentionBots, mentionPeople, onOpenDetails: () => setDetailsOpen(true), onOpenSearch: () => { setDetailsOpen(true); setSearchFocus(value => value + 1); }, banner,
       editMessage: (id, text) => changeMessage(id, text), deleteMessage: id => changeMessage(id, null),
       messageMeta: Object.fromEntries(messages.map(message => [message.id, { editedAt: message.editedAt, deletedAt: message.deletedAt, reactions: message.reactions, pinnedBy: message.pinnedBy }])),
       changeRevision: history.changeRevision,
@@ -346,6 +360,6 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       actions: <button type="button" aria-label="Conversation details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><PanelRight size={18} /></button>,
     }} />
     {detailsOpen && <SharedConversationDetails eligibleBots={eligibleBots} searchFocus={searchFocus} room={room} selfId={selfId} contacts={contacts} title={projected.name} pending={changing} error={changeError} onClose={() => setDetailsOpen(false)} onChange={changeRoom}
-      preferences={preferences} preferencePending={preferencePending} preferenceError={preferenceError} onNotificationsChange={changeNotifications} onShowMessage={showFileMessage} />}
+      preferences={preferences} preferencePending={preferencePending} preferenceError={preferenceError} onNotificationsChange={changeNotifications} onRepliesChange={changeReplies} onShowMessage={showFileMessage} />}
   </>;
 }

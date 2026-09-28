@@ -46,3 +46,16 @@ describe("shared conversation details", () => {
     expect(html).not.toContain('aria-label="Add person"');
   });
 });
+
+it("shows per-person reply modes and the eligible fixed responder", () => {
+  const html = renderToStaticMarkup(createElement(SharedConversationDetails, {
+    room, selfId: "home:person:owner", title: "Design", pending: false, error: "", contacts: [],
+    onClose() {}, onShowMessage: async () => {}, onChange: async () => true, onRepliesChange: async () => {},
+    preferences: { readSequence: 0, notifications: "all", replyMode: "fixed", replyBotId: "home:bot:scout" },
+    eligibleBots: [{ id: "home:bot:scout", name: "Scout", ownerName: "Firaz" }],
+  }));
+  expect(html).toContain("Who replies to you");
+  expect(html).toContain("Follow my last @bot");
+  expect(html).toContain("Only when I @mention");
+  expect(html).toContain('value="home:bot:scout" selected=""');
+});

@@ -1,3 +1,4 @@
+import type { GroupReplyPreference } from "../shared/group-replies.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, truncateSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
@@ -6,7 +7,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { quarantineSaved } from "./quarantine-saved.ts";
 import { contactId, parseContactId, SharedRoomLog, validateSharedSend, type SharedRoom, type SharedTextMessage } from "../shared/multiplayer.ts";
 
-export interface SharedConversationPreferences { readSequence: number; notifications: "all" | "mentions" | "muted" }
+export interface SharedConversationPreferences extends GroupReplyPreference { readSequence: number; notifications: "all" | "mentions" | "muted" }
 interface Snapshot {
   version: 1;
   preferences?: Record<string, Record<string, SharedConversationPreferences>>;
@@ -215,8 +216,10 @@ export class SharedRoomRepository {
     const latest = this.allMessages(roomId).at(-1)?.sequence ?? 0;
     if (patch.readSequence !== undefined && (!Number.isSafeInteger(patch.readSequence) || patch.readSequence < 0 || patch.readSequence > latest)) throw new Error("invalid read cursor");
     if (patch.notifications !== undefined && !["all", "mentions", "muted"].includes(patch.notifications)) throw new Error("invalid notification preference");
-    const next = { readSequence: Math.max(previous.readSequence, patch.readSequence ?? 0), notifications: patch.notifications ?? previous.notifications };
-    if (next.readSequence === previous.readSequence && next.notifications === previous.notifications) return next;
+    if (patch.replyMode !== undefined && !["follow", "fixed", "mentions"].includes(patch.replyMode)) throw new Error("invalid reply mode");
+    if (patch.replyBotId !== undefined && patch.replyBotId !== null && parseContactId(patch.replyBotId)?.kind !== "bot") throw new Error("invalid reply bot");
+    const next = { ...previous, ...(patch.replyMode !== undefined ? { replyMode: patch.replyMode } : {}), ...(patch.replyBotId !== undefined ? { replyBotId: patch.replyBotId } : {}), readSequence: Math.max(previous.readSequence, patch.readSequence ?? 0), notifications: patch.notifications ?? previous.notifications };
+    if (JSON.stringify(next) === JSON.stringify(previous)) return next;
     const values = this.preferences.get(roomId) ?? new Map<string, SharedConversationPreferences>();
     values.set(actorId, next);
     this.preferences.set(roomId, values);

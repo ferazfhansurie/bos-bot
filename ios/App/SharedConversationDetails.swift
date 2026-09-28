@@ -17,11 +17,29 @@ struct SharedConversationDetails: View {
     @State private var saving = false
     @State private var error: String?
     @State private var notifications = "all"
+    @State private var replyMode = "follow"
+    @State private var replyBotId = ""
+    @State private var preferencesLoaded = false
+    @State private var confirmedReplyMode = "follow"
+    @State private var confirmedReplyBotId = ""
     @State private var confirmLeave = false
     @State private var confirmDelete = false
     @State private var memberToRemove: SharedContact?
     private var displayed: SharedRoomSummary { current ?? room }
     private var canManage: Bool { selfID == (displayed.createdBy ?? "\(displayed.homeId):person:owner") || selfID == "\(displayed.homeId):person:owner" }
+
+    private func saveReplies(mode: String? = nil, botId: String? = nil) async {
+        saving = true
+        defer { saving = false }
+        do {
+            let pref = try await session.sharedPreferences(roomId: displayed.id, replyMode: mode, replyBotId: botId)
+            confirmedReplyMode = pref.replyMode ?? "follow"; confirmedReplyBotId = pref.replyBotId ?? ""
+            replyMode = confirmedReplyMode; replyBotId = confirmedReplyBotId
+        } catch {
+            replyMode = confirmedReplyMode; replyBotId = confirmedReplyBotId
+            self.error = error.localizedDescription
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -93,6 +111,29 @@ struct SharedConversationDetails: View {
                         catch { self.error = error.localizedDescription }
                     } }
                 }
+                if displayed.isGroup {
+                    Section("Who replies to you") {
+                        Picker("Reply options", selection: $replyMode) {
+                            Text("Follow my last @bot").tag("follow")
+                            Text("Use a chosen bot").tag("fixed")
+                            Text("Only when I @mention").tag("mentions")
+                        }.onChange(of: replyMode) { _, value in
+                            guard preferencesLoaded, value != confirmedReplyMode else { return }
+                            Task { await saveReplies(mode: value) }
+                        }
+                        if replyMode == "fixed" {
+                            Picker("Reply bot", selection: $replyBotId) {
+                                Text("Choose a bot").tag("")
+                                ForEach(bots) { bot in Text("\(bot.name) · \(bot.ownerName ?? "Owner")").tag(bot.id) }
+                            }.onChange(of: replyBotId) { _, value in
+                                guard preferencesLoaded, value != confirmedReplyBotId else { return }
+                                Task { await saveReplies(botId: value) }
+                            }
+                        }
+                        Text("Applies to your messages. In follow mode, mentioning a person pauses bot replies until you mention a bot again.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }.disabled(!preferencesLoaded)
+                }
                 Section("Working with bots") {
                     Label("Mention your bot in the conversation", systemImage: "at")
                     Text("You don’t need to add bots as members. Everyone here can see the reply. Your private bot conversations stay separate.")
@@ -111,7 +152,12 @@ struct SharedConversationDetails: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .onAppear { name = displayed.name }
-            .task { do { notifications = try await session.sharedPreferences(roomId: displayed.id).notifications } catch { self.error = error.localizedDescription } }
+            .task { do {
+                let pref = try await session.sharedPreferences(roomId: displayed.id)
+                notifications = pref.notifications; replyMode = pref.replyMode ?? "follow"; replyBotId = pref.replyBotId ?? ""
+                confirmedReplyMode = replyMode; confirmedReplyBotId = replyBotId
+                preferencesLoaded = true
+            } catch { self.error = error.localizedDescription } }
             .confirmationDialog("Leave \(displayed.name)?", isPresented: $confirmLeave, titleVisibility: .visible) {
                 Button("Leave group", role: .destructive) { Task { await exit(delete: false) } }
             } message: { Text("You will lose access to this conversation until someone adds you again.") }

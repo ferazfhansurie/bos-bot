@@ -1,3 +1,4 @@
+import { groupReplyTargets } from "../shared/group-replies.ts";
 import { SharedTyping } from "./shared-typing.ts";
 import { sharedMentionTargets } from "../shared/shared-mentions.ts";
 // OpenMausBot server — the harness host. Clients hold no transports
@@ -12265,13 +12266,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/preferences$/);
       if (m && (method === "GET" || method === "PATCH")) {
         if (!sharedRooms.roomFor(m[1], actorId)) return json(res, 404, { error: "conversation unavailable" });
-        if (method === "GET") return json(res, 200, sharedRooms.preferencesFor(m[1], actorId));
+        const replyPreferences = () => {
+          const preference = sharedRooms.preferencesFor(m![1], actorId);
+          return { ...preference, replyBotIds: groupReplyTargets({ actorId, preference,
+            available: sharedRoomBots(sharedRooms.roomFor(m![1], actorId)!, actorId).map(bot => bot.id),
+            explicitBots: [], humanMentions: [], history: sharedRooms.allMessages(m![1]),
+          }) };
+        };
+        if (method === "GET") return json(res, 200, replyPreferences());
         const body = await readBody(req, 1024);
         if (body.typing !== undefined) {
           if (typeof body.typing !== "boolean") return json(res, 400, { error: "invalid typing state" });
           sharedTyping.update(m[1], actorId, body.typing);
         }
-        try { return json(res, 200, sharedRooms.updatePreferences(m[1], actorId, { readSequence: body.readSequence, notifications: body.notifications })); }
+        if (body.replyBotId != null && !sharedRoomBots(sharedRooms.roomFor(m[1], actorId)!, actorId).some(bot => bot.id === body.replyBotId)) return json(res, 403, { error: "reply bot is unavailable" });
+        try { sharedRooms.updatePreferences(m[1], actorId, { readSequence: body.readSequence, notifications: body.notifications, replyMode: body.replyMode, replyBotId: body.replyBotId }); return json(res, 200, replyPreferences()); }
         catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "invalid preferences" }); }
       }
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)\/messages\/([\w-]+)$/);
@@ -12415,7 +12424,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return json(res, 403, { error: "bot mention is unavailable; choose it again" });
           }
           // A retry keeps the original routing even after bot names change.
-          const botTargets = previous?.botTargets ?? (directBotReply ? targets : body.botTargets ?? targets);
+          const explicitTargets = body.botTargets ?? targets;
+          const isGroupReply = room.kind === "group" || (!room.kind && room.memberIds.length > 2);
+          const botTargets = previous?.botTargets ?? (directBotReply ? targets : !isGroupReply || (targets.length > 0 && explicitTargets.length === 0) ? explicitTargets : groupReplyTargets({
+            actorId, preference: sharedRooms.preferencesFor(roomId, actorId), available: available.map(bot => bot.id),
+            explicitBots: explicitTargets, humanMentions, history: sharedRooms.allMessages(roomId),
+          }));
           result = sharedRooms.append(roomId, actorId, { actor, text: body.text, sendId: body.sendId, attachments: body.attachments, botTargets, replyTo: body.replyTo,
             humanMentions: previous?.humanMentions ?? humanMentions });
         }

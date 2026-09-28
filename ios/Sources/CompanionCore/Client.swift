@@ -771,10 +771,12 @@ public struct CompanionClient: Sendable {
         _ = try await send(makeRequest("PATCH", "/api/multiplayer/rooms/\(roomId)/preferences", body: ["typing": active]), as: SharedConversationPreferences.self)
     }
 
-    public func sharedPreferences(roomId: String, readSequence: Int? = nil, notifications: String? = nil) async throws -> SharedConversationPreferences {
+    public func sharedPreferences(roomId: String, readSequence: Int? = nil, notifications: String? = nil, replyMode: String? = nil, replyBotId: String? = nil) async throws -> SharedConversationPreferences {
         var body: [String: Any] = [:]
         if let readSequence { body["readSequence"] = readSequence }
         if let notifications { body["notifications"] = notifications }
+        if let replyMode { body["replyMode"] = replyMode }
+        if let replyBotId { body["replyBotId"] = replyBotId.isEmpty ? NSNull() : replyBotId as Any }
         return try await send(makeRequest(body.isEmpty ? "GET" : "PATCH", "/api/multiplayer/rooms/\(roomId)/preferences", body: body.isEmpty ? nil : body), as: SharedConversationPreferences.self)
     }
 

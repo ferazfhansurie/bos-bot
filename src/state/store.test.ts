@@ -1040,6 +1040,25 @@ describe("optimistic sent messages", () => {
     expect(reconciled.bots[0]?.activeLeafId).toBe(canonical.id);
   });
 
+  it("keeps the first remote send visible when its placeholder becomes a real thread", () => {
+    const remoteBot = { ...bot, threadId: "rt-home-pending-bot", messages: [], activeLeafId: null, remote: { homeId: "other", homeName: "Other Mac", ownerName: "Peer", online: true } } as Bot;
+    const sent = reducer({ ...initialState, bots: [remoteBot] }, { type: "send", botId: bot.id, sendId: "first-remote", text: "hello" });
+    const { messages: _messages, ...announcement } = remoteBot;
+    const opened = reducer(sent, { type: "botPatched", bot: { ...announcement, threadId: "rt-home-new-thread", tasks: [] } });
+    expect(opened.bots[0]?.messages).toHaveLength(1);
+    expect(opened.bots[0]?.activeLeafId).toBe("optimistic-first-remote");
+    expect(opened.bots[0]?.awaitingThreadSnapshot).toBe(false);
+  });
+
+  it("keeps a remote pending send visible when polling reports its old parent leaf", () => {
+    const remoteBot = { ...bot, remote: { homeId: "other", homeName: "Other Mac", ownerName: "Peer", online: true } } as Bot;
+    const sent = reducer({ ...initialState, bots: [remoteBot] }, { type: "send", botId: bot.id, threadId: bot.threadId, sendId: "pending-remote", text: "follow up" });
+    const polled = reducer(sent, { type: "threadActive", threadId: bot.threadId, activeLeafId: root.id });
+    expect(polled.bots[0]?.activeLeafId).toBe("optimistic-pending-remote");
+    const earlyLeaf = reducer(sent, { type: "threadActive", threadId: bot.threadId, activeLeafId: "receipt-not-here-yet" });
+    expect(earlyLeaf.bots[0]?.activeLeafId).toBe("optimistic-pending-remote");
+  });
+
   it("removes only the optimistic row when a send queues or fails", () => {
     const sent = reducer(
       { ...initialState, bots: [bot] },

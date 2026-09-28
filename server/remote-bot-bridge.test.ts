@@ -363,6 +363,21 @@ describe("RemoteBotBridge", () => {
     again.stop();
   });
 
+  it("publishes busy state from scoped peer polling before the reply settles", async () => {
+    bridge.stop();
+    bridge = make({ replaceLinkToken: () => {} });
+    await bridge.listBots(0);
+    await firstSend();
+    const task = fake.tasks.find(task => task.threadId === "bridge-1")!;
+    task.busy = true; task.activity = "working";
+    bridge.start();
+    await expect.poll(() => frames.some(frame => frame.kind === "bot" && frame.bot.id === botId && frame.bot.busy === true), { timeout: 7000 }).toBe(true);
+    task.busy = false; task.activity = "idle";
+    frames = [];
+    await expect.poll(() => frames.some(frame => frame.kind === "bot" && frame.bot.id === botId && frame.bot.busy === false), { timeout: 7000 }).toBe(true);
+    expect(fake.streamUrls).toHaveLength(0);
+  }, 15000);
+
   it("relays only frames for bridge threads, rewritten to virtual ids", async () => {
     bridge.start();
     await until(() => fake.streams.length === 1);

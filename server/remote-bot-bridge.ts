@@ -673,6 +673,7 @@ export class RemoteBotBridge {
       const json = this.outbound(home, botId, result.body);
       // the relayed message frame may trail the receipt; the cache dedupes by id
       if (result.status >= 200 && result.status < 300 && isObject(json.message)) this.remember(home, threadId, json.message as WireMessage, false);
+      home.wake?.();
       return { status: result.status, json };
     };
     if (!sendId) return run();
@@ -1340,6 +1341,7 @@ export class RemoteBotBridge {
           await Promise.all([...home.cache.entries()].filter(([threadId, cache]) => cache.hydrated && home.state.threads[threadId])
             .map(([threadId]) => this.hydrate(home, threadId, true).catch(() => {})));
           this.setConnected(home, true);
+          for (const botId of Object.keys(home.state.bots)) this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, botId) });
         } catch (error) {
           this.connectionFailed(home, error);
           this.log(`${home.link.name}: peer refresh failed (${error instanceof Error ? error.message : "unknown"})`);

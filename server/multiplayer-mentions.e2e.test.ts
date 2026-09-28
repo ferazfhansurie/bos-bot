@@ -45,5 +45,25 @@ it("keeps human notifications separate from bot requests and retries stable afte
     expect(retry.body.message.id).toBe(asked.body.message.id);
     expect((await api("GET", `${path}/requests`)).body.requests).toHaveLength(1);
     expect((await api("POST", `${path}/messages`, { ...payload, text: "changed contents" })).status).toBe(400);
+    const follow = await api("POST", `${path}/messages`, { text: "and explain it", sendId: "follow", botTargets: [] });
+    expect(follow.body.message.botTargets).toEqual([botId]);
+    expect((await api("GET", `${path}/preferences`)).body.replyBotIds).toEqual([botId]);
+    await api("POST", `${path}/messages`, { text: "@Maya your turn", sendId: "pause" });
+    expect((await api("POST", `${path}/messages`, { text: "still talking to Maya", sendId: "paused" })).body.message.botTargets).toEqual([]);
+    expect((await api("PATCH", `${path}/preferences`, { replyMode: "fixed", replyBotId: "outside:bot:no" })).status).toBe(403);
+    expect((await api("PATCH", `${path}/preferences`, { replyMode: "fixed", replyBotId: botId })).body.replyBotIds).toEqual([botId]);
+    expect((await api("POST", `${path}/messages`, { text: "fixed reply", sendId: "fixed" })).body.message.botTargets).toEqual([botId]);
+    expect((await api("PATCH", `${path}/preferences`, { replyMode: "mentions" })).status).toBe(200);
+    expect((await api("POST", `${path}/messages`, { text: "quiet now", sendId: "quiet" })).body.message.botTargets).toEqual([]);
+    const originalRetry = await api("POST", `${path}/messages`, { text: "and explain it", sendId: "follow", botTargets: [] });
+    expect(originalRetry.body.message.botTargets).toEqual([botId]);
+    const direct = (await api("POST", "/api/multiplayer/dm", { targetId: personId })).body.room;
+    const directPath = `/api/multiplayer/rooms/${direct.id}/messages`;
+    const directAsk = await api("POST", directPath, { text: "@Renamed help", sendId: "direct-ask" });
+    expect(directAsk.body.message.botTargets).toEqual([botId]);
+    const directFollow = await api("POST", directPath, { text: "private human followup", sendId: "direct-follow" });
+    expect(directFollow.body.message.botTargets).toEqual([]);
+
+
   } finally { await fixture.close(); }
 }, 60_000);
