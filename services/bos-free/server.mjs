@@ -48,10 +48,12 @@ const cooling = new Map();
 const cool = (id) => cooling.set(id, Date.now() + COOLDOWN_MS);
 const warm = (id) => !(cooling.get(id) > Date.now());
 export function candidates(requested, models) {
-  if (requested !== 'openrouter/free') return [requested];
-  const rest = models.map((m) => m.id).filter((id) => id !== requested && warm(id));
+  // a chosen free model goes first; if it is busy, other free models answer instead of failing the turn
+  const router = 'openrouter/free';
+  const rest = models.map((m) => m.id).filter((id) => id !== requested && id !== router && warm(id));
   for (let i = rest.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [rest[i], rest[j]] = [rest[j], rest[i]]; }
-  return [requested, ...rest].slice(0, ATTEMPTS);
+  const first = requested === router || warm(requested) ? [requested] : [];
+  return [...new Set([...first, router, ...rest])].slice(0, ATTEMPTS);
 }
 const retryable = (status) => status === 429 || status === 502 || status === 503;
 const limitedModel = (text) => /([a-zA-Z0-9_./-]+:free) is temporarily rate-limited/.exec(text)?.[1];
