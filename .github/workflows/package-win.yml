@@ -47,7 +47,9 @@ jobs:
       - name: clean build outputs
         shell: bash
         run: rm -rf dist dist-server release "$OUT"
+      - run: node scripts/release-contract.mjs check staging win
       - run: pnpm package:win
+      - run: node scripts/release-contract.mjs packaged staging win "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
       - name: Verify the bundled browser with an empty home
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
       - name: Verify the packaged server discovers its browser

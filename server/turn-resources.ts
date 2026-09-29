@@ -8,36 +8,43 @@ export type TurnOwner = { threadId: string; generation: string };
  * must see the same desktop. These coordinate app-managed resources; they
  * are not a sandbox for arbitrary shell commands. */
 export class TurnResources {
-  private readonly owners = new Map<string, TurnOwner>();
+  private readonly owners = new Map<string, Array<{ owner: TurnOwner; shared: boolean }>>();
 
-  blocker(resource: string, owner: TurnOwner): TurnOwner | undefined {
-    for (const [key, current] of this.owners) {
-      if (overlaps(key, resource) && !sameOwner(current, owner)) return current;
+  blocker(resource: string, owner: TurnOwner, { shared = false } = {}): TurnOwner | undefined {
+    for (const [key, claims] of this.owners) {
+      if (!overlaps(key, resource)) continue;
+      for (const claim of claims) {
+        if (!sameOwner(claim.owner, owner) && !(shared && claim.shared && resource.startsWith("workspace:"))) return claim.owner;
+      }
     }
     return undefined;
   }
 
-  claim(resource: string, owner: TurnOwner): boolean {
-    if (this.blocker(resource, owner)) return false;
-    this.owners.set(resource, owner);
+  claim(resource: string, owner: TurnOwner, { shared = false } = {}): boolean {
+    // Only project turns can share a resource. A restore uses the default
+    // exclusive mode, which blocks every writer, including parallel turns.
+    shared = shared && resource.startsWith("workspace:");
+    if (this.blocker(resource, owner, { shared })) return false;
+    const claims = this.owners.get(resource) ?? [];
+    const existing = claims.find(claim => sameOwner(claim.owner, owner));
+    if (existing) existing.shared = existing.shared && shared;
+    else claims.push({ owner, shared });
+    this.owners.set(resource, claims);
     return true;
   }
 
   owns(resource: string, owner: TurnOwner): boolean {
-    const current = this.owners.get(resource);
-    return Boolean(current && sameOwner(current, owner));
+    return this.owners.get(resource)?.some(claim => sameOwner(claim.owner, owner)) ?? false;
   }
 
   release(owner: TurnOwner): void {
-    for (const [key, current] of this.owners) {
-      if (sameOwner(current, owner)) this.owners.delete(key);
-    }
+    for (const resource of this.owners.keys()) this.releaseOne(resource, owner);
   }
 
-  /** Drop one of an owner's claims early, when the sequence that took it
-   * could not finish. The owner's other claims stand until settle. */
   releaseOne(resource: string, owner: TurnOwner): void {
-    if (this.owns(resource, owner)) this.owners.delete(resource);
+    const claims = this.owners.get(resource)?.filter(claim => !sameOwner(claim.owner, owner));
+    if (claims?.length) this.owners.set(resource, claims);
+    else this.owners.delete(resource);
   }
 }
 
@@ -53,7 +60,7 @@ export function workspaceResource(cwd: string): string {
   return `workspace:${process.platform === "win32" ? canonical.toLowerCase() : canonical}`;
 }
 
-function overlaps(a: string, b: string): boolean {
+export function overlaps(a: string, b: string): boolean {
   if (a === b) return true;
   if (!a.startsWith("workspace:") || !b.startsWith("workspace:")) return false;
   const left = a.slice("workspace:".length);

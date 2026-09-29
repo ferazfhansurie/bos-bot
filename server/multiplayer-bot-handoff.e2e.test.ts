@@ -44,3 +44,23 @@ it("lets a room bot hand off to another bot once, without looping back", async (
     await fixture.close();
   }
 }, 60_000);
+
+
+it("caps initial room mentions at eight distinct bots before dispatch", async () => {
+  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_MODE: "slow" });
+  const api = async (method: string, path: string, body?: unknown) => {
+    const response = await fetch(`${fixture.info.url}${path}`, { method, headers: { "content-type": "application/json", origin: fixture.info.url }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(10_000) });
+    return { status: response.status, body: await response.json() as any };
+  };
+  try {
+    const bots = [];
+    for (let i = 0; i < 9; i++) bots.push((await api("POST", "/api/bots", { name: `BudgetBot${i}`, modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true })).body.bot);
+    const me = (await api("GET", "/api/multiplayer/me")).body;
+    const room = (await api("POST", "/api/multiplayer/dm", { targetId: `${me.homeId}:bot:${bots[0].id}` })).body.room;
+    const sent = await api("POST", `/api/multiplayer/rooms/${room.id}/messages`, { text: bots.map(bot => `@${bot.name}`).join(" "), sendId: "budget-initial" });
+    expect(sent.status).toBe(201);
+    await expect.poll(async () => (await api("GET", `/api/multiplayer/rooms/${room.id}/requests`)).body.requests.length, { timeout: 10_000 }).toBeGreaterThanOrEqual(8);
+    const requests = (await api("GET", `/api/multiplayer/rooms/${room.id}/requests`)).body.requests;
+    expect(requests).toHaveLength(8);
+  } finally { await fixture.close(); }
+}, 60_000);

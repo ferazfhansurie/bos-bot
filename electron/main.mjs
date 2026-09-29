@@ -76,6 +76,8 @@ import localOriginModule from "./local-origin.cjs";
 import { buildApplicationMenu } from "./menu.mjs";
 import { createComputerSharing, validateSharedFolders } from "./computer-sharing.mjs";
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
+import { createHostLifecycle } from "./host-lifecycle.mjs";
+import { createUpdateLifecycleClient } from "./update-lifecycle.mjs";
 import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore } from "./managed-desktop.mjs";
 import { createCompanyBackups } from "./company-backups.mjs";
 import { createCompanyBackupSchedule } from "./company-backup-schedule.mjs";
@@ -266,6 +268,7 @@ let serverReady = !app.isPackaged;
 let secureCredentials = {};
 let secureCredentialState = null;
 let desktopDataDirLease = null;
+let desktopHostLifecycle = null;
 let managedDesktop = null;
 let companyBackupController = null;
 let companyBackupState = { busy: false };
@@ -287,6 +290,8 @@ const serverSupervisor = createServerSupervisor({
     serverProc = proc;
     serverReady = true;
     serverStartConflictOnly = false;
+    try { desktopHostLifecycle?.ready(proc.pid); }
+    catch (error) { slog(`host recovery readiness held: ${error?.message ?? error}`); }
     slog(`server ready pid=${proc.pid} port=${SERVER_PORT}`);
     // Re-read the latest account credentials; registration may have completed
     // while the replacement child's health probe was pending.
@@ -1210,6 +1215,7 @@ async function startServerOn(port) {
     // from the launching shell. It starts fail-closed until this exact main
     // process sends the private in-memory connection after spawn.
     OMB_DESKTOP_PARENT: "1",
+    OMB_DESKTOP_LIFECYCLE_GENERATION: desktopHostLifecycle?.generation,
     OMB_STATIC_DIR: path.join(process.resourcesPath, "ui"),
     OMB_RESOURCES_PATH: process.resourcesPath,
     OMB_SKILLS_DIR: path.join(process.resourcesPath, "skills"),
@@ -1255,12 +1261,16 @@ async function startServerOn(port) {
   proc.once("spawn", () => {
     slog(`spawned pid=${proc.pid}`);
     if (!serverSupervisor.isCurrent(proc)) return;
+    try { desktopHostLifecycle?.childStarted(proc.pid); }
+    catch (error) { slog(`host recovery child receipt held: ${error?.message ?? error}`); }
     syncDesktopMutationToken(proc);
     syncPhoneSecretKey(proc);
   });
   let exited = false;
   proc.once("exit", (code) => {
     exited = true;
+    try { desktopHostLifecycle?.childExited(proc.pid); }
+    catch (error) { slog(`host recovery child exit receipt held: ${error?.message ?? error}`); }
     trustedApprovalMode.rejectProcess(proc);
     managedDesktopRelay.rejectProcess(proc);
     resolveServerExit();
@@ -1882,6 +1892,7 @@ function createWindow() {
   const restored = resolveWindowState(readWindowState(), displays.map((display) => display.workArea));
   const win = new BrowserWindow({
     ...restored.bounds,
+    title: STAGING ? "BOS Staging" : "BOS Bot",
     minWidth: MIN_BOUNDS.width,
     minHeight: MIN_BOUNDS.height,
     // The renderer restores its persisted skin before mounting React and
@@ -1901,7 +1912,7 @@ function createWindow() {
       // loopback relay, so it is a trusted local page while also needing the
       // renderer's remote-only feature gates. Keep the two facts independent:
       // upstream's origin boundary must not erase the client-mode marker.
-      additionalArguments: [...desktopCompanionRendererArguments(rendererOrigin(), desktopRemoteAccess),
+      additionalArguments: [`--bos-channel=${STAGING ? "staging" : "live"}`, ...desktopCompanionRendererArguments(rendererOrigin(), desktopRemoteAccess),
         ...(app.isPackaged && !desktopRemoteAccess ? ["--omb-company-desktop=1"] : [])],
     },
   });
@@ -2497,6 +2508,7 @@ ipcMain.handle("company-backups:restore", localWorkspaceOnly("company-backups:re
       preparedCompanyRestore.proc !== serverProc || preparedCompanyRestore.deviceId !== connection.deviceId) throw new Error("Preview this backup again and type REPLACE to confirm.");
   // Consume the preview before yielding; duplicate IPC cannot commit it twice.
   // On an uncertain response the existing local backup status is authoritative.
+  desktopHostLifecycle?.maintenance("workspace-restore");
   preparedCompanyRestore = null;
   companyRestoreCommitting = true;
   try {
@@ -2684,9 +2696,16 @@ app.whenReady().then(async () => {
       // Acquire before either plaintext credential migration reads or writes
       // config.json. The parent retains ownership across utility-child port
       // fallbacks and restarts for the entire desktop process lifetime.
-      desktopDataDirLease = acquireDataDirLease(desktopDataDir(), {
-        ...(STAGING ? {} : { legacyDataDir: path.join(app.getPath("home"), ".opengrokbot") }),
+      desktopDataDirLease = acquireDataDirLease(desktopDataDir(),
+        STAGING ? {} : { legacyDataDir: path.join(app.getPath("home"), ".opengrokbot") });
+      desktopHostLifecycle = createHostLifecycle(desktopDataDir(), {
+        recovery: process.env.OMB_RECOVERY_GENERATION || process.env.OMB_RECOVERY_TOKEN
+          ? { generation: process.env.OMB_RECOVERY_GENERATION, token: process.env.OMB_RECOVERY_TOKEN }
+          : null,
       });
+      // The launch capability belongs to main; never pass it to providers.
+      delete process.env.OMB_RECOVERY_GENERATION;
+      delete process.env.OMB_RECOVERY_TOKEN;
     } catch (error) {
       dialog.showErrorBox(
         "OpenMausBot could not start safely",
@@ -2869,7 +2888,16 @@ app.whenReady().then(async () => {
   }
   // in-app auto-update (packaged only) — checks GitHub releases, downloads on
   // the user's click, installs on "Restart to update"
-  startUpdater();
+  const updateLifecycle = createUpdateLifecycleClient({
+    getConnection: () => serverReady && serverProc && !preparedCompanyRestore && !companyRestoreCommitting && !desktopShutdownStarted
+      ? { url: `http://127.0.0.1:${SERVER_PORT}`, pid: serverProc.pid, token: desktopMutationToken, generation: desktopHostLifecycle?.generation }
+      : null,
+    recordIntent: receipt => {
+      if (!desktopHostLifecycle || receipt.pid !== serverProc?.pid) throw new Error("Desktop update owner changed; installation held.");
+      desktopHostLifecycle.update(receipt);
+    },
+  });
+  startUpdater({ prepareInstall: updateLifecycle.prepareInstall });
   refreshApplicationMenu();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -2902,6 +2930,14 @@ process.once("SIGINT", requestSignalQuit);
 process.once("SIGTERM", requestSignalQuit);
 
 app.on("before-quit", (e) => {
+  // Intent is durable before any asynchronous shutdown. A failed write must
+  // not look like a host crash to an external recovery owner.
+  try { desktopHostLifecycle?.quit(); }
+  catch (error) {
+    e.preventDefault();
+    dialog.showErrorBox("BOS could not quit safely", error?.message ?? "The durable quit receipt could not be saved.");
+    return;
+  }
   desktopShutdownStarted = true;
   companyBackupSchedule?.close();
   managedDesktop?.close();

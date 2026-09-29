@@ -48,6 +48,8 @@
   "approval.tool.think": "think",
   "approval.tool.takeAction": "take an action",
   "approval.tool.useTool": "use a tool",
+  "approval.tool.checkComputers": "check available computers",
+  "approval.technicalDetails": "Technical details",
   "approval.card.namedWantsTo": "{name} wants to {action}",
   "approval.card.wantsTo": "Wants to {action}",
   "approval.card.profileWantsToOwn": "{name} wants to update its profile",
@@ -2259,5 +2261,13 @@
   "engines.icon.formatError": "Upload a PNG, JPEG, or WebP image.",
   "engines.icon.sizeError": "Provider icons must be 128 KB or smaller.",
   "engines.icon.invalidError": "Upload a complete PNG, JPEG, or WebP image up to 128 KB and {dimension} × {dimension} pixels.",
-  "engines.icon.dimensionError": "Provider icons must be at most {dimension} × {dimension} pixels."
+  "engines.icon.dimensionError": "Provider icons must be at most {dimension} × {dimension} pixels.",
+  "toolRecovery.confirm": "Confirm that you checked the outcome and the request finished or stopped",
+  "toolRecovery.unverified": "Review receipt could not be verified",
+  "toolRecovery.reviewed": "Outcome reviewed. This request will not run again automatically.",
+  "toolRecovery.failed": "Review could not be saved",
+  "toolRecovery.help": "Check any external effects and make sure any orphaned work has stopped. Marking reviewed records your check and releases this request's hold; it does not run the request again.",
+  "toolRecovery.checkbox": "I checked the outcome and that this request has finished or stopped",
+  "toolRecovery.saving": "Saving review…",
+  "toolRecovery.mark": "Mark reviewed"
 }

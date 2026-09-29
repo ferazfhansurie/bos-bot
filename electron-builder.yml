@@ -143,23 +143,16 @@ win:
       to: cua-driver.exe
     - from: dist-native/cua-win32-x64/cua-sdk
       to: cua-sdk
-  # No signing config yet (would go under win.signtoolOptions or
-  # win.azureSignOptions — eb 26 nests it, there is no top-level
-  # win.certificateFile). The installer is unsigned, so SmartScreen shows
-  # "unknown publisher" on first run (README says so). verifyUpdateCodeSignature
-  # defaults true, but electron-updater skips the check when app-update.yml
-  # carries no publisherName — so auto-update still works today. Do NOT set
-  # publisherName without actually signing, or every update is rejected as
-  # untrusted; and once signed, keep the cert subject stable (or list both old
-  # and new in publisherName) or you strand already-installed users.
+  # Ordinary staging remains update-free. Live packaging adds forceCodeSigning,
+  # a configured stable publisher and signature verification in live.cjs.
 
 nsis:
   oneClick: true
   perMachine: false
   shortcutName: BOS Bot
   # Versioned, like the .dmg. The README's /latest/download/ button needs a
-  # STABLE filename, so ship a second copy named OpenMausBot-setup.exe on the
-  # release — the same trick as OpenMausBot.dmg beside OpenMausBot-${version}.dmg.
+  # STABLE filename, so ship a second copy named BOS-Bot-setup.exe on the
+  # release — the same trick as BOS-Bot.dmg beside OpenMausBot-${version}.dmg.
   artifactName: BOS-Bot-${version}-setup.${ext}
 
 linux:
@@ -188,10 +181,10 @@ linux:
     - from: dist-native/browser/linux-x64
       to: browser-engine
     - from: build/linux-openmausbot-browser.apparmor
-      to: openmausbot-browser.apparmor
+      to: bos-bot-browser.apparmor
   desktop:
     entry:
-      Name: OpenMausBot
+      Name: BOS Bot
       Comment: Your own team of AI bots, in a chat app
       Keywords: AI;Agents;Chat;Productivity;
 

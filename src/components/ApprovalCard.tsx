@@ -63,6 +63,7 @@ export function toolLabel(tool?: string): string {
     tool: "approval.tool.useTool",
   };
   const key = nice[tool];
+  if (bare === "agents select computer" || bare === "select computer") return t("approval.tool.checkComputers");
   return key ? t(key) : bare;
 }
 
@@ -93,6 +94,7 @@ export function ApprovalCard({
     : isProfileRequest
       ? "update_profile"
     : card.tool;
+  const isComputerSelection = displayTool?.endsWith("select_computer") === true;
   // A cross-bot profile card is shown in the PROPOSER's thread, so
   // "wants to update its profile" (fine for a bot editing itself) would
   // silently claim the proposer's own profile is changing. Name the actual
@@ -124,11 +126,18 @@ export function ApprovalCard({
             </>
           )}
         </div>
-        {displayTool && !isTeamSetup && <span className="shrink-0 font-mono text-[11px] text-ink-secondary">{displayTool}</span>}
+        {displayTool && !isTeamSetup && !isComputerSelection && <span className="shrink-0 font-mono text-[11px] text-ink-secondary">{displayTool}</span>}
       </div>
 
       {/* what, exactly */}
-      <pre
+      {isComputerSelection ? (
+        <details className="mt-2 text-[12.5px] text-ink-secondary">
+          <summary className="cursor-pointer">{t("approval.technicalDetails")}</summary>
+          <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-inset px-3 py-2 font-mono">
+            {displayTool}{"\n"}{card.subtitle}
+          </pre>
+        </details>
+      ) : <pre
         tabIndex={0}
         aria-label={
           isRoutineRequest
@@ -142,7 +151,7 @@ export function ApprovalCard({
         className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-inset px-3 py-2 font-mono text-[12.5px] leading-relaxed text-ink"
       >
         {card.subtitle}
-      </pre>
+      </pre>}
 
       {card.skillRequest && <SkillRequestPreview request={card.skillRequest} />}
 

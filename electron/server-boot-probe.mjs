@@ -53,17 +53,22 @@ export async function pollServerIdentity({
     if (remainingMs <= 0) return { outcome: "timeout" };
 
     let res;
+    let body;
+    const controller = new AbortController();
+    // A referenced deadline owns the pending probe, including body reads.
+    // AbortSignal.timeout alone can let an isolated pending probe disappear
+    // when no socket or other referenced handle remains.
+    const timer = setTimeout(() => controller.abort(), remainingMs);
     try {
-      res = await fetchImpl(`http://127.0.0.1:${port}/api/health`, {
-        signal: AbortSignal.timeout(remainingMs),
-      });
+      res = await fetchImpl(`http://127.0.0.1:${port}/api/health`, { signal: controller.signal });
+      body = await res.json().catch(() => null);
     } catch {
       // Not up yet, or this probe ran into the wall-clock budget — either way
       // back off to the poll interval, then let the loop condition decide.
       await sleep(Math.min(BOOT_PROBE_INTERVAL_MS, Math.max(1, deadline - now())));
       continue;
-    }
-    const body = await res.json().catch(() => null);
+    } finally { clearTimeout(timer); }
+
     // Body consumption is covered by the same abort signal as fetch. If it
     // reaches the deadline, a null body means the probe timed out—not that a
     // different process answered on the port.

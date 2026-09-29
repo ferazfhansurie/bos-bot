@@ -13,7 +13,7 @@
     "email": "46266943+milind-soni@users.noreply.github.com"
   },
   "license": "Apache-2.0",
-  "desktopName": "com.openmausbot.app.desktop",
+  "desktopName": "ai.bos.bot.desktop",
   "type": "module",
   "main": "electron/main.mjs",
   "engines": {
@@ -62,9 +62,9 @@
     "build:cua:linux:offline": "node scripts/prepare-cua-linux.mjs --offline",
     "build:updater": "node scripts/bundle-updater.mjs",
     "package:prepare": "pnpm build && pnpm build:server && pnpm build:companion && pnpm build:updater && pnpm build:android-tools && pnpm build:cloudflared && pnpm build:browser",
-    "package:mac": "pnpm package:prepare && pnpm build:speech && pnpm build:cua && electron-builder --config electron-builder.staging.yml --mac --publish never",
-    "package:win": "pnpm package:prepare && pnpm build:cua:win && electron-builder --config electron-builder.staging.yml --win --publish never",
-    "package:linux": "pnpm package:prepare && pnpm build:cua:linux && electron-builder --config electron-builder.staging.yml --linux --x64 --publish never",
+    "package:mac": "pnpm package:prepare && pnpm build:speech && pnpm build:cua && node scripts/release-contract.mjs package staging mac",
+    "package:win": "pnpm package:prepare && pnpm build:cua:win && node scripts/release-contract.mjs package staging win",
+    "package:linux": "pnpm package:prepare && pnpm build:cua:linux && node scripts/release-contract.mjs package staging linux",
     "package:linux:offline": "pnpm package:prepare && pnpm build:cua:linux:offline && electron-builder --config electron-builder.staging.yml --linux --x64 --publish never",
     "smoke:deb-command": "node scripts/smoke-deb-command.mjs",
     "smoke:linux-update": "xvfb-run -a electron --no-sandbox scripts/smoke-linux-update.mjs",
@@ -80,7 +80,11 @@
     "control-plane:types": "pnpm --filter @openmausbot/control-plane types",
     "control-plane:check": "pnpm --filter @openmausbot/control-plane check",
     "control-plane:test": "pnpm --filter @openmausbot/control-plane test",
-    "control-plane:dry-run": "pnpm --filter @openmausbot/control-plane dry-run"
+    "control-plane:dry-run": "pnpm --filter @openmausbot/control-plane dry-run",
+    "package:mac:live": "node scripts/release-contract.mjs check live mac && pnpm package:prepare && pnpm build:speech && pnpm build:cua && node scripts/release-contract.mjs package live mac",
+    "package:win:live": "node scripts/release-contract.mjs check live win && pnpm package:prepare && pnpm build:cua:win && node scripts/release-contract.mjs package live win",
+    "package:linux:live": "node scripts/release-contract.mjs check live linux && pnpm package:prepare && pnpm build:cua:linux && node scripts/release-contract.mjs package live linux",
+    "test:release-contract": "node --test scripts/release-contract.test.mjs"
   },
   "dependencies": {
     "@clack/prompts": "1.7.0",

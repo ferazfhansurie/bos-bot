@@ -60,6 +60,7 @@ function fixture() {
     },
     createCompanyBackups: () => ({ backup: (...args) => f.transfer(...args), prepareRestore: (...args) => f.transfer(...args) }),
     managedDesktop: null, companyBackupController: null, preparedCompanyRestore: null,
+    desktopHostLifecycle: { maintenance: () => {} },
     companyBackupSchedule: null, companyBackupClientStateRequest: null, companyRestoreCommitting: false, desktopShutdownStarted: false, companyBackupConfigurationRevision: 0,
     desktopDataDir: () => "/synthetic-fixture-workspace",
     companyBackupState: { busy: false }, serverProc: {}, serverReady: true,

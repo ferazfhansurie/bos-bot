@@ -89,7 +89,7 @@ function harness(t, { fetchZip = true } = {}) {
   const coordinator = createUpdaterCoordinator(updater, (patch) => {
     state = { ...state, ...patch };
     states.push({ ...state });
-  }, { nativeStaging: true });
+  }, { nativeStaging: true, prepareInstall: async () => {} });
   const timers = new Map();
   const originalTimeout = globalThis.setTimeout;
   t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
@@ -132,7 +132,7 @@ test("real Mac ZIP transfer stays preparing until native ready; restart is singl
   assert.equal(h.updater.squirrelDownloadedUpdate, true);
   assert.equal(h.native.listenerCount("update-downloaded"), 1, "temporary staging listener was removed");
   assert.equal(h.timers.has(300_000), false);
-  h.coordinator.install();
+  await h.coordinator.install();
   h.timers.get(120_000).callback();
   assert.equal(h.state().status, "installing");
   assert.match(h.state().message, /Quit and reopen/);

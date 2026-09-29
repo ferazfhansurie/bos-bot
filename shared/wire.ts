@@ -313,6 +313,8 @@ export interface WireMessage {
     /** Whether the harness captured the full redacted result. Private
      * server-local spill paths are not exposed to clients. */
     fullResult?: boolean;
+    /** Explicit human review of a held private dispatch; never replay authority. */
+    recovery?: { id: string; botId: string; threadId: string; reviewedAt?: number };
   };
   /** user messages sent INTO a running turn (capabilities.queueing). */
   steered?: boolean;

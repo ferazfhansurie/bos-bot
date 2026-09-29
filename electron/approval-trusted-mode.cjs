@@ -158,7 +158,8 @@ function createTrustedApprovalModeCoordinator({ randomId, timeoutMs = 10_000 } =
           new Error("The embedded bot server did not answer the approval-mode request"),
         );
       }, timeoutMs);
-      timer.unref?.();
+      // The caller awaits this timeout. Keep it referenced until the request
+      // settles; otherwise an Ask request can exit without its safe refusal.
       pending.set(message.requestId, {
         proc,
         botId: message.botId,

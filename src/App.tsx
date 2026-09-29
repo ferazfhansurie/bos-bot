@@ -229,6 +229,7 @@ function Shell() {
 
   return (
     <div className="flex h-full flex-col">
+      {window.ogb?.appChannel === "staging" && <div role="status" className="shrink-0 border-b border-amber-400/30 bg-amber-400/10 px-3 py-1 text-center text-xs text-amber-300">BOS Staging</div>}
       {/* fixed-position popup, bottom-left — outside the layout flow */}
       <UpdateBanner />
       <div className="relative flex min-h-0 flex-1">

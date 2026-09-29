@@ -6,7 +6,7 @@
 // describing what is left to do, which the card renders.
 import { updateErrorMessage } from "./update-errors.mjs";
 
-export function createUpdaterCoordinator(updater, setState, { handOffInstall = null, nativeStaging = false } = {}) {
+export function createUpdaterCoordinator(updater, setState, { handOffInstall = null, nativeStaging = false, prepareInstall = null } = {}) {
   let checkOperation = null;
   // Set from downloadUpdate's resolution: the paths electron-updater staged.
   // Only the hand-off needs them; quitAndInstall reads its own copy.
@@ -25,6 +25,11 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
 
   const routeError = (manual, error) => {
     if (recoveryRequired) return;
+    if (installOperation?.dispatched) {
+      recoveryRequired = true;
+      setState({ status: "error", retryable: false, message: `${updateErrorMessage(error)} Update handoff is uncertain; installation remains held.` });
+      return;
+    }
     actionOwnsState = manual;
     if (error instanceof Error) routedErrors.add(error);
     if (downloadOperation) {
@@ -178,17 +183,26 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
     return operation.promise;
   }
 
-  function install() {
+  async function install() {
     if (recoveryRequired || installOperation || downloadOperation || (nativeStaging && !nativeReady)) return;
     actionOwnsState = true;
     if (handOffInstall) {
       handOff();
       return;
     }
-    const operation = { failed: false, timer: null };
+    const operation = { failed: false, timer: null, dispatched: false };
     installOperation = operation;
     setState({ status: "installing" });
     try {
+      if (typeof prepareInstall !== "function") throw new Error("Update lifecycle protection is unavailable");
+      await prepareInstall();
+      if (installOperation !== operation || operation.failed) return;
+    } catch (error) {
+      routeError(true, error);
+      return;
+    }
+    try {
+      operation.dispatched = true;
       updater.quitAndInstall(true, true);
     } catch (error) {
       routeError(true, error);

@@ -1,3 +1,5 @@
+import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
+import { DesktopUpdateLifecycle, readPreparedUpdateReceipt, assertUpdateCancellationSafe } from "./desktop-update-lifecycle.ts";
 import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
 import { groupReplyTargets } from "../shared/group-replies.ts";
 import { SharedTyping } from "./shared-typing.ts";
@@ -298,6 +300,7 @@ import { Handoffs, handedStateUsable, recordHanded, renderUnseen, sessionStart, 
 import { extractTurnImages } from "./turn-images.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
 import { TurnResources, workspaceResource, type TurnOwner } from "./turn-resources.ts";
+import { turnRecoveryBlocker } from "./turn-recovery-blocker.ts";
 import {
   ensureWorkspace,
   ensureTaskWorkspace,
@@ -527,6 +530,9 @@ if (existsSync(join(DATA_DIR, ".backups"))) {
   }
 }
 const workspaceMaintenance = new WorkspaceBackupMaintenance();
+const desktopLifecycleGeneration = process.env.OMB_DESKTOP_LIFECYCLE_GENERATION;
+const startupUpdateReceipt = process.env.OMB_DESKTOP_PARENT === "1" ? readPreparedUpdateReceipt(DATA_DIR, desktopLifecycleGeneration) : null;
+if (startupUpdateReceipt) workspaceMaintenance.restoreUpdate(startupUpdateReceipt.nonce);
 // Only after ensureDirs(): it performs the one-time rename of the legacy data
 // dir, which must not find a freshly created ~/.openmausbot already there.
 // Remote clients (server/request-auth.ts, server/sessions.ts): a stable identity
@@ -1068,8 +1074,11 @@ const turnComputerResources = new Map<string, { owner: TurnOwner; resource: stri
 const teamComputerTurns = new Map<string, { owner: TurnOwner; computerId: string; botId: string; remoteAgent: boolean }>();
 const settlingResourceOwners = new Map<string, string>();
 
-function claimTurnResource(owner: TurnOwner, resource: string): boolean {
-  if (!turnResources.claim(resource, owner)) return false;
+function claimTurnResource(owner: TurnOwner, resource: string, options?: { shared: boolean }): boolean {
+  if (resource.startsWith("workspace:") && turnRecoveryBlocker(privateTurnDispatches.all(), { workspace: resource })) {
+    throw Object.assign(new Error("Review the interrupted request in this project before continuing; its outcome is unknown."), { status: 409, code: "outcome_unknown" });
+  }
+  if (!turnResources.claim(resource, owner, options)) return false;
   turnResourceOwners.set(owner.threadId, owner);
   return true;
 }
@@ -1774,6 +1783,16 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const privateTurnDispatches = new PrivateTurnDispatches(join(DATA_DIR, "private-turn-dispatches.json"));
+function privateDispatchHasTerminal(generation: string, threadId: string, providerTurnId: string): boolean {
+  const receipt = privateTurnDispatches.all().find(row => row.id === generation && row.threadId === threadId);
+  if (!receipt || receipt.state !== "dispatching") return false;
+  const messages = store.messagesFor(threadId);
+  const sourceIndex = receipt.sourceId ? messages.findIndex(message => message.id === receipt.sourceId) : -1;
+  return messages.some((message, index) => index > sourceIndex && message.at >= receipt.createdAt &&
+    message.turnId === providerTurnId && message.turnTerminal && message.turnOutcome?.stopReason !== "outcome-unknown");
+}
+
 const teamComputers = new TeamComputers(join(DATA_DIR, "team-computers.json"), ENVIRONMENT_ID);
 let followupsReady = false;
 const sendSequencer = new SendSequencer();
@@ -5064,6 +5083,13 @@ bus.subscribe((event: RuntimeEvent) => {
         }
       }
       if (completedTurnId || !event.ok) store.settleTurn(event.threadId, completedTurnId ?? undefined, { ok: event.ok, stopReason: event.stopReason ?? undefined });
+      if (completedTurnId) {
+        try {
+          const generation = turnResourceOwners.get(event.threadId)?.generation ?? directTurnGenerationByThread.get(event.threadId);
+          if (generation) privateTurnDispatches.settle(generation, event.threadId, completedTurnId);
+        }
+        catch { console.error("Private turn terminal receipt could not be saved; its work remains held for review."); }
+      }
       const reply = lastReply.get(event.threadId) ?? "";
       lastReply.delete(event.threadId);
       // A run that broke — not one the person stopped, and not a routine's,
@@ -5376,10 +5402,22 @@ function incidentContext(threadId: string): { lastRequest: string | null; lastRe
 function reportIncident(input: { kind: IncidentKind; bot: BotRecord; threadId: string; detail: string }): void {
   const { bot, threadId } = input;
   const task = store.taskByThread(bot.id, threadId);
+  // Unknown effects require an explicit human review. Never turn their
+  // failure into another autonomous provider request or retry suggestion.
+  const group = store.groupByThread(threadId);
+  const groupTask = group ? store.groupTaskByThread(group.id, threadId) : undefined;
+  // Room routines have no private TaskRecord. Use the already persisted
+  // room pin; never mutate it while deciding whether incident work is safe.
+  const cwd = task?.cwd ?? (group ? ((groupTask ? groupTask.pinnedCwd : group.pinnedCwd) ?? workspaceDir(bot.id)) : undefined);
+  let workspace: string | undefined;
+  if (cwd) {
+    try { workspace = workspaceResource(cwd); }
+    catch { workspace = `workspace:${cwd}`; }
+  }
+  if (turnRecoveryBlocker(privateTurnDispatches.all(), { threadId, workspace })) return;
   // A thread another bot opened and is watching is that bot's to handle:
   // the delegator is woken with the failure already (wakeDelegationSource).
   if (task?.openedBy?.delegationId || delegationWatch.has(threadId) || roomHandoffs.activeDirect(threadId)) return;
-  const group = store.groupByThread(threadId);
   const incident: Incident = {
     kind: input.kind,
     bot,
@@ -6131,6 +6169,7 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
 interface SharedBotChain { requesterId: string; hop: number; started: Set<string> }
 
 async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, chain?: SharedBotChain): Promise<void> {
+  workspaceMaintenance.assertAvailable();
   if (source.kind === "activity" || source.editedAt || source.deletedAt) return;
   const fromBot = Boolean(chain);
   if (fromBot ? source.actor.kind !== "bot" || chain!.hop > MAX_SHARED_ROOM_HOPS : source.actor.kind !== "person") return;
@@ -6141,10 +6180,20 @@ async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, cha
     message.responseTo === source.id && message.actor.kind === "bot" &&
     (message.kind !== "activity" || message.tool?.name === "reply failed")
   ).map(message => contactId(message.actor)));
-  const targets = (source.botTargets ? bots.filter(bot => source.botTargets!.includes(bot.id)) : sharedRoomTargets(bots, source.text, false))
+  const requestedIds = source.botTargets ?? sharedRoomTargets(bots, source.text, false).map(bot => bot.id);
+  // Cap the original identities before access/completion filtering: restart
+  // recovery must not backfill a ninth bot when an earlier target settles.
+  const selectedIds = fromBot ? requestedIds : requestedIds.slice(0, MAX_SHARED_CHAIN_BOTS);
+  const targets = bots.filter(bot => selectedIds.includes(bot.id))
     .filter(bot => bot.id !== contactId(source.actor) && !completed.has(bot.id));
   if (!targets.length) return;
-  const started = chain?.started ?? new Set(targets.map(bot => bot.id));
+  const started = chain?.started ?? new Set(selectedIds);
+  if (!fromBot && requestedIds.length > MAX_SHARED_CHAIN_BOTS) {
+    const target = targets[0]!;
+    sharedRooms.append(room.id, target.id, { actor: target.key, responseTo: source.id, text: "", kind: "activity",
+      tool: { name: "bot limit", ok: false, spoken: "Only the first eight bots will run for this request. Send a separate request for the remaining bots." },
+      sendId: `bot-limit-${source.id}`.slice(0, 120) });
+  }
   const people = multiplayerActors.people(cfg.profile?.name ?? "Owner");
   const senderName = fromBot
     ? bots.find(bot => bot.id === contactId(source.actor))?.name ?? "A bot"
@@ -6677,6 +6726,9 @@ async function startTurn(
   const profile = store.bot(botId);
   if (!profile) throw Object.assign(new Error("no such bot"), { status: 404 });
   const threadId = opts?.threadId ?? profile.threadId;
+  if (turnRecoveryBlocker(privateTurnDispatches.all(), { threadId })) {
+    throw Object.assign(new Error("Review the interrupted request in this conversation before continuing; its outcome is unknown."), { status: 409, code: "outcome_unknown" });
+  }
   const continuingRoutine = opts?.cardContinuation ? activeRoutineRunForThread(threadId) : null;
   if (continuingRoutine) {
     const onDispatchError = opts?.onDispatchError;
@@ -7104,15 +7156,16 @@ async function startTurn(
           ? store.pinTaskCwd(bot.id, threadId, privateWorkspace)
           : null;
       const cwd = pinnedCwd ?? undefined;
-      const claimedFolder = cwd ? claimTurnResource(resourceOwner, workspaceResource(cwd)) : true;
-      if (cwd && !claimedFolder && !parallelProjectFolderThreads(cfg)) {
+      const folderResource = cwd ? workspaceResource(cwd) : undefined;
+      const folderShared = Boolean(folderResource && turnResources.blocker(folderResource, resourceOwner));
+      const claimedFolder = folderResource ? claimTurnResource(resourceOwner, folderResource, { shared: parallelProjectFolderThreads(cfg) }) : true;
+      if (cwd && !claimedFolder) {
         throw Object.assign(new Error("another thread is working in this project folder — wait for it to finish or choose a separate folder"), { status: 409, code: "workspace_busy" });
       }
       // Checkpoint explicit project folders, where a bot can overwrite the
       // user's work. Its private OpenMaus workspace is app-owned and changes
       // on nearly every ordinary chat; snapshotting it would add hidden disk
       // and process overhead without a user project to restore.
-      const folderShared = Boolean(cwd) && !claimedFolder;
       const checkpointCwd = cwd && cwd !== privateWorkspace && !folderShared ? cwd : undefined;
       // dweb is opt-in: without an explicit daemon URL, do not advertise
       // tools that would fail on every call or spawn an unnecessary proxy.
@@ -7646,6 +7699,11 @@ async function startTurn(
       if (strictResume && !(opts?.cardContinuation && continuingRoutine) && dispatchedConfig !== plannedConfig) dispatchContext = decideContext(dispatchedConfig);
       // Before sendTurn: an adapter may emit the whole turn before it resolves.
       handoffs.dispatching(threadId, dispatchClaimId, dispatchContext.handoff);
+      // Commit authority before invoking an adapter: it may perform effects or
+      // emit its whole turn before its handshake returns. This is not a queue.
+      privateTurnDispatches.prepare({ id: dispatchClaimId, botId: bot.id, threadId,
+        ...(userMessage?.id ? { sourceId: userMessage.id } : {}), ...(cwd ? { cwd: workspaceResource(cwd).slice("workspace:".length), workspace: workspaceResource(cwd) } : {}), createdAt: Date.now(), serverPid: process.pid,
+        ...(process.env.OMB_DESKTOP_LIFECYCLE_GENERATION ? { hostGeneration: process.env.OMB_DESKTOP_LIFECYCLE_GENERATION } : {}) });
       const dispatch = await guardTurnDispatch(instance.adapter.sendTurn({
         threadId,
         ...(sharedContext ? { sharedContext: { mode: "conversation-only" as const } } : {}),
@@ -7677,6 +7735,14 @@ async function startTurn(
       if (dispatch.cancelled) {
         retireProviderTurn(dispatch.value.turnId);
         throw new DirectTurnSetupCancelled("turn stopped during provider setup");
+      }
+      if (dispatch.value.turnId) {
+        privateTurnDispatches.bind(dispatchClaimId, dispatch.value.turnId);
+        // Adapters can complete before sendTurn resolves. Durable transcript
+        // terminal truth retires only the exact provider identity just bound.
+        if (privateDispatchHasTerminal(dispatchClaimId, threadId, dispatch.value.turnId)) {
+          privateTurnDispatches.settle(dispatchClaimId, threadId, dispatch.value.turnId);
+        }
       }
       bindInternalCapabilityToProviderTurn(threadId, dispatchClaimId, dispatch.value.turnId);
       handoffs.bindTurn(threadId, dispatchClaimId, dispatch.value.turnId);
@@ -7724,6 +7790,9 @@ async function startTurn(
         drainDelegationWakes();
       }
     } catch (e) {
+      // A provider exception/ambiguous handshake is not proof no effect ran.
+      try { privateTurnDispatches.hold(dispatchClaimId); }
+      catch { console.error("Private turn hold could not be saved; dispatch remains blocked for review."); }
       handoffs.abandon(threadId, dispatchClaimId);
       if (computerSelectionTurns.get(threadId)?.generation === dispatchClaimId) computerSelectionTurns.delete(threadId);
       settleDirectFollowup(dispatchClaimId);
@@ -7777,7 +7846,9 @@ async function startTurn(
         notify(
           buildNotification("turn-failed", bot, threadId, redactSecretsInText(message), { avatarUrl: bot.avatarUrl }),
         );
-        reportIncident({ kind: "could-not-start", bot, threadId, detail: message });
+        if (!(e instanceof Error && "code" in e && e.code === "outcome_unknown")) {
+          reportIncident({ kind: "could-not-start", bot, threadId, detail: message });
+        }
       }
       store.setTaskActivity(bot.id, threadId, "idle");
       directTurnBots.delete(threadId);
@@ -8871,6 +8942,10 @@ async function runGroupMemberTurn(
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread) return false;
+  if (turnRecoveryBlocker(privateTurnDispatches.all(), { threadId })) {
+    onDispatchError?.("Review the interrupted request in this conversation before continuing; its outcome is unknown.");
+    return false;
+  }
   if (bot.approvalGrant) {
     onDispatchError?.(`${bot.name}'s approval level is still being confirmed — skipped this round`);
     return true;
@@ -9330,6 +9405,11 @@ async function runGroupMemberTurn(
   // but must not decide the pin: the room's desk is a property of the
   // room, not of whichever member happened to speak first.
   const cwd = groupTurnCwd(workspace, () => store.pinGroupCwd(readyGroup.id, threadId));
+  // Room providers write the same canonical folders as direct turns. Every
+  // writer participates in the shared lease so restore can acquire exclusivity.
+  if (cwd && !claimTurnResource(resourceOwner, workspaceResource(cwd), { shared: parallelProjectFolderThreads(cfg) })) {
+    throw Object.assign(new Error("another thread is working in this project folder — wait for it to finish or choose a separate folder"), { status: 409, code: "workspace_busy" });
+  }
   {
     const drift = checkSoulDrift(bot.id, bot.soul ?? "", bot.soulHash ?? "");
     if (drift.drift !== Boolean(bot.soulDrift)) store.patchBot(bot.id, { soulDrift: drift.drift });
@@ -9398,6 +9478,9 @@ async function runGroupMemberTurn(
     }
     return false;
   }
+  privateTurnDispatches.prepare({ id: internalGeneration, botId: bot.id, threadId, groupId: group.id,
+    ...(latestUser?.id ? { sourceId: latestUser.id } : {}), ...(cwd ? { cwd: workspaceResource(cwd).slice("workspace:".length), workspace: workspaceResource(cwd) } : {}), createdAt: Date.now(), serverPid: process.pid,
+    ...(process.env.OMB_DESKTOP_LIFECYCLE_GENERATION ? { hostGeneration: process.env.OMB_DESKTOP_LIFECYCLE_GENERATION } : {}) });
   let replyText = "";
   let providerTurnId: string | undefined;
   let abandoned = false;
@@ -9485,6 +9568,10 @@ async function runGroupMemberTurn(
       })
       .then((dispatch) => {
         providerTurnId = dispatch.value.turnId;
+        if (providerTurnId) {
+          privateTurnDispatches.bind(internalGeneration, providerTurnId);
+          if (privateDispatchHasTerminal(internalGeneration, threadId, providerTurnId)) privateTurnDispatches.settle(internalGeneration, threadId, providerTurnId);
+        }
         bindInternalCapabilityToProviderTurn(threadId, internalGeneration, dispatch.value.turnId);
         orchestration?.onTurnStarted?.(dispatch.value.turnId);
         if (abandoned) {
@@ -9500,6 +9587,8 @@ async function runGroupMemberTurn(
         onProviderHandshakeSettled?.();
       })
       .catch((err) => {
+        try { privateTurnDispatches.hold(internalGeneration); }
+        catch { console.error("Room turn hold could not be saved; dispatch remains blocked for review."); }
         onProviderHandshakeSettled?.();
         clearCancelledProviderHandshake(threadId, retirementOwner);
         if (abandoned) return;
@@ -10067,6 +10156,7 @@ function startGroupTurn(
   queueId?: string,
   options: StartGroupTurnOptions = {},
 ) {
+  workspaceMaintenance.assertAvailable();
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   if (roomSetupPending(group)) {
@@ -10080,6 +10170,9 @@ function startGroupTurn(
     : Boolean(store.groupTaskByThread(group.id, threadId));
   if (!ownsThread) {
     throw Object.assign(new Error("no such room task"), { status: 404 });
+  }
+  if (turnRecoveryBlocker(privateTurnDispatches.all(), { threadId })) {
+    throw Object.assign(new Error("Review the interrupted request in this conversation before continuing; its outcome is unknown."), { status: 409, code: "outcome_unknown" });
   }
   const members = group.memberIds
     .map((id) => store.bot(id))
@@ -11685,6 +11778,30 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<any> {
 // onto it. Reject non-loopback Hosts outright (defeats rebinding) and
 // origins outside loopback (blocks remote-web CSRF).
 
+const workspaceQuietHooks = {
+    idle: () => !privateTurnDispatches.pending().length && !runningSharedRequests.size && !sharedRoomLocks.size && !sharedBotLocks.size && !settlingResourceOwners.size &&
+      !pendingDelegationWakes.size && !pendingConnectorResumes.size && !pendingSecretResumes.size && !pendingTeamSetupResumes.size &&
+      !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall &&
+      !routines?.isTicking && !calendarCalls?.isTicking &&
+      !localVmImageBusy && !localVmProvisionBusy && !localVmModeChangeBusy &&
+      !localVmLifecycleBusy.size && !boxLifecycleBusyBots.size && !vpsPreviewRequests.size && !orphanBoxLifecycleBusyIds.size &&
+      !computerProviderConfigTransitions.size && !checkpointRestoreLeases.size &&
+      teamComputers.list().every(computer => !teamComputerInUse(computer)) &&
+      store.bots.every((bot) => !botHasActiveTurn(bot.id) && !routines?.activeRunForBot(bot.id) && !botComputerControlSnapshot(bot.id).held) &&
+      store.groups.every((group) => !groupIsWorking(group)),
+    pause: () => { routines?.stop(); calendarCalls?.stop(); watchdog.stop(); },
+    resume: () => { routines?.start(); calendarCalls?.start(); watchdog.start(); },
+    flush: async () => {
+      await Promise.all([flushAllProfileHistory(), flushAllMemoryJournals(), flushUsageLedger(DATA_DIR), flushDecisionLog(DATA_DIR)]);
+      // With writers gated and work idle, release our WAL connection for the
+      // consistent snapshot. Store reopens it lazily after maintenance.
+      closeMessageDb();
+    },
+};
+const desktopUpdateLifecycle = new DesktopUpdateLifecycle(workspaceMaintenance, process.pid, workspaceQuietHooks, async receipt => {
+  writeFileAtomic(join(DATA_DIR, "desktop-update-receipt.json"), JSON.stringify(receipt), { mode: 0o600 });
+}, desktopLifecycleGeneration ?? "", startupUpdateReceipt, () => assertUpdateCancellationSafe(DATA_DIR, desktopLifecycleGeneration ?? "", process.pid));
+
 const workspaceBackupRoutes = createWorkspaceBackupRoutes({
   dataDir: DATA_DIR,
   appVersion: serverVersion(),
@@ -11707,24 +11824,7 @@ const workspaceBackupRoutes = createWorkspaceBackupRoutes({
       throw Object.assign(new Error("Unassign team computers before restoring this workspace"), { status: 409 });
     }
     return work();
-  }, {
-    idle: () => !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall &&
-      !routines?.isTicking && !calendarCalls?.isTicking &&
-      !localVmImageBusy && !localVmProvisionBusy && !localVmModeChangeBusy &&
-      !localVmLifecycleBusy.size && !boxLifecycleBusyBots.size && !vpsPreviewRequests.size && !orphanBoxLifecycleBusyIds.size &&
-      !computerProviderConfigTransitions.size && !checkpointRestoreLeases.size &&
-      teamComputers.list().every(computer => !teamComputerInUse(computer)) &&
-      store.bots.every((bot) => !botHasActiveTurn(bot.id) && !routines?.activeRunForBot(bot.id) && !botComputerControlSnapshot(bot.id).held) &&
-      store.groups.every((group) => !groupIsWorking(group)),
-    pause: () => { routines?.stop(); calendarCalls?.stop(); watchdog.stop(); },
-    resume: () => { routines?.start(); calendarCalls?.start(); watchdog.start(); },
-    flush: async () => {
-      await Promise.all([flushAllProfileHistory(), flushAllMemoryJournals(), flushUsageLedger(DATA_DIR), flushDecisionLog(DATA_DIR)]);
-      // With writers gated and work idle, release our WAL connection for the
-      // consistent snapshot. Store reopens it lazily after maintenance.
-      closeMessageDb();
-    },
-  }, keepLocked),
+  }, workspaceQuietHooks, keepLocked),
 });
 
 const toolResults = new ToolResults();
@@ -11741,6 +11841,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   let m: RegExpMatchArray | null = null;
   let releaseWorkspaceRequest: (() => void) | undefined;
   try {
+    // Admission precedes public pairing/sign-in body reads and authenticated
+    // session confirmation. A slow public request must prevent an idle update.
+    // The private lifecycle control bypasses its own count only after verifying
+    // the same desktop capability/transport required by its handler below.
+    const ownerHeader = req.headers["x-openmausbot-desktop-owner"];
+    const suppliedOwner = Buffer.from(typeof ownerHeader === "string" ? ownerHeader : "");
+    const expectedOwner = Buffer.from(desktopMutationToken ?? "");
+    const privateLifecycleControl = method === "POST" && path === "/api/desktop/lifecycle/update" && DESKTOP_MANAGED &&
+      expectedOwner.length > 0 && suppliedOwner.length === expectedOwner.length && timingSafeEqual(suppliedOwner, expectedOwner) &&
+      !isProxied(req) && isLoopbackHost(req.headers.host) && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
+    const readOnlyProbe = method === "GET" && ["/api/events", "/api/health", "/api/health/hosted"].includes(path);
+    if (path.startsWith("/api/") && !readOnlyProbe && !privateLifecycleControl && !path.startsWith("/api/workspace-backup/") &&
+        !path.startsWith("/api/shared-computers/") && !isWorkspaceBackupSessionControl(method, path)) {
+      releaseWorkspaceRequest = workspaceMaintenance.request();
+    }
     // Unlike the legacy reachability probe, this attests the running
     // server's portal-membership capability, including live entitlement.
     if (method === "GET" && path === "/api/health/hosted") {
@@ -11917,7 +12032,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
-    if (auth.kind === "session") {
+    if (auth.kind === "session" && !workspaceMaintenance.active) {
       const replaced = peerHandoffs.confirm(auth.session.id);
       if (replaced) sessions.revoke(replaced);
     }
@@ -11930,6 +12045,40 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? await workspaceAccess.authorize(req, auth)
         : { status: 503, error: "Workspace sign-in is unavailable." };
       if (failure) return json(res, failure.status, { error: failure.error });
+    }
+
+    if (method === "POST" && path === "/api/workspace-backup/restore" && teamComputers.list().some(computer => computer.section !== null)) {
+      return json(res, 409, { error: "Unassign team computers before restoring a workspace; restored team names must not gain access to existing desktops" });
+    }
+    if (method === "POST" && path === "/api/desktop/lifecycle/update") {
+      const supplied = req.headers["x-openmausbot-desktop-owner"];
+      const suppliedBytes = Buffer.from(typeof supplied === "string" ? supplied : "");
+      const expectedBytes = Buffer.from(desktopMutationToken ?? "");
+      const authorized = DESKTOP_MANAGED && auth.kind === "loopback" &&
+        ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "") && expectedBytes.length > 0 && suppliedBytes.length === expectedBytes.length &&
+        timingSafeEqual(suppliedBytes, expectedBytes) && !isProxied(req) && isLoopbackHost(req.headers.host);
+      if (!authorized) return json(res, 403, { error: "Desktop update authority required" });
+      const receipt = await desktopUpdateLifecycle.handle(true, await readBody(req));
+      return json(res, 200, receipt);
+    }
+    if (await workspaceBackupRoutes(req, res, path, auth)) return;
+
+
+    const privateReviewRoute = /^\/api\/bots\/([\w-]+)\/threads\/([\w-]+)\/recovery\/([\w-]+)\/review$/.exec(path);
+    if (method === "POST" && privateReviewRoute) {
+      if (!auth.scopes.includes("admin")) return json(res, 403, { error: "Admin review required" });
+      const confirmed = z.object({ confirmed: z.literal(true) }).strict().safeParse(await readBody(req));
+      if (!confirmed.success) return json(res, 400, { error: "Confirm that you checked the outcome and that the request finished or stopped" });
+      const [, botId, threadId, receiptId] = privateReviewRoute;
+      const group = store.groupByThread(threadId!);
+      if (botHasActiveTurn(botId!) || (group && groupIsWorking(group))) return json(res, 409, { error: "Finish or stop this active request before reviewing it" });
+      const actor = auth.kind === "session" ? `session:${auth.session.id}` : "desktop-owner";
+      const receipt = privateTurnDispatches.acknowledge(receiptId!, botId!, threadId!, actor);
+      for (const message of store.messagesFor(threadId!)) {
+        if (message.tool?.recovery?.id !== receipt.id) continue;
+        store.patchMessage(threadId!, message.id, { tool: { ...message.tool, recovery: { ...message.tool.recovery, reviewedAt: receipt.reviewedAt } } });
+      }
+      return json(res, 200, { receipt });
     }
 
     // Peer uploads are bound to one bridge thread. The ordinary attachment
@@ -12025,7 +12174,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const task = store.taskByThread(entry.botId, entry.threadId);
           const targetBot = store.bot(entry.botId);
           const title = task?.title ?? "";
-          const privateBridge = binding ? title === `${binding.name} · linked Mac` : / · linked Mac$/.test(title);
+          const privateBridge = binding ? title === `${binding.name} · linked Mac` : title.endsWith(" · linked Mac");
           if (!task || !targetBot || targetBot.hidden || (!privateBridge && !title.startsWith("room · "))) {
             return json(res, 409, { error: "a renamed or private thread needs owner review before peer migration" });
           }
@@ -12580,16 +12729,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
         return json(res, result.created ? 201 : 200, result);
       }
-    }
-
-    if (method === "POST" && path === "/api/workspace-backup/restore" && teamComputers.list().some(computer => computer.section !== null)) {
-      return json(res, 409, { error: "Unassign team computers before restoring a workspace; restored team names must not gain access to existing desktops" });
-    }
-    if (await workspaceBackupRoutes(req, res, path, auth)) return;
-    // Count ordinary requests until their asynchronous handler returns, not
-    // merely until the browser disconnects. A cancelled upload can still write.
-    if (path.startsWith("/api/") && path !== "/api/events" && path !== "/api/health" && !path.startsWith("/api/shared-computers/") && !isWorkspaceBackupSessionControl(method, path)) {
-      releaseWorkspaceRequest = workspaceMaintenance.request();
     }
 
     // ── sessions: who am I, tickets, pairing and revocation ─────────────
@@ -17171,12 +17310,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (checkpointRestoreLeases.has(bot.id)) {
         return json(res, 409, { error: "this bot's project files are already being restored" });
       }
+      const restoreOwner = { threadId: `restore-${bot.id}`, generation: randomUUID() };
+      let restoreResource: string;
+      try { restoreResource = workspaceResource(parsed.data.cwd); }
+      catch { return json(res, 400, { error: "the project folder must exist before restoring files" }); }
+      if (turnRecoveryBlocker(privateTurnDispatches.all(), { workspace: restoreResource })) {
+        return json(res, 409, { error: "Review the interrupted request in this project before restoring files; its outcome is unknown." });
+      }
+      if (!turnResources.claim(restoreResource, restoreOwner)) {
+        return json(res, 409, { error: "another thread is working in this project folder — stop all project turns before restoring files" });
+      }
       checkpointRestoreLeases.add(bot.id);
       let result: checkpoints.RestoreResult;
       try {
         result = await checkpoints.restore(bot.id, parsed.data.cwd, parsed.data.hash);
       } finally {
         checkpointRestoreLeases.delete(bot.id);
+        turnResources.release(restoreOwner);
       }
       if (!result.ok) return json(res, 400, { error: result.error });
       return json(res, 200, { ok: true });
@@ -19844,6 +19994,39 @@ try {
 // A days-scale window needs no tighter cadence; unref so the timer never
 // holds the process open.
 setInterval(sweepThreadEventLogsNow, THREAD_LOG_RETENTION_SWEEP_MS).unref();
+
+// Ordinary private turns have the same no-replay rule as shared requests.
+// Transient busy flags are deliberately reset, but their durable dispatch
+// authority survives; unfinished work becomes an explicit held outcome.
+for (const receipt of privateTurnDispatches.all()) {
+  const task = store.taskByThread(receipt.botId, receipt.threadId);
+  const recoveredGroup = receipt.groupId ? store.groupByThread(receipt.threadId) : undefined;
+  if (receipt.groupId ? recoveredGroup?.id !== receipt.groupId : !task) { privateTurnDispatches.hold(receipt.id); continue; }
+  const messages = store.messagesFor(receipt.threadId);
+  if (receipt.state === "dispatching" && receipt.providerTurnId && privateDispatchHasTerminal(receipt.id, receipt.threadId, receipt.providerTurnId)) {
+    privateTurnDispatches.settle(receipt.id, receipt.threadId, receipt.providerTurnId); continue;
+  }
+  privateTurnDispatches.hold(receipt.id);
+  for (const message of messages) {
+    const card = message.card;
+    if (!card?.requestId || card.answered || card.dismissed || card.routineRequest || card.skillRequest || card.profileRequest || card.teamSetupRequest) continue;
+    // Preserve the card and its audit fields; the dead provider cannot take an answer.
+    store.patchMessage(receipt.threadId, message.id, { card: { ...card, answered: "unavailable", dismissed: true,
+      held: "The host restarted. This provider request is held; its action was not replayed." } });
+  }
+  const order = store.activePath(receipt.threadId).filter(isContextMessage).map(message => message.id);
+  for (const [instanceId, state] of Object.entries(task?.handedMessages ?? {})) {
+    if (state.session !== undefined && receipt.sourceId) store.setHandedMessages(receipt.botId, receipt.threadId, instanceId,
+      recordHanded(state, order, [receipt.sourceId]));
+  }
+  const recoveredBot = store.bot(receipt.botId);
+  store.appendMessage(receipt.threadId, { role: "bot", kind: "activity", turnTerminal: true,
+    ...(recoveredGroup && recoveredBot ? { from: { botId: recoveredBot.id, name: recoveredBot.name, color: recoveredBot.color } } : {}),
+    ...(receipt.providerTurnId ? { turnId: receipt.providerTurnId } : {}),
+    turnOutcome: { ok: false, stopReason: "outcome-unknown" },
+    tool: { name: "The host restarted while this request was active. Its outcome is unknown; it will not run again automatically. Review any effects before continuing.", ok: false, terminal: true, recovery: { id: receipt.id, botId: receipt.botId, threadId: receipt.threadId, ...(receipt.reviewedAt ? { reviewedAt: receipt.reviewedAt } : {}) } },
+  }, { kind: "private-turn.recovery", key: receipt.id });
+}
 
 // A dispatch claim is deliberately committed before transcript/provider work.
 // If we died after that point, its outcome is unknown: recover the user's words

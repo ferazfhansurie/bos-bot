@@ -93,6 +93,12 @@ describe("encrypted full workspace backups", () => {
     // while the maintenance gate is held. No server mutation can reopen it.
     db.close();
     try {
+      const runtimePaths = ["private-turn-dispatches.json", "private-turn-dispatches.json.123.aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.tmp", "desktop-lifecycle.json", "host-recovery-state.json", "desktop-update-receipt.json",
+        "desktop-lifecycle.json.123.aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.tmp", "host-recovery-state.json.aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.tmp", "desktop-update-receipt.json.123.aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.tmp"];
+      for (const name of runtimePaths) writeFileSync(join(source, name), "source capability");
+      mkdirSync(join(source, ".host-recovery-owner"));
+      writeFileSync(join(source, ".host-recovery-owner", "openmausbot-server.lease"), "source runner lease");
+      writeFileSync(join(source, "attachments", "desktop-lifecycle.json"), "ordinary user attachment");
       json(join(source, "team-computers.json"), { version: 1, environmentId: "source-environment", computers: [{ id: "source-computer", name: "Source desktop", section: "Design" }] });
       const originalDb = readFileSync(join(source, "messages.db"));
       const exported = await createWorkspaceBackup(source, {
@@ -114,6 +120,9 @@ describe("encrypted full workspace backups", () => {
       json(join(target, "team-computers.json"), targetComputers);
       writeFileSync(join(target, "environment-id"), "target-environment");
       writeFileSync(join(target, "openmausbot-server.lease"), "live-lease");
+      for (const name of runtimePaths) writeFileSync(join(target, name), "destination runtime identity");
+      mkdirSync(join(target, ".host-recovery-owner"));
+      writeFileSync(join(target, ".host-recovery-owner", "openmausbot-server.lease"), "destination runner lease");
       writeFileSync(join(target, "messages.db-wal"), "old database WAL must not enter the new DB");
       writeFileSync(join(target, "messages.db-shm"), "old database shared memory");
       const staged = await stageWorkspaceBackup(target, exported.path, { password: PASSWORD });
@@ -122,6 +131,7 @@ describe("encrypted full workspace backups", () => {
       expect(readStagedWorkspaceBackup(target, staged.id)).not.toHaveProperty("credentials");
       const data = join(target, ".backups", staged.id, "staged", "data");
       expect(existsSync(join(data, "team-computers.json"))).toBe(false);
+      for (const name of [...runtimePaths, ".host-recovery-owner"]) expect(existsSync(join(data, name))).toBe(false);
       expect(readJson(join(data, "config.json"))).toEqual({ language: "ja" });
       expect(readJson(join(data, "webhooks.json")).webhooks[0]).not.toHaveProperty("secretHash");
       expect(commitPendingWorkspaceRestore(target, staged.id)).toMatchObject({ id: staged.id, restartRequired: true });
@@ -139,6 +149,9 @@ describe("encrypted full workspace backups", () => {
       expect(readJson(join(target, "team-computers.json"))).toEqual(targetComputers);
       expect(readFileSync(join(target, "environment-id"), "utf8")).toBe("target-environment");
       expect(readFileSync(join(target, "openmausbot-server.lease"), "utf8")).toBe("live-lease");
+      for (const name of runtimePaths) expect(readFileSync(join(target, name), "utf8")).toBe("destination runtime identity");
+      expect(readFileSync(join(target, ".host-recovery-owner", "openmausbot-server.lease"), "utf8")).toBe("destination runner lease");
+      expect(readFileSync(join(target, "attachments", "desktop-lifecycle.json"), "utf8")).toBe("ordinary user attachment");
       expect(existsSync(join(target, "messages.db-wal"))).toBe(false);
       expect(readFileSync(join(result.safetyCopyPath!, "data", "messages.db-wal"), "utf8")).toBe("old database WAL must not enter the new DB");
       expect(existsSync(join(target, "tools"))).toBe(false);

@@ -20,7 +20,7 @@ ipcRenderer.on("package:install", (_event, url) => {
 // helpers here. Main enforces the same rule on the sensitive channels.
 const localOrigin = process.argv.find((arg) => arg.startsWith("--omb-local-origin="))?.slice("--omb-local-origin=".length) ?? null;
 const isLocalPage = !localOrigin || location.origin === localOrigin;
-const REMOTE_SAFE = new Set(["platform", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus", "workspaces"]);
+const REMOTE_SAFE = new Set(["platform", "appChannel", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus", "workspaces"]);
 
 // Sandboxed preload cannot import TS or sibling modules. Keep this list in
 // parity with shared/workspace-backup-client.ts (covered by the preload test).
@@ -51,6 +51,7 @@ if (isLocalPage && !desktopRemoteClient && process.argv.includes("--omb-company-
 }
 
 const bridge = {
+  appChannel: process.argv.includes("--bos-channel=staging") ? "staging" : "live",
   /** Host platform ("darwin" | "win32" | "linux") — for platform-aware UI. */
   platform: process.platform,
   // Safe even on a cloud page: the user chooses in a native menu owned by

@@ -112,6 +112,7 @@ const __APP_VERSION__: string;
 
   interface Window {
     ogb?: {
+      appChannel?: "staging" | "live";
       platform: NodeJS.Platform;
       organization?: import("../../electron/managed-desktop.mjs").ManagedDesktopBridge;
       companyBackups?: {

@@ -103,7 +103,7 @@ function applyIcon(favicon: string | undefined): void {
 export function applyBrand(status: BrandStatus): void {
   current = status;
   if (typeof document === "undefined") return;
-  document.title = status.brand.name;
+  document.title = window.ogb?.appChannel === "staging" ? "BOS Staging" : status.brand.name;
   applyIcon(status.brand.favicon);
   const root = document.documentElement;
   for (const name of ["--color-accent", "--color-accent-border", "--color-focus", "--color-accent-text", "--color-accent-ink"]) {

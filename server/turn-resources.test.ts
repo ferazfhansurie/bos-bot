@@ -80,3 +80,51 @@ describe("thread resource ownership", () => {
     }
   });
 });
+
+
+describe("shared workspace writers and exclusive restore", () => {
+  it("tracks every parallel writer and excludes restore until all settle", () => {
+    const leases = new TurnResources();
+    const resource = "workspace:/fixture/project";
+    const restore = { threadId: "restore", generation: "restore-1" };
+    expect(leases.claim(resource, a, { shared: true })).toBe(true);
+    expect(leases.claim(resource, b, { shared: true })).toBe(true);
+    expect(leases.claim(resource, restore)).toBe(false);
+    leases.release(a);
+    expect(leases.claim(resource, restore)).toBe(false);
+    leases.release(b);
+    expect(leases.claim(resource, restore)).toBe(true);
+    expect(leases.claim(resource, a, { shared: true })).toBe(false);
+    expect(leases.claim(`${resource}/nested`, b, { shared: true })).toBe(false);
+    leases.release(restore);
+    expect(leases.claim(resource, a, { shared: true })).toBe(true);
+  });
+});
+
+it("keeps parallel canonical/nested leases generation-scoped and cannot downgrade an exclusive owner", () => {
+  const root = mkdtempSync(join(tmpdir(), "omb-shared-leases-"));
+  try {
+    mkdirSync(join(root, "project", "nested"), { recursive: true });
+    symlinkSync(join(root, "project"), join(root, "alias"), process.platform === "win32" ? "junction" : "dir");
+    const leases = new TurnResources();
+    const parent = workspaceResource(join(root, "project"));
+    const alias = workspaceResource(join(root, "alias"));
+    const nested = workspaceResource(join(root, "project", "nested"));
+    const restore = { threadId: "restore", generation: "1" };
+    expect(leases.claim(alias, a, { shared: true })).toBe(true);
+    expect(leases.claim(nested, b, { shared: true })).toBe(true);
+    leases.release({ ...a, generation: "obsolete" });
+    expect(leases.owns(parent, a)).toBe(true);
+    expect(leases.claim(parent, restore)).toBe(false);
+    leases.release(a);
+    expect(leases.claim(parent, restore)).toBe(false);
+    leases.release(b);
+    expect(leases.claim(parent, restore)).toBe(true);
+    expect(leases.claim(parent, restore, { shared: true })).toBe(true);
+    expect(leases.claim(alias, a, { shared: true })).toBe(false);
+    leases.release({ ...restore, generation: "stale" });
+    expect(leases.claim(nested, b, { shared: true })).toBe(false);
+    leases.release(restore);
+    expect(leases.claim(nested, b, { shared: true })).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

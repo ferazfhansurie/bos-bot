@@ -90,7 +90,7 @@ export function attachUpdaterWindow(mainWindow) {
   win = mainWindow;
 }
 
-export function startUpdater() {
+export function startUpdater({ prepareInstall = null } = {}) {
   // dev / unsigned builds can't auto-update — leave the banner dormant
   if (STAGING || !app.isPackaged) {
     updaterCoordinator = null;
@@ -108,7 +108,7 @@ export function startUpdater() {
   // Squirrel.Mac has a second, native staging pass after the ZIP download.
   // Start it immediately so "Restart to update" never has to begin that slow
   // pass and wait indefinitely. Windows keeps the explicit installer click.
-  autoUpdater.autoInstallOnAppQuit = process.platform === "darwin";
+  autoUpdater.autoInstallOnAppQuit = false; // explicit idle-gated install only
   autoUpdater.logger = updaterLogger();
 
   // Broadcast the install flavour before the first check so the banner never
@@ -119,6 +119,7 @@ export function startUpdater() {
   updaterCoordinator = createUpdaterCoordinator(autoUpdater, setState, {
     handOffInstall: handOff ? handOffDownloadedPackage(packageType) : null,
     nativeStaging: process.platform === "darwin",
+    prepareInstall,
   });
 
   // first check ~15s after launch (let the app settle), then hourly — both

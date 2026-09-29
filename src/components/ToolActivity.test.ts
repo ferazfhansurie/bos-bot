@@ -23,3 +23,16 @@ describe("ToolActivity", () => {
     expect(render(true)).toContain("No output was recorded");
   });
 });
+
+it("requires explicit finished-or-stopped confirmation for held outcome review", async () => {
+ const { reviewPrivateTurnOutcome }=await import("./ToolActivity");
+ const recovery={id:"receipt",botId:"bot",threadId:"thread"};let calls=0;let body;
+ const request=async(_path:string,init?:RequestInit)=>{calls++;body=JSON.parse(String(init?.body));return {receipt:{...recovery,reviewedAt:123}};};
+ await expect(reviewPrivateTurnOutcome(recovery,false,request)).rejects.toThrow(/Confirm/);expect(calls).toBe(0);
+ expect(await reviewPrivateTurnOutcome(recovery,true,request)).toBe(123);expect(calls).toBe(1);expect(body).toEqual({confirmed:true});
+ const html=renderToStaticMarkup(createElement(ToolActivity,{tool:{name:"Outcome unknown",ok:false,recovery}}));
+ expect(html).toContain("I checked the outcome and that this request has finished or stopped");
+ expect(html).toContain('type="checkbox"');expect(html).toContain("Mark reviewed");expect(html).toContain('disabled=""');
+ const reviewed=renderToStaticMarkup(createElement(ToolActivity,{tool:{name:"Outcome unknown",ok:false,recovery:{...recovery,reviewedAt:123}}}));
+ expect(reviewed).toContain("Outcome reviewed");expect(reviewed).not.toContain("Mark reviewed");
+});

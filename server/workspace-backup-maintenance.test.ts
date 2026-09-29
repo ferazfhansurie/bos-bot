@@ -23,3 +23,24 @@ it("refuses in-flight requests and turns, gates new work, and unlocks on failure
   expect(gate.pendingRestore).toBe(true);
   expect(resumes).toBe(1);
 });
+
+it("retains an update gate until its exact owner cancels and resumes", async () => {
+  const gate = new WorkspaceBackupMaintenance();
+  let resumes = 0;
+  const hooks = { idle: () => true, pause: () => {}, resume: () => { resumes++; }, flush: async () => {} };
+  await gate.prepareUpdate("operation-a", async () => {}, hooks);
+  expect(gate.pendingRestore).toBe(false);
+  expect(() => gate.request()).toThrow(/update/);
+  expect(() => gate.cancelUpdate("operation-b")).toThrow();
+  expect(gate.active).toBe(true);
+  gate.cancelUpdate("operation-a");
+  expect(gate.active).toBe(false);
+  expect(resumes).toBe(1);
+});
+
+it("does not retain an update gate when receipt persistence fails", async () => {
+  const gate = new WorkspaceBackupMaintenance();
+  const hooks = { idle: () => true, pause: () => {}, resume: () => {}, flush: async () => {} };
+  await expect(gate.prepareUpdate("a", async () => { throw new Error("disk full"); }, hooks)).rejects.toThrow("disk full");
+  expect(gate.active).toBe(false);
+});

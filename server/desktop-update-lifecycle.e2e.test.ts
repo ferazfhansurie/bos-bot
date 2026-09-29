@@ -1,0 +1,90 @@
+import { request as httpRequest } from "node:http";
+import { spawn, type ChildProcess } from "node:child_process";
+import { writeFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, it } from "vitest";
+import { launchVerificationServer, verificationServerEnvironment } from "../scripts/control-omb.ts";
+import { waitForExit } from "./testing/cleanup.ts";
+it("desktop update endpoint refuses busy work and retains exclusive maintenance until owned cancellation", async () => {
+ const fixture = await launchVerificationServer(); let child: ChildProcess | undefined;
+ const { url, dataDir } = fixture.info; const token = "a".repeat(43);
+ const finish = join(dataDir,"finish");
+ try {
+  await waitForExit(fixture.child,{signal:"SIGTERM"});
+  const preload=join(dataDir,"desktop-parent.mjs");
+  // Only the fixture emulates Electron's private utility channel, never a
+  // production environment variable or HTTP route supplying the capability.
+  writeFileSync(preload, `process.parentPort={on(name,fn){if(name==='message')setImmediate(()=>fn({data:{type:'openmausbot:desktop-mutation-token',token:'${token}'}}));},postMessage(){}};`);
+  const env=verificationServerEnvironment({...process.env,FAKE_CLAUDE_MODE:"slow",FAKE_CLAUDE_SLOW_FINISH_GATE:finish},dataDir,Number(new URL(url).port));
+  env.OMB_DESKTOP_PARENT="1";
+  env.OMB_DESKTOP_LIFECYCLE_GENERATION="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  let log="";child.stdout?.on("data",b=>{log+=String(b)});child.stderr?.on("data",b=>{log+=String(b)});
+  const api=async(method:string,path:string,body?:unknown,owner:string=token)=>{
+   const response=await fetch(url+path,{method,headers:{"content-type":"application/json","x-openmausbot-desktop-owner":owner,origin:url},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(10_000)});
+   return {status:response.status,body:await response.json() as any};
+  };
+  await expect.poll(async()=>{if(child?.exitCode!==null)throw new Error(log);return fetch(url+"/api/health").then(r=>r.ok).catch(()=>false)},{timeout:15000}).toBe(true);
+  const nonce="operation-fixture-123";
+  const prepare=(pid=child!.pid,owner=token)=>api("POST","/api/desktop/lifecycle/update",{action:"prepare",expectedPid:pid,nonce},owner);
+  expect((await prepare(child!.pid,"wrong")).status).toBe(403);
+  expect((await prepare(child!.pid!+1)).status).toBe(409);
+  const slowPair=httpRequest(new URL("/api/auth/pair",url),{method:"POST",headers:{"content-type":"application/json","content-length":"200",origin:url}});
+  slowPair.on("error",()=>{});
+  slowPair.write('{"code":"');
+  await new Promise(resolve=>setTimeout(resolve,100));
+  try { expect((await prepare()).status).toBe(409); } finally {slowPair.destroy();}
+  await new Promise(resolve=>setTimeout(resolve,100));
+  const created=await api("POST","/api/bots",{name:"Update fixture",modelSelection:{instanceId:"claude",model:"claude-sonnet-5"},requireAvailableModel:true});expect(created.status).toBe(201);
+  const bot=created.body.bot;
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"hold fixture turn"})).status).toBe(202);
+  const busy=async()=> (await api("GET","/api/bots?messages=0")).body.bots.find((b:any)=>b.id===bot.id).busy;
+  await expect.poll(busy,{timeout:15000}).toBe(true);
+  expect((await prepare()).status).toBe(409);
+  writeFileSync(finish,"finish");await expect.poll(busy,{timeout:15000}).toBe(false);
+  await expect.poll(async()=> (await prepare()).status,{timeout:15000}).toBe(200);
+  expect(JSON.parse(readFileSync(join(dataDir,"desktop-update-receipt.json"),"utf8"))).toMatchObject({nonce,state:"prepared"});
+  expect((await api("POST","/api/multiplayer/invites",{})).status).toBe(503);
+  expect((await api("POST","/api/auth/pair",{code:"synthetic-invalid"})).status).toBe(503);
+  expect((await api("POST","/api/pair",{credential:"synthetic-invalid"})).status).toBe(503);
+  expect((await api("POST","/api/auth/email/start",{email:"fixture@example.invalid"})).status).toBe(503);
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"must refuse"})).status).toBe(503);
+  const oldPid = child!.pid;
+  await waitForExit(child,{signal:"SIGKILL"});
+  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  child.stderr?.on("data",b=>{log+=String(b)});
+  await expect.poll(async()=>{if(child?.exitCode!==null)throw new Error(log);return (await api("GET","/api/health")).body.pid},{timeout:15000}).toBe(child.pid);
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"new child must retain update hold"})).status).toBe(503);
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:oldPid,nonce})).status).toBe(409);
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce:"other-operation-123"})).status).toBe(409);
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409); // absent host intent fails closed
+  const hostRecord = {version:1,generation:env.OMB_DESKTOP_LIFECYCLE_GENERATION,pid:process.pid,children:[child!.pid],phase:"update",startedAt:Date.now(),readyAt:null};
+  writeFileSync(join(dataDir,"desktop-lifecycle.json"),JSON.stringify(hostRecord));
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409);
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"uncertain handoff stays held"})).status).toBe(503);
+  writeFileSync(join(dataDir,"desktop-lifecycle.json"),"{invalid");
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409);
+  writeFileSync(join(dataDir,"desktop-lifecycle.json"),JSON.stringify({...hostRecord,generation:"cccccccc-cccc-cccc-cccc-cccccccccccc",phase:"running"}));
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409);
+  writeFileSync(join(dataDir,"desktop-lifecycle.json"),JSON.stringify({...hostRecord,phase:"running"}));
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(200);
+  expect((await api("GET","/api/bots?messages=0")).status).toBe(200);
+  expect((await prepare()).status).toBe(200);
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"commit",expectedPid:child!.pid,nonce})).body.state).toBe("committed");
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409);
+  await waitForExit(child,{signal:"SIGKILL"});
+  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  child.stderr?.on("data",b=>{log+=String(b)});
+  await expect.poll(async()=>{if(child?.exitCode!==null)throw new Error(log);return (await api("GET","/api/health")).body.pid},{timeout:15000}).toBe(child.pid);
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"committed restart must stay held"})).status).toBe(503);
+  expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409);
+  await waitForExit(child,{signal:"SIGKILL"});
+  env.OMB_DESKTOP_LIFECYCLE_GENERATION="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  child.stderr?.on("data",b=>{log+=String(b)});
+  await expect.poll(async()=>{if(child?.exitCode!==null)throw new Error(log);return (await api("GET","/api/health")).body.pid},{timeout:15000}).toBe(child.pid);
+  expect((await api("GET","/api/bots?messages=0")).status).toBe(200);
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"new explicit host generation may continue"})).status).toBe(202);
+ } finally {await waitForExit(child,{signal:"SIGTERM"});await fixture.close();}
+},60000);

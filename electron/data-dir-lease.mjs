@@ -508,6 +508,19 @@ export function acquireDataDirLease(dataDir, options = {}) {
   return acquireDataDirLeaseInternal(dataDir, options);
 }
 
+/** Read-only safety check for an external host recovery owner. Unknown or
+ * foreign records fail closed; use the same identity rules as acquisition. */
+export function dataDirRecoverySafe(dataDir) {
+  validateDataDir(dataDir);
+  for (const path of [join(dataDir, LEASE_NAME), join(dataDir, DELEGATED_CHILD_DIR, LEASE_NAME)]) {
+    const owner = readOwner(path);
+    if (!owner) continue;
+    if (owner.host !== hostname()) throw leaseError("Data-directory ownership belongs to another machine; recovery is held.");
+    if (ownerIsAlive(owner)) return false;
+  }
+  return true;
+}
+
 /**
  * Server entry-point API. A standalone server claims the lease; an Electron
  * utility child consumes and validates its parent's private capability.

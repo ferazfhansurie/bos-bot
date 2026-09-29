@@ -1,23 +1,3 @@
-# One-button releases: builds macOS (arm64 + x64, signed, notarized, stapled),
-# Windows, and Ubuntu from ONE commit, assembles a complete draft in this
-# repository with verified feeds, and mirrors it to the legacy releases repo
-# so already-installed builds can cross the updater migration safely.
-#
-# Every gate below exists because its absence shipped (or nearly shipped) a
-# broken build from a laptop:
-#   - clean output dirs        -> 0.1.15 "app is damaged" (stale dist/ broke the seal)
-#   - codesign gate BEFORE     -> notarization ACCEPTS invalid signatures
-#   - packaged-server smoke    -> 0.1.24 died on launch (unbundled zod import)
-#   - proxy-path probe         -> the 0.1.24 fix broke every helper while
-#                                 /api/health stayed green
-#   - staple, THEN hash        -> stapling rewrites bytes; stale feeds make
-#                                 electron-updater reject every update
-#   - blockmap regeneration    -> stale differential maps waste every updater's
-#                                 bandwidth silently
-#   - assemble-then-publish    -> 0.1.24 sat as an invisible draft; a mac-only
-#                                 publish 404s the README's other buttons
-#
-# One-time setup (repo secrets) is documented in docs/releasing.md.
 name: Release
 
 on:
@@ -32,11 +12,6 @@ on:
         required: false
         type: boolean
         default: false
-  push:
-    branches:
-      - main
-    paths:
-      - package.json
 
 permissions:
   contents: read
@@ -56,6 +31,8 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Enforce BOS release destination
+        run: test "$GITHUB_REPOSITORY" = firazfhansurie/bos-bot
       - id: pin
         env:
           BEFORE: ${{ github.event.before }}
@@ -86,17 +63,6 @@ jobs:
             echo "::error::$v is already published on $GITHUB_REPOSITORY — bump the version first"
             exit 1
           fi
-      - name: Refuse to overwrite a published legacy mirror
-        if: steps.pin.outputs.should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_PAT }}
-        run: |
-          test -n "$GH_TOKEN" || { echo "::error::RELEASES_PAT is required for the updater bridge"; exit 1; }
-          v="v$(node -p "require('./package.json').version")"
-          if gh release view "$v" --repo milind-soni/openmausbot-releases --json isDraft --jq .isDraft 2>/dev/null | grep -q false; then
-            echo "::error::$v is already published on the legacy mirror — recover the canonical draft instead of rebuilding bytes"
-            exit 1
-          fi
 
   mac:
     name: macOS arm64 + x64 (sign, notarize, staple)
@@ -104,6 +70,12 @@ jobs:
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: macos-14
     timeout-minutes: 90
+    env:
+      MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+      MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+      APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -118,6 +90,7 @@ jobs:
       - name: Clean generated output
         run: rm -rf dist dist-server dist-native release
 
+      - run: node scripts/release-contract.mjs check live mac
       - name: Import the Developer ID certificate into a throwaway keychain
         env:
           MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
@@ -136,21 +109,22 @@ jobs:
           rm "$RUNNER_TEMP/cert.p12"
 
       - name: Package both architectures
-        run: pnpm package:mac
+        run: pnpm package:mac:live
 
       - name: "Gate: both packaged apps use the canonical updater feed"
         run: |
-          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
+          for app in "release/mac-arm64/BOS Bot.app" "release/mac/BOS Bot.app"; do
             update="$app/Contents/Resources/app-update.yml"
             test -f "$update" || { echo "::error::missing $update"; exit 1; }
-            grep -Eq '^owner: milind-soni$' "$update" || { echo "::error::wrong update owner in $update"; exit 1; }
-            grep -Eq '^repo: OpenMausBot$' "$update" || { echo "::error::wrong update repo in $update"; exit 1; }
+            grep -Eq '^owner: firazfhansurie$' "$update" || { echo "::error::wrong update owner in $update"; exit 1; }
+            grep -Eq '^repo: bos-bot$' "$update" || { echo "::error::wrong update repo in $update"; exit 1; }
           done
 
       - name: "Gate: the signature must verify BEFORE notarization"
         run: |
-          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
+          for app in "release/mac-arm64/BOS Bot.app" "release/mac/BOS Bot.app"; do
             codesign --verify --deep --strict "$app"
+            codesign -dv --verbose=4 "$app" 2>&1 | grep -q "Authority=Developer ID Application:" || { echo "::error::not Developer ID distribution signed"; exit 1; }
             bin="$app/Contents/Resources/cloudflared/cloudflared"
             test -x "$bin" || { echo "::error::missing executable $bin"; exit 1; }
             test -f "$app/Contents/Resources/licenses/cloudflared-LICENSE.txt" \
@@ -174,8 +148,8 @@ jobs:
       - name: "Gate: signed native browser works with an empty home"
         run: |
           case "$(node -p process.arch)" in
-            arm64) resources="$PWD/release/mac-arm64/OpenMausBot.app/Contents/Resources" ;;
-            x64) resources="$PWD/release/mac/OpenMausBot.app/Contents/Resources" ;;
+            arm64) resources="$PWD/release/mac-arm64/BOS Bot.app/Contents/Resources" ;;
+            x64) resources="$PWD/release/mac/BOS Bot.app/Contents/Resources" ;;
             *) exit 1 ;;
           esac
           node scripts/smoke-browser-bundle.mjs --resources "$resources"
@@ -183,7 +157,7 @@ jobs:
 
       - name: "Gate: both packaged servers start and every helper path resolves"
         run: |
-          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
+          for app in "release/mac-arm64/BOS Bot.app" "release/mac/BOS Bot.app"; do
             res="$app/Contents/Resources"
             # the server tree is plain JS — runnable on the runner's node
             # regardless of the app binary's arch
@@ -236,17 +210,17 @@ jobs:
 
       - name: Staple, re-zip, regenerate blockmaps and the feed
         run: |
-          xcrun stapler staple release/OpenMausBot-*-arm64.dmg
-          xcrun stapler staple release/OpenMausBot-*-x64.dmg
-          xcrun stapler staple release/mac-arm64/OpenMausBot.app
-          xcrun stapler staple release/mac/OpenMausBot.app
+          xcrun stapler staple release/BOS-Bot-*-arm64.dmg
+          xcrun stapler staple release/BOS-Bot-*-x64.dmg
+          xcrun stapler staple "release/mac-arm64/BOS Bot.app"
+          xcrun stapler staple "release/mac/BOS Bot.app"
           v=$(node -p "require('./package.json').version")
-          rm -f "release/OpenMausBot-$v-arm64.zip" "release/OpenMausBot-$v-x64.zip"
-          ditto -c -k --sequesterRsrc --keepParent release/mac-arm64/OpenMausBot.app "release/OpenMausBot-$v-arm64.zip"
-          ditto -c -k --sequesterRsrc --keepParent release/mac/OpenMausBot.app "release/OpenMausBot-$v-x64.zip"
+          rm -f "release/BOS-Bot-$v-arm64.zip" "release/BOS-Bot-$v-x64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "release/mac-arm64/BOS Bot.app" "release/BOS-Bot-$v-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "release/mac/BOS Bot.app" "release/BOS-Bot-$v-x64.zip"
           node scripts/regenerate-blockmaps.mjs \
-            "release/OpenMausBot-$v-arm64.zip" "release/OpenMausBot-$v-x64.zip" \
-            "release/OpenMausBot-$v-arm64.dmg" "release/OpenMausBot-$v-x64.dmg"
+            "release/BOS-Bot-$v-arm64.zip" "release/BOS-Bot-$v-x64.zip" \
+            "release/BOS-Bot-$v-arm64.dmg" "release/BOS-Bot-$v-x64.dmg"
           # refreshes every hash from the post-staple bytes and refuses to
           # finish unless the feed matches the files on disk
           node scripts/regenerate-mac-feed.mjs
@@ -254,13 +228,17 @@ jobs:
       - name: Stable-named copies for the README's /latest/download links
         run: |
           v=$(node -p "require('./package.json').version")
-          cp "release/OpenMausBot-$v-arm64.dmg" release/OpenMausBot.dmg
-          cp "release/OpenMausBot-$v-x64.dmg" release/OpenMausBot-intel.dmg
+          cp "release/BOS-Bot-$v-arm64.dmg" release/BOS-Bot.dmg
+          cp "release/BOS-Bot-$v-x64.dmg" release/BOS-Bot-intel.dmg
 
+      - name: Verify packaged release contract
+        run: node scripts/release-contract.mjs packaged live mac "release/mac-arm64/BOS Bot.app/Contents/Resources"
+      - run: node scripts/release-contract.mjs packaged live mac "release/mac/BOS Bot.app/Contents/Resources"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mac-release
           path: |
+            release/release-contract-mac.json
             release/*.dmg
             release/*.zip
             release/*.blockmap
@@ -274,6 +252,12 @@ jobs:
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      BOS_WINDOWS_PUBLISHER: ${{ vars.BOS_WINDOWS_PUBLISHER }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -288,7 +272,7 @@ jobs:
       - name: Clean generated output
         shell: bash
         run: rm -rf dist dist-server release
-      - run: pnpm package:win
+      - run: pnpm package:win:live
       - name: "Gate: bundled browser works with an empty home"
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
       - name: "Gate: packaged Windows server discovers its browser"
@@ -310,11 +294,8 @@ jobs:
           "$res/cloudflared/cloudflared.exe" version | grep -Fq "cloudflared version 2026.8.2 " || {
             echo "::error::cloudflared has the wrong version"; exit 1; }
           [ -f "$res/app-update.yml" ] || { echo "::error::missing app-update.yml"; exit 1; }
-          grep -Eq '^owner: milind-soni$' "$res/app-update.yml" || { echo "::error::wrong update owner"; exit 1; }
-          grep -Eq '^repo: OpenMausBot$' "$res/app-update.yml" || { echo "::error::wrong update repo"; exit 1; }
-          if grep -q "publisherName" "$res/app-update.yml"; then
-            echo "::error::publisherName on an unsigned build breaks every update"; exit 1
-          fi
+          grep -Eq '^owner: firazfhansurie$' "$res/app-update.yml" || { echo "::error::wrong update owner"; exit 1; }
+          grep -Eq '^repo: bos-bot$' "$res/app-update.yml" || { echo "::error::wrong update repo"; exit 1; }
           HOME="$RUNNER_TEMP/smoke" USERPROFILE="$RUNNER_TEMP/smoke" OMB_PORT=21987 \
             node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
           pid=$!
@@ -326,15 +307,27 @@ jobs:
           echo "::error::the packaged server never served /api/health"
           cat "$RUNNER_TEMP/server.log" || true
           exit 1
+      - name: Verify Windows Authenticode trust and publisher
+        shell: pwsh
+        run: |
+          Get-ChildItem release/*.exe | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne 'Valid') { throw "Invalid release signature: $($_.Name)" }
+            $publisher = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            if ($publisher -ne $env:BOS_WINDOWS_PUBLISHER) { throw "Release publisher differs from configured stable publisher" }
+          }
       - name: Stable-named copy
         shell: bash
         run: |
           v=$(node -p "require('./package.json').version")
-          cp "release/OpenMausBot-$v-setup.exe" release/OpenMausBot-setup.exe
+          cp "release/BOS-Bot-$v-setup.exe" release/BOS-Bot-setup.exe
+      - name: Verify packaged release contract
+        run: node scripts/release-contract.mjs packaged live win "release/win-unpacked/resources"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-release
           path: |
+            release/release-contract-win.json
             release/*.exe
             release/*.exe.blockmap
             release/latest.yml
@@ -368,13 +361,13 @@ jobs:
         run: pnpm build:cua:linux
       - name: Prove overlay-free X11 input routing
         run: dbus-run-session -- xvfb-run -a pnpm smoke:cua-x11-input
-      - run: pnpm package:linux
+      - run: pnpm package:linux:live
       - name: Verify the packaged updater target
         run: |
           update=release/linux-unpacked/resources/app-update.yml
           test -f "$update" || { echo "::error::missing $update"; exit 1; }
-          grep -Eq '^owner: milind-soni$' "$update" || { echo "::error::wrong update owner"; exit 1; }
-          grep -Eq '^repo: OpenMausBot$' "$update" || { echo "::error::wrong update repo"; exit 1; }
+          grep -Eq '^owner: firazfhansurie$' "$update" || { echo "::error::wrong update owner"; exit 1; }
+          grep -Eq '^repo: bos-bot$' "$update" || { echo "::error::wrong update repo"; exit 1; }
       - name: Verify package contents and metadata
         run: node scripts/verify-linux-package.mjs
       - name: Match a normal Ubuntu package parent on the ephemeral runner
@@ -398,11 +391,11 @@ jobs:
           sudo chmod 4755 release/linux-unpacked/chrome-sandbox
           test "$(stat -c '%U:%G %a' release/linux-unpacked/chrome-sandbox)" = "root:root 4755"
       - name: "Gate: installed browser works with Ubuntu sandbox restrictions"
-        run: node scripts/smoke-browser-bundle.mjs --resources /opt/OpenMausBot/resources
+        run: node scripts/smoke-browser-bundle.mjs --resources "/opt/BOS Bot/resources"
       - name: "Gate: packaged Linux server discovers its browser"
         env:
-          OMB_SMOKE_DIST: /opt/OpenMausBot/resources/server
-        run: node scripts/smoke-packaged-server.mjs --browser-bundle /opt/OpenMausBot/resources/browser-engine
+          OMB_SMOKE_DIST: /opt/BOS Bot/resources/server
+        run: node scripts/smoke-packaged-server.mjs --browser-bundle "/opt/BOS Bot/resources/browser-engine"
       - name: Smoke the packages
         env:
           OMB_KEEP_SMOKE_DIR: "1"
@@ -410,17 +403,20 @@ jobs:
         run: pnpm smoke:linux-package
       - name: Remove the installed upgrade fixture
         if: always()
-        run: sudo dpkg --purge openmausbot || true
+        run: sudo dpkg --purge bos-bot || true
       - name: Stable-named copies and checksums
         run: |
           v=$(node -p "require('./package.json').version")
-          cp "release/OpenMausBot-$v-amd64.deb" release/OpenMausBot-amd64.deb
-          cp "release/OpenMausBot-$v-x86_64.AppImage" release/OpenMausBot.AppImage
-          (cd release && sha256sum OpenMausBot-$v-amd64.deb OpenMausBot-$v-x86_64.AppImage > SHA256SUMS-ubuntu-x64.txt)
+          cp "release/BOS-Bot-$v-x64.deb" release/BOS-Bot-x64.deb
+          cp "release/BOS-Bot-$v-x64.AppImage" release/BOS-Bot.AppImage
+          (cd release && sha256sum BOS-Bot-$v-x64.deb BOS-Bot-$v-x64.AppImage > SHA256SUMS-ubuntu-x64.txt)
+      - name: Verify packaged release contract
+        run: node scripts/release-contract.mjs packaged live linux "release/linux-unpacked/resources"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-release
           path: |
+            release/release-contract-linux.json
             release/*.deb
             release/*.AppImage
             release/SHA256SUMS-ubuntu-x64.txt
@@ -439,33 +435,48 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write
-      # to dispatch the npm and Docker publishes on the new tag
-      actions: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: assets
           merge-multiple: true
+      - name: Verify platform source parity
+        env:
+          SHA: ${{ needs.prepare.outputs.sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          node --input-type=module - <<'EOF'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          for (const platform of ['mac','win','linux']) {
+            const manifest = JSON.parse(readFileSync(`assets/release-contract-${platform}.json`));
+            assert.equal(manifest.sha, process.env.SHA);
+            assert.equal(manifest.version, process.env.VERSION);
+            assert.equal(manifest.channel, 'live');
+            assert.equal(manifest.appId, 'ai.bos.bot');
+          }
+          EOF
       - name: Refuse an incomplete installer or updater set
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           required=(
+            release-contract-mac.json release-contract-win.json release-contract-linux.json
             latest-linux.yml latest-mac.yml latest.yml
-            "OpenMausBot-$VERSION-amd64.deb"
-            "OpenMausBot-$VERSION-arm64.dmg"
-            "OpenMausBot-$VERSION-arm64.dmg.blockmap"
-            "OpenMausBot-$VERSION-arm64.zip"
-            "OpenMausBot-$VERSION-arm64.zip.blockmap"
-            "OpenMausBot-$VERSION-setup.exe"
-            "OpenMausBot-$VERSION-setup.exe.blockmap"
-            "OpenMausBot-$VERSION-x64.dmg"
-            "OpenMausBot-$VERSION-x64.dmg.blockmap"
-            "OpenMausBot-$VERSION-x64.zip"
-            "OpenMausBot-$VERSION-x64.zip.blockmap"
-            "OpenMausBot-$VERSION-x86_64.AppImage"
-            OpenMausBot-amd64.deb OpenMausBot-intel.dmg OpenMausBot-setup.exe
-            OpenMausBot.AppImage OpenMausBot.dmg SHA256SUMS-ubuntu-x64.txt
+            "BOS-Bot-$VERSION-x64.deb"
+            "BOS-Bot-$VERSION-arm64.dmg"
+            "BOS-Bot-$VERSION-arm64.dmg.blockmap"
+            "BOS-Bot-$VERSION-arm64.zip"
+            "BOS-Bot-$VERSION-arm64.zip.blockmap"
+            "BOS-Bot-$VERSION-setup.exe"
+            "BOS-Bot-$VERSION-setup.exe.blockmap"
+            "BOS-Bot-$VERSION-x64.dmg"
+            "BOS-Bot-$VERSION-x64.dmg.blockmap"
+            "BOS-Bot-$VERSION-x64.zip"
+            "BOS-Bot-$VERSION-x64.zip.blockmap"
+            "BOS-Bot-$VERSION-x64.AppImage"
+            BOS-Bot-x64.deb BOS-Bot-intel.dmg BOS-Bot-setup.exe
+            BOS-Bot.AppImage BOS-Bot.dmg SHA256SUMS-ubuntu-x64.txt
           )
           for file in "${required[@]}"; do
             test -s "assets/$file" || { echo "::error::missing or empty release asset: $file"; exit 1; }
@@ -481,15 +492,15 @@ jobs:
           const sha512 = (f) => createHash("sha512").update(readFileSync(f)).digest("base64");
           const expected = new Map([
             ["latest-mac.yml", [
-              "OpenMausBot-${{ needs.prepare.outputs.version }}-x64.zip",
-              "OpenMausBot-${{ needs.prepare.outputs.version }}-arm64.zip",
-              "OpenMausBot-${{ needs.prepare.outputs.version }}-x64.dmg",
-              "OpenMausBot-${{ needs.prepare.outputs.version }}-arm64.dmg",
+              "BOS-Bot-${{ needs.prepare.outputs.version }}-x64.zip",
+              "BOS-Bot-${{ needs.prepare.outputs.version }}-arm64.zip",
+              "BOS-Bot-${{ needs.prepare.outputs.version }}-x64.dmg",
+              "BOS-Bot-${{ needs.prepare.outputs.version }}-arm64.dmg",
             ]],
-            ["latest.yml", ["OpenMausBot-${{ needs.prepare.outputs.version }}-setup.exe"]],
+            ["latest.yml", ["BOS-Bot-${{ needs.prepare.outputs.version }}-setup.exe"]],
             ["latest-linux.yml", [
-              "OpenMausBot-${{ needs.prepare.outputs.version }}-x86_64.AppImage",
-              "OpenMausBot-${{ needs.prepare.outputs.version }}-amd64.deb",
+              "BOS-Bot-${{ needs.prepare.outputs.version }}-x64.AppImage",
+              "BOS-Bot-${{ needs.prepare.outputs.version }}-x64.deb",
             ]],
           ]);
           let bad = 0;
@@ -541,7 +552,7 @@ jobs:
             done
           }
           ensure_draft "$GITHUB_REPOSITORY" --target "$SHA" \
-            --draft --title "OpenMausBot $VERSION" --generate-notes
+            --draft --title "BOS Bot $VERSION" --generate-notes
           target=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
           target_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$target" --jq .sha)
           test "$target_sha" = "$SHA" || {
@@ -556,44 +567,9 @@ jobs:
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$RUNNER_TEMP/release-notes.md"
           echo "canonical asset count: $(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
 
-      - name: Mirror the same draft for installed legacy clients
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_PAT }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          tag="v$VERSION"
-          ensure_draft() {
-            local repo=$1
-            shift
-            local attempt delay
-            for attempt in 1 2 3 4 5; do
-              gh release view "$tag" --repo "$repo" > /dev/null 2>&1 && return 0
-              if gh release create "$tag" --repo "$repo" "$@"; then
-                return 0
-              fi
-              gh release view "$tag" --repo "$repo" > /dev/null 2>&1 && return 0
-              test "$attempt" -lt 5 || {
-                echo "::error::could not create $tag in $repo after $attempt attempts"
-                return 1
-              }
-              delay=$((5 << (attempt - 1)))
-              echo "::warning::release creation failed for $repo; retrying in ${delay}s ($attempt/5)"
-              sleep "$delay"
-            done
-          }
-          ensure_draft milind-soni/openmausbot-releases \
-            --draft --title "OpenMausBot $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
-          gh release edit "$tag" --repo milind-soni/openmausbot-releases \
-            --title "OpenMausBot $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
-          for file in assets/*; do
-            gh release upload "$tag" "$file" --repo milind-soni/openmausbot-releases --clobber
-          done
-          echo "legacy asset count: $(gh release view "$tag" --repo milind-soni/openmausbot-releases --json assets --jq '.assets | length')"
-
-      - name: Prove both drafts contain the exact staged bytes
+      - name: Prove the BOS draft contains the exact staged bytes
         env:
           CANONICAL_TOKEN: ${{ github.token }}
-          LEGACY_TOKEN: ${{ secrets.RELEASES_PAT }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           node --input-type=module - "$VERSION" <<'EOF'
@@ -608,7 +584,6 @@ jobs:
           ]));
           for (const [repo, token] of [
             [process.env.GITHUB_REPOSITORY, process.env.CANONICAL_TOKEN],
-            ["milind-soni/openmausbot-releases", process.env.LEGACY_TOKEN],
           ]) {
             const json = execFileSync("gh", ["release", "view", `v${version}`, "--repo", repo, "--json", "assets"], {
               encoding: "utf8",
@@ -627,7 +602,6 @@ jobs:
         if: ${{ inputs.publish }}
         env:
           CANONICAL_TOKEN: ${{ github.token }}
-          LEGACY_TOKEN: ${{ secrets.RELEASES_PAT }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           # The bridge build points at the canonical feed. Publish and verify
@@ -636,15 +610,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --draft=false --latest
           GH_TOKEN="$CANONICAL_TOKEN" gh release view "v$VERSION" \
             --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft | grep -q false
-          GH_TOKEN="$LEGACY_TOKEN" gh release edit "v$VERSION" \
-            --repo milind-soni/openmausbot-releases --draft=false --latest
-          GH_TOKEN="$LEGACY_TOKEN" gh release view "v$VERSION" \
-            --repo milind-soni/openmausbot-releases --json isDraft --jq .isDraft | grep -q false
-          echo "v$VERSION is live on the canonical feed and its legacy updater bridge"
-          # Publishing created the tag with this workflow's token, and GitHub
-          # starts no workflow from events that token creates. Start the two
-          # tag-driven publishes by hand, on the tag, so they see refs/tags/v*.
-          for workflow in npm-package.yml docker.yml; do
-            GH_TOKEN="$CANONICAL_TOKEN" gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "v$VERSION"
-          done
-          echo "dispatched the npm package and Docker image publishes on v$VERSION"
+          echo "BOS v$VERSION published on the verified canonical feed"

@@ -26,7 +26,7 @@ function harness(options) {
       state = { ...state, ...patch };
       states.push({ ...state });
     },
-    options,
+    { prepareInstall: async () => ({}), ...options },
   );
   return { updater, coordinator, states, getState: () => state };
 }
@@ -173,7 +173,7 @@ test("Mac transfer failures cannot overlap a pending download and remain retryab
   assert.notEqual(h.getState().retryable, false);
   assert.strictEqual(h.coordinator.download(), first);
   await h.coordinator.check(true);
-  h.coordinator.install();
+  await h.coordinator.install();
   assert.equal(calls, 1);
   pending.reject(failure);
   await first;
@@ -200,37 +200,37 @@ test("a restart watchdog keeps Windows/AppImage installs locked against overlapp
   h.updater.quitAndInstall = () => { quits += 1; };
   h.updater.checkForUpdates = () => assert.fail("install still owns the updater");
   await downloadInto(h);
-  h.coordinator.install();
+  await h.coordinator.install();
   watchdog();
   h.updater.downloadUpdate = () => assert.fail("a retry must not overlap a slow installer");
   await h.coordinator.download();
   await h.coordinator.check(true);
-  h.coordinator.install();
+  await h.coordinator.install();
   assert.equal(h.getState().status, "installing");
   assert.match(h.getState().message, /Quit and reopen/);
   assert.equal(quits, 1);
 });
 
-test("an asynchronous native install error escapes the restarting spinner", () => {
+test("an asynchronous native install error escapes the restarting spinner", async () => {
   const { updater, coordinator, getState, states } = harness();
   const error = new Error("native staging failed");
   updater.quitAndInstall = () => updater.emit("error", error);
 
-  coordinator.install();
+  await coordinator.install();
 
-  assert.deepEqual(getState(), { status: "error", message: "native staging failed" });
+  assert.deepEqual(getState(), { status: "error", retryable: false, message: "native staging failed Update handoff is uncertain; installation remains held." });
   assert.equal(errorStates(states).length, 1);
 });
 
-test("a synchronous install failure becomes a user-visible error", () => {
+test("a synchronous install failure becomes a user-visible error", async () => {
   const { updater, coordinator, getState } = harness();
   updater.quitAndInstall = () => {
     throw new Error("install threw");
   };
 
-  coordinator.install();
+  await coordinator.install();
 
-  assert.deepEqual(getState(), { status: "error", message: "install threw" });
+  assert.deepEqual(getState(), { status: "error", retryable: false, message: "install threw Update handoff is uncertain; installation remains held." });
 });
 
 test("an active download state survives a later background check failure", async () => {
@@ -403,7 +403,7 @@ test("the hand-off install opens the staged package instead of quitting", async 
   await downloadInto(h);
   assert.equal(h.getState().status, "downloaded");
 
-  h.coordinator.install();
+  await h.coordinator.install();
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(received, [["/tmp/OpenMausBot-2.0.0-amd64.deb"]]);
@@ -418,7 +418,7 @@ test("a failed hand-off is reported instead of leaving the card spinning", async
   const h = harness({ handOffInstall: () => Promise.reject(new Error("no handler for .deb")) });
 
   await downloadInto(h);
-  h.coordinator.install();
+  await h.coordinator.install();
   await new Promise((resolve) => setImmediate(resolve));
 
   // version survives the merge from the download — assert what the card reads
@@ -435,7 +435,7 @@ test("the hand-off sees no staged file when nothing downloaded", async () => {
     },
   });
 
-  h.coordinator.install();
+  await h.coordinator.install();
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(received, [null]);
@@ -449,7 +449,7 @@ test("without a hand-off the install still quits and installs", async () => {
   };
 
   await downloadInto(h, ["/tmp/OpenMausBot-2.0.0.AppImage"]);
-  h.coordinator.install();
+  await h.coordinator.install();
 
   assert.equal(called, 1);
   assert.equal(h.getState().status, "installing");
@@ -497,7 +497,7 @@ test("checks cannot replace an install in progress or its completed hand-off", a
   const h = harness({ handOffInstall: () => pending.promise });
   h.updater.checkForUpdates = () => assert.fail("installation owns the updater");
   await downloadInto(h);
-  h.coordinator.install();
+  await h.coordinator.install();
 
   await h.coordinator.check();
   await h.coordinator.check(true);
@@ -519,7 +519,7 @@ test("failed download and hand-off actions survive automatic checks but remain r
       await h.coordinator.download();
     } else {
       await downloadInto(h);
-      h.coordinator.install();
+      await h.coordinator.install();
       await new Promise((resolve) => setImmediate(resolve));
     }
     let checks = 0;
@@ -537,4 +537,36 @@ test("failed download and hand-off actions survive automatic checks but remain r
     assert.equal(checks, 1);
     assert.equal(h.getState().status, "available");
   }
+});
+
+test("install reserves ownership and waits for the idle gate before dispatch", async () => {
+  const gate = deferred();
+  const h = harness({ prepareInstall: () => gate.promise });
+  let installs = 0;
+  h.updater.quitAndInstall = () => { installs++; };
+  const first = h.coordinator.install();
+  h.coordinator.install();
+  assert.equal(installs, 0);
+  gate.resolve({ nonce: "prepared" });
+  await first;
+  assert.equal(installs, 1);
+});
+
+test("install without a lifecycle gate fails closed", async () => {
+  const h = harness({ prepareInstall: null });
+  let installs = 0;
+  h.updater.quitAndInstall = () => { installs++; };
+  await h.coordinator.install();
+  assert.equal(installs, 0);
+  assert.equal(h.getState().status, "error");
+});
+
+test("uncertain native dispatch retains ownership after an error", async () => {
+  const h = harness({ prepareInstall: async () => ({ nonce: "prepared" }) });
+  let installs = 0;
+  h.updater.quitAndInstall = () => { installs++; throw new Error("uncertain handoff"); };
+  await h.coordinator.install();
+  await h.coordinator.install();
+  assert.equal(installs, 1);
+  assert.equal(h.getState().retryable, false);
 });

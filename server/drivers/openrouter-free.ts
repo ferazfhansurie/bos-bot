@@ -28,7 +28,7 @@ const hostedError=(value:unknown):Error=>{
  const error=value instanceof Error?value:new Error('');
  if(error.name==='AbortError'||error.name==='TimeoutError')return new Error('BOS Free request interrupted or timed out');
  const status=error.message.match(/HTTP (\d{3})/);
- if(status?.[1]==='429')return new Error('BOS Free is busy or today\'s limit for this install is used up. Try again in a minute (HTTP 429).');
+ if(status?.[1]==='429')return new Error('BOS Free is busy or today\'s limit for this install is used up. Availability may be limited until the quota resets. Retry when available (HTTP 429).');
  if(status?.[1]==='401')return new Error('The free connection needs reconnecting: Settings → Engines → Reconnect (HTTP 401).');
  if(status)return new Error(`BOS Free couldn't answer this time. Try again in a moment (HTTP ${status[1]}).`);
  if(['OpenRouter free key required','OpenRouter free catalog unavailable'].includes(error.message))return new Error(error.message.replace('OpenRouter free','BOS Free'));
@@ -38,7 +38,7 @@ const safeError=(value:unknown):Error=>{
  const error=value instanceof Error?value:new Error('');
  if(error.name==='AbortError'||error.name==='TimeoutError')return new Error('OpenRouter free request interrupted or timed out');
  const status=error.message.match(/HTTP (\d{3})/);
- if(status?.[1]==='429')return new Error('Free models are busy or today\'s free limit is used up. Try again in a minute; no paid model is used (HTTP 429).');
+ if(status?.[1]==='429')return new Error('Free models are busy or today\'s free limit is used up. Availability may be limited until the quota resets. Retry when available; no paid model is used (HTTP 429).');
  if(status?.[1]==='401')return new Error('The free connection needs reconnecting: Settings → Engines → Reconnect (HTTP 401).');
  if(status)return new Error(`The free models couldn't answer this time. Try again in a moment; no paid model is used (HTTP ${status[1]}).`);
  if(['OpenRouter free key required','OpenRouter free model is not currently verified zero-price and tool-capable','OpenRouter free catalog unavailable'].includes(error.message))return new Error(error.message);

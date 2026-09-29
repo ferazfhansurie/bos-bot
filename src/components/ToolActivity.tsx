@@ -1,12 +1,42 @@
 import { Check, ChevronRight, X } from "lucide-react";
-import { useState } from "react";
-import type { Message } from "@/state/store";
+import { useRef, useState } from "react";
+import { api, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { placeLabelKey, type Place } from "@/lib/place";
 import { nameIsCommand } from "@/lib/verify-steps";
 import { PlaceIcon } from "./PlaceIcon";
 import { WorkingDots } from "./WorkingIndicator";
+
+type RecoveryReview = NonNullable<NonNullable<Message["tool"]>["recovery"]>;
+export async function reviewPrivateTurnOutcome(recovery: RecoveryReview, confirmed: boolean, request: (path: string, init?: RequestInit) => Promise<{ receipt: { reviewedAt?: number } }> = api): Promise<number> {
+  if (!confirmed) throw new Error(t("toolRecovery.confirm"));
+  const path = `/api/bots/${encodeURIComponent(recovery.botId)}/threads/${encodeURIComponent(recovery.threadId)}/recovery/${encodeURIComponent(recovery.id)}/review`;
+  const result = await request(path, { method: "POST", body: JSON.stringify({ confirmed: true }) });
+  if (!Number.isSafeInteger(result.receipt?.reviewedAt) || result.receipt.reviewedAt! <= 0) throw new Error(t("toolRecovery.unverified"));
+  return result.receipt.reviewedAt!;
+}
+function RecoveryOutcomeReview({ recovery }: { recovery: RecoveryReview }) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [reviewedAt, setReviewedAt] = useState<number | undefined>(recovery.reviewedAt);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef(false);
+  if (reviewedAt || recovery.reviewedAt) return <p className="text-xs text-ink-secondary" role="status">{t("toolRecovery.reviewed")}</p>;
+  const review = async () => {
+    if (!confirmed || pending.current) return;
+    pending.current = true; setBusy(true); setError(null);
+    try { setReviewedAt(await reviewPrivateTurnOutcome(recovery, confirmed)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : t("toolRecovery.failed")); }
+    finally { pending.current = false; setBusy(false); }
+  };
+  return <div className="space-y-2 rounded-lg border border-hairline/40 p-3 text-xs text-ink-secondary">
+    <p>{t("toolRecovery.help")}</p>
+    <label className="flex items-start gap-2"><input type="checkbox" checked={confirmed} disabled={busy} onChange={event => setConfirmed(event.currentTarget.checked)} />{t("toolRecovery.checkbox")}</label>
+    <button type="button" disabled={!confirmed || busy} onClick={() => void review()} className="rounded-lg bg-accent px-3 py-1.5 text-accent-ink disabled:opacity-40">{busy ? t("toolRecovery.saving") : t("toolRecovery.mark")}</button>
+    {error && <p role="alert" className="text-danger">{error}</p>}
+  </div>;
+}
 
 /** A quiet disclosure, not a second inspector. Old messages and providers
  * without output keep their status and never invent a successful result. */
@@ -18,6 +48,7 @@ export function ToolActivity({ tool, place = null }: { tool: NonNullable<Message
   const failed = tool.ok === false;
   const status = tool.ok === undefined ? t("toolDetail.running") : failed ? t("toolDetail.failed") : t("toolDetail.completed");
   return (
+    <div className="max-w-full space-y-2">
     <details onToggle={(event) => setExpanded(event.currentTarget.open)} className="group/tool w-fit max-w-full rounded-xl border border-hairline/40 bg-panel text-[13px] open:w-[min(38rem,100%)]" data-testid="tool-activity">
       <summary
         role="button"
@@ -44,5 +75,7 @@ export function ToolActivity({ tool, place = null }: { tool: NonNullable<Message
         <p className="text-[11px] text-ink-secondary">{t("toolDetail.previewHint")}</p>
       </div>
     </details>
+    {tool.recovery && <RecoveryOutcomeReview recovery={tool.recovery} />}
+    </div>
   );
 }

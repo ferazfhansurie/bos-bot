@@ -5,9 +5,11 @@ artifactName: BOS-Staging-${version}-${arch}.${ext}
 extraMetadata:
   bosChannel: staging
   name: bos-staging
+  desktopName: ai.bos.bot.staging.desktop
 protocols:
   - name: BOS Staging package install
-    schemes: [bosbot-staging]
+    schemes:
+      - bosbot-staging
 publish: null
 directories:
   output: release-staging
@@ -21,3 +23,15 @@ linux:
   desktop:
     entry:
       Name: BOS Staging
+  extraResources:
+    - from: dist-native/cua-linux-x64
+      to: cua-linux-x64
+    - from: dist-native/cloudflared/linux-x64/cloudflared
+      to: cloudflared/cloudflared
+    - from: dist-native/browser/linux-x64
+      to: browser-engine
+    - from: build/linux-bos-staging-browser.apparmor
+      to: bos-staging-browser.apparmor
+deb:
+  afterInstall: build/linux-after-install.staging.sh
+  afterRemove: build/linux-after-remove.staging.sh
