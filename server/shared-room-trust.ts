@@ -43,8 +43,10 @@ export class SharedRoomTrust {
   }
 }
 
-/** Only explicit human mentions invoke bots. Code, quotes, links and bot output
- * are inert. Ambiguous names require the owner-qualified picker label. */
+/** Only explicit mentions invoke bots. Code, quotes and links are inert.
+ * Ambiguous names require the owner-qualified picker label. Callers pass
+ * fromBot only where bot output must stay inert; handoffs are bounded by the
+ * caller's hop limit and visited set. */
 export function sharedRoomTargets<T extends { name: string; ownerName?: string }>(bots: T[], text: string, fromBot: boolean): T[] {
   if (fromBot) return [];
   const lower = sharedMentionText(text).toLocaleLowerCase();

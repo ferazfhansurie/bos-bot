@@ -85,7 +85,7 @@ export function validateSharedSend(input: unknown): SharedSendInput {
   const humanMentions = value.humanMentions;
   if (humanMentions !== undefined && (!Array.isArray(humanMentions) || humanMentions.length > 50 || humanMentions.some(id => parseContactId(id)?.kind !== "person"))) throw new Error("invalid human mentions");
   const targets = value.botTargets;
-  if (targets !== undefined && (parsed.kind !== "person" || !Array.isArray(targets) || targets.length > 10 ||
+  if (targets !== undefined && ((parsed.kind !== "person" && (parsed.kind !== "bot" || value.kind === "activity")) || !Array.isArray(targets) || targets.length > 10 ||
       new Set(targets).size !== targets.length || targets.some(id => parseContactId(id)?.kind !== "bot"))) throw new Error("invalid bot targets");
   const attachments = value.attachments;
   if (attachments !== undefined && (!Array.isArray(attachments) || attachments.length > 4 || attachments.some(item =>
@@ -116,6 +116,9 @@ export function validateSharedSend(input: unknown): SharedSendInput {
     ...(value.responseTo ? { responseTo: value.responseTo as string } : {}) };
 }
 
+/** Bot-to-bot handoffs a single person message may set off. */
+export const SHARED_ROOM_MAX_HOPS = 4;
+
 /** Canonical-home ordering and retry collapse, with no network side effects. */
 export class SharedRoomLog {
   private readonly messages: SharedTextMessage[];
@@ -141,8 +144,7 @@ export class SharedRoomLog {
     const input = validateSharedSend(raw);
     const actorId = contactId(input.actor);
     const request = input.responseTo ? this.messages.find(message => message.id === input.responseTo) : undefined;
-    const invoked = input.actor.kind === "bot" && request?.actor.kind === "person" &&
-      request.botTargets?.includes(actorId) && this.room.memberIds.includes(contactId(request.actor));
+    const invoked = input.actor.kind === "bot" && Boolean(request?.botTargets?.includes(actorId)) && this.startedByMember(request);
     if (!this.room.memberIds.includes(actorId) && !invoked) throw new Error("actor is not in this room");
     const previous = this.messages.find(message => contactId(message.actor) === actorId && message.sendId === input.sendId);
     if (previous) {
@@ -167,6 +169,17 @@ export class SharedRoomLog {
     };
     this.messages.push(message);
     return { message, created: true };
+  }
+
+  /** A bot may answer a message outside membership only when that message's
+   * chain of bot handoffs starts at a room member, within the hop limit. */
+  private startedByMember(message: SharedTextMessage | undefined): boolean {
+    for (let hop = 0; message && hop <= SHARED_ROOM_MAX_HOPS; hop++) {
+      if (message.actor.kind === "person") return this.room.memberIds.includes(contactId(message.actor));
+      const parent: string | undefined = message.responseTo;
+      message = parent ? this.messages.find(candidate => candidate.id === parent) : undefined;
+    }
+    return false;
   }
 
   after(sequence: number, limit = 100): SharedTextMessage[] {
