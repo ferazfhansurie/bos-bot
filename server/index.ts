@@ -6098,6 +6098,15 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
     }
     const failed = start >= 0 ? after.find(message => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false) : undefined;
     if (failed) throw new Error("the shared bot could not finish its turn");
+    // A turn refused before it started (busy folder, engine offline) leaves
+    // only an error activity, never a terminal reply: report it now instead
+    // of letting the room wait out its deadline for an answer that won't come.
+    const refused = start >= 0 ? after.find(message => message.role === "bot" && message.kind === "activity" && message.tool?.ok === false && message.tool.name.startsWith("error:")) : undefined;
+    if (refused) throw Object.assign(new Error("the shared bot could not finish its turn"), {
+      sharedExplanation: refused.tool!.name.includes("another thread is working in this project folder")
+        ? `${bot.name} is busy with another task right now. Please try again when it finishes.`
+        : `${bot.name} could not start that reply. Please try again.`,
+    });
     const settled = start >= 0 ? after.find(message => message.role === "bot" && message.kind === "text" && message.turnTerminal) : undefined;
     if (settled) return collectSharedBotReply(after.slice(0, after.indexOf(settled) + 1), async (_message, href, generated) => {
       if (!shouldContinue()) throw new Error("shared request access changed");
