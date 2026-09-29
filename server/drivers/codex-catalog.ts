@@ -13,6 +13,7 @@ import { mergeLocalInject } from "./local-inject.ts";
 
 // Recent releases can precede the installed CLI's model/list catalog.
 export const RECENT_CODEX_MODELS = [
+  { id: "gpt-6.1-sol", label: "GPT-6.1 Sol" },
   { id: "gpt-6-sol", label: "GPT-6 Sol" },
   { id: "gpt-6-luna", label: "GPT-6 Luna" },
 ];
