@@ -20,6 +20,12 @@ on:
         required: false
         type: string
 
+# pnpm package:win builds the staging app (electron-builder.staging.yml):
+# "BOS Staging", output in release-staging/, auto-update off (publish: null),
+# matching the mac staging build.
+env:
+  OUT: release-staging
+
 jobs:
   package:
     name: NSIS installer
@@ -40,20 +46,20 @@ jobs:
       # incident) — a fresh checkout is clean, but be explicit
       - name: clean build outputs
         shell: bash
-        run: rm -rf dist dist-server release
+        run: rm -rf dist dist-server release "$OUT"
       - run: pnpm package:win
       - name: Verify the bundled browser with an empty home
-        run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
+        run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
       - name: Verify the packaged server discovers its browser
         env:
-          OMB_SMOKE_DIST: ${{ github.workspace }}/release/win-unpacked/resources/server
-        run: node scripts/smoke-packaged-server.mjs --browser-bundle "${{ github.workspace }}/release/win-unpacked/resources/browser-engine"
+          OMB_SMOKE_DIST: ${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources/server
+        run: node scripts/smoke-packaged-server.mjs --browser-bundle "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources/browser-engine"
       - name: report what was built
         shell: bash
         run: |
           echo "version: $(node -p "require('./package.json').version")"
           echo "commit:  $(git rev-parse HEAD)"
-          ls -lh release/*.exe release/*.yml 2>/dev/null || true
+          ls -lh "$OUT"/*.exe "$OUT"/*.yml 2>/dev/null || true
       # Three things silently produce an installer that builds fine and is
       # broken in the field, and none of them can be checked from the Mac the
       # release is cut on — the artifact carries only the .exe. So assert them
@@ -62,7 +68,7 @@ jobs:
       - name: verify the packaged tree
         shell: bash
         run: |
-          res=release/win-unpacked/resources
+          res="$OUT/win-unpacked/resources"
           fail=0
           # missing → utilityProcess.fork fails → the 🐭 "Couldn't start the
           # bot server" page
@@ -83,17 +89,11 @@ jobs:
             "$res/cloudflared/cloudflared.exe" version | grep -Fq "cloudflared version 2026.8.2 " || {
               echo "::error::packaged cloudflared has the wrong version"; fail=1; }
           fi
-          [ -f "$res/app-update.yml" ] || { echo "::error::missing $res/app-update.yml"; fail=1; }
+          # staging ships with auto-update off (publish: null). an update file
+          # here would mean the build points at a feed it shouldn't use.
           if [ -f "$res/app-update.yml" ]; then
-            grep -Eq '^repo: OpenMausBot$' "$res/app-update.yml" || {
-              echo "::error::app-update.yml does not point at milind-soni/OpenMausBot"; fail=1; }
-            # while the build is unsigned, a publisherName makes
-            # electron-updater reject every update as untrusted
-            if grep -q "publisherName" "$res/app-update.yml"; then
-              echo "::error::app-update.yml carries publisherName on an unsigned build"; fail=1
-            fi
+            echo "::error::staging build carries app-update.yml"; cat "$res/app-update.yml"; fail=1
           fi
-          echo "--- app-update.yml ---"; cat "$res/app-update.yml" 2>/dev/null || true
           exit $fail
 
       # index.js EXISTING is not the same as index.js RUNNING. 0.1.24 shipped a
@@ -104,7 +104,7 @@ jobs:
       - name: start the packaged server
         shell: bash
         run: |
-          res=release/win-unpacked/resources
+          res="$OUT/win-unpacked/resources"
           HOME="$RUNNER_TEMP/omb-smoke" USERPROFILE="$RUNNER_TEMP/omb-smoke" \
             OMB_PORT=21987 node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
           pid=$!
@@ -126,8 +126,6 @@ jobs:
         with:
           name: windows-installer
           path: |
-            release/*.exe
-            release/*.exe.blockmap
-            release/latest.yml
+            ${{ env.OUT }}/*.exe
           if-no-files-found: error
           retention-days: 14
