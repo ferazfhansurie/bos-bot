@@ -653,7 +653,7 @@ export function maxConcurrentBotThreads(cfg: AppConfig): number {
 }
 
 export function parallelProjectFolderThreads(cfg: AppConfig): boolean {
-  return cfg.threads?.parallelProjectFolder === true;
+  return cfg.threads?.parallelProjectFolder !== false;
 }
 
 /** Size cap for each per-thread events/ and native/ NDJSON log. Null (the
