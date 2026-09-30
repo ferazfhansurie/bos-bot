@@ -586,3 +586,30 @@ test("server-only launcher start is opt-in and wires env, attestation and signal
   assert.deepEqual(events, ["install", "start", "stop"], "one stop for any number of signals");
   assert.deepEqual(exits, [0]);
 });
+
+test("server-only host never pre-empts the server's own graceful exit", async () => {
+  const processRef = new EventEmitter();
+  const exits = [];
+  processRef.exit = (code) => exits.push(code);
+  let finishStop;
+  const events = [];
+  const fake = {
+    descriptorPath: "C:\\data\\cua-windows\\cua-connection.json",
+    start: async () => ({ state: "ready" }),
+    stop: () => new Promise((resolve) => { events.push("stop"); finishStop = resolve; }),
+  };
+  const config = { computerUse: true, dataDir: "C:\\data", resources: "C:\\res", environmentId: "partner-server-01", maintenanceMarker: "C:\\m.lock" };
+  await startServerOnlyWindowsCua(config, { processRef, createHost: () => fake, install: () => {} });
+  // The server registers its own handler after the host starts.
+  processRef.on("SIGINT", () => events.push("server-cleanup"));
+  processRef.emit("SIGINT");
+  await settle();
+  assert.deepEqual(events, ["stop", "server-cleanup"]);
+  assert.deepEqual(exits, [], "host does not exit while the server handles the signal");
+  processRef.exit(0); // server finished persisting sessions/db/lease
+  await settle();
+  assert.deepEqual(exits, [], "server exit waits for the host stop");
+  finishStop();
+  await settle();
+  assert.deepEqual(exits, [0]);
+});

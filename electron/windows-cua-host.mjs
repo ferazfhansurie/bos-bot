@@ -744,6 +744,8 @@ export function serverOnlyCuaEnvironment(descriptorPath) {
  * Signals stop the host (revoking its descriptor) before the process exits;
  * the daemon's parent-liveness pipe covers a hard kill.
  */
+const STOP_EXIT_GRACE_MS = 3_000;
+
 export async function startServerOnlyWindowsCua(config, {
   createHost = createWindowsCuaHost,
   install = installWindowsCuaAttestation,
@@ -758,11 +760,24 @@ export async function startServerOnlyWindowsCua(config, {
   });
   install(host);
   const env = serverOnlyCuaEnvironment(host.descriptorPath);
+  // The server owns process exit: its shutdown persists sessions, closes the
+  // message DB and releases the data-dir lease. A signal only starts the host
+  // stop; the server's exit then waits (bounded) for it so the daemon is not
+  // orphaned. The host exits by itself only when nothing else handles the signal.
   let stopping = null;
-  const stopAndExit = (signal) => {
-    stopping ??= host.stop().catch(() => {}).finally(() => processRef.exit(signal === "SIGINT" ? 130 : 0));
+  let exiting = false;
+  const realExit = processRef.exit.bind(processRef);
+  const exitOnce = (code) => { if (!exiting) { exiting = true; realExit(code); } };
+  processRef.exit = (code) => {
+    if (!stopping) return realExit(code);
+    const timer = setTimeout(() => exitOnce(code), STOP_EXIT_GRACE_MS);
+    void stopping.finally(() => { clearTimeout(timer); exitOnce(code); });
   };
-  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) processRef.once(signal, () => stopAndExit(signal));
+  const onSignal = (signal) => {
+    stopping ??= host.stop().catch(() => {});
+    if (processRef.listenerCount(signal) === 0) void stopping.finally(() => exitOnce(signal === "SIGINT" ? 130 : 0));
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) processRef.once(signal, () => onSignal(signal));
   await host.start();
   return { host, env };
 }
