@@ -8584,6 +8584,7 @@ function delegatedSetupService(identity: NonNullable<TeamSetupRequest["delegatio
     let grant;
     try { grant = crossHomeGrants.require(identity, scope); }
     catch { throw new TeamSetupError("No live delegation for this proposal", 403); }
+    if (!store.bot(reviewerId) || store.bot(reviewerId)?.hidden || store.bot(reviewerId)?.visibility === "private") throw new TeamSetupError("Delegated reviewer is unavailable", 403);
     if (grant.section !== identity.section) throw new TeamSetupError("Delegation section changed; review a new proposal", 403);
     return grant;
   };
@@ -8591,9 +8592,9 @@ function delegatedSetupService(identity: NonNullable<TeamSetupRequest["delegatio
     delegation: identity,
     requester: id => {
       const bot = store.bot(id);
-      if (!bot || bot.hidden || id !== reviewerId || sectionKey(bot.section) !== identity.section) return undefined;
+      if (!bot || bot.hidden || bot.visibility === "private" || id !== reviewerId || sectionKey(bot.section) !== identity.section) return undefined;
       return { ...bot, chiefOfStaff: true, section: identity.section, managedSections: [],
-        peers: store.bots.filter(bot => !bot.hidden && sectionKey(bot.section) === identity.section).map(bot => bot.id) };
+        peers: store.bots.filter(bot => !bot.hidden && bot.visibility !== "private" && sectionKey(bot.section) === identity.section).map(bot => bot.id) };
     },
     canAccessTeam: (_chief, target) => sectionKey(target) === identity.section,
     teams: () => [identity.section],
@@ -8609,12 +8610,14 @@ function delegatedSetupService(identity: NonNullable<TeamSetupRequest["delegatio
       for (const op of request.operations) {
         live(op.action === "create" ? "bots:create" : "bots:configure");
         const target = op.action === "update" ? store.bot(op.botId) : undefined;
+        if (target?.hidden || target?.visibility === "private") throw new TeamSetupError("Delegated target is unavailable", 403);
         if ((target && sectionKey(target.section) !== identity.section) || sectionKey(op.fields.section ?? target?.section) !== identity.section) throw new TeamSetupError("Target is outside delegated section", 403);
         if (target && op.fields.modelSelection && op.fields.modelSelection.instanceId !== target.modelSelection.instanceId) throw new TeamSetupError("Delegation cannot change provider/account", 403);
       }
       if (request.deletion) {
         live("bots:delete");
         const target = store.bot(request.deletion.botId);
+        if (target?.hidden || target?.visibility === "private") throw new TeamSetupError("Delegated target is unavailable", 403);
         if (target && sectionKey(target.section) !== identity.section) throw new TeamSetupError("Deletion is outside delegated section", 403);
       }
     },
@@ -8643,7 +8646,7 @@ async function drainDelegatedJobs() {
         if (!sessions.isLive(job.identity.sessionId)) throw new Error("Delegating peer session was revoked");
         const grant = crossHomeGrants.require(job.identity, "coordinate");
         const target = store.bot(job.targetBotId);
-        if (!target || target.hidden || sectionKey(target.section) !== grant.section) throw new Error("Delegated target is outside scope or was removed");
+        if (!target || target.hidden || target.visibility === "private" || sectionKey(target.section) !== grant.section) throw new Error("Delegated target is outside scope or was removed");
         if (Date.now() - job.createdAt > 60 * 60_000) throw new Error("Delegated job queue budget exhausted");
         if (teamSetupOptions.targetBusy(target.id)) continue;
         const pair = store.resolvePairConversation({ id: `dh-${job.identity.homeId}-${job.identity.botId}`, name: "Remote Chief" }, target.id,
@@ -12216,7 +12219,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!sessions.isLive(identity.sessionId)) throw new TeamSetupError("Delegating session was revoked", 403);
         grant = crossHomeGrants.require(identity, scope);
       };
-      const allowedBots = () => store.bots.filter(bot => !bot.hidden && sectionKey(bot.section) === grant.section);
+      const allowedBots = () => store.bots.filter(bot => !bot.hidden && bot.visibility !== "private" && sectionKey(bot.section) === grant.section);
       if (method === "GET" && path === "/api/delegated/roster") return json(res, 200, { bots: allowedBots().map(bot => ({ id: bot.id, name: bot.name, title: bot.title,
         busy: Boolean(bot.busy), activity: bot.activity, model: bot.modelSelection.model })) });
       if (method === "GET" && path === "/api/delegated/catalog") {

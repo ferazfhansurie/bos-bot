@@ -68,7 +68,12 @@ test("real peer endpoints deny ungranted authority, recheck revocation at review
     const durable = JSON.parse(readFileSync(join(fixture.info.dataDir, "delegated-jobs.json"), "utf8"));
     expect(durable.filter((job: any) => job.requestKey === "one")).toHaveLength(1);
     await expect.poll(async () => (await api("GET", "/api/bots")).bots.find((bot: any) => bot.id === recipient.id).busy, { timeout: 15000 }).toBe(false);
-    await api("PATCH", `/api/bots/${recipient.id}`, { section: "private" });
+    await api("PATCH", `/api/bots/${recipient.id}`, { visibility: "private" });
+    expect((await api("GET", "/api/delegated/roster", undefined, token)).bots.some((bot: any) => bot.id === recipient.id)).toBe(false);
+    expect((await api("GET", "/api/delegated/catalog", undefined, token)).bots.some((bot: any) => bot.id === recipient.id)).toBe(false);
+    await api("POST", "/api/delegated/coordinate", { ...coordinate, requestKey: "private-denied" }, token, 403);
+    await api("PATCH", `/api/delegated/bots/${recipient.id}`, { reason: "private denied", fields: { title: "Leaked" } }, token, 403);
+    await api("DELETE", `/api/delegated/bots/${recipient.id}`, { reason: "private denied" }, token, 403);
     await api("GET", `/api/delegated/coordinate/${first.requestId}`, undefined, token, 403);
   } finally { await fixture.close(); }
 }, 90000);
