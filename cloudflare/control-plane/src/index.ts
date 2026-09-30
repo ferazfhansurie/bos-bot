@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { remoteFull } from "./remote-full";
 
 import { accountSession, createAuth } from "./auth";
 import { readConfig, type ControlPlaneConfig } from "./config";
@@ -79,6 +80,8 @@ async function route(
   }
 
   const auth = createAuth(env, ctx, config, requestId);
+  const remoteGrant = /^\/v1\/remote-full\/(prepare|authorize|verify)$/.exec(url.pathname);
+  if (request.method === "POST" && remoteGrant) return remoteFull(request, env, auth, remoteGrant[1]);
   if (request.method === "GET" && url.pathname === "/v1/me") {
     const session = await accountSession(request, auth);
     if (!session) throw new HTTPError(401, "unauthorized");

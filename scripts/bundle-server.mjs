@@ -152,3 +152,8 @@ const piMcpExtSrc = join(server, "drivers", "pi-mcp-extension.ts");
 const piMcpExtDest = join(root, "dist-server", "drivers", "pi-mcp-extension.ts");
 mkdirSync(dirname(piMcpExtDest), { recursive: true });
 copyFileSync(piMcpExtSrc, piMcpExtDest);
+
+// Human-operated enrollment; a bundled command so standalone servers do not
+// need a source checkout or dependency install. It refuses non-interactive use.
+await build({ entryPoints: [join(root, "scripts", "enroll-remote-full.mjs")], bundle: true,
+  platform: "node", target: "node20", format: "esm", outfile: join(root, "dist-server", "enroll-remote-full.js"), allowOverwrite: true, logLevel: "info" });

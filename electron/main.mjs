@@ -1,3 +1,5 @@
+import { confirmRemoteFull } from "./remote-full-client.mjs";
+import { signInRemoteOwner, authorizeRemoteFull } from "./remote-full-owner-window.mjs";
 import "./staging-bootstrap.mjs";
 import { stagingServerEnvironment } from "./staging-environment.mjs";
 import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEME } from "./release-channel.mjs";
@@ -2460,6 +2462,56 @@ const workspaceOnly = (handler) => (event, ...args) => {
   return handler(event, ...args);
 };
 const localWorkspaceOnly = (channel, handler) => localOnly(channel, workspaceOnly(handler));
+let remoteFullInProgress = false;
+function remoteFullContext(event) {
+  const environment = activeEnvironment(environmentsState);
+  if (!app.isPackaged || !environment || !mainWindow || mainWindow.isDestroyed() ||
+      event.senderFrame !== mainWindow.webContents.mainFrame || new URL(event.senderFrame.url).origin !== environment.origin || !environment.origin.startsWith("https://")) throw new Error("Use the installed desktop app on a paired HTTPS server");
+  const contents = mainWindow.webContents, frame = event.senderFrame;
+  let navigated = false;
+  const navigation = (_event, _url, inPlace, isMainFrame) => { if (isMainFrame && !inPlace) navigated = true; };
+  contents.on("did-start-navigation", navigation);
+  return { environment, dispose: () => { if (!contents.isDestroyed()) contents.removeListener("did-start-navigation", navigation); }, stillCurrent: () => !navigated && !contents.isDestroyed() && contents.mainFrame === frame &&
+    activeEnvironment(environmentsState)?.id === environment.id && activeEnvironment(environmentsState)?.origin === environment.origin && new URL(contents.getURL()).origin === environment.origin,
+    request: async (action, body) => {
+      const response = await contents.session.fetch(`${environment.origin}/api/remote-full/${action}`, { method: body === undefined ? "GET" : "POST", redirect: "error", credentials: "include", signal: AbortSignal.timeout(15000),
+        headers: { origin: environment.origin, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      if (!response.ok) throw new Error("Remote approval unavailable. Check enrollment, owner and unchanged idle targets.");
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Missing remote approval response");
+      const chunks = []; let size = 0;
+      try { for (;;) {
+        const { done, value } = await reader.read(); if (done) break;
+        size += value.length; if (size > 32768) { await reader.cancel(); throw new Error("Remote approval response too large"); }
+        chunks.push(Buffer.from(value));
+      } } finally { reader.releaseLock(); }
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } };
+}
+ipcMain.handle("remote-full:status", workspaceOnly(async event => {
+  let context;
+  try { context = remoteFullContext(event); return await context.request("status"); }
+  catch { return { protocol: 0, enrolled: false }; } finally { context?.dispose(); }
+}));
+ipcMain.handle("remote-full:request", workspaceOnly(async (event, targets) => {
+  if (remoteFullInProgress) throw new Error("Finish the current owner confirmation first");
+  const context = remoteFullContext(event);
+  remoteFullInProgress = true;
+  try {
+    const status = await context.request("status");
+    if (status.protocol !== 1 || !status.enrolled || typeof status.environmentId !== "string" || !/^[a-f0-9-]{36}$/i.test(status.environmentId) ||
+        (context.environment.environmentId && context.environment.environmentId !== status.environmentId)) throw new Error("Server identity changed or owner enrollment is missing");
+    return await confirmRemoteFull({ ...context, environment: { ...context.environment, environmentId: status.environmentId }, targets,
+    pinEnvironment: async environmentId => {
+      if (!context.stillCurrent()) throw new Error("Workspace changed");
+      persistEnvironments({ ...environmentsState, environments: environmentsState.environments.map(e => e.id === context.environment.id ? { ...e, environmentId } : e) });
+    },
+    ownerSignIn: environment => signInRemoteOwner({ BrowserWindow, ipcMain, parent: mainWindow, environment }), authorize: authorizeRemoteFull,
+    confirm: async detail => (await dialog.showMessageBox(mainWindow, { type: "warning", message: "Grant Full access to these exact targets?", detail,
+      buttons: ["Cancel", "Grant Full access"], defaultId: 0, cancelId: 0, noLink: true })).response === 1,
+  }); } finally { context.dispose(); remoteFullInProgress = false; }
+}));
+
 ipcMain.handle("organization:state", localWorkspaceOnly("organization:state", () => ensureManagedDesktop().state()));
 ipcMain.handle("organization:begin", localWorkspaceOnly("organization:begin", (_event, input) => ensureManagedDesktop().begin(input)));
 ipcMain.handle("organization:cancel", localWorkspaceOnly("organization:cancel", () => ensureManagedDesktop().cancelEnrollment()));

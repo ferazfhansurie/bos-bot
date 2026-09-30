@@ -349,6 +349,7 @@ export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
     threadOnly?: true;
   };
   /** Receipt committed with a confirmed profile, for retrying card settlement. */
+  lastRemoteFullReceipt?: { nonce: string; digest: string; ownerUserId: string; at: number };
   lastProfileRequestId?: string;
   /** Receipt committed with a reviewed team batch; prevents replay after a lost response. */
   lastTeamSetupReceipt?: { requestId: string; result: TeamSetupResult };
@@ -359,7 +360,7 @@ export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
  * WireTask[], avatarUrl is coerced to always-present). The exactness
  * assertion fails to compile when either side drifts, so a new server
  * field forces a decision — wire-visible or private here. */
-export type BotWirePrivateKeys = "resumeCursors" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt";
+export type BotWirePrivateKeys = "resumeCursors" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt" | "lastRemoteFullReceipt";
 export type BotWireProjection = Pick<BotRecord, Exclude<keyof BotRecord, BotWirePrivateKeys>>;
 export type BotWireProjectionIsExact = AssertExact<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection> & AssertSameKeys<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection>;
 export const botWireProjectionIsExact: BotWireProjectionIsExact = true;
@@ -2023,6 +2024,36 @@ export class Store {
     if (updateBotDefault) Object.assign(bot, patch);
     this.emit({ type: "bot", botId });
     return task;
+  }
+
+  /** One durable write for the entire owner-confirmed batch. Existing sibling
+   * threads keep their effective settings even when they previously inherited. */
+  applyRemoteFull(operations: Array<{ botId: string; threadId: string; updateBotDefault: boolean }>,
+    receipt: NonNullable<BotRecord["lastRemoteFullReceipt"]>): void {
+    const updates = new Map<string, BotRecord>();
+    for (const op of operations) {
+      const bot = this.bot(op.botId);
+      const task = this.taskByThread(op.botId, op.threadId);
+      if (!bot || !task || updates.has(op.botId) || bot.approvalGrant || bot.busy || bot.tasks?.some(t => t.busy)) throw new Error("Approval target changed or is busy");
+      const full = { approvalMode: "full" as const, autoApprove: false, alwaysAllow: [] };
+      updates.set(bot.id, { ...bot, ...(op.updateBotDefault ? full : {}), lastRemoteFullReceipt: receipt,
+        tasks: bot.tasks!.map(t => t === task ? { ...t, ...full } : !op.updateBotDefault ? t : {
+          ...t, modelSelection: structuredClone(t.modelSelection ?? bot.modelSelection),
+          approvalMode: approvalModeFor(this.projectBotForTask(bot.id, t.threadId)!),
+          autoApprove: t.autoApprove ?? bot.autoApprove,
+          alwaysAllow: structuredClone(t.alwaysAllow ?? bot.alwaysAllow ?? []),
+        }) });
+    }
+    this.saveBots(this.bots.map(bot => updates.get(bot.id) ?? bot));
+    // Keep live object references; publish only after the atomic rename succeeds.
+    for (const bot of this.bots) {
+      const next = updates.get(bot.id);
+      if (!next) continue;
+      const tasks = bot.tasks!;
+      tasks.forEach((task, i) => Object.assign(task, next.tasks![i]));
+      Object.assign(bot, next, { tasks });
+    }
+    for (const botId of updates.keys()) this.emit({ type: "bot", botId });
   }
 
   private mirrorActiveTask(bot: BotRecord, task: TaskRecord) {

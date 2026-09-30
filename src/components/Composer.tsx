@@ -1,3 +1,4 @@
+import { RemoteFullAccess } from "./RemoteFullAccess";
 import { useSharedDelivery } from "@/lib/shared-delivery";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
@@ -997,6 +998,7 @@ export function Composer({
                   {effectiveChannelMode === "goal" ? "/goal" : t("composer.goal.chip")}
                 </button>
               )}
+              {modeBot && approvalEngine && ["codex", "claudeAgent"].includes(approvalEngine.driverKind) && <RemoteFullAccess botId={modeBot.id} threadId={modeBot.threadId} busy={Boolean(modeBot.busy)} candidates={state.bots.filter(b => !b.remote && state.instances.some(i => i.instanceId === currentTaskBot(b).modelSelection.instanceId && ["codex", "claudeAgent"].includes(i.driverKind))).map(b => ({ botId: b.id, threadId: b.threadId, name: b.name, busy: Boolean(b.busy) }))} />}
               {modeBot && approvalEngine && !remoteClient && (
                 <ApprovalModeSelector
                   approvalMode={modeBot.approvalMode}

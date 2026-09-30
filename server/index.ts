@@ -1,3 +1,4 @@
+import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
 import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
 import { DesktopUpdateLifecycle, readPreparedUpdateReceipt, assertUpdateCancellationSafe } from "./desktop-update-lifecycle.ts";
 import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
@@ -1783,6 +1784,21 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const remoteFullProviderRevisions = new WeakMap<object, string>();
+const remoteFull = new RemoteFullService({ store,
+  enrollment: () => readRemoteFullEnrollment(DATA_DIR, ENVIRONMENT_ID),
+  providerRevision: instanceId => {
+    const instance = registry.get(instanceId);
+    if (!instance) return "unavailable";
+    let revision = remoteFullProviderRevisions.get(instance);
+    if (!revision) { revision = randomUUID(); remoteFullProviderRevisions.set(instance, revision); }
+    return revision;
+  },
+  supported: instanceId => Boolean(registry.get(instanceId)) && ["codex", "claudeAgent"].includes(registry.cliTarget(instanceId)?.driverKind ?? ""),
+  busy: (botId, threadId) => botHasActiveTurn(botId) || threadBusy(botId, threadId),
+  sessionValid: id => sessions.list().some(s => s.id === id),
+});
+
 const privateTurnDispatches = new PrivateTurnDispatches(join(DATA_DIR, "private-turn-dispatches.json"));
 function privateDispatchHasTerminal(generation: string, threadId: string, providerTurnId: string): boolean {
   const receipt = privateTurnDispatches.all().find(row => row.id === generation && row.threadId === threadId);
@@ -1837,7 +1853,7 @@ const wireTask = (task: TaskRecord): WireTask => {
 };
 
 const wireBot = (bot: BotRecord): WireBot => {
-  const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, ...rest } = bot;
+  const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, ...rest } = bot;
   // An elevated selection is inert until the desktop confirms its exact
   // private reply. Every ordinary client sees the effective Ask state during
   // that two-phase window, never a grant that may still roll back.
@@ -1868,7 +1884,7 @@ function peerBotView(bot: BotRecord, sessionId: string) {
 /** The correlated private response carries the requested value so Electron
  * can validate it before sending the confirmation that makes it effective. */
 const wireTrustedApprovalBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
-  const { resumeCursors: _resumeCursors, tasks, approvalGrant: _approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, ...rest } = bot;
+  const { resumeCursors: _resumeCursors, tasks, approvalGrant: _approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, ...rest } = bot;
   return { ...rest, approvalMode: approvalModeFor(rest), avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
 };
 
@@ -12060,6 +12076,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!authorized) return json(res, 403, { error: "Desktop update authority required" });
       const receipt = await desktopUpdateLifecycle.handle(true, await readBody(req));
       return json(res, 200, receipt);
+    }
+    if (path.startsWith("/api/remote-full/")) {
+      if (auth.kind !== "session" || !auth.scopes.includes("client") || auth.via === "ticket") return json(res, 403, { error: "Paired desktop session required" });
+      if (method === "GET" && path === "/api/remote-full/status") return json(res, 200, { protocol: 1, environmentId: ENVIRONMENT_ID, enrolled: Boolean(readRemoteFullEnrollment(DATA_DIR, ENVIRONMENT_ID)) });
+      if (method !== "POST") return json(res, 405, { error: "Method not allowed" });
+      try {
+        if (path === "/api/remote-full/prepare") return json(res, 200, await remoteFull.prepare(auth.session.id, await readBody(req)));
+        if (path === "/api/remote-full/receipt") return json(res, 200, remoteFull.receipt(auth.session.id, await readBody(req)));
+        if (path === "/api/remote-full/commit") return json(res, 200, await remoteFull.commit(auth.session.id, await readBody(req)));
+      } catch { return json(res, 403, { error: "Remote Full was not applied. Enrollment, owner confirmation, idle targets and unchanged models are required. Prepare a new confirmation." }); }
+      return json(res, 404, { error: "Not found" });
     }
     if (await workspaceBackupRoutes(req, res, path, auth)) return;
 

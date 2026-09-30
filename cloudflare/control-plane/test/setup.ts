@@ -20,6 +20,8 @@ afterEach(async () => {
     env.DB.prepare("DELETE FROM control_action_rate_limits"),
     env.DB.prepare("DELETE FROM installation_action_rate_limits"),
     env.DB.prepare("DELETE FROM installation_endpoints"),
+    env.DB.prepare("DELETE FROM remote_full_challenges"),
+    env.DB.prepare("DELETE FROM remote_full_bindings"),
     env.DB.prepare("DELETE FROM installation_credentials"),
     env.DB.prepare("DELETE FROM installations"),
     env.DB.prepare('DELETE FROM "session"'),

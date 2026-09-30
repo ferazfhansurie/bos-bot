@@ -137,9 +137,11 @@ function parseEnvironments(raw) {
     const origin = normalizeOrigin(entry?.origin);
     const id = typeof entry?.id === "string" && /^[\w-]{1,64}$/.test(entry.id) ? entry.id : null;
     if (!origin || !id || id === LOCAL_ID || seen.has(id) || seen.has(origin)) continue;
+    if (entry.environmentId !== undefined && (typeof entry.environmentId !== "string" || !/^[a-f0-9-]{36}$/i.test(entry.environmentId))) continue;
     seen.add(id);
     seen.add(origin);
-    environments.push({ id, name: cleanName(entry?.name, nameFromOrigin(origin)), origin });
+    environments.push({ id, name: cleanName(entry?.name, nameFromOrigin(origin)), origin,
+      ...(typeof entry.environmentId === "string" && /^[a-f0-9-]{36}$/i.test(entry.environmentId) ? { environmentId: entry.environmentId } : {}) });
   }
   const activeId = typeof value?.activeId === "string" && environments.some((e) => e.id === value.activeId) ? value.activeId : LOCAL_ID;
   return { environments, activeId };

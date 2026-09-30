@@ -1,3 +1,5 @@
+import { generateKeyPairSync, sign } from "node:crypto";
+import { canonical } from "../../../electron/remote-full-protocol.mjs";
 import { env } from "cloudflare:workers";
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
@@ -659,5 +661,40 @@ describe("HTTP boundary hardening", () => {
     });
     expect(deniedPreflight.status).toBe(403);
     expect(deniedPreflight.headers.get("access-control-allow-origin")).toBe("https://app.openmausbot.test");
+  });
+});
+
+
+describe("remote Full installation owner authority", () => {
+  const serverKeys = generateKeyPairSync("ed25519");
+  const prepared = (challenge: unknown) => ({ challenge, serverSignature: sign(null, Buffer.from(canonical(challenge)), serverKeys.privateKey).toString("base64url") });
+  const challenge = (installationId: string) => ({ protocol: "bos.remote-full.v1", nonce: "a".repeat(64), environmentId: "00000000-0000-4000-8000-000000000001", installationId,
+    serverKey: serverKeys.publicKey.export({ format: "jwk" }).x!, audience: "https://fixture.invalid", expiresAt: Date.now() + 110_000,
+    operations: [{ botId: "sol", threadId: "task", name: "Sol", title: "Exact task", modelSelection: { instanceId: "codex", model: "fixture" }, revision: "b".repeat(64), mode: "full", updateBotDefault: true }] });
+  it("requires installation proof to prepare and the actual account owner to authorize; revocation fails closed", async () => {
+    const owner = await signIn("owner-full@example.com"), stranger = await signIn("stranger-full@example.com");
+    const installed = await createInstall(owner.token), other = await createInstall(stranger.token);
+    const c = challenge(installed.installation.id), ref = { installationId: c.installationId, nonce: c.nonce }, approval = { ...ref, challenge: c, signer: "a".repeat(43) };
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: owner.token, body: prepared(c) })).status).toBe(401);
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: other.credential, body: prepared(c) })).status).toBe(403);
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(200);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: installed.credential, body: approval })).status).toBe(401);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: stranger.token, body: approval })).status).toBe(403);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { ...approval, challenge: { ...c, audience: "https://evil.invalid" } } })).status).toBe(403);
+    expect((await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref })).status).toBe(403);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(200);
+    const verified = await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref });
+    expect(verified.status).toBe(200); expect((await verified.json<{ ownerUserId: string }>()).ownerUserId).toBe(owner.userId);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(403);
+    const moved = { ...c, nonce: "c".repeat(64), environmentId: "different-server" };
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(moved) })).status).toBe(200);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { ...approval, nonce: moved.nonce, challenge: moved } })).status).toBe(403);
+    await call(`/v1/installations/${c.installationId}`, { method: "DELETE", token: owner.token });
+    expect((await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref })).status).toBe(401);
+  });
+  it("rejects unregistered, expired and oversized-window challenges", async () => {
+    const owner = await signIn("expiry-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);
+    for (const expiresAt of [Date.now()-1, Date.now()+180_000]) expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared({ ...c, expiresAt }) })).status).toBe(403);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { installationId: c.installationId, nonce: c.nonce, challenge: c, signer: "a".repeat(43) } })).status).toBe(403);
   });
 });

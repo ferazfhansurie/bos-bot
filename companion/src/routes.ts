@@ -73,6 +73,9 @@ export function isCloudDesktopAccess(method: string, path: string): boolean {
  * fails to match and is denied rather than forwarded — the failure mode of
  * a strict pattern is a closed door, which is the one to have. */
 const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
+  // These transport signed owner confirmations; pairing alone cannot elevate.
+  { method: "GET", path: /^\/api\/remote-full\/status$/ },
+  { method: "POST", path: /^\/api\/remote-full\/(?:prepare|commit|receipt)$/ },
   // configured-or-not booleans. The write side is refused below: reading
   // which providers are set up is not reading their keys.
   { method: "GET", path: /^\/api\/config$/ },
