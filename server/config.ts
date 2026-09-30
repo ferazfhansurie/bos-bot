@@ -911,6 +911,8 @@ export const WORKSPACE_CREDENTIAL_ENV = [
   // state. The built-in browser master is delivered privately in memory.
   "OMB_BROWSER_CONNECTION",
   "OMB_USER_DATA",
+  "OMB_CUA_WINDOWS_DESCRIPTOR",
+  "OMB_CUA_WINDOWS_SUPERVISED",
 ] as const;
 
 /** Drop every workspace credential from a child-process env (in place). */

@@ -160,4 +160,21 @@ await writeFile(
   ),
 );
 
+// Build manifest for electron/windows-cua-host.mjs: the server-only host
+// refuses to load an SDK, DLL, runtime or executable that differs from these.
+const manifestFiles = [
+  "cua-driver.exe",
+  "cua-sdk/cua-sdk.mjs",
+  "cua-sdk/native/cua_driver_sdk.dll",
+  "cua-sdk/native/cua_driver_node_runtime.node",
+];
+const digests = {};
+for (const name of manifestFiles) {
+  digests[name] = createHash("sha256").update(await readFile(join(stage, ...name.split("/")))).digest("hex");
+}
+await writeFile(
+  join(stage, "cua-sdk", "manifest.json"),
+  `${JSON.stringify({ schemaVersion: 1, platform: "win32-x64", version: expectedVersion, files: digests }, null, 2)}\n`,
+);
+
 console.log(`Staged CUA for win32-x64 from ${binary}`);

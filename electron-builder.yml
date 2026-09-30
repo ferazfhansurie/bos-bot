@@ -143,6 +143,10 @@ win:
       to: cua-driver.exe
     - from: dist-native/cua-win32-x64/cua-sdk
       to: cua-sdk
+    # Electron-independent owner for server-only installs (no Electron UI);
+    # verifies cua-sdk/manifest.json before loading the staged SDK.
+    - from: electron/windows-cua-host.mjs
+      to: cua-host/windows-cua-host.mjs
   # Ordinary staging remains update-free. Live packaging adds forceCodeSigning,
   # a configured stable publisher and signature verification in live.cjs.
 

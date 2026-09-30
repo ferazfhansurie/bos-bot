@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, win32 } from "node:path";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 export const REQUIRED_LINUX_TOOLS = ["click", "get_window_state", "list_apps", "type_text"];
@@ -355,19 +355,109 @@ function validateLegacyDescriptorRuntime(
   }
 }
 
+export const WINDOWS_SUPERVISED_MODE = "windows-embedded-supervised";
+// Installed once per process by electron/windows-cua-host.mjs (server-only
+// Windows launcher). Keep the key synchronized with WINDOWS_CUA_ATTESTATION.
+const WINDOWS_ATTESTATION = Symbol.for("openmausbot.windows-cua-attestation.v1");
+const WINDOWS_MCP_ENV_KEYS = ["CUA_DRIVER_RS_TELEMETRY_ENABLED", "CUA_DRIVER_EMBEDDED", "CUA_DRIVER_HOST_BUNDLE_ID"];
+
+export type WindowsCuaAttestation = { attest(file: string, raw: unknown): boolean };
+
+function record(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+const positiveInteger = (value: unknown) => Number.isSafeInteger(value) && (value as number) > 0;
+const nonEmpty = (value: unknown) => typeof value === "string" && value.length > 0 && !value.includes("\0");
+
+/** Strict shape check for the supervised Windows descriptor. Values are
+ * attested by the owning host; this only refuses anything that is not exactly
+ * one embedded driver reached through its own pipe. */
+export function decodeWindowsSupervisedDescriptor(value: unknown): LocalComputerConnection | null {
+  if (!record(value) || !exactKeys(value, [
+    "schemaVersion", "mode", "platform", "environmentId", "instanceNonce", "generation", "owner", "daemon", "driver", "mcp",
+  ])) return null;
+  const { owner, daemon, driver, mcp } = value;
+  if (
+    value.schemaVersion !== 1 || value.mode !== WINDOWS_SUPERVISED_MODE || value.platform !== "win32" ||
+    !nonEmpty(value.environmentId) || !nonEmpty(value.instanceNonce) || !nonEmpty(value.generation) ||
+    !record(owner) || !exactKeys(owner, ["pid", "startTimeMs", "sid", "sessionId"]) ||
+    !positiveInteger(owner.pid) || !positiveInteger(owner.startTimeMs) || !positiveInteger(owner.sessionId) ||
+    typeof owner.sid !== "string" || !/^S-1-(?:\d+-){1,14}\d+$/.test(owner.sid) ||
+    !record(daemon) || !exactKeys(daemon, ["pid", "startTimeMs", "socketPath", "driverVersion", "contractVersion", "mcpProtocolVersion"]) ||
+    !positiveInteger(daemon.pid) || !positiveInteger(daemon.startTimeMs) ||
+    typeof daemon.socketPath !== "string" || !daemon.socketPath.startsWith("\\\\.\\pipe\\") || daemon.socketPath.includes("\0") ||
+    !nonEmpty(daemon.driverVersion) || !nonEmpty(daemon.contractVersion) || !nonEmpty(daemon.mcpProtocolVersion) ||
+    !record(driver) || !exactKeys(driver, ["path", "version", "sha256", "sdkSha256"]) ||
+    typeof driver.path !== "string" || !win32.isAbsolute(driver.path) || !/[\\/]cua-driver\.exe$/i.test(driver.path) ||
+    driver.version !== daemon.driverVersion ||
+    typeof driver.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(driver.sha256) ||
+    typeof driver.sdkSha256 !== "string" || !/^[0-9a-f]{64}$/.test(driver.sdkSha256) ||
+    !record(mcp) || !exactKeys(mcp, ["command", "args", "env"]) || mcp.command !== driver.path ||
+    !Array.isArray(mcp.args) || mcp.args.length !== 4 || mcp.args[0] !== "mcp" || mcp.args[1] !== "--embedded" ||
+    mcp.args[2] !== "--socket" || mcp.args[3] !== daemon.socketPath ||
+    !record(mcp.env) || !exactKeys(mcp.env, WINDOWS_MCP_ENV_KEYS) ||
+    mcp.env.CUA_DRIVER_RS_TELEMETRY_ENABLED !== "0" || mcp.env.CUA_DRIVER_EMBEDDED !== "1" ||
+    mcp.env.CUA_DRIVER_HOST_BUNDLE_ID !== "com.openmausbot.app"
+  ) {
+    return null;
+  }
+  return {
+    command: driver.path,
+    args: [...(mcp.args as string[])],
+    env: { ...(mcp.env as Record<string, string>) },
+    platform: "win32",
+    generation: value.generation as string,
+    scope: "local-computer",
+  };
+}
+
+function processWindowsAttestation(): WindowsCuaAttestation | null {
+  const value = (globalThis as Record<symbol, unknown>)[WINDOWS_ATTESTATION] as WindowsCuaAttestation | undefined;
+  return value && typeof value.attest === "function" ? value : null;
+}
+
+/** Supervised mode reads only the host's own descriptor and never falls back
+ * to the legacy command descriptor, so a file dropped into a data directory
+ * cannot name an arbitrary command for the per-turn proxy. */
+function readWindowsSupervisedConnection(
+  file: string | undefined,
+  attestation: WindowsCuaAttestation | null,
+): LocalComputerConnection | null {
+  if (!file || !win32.isAbsolute(file) || !attestation) return null;
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
+    const decoded = decodeWindowsSupervisedDescriptor(raw);
+    return decoded && attestation.attest(file, raw) === true ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
 export function readCuaConnection({
   platform = process.platform,
   userData = process.env.OMB_USER_DATA,
   home = homedir(),
   validateLinuxRuntime = validateLinuxDescriptorRuntime,
   validateLegacyRuntime = validateLegacyDescriptorRuntime,
+  windowsSupervised = process.env.OMB_CUA_WINDOWS_SUPERVISED === "1",
+  windowsDescriptor = process.env.OMB_CUA_WINDOWS_DESCRIPTOR,
+  windowsAttestation = processWindowsAttestation(),
 }: {
   platform?: NodeJS.Platform;
   userData?: string;
   home?: string;
   validateLinuxRuntime?: (file: string, raw: LinuxConnectionDescriptor) => boolean;
   validateLegacyRuntime?: (file: string, platform: NodeJS.Platform) => boolean;
+  windowsSupervised?: boolean;
+  windowsDescriptor?: string;
+  windowsAttestation?: WindowsCuaAttestation | null;
 } = {}): LocalComputerConnection | null {
+  if (platform === "win32" && windowsSupervised) {
+    return readWindowsSupervisedConnection(windowsDescriptor, windowsAttestation);
+  }
   const candidates = userData ? [join(userData, "cua-connection.json")] : [];
   if (platform === "darwin") {
     // Legacy/dev fallback. Packaged Electron passes its exact userData path.
