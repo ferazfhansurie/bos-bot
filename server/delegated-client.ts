@@ -15,20 +15,31 @@ export class DelegatedClient {
   }
   async call(home: string, chief: string, method: string, path: string, body?: unknown) {
     const link = this.links().find(link => link.homeId === home);
-    if (!link) throw new Error("Remote home is not linked");
-    if (!/^\/api\/delegated\/(?:roster|coordinate(?:\/[\w-]+)?|bots(?:\/[\w-]+)?|catalog|setup|proposals\/[\w-]+)$/.test(path)) throw new Error("Invalid delegated route");
-    const descriptor = await this.fetcher(new URL("/.well-known/openmausbot/environment", link.origin), { redirect: "error", signal: AbortSignal.timeout(20000) });
-    if (!descriptor.ok) throw Object.assign(new Error("Remote home identity is unavailable"), { status: descriptor.status, retryable: descriptor.status >= 500 });
-    const identity = await descriptor.json() as { environmentId?: string; delegatedProtocol?: number };
-    if (identity.environmentId !== home) throw new Error("Remote home identity changed; delegated access refused");
-    if (identity.delegatedProtocol !== 1) throw new Error(`update ${link.name || "partner"}'s BOS to use delegated coordination`);
-    const response = await this.fetcher(new URL(path, link.origin), { method, redirect: "error", signal: AbortSignal.timeout(20000),
-      headers: { authorization: `Bearer ${link.token}`, "x-bos-grantee-home": this.homeId, "x-bos-grantee-bot": chief,
-        ...(body === undefined ? {} : { "content-type": "application/json" }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    if (!link) throw Object.assign(new Error("Remote home is not linked"), { beforeSend: true });
+    if (!/^\/api\/delegated\/(?:roster|coordinate(?:\/[\w-]+)?|bots(?:\/[\w-]+)?|catalog|setup|proposals\/[\w-]+)$/.test(path)) throw Object.assign(new Error("Invalid delegated route"), { beforeSend: true });
+    try {
+      const descriptor = await this.fetcher(new URL("/.well-known/openmausbot/environment", link.origin), { redirect: "error", signal: AbortSignal.timeout(20000) });
+      if (!descriptor.ok) throw Object.assign(new Error("Remote home identity is unavailable"), { status: descriptor.status, retryable: descriptor.status >= 500 });
+      const identity = await descriptor.json() as { environmentId?: string; delegatedProtocol?: number };
+      if (identity.environmentId !== home) throw new Error("Remote home identity changed; delegated access refused");
+      if (identity.delegatedProtocol !== 1) throw new Error(`update ${link.name || "partner"}'s BOS to use delegated coordination`);
+    } catch (error) { throw Object.assign(error instanceof Error ? error : new Error("Remote identity check failed"), { beforeSend: true }); }
+    let response: Response;
+    try {
+      response = await this.fetcher(new URL(path, link.origin), { method, redirect: "error", signal: AbortSignal.timeout(20000),
+        headers: { authorization: `Bearer ${link.token}`, "x-bos-grantee-home": this.homeId, "x-bos-grantee-bot": chief,
+          ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    } catch (error) {
+      if (method === "GET") throw error;
+      throw Object.assign(new Error("Remote mutation acceptance or outcome is unknown; do not repeat. Check the remote owner's receipts and pending review cards."), { uncertain: true });
+    }
+    // Proxies frequently return HTML for 5xx. Classify status before JSON
+    // so safe receipt reads still back off, and mutations remain uncertain.
+    if (response.status >= 500) throw Object.assign(new Error(method === "GET" ? "Remote delegated request temporarily unavailable" : "Remote mutation acceptance or outcome is unknown; do not repeat. Check the remote owner's receipts and pending review cards."), { status: response.status, retryable: method === "GET", uncertain: method !== "GET" });
     if (response.status === 404) throw Object.assign(new Error("Remote delegated receipt or target is unavailable; do not repeat uncertain work"), { status: 404 });
     let result: any;
-    try { result = await response.json(); } catch { throw new Error("Remote delegated response is invalid"); }
+    try { result = await response.json(); } catch { throw Object.assign(new Error(response.ok ? "Remote delegated response is invalid; do not repeat uncertain mutations" : "Remote delegated request refused"), { status: response.status, uncertain: response.ok && method !== "GET" }); }
     if (!response.ok) throw Object.assign(new Error(response.status === 403 ? "No live delegation for this chief on the remote home" : "Remote delegated request failed"), { status: response.status, retryable: response.status >= 500 });
     return result;
   }
@@ -68,7 +79,7 @@ export class DelegatedClient {
   async proposal(chief: string, home: string, requestId: string, signal: AbortSignal) {
     for (;;) {
       const result = await this.readReceipt(chief, home, `/api/delegated/proposals/${requestId}`, requestId, signal);
-      if (result.state !== "pending") return { ok: result.state === "applied", text: JSON.stringify(result).slice(0, 24000) };
+      if (result.state !== "pending") return { ok: result.state === "applied", text: JSON.stringify(result).slice(0, 24000), ...(result.state !== "applied" ? { remoteOutcomeKnown: true } : {}) };
       await this.delay(signal);
     }
   }
@@ -84,14 +95,14 @@ export class DelegatedClient {
     if (!route) throw new Error("Remote target is no longer linked");
     let accepted;
     try { accepted = await this.call(route.homeId, chief, "POST", "/api/delegated/coordinate", { botId: route.botId, requestKey, message }); }
-    catch { throw new Error(`Remote requestKey ${requestKey}: acceptance or outcome is unknown; do not repeat the work. The mutation was not replayed.`); }
+    catch (error) { if (!(error as { uncertain?: boolean }).uncertain) throw error; throw new Error(`Remote requestKey ${requestKey}: acceptance or outcome is unknown; do not repeat the work. The mutation was not replayed.`); }
     if (typeof accepted.requestId !== "string" || !/^[\w-]{1,128}$/.test(accepted.requestId)) throw new Error("Invalid delegated receipt");
     // Only safe GET receipt reads are retried; POST is never replayed after
     // a timeout. RoomHandoffs owns the lifetime and cancellation budget.
     for (;;) {
       signal.throwIfAborted();
       const result = await this.readReceipt(chief, route.homeId, `/api/delegated/coordinate/${accepted.requestId}`, accepted.requestId, signal);
-      if (result.status === "completed" || result.status === "failed") return { ok: result.status === "completed", text: String(result.result ?? "").slice(0, 24000) };
+      if (result.status === "completed" || result.status === "failed") return { ok: result.status === "completed", text: String(result.result ?? "").slice(0, 24000), ...(result.status === "failed" ? { remoteOutcomeKnown: true } : {}) };
       await this.delay(signal);
     }
   }

@@ -34,6 +34,9 @@ test("prepares an existing peer binding and owner-only grant draft without modif
     assert.equal(grants.delegations[1].autoApply, false);
     assert.equal(grants.delegations[1].section, "ops");
     assert.notEqual(run(["grant", "--data-dir", dir, "--binding", binding, "--out", join(dir, "no-section.json")]).status, 0);
+    const general = join(dir, "general.json");
+    assert.equal(run(["grant", "--data-dir", dir, "--binding", binding, "--section=", "--out", general]).status, 0);
+    assert.equal(JSON.parse(readFileSync(general, "utf8")).delegations.at(-1).section, "");
     if (process.platform !== "win32") assert.equal(statSync(draft).mode & 0o077, 0);
     result = run(["grant", "--data-dir", dir, "--binding", binding, "--section=ops", "--out", live]);
     assert.notEqual(result.status, 0);

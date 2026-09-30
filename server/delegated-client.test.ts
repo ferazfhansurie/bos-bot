@@ -58,7 +58,7 @@ test("transient safe receipt reads retry with backoff without another POST", asy
       if (init.method === "POST") { posts++; return Response.json({ requestId: "receipt" }); }
       reads++;
       if (reads === 1) throw new TypeError("fixture network failure");
-      if (reads === 2) return Response.json({}, { status: 503 });
+      if (reads === 2) return new Response("<html>proxy restarting</html>", { status: 503 });
       return Response.json({ status: "completed", result: "once" });
     }) as typeof fetch);
     const promise = client.coordinate("jarvis", `rb-${homeKey("partner")}-sol`, "once", "bounded", new AbortController().signal);
@@ -102,4 +102,23 @@ test("an uncertain POST is never retried and retains its requestKey", async () =
   }) as typeof fetch);
   await expect(client.coordinate("jarvis", `rb-${homeKey("partner")}-sol`, "known-key", "bounded", new AbortController().signal)).rejects.toThrow(/known-key.*do not repeat/i);
   expect(posts).toBe(1);
+});
+
+test("a mixed-version coordinate preserves update-required and sends no mutation", async () => {
+  let calls = 0;
+  const client = new DelegatedClient("firaz", () => [link], (async () => { calls++; return Response.json({ environmentId: "partner" }); }) as typeof fetch);
+  await expect(client.coordinate("jarvis", `rb-${homeKey("partner")}-sol`, "known", "bounded", new AbortController().signal)).rejects.toThrow(/update partner.*BOS/);
+  expect(calls).toBe(1);
+});
+test("known remote rejection and work cancelled before send retain their definite outcome", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "delegated-known-"));
+  try {
+    const engine = new RoomHandoffs(join(dir, "handoffs.json"), { validate: () => undefined, busy: () => false, changed: () => {}, report: () => {}, run: async () => ({ ok: false, text: "Owner rejected proposal", remoteOutcomeKnown: true }) });
+    const target = { botId: `rb-${homeKey("partner")}-sol`, threadId: "review" };
+    const { node } = engine.enqueue({ botId: "jarvis", threadId: "source" }, "turn", undefined, target, "review", "review", true, false, "", "known");
+    engine.sourceSettled("turn", true); engine.tick(); await Promise.resolve();
+    expect(node.result).toBe("Owner rejected proposal");
+    const queued = engine.enqueue({ botId: "jarvis", threadId: "another" }, "another", undefined, target, "review", "review", true, false, "", "queued").node;
+    engine.cancelTree(queued, "Stopped before send"); expect(queued.result).toBe("Stopped before send");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

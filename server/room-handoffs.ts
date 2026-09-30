@@ -12,6 +12,7 @@ const nodeSchema = z.object({
   executions: z.number().int().nonnegative().default(0), startedAt: z.number().optional(),
   approvalGranted: z.boolean().default(false),
   kind: z.enum(["work", "assignment"]).default("work"),
+  remoteOutcomeKnown: z.boolean().optional(),
   delegatedProposalId: z.string().regex(/^[\w-]{1,128}$/).optional(),
 });
 export type RoomHandoff = z.infer<typeof nodeSchema>;
@@ -19,7 +20,7 @@ export type RoomAddress = Pick<RoomHandoff, "groupId" | "threadId" | "botId">;
 export const ROOM_HANDOFF_LIMITS = { depth: 4, requests: 24, executions: 48, lifetimeMs: 30 * 60_000, minRunwayMs: 10 * 60_000, queueMs: 60 * 60_000, hardCapMs: 4 * 60 * 60_000 };
 /** Renders elapsed milliseconds as whole minutes, or seconds under one minute. */
 const duration = (ms: number) => ms >= 60_000 ? `${Math.floor(ms / 60_000)}m` : `${Math.floor(ms / 1000)}s`;
-const remoteUncertainty = (n: RoomHandoff, reason: string) => n.botId.startsWith("rb-")
+const remoteUncertainty = (n: RoomHandoff, reason: string) => n.botId.startsWith("rb-") && n.startedAt !== undefined && !n.remoteOutcomeKnown
   ? `${reason} Remote ${n.delegatedProposalId ? `proposal ${n.delegatedProposalId}` : `requestKey ${n.id}`} remains pending or its outcome is unknown. Ending this wait does not cancel work on the remote home; do not repeat it.` : reason;
 const terminal = (n: RoomHandoff) => ["completed", "failed", "cancelled"].includes(n.status);
 
@@ -27,7 +28,7 @@ export interface RoomHandoffHooks {
   /** Recheck addresses and route permission immediately before every dispatch. */
   validate(node: RoomHandoff, parent?: RoomHandoff): string | undefined;
   busy(node: RoomHandoff): boolean;
-  run(node: RoomHandoff, resumed: boolean, signal: AbortSignal): Promise<{ ok: boolean; text: string }>;
+  run(node: RoomHandoff, resumed: boolean, signal: AbortSignal): Promise<{ ok: boolean; text: string; remoteOutcomeKnown?: boolean }>;
   report(child: RoomHandoff, parent: RoomHandoff): void;
   changed(groupIds: ReadonlySet<string>, directThreadIds: ReadonlySet<string>): void;
 }
@@ -339,6 +340,7 @@ export class RoomHandoffs {
       void this.hooks.run(n, resumed, controller.signal).then(result => {
         if (terminal(n)) return;
         n.result = result.text.slice(0, 12_000);
+        n.remoteOutcomeKnown = result.remoteOutcomeKnown;
         if (!result.ok) this.cancelTree(n, n.result || "Room agent failed", "failed");
         else if (this.children(n.id).length > childCount) n.status = "waiting";
         else n.status = "completed";
