@@ -146,6 +146,6 @@ test("named-section delegation binds peer-only authority and operation-specific 
     const deletion = await api("DELETE", `/api/delegated/bots/${target.id}`, { reason: "review only" }, peer.token);
     expect(deletion.status).toBe(201); expect(deletion.body.state).toBe("pending");
     expect((await api("GET", "/api/bots")).body.bots.some((bot: any) => bot.id === target.id)).toBe(true);
-    expect((await api("PATCH", `/api/delegated/bots/${general.id}`, { reason: "outside", fields: { title: "No" } }, peer.token)).status).toBe(403);
+    expect((await api("PATCH", `/api/delegated/bots/${general.id}`, { reason: "outside", fields: { title: "No" } }, peer.token)).status).toBe(404);
   } finally { await fixture.close(); }
 }, 60000);
