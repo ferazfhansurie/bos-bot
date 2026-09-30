@@ -282,6 +282,8 @@ export const REMOTE_BOT_UNAVAILABLE = "not available for a bot on another Mac";
 /** One transcript line. Serialized as stored — the durable delivery
  * identity (roomRequest) rides the wire unchanged. */
 export interface WireMessage {
+  /** Provenance for an inert, imported Discord transcript line. Never dispatch this as a turn. */
+  discordImport?: { guildId: string; channelId: string; messageId: string; authorName: string; deliveryState: string };
   roomRequest?: { id: string; phase: "request" | "result" };
   id: string;
   role: "bot" | "user";

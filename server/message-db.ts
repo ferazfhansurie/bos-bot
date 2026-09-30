@@ -417,7 +417,8 @@ export function insertMessage(threadId: string, message: Message): void {
 }
 
 /** A backup may only populate a fresh thread, never replace a transcript. */
-export function importThread(threadId: string, messages: Message[], activeLeafId: string | null): void {
+export function importThread(threadId: string, messages: Message[], activeLeafId: string | null,
+  receipt?: { kind: string; key: string; result: string }): void {
   transaction((database) => {
     if (database.prepare("SELECT 1 FROM messages WHERE thread_id = ? LIMIT 1").get(threadId) ||
         database.prepare("SELECT 1 FROM thread_state WHERE thread_id = ?").get(threadId)) {
@@ -425,6 +426,8 @@ export function importThread(threadId: string, messages: Message[], activeLeafId
     }
     for (const message of messages) insertMessage(threadId, message);
     setActiveLeaf(threadId, activeLeafId);
+    if (receipt) database.prepare("INSERT INTO command_receipts(kind, key, at, result) VALUES (?, ?, ?, ?)")
+      .run(receipt.kind, receipt.key, Date.now(), receipt.result);
   });
 }
 
