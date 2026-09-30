@@ -317,6 +317,10 @@ export function createWindowsCuaHost({
   isProcessAlive = processAlive,
   selfPid = process.pid,
   restartBudget = { max: 2, windowMs: 10 * 60_000, cooldownMs: 30 * 60_000 },
+  // false: a daemon exit leaves computer use unavailable until the next host
+  // start. Server-only mode needs this: a relaunch after the server loaded would
+  // inherit credentials the server has since written into process.env.
+  relaunch = true,
   sessionPollMs = 15_000,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -581,6 +585,7 @@ export function createWindowsCuaHost({
     connection = null;
     hostAbort = null;
     if (maintenance()) return fail(unavailable("maintenance", "Maintenance is in progress"));
+    if (!relaunch) return fail(unavailable("daemon-exited", "Computer-use daemon exited; restart the server to re-enable computer use"));
     if (recordFailure()) return fail(unavailable("restart-budget-exhausted", "Computer-use daemon kept exiting; restart budget exhausted"));
     set("starting");
     try {
@@ -745,11 +750,15 @@ export function serverOnlyCuaEnvironment(descriptorPath) {
  * the daemon's parent-liveness pipe covers a hard kill.
  */
 const STOP_EXIT_GRACE_MS = 3_000;
+// The server must never wait on the host for long: past this, the host is
+// stopped (it cannot publish or spawn after stop) and the server starts without it.
+const HOST_START_TIMEOUT_MS = 15_000;
 
 export async function startServerOnlyWindowsCua(config, {
   createHost = createWindowsCuaHost,
   install = installWindowsCuaAttestation,
   processRef = process,
+  startTimeoutMs = HOST_START_TIMEOUT_MS,
 } = {}) {
   if (config?.computerUse !== true) return null;
   const host = createHost({
@@ -757,6 +766,7 @@ export async function startServerOnlyWindowsCua(config, {
     resourcesPath: config.resources,
     environmentId: config.environmentId,
     maintenanceMarker: config.maintenanceMarker,
+    relaunch: false,
   });
   install(host);
   const env = serverOnlyCuaEnvironment(host.descriptorPath);
@@ -778,8 +788,15 @@ export async function startServerOnlyWindowsCua(config, {
     if (processRef.listenerCount(signal) === 0) void stopping.finally(() => exitOnce(signal === "SIGINT" ? 130 : 0));
   };
   for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) processRef.once(signal, () => onSignal(signal));
-  await host.start();
-  return { host, env };
+  let timer;
+  const started = await Promise.race([
+    host.start().then(() => true, () => true),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(false), startTimeoutMs); }),
+  ]);
+  clearTimeout(timer);
+  if (!started) void host.stop().catch(() => {});
+  // A stop requested while the host was starting means the server must not load.
+  return { host, env, startTimedOut: !started, stopRequested: () => stopping !== null };
 }
 
 // ---------------------------------------------------------------------------
@@ -974,7 +991,18 @@ export function parseWindowsProbeOutput(op, stdout) {
   return reply.value;
 }
 
-export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 20_000, environment = process.env } = {}) {
+// Probes get a fixed, minimal environment captured when the probe is created,
+// never the live process.env (the server writes credentials into it later).
+const PROBE_ENV_KEYS = ["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATH", "PATHEXT", "TEMP", "TMP", "PSModulePath",
+  "USERPROFILE", "USERNAME", "USERDOMAIN", "COMPUTERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS"];
+
+export function probeEnvironment(source = process.env) {
+  const out = {};
+  for (const key of PROBE_ENV_KEYS) if (typeof source[key] === "string") out[key] = source[key];
+  return Object.freeze(out);
+}
+
+export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 20_000, environment = probeEnvironment() } = {}) {
   const systemRoot = environment.SystemRoot ?? "C:\\Windows";
   const powershell = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const encoded = encodeWindowsProbeCommand();
