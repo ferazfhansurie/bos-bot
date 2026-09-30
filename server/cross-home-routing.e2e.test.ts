@@ -1,15 +1,19 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
+import { launchVerificationServer, runControlOmb, verificationServerEnvironment } from "../scripts/control-omb.ts";
 
 test("two real isolated homes forward Chief tools and resume once for coordination and owner-reviewed setup", async () => {
   const gates = mkdtempSync(join(tmpdir(), "chief-routing-"));
   const gate = join(gates, "finish");
   const remote = await launchVerificationServer({ FAKE_CLAUDE_REPLIES: JSON.stringify(["remote bounded result"]) });
   let local: Awaited<ReturnType<typeof launchVerificationServer>> | undefined;
+  let restarted: ChildProcess | undefined;
   const api = async (fixture: typeof remote, method: string, path: string, body?: unknown, token?: string, expected = 200) => {
     const response = await fetch(fixture.info.url + path, { method, headers: { "content-type": "application/json", origin: fixture.info.url,
       ...(token ? { authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -29,8 +33,9 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     const chief = (await api(local, "GET", "/api/bots")).bots[0];
     await api(local, "PATCH", `/api/bots/${chief.id}`, { chiefOfStaff: true });
     const target = (await api(remote, "GET", "/api/bots")).bots[0];
+    await api(remote, "POST", "/api/bots", { name: "Surviving receipt owner", title: "Fixture", modelSelection: target.modelSelection }, undefined, 201);
     const grant = { granteeHomeId: localHome, granteeBotId: chief.id, peerSessionId: paired.session.id, peerTokenHash: createHash("sha256").update(paired.token).digest("hex"),
-      scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", note: "two-home fixture" };
+      scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", autoApply: true, note: "two-home fixture" };
     const grantFile = join(remote.info.dataDir, "delegations.json");
     const setGrant = (entries: any[]) => writeFileSync(grantFile, JSON.stringify({ version: 1, delegations: entries }));
     let previousPid = 0;
@@ -47,7 +52,7 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     expect((await api(local, "GET", "/api/internal/room-targets", undefined, capability)).bots.some((bot: any) => bot.id.startsWith("rb-"))).toBe(false);
     setGrant([grant]);
     const roster = await api(local, "GET", "/api/internal/agents", undefined, capability);
-    const delegated = roster.bots.find((bot: any) => bot.home === remoteHome);
+    const delegated = roster.bots.find((bot: any) => bot.home === remoteHome && bot.id.endsWith(`-${target.id}`));
     expect(delegated).toBeDefined(); expect(delegated.section).toBe("partner");
     const coordinated = await api(local, "POST", "/api/internal/coordinate-bots", { botIds: [delegated.id], requestKey: "probe", message: "bounded fixture" }, capability);
     expect(coordinated.accepted).toHaveLength(1);
@@ -63,24 +68,65 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     const catalog = await api(local, "GET", `/api/internal/team-setup-catalog?home=${remoteHome}`, undefined, capability);
     expect(catalog.home).toBe(remoteHome);
     const proposal = await api(local, "POST", "/api/internal/team-setup-requests", { home: remoteHome, plan: { reason: "two-home review", operations: [{ action: "update", botId: target.id, fields: { title: "Reviewed remote lead" } }] } }, capability, 201);
-    expect(proposal.state).toBe("pending"); expect(proposal.review).toBe("partner review");
+    expect(proposal.state).toBe("pending");
+    const remoteReviews = async () => (await api(remote, "GET", "/api/bots")).bots.flatMap((b: any) => b.tasks).filter((t: any) => t.openedBy?.name === "Remote Chief setup review");
+    expect(await remoteReviews()).toHaveLength(0);
+    expect((await api(remote, "GET", "/api/bots")).bots.find((b: any) => b.id === target.id).title).toBe(target.title);
     writeFileSync(gate, "finish");
-    const reviewBot = (await api(remote, "GET", "/api/bots")).bots.find((bot: any) => bot.id === proposal.reviewBotId);
-    const reviewTask = reviewBot.tasks.find((task: any) => task.openedBy?.name === "Remote Chief setup review");
-    await api(remote, "POST", `/api/threads/${reviewTask.threadId}/respond`, { requestId: proposal.requestId, behavior: "allow" });
-    await expect.poll(() => handoffs().find((node: any) => node.delegatedProposalId === proposal.requestId)?.status, { timeout: 30000 }).toBe("completed");
-    await expect.poll(() => handoffs().filter((node: any) => !node.parentId).every((node: any) => node.status === "completed"), { timeout: 30000 }).toBe(true);
-    expect(handoffs().filter((node: any) => !node.parentId).map((node: any) => node.executions)).toEqual([2, 2]);
-    expect((await api(remote, "GET", "/api/bots")).bots.find((bot: any) => bot.id === target.id).title).toBe("Reviewed remote lead");
-    expect((await api(remote, "GET", "/api/bots")).bots.find((bot: any) => bot.id === target.id).chiefOfStaff).toBe(target.chiefOfStaff);
-    await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((bot: any) => bot.id === chief.id).busy, { timeout: 15000 }).toBe(true);
+    await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((b: any) => b.id === chief.id).busy, { timeout: 15000 }).toBe(true);
+    const approved = await api(local, "POST", `/api/threads/${chief.threadId}/respond`, { requestId: proposal.requestId, behavior: "allow" });
+    expect(approved.result.state).toBe("applied");
+    expect((await api(remote, "GET", "/api/bots")).bots.find((b: any) => b.id === target.id).title).toBe("Reviewed remote lead");
+    expect((await api(remote, "GET", "/api/bots")).bots.find((b: any) => b.id === target.id).chiefOfStaff).toBe(target.chiefOfStaff);
+    const remoteMessages = async () => (await api(remote, "GET", "/api/bots")).bots.flatMap((b: any) => b.tasks).filter((t: any) => t.openedBy?.name === "Remote Chief setup review");
+    const countReceipts = async () => {
+      let count = 0;
+      for (const task of await remoteMessages()) count += (await api(remote, "GET", `/api/threads/${task.threadId}/messages`)).messages.filter((m: any) => m.card?.teamSetupRequest).length;
+      return count;
+    };
+    expect(await countReceipts()).toBe(1);
+    await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((b: any) => b.id === chief.id).busy, { timeout: 15000 }).toBe(true);
+    // Restart the actual source server with the same isolated data and transport.
+    const restartSource = async (full = false) => {
+      const child = restarted ?? local!.child;
+      const exited = once(child, "exit"); child.kill("SIGTERM"); await exited;
+      if (full) {
+        const file = join(local!.info.dataDir, "bots.json"); const bots = JSON.parse(readFileSync(file, "utf8"));
+        const saved = bots.find((b: any) => b.id === chief.id); saved.approvalMode = "full"; saved.autoApprove = false;
+        for (const task of saved.tasks) { task.approvalMode = "full"; task.autoApprove = false; }
+        writeFileSync(file, JSON.stringify(bots));
+      }
+    const log = openSync(local!.info.logPath, "a", 0o600);
+    restarted = spawn(process.execPath, ["--import", join(local!.info.dataDir, "delegated-fixture-transport.mjs"), "--experimental-strip-types", fileURLToPath(new URL("./index.ts", import.meta.url))], {
+      cwd: process.cwd(), env: verificationServerEnvironment({ FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: gate }, local!.info.dataDir, Number(new URL(local!.info.url).port)), stdio: ["ignore", log, log] }); closeSync(log);
+    await expect.poll(async () => { try { return (await fetch(local!.info.url + "/api/health")).status; } catch { return 0; } }, { timeout: 20000 }).toBe(200);
+    };
+    await restartSource();
+    await api(local, "POST", `/api/threads/${chief.threadId}/respond`, { requestId: proposal.requestId, behavior: "allow" });
+    expect(await countReceipts()).toBe(1);
+    // Deny and cancel source cards without contacting Partner.
+    previousPid = JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).pid;
+    for (const cancel of [false, true]) {
+      capability = await begin();
+      const denied = await api(local, "POST", "/api/internal/bot-deletion-requests", { home: remoteHome, targetBotId: delegated.id, reason: "source deny fixture" }, capability, 201);
+      expect(denied.state).toBe("pending");
+      writeFileSync(gate, "finish");
+      await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((b: any) => b.id === chief.id).busy, { timeout: 15000 }).toBe(true);
+      if (cancel) await api(local, "PATCH", `/api/bots/${chief.id}`, { title: "Changed before approval" });
+      const decision = await api(local, "POST", `/api/threads/${chief.threadId}/respond`, { requestId: denied.requestId, behavior: cancel ? "allow" : "deny" });
+      expect(decision.result.state).toBe(cancel ? "cancelled" : "denied");
+      expect(await countReceipts()).toBe(1);
+      await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((b: any) => b.id === chief.id).busy, { timeout: 15000 }).toBe(true);
+      previousPid = JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).pid;
+    }
+    await restartSource(true);
     previousPid = JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).pid;
     capability = await begin();
-    for (let i = 0; i < 24; i++) await api(local, "POST", "/api/internal/coordinate-bots", { botIds: [delegated.id], requestKey: `budget-${i}`, message: "fixture queued only" }, capability);
-    const untracked = await api(local, "POST", "/api/internal/team-setup-requests", { home: remoteHome, plan: { reason: "tracking budget fixture", operations: [{ action: "update", botId: target.id, fields: { title: "Pending only" } }] } }, capability, 201);
-    expect(untracked.state).toBe("pending"); expect(untracked.routing).toBe("unavailable");
-    expect(untracked.requestId).toMatch(/^[\w-]+$/); expect(untracked.warning).toMatch(/do not repeat/i);
-    expect(handoffs().some((node: any) => node.delegatedProposalId === untracked.requestId)).toBe(false);
-    expect((await api(remote, "GET", "/api/bots")).bots.find((bot: any) => bot.id === target.id).title).toBe("Reviewed remote lead");
-  } finally { await local?.close(); await remote.close(); rmSync(gates, { recursive: true, force: true }); }
+    const full = await api(local, "POST", "/api/internal/team-setup-requests", { home: remoteHome, plan: { reason: "Full source fixture", operations: [{ action: "update", botId: target.id, fields: { title: "Full remote lead" } }] } }, capability, 201);
+    expect(full.state).toBe("applied"); expect(await countReceipts()).toBe(2);
+    const deleted = await api(local, "POST", "/api/internal/bot-deletion-requests", { home: remoteHome, targetBotId: delegated.id, reason: "Full source delete fixture" }, capability, 201);
+    expect(deleted.state, JSON.stringify(deleted)).toBe("applied");
+    expect((await api(remote, "GET", "/api/bots")).bots.some((b: any) => b.id === target.id)).toBe(false);
+    writeFileSync(gate, "finish");
+  } finally { if (restarted && restarted.exitCode === null && restarted.signalCode === null) { const done = once(restarted, "exit"); restarted.kill("SIGTERM"); await done; } await local?.close(); await remote.close(); rmSync(gates, { recursive: true, force: true }); }
 }, 120000);

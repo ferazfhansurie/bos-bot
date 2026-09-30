@@ -49,6 +49,7 @@ interface SetupStore {
 }
 
 export interface TeamSetupOptions {
+  applyRemote?(request: TeamSetupRequest): Promise<TeamSetupResult>;
   requester?(botId: string): BotRecord | undefined;
   guard?(request: TeamSetupRequest): void;
   delegation?: TeamSetupRequest["delegation"];
@@ -67,8 +68,8 @@ export interface TeamSetupOptions {
 }
 
 type RequestFrom = { botId: string; name: string; color: string };
-type SetupArgs = { botId: string; threadId: string; plan: unknown; from?: RequestFrom };
-type DeletionArgs = { botId: string; threadId: string; targetBotId: string; reason: string; from?: RequestFrom };
+type SetupArgs = { botId: string; threadId: string; plan: unknown; home?: string; from?: RequestFrom };
+type DeletionArgs = { botId: string; threadId: string; targetBotId: string; reason: string; home?: string; from?: RequestFrom };
 /** Server-only invocation lease. Never saved on a request or approval card. */
 type SubmitAuthority = { canCommit?: () => boolean };
 
@@ -111,6 +112,10 @@ export class TeamSetupRequestService {
     if (immediate && !this.autoApply(request)) throw new TeamSetupError(request.delegation ? "Scoped delegation auto-apply is no longer enabled" : "Full Access is no longer enabled for this conversation", 409);
     if (confirming && !immediate && !this.options.store.messagesFor(request.threadId).some((message) => message.card?.requestId === request.requestId && !message.card.answered && !message.card.dismissed)) throw new TeamSetupError("This setup card is no longer pending", 409);
     if (confirming && teamSetupRevision(chief) !== request.requesterRevision) throw new TeamSetupError("The Chief's settings changed. This setup was cancelled; review a new proposal.", 409);
+    if (request.remote) {
+      if (!this.options.applyRemote || !/^[\w-]{1,128}$/.test(request.remote.home)) throw new TeamSetupError("Remote setup is unavailable", 403);
+      return; // The target home revalidates catalog, scope, revisions and running work.
+    }
     const existingTeams = new Set(this.options.teams().map(section));
     if (new Set([...(chief.managedSections ?? []), ...request.newTeams]).size > 100) throw new TeamSetupError("A Chief may coordinate at most 100 additional teams", 409);
     for (const name of request.newTeams) if (existingTeams.has(name)) throw new TeamSetupError(`Team ${JSON.stringify(name)} now exists. Review a new proposal.`, 409);
@@ -157,6 +162,22 @@ export class TeamSetupRequestService {
     const parsed = planSchema.safeParse(args.plan);
     if (!parsed.success) throw new TeamSetupError(parsed.error.issues[0]?.message ?? "Invalid team setup");
     const chief = this.chief(args.botId);
+    if (args.home) {
+      // Validate profiles locally, but provider/account and target scope belong to the remote catalog.
+      const plan = parsed.data;
+      for (const op of plan.operations) {
+        const { modelSelection: _model, section: _section, ...profile } = op.fields;
+        const checked = parseBotProfilePatch(Object.fromEntries(Object.entries(profile).map(([k, v]) => [k, redactSecretsInText(v!)])), true);
+        if (!checked.ok) throw new TeamSetupError(checked.error);
+        Object.assign(op.fields, checked.patch);
+        if (op.action === "create" && (!op.fields.name?.trim() || !op.fields.title?.trim() || !op.fields.soul?.trim() || !op.fields.modelSelection)) throw new TeamSetupError("Each new bot needs a name, title, soul instructions, and exact model selection");
+      }
+      const request: TeamSetupRequest = { version: 1, requestId: newId(), botId: args.botId, threadId: args.threadId,
+        reason: redactSecretsInText(plan.reason), createdAt: Date.now(), requesterRevision: teamSetupRevision(chief),
+        newTeams: plan.newTeams, operations: plan.operations.map(op => ({ action: op.action, botId: op.action === "create" ? op.key : op.botId, fields: op.fields as TeamSetupFields })),
+        remote: { home: args.home, plan: { ...plan, reason: redactSecretsInText(plan.reason) } } };
+      this.validate(request, false); return request;
+    }
     const combined = new Map<string, typeof parsed.data.operations[number]>();
     for (const operation of parsed.data.operations) {
       const key = operation.action === "create" ? `create:${operation.key}` : `update:${operation.botId}`;
@@ -182,6 +203,13 @@ export class TeamSetupRequestService {
 
   private prepareDeletion(args: DeletionArgs) {
     const chief = this.chief(args.botId);
+    if (args.home) {
+      if (!/^[\w-]{1,128}$/.test(args.targetBotId) || !args.reason.trim() || args.reason.length > 500) throw new TeamSetupError("An exact remote bot id and deletion reason are required");
+      const request: TeamSetupRequest = { version: 1, requestId: newId(), botId: args.botId, threadId: args.threadId,
+        reason: redactSecretsInText(args.reason), createdAt: Date.now(), requesterRevision: teamSetupRevision(chief), newTeams: [], operations: [],
+        remote: { home: args.home }, deletion: { botId: args.targetBotId, name: args.targetBotId, expectedRevision: "" } };
+      this.validate(request, false); return request;
+    }
     const target = this.options.store.bot(args.targetBotId);
     if (!target) throw new TeamSetupError("That bot no longer exists", 404);
     if (!args.reason.trim() || args.reason.length > 500) throw new TeamSetupError("A deletion reason of at most 500 characters is required");
@@ -213,12 +241,13 @@ export class TeamSetupRequestService {
     if (!permission.ok) throw new TeamSetupError(permission.error, permission.status);
     const chief = this.chief(request.botId);
     const lines = [`Why: ${request.reason}`];
+    if (request.remote) lines.push(`Target home: ${request.remote.home}. This decision authorizes one scoped remote request; an uncertain outcome is never replayed.`);
     if (request.delegation) lines.push(`Delegated request from home ${request.delegation.homeId}, Chief ${request.delegation.botId}. Approval does not grant Full Access or change account permissions.`);
     if (request.deletion) lines.push(`Delete @${request.deletion.name} (${request.deletion.botId}).`, "Permanently removes this bot, all its conversations, memory, instructions, skills, and any computer owned only by it. Generated project files and shared team computers remain. Active work or an unavailable provider can block deletion safely.");
     if (request.newTeams.length) lines.push(`Create teams: ${request.newTeams.map((name) => JSON.stringify(name)).join(", ")}.`, `Authorize @${chief.name} to coordinate and propose setup changes in these new teams.`);
     for (const operation of request.operations) {
-      const current = this.options.store.bot(operation.botId);
-      lines.push(`\n${operation.action === "create" ? "Create" : "Update"} @${operation.fields.name ?? current?.name} (${operation.action === "create" ? "new bot" : operation.botId})`);
+      const current = request.remote ? undefined : this.options.store.bot(operation.botId);
+      lines.push(`\n${operation.action === "create" ? "Create" : "Update"} @${operation.fields.name ?? current?.name ?? operation.botId} (${operation.action === "create" ? "new bot" : operation.botId})`);
       for (const [key, value] of Object.entries(operation.fields)) {
         const before = current ? (key === "section" ? current.section || "General" : current[key as keyof BotRecord]) : undefined;
         lines.push(`${key === "modelSelection" ? "Default engine/model" : key}: ${current ? `${JSON.stringify(before ?? "")} → ` : ""}${key === "section" ? JSON.stringify(value || "General") : JSON.stringify(value)}`);
@@ -252,6 +281,17 @@ export class TeamSetupRequestService {
         this.validate(request, true, immediate);
       };
       revalidate();
+      if (request.remote) {
+        const existing = this.options.store.messagesFor(request.threadId).find(m => m.card?.requestId === request.requestId);
+        if (existing?.card?.teamSetupRequest?.remote?.dispatchStarted) return existing.card.teamSetupRequest.result ?? { state: "failed", bots: [], newTeams: [], error: "Remote outcome is unknown; dispatch was not replayed. Check the remote owner's receipt." };
+        const result: TeamSetupResult = { state: "failed", bots: [], newTeams: [], error: "Remote outcome is unknown; dispatch was not replayed. Check the remote owner's receipt." };
+        const card = { ...(existing?.card ?? this.cardData(request, immediate)), answered: "deny" as const,
+          teamSetupRequest: { ...request, remote: { ...request.remote, dispatchStarted: true }, result } };
+        // Synchronous durable message write precedes the external mutation. A crash fails closed.
+        if (existing) this.options.store.patchMessage(request.threadId, existing.id, { card });
+        else this.options.store.appendMessage(request.threadId, { role: "bot", kind: "options", card });
+        return await this.options.applyRemote!(request);
+      }
       if (!request.deletion) return this.options.store.applyTeamSetup(request);
       await this.options.deleteBot(request.deletion.botId, revalidate, request);
       return { state: "applied", bots: [{ id: request.deletion.botId, name: request.deletion.name, action: "deleted" }], newTeams: [] };
@@ -272,10 +312,11 @@ export class TeamSetupRequestService {
     const title = result.state === "applied" ? (request.deletion ? `Deleted @${request.deletion.name}` : "Team setup applied") : "Team setup not applied";
     let messageId: string | undefined;
     try {
-      messageId = this.options.store.appendMessage(request.threadId, { role: "bot", kind: "options", ...(from ? { from } : {}), card: {
-        ...card, title, options: [], answered: result.state === "applied" ? "allow" : "deny", held: result.error,
-        teamSetupRequest: { ...request, result, resumed: true },
-      } }).id;
+      const settled = { ...card, title, options: [], answered: result.state === "applied" ? "allow" as const : "deny" as const, held: result.error,
+        teamSetupRequest: { ...request, ...(request.remote ? { remote: { ...request.remote, dispatchStarted: true } } : {}), result, resumed: true } };
+      const existing = request.remote && this.options.store.messagesFor(request.threadId).find(m => m.card?.requestId === request.requestId);
+      if (existing) { this.options.store.patchMessage(request.threadId, existing.id, { card: settled }); messageId = existing.id; }
+      else messageId = this.options.store.appendMessage(request.threadId, { role: "bot", kind: "options", ...(from ? { from } : {}), card: settled }).id;
     } catch (error) {
       // The atomic bot receipt remains authoritative if the chat write fails.
       const detail = redactSecretsInText(error instanceof Error ? error.message : String(error));
@@ -304,6 +345,8 @@ export class TeamSetupRequestService {
       if (receipt?.requestId === request.requestId) result = receipt.result;
       else if (args.behavior === "deny") result = { state: "denied", bots: [], newTeams: [] };
       else result = await this.apply(request);
+      const durableRemote = this.options.store.messagesFor(args.threadId).find(m => m.id === message.id)?.card?.teamSetupRequest?.remote;
+      if (durableRemote) request.remote = durableRemote;
       this.options.store.patchMessage(args.threadId, message.id, { card: { ...card, answered: result.state === "applied" ? "allow" : "deny", held: result.error, teamSetupRequest: { ...request, result } } });
       return { result, request: { ...request, result }, messageId: message.id, duplicate: false };
     } finally { this.resolving.delete(request.requestId); }

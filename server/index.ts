@@ -27,7 +27,7 @@ import { PeerThreads, type PeerThread } from "./peer-threads.ts";
 import { peerEvent } from "./peer-events.ts";
 import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
-import { RemoteBotBridge, isRemoteBotPath, homeKey } from "./remote-bot-bridge.ts";
+import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
 import { onboardingChief } from "./onboarding-chief.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
@@ -8547,6 +8547,14 @@ const teamSetupTeams = () => [...new Set(["", ...readSections(), ...store.bots.m
 const teamSetupOptions: TeamSetupOptions = {
   store, teams: teamSetupTeams, canAccessTeam, canPersist: proposalPersistence, maxBots: MAX_WORKSPACE_BOTS,
   autoApply: fullAccessForSource,
+  applyRemote: async (request) => {
+    const remote = request.remote!;
+    const result = await delegatedClient.call(remote.home, request.botId, request.deletion ? "DELETE" : "POST",
+      request.deletion ? `/api/delegated/bots/${request.deletion.botId}` : "/api/delegated/setup",
+      request.deletion ? { reason: request.reason } : { plan: remote.plan });
+    if (result.state !== "applied" || result.result?.state !== "applied") throw new TeamSetupError(`Remote request was not applied (${result.state ?? "unknown"}); retain receipt ${result.requestId ?? request.requestId} and do not repeat. The remote grant must enable scoped auto-apply.`, 409);
+    return result.result;
+  },
   validateChange: (before, fields) => assertTeamComputerChangeIdle(before, { ...before, ...fields }),
   ownsThread: (botId, threadId) => Boolean(connectorThread(botId, threadId)),
   targetBusy: (botId, sourceThreadId) => {
@@ -13648,31 +13656,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
         return json(res, 201, proposed);
       }
-      const forwardDelegatedSetup = async (home: string, remotePath: string, remoteMethod: string, body: unknown) => {
-        const chief = store.bot(internalCapability.botId);
-        if (!chief?.chiefOfStaff || chief.hidden || !connectorThread(chief.id, internalCapability.threadId)) throw new TeamSetupError("Only an active Chief may target another home", 403);
-        if (!internalCapability.roomCoordination) throw new TeamSetupError("Remote setup requires bounded coordination support on this turn", 403);
-        const result = await delegatedClient.call(home, chief.id, remoteMethod, remotePath, body);
-        if (result.state === "pending") {
-          // The remote card already exists. Tracking failure must preserve
-          // its receipt, never invite a second proposal or imply cancellation.
-          try {
-            requireActiveInternalCapability();
-            if (!store.bot(chief.id)?.chiefOfStaff || store.bot(chief.id)?.hidden) throw new Error("Chief authority changed");
-            if (typeof result.requestId !== "string" || !/^[\w-]{1,128}$/.test(result.requestId) || typeof result.reviewBotId !== "string" || !/^[\w-]{1,128}$/.test(result.reviewBotId)) throw new Error("Invalid remote review receipt");
-            const targetId = `rb-${homeKey(home)}-${result.reviewBotId}`;
-            const source = store.groupByThread(internalCapability.threadId);
-            roomHandoffs.enqueue({ groupId: source?.id, threadId: internalCapability.threadId, botId: chief.id }, internalCapability.generation, internalCapability.roomHandoffId,
-              { botId: targetId, threadId: targetId }, `proposal-${result.requestId}`, "Remote setup review result", true, false, "", result.requestId);
-          } catch {
-            return { ...result, routing: "unavailable", warning: "Review remains pending on the remote home. Automatic result routing is unavailable; retain this requestId and do not repeat the proposal." };
-          }
-        } else {
-          requireActiveInternalCapability();
-          if (!store.bot(chief.id)?.chiefOfStaff || store.bot(chief.id)?.hidden) throw new TeamSetupError("Chief authority changed; remote receipt remains on its home", 403);
-        }
-        return result;
-      };
       if (method === "GET" && path === "/api/internal/team-setup-catalog") {
         let chief = store.bot(internalCapability.botId)!;
         if (!chief.chiefOfStaff || chief.hidden) return json(res, 403, { error: "Only an active Chief may plan team setup" });
@@ -13702,8 +13685,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const chief = store.bot(internalCapability.botId)!;
         const owner = connectorThread(chief.id, internalCapability.threadId);
         if (!owner) return json(res, 403, { error: "Source conversation no longer belongs to the Chief" });
-        if (parsed.data.home && parsed.data.home !== ENVIRONMENT_ID) return json(res, 201, await forwardDelegatedSetup(parsed.data.home, "/api/delegated/setup", "POST", { plan: parsed.data.plan }));
-        const proposed = await teamSetupRequests.submit({ botId: chief.id, threadId: internalCapability.threadId, plan: parsed.data.plan,
+        const home = parsed.data.home && parsed.data.home !== ENVIRONMENT_ID ? parsed.data.home : undefined;
+        if (home && !internalCapability.roomCoordination) return json(res, 403, { error: "Remote setup requires bounded coordination support on this turn" });
+        const proposed = await teamSetupRequests.submit({ botId: chief.id, threadId: internalCapability.threadId, plan: parsed.data.plan, home,
           canCommit: () => internalCapabilityIsActive(internalCapability),
           ...(owner.group ? { from: { botId: chief.id, name: chief.name, color: chief.color } } : {}) });
         if (proposed.state === "applied" || proposed.state === "pending") appendDecision(DATA_DIR, { threadId: internalCapability.threadId, requestId: proposed.requestId, botId: chief.id,
@@ -13717,13 +13701,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const chief = store.bot(internalCapability.botId)!;
         const owner = connectorThread(chief.id, internalCapability.threadId);
         if (!owner) return json(res, 403, { error: "Source conversation no longer belongs to the Chief" });
-        if (parsed.data.home && parsed.data.home !== ENVIRONMENT_ID) {
-          const target = delegatedClient.resolve(parsed.data.targetBotId);
-          const targetId = target?.homeId === parsed.data.home ? target.botId : parsed.data.targetBotId;
-          if (!/^[\w-]{1,128}$/.test(targetId)) return json(res, 400, { error: "Use the exact remote catalog bot id" });
-          return json(res, 201, await forwardDelegatedSetup(parsed.data.home, `/api/delegated/bots/${targetId}`, "DELETE", { reason: parsed.data.reason }));
-        }
-        const proposed = await teamSetupRequests.submitDeletion({ botId: chief.id, threadId: internalCapability.threadId, targetBotId: parsed.data.targetBotId, reason: parsed.data.reason,
+        const home = parsed.data.home && parsed.data.home !== ENVIRONMENT_ID ? parsed.data.home : undefined;
+        if (home && !internalCapability.roomCoordination) return json(res, 403, { error: "Remote setup requires bounded coordination support on this turn" });
+        const target = home ? delegatedClient.resolve(parsed.data.targetBotId) : null;
+        const targetBotId = target && target.homeId === home ? target.botId : parsed.data.targetBotId;
+        const proposed = await teamSetupRequests.submitDeletion({ botId: chief.id, threadId: internalCapability.threadId, targetBotId, home, reason: parsed.data.reason,
           canCommit: () => internalCapabilityIsActive(internalCapability),
           ...(owner.group ? { from: { botId: chief.id, name: chief.name, color: chief.color } } : {}) });
         if (proposed.state === "applied" || proposed.state === "pending") appendDecision(DATA_DIR, { threadId: internalCapability.threadId, requestId: proposed.requestId, botId: chief.id,

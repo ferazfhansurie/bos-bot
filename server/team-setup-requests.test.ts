@@ -4,7 +4,7 @@ import { canAccessTeam } from "./peer-roster.ts";
 import type { BotRecord, OptionCardData } from "./store.ts";
 import type { TeamSetupRequest, TeamSetupResult } from "../shared/team-setup.ts";
 
-function harness() {
+function harness(remote = false) {
   const bots: BotRecord[] = [];
   const messages: Array<{ id: string; card?: OptionCardData }> = [];
   const teams = ["", "Work", "Engineering", "Private"];
@@ -40,17 +40,20 @@ function harness() {
   const targetBusy = vi.fn((id: string, _sourceThreadId?: string) => Boolean(store.bot(id)?.busy));
   const validateChange = vi.fn();
   const canPersist = vi.fn((): { ok: true } | { ok: false; status: number; error: string } => ({ ok: true }));
-  const service = new TeamSetupRequestService({ store, teams: () => teams, maxBots: 100, canAccessTeam,
+  const applyRemote = vi.fn(async (): Promise<TeamSetupResult> => ({ state: "applied", bots: [], newTeams: [] }));
+  const options = { store, teams: () => teams, maxBots: 100, canAccessTeam,
+    ...(remote ? { applyRemote } : {}),
     canPersist, ownsThread: () => sourceExists, targetBusy, deleteBot, autoApply, validateChange,
-    validateModel: (selection, current) => {
+    validateModel: (selection: BotRecord["modelSelection"], current?: BotRecord) => {
       if (!({ claude: ["sonnet", "opus"], codex: ["gpt-fixture"] }[selection.instanceId]?.includes(selection.model))) return "Model is not in the current catalog";
       return current?.approvalMode === "full" && selection.instanceId !== current.modelSelection.instanceId ? "Existing permissions are incompatible" : null;
     },
-  });
+  };
+  const service = new TeamSetupRequestService(options);
   const propose = (operations: unknown[], newTeams: string[] = []) => service.propose({ botId: chief.id, threadId: chief.threadId, plan: { reason: "Requested specialist setup", operations, newTeams } });
   const submit = (operations: unknown[], newTeams: string[] = []) => service.submit({ botId: chief.id, threadId: chief.threadId, plan: { reason: "Requested specialist setup", operations, newTeams } });
   const resolve = (requestId: string, behavior = "allow") => service.resolve({ botId: chief.id, threadId: chief.threadId, requestId, behavior });
-  return { service, store, chief, peer, bot, teams, propose, submit, resolve, apply, deleteBot, messages, autoApply, targetBusy, validateChange, canPersist, removeSource: () => { sourceExists = false; } };
+  return { service, applyRemote, restart: () => new TeamSetupRequestService(options), store, chief, peer, bot, teams, propose, submit, resolve, apply, deleteBot, messages, autoApply, targetBusy, validateChange, canPersist, removeSource: () => { sourceExists = false; } };
 }
 const specialist = (key: string, section: string, modelSelection = { instanceId: "claude", model: "sonnet" }) => ({ action: "create", key,
   fields: { name: key, title: "Specialist", soul: "Finish the assigned work.", section, modelSelection } });
@@ -335,4 +338,48 @@ describe("Full Access team setup", () => {
     expect(h.apply).toHaveBeenCalledTimes(1);
     expect(h.messages).toHaveLength(0);
   });
+});
+
+
+describe("source-home remote approval", () => {
+  for (const deletion of [false, true]) {
+    const submit = (h: ReturnType<typeof harness>) => deletion
+      ? h.service.submitDeletion({ botId: h.chief.id, threadId: h.chief.threadId, home: "partner", targetBotId: "remote-only", reason: "remote deletion" })
+      : h.service.submit({ botId: h.chief.id, threadId: h.chief.threadId, home: "partner", plan: { reason: "remote setup", operations: [{ action: "update", botId: "remote-only", fields: { title: "Lead" } }] } });
+    it(`${deletion ? "delete" : "setup"}: Ask waits, approve sends once across service restart`, async () => {
+      const h = harness(true); const p = await submit(h);
+      expect(p.state).toBe("pending"); expect(h.applyRemote).not.toHaveBeenCalled();
+      expect((await h.resolve(p.requestId))?.result.state).toBe("applied");
+      await h.restart().resolve({ botId: h.chief.id, threadId: h.chief.threadId, requestId: p.requestId, behavior: "allow" });
+      expect(h.applyRemote).toHaveBeenCalledTimes(1); expect(h.apply).not.toHaveBeenCalled(); expect(h.deleteBot).not.toHaveBeenCalled();
+    });
+    it(`${deletion ? "delete" : "setup"}: deny, dismiss and stale Chief never send`, async () => {
+      for (const mode of ["deny", "dismiss", "stale"]) {
+        const h = harness(true); const p = await submit(h);
+        if (mode === "dismiss") h.messages[0].card!.dismissed = true;
+        if (mode === "stale") h.chief.chiefOfStaff = false;
+        await h.resolve(p.requestId, mode === "deny" ? "deny" : "allow");
+        expect(h.applyRemote).not.toHaveBeenCalled();
+      }
+    });
+    it(`${deletion ? "delete" : "setup"}: granted Full sends once and closes the receipt`, async () => {
+      const h = harness(true); h.autoApply.mockReturnValue(true); const p = await submit(h);
+      expect(p.state).toBe("applied"); expect(h.applyRemote).toHaveBeenCalledTimes(1);
+      expect(h.messages).toHaveLength(1);
+      await h.restart().resolve({ botId: h.chief.id, threadId: h.chief.threadId, requestId: p.requestId, behavior: "allow" });
+      expect(h.applyRemote).toHaveBeenCalledTimes(1);
+    });
+    it(`${deletion ? "delete" : "setup"}: crash after dispatch claim never replays`, async () => {
+      const h = harness(true); const p = await submit(h);
+      h.applyRemote.mockImplementation(async () => {
+        const persisted = structuredClone(h.messages);
+        expect(persisted[0].card?.teamSetupRequest?.remote?.dispatchStarted).toBe(true);
+        await h.restart().resolve({ botId: h.chief.id, threadId: h.chief.threadId, requestId: p.requestId, behavior: "allow" });
+        throw new Error("uncertain remote outcome; do not repeat");
+      });
+      expect((await h.resolve(p.requestId))?.result.state).toBe("failed");
+      await h.restart().resolve({ botId: h.chief.id, threadId: h.chief.threadId, requestId: p.requestId, behavior: "allow" });
+      expect(h.applyRemote).toHaveBeenCalledTimes(1);
+    });
+  }
 });

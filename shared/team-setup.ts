@@ -36,6 +36,8 @@ export interface TeamSetupRequest {
   operations: TeamSetupOperation[];
   newTeams: string[];
   deletion?: { botId: string; name: string; expectedRevision: string };
+  /** Source-home approval and durable at-most-once remote dispatch claim. */
+  remote?: { home: string; plan?: unknown; dispatchStarted?: boolean };
   result?: TeamSetupResult;
   resumed?: boolean;
   delegation?: { homeId: string; botId: string; sessionId: string; tokenHash: string; section: string };
