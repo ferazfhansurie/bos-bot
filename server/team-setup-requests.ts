@@ -309,11 +309,11 @@ export class TeamSetupRequestService {
     // receipt is published, so no interactive card or second turn can start.
     const card = this.cardData(request, true);
     let result = await this.apply(request, true, canCommit);
-    const title = result.state === "applied" ? (request.deletion ? `Deleted @${request.deletion.name}` : "Team setup applied") : "Team setup not applied";
+    const title = result.state === "pending" ? "Awaiting remote owner review" : result.state === "applied" ? (request.deletion ? `Deleted @${request.deletion.name}` : "Team setup applied") : "Team setup not applied";
     let messageId: string | undefined;
     try {
-      const settled = { ...card, title, options: [], answered: result.state === "applied" ? "allow" as const : "deny" as const, held: result.error,
-        teamSetupRequest: { ...request, ...(request.remote ? { remote: { ...request.remote, dispatchStarted: true } } : {}), result, resumed: true } };
+      const settled = { ...card, title, options: [], answered: result.state === "applied" || result.state === "pending" ? "allow" as const : "deny" as const, held: result.error,
+        teamSetupRequest: { ...request, ...(request.remote ? { remote: { ...request.remote, dispatchStarted: true } } : {}), result, resumed: result.state !== "pending" } };
       const existing = request.remote && this.options.store.messagesFor(request.threadId).find(m => m.card?.requestId === request.requestId);
       if (existing) { this.options.store.patchMessage(request.threadId, existing.id, { card: settled }); messageId = existing.id; }
       else messageId = this.options.store.appendMessage(request.threadId, { role: "bot", kind: "options", ...(from ? { from } : {}), card: settled }).id;
@@ -347,7 +347,7 @@ export class TeamSetupRequestService {
       else result = await this.apply(request);
       const durableRemote = this.options.store.messagesFor(args.threadId).find(m => m.id === message.id)?.card?.teamSetupRequest?.remote;
       if (durableRemote) request.remote = durableRemote;
-      this.options.store.patchMessage(args.threadId, message.id, { card: { ...card, answered: result.state === "applied" ? "allow" : "deny", held: result.error, teamSetupRequest: { ...request, result } } });
+      this.options.store.patchMessage(args.threadId, message.id, { card: { ...card, answered: result.state === "applied" || result.state === "pending" ? "allow" : "deny", held: result.error, teamSetupRequest: { ...request, result } } });
       return { result, request: { ...request, result }, messageId: message.id, duplicate: false };
     } finally { this.resolving.delete(request.requestId); }
   }

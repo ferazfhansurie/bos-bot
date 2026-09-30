@@ -28,7 +28,7 @@ import { peerEvent } from "./peer-events.ts";
 import { privateRoomForViewer } from "./private-room-visibility.ts";
 import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
-import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
+import { RemoteBotBridge, isRemoteBotPath, homeKey } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
 import { onboardingChief } from "./onboarding-chief.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
@@ -419,7 +419,7 @@ import { Delegations, type DelegatedIdentity, type DelegationScope } from "./cro
 import { DelegatedJobs, type DelegatedJob } from "./delegated-jobs.ts";
 import { DelegatedClient } from "./delegated-client.ts";
 import { TeamSetupError, TeamSetupRequestService, type TeamSetupOptions } from "./team-setup-requests.ts";
-import type { TeamSetupRequest } from "../shared/team-setup.ts";
+import type { TeamSetupRequest, TeamSetupResult } from "../shared/team-setup.ts";
 import { profileRevision, profileSnapshot } from "./profile-revision.ts";
 import { flushAllProfileHistory, flushProfileHistory, readHistory, recordProfileChange } from "./profile-versions.ts";
 import { fetchBotDirectory, matchDirectoryBots, type MatchedDirectoryBot } from "./bot-directory.ts";
@@ -2845,6 +2845,22 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
   report: (child, parent) => {
     // Same-room replies already appear in this conversation.
     if (child.kind === "assignment" && child.status === "completed") return;
+    if (child.delegatedProposalId && parent.id.startsWith("remote-setup-")) {
+      const sourceId = parent.id.slice("remote-setup-".length);
+      const message = store.messagesFor(parent.threadId).find(m => m.card?.requestId === sourceId);
+      if (message?.card?.teamSetupRequest?.result?.remoteRequestId === child.delegatedProposalId) {
+        let result: TeamSetupResult = { state: "failed", bots: [], newTeams: [], remoteRequestId: child.delegatedProposalId,
+          error: `Remote receipt ${child.delegatedProposalId}: ${child.result}. Do not repeat the proposal.` };
+        if (!roomHandoffProblem(child, parent)) {
+          try {
+            const response = JSON.parse(child.result);
+            if (["applied", "denied", "cancelled", "failed"].includes(response.result?.state)) result = { ...response.result, remoteRequestId: child.delegatedProposalId };
+          } catch { /* Preserve explicit uncertainty when tracking failed. */ }
+        }
+        store.patchMessage(parent.threadId, message.id, { card: { ...message.card, held: result.error,
+          answered: result.state === "applied" ? "allow" : "deny", teamSetupRequest: { ...message.card.teamSetupRequest, result, resumed: true } } });
+      }
+    }
     const group = parent.groupId ? store.group(parent.groupId) : undefined;
     if (parent.groupId ? !group || !store.groupTaskByThread(group.id, parent.threadId) : !store.taskByThread(parent.botId, parent.threadId)) return;
     const bot = store.bot(child.botId);
@@ -8575,7 +8591,25 @@ const teamSetupOptions: TeamSetupOptions = {
     const result = await delegatedClient.call(remote.home, request.botId, request.deletion ? "DELETE" : "POST",
       request.deletion ? `/api/delegated/bots/${request.deletion.botId}` : "/api/delegated/setup",
       request.deletion ? { reason: request.reason } : { plan: remote.plan });
-    if (result.state !== "applied" || result.result?.state !== "applied") throw new TeamSetupError(`Remote request was not applied (${result.state ?? "unknown"}); retain receipt ${result.requestId ?? request.requestId} and do not repeat. The remote grant must enable scoped auto-apply.`, 409);
+    if (result.state === "pending") {
+      if (typeof result.requestId !== "string" || !/^[\w-]{1,128}$/.test(result.requestId) || typeof result.reviewBotId !== "string" || !/^[\w-]{1,128}$/.test(result.reviewBotId)) throw new Error("Remote review acceptance is uncertain; retain the source receipt and do not repeat.");
+      const pending: TeamSetupResult = { state: "pending", bots: [], newTeams: [], remoteRequestId: result.requestId };
+      try {
+        const owner = connectorThread(request.botId, request.threadId);
+        const chief = store.bot(request.botId);
+        if (!owner || !chief?.chiefOfStaff || chief.hidden) throw new Error("Source Chief no longer available");
+        const targetId = `rb-${homeKey(remote.home)}-${result.reviewBotId}`;
+        const generation = `remote-setup-${request.requestId}`;
+        roomHandoffs.enqueue({ groupId: owner.group?.id, threadId: request.threadId, botId: request.botId }, generation, undefined,
+          { botId: targetId, threadId: targetId }, `proposal-${result.requestId}`, "Remote setup review result", true, false,
+          `Approved remote setup ${request.requestId}. Report the owner's result; do not repeat this proposal.`, result.requestId);
+        roomHandoffs.sourceSettled(generation, true);
+      } catch {
+        pending.error = `Remote proposal ${result.requestId} remains pending on Partner. Automatic result routing is unavailable; do not repeat it.`;
+      }
+      return pending;
+    }
+    if (result.state !== "applied" || result.result?.state !== "applied") throw new Error(`Remote outcome is ${result.state ?? "unknown"}; retain receipt ${result.requestId ?? request.requestId} and do not repeat.`);
     return result.result;
   },
   validateChange: (before, fields) => assertTeamComputerChangeIdle(before, { ...before, ...fields }),
@@ -8808,7 +8842,7 @@ async function resolveAndSendTeamSetup(res: ServerResponse, args: { botId: strin
   if (args.behavior === "allow" && !card.answered && !card.dismissed) {
     // Confirmed Chief setup can move bots without the ordinary PATCH route.
     // Keep that atomic Store operation behind the same shared-machine fence.
-    for (const operation of card.teamSetupRequest!.operations) {
+    for (const operation of card.teamSetupRequest!.remote ? [] : card.teamSetupRequest!.operations) {
       const before = store.bot(operation.botId);
       if (before && operation.action === "update") assertTeamComputerChangeIdle(before, { ...before, ...operation.fields });
     }
@@ -8818,14 +8852,14 @@ async function resolveAndSendTeamSetup(res: ServerResponse, args: { botId: strin
   if (!resolved) return false;
   if (!resolved.duplicate) {
     appendDecision(DATA_DIR, { threadId: args.threadId, requestId: args.requestId, botId: args.botId, tool: card.tool,
-      summary: card.subtitle, decision: resolved.result.state === "applied" ? "user-approved" : "user-denied", source: "user" });
+      summary: card.subtitle, decision: args.behavior === "allow" ? "user-approved" : "user-denied", source: "user" });
   }
   const current = store.messagesFor(args.threadId).find((item) => item.id === resolved.messageId);
-  if (current?.card?.teamSetupRequest?.result && !current.card.teamSetupRequest.resumed) {
+  if (current?.card?.teamSetupRequest?.result && resolved.result.state !== "pending" && !current.card.teamSetupRequest.resumed) {
     store.patchMessage(args.threadId, current.id, { card: { ...current.card, teamSetupRequest: { ...current.card.teamSetupRequest, resumed: true } } });
     if (!resolved.request.delegation) dispatchTeamSetupResume({ request: resolved.request, messageId: resolved.messageId, generation: resumeGeneration });
   }
-  json(res, 200, { ok: true, outcome: resolved.result.state === "applied" ? "allowed-once" : "rejected", result: resolved.result, alreadySettled: resolved.duplicate });
+  json(res, 200, { ok: true, outcome: resolved.result.state === "pending" ? "pending-remote-review" : resolved.result.state === "applied" ? "allowed-once" : "rejected", result: resolved.result, alreadySettled: resolved.duplicate });
   return true;
 }
 const ROUTINE_WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;

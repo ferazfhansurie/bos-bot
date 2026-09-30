@@ -35,7 +35,7 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     const target = (await api(remote, "GET", "/api/bots")).bots[0];
     await api(remote, "POST", "/api/bots", { name: "Surviving receipt owner", title: "Fixture", modelSelection: target.modelSelection }, undefined, 201);
     const grant = { granteeHomeId: localHome, granteeBotId: chief.id, peerSessionId: paired.session.id, peerTokenHash: createHash("sha256").update(paired.token).digest("hex"),
-      scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", autoApply: true, note: "two-home fixture" };
+      scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", autoApply: false, note: "two-home fixture" };
     const grantFile = join(remote.info.dataDir, "delegations.json");
     const setGrant = (entries: any[]) => writeFileSync(grantFile, JSON.stringify({ version: 1, delegations: entries }));
     let previousPid = 0;
@@ -75,13 +75,30 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     writeFileSync(gate, "finish");
     await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((b: any) => b.id === chief.id).busy, { timeout: 15000 }).toBe(true);
     const approved = await api(local, "POST", `/api/threads/${chief.threadId}/respond`, { requestId: proposal.requestId, behavior: "allow" });
-    expect(approved.result.state).toBe("applied");
+    expect(approved.result.state).toBe("pending");
+    expect(approved.result.remoteRequestId).toBeTruthy();
+    const approvedCard = (await api(local, "GET", `/api/threads/${chief.threadId}/messages`)).messages.find((m:any)=>m.card?.requestId===proposal.requestId).card;
+    expect(approvedCard.answered).toBe("allow");
+    expect(approvedCard.teamSetupRequest.resumed).not.toBe(true);
+    expect((await api(local, "GET", "/api/decisions")).decisions.findLast((d:any)=>d.requestId===proposal.requestId).decision).toBe("user-approved");
+    expect((await api(remote, "GET", "/api/bots")).bots.find((b: any) => b.id === target.id).title).toBe(target.title);
+    const pendingTask = (await remoteReviews())[0];
+    expect(pendingTask).toBeDefined();
+    const pendingMessage = (await api(remote, "GET", `/api/threads/${pendingTask.threadId}/messages`)).messages.find((m: any) => m.card?.requestId === approved.result.remoteRequestId);
+    expect(pendingMessage.card.teamSetupRequest.result).toBeUndefined();
+    const duplicatePending = await api(local, "POST", `/api/threads/${chief.threadId}/respond`, { requestId: proposal.requestId, behavior: "allow" });
+    expect(duplicatePending.result.state).toBe("pending");
+    await api(remote, "POST", `/api/threads/${pendingTask.threadId}/respond`, {requestId: approved.result.remoteRequestId, behavior: "allow"});
+    await expect.poll(async () => (await api(local!, "GET", `/api/threads/${chief.threadId}/messages`)).messages.find((m: any) => m.card?.requestId === proposal.requestId)?.card.teamSetupRequest.result?.state, {timeout:15000}).toBe("applied");
+    const monitor = () => handoffs().find((n: any) => n.delegatedProposalId === approved.result.remoteRequestId);
+    await expect.poll(() => monitor()?.status, {timeout:15000}).toBe("completed");
+    await expect.poll(() => handoffs().find((n: any) => n.id === monitor()?.parentId)?.status, {timeout:15000}).toBe("completed");
+    expect(handoffs().find((n: any) => n.id === monitor()?.parentId).executions).toBe(2);
     expect((await api(remote, "GET", "/api/bots")).bots.find((b: any) => b.id === target.id).title).toBe("Reviewed remote lead");
     expect((await api(remote, "GET", "/api/bots")).bots.find((b: any) => b.id === target.id).chiefOfStaff).toBe(target.chiefOfStaff);
-    const remoteMessages = async () => (await api(remote, "GET", "/api/bots")).bots.flatMap((b: any) => b.tasks).filter((t: any) => t.openedBy?.name === "Remote Chief setup review");
     const countReceipts = async () => {
       let count = 0;
-      for (const task of await remoteMessages()) count += (await api(remote, "GET", `/api/threads/${task.threadId}/messages`)).messages.filter((m: any) => m.card?.teamSetupRequest).length;
+      for (const task of (await api(remote, "GET", "/api/bots")).bots.flatMap((b: any) => b.tasks)) count += (await api(remote, "GET", `/api/threads/${task.threadId}/messages`)).messages.filter((m: any) => m.card?.teamSetupRequest).length;
       return count;
     };
     expect(await countReceipts()).toBe(1);
@@ -119,11 +136,36 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
       await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((b: any) => b.id === chief.id).busy, { timeout: 15000 }).toBe(true);
       previousPid = JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).pid;
     }
+    // Partner can deny or invalidate its pending card after source approval.
+    for (const cancelled of [false, true]) {
+      previousPid = JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).pid;
+      capability = await begin();
+      const source = await api(local, "POST", "/api/internal/bot-deletion-requests", {home:remoteHome,targetBotId:delegated.id,reason:"pending remote decision fixture"}, capability, 201);
+      writeFileSync(gate,"finish");
+      await expect.poll(async () => !(await api(local!,"GET","/api/bots")).bots.find((b:any)=>b.id===chief.id).busy,{timeout:15000}).toBe(true);
+      const pending = await api(local,"POST",`/api/threads/${chief.threadId}/respond`,{requestId:source.requestId,behavior:"allow"});
+      expect(pending.result.state).toBe("pending");
+      let task: any, card: any;
+      for (const candidate of (await api(remote,"GET","/api/bots")).bots.flatMap((b:any)=>b.tasks)) {
+        const messages = (await api(remote,"GET",`/api/threads/${candidate.threadId}/messages`)).messages;
+        const found = messages.find((m:any)=>m.card?.requestId===pending.result.remoteRequestId);
+        if(found) {task=candidate;card=found;break;}
+      }
+      expect(card).toBeDefined();
+      if(cancelled) await api(remote,"PATCH",`/api/bots/${card.card.teamSetupRequest.botId}`,{title:"Changed pending reviewer"});
+      await api(remote,"POST",`/api/threads/${task.threadId}/respond`,{requestId:pending.result.remoteRequestId,behavior:cancelled?"allow":"deny"});
+      await expect.poll(async () => (await api(local!,"GET",`/api/threads/${chief.threadId}/messages`)).messages.find((m:any)=>m.card?.requestId===source.requestId)?.card.teamSetupRequest.result?.state,{timeout:15000}).toBe(cancelled?"cancelled":"denied");
+      const reviewNode=()=>handoffs().find((n:any)=>n.delegatedProposalId===pending.result.remoteRequestId);
+      await expect.poll(()=>handoffs().find((n:any)=>n.id===reviewNode()?.parentId)?.status,{timeout:15000}).toBe("completed");
+      expect(handoffs().find((n:any)=>n.id===reviewNode()?.parentId).executions).toBe(2);
+      expect((await api(remote,"GET","/api/bots")).bots.some((b:any)=>b.id===target.id)).toBe(true);
+    }
+    setGrant([{...grant, autoApply: true}]);
     await restartSource(true);
     previousPid = JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).pid;
     capability = await begin();
     const full = await api(local, "POST", "/api/internal/team-setup-requests", { home: remoteHome, plan: { reason: "Full source fixture", operations: [{ action: "update", botId: target.id, fields: { title: "Full remote lead" } }] } }, capability, 201);
-    expect(full.state).toBe("applied"); expect(await countReceipts()).toBe(2);
+    expect(full.state).toBe("applied"); expect(await countReceipts()).toBe(4);
     const deleted = await api(local, "POST", "/api/internal/bot-deletion-requests", { home: remoteHome, targetBotId: delegated.id, reason: "Full source delete fixture" }, capability, 201);
     expect(deleted.state, JSON.stringify(deleted)).toBe("applied");
     expect((await api(remote, "GET", "/api/bots")).bots.some((b: any) => b.id === target.id)).toBe(false);

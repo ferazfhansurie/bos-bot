@@ -18,10 +18,12 @@ export interface TeamSetupOperation {
 }
 
 export interface TeamSetupResult {
-  state: "applied" | "denied" | "cancelled" | "failed";
+  state: "applied" | "denied" | "cancelled" | "failed" | "pending";
   bots: Array<{ id: string; name: string; action: "created" | "updated" | "deleted"; section?: string; modelSelection?: ModelSelection }>;
   newTeams: string[];
   error?: string;
+  /** Accepted by the remote owner review; never resend this proposal. */
+  remoteRequestId?: string;
 }
 
 /** The complete, reviewed operation. It never accepts executable permissions. */
