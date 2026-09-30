@@ -486,6 +486,14 @@ describe("agents-proxy MCP surface", () => {
     expect(response.result.content[0].text).not.toContain("review card is visible");
   });
 
+  it("retains an untracked remote receipt without promising an automatic resume", async () => {
+    teamRequestResponse = { state: "pending", routing: "unavailable", review: "partner review", requestId: "known-review", reviewHome: "partner" };
+    const response = await callTool("propose_team_setup", { home: "partner", operations: [] });
+    expect(response.result.content[0].text).toContain("known-review");
+    expect(response.result.content[0].text).toContain("Do not repeat");
+    expect(response.result.content[0].text).not.toContain("resume you automatically");
+  });
+
   it("reports committed deletion cleanup attention without asking to apply deletion again", async () => {
     teamRequestResponse = { state: "applied", result: { state: "applied", error: "Saved, but cleanup needs attention", bots: [{ id: "bot-helper", action: "deleted" }], newTeams: [] } };
     const response = await callTool("propose_bot_deletion", { bot_id: "bot-helper" });

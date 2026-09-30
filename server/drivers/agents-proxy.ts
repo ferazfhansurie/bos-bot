@@ -1353,6 +1353,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     });
     const completed = completedProposalResult(result, deleting ? "the requested bot deletion" : "the requested team setup");
     if (completed) return completed;
+    if (result.routing === "unavailable") return { text: `Remote review ${String(result.requestId)} remains pending on ${String(result.reviewHome)}. Automatic result routing is unavailable. Do not repeat this proposal; retain the receipt for owner follow-up. Nothing has been confirmed applied. End this turn.` };
     return { text: `One review card is visible${result.review === "partner review" ? " on partner’s home" : ""}: ${String(result.title)}. Nothing has been applied. End this turn; the decision and structured result resume you automatically once. Do not ask again, poll, or repeat this proposal.` };
   }
   if (name === "create_bot") {

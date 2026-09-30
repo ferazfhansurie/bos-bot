@@ -25,18 +25,20 @@ test("prepares an existing peer binding and owner-only grant draft without modif
     const previous = JSON.stringify({ version: 1, delegations: [{ granteeHomeId: "other", granteeBotId: "other", peerSessionId: "existing-peer", peerTokenHash: digest, scopes: ["coordinate"], section: "", note: "fixture" }] });
     writeFileSync(live, previous);
     const draft = join(dir, "draft.json");
-    result = run(["grant", "--data-dir", dir, "--binding", binding, "--out", draft]);
+    result = run(["grant", "--data-dir", dir, "--binding", binding, "--section=ops", "--out", draft]);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(live, "utf8"), previous);
     const grants = JSON.parse(readFileSync(draft, "utf8"));
     assert.equal(grants.delegations.length, 2);
     assert.equal(grants.delegations[1].peerSessionId, "peer");
     assert.equal(grants.delegations[1].autoApply, false);
+    assert.equal(grants.delegations[1].section, "ops");
+    assert.notEqual(run(["grant", "--data-dir", dir, "--binding", binding, "--out", join(dir, "no-section.json")]).status, 0);
     if (process.platform !== "win32") assert.equal(statSync(draft).mode & 0o077, 0);
-    result = run(["grant", "--data-dir", dir, "--binding", binding, "--out", live]);
+    result = run(["grant", "--data-dir", dir, "--binding", binding, "--section=ops", "--out", live]);
     assert.notEqual(result.status, 0);
     writeFileSync(join(dir, "sessions.json"), JSON.stringify({ version: 1, sessions: [{ id: "admin", tokenHash: digest, scopes: ["peer", "admin"], expiresAt: Date.now() + 60000 }] }));
-    result = run(["grant", "--data-dir", dir, "--binding", binding, "--out", join(dir, "refused.json")]);
+    result = run(["grant", "--data-dir", dir, "--binding", binding, "--section=ops", "--out", join(dir, "refused.json")]);
     assert.notEqual(result.status, 0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -21,6 +21,9 @@ if (args[0] === "binding") {
   if (links?.length !== 1 || !/^omb_sess_[A-Za-z0-9_-]{43}$/.test(links[0].token)) throw new Error("Exactly one existing peer link is required");
   result = { version: 1, targetHomeId, granteeHomeId: homeId, granteeBotId, peerTokenHash: createHash("sha256").update(links[0].token).digest("hex") };
 } else if (args[0] === "grant") {
+  const sectionArg = args.find(arg => arg.startsWith("--section="));
+  const section = (sectionArg === undefined ? value("--section") : sectionArg.slice("--section=".length)).trim();
+  if (section.length > 60 || /[\r\n]/.test(section)) throw new Error("Invalid explicit section");
   const binding = read(value("--binding"));
   if (binding.version !== 1 || binding.targetHomeId !== homeId || ![binding.granteeHomeId, binding.granteeBotId].every(validId) || !/^[a-f0-9]{64}$/.test(binding.peerTokenHash)) throw new Error("Binding does not match this server");
   const matches = read(join(dataDir, "sessions.json")).sessions?.filter(session => session.tokenHash === binding.peerTokenHash && session.expiresAt > Date.now() &&
@@ -37,10 +40,10 @@ if (args[0] === "binding") {
     Object.keys(item).every(key => ["granteeHomeId", "granteeBotId", "peerSessionId", "peerTokenHash", "scopes", "section", "note", "autoApply", "expiresAt"].includes(key));
   if (previous.version !== 1 || Object.keys(previous).some(key => !["version", "delegations"].includes(key)) || !Array.isArray(previous.delegations) || !previous.delegations.every(validEntry)) throw new Error("Existing delegation file is invalid; refusing to replace it");
   const entry = { granteeHomeId: binding.granteeHomeId, granteeBotId: binding.granteeBotId, peerSessionId: matches[0].id, peerTokenHash: binding.peerTokenHash,
-    scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", note: "authorized by partner via firaz 2026-09-30", autoApply: false };
+    scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section, note: "authorized by partner via firaz 2026-09-30", autoApply: false };
   result = { version: 1, delegations: [...previous.delegations.filter(item => item.granteeHomeId !== entry.granteeHomeId || item.granteeBotId !== entry.granteeBotId), entry] };
 } else throw new Error("Use binding or grant");
 // Refuse an existing output; no accidental overwrite of another session's work.
 const descriptor = openSync(output, "wx", 0o600);
 try { writeFileSync(descriptor, JSON.stringify(result, null, 2) + "\n"); } finally { closeSync(descriptor); }
-console.log(`Prepared ${args[0]} draft: ${output}. No live delegation changed.`);
+console.log(`Prepared ${args[0]} draft: ${output}. No live delegation changed.${args[0] === "grant" ? ` Section: ${JSON.stringify(result.delegations.at(-1).section)}.` : ""}`);

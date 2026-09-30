@@ -59,7 +59,7 @@ export interface TeamSetupOptions {
   validateModel(selection: ModelSelection, current?: BotRecord): string | null;
   targetBusy(botId: string, sourceThreadId?: string): boolean;
   /** The caller resolves the effective mode of this exact conversation. */
-  autoApply?(botId: string, threadId: string): boolean;
+  autoApply?(botId: string, threadId: string, request?: TeamSetupRequest): boolean;
   validateChange?(before: BotRecord, fields: TeamSetupFields): void;
   maxBots: number;
   ownsThread(botId: string, threadId: string): boolean;
@@ -99,11 +99,16 @@ export class TeamSetupRequestService {
     return result;
   }
 
+  private autoApply(request: TeamSetupRequest) {
+    return this.options.delegation ? this.options.autoApply?.(request.botId, request.threadId, request)
+      : this.options.autoApply?.(request.botId, request.threadId);
+  }
+
   private validate(request: TeamSetupRequest, confirming: boolean, immediate = false): void {
     this.options.guard?.(request);
     const chief = this.chief(request.botId);
     if (!this.options.ownsThread(request.botId, request.threadId)) throw new TeamSetupError("The requesting conversation no longer exists", 409);
-    if (immediate && !this.options.autoApply?.(request.botId, request.threadId)) throw new TeamSetupError("Full Access is no longer enabled for this conversation", 409);
+    if (immediate && !this.autoApply(request)) throw new TeamSetupError(request.delegation ? "Scoped delegation auto-apply is no longer enabled" : "Full Access is no longer enabled for this conversation", 409);
     if (confirming && !immediate && !this.options.store.messagesFor(request.threadId).some((message) => message.card?.requestId === request.requestId && !message.card.answered && !message.card.dismissed)) throw new TeamSetupError("This setup card is no longer pending", 409);
     if (confirming && teamSetupRevision(chief) !== request.requesterRevision) throw new TeamSetupError("The Chief's settings changed. This setup was cancelled; review a new proposal.", 409);
     const existingTeams = new Set(this.options.teams().map(section));
@@ -192,13 +197,15 @@ export class TeamSetupRequestService {
   proposeDeletion(args: DeletionArgs) { return this.card(this.prepareDeletion(args), args.from); }
 
   async submit(args: SetupArgs & SubmitAuthority) {
-    if (this.options.autoApply?.(args.botId, args.threadId)) return this.applyImmediately(this.prepare(args), args.from, args.canCommit);
-    return { ...this.propose(args), applied: false, state: "pending" as const };
+    const request = this.prepare(args);
+    if (this.autoApply(request)) return this.applyImmediately(request, args.from, args.canCommit);
+    return { ...this.card(request, args.from), applied: false, state: "pending" as const };
   }
 
   async submitDeletion(args: DeletionArgs & SubmitAuthority) {
-    if (this.options.autoApply?.(args.botId, args.threadId)) return this.applyImmediately(this.prepareDeletion(args), args.from, args.canCommit);
-    return { ...this.proposeDeletion(args), applied: false, state: "pending" as const };
+    const request = this.prepareDeletion(args);
+    if (this.autoApply(request)) return this.applyImmediately(request, args.from, args.canCommit);
+    return { ...this.card(request, args.from), applied: false, state: "pending" as const };
   }
 
   private cardData(request: TeamSetupRequest, immediate = false): OptionCardData {
@@ -218,7 +225,7 @@ export class TeamSetupRequestService {
       }
     }
     if (!request.deletion) lines.push("\nDefault models apply to groups and new threads. Every existing thread keeps its current model and permissions.", "New bots start in Ask with connected apps disabled. Existing execution permissions are unchanged.");
-    lines.push(immediate ? "Full Access applies this request in the current turn without another confirmation." : "After this decision the Chief continues once with the result.");
+    lines.push(immediate ? (request.delegation ? "The deployment delegation auto-applies this scoped request without another confirmation; it grants no Full Access." : "Full Access applies this request in the current turn without another confirmation.") : "After this decision the Chief continues once with the result.");
     const title = request.deletion ? `Delete @${request.deletion.name}?` : `Apply setup for ${request.operations.length} ${request.operations.length === 1 ? "bot" : "bots"}?`;
     const detail = lines.join("\n");
     return {

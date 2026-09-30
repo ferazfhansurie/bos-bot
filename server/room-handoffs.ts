@@ -19,6 +19,8 @@ export type RoomAddress = Pick<RoomHandoff, "groupId" | "threadId" | "botId">;
 export const ROOM_HANDOFF_LIMITS = { depth: 4, requests: 24, executions: 48, lifetimeMs: 30 * 60_000, minRunwayMs: 10 * 60_000, queueMs: 60 * 60_000, hardCapMs: 4 * 60 * 60_000 };
 /** Renders elapsed milliseconds as whole minutes, or seconds under one minute. */
 const duration = (ms: number) => ms >= 60_000 ? `${Math.floor(ms / 60_000)}m` : `${Math.floor(ms / 1000)}s`;
+const remoteUncertainty = (n: RoomHandoff, reason: string) => n.botId.startsWith("rb-")
+  ? `${reason} Remote ${n.delegatedProposalId ? `proposal ${n.delegatedProposalId}` : `requestKey ${n.id}`} remains pending or its outcome is unknown. Ending this wait does not cancel work on the remote home; do not repeat it.` : reason;
 const terminal = (n: RoomHandoff) => ["completed", "failed", "cancelled"].includes(n.status);
 
 export interface RoomHandoffHooks {
@@ -55,7 +57,7 @@ export class RoomHandoffs {
       if (ids.size !== saved.length || saved.some(n => !ids.has(n.rootId) || ids.get(n.rootId)?.parentId ||
         (n.parentId && (!ids.has(n.parentId) || ids.get(n.parentId)?.rootId !== n.rootId)))) throw new Error("Invalid room handoff tree");
       for (const n of saved) {
-        if (!terminal(n)) { n.status = "failed"; n.result = "Interrupted by server restart; not replayed."; }
+        if (!terminal(n)) { n.status = "failed"; n.result = remoteUncertainty(n, "Interrupted by server restart; not replayed."); }
         this.nodes.set(n.id, n);
       }
       this.save();
@@ -168,6 +170,7 @@ export class RoomHandoffs {
     target: RoomAddress, key: string, text: string, approvalGranted = false,
     rework = false, sourceText = "", delegatedProposalId?: string): { node: RoomHandoff; duplicate: boolean } {
     if (this.loadError) throw new Error(this.loadError);
+    if (delegatedProposalId !== undefined && !/^[\w-]{1,128}$/.test(delegatedProposalId)) throw new Error("Invalid delegated proposal receipt");
     let parent = parentId ? this.nodes.get(parentId) : this.nodes.get(generation);
     if (parentId && (!parent || parent.status !== "running")) throw new Error("The originating room task is no longer running");
     if (parent && (parent.groupId !== source.groupId || parent.threadId !== source.threadId || parent.botId !== source.botId)) {
@@ -186,7 +189,7 @@ export class RoomHandoffs {
         existing.kind !== kind || existing.delegatedProposalId !== delegatedProposalId) throw new Error("request_key was already used for different work");
       return { node: existing, duplicate: true };
     }
-    if (!rework && this.children(parent.id).some(n => n.kind === kind &&
+    if (!rework && !delegatedProposalId && this.children(parent.id).some(n => n.kind === kind &&
       n.groupId === target.groupId && n.botId === target.botId && n.status === "completed")) {
       throw new Error("This agent already completed your assignment. Do not send acknowledgements or approvals as new work. Finish with your decision; results return automatically. Only use rework=true for concrete additional work.");
     }
@@ -237,7 +240,7 @@ export class RoomHandoffs {
   cancelTree(node: RoomHandoff, reason: string, status: "failed" | "cancelled" = "cancelled") {
     for (const child of this.children(node.id)) if (!terminal(child)) this.cancelTree(child, reason, status);
     if (!terminal(node)) {
-      node.status = status; node.result = reason;
+      node.status = status; node.result = remoteUncertainty(node, reason);
       this.controllers.get(node.id)?.abort();
     }
     // Settlement closes the paused span now, not at the next periodic tick.

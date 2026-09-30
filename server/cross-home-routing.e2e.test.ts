@@ -73,5 +73,14 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     expect(handoffs().filter((node: any) => !node.parentId).map((node: any) => node.executions)).toEqual([2, 2]);
     expect((await api(remote, "GET", "/api/bots")).bots.find((bot: any) => bot.id === target.id).title).toBe("Reviewed remote lead");
     expect((await api(remote, "GET", "/api/bots")).bots.find((bot: any) => bot.id === target.id).chiefOfStaff).toBe(target.chiefOfStaff);
+    await expect.poll(async () => !(await api(local!, "GET", "/api/bots")).bots.find((bot: any) => bot.id === chief.id).busy, { timeout: 15000 }).toBe(true);
+    previousPid = JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).pid;
+    capability = await begin();
+    for (let i = 0; i < 24; i++) await api(local, "POST", "/api/internal/coordinate-bots", { botIds: [delegated.id], requestKey: `budget-${i}`, message: "fixture queued only" }, capability);
+    const untracked = await api(local, "POST", "/api/internal/team-setup-requests", { home: remoteHome, plan: { reason: "tracking budget fixture", operations: [{ action: "update", botId: target.id, fields: { title: "Pending only" } }] } }, capability, 201);
+    expect(untracked.state).toBe("pending"); expect(untracked.routing).toBe("unavailable");
+    expect(untracked.requestId).toMatch(/^[\w-]+$/); expect(untracked.warning).toMatch(/do not repeat/i);
+    expect(handoffs().some((node: any) => node.delegatedProposalId === untracked.requestId)).toBe(false);
+    expect((await api(remote, "GET", "/api/bots")).bots.find((bot: any) => bot.id === target.id).title).toBe("Reviewed remote lead");
   } finally { await local?.close(); await remote.close(); rmSync(gates, { recursive: true, force: true }); }
 }, 120000);

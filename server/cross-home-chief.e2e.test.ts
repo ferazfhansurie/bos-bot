@@ -62,9 +62,14 @@ test("real peer endpoints deny ungranted authority, recheck revocation at review
     const duplicate = await api("POST", "/api/delegated/coordinate", coordinate, token);
     expect(duplicate.requestId).toBe(first.requestId); expect(duplicate.duplicate).toBe(true);
     await expect.poll(async () => (await api("GET", `/api/delegated/coordinate/${first.requestId}`, undefined, token)).status, { timeout: 30000 }).toBe("completed");
+    expect((await api("GET", `/api/delegated/coordinate/${first.requestId}`, undefined, token)).result).toBe("bounded fixture reply");
     const after = (await api("GET", "/api/bots")).bots.find((bot: any) => bot.id === recipient.id);
     expect(after.approvalMode).toBe(recipient.approvalMode);
-    expect(after.tasks.find((task: any) => task.openedBy?.name === "Remote Chief").approvalMode).toBe("ask");
+    const remoteTask = after.tasks.find((task: any) => task.openedBy?.name === "Remote Chief");
+    expect(remoteTask.approvalMode).toBe("ask");
+    const transcript = (await api("GET", `/api/threads/${remoteTask.threadId}/messages`)).messages;
+    expect(transcript.some((message: any) => message.role === "user" && message.text?.includes(coordinate.message))).toBe(false);
+    expect(transcript.find((message: any) => message.roomRequest?.id === first.requestId && message.roomRequest.phase === "request")?.from?.name).toContain("Remote Chief jarvis");
     const durable = JSON.parse(readFileSync(join(fixture.info.dataDir, "delegated-jobs.json"), "utf8"));
     expect(durable.filter((job: any) => job.requestKey === "one")).toHaveLength(1);
     await expect.poll(async () => (await api("GET", "/api/bots")).bots.find((bot: any) => bot.id === recipient.id).busy, { timeout: 15000 }).toBe(false);
@@ -109,4 +114,38 @@ test("delegated deletion refuses a target with running work", async () => {
     const threads = (await api("GET", "/api/bots")).body.bots.find((bot: any) => bot.id === recipient.id).tasks;
     expect(threads.some((task: any) => task.openedBy?.name === "Remote Chief")).toBe(false);
   } finally { await fixture.close(); rmSync(dir, { recursive: true, force: true }); }
+}, 60000);
+
+test("named-section delegation binds peer-only authority and operation-specific autoApply", async () => {
+  const fixture = await launchVerificationServer();
+  try {
+    const api = async (method: string, path: string, body?: unknown, token?: string) => {
+      const res = await fetch(fixture.info.url + path, { method, headers: { origin: fixture.info.url, "content-type": "application/json",
+        ...(token ? { authorization: `Bearer ${token}`, "x-bos-grantee-home": "firaz", "x-bos-grantee-bot": "jarvis" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+      return { status: res.status, body: await res.json() as any };
+    };
+    const general = (await api("GET", "/api/bots")).body.bots[0];
+    const target = (await api("POST", "/api/bots", { name: "Section target", title: "Lead", section: "work", modelSelection: general.modelSelection })).body.bot;
+    const reviewer = (await api("POST", "/api/bots", { name: "Section reviewer", title: "Reviewer", section: "work", modelSelection: general.modelSelection })).body.bot;
+    const pair = async (scopes: string[]) => {
+      const code = (await api("POST", "/api/auth/pairing", { scopes })).body.code;
+      return (await api("POST", "/api/auth/pair", { code })).body;
+    };
+    const peer = await pair(["peer"]);
+    const entry = (session: any, scopes: string[], autoApply = false) => ({ granteeHomeId: "firaz", granteeBotId: "jarvis", peerSessionId: session.session.id,
+      peerTokenHash: createHash("sha256").update(session.token).digest("hex"), scopes, section: "work", autoApply, note: "fixture" });
+    const config = (entries: any[]) => writeFileSync(join(fixture.info.dataDir, "delegations.json"), JSON.stringify({ version: 1, delegations: entries }));
+    for (const scopes of [["admin"], ["client"]]) {
+      const nonPeer = await pair(scopes); config([entry(nonPeer, ["coordinate", "bots:configure"])]);
+      expect((await api("GET", "/api/delegated/roster", undefined, nonPeer.token)).status).toBe(403);
+    }
+    config([entry(peer, ["coordinate", "bots:configure"], true), entry(peer, ["bots:delete"], false)]);
+    expect((await api("GET", "/api/delegated/roster", undefined, peer.token)).body.bots.map((bot: any) => bot.id).sort()).toEqual([target.id, reviewer.id].sort());
+    const update = await api("PATCH", `/api/delegated/bots/${target.id}`, { reason: "scoped auto-apply", fields: { title: "Updated" } }, peer.token);
+    expect(update.status).toBe(201); expect(update.body.state).toBe("applied");
+    const deletion = await api("DELETE", `/api/delegated/bots/${target.id}`, { reason: "review only" }, peer.token);
+    expect(deletion.status).toBe(201); expect(deletion.body.state).toBe("pending");
+    expect((await api("GET", "/api/bots")).body.bots.some((bot: any) => bot.id === target.id)).toBe(true);
+    expect((await api("PATCH", `/api/delegated/bots/${general.id}`, { reason: "outside", fields: { title: "No" } }, peer.token)).status).toBe(403);
+  } finally { await fixture.close(); }
 }, 60000);
