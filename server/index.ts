@@ -12079,7 +12079,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (path.startsWith("/api/remote-full/")) {
       if (auth.kind !== "session" || !auth.scopes.includes("client") || auth.via === "ticket") return json(res, 403, { error: "Paired desktop session required" });
-      if (method === "GET" && path === "/api/remote-full/status") return json(res, 200, { protocol: 1, environmentId: ENVIRONMENT_ID, enrolled: Boolean(readRemoteFullEnrollment(DATA_DIR, ENVIRONMENT_ID)) });
+      if (method === "GET" && path === "/api/remote-full/status") {
+        res.setHeader("cache-control", "no-store");
+        return json(res, 200, { protocol: 1, environmentId: ENVIRONMENT_ID, ...await remoteFull.status(auth.session.id) });
+      }
       if (method !== "POST") return json(res, 405, { error: "Method not allowed" });
       try {
         if (path === "/api/remote-full/prepare") return json(res, 200, await remoteFull.prepare(auth.session.id, await readBody(req)));

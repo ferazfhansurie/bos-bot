@@ -3,16 +3,26 @@ type Candidate = { botId: string; threadId: string; name: string; busy: boolean 
 /** Selection is an untrusted request. Electron independently fetches the exact
  * server snapshot and owns both sign-in and the final confirmation dialog. */
 export function RemoteFullAccess({ botId, threadId, busy, candidates }: { botId: string; threadId: string; busy: boolean; candidates: Candidate[] }) {
-  const [available, setAvailable] = useState(false), [pending, setPending] = useState(false), [error, setError] = useState("");
+  const key = `${botId}:${threadId}`;
+  const [available, setAvailable] = useState<string | null>(null), [pending, setPending] = useState(false), [error, setError] = useState("");
   const [open, setOpen] = useState(false), [selected, setSelected] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
-    void window.ogb?.remoteApprovals?.status().then(s => { if (alive) setAvailable(s.protocol === 1 && s.enrolled); }).catch(() => {});
+    setAvailable(null); setOpen(false);
+    void window.ogb?.remoteApprovals?.status().then(s => { if (alive) setAvailable(s.protocol === 1 && s.enrolled === true && s.state === "verified" ? key : null); }).catch(() => { if (alive) setAvailable(null); });
     return () => { alive = false; };
-  }, [botId, threadId]);
-  if (!available) return null;
+  }, [botId, threadId, key]);
+  if (available !== key) return null;
   return <span className="relative"><button type="button" className="h-8 rounded-full border border-hairline/20 px-3 text-[13px]" disabled={busy || pending}
-    onClick={() => { setSelected([botId]); setError(""); setOpen(true); }}>{pending ? "Confirming…" : "Full access…"}</button>
+    onClick={async () => {
+      setPending(true); setError("");
+      try {
+        const status = await window.ogb?.remoteApprovals?.status();
+        if (status?.protocol !== 1 || status.enrolled !== true || status.state !== "verified") { setAvailable(null); return; }
+        setSelected([botId]); setOpen(true);
+      } catch { setAvailable(null); }
+      finally { setPending(false); }
+    }}>{pending ? "Confirming…" : "Full access…"}</button>
     {open && <div role="dialog" aria-label="Review remote Full access" className="absolute bottom-10 left-0 z-50 w-80 rounded-lg border border-hairline/30 bg-raised p-4 shadow-lg">
       <p>Choose bots. Full applies to each bot default and its selected task. Other existing tasks keep their access.</p>
       {candidates.map(c => <label key={c.botId} className="my-2 block"><input type="checkbox" checked={selected.includes(c.botId)} disabled={pending || c.busy}

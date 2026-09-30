@@ -19,9 +19,10 @@ function fixture() {
   delete sibling.approvalMode; delete sibling.modelSelection;
   let now = 10_000, valid = true, owner = true, enrolled: RemoteFullEnrollment | null = enrollment, busy = false, providerRevision = "initial";
   let challenge: any;
-  const authority = vi.fn(async (action, body) => {
+  const authority = vi.fn(async (action, body, _credential: string) => {
     if (!owner) throw new Error("revoked owner");
-    if (action === "prepare") { challenge = structuredClone(body.challenge); return {}; }
+    if (action === "status") return { enrolled: true, probe: body.probe };
+    if (action === "prepare") { challenge = structuredClone(body.challenge); return { prepared: true, state: "verified" }; }
     return { challenge, signer, ownerUserId: "verified-owner" };
   });
   const service = new RemoteFullService({ store, enrollment: () => enrolled, supported: () => true, providerRevision: () => providerRevision, busy: () => busy, sessionValid: id => valid && id === "paired", now: () => now, authority });
@@ -83,5 +84,51 @@ describe("remote Full owner grants", () => {
     await expect(f.service.commit("paired", f.signed(c))).rejects.toThrow();
     f.set({ valid: false }); release(); await expect(first).rejects.toThrow();
     expect(approvalModeFor(f.a)).toBe("ask");
+  });
+});
+
+describe("online enrollment readiness", () => {
+  it("missing local identity is not ready and makes no authority request", async () => {
+    const f = fixture(); f.set({ enrolled: null });
+    expect(await f.service.status("paired")).toEqual({ enrolled: false, state: "missing" }); expect(f.authority).not.toHaveBeenCalled();
+  });
+  it.each(["pending", "rejected", "lost-reply", "revoked", "unavailable", "conflict", "stale-response"])("local credentials alone do not enable status or prepare: %s", async reason => {
+    const f = fixture();
+    f.authority.mockImplementation(async (action, body) => {
+      if (["revoked", "unavailable", "lost-reply"].includes(reason)) throw new Error(reason);
+      if (action === "status") return { enrolled: reason === "stale-response", probe: reason === "stale-response" ? { ...body.probe, nonce: "old" } : body.probe };
+      return { prepared: false, state: "pending" };
+    });
+    expect((await f.service.status("paired")).enrolled).toBe(false);
+    await expect(f.prepare()).rejects.toThrow(); expect(approvalModeFor(f.a)).toBe("ask");
+  });
+  it("old authority prepare acknowledgements without verified binding are rejected", async () => {
+    const f = fixture(); f.authority.mockResolvedValue({ prepared: true } as any); await expect(f.prepare()).rejects.toThrow();
+  });
+  it("successful exact retry transitions pending to verified without changing the local credential", async () => {
+    const f = fixture(); let registered = false;
+    f.authority.mockImplementation(async (action, body, credential) => {
+      expect(credential).toBe(enrollment.credential);
+      if (action === "status") return { enrolled: registered, probe: body.probe };
+      return { prepared: registered, state: registered ? "verified" : "pending" };
+    });
+    expect(await f.service.status("paired")).toEqual({ enrolled: false, state: "pending" }); await expect(f.prepare()).rejects.toThrow();
+    registered = true;
+    expect(await f.service.status("paired")).toEqual({ enrolled: true, state: "verified" }); await expect(f.prepare()).resolves.toBeTruthy();
+    registered = false; expect((await f.service.status("paired")).enrolled).toBe(false); await expect(f.prepare()).rejects.toThrow();
+  });
+  it.each(["credential", "session", "expiry"])("late readiness is discarded after %s changes", async reason => {
+    const f = fixture(); let release!: () => void;
+    f.authority.mockImplementation(async (_action, body) => { await new Promise<void>(r => { release = r; }); return { enrolled: true, probe: body.probe }; });
+    const pending = f.service.status("paired");
+    if (reason === "credential") f.set({ enrolled: { ...enrollment, credential: "replacement" } });
+    if (reason === "session") f.set({ valid: false });
+    if (reason === "expiry") f.set({ now: 200_000 });
+    release(); expect(await pending).toEqual({ enrolled: false, state: "unavailable" });
+  });
+  it("a lost enrollment response is resolved only by fresh authority proof, never a local success flag", async () => {
+    const f = fixture(); const first = await f.service.status("paired"); expect(first.state).toBe("verified");
+    f.authority.mockRejectedValue(new Error("offline")); expect((await f.service.status("paired")).enrolled).toBe(false);
+    await expect(f.prepare()).rejects.toThrow();
   });
 });

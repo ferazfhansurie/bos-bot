@@ -18,7 +18,7 @@ export async function confirmRemoteFull({ environment, targets, request, ownerSi
       canonical(challenge.operations.map(({ botId, threadId, updateBotDefault }) => ({ botId, threadId, updateBotDefault }))) !== canonical(targets)) throw new Error("Server identity or targets changed");
     const detail = [`Server: ${environment.origin}`, `Environment: ${challenge.environmentId}`, `Installation: ${challenge.installationId}`, `Server public key: ${challenge.serverKey}`, `Owner account: ${account.user.email}`,
       ...challenge.operations.map(op => `\n${op.name} [${op.botId}]\nTask: ${op.title} [${op.threadId}]\nProvider: ${op.modelSelection.instanceId} / ${op.modelSelection.model} / ${op.modelSelection.effort ?? "default effort"} / ${op.modelSelection.variant ?? "default variant"}\nFull access: ${op.updateBotDefault ? "bot default AND this task" : "this task only"}`),
-      "\nThe first owner confirmation also binds this installation to this exact server. Full access allows these tasks to run tools without individual approval. This does not start or resume tasks. Other existing tasks keep their current access."].join("\n");
+      "\nThis installation must already have a verified ownership binding to this exact server. Full access allows these tasks to run tools without individual approval. This does not start or resume tasks. Other existing tasks keep their current access."].join("\n");
     if (!stillCurrent() || !(await confirm(detail)) || !stillCurrent()) throw new Error("Confirmation cancelled or workspace changed");
     if (challenge.expiresAt <= now()) throw new Error("Confirmation expired");
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");

@@ -9,6 +9,7 @@ import type { Store } from "./store.ts";
 export const AUTHORITY_ORIGIN = "https://accounts.openmausbot.com";
 const enrollmentSchema = z.object({ environmentId: z.string().uuid(), installationId: z.string().uuid(), audience: z.string().url(), privateKey: z.string().min(32).max(4096), credential: z.string().regex(/^omb_install_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/) }).strict();
 export type RemoteFullEnrollment = z.infer<typeof enrollmentSchema>;
+// Reads only a pending identity candidate. Readiness always requires online CP proof.
 export function readRemoteFullEnrollment(dataDir: string, environmentId: string): RemoteFullEnrollment | null {
   try {
     const e = enrollmentSchema.parse(JSON.parse(readFileSync(join(dataDir, ".remote-full", "owner.json"), "utf8")));
@@ -46,6 +47,21 @@ export class RemoteFullService {
     if (!response.ok) throw new Error("Verified installation owner confirmation required");
     return response.json();
   }
+  async status(sessionId: string): Promise<{ enrolled: boolean; state: "missing" | "pending" | "verified" | "unavailable" }> {
+    if (!this.options.sessionValid(sessionId)) throw new Error("Paired session required");
+    const enrollment = this.options.enrollment();
+    if (!enrollment) return { enrolled: false, state: "missing" };
+    try {
+      const probe = { protocol: "bos.remote-full.status.v1", installationId: enrollment.installationId,
+        environmentId: enrollment.environmentId, audience: enrollment.audience,
+        serverKey: createPublicKey(enrollment.privateKey).export({ format: "jwk" }).x!, nonce: randomBytes(32).toString("hex"), expiresAt: this.now() + 120_000 };
+      const serverSignature = sign(null, Buffer.from(canonical(probe)), enrollment.privateKey).toString("base64url");
+      const proof = await this.authority("status", { probe, serverSignature }, enrollment.credential);
+      if (!this.options.sessionValid(sessionId) || this.now() >= probe.expiresAt || canonical(this.options.enrollment()) !== canonical(enrollment) ||
+          !proof || canonical(proof.probe) !== canonical(probe) || typeof proof.enrolled !== "boolean") throw new Error("Stale readiness response");
+      return proof.enrolled ? { enrolled: true, state: "verified" } : { enrolled: false, state: "pending" };
+    } catch { return { enrolled: false, state: "unavailable" }; }
+  }
   private operation(target: { botId: string; threadId: string; updateBotDefault: boolean }): RemoteFullOperation {
     const { store, supported, busy } = this.options;
     const bot = store.bot(target.botId), task = store.taskByThread(target.botId, target.threadId);
@@ -68,7 +84,10 @@ export class RemoteFullService {
     // Reserve before awaiting: concurrent prepares remain bounded.
     this.pending.set(challenge.nonce, pending);
     const serverSignature = sign(null, Buffer.from(canonical(challenge)), enrollment.privateKey).toString("base64url");
-    try { await this.authority("prepare", { challenge, serverSignature }, enrollment.credential); }
+    try {
+      const proof = await this.authority("prepare", { challenge, serverSignature }, enrollment.credential);
+      if (proof?.prepared !== true || proof.state !== "verified" || !this.options.sessionValid(sessionId) || this.now() >= challenge.expiresAt || canonical(this.options.enrollment()) !== canonical(enrollment)) throw new Error("Verified owner enrollment required");
+    }
     catch (error) { this.pending.delete(challenge.nonce); throw error; }
     return { challenge, serverSignature };
   }

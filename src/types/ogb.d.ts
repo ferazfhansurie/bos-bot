@@ -174,7 +174,7 @@ const __APP_VERSION__: string;
       };
       /** Local-shell-only bridge for trusted approval-mode transitions. It is
        * absent on remote server pages and in older desktop builds. */
-      remoteApprovals?: { status(): Promise<{ protocol: number; enrolled: boolean }>; request(targets: Array<{ botId: string; threadId: string; updateBotDefault: boolean }>): Promise<{ applied: boolean; nonce: string; botIds: string[] }> };
+      remoteApprovals?: { status(): Promise<{ protocol: number; enrolled: boolean; state?: "missing" | "pending" | "verified" | "unavailable" }>; request(targets: Array<{ botId: string; threadId: string; updateBotDefault: boolean }>): Promise<{ applied: boolean; nonce: string; botIds: string[] }> };
       approvals?: {
         setMode(
           botId: string,

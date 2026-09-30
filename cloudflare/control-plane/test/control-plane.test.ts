@@ -689,7 +689,7 @@ describe("remote Full installation owner authority", () => {
     const c = challenge(installed.installation.id), ref = { installationId: c.installationId, nonce: c.nonce }, approval = { ...ref, challenge: c, signer: "a".repeat(43) };
     expect((await call("/v1/remote-full/prepare", { method: "POST", token: owner.token, body: prepared(c) })).status).toBe(401);
     expect((await call("/v1/remote-full/prepare", { method: "POST", token: other.credential, body: prepared(c) })).status).toBe(403);
-    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(200);
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(403);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: installed.credential, body: approval })).status).toBe(401);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: stranger.token, body: approval })).status).toBe(403);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { ...approval, challenge: { ...c, audience: "https://evil.invalid" } } })).status).toBe(403);
@@ -699,12 +699,13 @@ describe("remote Full installation owner authority", () => {
     expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(409);
     await permit(c, owner.userId);
     expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(200);
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(200);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(200);
     const verified = await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref });
     expect(verified.status).toBe(200); expect((await verified.json<{ ownerUserId: string }>()).ownerUserId).toBe(owner.userId);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(403);
     const moved = { ...c, nonce: "c".repeat(64), environmentId: "different-server" };
-    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(moved) })).status).toBe(200);
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(moved) })).status).toBe(403);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { ...approval, nonce: moved.nonce, challenge: moved } })).status).toBe(403);
     await call(`/v1/installations/${c.installationId}`, { method: "DELETE", token: owner.token });
     expect((await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref })).status).toBe(401);
@@ -767,7 +768,50 @@ describe("remote Full installation owner authority", () => {
     expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(409);
     await permit(c, owner.userId);
     expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(200);
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(200);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(200);
+  });
+  it("readiness and prepare require the exact current binding, including after lost enrollment replies and revocation", async () => {
+    const owner = await signIn("readiness-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);
+    const probeFor = (input = c) => ({ protocol: "bos.remote-full.status.v1", installationId: input.installationId,
+      environmentId: input.environmentId, serverKey: input.serverKey, audience: input.audience, nonce: "e".repeat(64), expiresAt: Date.now() + 110_000 });
+    const status = async (input = c, credential = installed.credential) => {
+      const probe = probeFor(input);
+      return call("/v1/remote-full/status", { method: "POST", token: credential, body: { probe, serverSignature: sign(null, Buffer.from(canonical(probe)), serverKeys.privateKey).toString("base64url") } });
+    };
+    const pending = await status(); expect(pending.status).toBe(200); expect(await pending.json()).toMatchObject({ enrolled: false });
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(403);
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(409);
+    expect(await (await status()).json()).toMatchObject({ enrolled: false });
+    await permit(c, owner.userId);
+    // Simulate the client losing a committed enrollment response. A fresh
+    // authenticated read proves the result without trusting local file state.
+    await enroll(c, owner.token, installed.credential, owner.userId);
+    expect(await (await status()).json()).toMatchObject({ enrolled: true, probe: { environmentId: c.environmentId, installationId: c.installationId, serverKey: c.serverKey, audience: c.audience } });
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(200);
+    const before = await env.DB.prepare("SELECT COUNT(*) AS n FROM remote_full_challenges").first<{ n: number }>(); expect(before?.n).toBe(0);
+    for (const wrong of [{ ...c, audience: "https://wrong.invalid" }, { ...c, environmentId: crypto.randomUUID() }]) {
+      expect(await (await status(wrong)).json()).toMatchObject({ enrolled: false });
+      expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(wrong) })).status).toBe(403);
+    }
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(200);
+    await env.DB.prepare("UPDATE remote_full_bindings SET explicitly_enrolled = 0").run();
+    expect(await (await status()).json()).toMatchObject({ enrolled: false });
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared({ ...c, nonce: "f".repeat(64) }) })).status).toBe(403);
+    await enroll(c, owner.token, installed.credential, owner.userId);
+    const rotated = await call(`/v1/installations/${c.installationId}/credentials/rotate`, { method: "POST", token: owner.token });
+    const fresh = await rotated.json<{ credential: string }>();
+    expect((await status()).status).toBe(401); expect(await (await status(c, fresh.credential)).json()).toMatchObject({ enrolled: true });
+    await call(`/v1/installations/${c.installationId}`, { method: "DELETE", token: owner.token });
+    expect((await status(c, fresh.credential)).status).toBe(401);
+    expect((await call("/v1/remote-full/prepare", { method: "POST", token: fresh.credential, body: prepared({ ...c, nonce: "f".repeat(64) }) })).status).toBe(401);
+  });
+  it("readiness rejects expired or wrongly signed probes and installation mismatches", async () => {
+    const owner = await signIn("probe-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);
+    const good = { protocol: "bos.remote-full.status.v1", installationId: c.installationId, environmentId: c.environmentId, serverKey: c.serverKey, audience: c.audience, nonce: "a".repeat(64), expiresAt: Date.now() + 110_000 };
+    for (const probe of [{ ...good, expiresAt: 1 }, { ...good, installationId: crypto.randomUUID() }, { ...good, serverKey: generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }).x! }]) {
+      expect((await call("/v1/remote-full/status", { method: "POST", token: installed.credential, body: { probe, serverSignature: sign(null, Buffer.from(canonical(probe)), serverKeys.privateKey).toString("base64url") } })).status).toBe(403);
+    }
   });
   it("rejects unregistered, expired and oversized-window challenges", async () => {
     const owner = await signIn("expiry-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);

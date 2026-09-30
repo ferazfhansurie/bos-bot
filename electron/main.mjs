@@ -2474,7 +2474,7 @@ function remoteFullContext(event) {
   return { environment, dispose: () => { if (!contents.isDestroyed()) contents.removeListener("did-start-navigation", navigation); }, stillCurrent: () => !navigated && !contents.isDestroyed() && contents.mainFrame === frame &&
     activeEnvironment(environmentsState)?.id === environment.id && activeEnvironment(environmentsState)?.origin === environment.origin && new URL(contents.getURL()).origin === environment.origin,
     request: async (action, body) => {
-      const response = await contents.session.fetch(`${environment.origin}/api/remote-full/${action}`, { method: body === undefined ? "GET" : "POST", redirect: "error", credentials: "include", signal: AbortSignal.timeout(15000),
+      const response = await contents.session.fetch(`${environment.origin}/api/remote-full/${action}`, { method: body === undefined ? "GET" : "POST", redirect: "error", cache: "no-store", credentials: "include", signal: AbortSignal.timeout(15000),
         headers: { origin: environment.origin, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       if (!response.ok) throw new Error("Remote approval unavailable. Check enrollment, owner and unchanged idle targets.");
       const reader = response.body?.getReader();
@@ -2499,7 +2499,7 @@ ipcMain.handle("remote-full:request", workspaceOnly(async (event, targets) => {
   remoteFullInProgress = true;
   try {
     const status = await context.request("status");
-    if (status.protocol !== 1 || !status.enrolled || typeof status.environmentId !== "string" || !/^[a-f0-9-]{36}$/i.test(status.environmentId) ||
+    if (status.protocol !== 1 || status.state !== "verified" || status.enrolled !== true || typeof status.environmentId !== "string" || !/^[a-f0-9-]{36}$/i.test(status.environmentId) ||
         (context.environment.environmentId && context.environment.environmentId !== status.environmentId)) throw new Error("Server identity changed or owner enrollment is missing");
     return await confirmRemoteFull({ ...context, environment: { ...context.environment, environmentId: status.environmentId }, targets,
     pinEnvironment: async environmentId => {

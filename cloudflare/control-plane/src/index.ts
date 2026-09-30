@@ -80,7 +80,7 @@ async function route(
   }
 
   const auth = createAuth(env, ctx, config, requestId);
-  const remoteGrant = /^\/v1\/remote-full\/(enroll|prepare|authorize|verify)$/.exec(url.pathname);
+  const remoteGrant = /^\/v1\/remote-full\/(enroll|status|prepare|authorize|verify)$/.exec(url.pathname);
   if (request.method === "POST" && remoteGrant) return remoteFull(request, env, auth, remoteGrant[1]);
   if (request.method === "GET" && url.pathname === "/v1/me") {
     const session = await accountSession(request, auth);

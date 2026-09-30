@@ -7,6 +7,14 @@ import { z } from "zod";
 
 const reference = z.object({ installationId: z.string().uuid(), nonce: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const approve = reference.extend({ challenge: z.unknown(), signer: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
+const bindingProbe = z.object({ protocol: z.literal("bos.remote-full.status.v1"), installationId: z.string().uuid(),
+  environmentId: z.string().uuid(), serverKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  audience: z.string().url(), nonce: z.string().regex(/^[a-f0-9]{64}$/), expiresAt: z.number().int() }).strict();
+const activeBindingSQL = `SELECT 1 FROM remote_full_bindings b JOIN installations i ON i.id = b.installation_id
+  JOIN installation_credentials c ON c.installation_id = i.id
+  WHERE b.installation_id = ? AND b.environment_id = ? AND b.server_key = ? AND b.audience = ?
+  AND b.explicitly_enrolled = 1 AND b.owner_user_id = i.owner_user_id AND i.revoked_at IS NULL
+  AND c.lookup_id = ? AND c.revoked_at IS NULL AND c.expires_at > ?`;
 export async function remoteFull(request: Request, env: Env, auth: ControlPlaneAuth, action: string): Promise<Response> {
   const now = Date.now();
   const body = await readBoundedJSON(request);
@@ -54,6 +62,19 @@ export async function remoteFull(request: Request, env: Env, auth: ControlPlaneA
     if (!bound) throw new HTTPError(409, "owner_binding_conflict");
     return json({ enrolled: true });
   }
+  if (action === "status") {
+    const installation = await requireInstallation(request, env);
+    const p = z.object({ probe: bindingProbe, serverSignature: z.string().regex(/^[A-Za-z0-9_-]{86}$/) }).strict().safeParse(body);
+    if (!p.success) throw new HTTPError(400, "invalid_request");
+    const probe = p.data.probe;
+    if (probe.installationId !== installation.installation_id || probe.expiresAt <= now || probe.expiresAt > now + 120_000) throw new HTTPError(403, "forbidden");
+    try {
+      if (!verify(null, Buffer.from(canonical(probe)), createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: probe.serverKey } }), Buffer.from(p.data.serverSignature, "base64url"))) throw new Error("signature");
+    } catch { throw new HTTPError(403, "forbidden"); }
+    const ready = await env.DB.prepare(activeBindingSQL).bind(probe.installationId, probe.environmentId, probe.serverKey, probe.audience, installation.lookup_id, now).first();
+    // Echo the fresh signed probe; never expose owner identity or credentials.
+    return json({ enrolled: Boolean(ready), probe });
+  }
   if (action === "prepare") {
     const installation = await requireInstallation(request, env);
     let challenge;
@@ -63,13 +84,15 @@ export async function remoteFull(request: Request, env: Env, auth: ControlPlaneA
       if (!verify(null, Buffer.from(canonical(challenge)), createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: challenge.serverKey } }), Buffer.from(input.serverSignature, "base64url"))) throw new Error("invalid server signature");
     } catch { throw new HTTPError(400, "invalid_request"); }
     if (challenge.installationId !== installation.installation_id || challenge.expiresAt <= now || challenge.expiresAt > now + 120_000) throw new HTTPError(403, "forbidden");
+    const bindingArgs = [challenge.installationId, challenge.environmentId, challenge.serverKey, challenge.audience, installation.lookup_id, now];
+    if (!await env.DB.prepare(activeBindingSQL).bind(...bindingArgs).first()) throw new HTTPError(403, "owner_enrollment_required");
     // Bound outstanding work per installation, including a compromised paired client.
     await env.DB.prepare("DELETE FROM remote_full_challenges WHERE expires_at < ?").bind(now - 120_000).run();
     const inserted = await env.DB.prepare(`INSERT INTO remote_full_challenges (installation_id, nonce, challenge, expires_at, credential_lookup)
-      SELECT ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM remote_full_challenges WHERE installation_id = ? AND expires_at > ?) < 16
-      ON CONFLICT(installation_id, nonce) DO NOTHING`).bind(installation.installation_id, challenge.nonce, canonical(challenge), challenge.expiresAt, installation.lookup_id, installation.installation_id, now).run();
+      SELECT ?, ?, ?, ?, ? WHERE EXISTS (${activeBindingSQL}) AND (SELECT COUNT(*) FROM remote_full_challenges WHERE installation_id = ? AND expires_at > ?) < 16
+      ON CONFLICT(installation_id, nonce) DO NOTHING`).bind(installation.installation_id, challenge.nonce, canonical(challenge), challenge.expiresAt, installation.lookup_id, ...bindingArgs, installation.installation_id, now).run();
     if (inserted.meta.changes !== 1) throw new HTTPError(409, "challenge_conflict");
-    return json({ prepared: true });
+    return json({ prepared: true, state: "verified" });
   }
   if (action === "authorize") {
     const session = await accountSession(request, auth);
