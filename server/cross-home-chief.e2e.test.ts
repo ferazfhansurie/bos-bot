@@ -74,7 +74,7 @@ test("real peer endpoints deny ungranted authority, recheck revocation at review
     await api("POST", "/api/delegated/coordinate", { ...coordinate, requestKey: "private-denied" }, token, 403);
     await api("PATCH", `/api/delegated/bots/${recipient.id}`, { reason: "private denied", fields: { title: "Leaked" } }, token, 404);
     await api("DELETE", `/api/delegated/bots/${recipient.id}`, { reason: "private denied" }, token, 404);
-    await api("GET", `/api/delegated/coordinate/${first.requestId}`, undefined, token, 403);
+    await api("GET", `/api/delegated/coordinate/${first.requestId}`, undefined, token, 404);
   } finally { await fixture.close(); }
 }, 90000);
 

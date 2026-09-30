@@ -34,7 +34,7 @@ it('does not dispatch a queued job after its target turns private', async () => 
     await expect.poll(()=>JSON.parse(readFileSync(join(fixture.info.dataDir,'delegated-jobs.json'),'utf8')).find((j:any)=>j.id===job.body.requestId).status,{timeout:20000}).toBe('failed');
     const current = (await api('GET','/api/bots')).body.bots.find((b:any)=>b.id===target.id);
     expect(current.tasks.some((t:any)=>t.openedBy?.name==='Remote Chief')).toBe(false);
-    expect((await api('GET',`/api/delegated/coordinate/${job.body.requestId}`,undefined,true)).status).toBe(403);
+    expect((await api('GET',`/api/delegated/coordinate/${job.body.requestId}`,undefined,true)).status).toBe(404);
   } finally { await fixture.close(); rmSync(dir,{recursive:true,force:true}); }
 },60000);
 
