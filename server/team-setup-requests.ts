@@ -48,7 +48,10 @@ interface SetupStore {
   applyTeamSetup(request: TeamSetupRequest): TeamSetupResult;
 }
 
-interface Options {
+export interface TeamSetupOptions {
+  requester?(botId: string): BotRecord | undefined;
+  guard?(request: TeamSetupRequest): void;
+  delegation?: TeamSetupRequest["delegation"];
   store: SetupStore;
   teams(): string[];
   canAccessTeam(from: BotRecord, target?: string): boolean;
@@ -71,11 +74,11 @@ type SubmitAuthority = { canCommit?: () => boolean };
 
 export class TeamSetupRequestService {
   private readonly resolving = new Set<string>();
-  private readonly options: Options;
-  constructor(options: Options) { this.options = options; }
+  private readonly options: TeamSetupOptions;
+  constructor(options: TeamSetupOptions) { this.options = options; }
 
   private chief(botId: string): BotRecord {
-    const chief = this.options.store.bot(botId);
+    const chief = this.options.requester ? this.options.requester(botId) : this.options.store.bot(botId);
     if (!chief || chief.hidden || !chief.chiefOfStaff) throw new TeamSetupError("Only an active Chief of Staff can propose team setup", 403);
     return chief;
   }
@@ -97,6 +100,7 @@ export class TeamSetupRequestService {
   }
 
   private validate(request: TeamSetupRequest, confirming: boolean, immediate = false): void {
+    this.options.guard?.(request);
     const chief = this.chief(request.botId);
     if (!this.options.ownsThread(request.botId, request.threadId)) throw new TeamSetupError("The requesting conversation no longer exists", 409);
     if (immediate && !this.options.autoApply?.(request.botId, request.threadId)) throw new TeamSetupError("Full Access is no longer enabled for this conversation", 409);
@@ -166,6 +170,7 @@ export class TeamSetupRequestService {
     const request: TeamSetupRequest = { version: 1, requestId: newId(), botId: args.botId, threadId: args.threadId,
       reason: redactSecretsInText(parsed.data.reason), createdAt: Date.now(), requesterRevision: teamSetupRevision(chief),
       newTeams: [...new Set(parsed.data.newTeams)], operations };
+    if (this.options.delegation) request.delegation = this.options.delegation;
     this.validate(request, false);
     return request;
   }
@@ -178,6 +183,7 @@ export class TeamSetupRequestService {
     const request: TeamSetupRequest = { version: 1, requestId: newId(), botId: args.botId, threadId: args.threadId,
       reason: redactSecretsInText(args.reason), createdAt: Date.now(), requesterRevision: teamSetupRevision(chief), newTeams: [], operations: [],
       deletion: { botId: target.id, name: target.name, expectedRevision: teamSetupRevision(target) } };
+    if (this.options.delegation) request.delegation = this.options.delegation;
     this.validate(request, false);
     return request;
   }
@@ -200,6 +206,7 @@ export class TeamSetupRequestService {
     if (!permission.ok) throw new TeamSetupError(permission.error, permission.status);
     const chief = this.chief(request.botId);
     const lines = [`Why: ${request.reason}`];
+    if (request.delegation) lines.push(`Delegated request from home ${request.delegation.homeId}, Chief ${request.delegation.botId}. Approval does not grant Full Access or change account permissions.`);
     if (request.deletion) lines.push(`Delete @${request.deletion.name} (${request.deletion.botId}).`, "Permanently removes this bot, all its conversations, memory, instructions, skills, and any computer owned only by it. Generated project files and shared team computers remain. Active work or an unavailable provider can block deletion safely.");
     if (request.newTeams.length) lines.push(`Create teams: ${request.newTeams.map((name) => JSON.stringify(name)).join(", ")}.`, `Authorize @${chief.name} to coordinate and propose setup changes in these new teams.`);
     for (const operation of request.operations) {

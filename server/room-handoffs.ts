@@ -12,6 +12,7 @@ const nodeSchema = z.object({
   executions: z.number().int().nonnegative().default(0), startedAt: z.number().optional(),
   approvalGranted: z.boolean().default(false),
   kind: z.enum(["work", "assignment"]).default("work"),
+  delegatedProposalId: z.string().regex(/^[\w-]{1,128}$/).optional(),
 });
 export type RoomHandoff = z.infer<typeof nodeSchema>;
 export type RoomAddress = Pick<RoomHandoff, "groupId" | "threadId" | "botId">;
@@ -165,7 +166,7 @@ export class RoomHandoffs {
 
   enqueue(source: RoomAddress, generation: string, parentId: string | undefined,
     target: RoomAddress, key: string, text: string, approvalGranted = false,
-    rework = false, sourceText = ""): { node: RoomHandoff; duplicate: boolean } {
+    rework = false, sourceText = "", delegatedProposalId?: string): { node: RoomHandoff; duplicate: boolean } {
     if (this.loadError) throw new Error(this.loadError);
     let parent = parentId ? this.nodes.get(parentId) : this.nodes.get(generation);
     if (parentId && (!parent || parent.status !== "running")) throw new Error("The originating room task is no longer running");
@@ -182,7 +183,7 @@ export class RoomHandoffs {
     const existing = this.children(parent.id).find(n => n.key === key);
     if (existing) {
       if (existing.groupId !== target.groupId || existing.botId !== target.botId || existing.text !== text ||
-        existing.kind !== kind) throw new Error("request_key was already used for different work");
+        existing.kind !== kind || existing.delegatedProposalId !== delegatedProposalId) throw new Error("request_key was already used for different work");
       return { node: existing, duplicate: true };
     }
     if (!rework && this.children(parent.id).some(n => n.kind === kind &&
@@ -217,7 +218,7 @@ export class RoomHandoffs {
     }
     const node: RoomHandoff = { ...target, id: randomUUID(), rootId: parent.rootId, parentId: parent.id,
       key, text, createdAt: this.now(), status: "queued", result: "", reported: false, executions: 0, approvalGranted,
-      kind };
+      kind, ...(delegatedProposalId ? { delegatedProposalId } : {}) };
     const problem = this.hooks.validate(node, parent);
     if (problem) throw new Error(problem);
     if (fresh) this.nodes.set(parent.id, parent);

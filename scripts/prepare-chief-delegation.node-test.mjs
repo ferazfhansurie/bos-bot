@@ -1,0 +1,42 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+test("prepares an existing peer binding and owner-only grant draft without modifying live grants", () => {
+  const dir = mkdtempSync(join(tmpdir(), "chief-grant-script-"));
+  const script = fileURLToPath(new URL("./prepare-chief-delegation.mjs", import.meta.url));
+  const token = "omb_sess_" + "a".repeat(43);
+  const digest = createHash("sha256").update(token).digest("hex");
+  const run = args => spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+  try {
+    writeFileSync(join(dir, "environment-id"), "firaz");
+    writeFileSync(join(dir, "multiplayer-links.json"), JSON.stringify({ version: 1, links: [{ homeId: "partner", token }] }));
+    const binding = join(dir, "binding.json");
+    let result = run(["binding", "--data-dir", dir, "--target-home", "partner", "--chief", "jarvis", "--out", binding]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(binding, "utf8").includes(token), false);
+    writeFileSync(join(dir, "environment-id"), "partner");
+    writeFileSync(join(dir, "sessions.json"), JSON.stringify({ version: 1, sessions: [{ id: "peer", tokenHash: digest, scopes: ["peer"], expiresAt: Date.now() + 60000 }] }));
+    const live = join(dir, "delegations.json");
+    const previous = JSON.stringify({ version: 1, delegations: [{ granteeHomeId: "other", granteeBotId: "other", peerSessionId: "existing-peer", peerTokenHash: digest, scopes: ["coordinate"], section: "", note: "fixture" }] });
+    writeFileSync(live, previous);
+    const draft = join(dir, "draft.json");
+    result = run(["grant", "--data-dir", dir, "--binding", binding, "--out", draft]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(live, "utf8"), previous);
+    const grants = JSON.parse(readFileSync(draft, "utf8"));
+    assert.equal(grants.delegations.length, 2);
+    assert.equal(grants.delegations[1].peerSessionId, "peer");
+    assert.equal(grants.delegations[1].autoApply, false);
+    if (process.platform !== "win32") assert.equal(statSync(draft).mode & 0o077, 0);
+    result = run(["grant", "--data-dir", dir, "--binding", binding, "--out", live]);
+    assert.notEqual(result.status, 0);
+    writeFileSync(join(dir, "sessions.json"), JSON.stringify({ version: 1, sessions: [{ id: "admin", tokenHash: digest, scopes: ["peer", "admin"], expiresAt: Date.now() + 60000 }] }));
+    result = run(["grant", "--data-dir", dir, "--binding", binding, "--out", join(dir, "refused.json")]);
+    assert.notEqual(result.status, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

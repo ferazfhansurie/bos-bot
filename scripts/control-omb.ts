@@ -387,6 +387,9 @@ export async function launchVerificationServer(
   extraProviders: Array<"codex"> = [],
   /** Programmatic tests only: an owned loopback Box provider, never a live account. */
   boxFixtureApi?: string,
+  /** Test-only remote transport: an exact synthetic tailnet name mapped to an
+   * owned loopback fixture. Runtime server code has no test transport switch. */
+  delegatedFixture?: { origin: string; prepare(dataDir: string): void },
 ): Promise<VerificationServer> {
   if (boxFixtureApi) {
     if (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(boxFixtureApi)) {
@@ -401,6 +404,7 @@ export async function launchVerificationServer(
       throw new ControlOmbError("Local VM verification requires an explicit loopback Podman machine");
     }
   }
+  if (delegatedFixture && !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(delegatedFixture.origin)) throw new ControlOmbError("Delegation verification requires an owned loopback server");
   const port = await freePortBlock([0, 1]);
   if (signal?.aborted) throw new ControlOmbError("verification launch cancelled");
   const url = `http://127.0.0.1:${port}`;
@@ -447,7 +451,14 @@ export async function launchVerificationServer(
     AGENT_BROWSER_EXECUTABLE_PATH: browser.executablePath,
   });
   if (boxFixtureApi) childEnv.OMB_BOX_API = boxFixtureApi;
-  const child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "server", "index.ts")], {
+  const childArgs = ["--experimental-strip-types", join(ROOT, "server", "index.ts")];
+  if (delegatedFixture) {
+    delegatedFixture.prepare(dataDir);
+    const shim = join(dataDir, "delegated-fixture-transport.mjs");
+    writeFileSync(shim, `const original = globalThis.fetch; globalThis.fetch = (input, init) => { const url = new URL(input instanceof Request ? input.url : String(input)); if (url.origin === "https://delegated-fixture.example.ts.net:8443") return original(${JSON.stringify(delegatedFixture.origin)} + url.pathname + url.search, init); return original(input, init); };`, { mode: 0o600 });
+    childArgs.unshift("--import", shim);
+  }
+  const child = spawn(process.execPath, childArgs, {
     cwd: ROOT,
     env: childEnv,
     stdio: ["ignore", log, log],

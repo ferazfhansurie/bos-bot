@@ -124,6 +124,7 @@ describe("environment identity", () => {
       platform: process.platform,
       version: "0.1.99",
       multiplayerProtocol: 1,
+      delegatedProtocol: 1,
       sharedConversationIsolation: 1,
       capabilities: { remoteSessions: true, selfUpdate: "desktop-managed", emailSignIn: false },
     });

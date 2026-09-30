@@ -286,6 +286,8 @@ export function isLegacyPeerSession(session: SessionRecord): boolean {
  * export, search, events, config, files, routines or task PATCH. Thread IDs
  * are checked again against PeerThreads in the server handler. */
 export const PEER_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegExp }> = [
+  // Handler requires an exact live deployment grant in addition to peer auth.
+  { methods: ["GET", "POST", "PATCH", "DELETE"], path: /^\/api\/delegated\/(?:roster|catalog|setup|coordinate(?:\/[\w-]+)?|bots(?:\/[\w-]+)?|proposals\/[\w-]+)$/ },
   { methods: ["GET"], path: /^\/api\/multiplayer\/peer-events$/ },
   { methods: ["GET"], path: /^\/api\/(?:health|edition|brand|bots)$/ },
   { methods: ["GET"], path: /^\/api\/auth\/session$/ },

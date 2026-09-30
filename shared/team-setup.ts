@@ -38,4 +38,5 @@ export interface TeamSetupRequest {
   deletion?: { botId: string; name: string; expectedRevision: string };
   result?: TeamSetupResult;
   resumed?: boolean;
+  delegation?: { homeId: string; botId: string; sessionId: string; tokenHash: string; section: string };
 }

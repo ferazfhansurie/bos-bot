@@ -570,7 +570,7 @@ const TOOLS = [
   {
     name: "list_team_setup",
     description: "Chief of Staff only: list authorized teams, teammate IDs, and exact engine/model choices for team setup. Call before proposing configuration; never invent model IDs. Existing thread models are independent of bot defaults.",
-    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    inputSchema: { type: "object", additionalProperties: false, properties: { home: { type: "string", description: "Optional linked home id for a delegated Chief" } } },
   },
   {
     name: "propose_team_setup",
@@ -578,6 +578,7 @@ const TOOLS = [
     inputSchema: {
       type: "object", additionalProperties: false,
       properties: {
+        home: { type: "string", description: "Optional exact linked home id" },
         reason: { type: "string", minLength: 1, maxLength: 500 },
         newTeams: { type: "array", maxItems: 8, items: { type: "string", minLength: 1, maxLength: 60 } },
         operations: { type: "array", minItems: 1, maxItems: 24, items: {
@@ -602,7 +603,7 @@ const TOOLS = [
   {
     name: "propose_bot_deletion",
     description: "Chief of Staff only: when the user explicitly asks to delete a named teammate, submit a separate deletion request for that exact bot. Deletion removes its conversations, memory, instructions, skills, and any computer owned only by it; generated project files and shared team computers remain. Running work or an unavailable computer provider can block deletion safely. Never delete yourself, substitute an archive, or put deletion into a setup batch. If review is pending, the decision and result resume you once." + PROPOSAL_OUTCOME,
-    inputSchema: { type: "object", additionalProperties: false, properties: {
+    inputSchema: { type: "object", additionalProperties: false, properties: { home: { type: "string", description: "Optional exact linked home id" },
       bot_id: { type: "string", minLength: 1 }, reason: { type: "string", minLength: 1, maxLength: 500 },
     }, required: ["bot_id", "reason"] },
   },
@@ -1087,7 +1088,8 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
   if (name === "list_bots") {
     const r = await api(`/api/internal/agents?self=${encodeURIComponent(BOT_ID)}`);
     const bots = (r.bots as Array<Json>) ?? [];
-    if (!bots.length) return { text: "No other reachable bots yet." };
+    const remoteErrors = Array.isArray(r.errors) && r.errors.length ? `\n${r.errors.join("\n")}` : "";
+    if (!bots.length) return { text: "No other reachable bots yet." + remoteErrors };
     const lines = bots.map((b) => {
       const role = b.title ? ` — ${b.title}` : "";
       const about = b.description ? ` (${String(b.description).slice(0, 120)})` : "";
@@ -1097,10 +1099,11 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
         ? (b.status === "available" ? "" : b.statusText)
         : (b.busy ? "busy" : "");
       const team = typeof b.section === "string" ? `, team: ${peerName(b.section) || "General"}` : "";
-      return `- ${b.name}${role}${about} [id: ${b.id}, model: ${b.model}${team}${state ? `, ${state}` : ""}]`;
+      const home = typeof b.home === "string" ? `, home: ${b.home}` : "";
+      return `- ${b.name}${role}${about} [id: ${b.id}, model: ${b.model}${team}${home}${state ? `, ${state}` : ""}]`;
     });
     return {
-      text: `Reachable teammates:\n${lines.join("\n")}\n\n${COORDINATING ? "Use coordinate_bots for advice or concrete work, then end your turn. Busy teammates queue and results resume you automatically." : "Assign work with delegate_bot. Use ask_bot only for a short answer you need inline."}`,
+      text: `Reachable teammates:\n${lines.join("\n")}${remoteErrors}\n\n${COORDINATING ? "Use coordinate_bots for advice or concrete work, then end your turn. Busy teammates queue and results resume you automatically." : "Assign work with delegate_bot. Use ask_bot only for a short answer you need inline."}`,
     };
   }
   if (name === "list_rooms") {
@@ -1337,18 +1340,20 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     };
   }
   if (name === "list_team_setup") {
-    return { text: JSON.stringify(await api("/api/internal/team-setup-catalog")) };
+    return { text: JSON.stringify(await api("/api/internal/team-setup-catalog" + (typeof args.home === "string" ? `?home=${encodeURIComponent(args.home)}` : ""))) };
   }
   if (name === "propose_team_setup" || name === "propose_bot_deletion") {
     const deleting = name === "propose_bot_deletion";
+    const { home, ...plan } = args;
     const result = await api(deleting ? "/api/internal/bot-deletion-requests" : "/api/internal/team-setup-requests", {
       method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID,
-        ...(deleting ? { targetBotId: args.bot_id, reason: args.reason } : { plan: args }),
+        ...(typeof home === "string" ? { home } : {}),
+        ...(deleting ? { targetBotId: args.bot_id, reason: args.reason } : { plan }),
       }),
     });
     const completed = completedProposalResult(result, deleting ? "the requested bot deletion" : "the requested team setup");
     if (completed) return completed;
-    return { text: `One review card is visible: ${String(result.title)}. Nothing has been applied. End this turn; the decision and structured result resume you automatically once. Do not ask again, poll, or repeat this proposal.` };
+    return { text: `One review card is visible${result.review === "partner review" ? " on partner’s home" : ""}: ${String(result.title)}. Nothing has been applied. End this turn; the decision and structured result resume you automatically once. Do not ask again, poll, or repeat this proposal.` };
   }
   if (name === "create_bot") {
     const botName = String(args.name ?? "").trim();
