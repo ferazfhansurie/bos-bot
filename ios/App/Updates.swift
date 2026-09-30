@@ -19,6 +19,9 @@ struct ChatUpdate: Identifiable, Hashable {
     let line: String
     /// The card to answer, when `kind == .needsYou`.
     let card: OptionCard?
+    /// Mid-reply. The reply itself is drawn only inside the open chat, so
+    /// here it is a typing dot rather than text that would redraw per token.
+    var typing = false
 
     var id: String { chat.conversationID }
 }
@@ -46,7 +49,8 @@ extension CompanionState {
                 } else if let held = pendingQueued[task.threadId], !held.isEmpty {
                     out.append(ChatUpdate(chat: chat, kind: .working, line: queuedLine(for: held), card: nil))
                 } else if projected.busy == true {
-                    out.append(ChatUpdate(chat: chat, kind: .working, line: workingLine(threadId: task.threadId), card: nil))
+                    out.append(ChatUpdate(chat: chat, kind: .working, line: workingLine(threadId: task.threadId), card: nil,
+                                          typing: isTyping(threadId: task.threadId)))
                 } else if projected.unread {
                     out.append(ChatUpdate(chat: chat, kind: .toReview, line: lastLine(threadId: task.threadId), card: nil))
                 }
@@ -60,7 +64,8 @@ extension CompanionState {
                 out.append(ChatUpdate(chat: chat, kind: .working, line: queuedLine(for: held), card: nil))
             } else if room.busyBotId != nil {
                 seen.insert(chat.conversationID)
-                out.append(ChatUpdate(chat: chat, kind: .working, line: workingLine(threadId: room.threadId), card: nil))
+                out.append(ChatUpdate(chat: chat, kind: .working, line: workingLine(threadId: room.threadId), card: nil,
+                                      typing: isTyping(threadId: room.threadId)))
             } else if room.unread {
                 seen.insert(chat.conversationID)
                 out.append(ChatUpdate(chat: chat, kind: .toReview, line: lastLine(threadId: room.threadId), card: nil))
@@ -87,10 +92,15 @@ extension CompanionState {
         return "\(held.count) messages queued"
     }
 
+    private func isTyping(threadId: String) -> Bool {
+        !(streaming[threadId] ?? "").isEmpty
+    }
+
+    /// Never the streamed text itself: tokens fold without republishing the
+    /// root state, so a line quoting them would be stale, and one that
+    /// tracked them would redraw every list per token.
     private func workingLine(threadId: String) -> String {
-        if let live = streaming[threadId], !live.isEmpty {
-            return String(live.suffix(120)).replacingOccurrences(of: "\n", with: " ")
-        }
+        if isTyping(threadId: threadId) { return "Typing…" }
         if let last = visibleTranscript(forThread: threadId).last, last.kind == .activity, let tool = last.tool {
             return tool.name
         }

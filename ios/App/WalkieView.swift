@@ -64,7 +64,7 @@ struct WalkieView: View {
             }
         }
         .onChange(of: speakReplies) { _, on in walkie.speaksReplies = on }
-        .onReceive(session.$state) { walkie.observe($0) }
+        .onReceive(session.stateChanges) { walkie.observe($0) }
         .onDisappear { walkie.shutdown() }
     }
 

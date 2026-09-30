@@ -99,7 +99,10 @@ public func eventStream(
     session: URLSession = .shared
 ) -> AsyncThrowingStream<StreamFrame, Error> {
     AsyncThrowingStream { continuation in
-        let task = Task {
+        // Detached so reading bytes, splitting lines and decoding JSON never
+        // run on the consumer's actor. The consumer is `Session`, which is
+        // on the main actor; only the decoded frame hops there.
+        let task = Task.detached(priority: .userInitiated) {
             do {
                 let (bytes, response) = try await session.bytes(for: request)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 {

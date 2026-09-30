@@ -23,7 +23,7 @@ final class LiveActivityCoordinator {
         AnswerApprovalIntent.handler = { [weak self, weak session] threadId, requestId, choice, isPermission in
             await self?.answer(session: session, threadId: threadId, requestId: requestId, choice: choice, isPermission: isPermission)
         }
-        cancellable = session.$state
+        cancellable = session.stateChanges
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] state in self?.sync(state) }
     }

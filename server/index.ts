@@ -208,6 +208,7 @@ import {
   newId,
 } from "./contracts.ts";
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
+import { DeltaCoalescer, isDeltaFrame, LiveDeltaReplay, replayAfter, type ReplayEntry } from "./delta-coalesce.ts";
 import { decodeGeneratedImage } from "./generated-image.ts";
 import {
   MAX_MCP_SERVERS,
@@ -3487,7 +3488,13 @@ const SSE_HEARTBEAT_MS =
     ? configuredSseHeartbeatMs
     : 15_000;
 let lastSeq = 0;
-const replayBuffer: Array<{ seq: number; kind: string; frame: string | null; clientFrame: string | null }> = [];
+const replayBuffer: ReplayEntry[] = [];
+/** The newest seq shifted out of `replayBuffer`. A cursor older than this
+ * missed a durable frame that is gone. Deltas take seqs but no slots, so
+ * the buffer's first seq no longer says how far back it reaches. */
+let replayEvictedThrough = 0;
+const liveDeltaReplay = new LiveDeltaReplay();
+const deltaCoalescer = new DeltaCoalescer(payload => emitFrame(payload));
 
 /** Screen frames are the only kind a client can decline. */
 const wants = (client: SseClient, kind: string) => kind !== "screen" || client.screens;
@@ -3503,7 +3510,16 @@ function cursorSeq(raw: string | string[] | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
+/** Tokens wait up to ~50ms to be merged per thread and item; anything else
+ * first sends what is waiting, so it is never numbered ahead of the text
+ * that came before it. See ./delta-coalesce.ts. */
 function broadcast(payload: Record<string, unknown>) {
+  if (deltaCoalescer.offer(payload)) return;
+  deltaCoalescer.flush();
+  emitFrame(payload);
+}
+
+function emitFrame(payload: Record<string, unknown>) {
   // Membership may also change through fleet/CLI config writes. Close stale
   // email streams before any further workspace data is delivered.
   sessions.revalidateEmailSessions();
@@ -3540,8 +3556,17 @@ function broadcast(payload: Record<string, unknown>) {
   // Live desktop captures can each be hundreds of kilobytes and become stale
   // as soon as the next one arrives. Keep their sequence slots so resume-gap
   // detection stays honest, but never retain their base64 payloads.
-  replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame, clientFrame: kind === "screen" ? null : clientFrame });
-  if (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
+  // Deltas live outside it until their reply settles, so a streaming reply
+  // cannot push the durable frames a waking phone needs out of the buffer.
+  const entry = { seq, kind, frame: kind === "screen" ? null : frame, clientFrame: kind === "screen" ? null : clientFrame };
+  const delta = isDeltaFrame(payload);
+  if (delta) {
+    liveDeltaReplay.add(String((payload.event as { threadId: string }).threadId), entry);
+  } else {
+    liveDeltaReplay.settle(payload);
+    replayBuffer.push(entry);
+    if (replayBuffer.length > REPLAY_MAX) replayEvictedThrough = replayBuffer.shift()!.seq;
+  }
   for (const client of Array.from(sseClients)) {
     if (client.sessionId) {
       const actor = multiplayerActors.actorFor(client.sessionId);
@@ -15350,10 +15375,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The buffer only reaches so far back. If the client's cursor fell off
       // the end, saying so is the only honest answer — a partial replay
       // would leave a permanent hole in its state.
+      // Anything still merging is numbered first, so the hello cursor and
+      // the replay below agree on where this client starts.
+      deltaCoalescer.flush();
       const resumed =
         since !== null &&
         since <= lastSeq &&
-        (replayBuffer.length === 0 ? since === lastSeq : replayBuffer[0].seq <= since + 1);
+        since >= replayEvictedThrough &&
+        liveDeltaReplay.covers(since);
       res.write(
         `data: ${JSON.stringify({
           kind: "hello",
@@ -15365,9 +15394,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         })}\n\n`,
       );
       if (resumed) {
-        for (const buffered of replayBuffer) {
+        for (const buffered of replayAfter(replayBuffer, liveDeltaReplay, since)) {
           const frame = client.admin ? buffered.frame : buffered.clientFrame;
-          if (buffered.seq > since && frame && wants(client, buffered.kind)) res.write(frame);
+          if (frame && wants(client, buffered.kind)) res.write(frame);
         }
       }
 
