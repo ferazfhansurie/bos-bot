@@ -8570,6 +8570,25 @@ const teamSetupRequests = new TeamSetupRequestService(teamSetupOptions);
 
 const delegatedSetupServices = new Map<string, TeamSetupRequestService>();
 
+/** Saved delegated results must obey current privacy even when their reviewer is public. */
+function checkDelegatedProposalPrivacy(request: TeamSetupRequest, section: string, receipt = false) {
+  const requireVisible = (id: string, missingAllowed = false) => {
+    const bot = store.bot(id);
+    if (!bot && missingAllowed) return;
+    if (!bot || bot.hidden || bot.visibility === "private" || sectionKey(bot.section) !== section) {
+      throw new TeamSetupError("Delegated proposal unavailable", 404);
+    }
+  };
+  requireVisible(request.botId);
+  for (const op of request.operations) {
+    if (Object.hasOwn(op.fields, "visibility")) throw new TeamSetupError("Delegation cannot change visibility", 403);
+    requireVisible(op.botId, op.action === "create" && !store.bot(op.botId));
+  }
+  if (request.deletion) requireVisible(request.deletion.botId, receipt && request.result?.state === "applied");
+  for (const bot of request.result?.bots ?? []) requireVisible(bot.id, true);
+}
+
+
 /** Reuse normal review/store lifecycle with a display-only scoped requester.
  * No Chief, peer permission, Full Access or provider account is saved locally. */
 function delegatedSetupService(identity: NonNullable<TeamSetupRequest["delegation"]>, reviewerId: string) {
@@ -8607,6 +8626,7 @@ function delegatedSetupService(identity: NonNullable<TeamSetupRequest["delegatio
     guard: request => {
       const saved = request.delegation;
       if (!saved || saved.homeId !== identity.homeId || saved.botId !== identity.botId || saved.sessionId !== identity.sessionId || saved.tokenHash !== identity.tokenHash || saved.section !== identity.section || request.botId !== reviewerId || request.newTeams.length) throw new TeamSetupError("Invalid delegated proposal authority", 403);
+      checkDelegatedProposalPrivacy(request, identity.section);
       for (const op of request.operations) {
         live(op.action === "create" ? "bots:create" : "bots:configure");
         const target = op.action === "update" ? store.bot(op.botId) : undefined;
@@ -12249,6 +12269,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         for (const bot of allowedBots()) for (const task of store.tasks(bot.id)) {
           const request = store.messagesFor(task.threadId).find(message => message.card?.requestId === proposalMatch[1])?.card?.teamSetupRequest;
           if (!request?.delegation || request.delegation.homeId !== identity.homeId || request.delegation.botId !== identity.botId || request.delegation.sessionId !== identity.sessionId || request.delegation.tokenHash !== identity.tokenHash) continue;
+          try { checkDelegatedProposalPrivacy(request, grant.section, true); }
+          catch { return json(res, 404, { error: "No delegated proposal for this grantee" }); }
           delegatedSetupService(request.delegation, request.botId); // Revocation already checked above.
           return json(res, 200, { requestId: request.requestId, state: request.result?.state ?? "pending", result: request.result });
         }
@@ -12268,6 +12290,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const service = delegatedSetupService({ ...identity, section: grant.section }, reviewer.id);
         const proposed = method === "DELETE" ? await service.submitDeletion({ botId: reviewer.id, threadId: task.threadId, targetBotId: targetId!, reason: body.reason })
           : await service.submit({ botId: reviewer.id, threadId: task.threadId, plan: path.endsWith("/setup") ? body.plan : { reason: body.reason, operations: [{ action: method === "POST" ? "create" : "update", ...(method === "POST" ? { key: body.key } : { botId: targetId }), fields: body.fields }] } });
+        refreshGrant();
+        const savedRequest = store.messagesFor(task.threadId).find(message => message.card?.requestId === proposed.requestId)?.card?.teamSetupRequest;
+        if (!savedRequest) throw new TeamSetupError("Delegated proposal unavailable", 404);
+        checkDelegatedProposalPrivacy(savedRequest, grant.section, true);
         return json(res, 201, { ...proposed, reviewHome: ENVIRONMENT_ID, reviewBotId: reviewer.id, review: proposed.state === "pending" ? "partner review" : undefined });
       }
       return json(res, 405, { error: "Unknown delegated operation" });
