@@ -10,7 +10,9 @@ import {
   WINDOWS_MCP_ENV,
   aclAllowsOnlyTrustedWriters,
   aclIsPrivate,
+  WINDOWS_PROBE_SCRIPT,
   createPowerShellWindowsProbe,
+  encodeWindowsProbeCommand,
   installWindowsCuaAttestation,
   sessionAvailability,
   startServerOnlyWindowsCua,
@@ -383,44 +385,175 @@ test("attestation installs once and cannot be replaced", () => {
   assert.throws(() => { "use strict"; target[WINDOWS_CUA_ATTESTATION] = null; });
 });
 
-test("PowerShell probe sends one request per call and parses metadata", async () => {
+// Values captured from the fixed probe on PARTNERHOST/kings over SSH (session 0,
+// 2026-09-30), used to pin the real reply shapes.
+const PARTNERHOST_SID = "S-1-5-21-1494927478-50599041-3459622598-1001";
+const PARTNERHOST = {
+  identity: { sid: PARTNERHOST_SID, userName: "PartnerHost\\owner", sessionId: 0, logonSid: "S-1-5-5-0-47089391" },
+  session: { sessionId: 0, connectState: 4, windowStation: "Service-0x0-2ce86f0$", inputDesktop: null },
+  processInfo: { pid: 9052, parentPid: 14104, sessionId: 0, ownerSid: PARTNERHOST_SID, executablePath: "C:\\Program Files\\nodejs\\node.exe", startTimeMs: 1790781039036 },
+  acl: { ownerSid: "S-1-5-32-544", entries: [
+    { sid: "S-1-5-18", type: "allow", rights: 2032127, inheritOnly: false },
+    { sid: PARTNERHOST_SID, type: "allow", rights: 2032127, inheritOnly: false },
+  ] },
+};
+const frame = (op, value, extra = {}) => `OMBCUA1:${JSON.stringify({ schema: "omb-cua-probe/1", op, ok: true, value, ...extra })}`;
+
+function scriptedProbe(reply) {
   const runs = [];
-  const replies = {
-    identity: JSON.stringify({ sid: USER_SID, sessionId: 2 }),
-    processesNamed: JSON.stringify({ pid: 9, sessionId: 2 }),
-    pipeInfo: "",
-  };
   const run = (file, args, options, callback) => {
     const request = JSON.parse(options.env?.OMB_CUA_PROBE_REQUEST ?? "{}");
-    runs.push({ file, args, options, request });
-    const stdin = { script: "", end(text) { this.script = text; } };
-    queueMicrotask(() => callback(null, replies[request.op] ?? "null"));
-    return { stdin };
+    const record = { file, args, options, request, stdinEnded: false, stdinText: undefined };
+    runs.push(record);
+    queueMicrotask(() => {
+      const [error, stdout] = reply(request, file);
+      callback(error, stdout, "");
+    });
+    return { stdin: { end(text) { record.stdinEnded = true; record.stdinText = text; } } };
   };
-  const probe = createPowerShellWindowsProbe({ run, environment: { SystemRoot: "C:\\Windows" } });
-  assert.deepEqual(await probe.identity(), { sid: USER_SID, sessionId: 2 });
-  assert.deepEqual(await probe.processesNamed("cua-driver.exe"), [{ pid: 9, sessionId: 2 }]);
+  return { runs, probe: createPowerShellWindowsProbe({ run, environment: { SystemRoot: "C:\\Windows" } }) };
+}
+
+test("PowerShell probe uses -EncodedCommand and parses the captured PARTNERHOST replies", async () => {
+  const { runs, probe } = scriptedProbe((request, file) => {
+    if (file.endsWith("icacls.exe")) return [null, ""];
+    const value = request.op === "processesNamed" ? [] : request.op === "pipeInfo" ? null : PARTNERHOST[request.op];
+    // Stray progress text before the frame is ignored; only the frame counts.
+    return [null, `Preparing modules for first use.\r\n${frame(request.op, value)}\r\n`];
+  });
+  assert.deepEqual(await probe.identity(), PARTNERHOST.identity);
+  assert.deepEqual(await probe.session(), PARTNERHOST.session);
+  assert.equal(sessionAvailability(PARTNERHOST.identity, PARTNERHOST.session).reasonCode, "no-interactive-session");
+  assert.deepEqual(await probe.processInfo(9052), PARTNERHOST.processInfo);
+  assert.deepEqual(await probe.acl("C:\\Users\\owner\\AppData\\Local\\BOSServerStandalone\\resources"), PARTNERHOST.acl);
+  assert.equal(aclAllowsOnlyTrustedWriters(PARTNERHOST.acl, PARTNERHOST.identity), true);
+  assert.deepEqual(await probe.processesNamed("cua-driver.exe"), []);
   assert.equal(await probe.pipeInfo("\\\\.\\pipe\\x"), null);
-  assert.equal(runs[0].file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-  assert.deepEqual(runs[0].args, ["-NoProfile", "-NonInteractive", "-Command", "-"]);
-  assert.equal(runs[0].options.windowsHide, true);
+  const first = runs[0];
+  assert.equal(first.file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+  assert.deepEqual(first.args, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodeWindowsProbeCommand()]);
+  assert.equal(Buffer.from(first.args.at(-1), "base64").toString("utf16le"), WINDOWS_PROBE_SCRIPT);
+  assert.ok(!first.args.includes("-Command"), "never feeds the script through stdin");
+  assert.equal(first.stdinEnded, true);
+  assert.equal(first.stdinText, undefined, "stdin is closed empty");
+  assert.equal(first.options.windowsHide, true);
+  assert.deepEqual(first.request, { op: "identity" });
   await probe.restrictDirectory("C:\\data\\cua-windows", USER_SID);
   assert.equal(runs.at(-1).file, "C:\\Windows\\System32\\icacls.exe");
   assert.deepEqual(runs.at(-1).args, ["C:\\data\\cua-windows", "/inheritance:r", "/grant:r", `*${USER_SID}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F"]);
   await assert.rejects(probe.restrictDirectory("C:\\data", "Everyone"), (error) => error.reasonCode === "identity-unknown");
-  const failing = createPowerShellWindowsProbe({ run: (f, a, o, cb) => { queueMicrotask(() => cb(new Error("exit 1"))); return {}; } });
-  await assert.rejects(failing.session(), (error) => error.reasonCode === "probe-failed");
-  const garbage = createPowerShellWindowsProbe({ run: (f, a, o, cb) => { queueMicrotask(() => cb(null, "<html>")); return {}; } });
-  await assert.rejects(garbage.session(), (error) => error.reasonCode === "probe-failed");
 });
 
-test("the probe script is metadata-only", async () => {
-  let script = "";
-  const run = (file, args, options, callback) => { queueMicrotask(() => callback(null, "null")); return { stdin: { end(text) { script = text; } } }; };
-  await createPowerShellWindowsProbe({ run }).session();
-  assert.match(script, /OpenInputDesktop/);
-  for (const forbidden of [/CopyFromScreen/i, /BitBlt/i, /SendInput/i, /keybd_event/i, /mouse_event/i, /EnumWindows/i, /SetForegroundWindow/i, /Start-Process/i]) {
-    assert.doesNotMatch(script, forbidden);
+test("the encoded probe fits the Windows command-line limit", () => {
+  assert.ok(encodeWindowsProbeCommand().length < 30_000);
+  assert.throws(() => encodeWindowsProbeCommand("x".repeat(20_000)), /too long/);
+});
+
+test("missing, empty or malformed probe output fails closed, never as null", async (t) => {
+  const cases = [
+    // Exactly what `-Command -` produced on PARTNERHOST: exit 0, nothing on stdout.
+    ["empty stdout with exit 0", () => [null, ""]],
+    ["bare null", () => [null, "null"]],
+    ["unframed JSON", (r) => [null, JSON.stringify(PARTNERHOST[r.op] ?? {})]],
+    ["html", () => [null, "<html>"]],
+    ["truncated frame", () => [null, "OMBCUA1:{\"schema\":\"omb-cua-probe/1\""]],
+    ["two frames", (r) => [null, `${frame(r.op, PARTNERHOST[r.op])}\n${frame(r.op, PARTNERHOST[r.op])}`]],
+    ["wrong schema", (r) => [null, frame(r.op, PARTNERHOST[r.op], { schema: "other/1" })]],
+    ["answer for another op", (r) => [null, frame(r.op === "session" ? "identity" : "session", r.op === "session" ? PARTNERHOST.identity : PARTNERHOST.session)]],
+    ["ok without value", (r) => [null, `OMBCUA1:${JSON.stringify({ schema: "omb-cua-probe/1", op: r.op, ok: true })}`]],
+    ["null value", (r) => [null, frame(r.op, null)]],
+    ["script error frame", (r) => [Object.assign(new Error("exit 3"), { code: 3 }), `OMBCUA1:${JSON.stringify({ schema: "omb-cua-probe/1", op: r.op, ok: false, error: "System.InvalidCastException" })}`]],
+    ["non-zero exit with a valid frame", (r) => [Object.assign(new Error("exit 1"), { code: 1 }), frame(r.op, PARTNERHOST[r.op])]],
+    ["spawn failure", () => [Object.assign(new Error("ENOENT"), { code: "ENOENT" }), ""]],
+  ];
+  for (const [name, reply] of cases) {
+    await t.test(name, async () => {
+      const { probe } = scriptedProbe(reply);
+      for (const op of ["identity", "session", "acl"]) {
+        await assert.rejects(op === "acl" ? probe.acl("C:\\x") : probe[op](), (error) => error.reasonCode === "probe-failed", `${op} must fail`);
+      }
+    });
+  }
+});
+
+test("script error frames surface only the exception type", async () => {
+  const { probe } = scriptedProbe((r) => [Object.assign(new Error("exit 3"), { code: 3 }),
+    `OMBCUA1:${JSON.stringify({ schema: "omb-cua-probe/1", op: r.op, ok: false, error: "System.InvalidCastException<script>SECRET=1" })}`]);
+  await assert.rejects(probe.acl("C:\\x"), (error) => {
+    assert.equal(error.reasonCode, "probe-failed");
+    assert.equal(error.message, "Windows acl probe failed (System.InvalidCastExceptionscriptSECRET1)");
+    return true;
+  });
+});
+
+test("probe values with the wrong shape fail closed", async (t) => {
+  const bad = {
+    identity: [{ sid: "kings", sessionId: 1 }, { sid: PARTNERHOST_SID, sessionId: -1 }, { sid: PARTNERHOST_SID, sessionId: 1, logonSid: "x" }],
+    session: [{ sessionId: "1", connectState: 0 }, { sessionId: 1 }],
+    acl: [
+      { ownerSid: "S-1-5-32-544", entries: [{ sid: "S-1-1-0", type: "allow", rights: -1610612736, inheritOnly: false }] },
+      { ownerSid: "S-1-5-32-544", entries: [{ sid: "S-1-1-0", type: "allow", rights: 4294967296, inheritOnly: false }] },
+      { ownerSid: "S-1-5-32-544", entries: [{ sid: "S-1-1-0", type: "allow", rights: 1.5, inheritOnly: false }] },
+      { ownerSid: "S-1-5-32-544", entries: [{ sid: "S-1-1-0", type: "allow", rights: 1 }] },
+      { ownerSid: "S-1-5-32-544", entries: [{ sid: "S-1-1-0", type: "audit", rights: 1, inheritOnly: false }] },
+      { ownerSid: "S-1-5-32-544", entries: {} },
+    ],
+    processInfo: [{ pid: 0, parentPid: 1, sessionId: 1, ownerSid: PARTNERHOST_SID, startTimeMs: 1 }, { pid: 5, parentPid: 1, sessionId: 1, ownerSid: PARTNERHOST_SID }],
+    processesNamed: [{ pid: 5 }, null],
+  };
+  for (const [op, values] of Object.entries(bad)) {
+    for (const value of values) {
+      await t.test(`${op} ${JSON.stringify(value)}`, async () => {
+        const { probe } = scriptedProbe((r) => [null, frame(r.op, value)]);
+        const call = op === "processInfo" ? probe.processInfo(5) : op === "processesNamed" ? probe.processesNamed("x.exe") : op === "acl" ? probe.acl("C:\\x") : probe[op]();
+        await assert.rejects(call, (error) => error.reasonCode === "probe-failed");
+      });
+    }
+  }
+});
+
+test("unsigned access masks from the PARTNERHOST SDDL smoke keep the ACL policy strict", () => {
+  // Parsed by the real PowerShell Acl() on PARTNERHOST from synthetic SDDL.
+  const who = { sid: PARTNERHOST_SID, logonSid: "S-1-5-5-0-47089391" };
+  const system = { sid: "S-1-5-18", type: "allow", rights: 2032127, inheritOnly: false };
+  const admins = { sid: "S-1-5-32-544", type: "allow", rights: 2032127, inheritOnly: false };
+  const acl = (...entries) => ({ ownerSid: "S-1-5-32-544", entries });
+  // (A;OICIIO;GA;;;CO)(A;;GRGX;;;BU): inherit-only GENERIC_ALL, GENERIC_READ|EXECUTE = 0xA0000000.
+  const readExecute = acl({ sid: "S-1-3-0", type: "allow", rights: 268435456, inheritOnly: true }, { sid: "S-1-5-32-545", type: "allow", rights: 2684354560, inheritOnly: false }, system);
+  assert.equal(aclAllowsOnlyTrustedWriters(readExecute, who), true);
+  assert.equal(aclIsPrivate(readExecute, who), false);
+  // (A;;GW;;;BU) = 0x40000000.
+  assert.equal(aclAllowsOnlyTrustedWriters(acl({ sid: "S-1-5-32-545", type: "allow", rights: 1073741824, inheritOnly: false }, system), who), false);
+  // (A;;0x80000000;;;WD): GENERIC_READ only.
+  const everyoneRead = acl({ sid: "S-1-1-0", type: "allow", rights: 2147483648, inheritOnly: false }, admins);
+  assert.equal(aclAllowsOnlyTrustedWriters(everyoneRead, who), true);
+  assert.equal(aclIsPrivate({ ...everyoneRead, ownerSid: PARTNERHOST_SID }, who), false);
+  // (A;;0xffffffff;;;WD), and an object ACE mapped to Everyone/all bits.
+  assert.equal(aclAllowsOnlyTrustedWriters(acl({ sid: "S-1-1-0", type: "allow", rights: 4294967295, inheritOnly: false }), who), false);
+  // (D;;FA;;;AN): deny entries never widen access.
+  assert.equal(aclAllowsOnlyTrustedWriters(acl({ sid: "S-1-5-7", type: "deny", rights: 2032127, inheritOnly: false }, admins), who), true);
+  // D:(A;;FA;;;BA) with no owner.
+  assert.equal(aclAllowsOnlyTrustedWriters({ ownerSid: null, entries: [admins] }, who), false);
+  // Out-of-range masks never reach policy as "valid".
+  assert.equal(aclAllowsOnlyTrustedWriters(acl({ sid: "S-1-1-0", type: "allow", rights: 4294967296, inheritOnly: false }), who), false);
+  assert.equal(aclAllowsOnlyTrustedWriters(acl({ sid: "S-1-1-0", type: "allow", rights: -1, inheritOnly: false }), who), false);
+});
+
+test("the probe script handles signed masks, enum flags and the logon SID explicitly", () => {
+  const script = WINDOWS_PROBE_SCRIPT;
+  assert.doesNotMatch(script, /\[uint32\]\s*\$ace/i, "a [uint32] cast of a negative Int32 mask throws in PS 5.1");
+  assert.doesNotMatch(script, /\[bool\]\s*\(\s*\$ace\.AceFlags/i, "[bool] of a flags enum throws InvalidCastException");
+  assert.match(script, /\$m \+= 4294967296/);
+  assert.match(script, /\(\[int\]\$ace\.AceFlags\) -band 8/);
+  assert.match(script, /0xC0000000u/, "logon SID comes from TOKEN_GROUPS, not WindowsIdentity.Groups");
+  assert.match(script, /\$ProgressPreference = 'SilentlyContinue'/);
+  assert.doesNotMatch(script, /\bswitch\s*\(/, "switch unrolls arrays and nulls");
+});
+
+test("the probe script is metadata-only", () => {
+  assert.match(WINDOWS_PROBE_SCRIPT, /OpenInputDesktop/);
+  for (const forbidden of [/CopyFromScreen/i, /BitBlt/i, /SendInput/i, /keybd_event/i, /mouse_event/i, /EnumWindows/i, /SetForegroundWindow/i, /Start-Process/i, /Set-Acl/i, /icacls/i]) {
+    assert.doesNotMatch(WINDOWS_PROBE_SCRIPT, forbidden);
   }
 });
 

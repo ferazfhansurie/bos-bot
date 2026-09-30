@@ -78,7 +78,7 @@ const isTime = (value) => Number.isSafeInteger(value) && value > 0;
 function validAcl(acl) {
   return Boolean(acl && typeof acl === "object" && typeof acl.ownerSid === "string" && Array.isArray(acl.entries) &&
     acl.entries.every((entry) => entry && SID.test(entry.sid) && (entry.type === "allow" || entry.type === "deny") &&
-      Number.isInteger(entry.rights) && entry.rights >= 0));
+      Number.isSafeInteger(entry.rights) && entry.rights >= 0 && entry.rights <= 0xffffffff));
 }
 
 /** Staged resources may be read by anyone; only trusted principals may change them. */
@@ -769,11 +769,27 @@ export async function startServerOnlyWindowsCua(config, {
 
 // ---------------------------------------------------------------------------
 // Real probe: one short PowerShell call per question. Metadata only.
+//
+// Windows PowerShell 5.1 is driven with -EncodedCommand. `-Command -` reads
+// stdin as interactive lines: on PARTNERHOST it ran nothing, printed nothing and
+// exited 0, which a caller would read as "null". Every reply is therefore one
+// framed line (PROBE_FRAME + {schema, op, ok, value|error}); a missing,
+// duplicated, mismatched or malformed frame, a non-zero exit or an unexpected
+// value shape is a probe failure, never an empty success.
+
+const PROBE_SCHEMA = "omb-cua-probe/1";
+const PROBE_FRAME = "OMBCUA1:";
+// CreateProcess limits the whole command line to 32767 UTF-16 units.
+const MAX_ENCODED_COMMAND = 30_000;
 
 const PROBE_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
-$req = $env:OMB_CUA_PROBE_REQUEST | ConvertFrom-Json
-Add-Type -TypeDefinition @'
+$ProgressPreference = 'SilentlyContinue'
+$op = $null
+try {
+  $req = $env:OMB_CUA_PROBE_REQUEST | ConvertFrom-Json
+  $op = [string]$req.op
+  Add-Type -TypeDefinition @'
 using System; using System.Runtime.InteropServices; using System.Text;
 public static class OmbCuaProbe {
   [DllImport("wtsapi32.dll", SetLastError=true)] static extern bool WTSQuerySessionInformation(IntPtr s, int id, int cls, out IntPtr buf, out int n);
@@ -784,7 +800,11 @@ public static class OmbCuaProbe {
   [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool GetUserObjectInformation(IntPtr h, int i, StringBuilder b, int len, out int need);
   [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string n, uint a, uint s, IntPtr sa, uint d, uint f, IntPtr t);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetNamedPipeServerProcessId(IntPtr h, out uint pid);
+  [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr p, uint access, out IntPtr token);
+  [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr info, int len, out int needed);
+  [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool ConvertSidToStringSid(IntPtr sid, out IntPtr str);
   [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr h, int t, int i, out IntPtr o, out IntPtr g, out IntPtr d, out IntPtr s, out IntPtr sd);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode)] static extern bool ConvertSecurityDescriptorToStringSecurityDescriptor(IntPtr sd, uint r, int i, out IntPtr str, out uint n);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
@@ -792,6 +812,28 @@ public static class OmbCuaProbe {
   public static int ConnectState(int id) { IntPtr b; int n; if (!WTSQuerySessionInformation(IntPtr.Zero, id, 8, out b, out n)) return -1; try { return Marshal.ReadInt32(b); } finally { WTSFreeMemory(b); } }
   public static string InputDesktop() { IntPtr h = OpenInputDesktop(0, false, 0x0001); if (h == IntPtr.Zero) return null; try { return Name(h); } finally { CloseDesktop(h); } }
   public static string WindowStation() { return Name(GetProcessWindowStation()); }
+  // WindowsIdentity.Groups omits the logon SID; read it from TOKEN_GROUPS
+  // (SE_GROUP_LOGON_ID). The default named-pipe DACL grants this SID.
+  public static string LogonSid() {
+    IntPtr token; if (!OpenProcessToken(GetCurrentProcess(), 0x0008, out token)) throw new System.ComponentModel.Win32Exception();
+    try {
+      int needed; GetTokenInformation(token, 2, IntPtr.Zero, 0, out needed);
+      if (needed <= 0) throw new System.ComponentModel.Win32Exception();
+      IntPtr buf = Marshal.AllocHGlobal(needed);
+      try {
+        if (!GetTokenInformation(token, 2, buf, needed, out needed)) throw new System.ComponentModel.Win32Exception();
+        int count = Marshal.ReadInt32(buf);
+        for (int i = 0; i < count; i++) {
+          long entry = buf.ToInt64() + IntPtr.Size + (long)i * 2 * IntPtr.Size;
+          uint attributes = (uint)Marshal.ReadInt32(new IntPtr(entry + IntPtr.Size));
+          if ((attributes & 0xC0000000u) != 0xC0000000u) continue;
+          IntPtr str; if (!ConvertSidToStringSid(Marshal.ReadIntPtr(new IntPtr(entry)), out str)) throw new System.ComponentModel.Win32Exception();
+          try { return Marshal.PtrToStringUni(str); } finally { LocalFree(str); }
+        }
+        return null;
+      } finally { Marshal.FreeHGlobal(buf); }
+    } finally { CloseHandle(token); }
+  }
   public static string Pipe(string path, out uint pid) {
     pid = 0;
     IntPtr h = CreateFile(path, 0x00020080, 0, IntPtr.Zero, 3, 0, IntPtr.Zero);
@@ -806,37 +848,123 @@ public static class OmbCuaProbe {
   }
 }
 '@
-function Acl($sddl) {
-  if (-not $sddl) { return $null }
-  $sd = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
-  $entries = @(foreach ($ace in $sd.DiscretionaryAcl) {
-    if ($ace -is [System.Security.AccessControl.CommonAce]) {
-      [ordered]@{ sid = $ace.SecurityIdentifier.Value; type = $(if ($ace.AceQualifier -eq 'AccessAllowed') { 'allow' } else { 'deny' }); rights = [int64]([uint32]$ace.AccessMask); inheritOnly = [bool]($ace.AceFlags -band [System.Security.AccessControl.AceFlags]::InheritOnly) }
-    } else { [ordered]@{ sid = 'S-1-0-0'; type = 'allow'; rights = 4294967295; inheritOnly = $false } }
-  })
-  [ordered]@{ ownerSid = $sd.Owner.Value; entries = $entries }
+  # AccessMask is Int32: GENERIC_READ and friends arrive negative, and a
+  # [uint32] cast of a negative Int32 throws in PowerShell 5.1.
+  function Mask($value) { $m = [int64]$value; if ($m -lt 0) { $m += 4294967296 }; $m }
+  function Acl($sddl) {
+    if (-not $sddl) { throw 'empty security descriptor' }
+    $sd = New-Object System.Security.AccessControl.RawSecurityDescriptor($sddl)
+    $entries = @(foreach ($ace in $sd.DiscretionaryAcl) {
+      if ($ace -is [System.Security.AccessControl.CommonAce]) {
+        $allow = $ace.AceQualifier -eq [System.Security.AccessControl.AceQualifier]::AccessAllowed
+        # [bool] of a flags enum throws InvalidCastException; compare the bit.
+        $inheritOnly = (([int]$ace.AceFlags) -band 8) -ne 0
+        [ordered]@{ sid = $ace.SecurityIdentifier.Value; type = $(if ($allow) { 'allow' } else { 'deny' }); rights = (Mask $ace.AccessMask); inheritOnly = $inheritOnly }
+      } else {
+        # Object/callback/compound ACEs are not interpreted: treat as Everyone full access.
+        [ordered]@{ sid = 'S-1-1-0'; type = 'allow'; rights = [int64]4294967295; inheritOnly = $false }
+      }
+    })
+    [ordered]@{ ownerSid = $(if ($sd.Owner) { $sd.Owner.Value } else { $null }); entries = $entries }
+  }
+  function Proc($p) {
+    if (-not $p) { return $null }
+    $owner = (Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid).Sid
+    [ordered]@{ pid = [int]$p.ProcessId; parentPid = [int]$p.ParentProcessId; sessionId = [int]$p.SessionId; ownerSid = $owner; executablePath = $p.ExecutablePath; startTimeMs = [int64](([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds()) }
+  }
+  if ($op -eq 'identity') {
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $out = [ordered]@{ sid = $id.User.Value; userName = $id.Name; sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId; logonSid = [OmbCuaProbe]::LogonSid() }
+  } elseif ($op -eq 'session') {
+    $sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+    $out = [ordered]@{ sessionId = $sessionId; connectState = [OmbCuaProbe]::ConnectState($sessionId); windowStation = [OmbCuaProbe]::WindowStation(); inputDesktop = [OmbCuaProbe]::InputDesktop() }
+  } elseif ($op -eq 'processInfo') {
+    $out = Proc (Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$req.pid))
+  } elseif ($op -eq 'processesNamed') {
+    $out = @(Get-CimInstance Win32_Process -Filter ("Name='" + ($req.name -replace "'", "") + "'") | ForEach-Object { Proc $_ })
+  } elseif ($op -eq 'acl') {
+    $out = Acl (Get-Acl -LiteralPath $req.path).Sddl
+  } elseif ($op -eq 'pipeInfo') {
+    $serverPid = [uint32]0
+    $sddl = [OmbCuaProbe]::Pipe($req.path, [ref]$serverPid)
+    if ($sddl) { $out = Acl $sddl; $out.serverPid = [int64]$serverPid } else { $out = $null }
+  } else {
+    throw 'unknown probe op'
+  }
+  $result = [ordered]@{ schema = 'omb-cua-probe/1'; op = $op; ok = $true; value = $out }
+} catch {
+  $result = [ordered]@{ schema = 'omb-cua-probe/1'; op = $op; ok = $false; error = $_.Exception.GetType().FullName }
 }
-function Proc($p) {
-  if (-not $p) { return $null }
-  $owner = (Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid).Sid
-  [ordered]@{ pid = [int]$p.ProcessId; parentPid = [int]$p.ParentProcessId; sessionId = [int]$p.SessionId; ownerSid = $owner; executablePath = $p.ExecutablePath; startTimeMs = [int64](([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds()) }
-}
-$out = switch ($req.op) {
-  'identity' { $id = [System.Security.Principal.WindowsIdentity]::GetCurrent(); [ordered]@{ sid = $id.User.Value; userName = $id.Name; sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId; logonSid = @($id.Groups | Where-Object { $_.Value -like 'S-1-5-5-*' } | Select-Object -First 1 | ForEach-Object { $_.Value })[0] } }
-  'session' { $sid = [System.Diagnostics.Process]::GetCurrentProcess().SessionId; [ordered]@{ sessionId = $sid; connectState = [OmbCuaProbe]::ConnectState($sid); windowStation = [OmbCuaProbe]::WindowStation(); inputDesktop = [OmbCuaProbe]::InputDesktop() } }
-  'processInfo' { Proc (Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$req.pid)) }
-  'processesNamed' { @(Get-CimInstance Win32_Process -Filter ("Name='" + ($req.name -replace "'", "") + "'") | ForEach-Object { Proc $_ }) }
-  'acl' { Acl (Get-Acl -LiteralPath $req.path).Sddl }
-  'pipeInfo' { $serverPid = [uint32]0; $sddl = [OmbCuaProbe]::Pipe($req.path, [ref]$serverPid); if ($sddl) { $a = Acl $sddl; $a.serverPid = [int]$serverPid; $a } else { $null } }
-  default { throw 'unknown probe op' }
-}
-ConvertTo-Json -InputObject $out -Depth 6 -Compress
+[Console]::Out.WriteLine('OMBCUA1:' + (ConvertTo-Json -InputObject $result -Depth 8 -Compress))
+if (-not $result.ok) { exit 3 }
+exit 0
 `;
 
-export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 10_000, environment = process.env } = {}) {
-  const powershell = path.win32.join(environment.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+export const WINDOWS_PROBE_SCRIPT = PROBE_SCRIPT;
+
+export function encodeWindowsProbeCommand(script = PROBE_SCRIPT) {
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  if (encoded.length > MAX_ENCODED_COMMAND) throw new Error("Windows probe script is too long for -EncodedCommand");
+  return encoded;
+}
+
+const isUint32 = (value) => Number.isSafeInteger(value) && value >= 0 && value <= 0xffffffff;
+const isInt = (value) => Number.isSafeInteger(value) && value >= 0;
+const optionalSid = (value) => value === null || (typeof value === "string" && SID.test(value));
+
+function probeAclShape(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && optionalSid(value.ownerSid ?? null) &&
+    Array.isArray(value.entries) && value.entries.every((entry) => entry && typeof entry === "object" &&
+      typeof entry.sid === "string" && SID.test(entry.sid) && (entry.type === "allow" || entry.type === "deny") &&
+      isUint32(entry.rights) && typeof entry.inheritOnly === "boolean"));
+}
+
+function probeProcessShape(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && isPid(value.pid) && isInt(value.parentPid) &&
+    isInt(value.sessionId) && optionalSid(value.ownerSid ?? null) &&
+    (value.executablePath === null || value.executablePath === undefined || typeof value.executablePath === "string") &&
+    isTime(value.startTimeMs));
+}
+
+// What each op may legitimately return. Anything else, including null where
+// null is not an answer, is a probe failure.
+const PROBE_VALUE = Object.freeze({
+  identity: (v) => Boolean(v && typeof v.sid === "string" && SID.test(v.sid) && isInt(v.sessionId) && optionalSid(v.logonSid ?? null)),
+  session: (v) => Boolean(v && isInt(v.sessionId) && Number.isSafeInteger(v.connectState) &&
+    (v.windowStation === null || typeof v.windowStation === "string") && (v.inputDesktop === null || typeof v.inputDesktop === "string")),
+  processInfo: (v) => v === null || probeProcessShape(v),
+  processesNamed: (v) => Array.isArray(v) && v.every(probeProcessShape),
+  acl: probeAclShape,
+  pipeInfo: (v) => v === null || (probeAclShape(v) && isUint32(v.serverPid)),
+});
+
+/** Parse one framed probe reply; throws probe-failed for anything but a well-formed answer to `op`. */
+export function parseWindowsProbeOutput(op, stdout) {
+  const frames = String(stdout ?? "").split(/\r?\n/).filter((line) => line.startsWith(PROBE_FRAME));
+  if (frames.length !== 1) throw unavailable("probe-failed", `Windows ${op} probe returned no result`);
+  let reply;
+  try {
+    reply = JSON.parse(frames[0].slice(PROBE_FRAME.length));
+  } catch (error) {
+    throw unavailable("probe-failed", `Windows ${op} probe returned invalid output`, error);
+  }
+  if (!reply || reply.schema !== PROBE_SCHEMA || reply.op !== op) throw unavailable("probe-failed", `Windows ${op} probe returned a mismatched result`);
+  if (reply.ok !== true) {
+    const kind = typeof reply.error === "string" ? reply.error.replace(/[^\w.]/g, "").slice(0, 120) : "unknown";
+    throw unavailable("probe-failed", `Windows ${op} probe failed (${kind})`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(reply, "value") || !PROBE_VALUE[op]?.(reply.value)) {
+    throw unavailable("probe-failed", `Windows ${op} probe returned an unexpected value`);
+  }
+  return reply.value;
+}
+
+export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 20_000, environment = process.env } = {}) {
+  const systemRoot = environment.SystemRoot ?? "C:\\Windows";
+  const powershell = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const encoded = encodeWindowsProbeCommand();
   const call = (request) => new Promise((resolve, reject) => {
-    const child = run(powershell, ["-NoProfile", "-NonInteractive", "-Command", "-"], {
+    const child = run(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
       env: { ...environment, OMB_CUA_PROBE_REQUEST: JSON.stringify(request) },
       timeout: timeoutMs,
       killSignal: "SIGKILL",
@@ -844,19 +972,22 @@ export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 10_00
       windowsHide: true,
       encoding: "utf8",
     }, (error, stdout) => {
-      if (error) return reject(unavailable("probe-failed", `Windows ${request.op} probe failed`, error));
+      // The frame's error type is more useful than the exit code; it is also
+      // the only detail passed on (no stderr, no environment).
       try {
-        const text = String(stdout).trim();
-        resolve(text === "" || text === "null" ? null : JSON.parse(text));
-      } catch (parseError) {
-        reject(unavailable("probe-failed", `Windows ${request.op} probe returned invalid output`, parseError));
+        const value = parseWindowsProbeOutput(request.op, stdout);
+        if (error) throw unavailable("probe-failed", `Windows ${request.op} probe exited abnormally`, error);
+        resolve(value);
+      } catch (failure) {
+        reject(failure);
       }
     });
-    child?.stdin?.end(PROBE_SCRIPT);
+    // Nothing is read from stdin; close it so PowerShell never waits on it.
+    child?.stdin?.end();
   });
   const restrict = (directory, sid) => new Promise((resolve, reject) => {
     if (!SID.test(sid)) return reject(unavailable("identity-unknown", "Invalid SID"));
-    const icacls = path.win32.join(environment.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+    const icacls = path.win32.join(systemRoot, "System32", "icacls.exe");
     run(icacls, [directory, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, `*${SYSTEM_SID}:(OI)(CI)F`], {
       timeout: timeoutMs, killSignal: "SIGKILL", windowsHide: true, maxBuffer: 1 << 16,
     }, (error) => (error ? reject(unavailable("descriptor-acl", "Computer-use state directory could not be made private", error)) : resolve()));
@@ -865,11 +996,7 @@ export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 10_00
     identity: () => call({ op: "identity" }),
     session: () => call({ op: "session" }),
     processInfo: (pid) => call({ op: "processInfo", pid }),
-    // PowerShell's switch unrolls arrays: none is null, one is a bare object.
-    processesNamed: async (name) => {
-      const found = await call({ op: "processesNamed", name });
-      return Array.isArray(found) ? found : found ? [found] : [];
-    },
+    processesNamed: (name) => call({ op: "processesNamed", name }),
     acl: (target) => call({ op: "acl", path: target }),
     pipeInfo: (pipePath) => call({ op: "pipeInfo", path: pipePath }),
     restrictDirectory: restrict,
