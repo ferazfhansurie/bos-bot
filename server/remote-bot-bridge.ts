@@ -1058,7 +1058,7 @@ export class RemoteBotBridge {
     if (result.status !== 200 || !Array.isArray(result.body?.bots)) throw new BridgeError(502, "the other Mac did not list its bots");
     const seen = new Set<string>();
     for (const raw of result.body.bots as unknown[]) {
-      if (!isObject(raw) || typeof raw.id !== "string" || !ID.test(raw.id) || raw.hidden === true || relayed(raw)) continue;
+      if (!isObject(raw) || typeof raw.id !== "string" || !ID.test(raw.id) || raw.hidden === true || raw.visibility === "private" || relayed(raw)) continue;
       seen.add(raw.id);
       this.absorbBot(home, raw);
     }
@@ -1073,7 +1073,7 @@ export class RemoteBotBridge {
   private absorbBot(home: Home, raw: Record<string, any>): boolean {
     const botId = raw.id as string;
     if (relayed(raw)) return false;
-    if (raw.hidden === true) {
+    if (raw.hidden === true || raw.visibility === "private") {
       if (home.state.bots[botId]) this.removeBot(home, botId);
       return false;
     }

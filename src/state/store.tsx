@@ -343,6 +343,7 @@ export interface Bot {
   name: string;
   title: string;
   description: string;
+  visibility?: "shared" | "private";
   /** Standing instructions (SOUL.md). Canonical on the server; the file is a mirror. */
   soul?: string;
   /** The SOUL.md mirror on disk differs from the record; the Soul editor offers apply/discard. */

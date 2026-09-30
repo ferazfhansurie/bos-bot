@@ -188,6 +188,8 @@ export interface WireBot {
   name: string;
   title: string;
   description: string;
+  /** Missing means shared for bots created before this setting existed. */
+  visibility?: "shared" | "private";
   /** Standing instructions — the persona body. */
   soul?: string;
   /** sha256 of soul, for spotting a SOUL.md edited outside the app. */

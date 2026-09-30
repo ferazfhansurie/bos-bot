@@ -16,6 +16,7 @@ export type BotPatch = Partial<
     | "name"
     | "title"
     | "description"
+    | "visibility"
     | "soul"
     | "notifications"
     | "cloudBackend"

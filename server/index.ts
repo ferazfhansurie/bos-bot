@@ -3397,6 +3397,7 @@ interface SseClient {
 }
 const sseClients = new Set<SseClient>();
 const peerSseClients = new Set<SseClient & { sessionId: string }>();
+const peerKnownBots = new Map<string, Set<string>>();
 function closeSessionStreams(sessionId: string): void {
   browserLive.closeForOwner(sessionId);
   for (const client of [...sseClients, ...peerSseClients]) {
@@ -3463,18 +3464,25 @@ function broadcast(payload: Record<string, unknown>) {
   // email streams before any further workspace data is delivered.
   sessions.revalidateEmailSessions();
   for (const client of Array.from(peerSseClients)) {
-    if (!sessions.isLive(client.sessionId)) { client.res.end(); peerSseClients.delete(client); continue; }
+    if (!sessions.isLive(client.sessionId)) { client.res.end(); peerSseClients.delete(client); peerKnownBots.delete(client.sessionId); continue; }
     const projected = peerEvent(payload, {
       owns: threadId => {
         const botId = peerThreads.botFor(client.sessionId, threadId);
         const bot = botId ? store.bot(botId) : null;
-        return !!bot && !bot.hidden && store.tasks(bot.id).some(task => task.threadId === threadId);
+        return !!bot && !bot.hidden && bot.visibility !== "private" && store.tasks(bot.id).some(task => task.threadId === threadId);
       },
+      knownBot: botId => peerKnownBots.get(client.sessionId)?.has(botId) === true,
       botView: botId => {
         const bot = store.bot(botId);
-        return bot && !bot.hidden ? peerBotView(bot, client.sessionId) : null;
+        return bot && !bot.hidden && bot.visibility !== "private" ? peerBotView(bot, client.sessionId) : null;
       },
     });
+    if (projected?.kind === "bot" && typeof (projected.bot as { id?: unknown })?.id === "string") {
+      const known = peerKnownBots.get(client.sessionId) ?? new Set<string>();
+      known.add((projected.bot as { id: string }).id);
+      peerKnownBots.set(client.sessionId, known);
+    }
+    if (projected?.kind === "bot.deleted" && typeof projected.botId === "string") peerKnownBots.get(client.sessionId)?.delete(projected.botId);
     if (projected && deliverSseFrame(client, String(projected.kind), `data: ${JSON.stringify(projected)}\n\n`) === "disconnected") peerSseClients.delete(client);
   }
   const seq = ++lastSeq;
@@ -6028,7 +6036,7 @@ function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
   const owner = cfg.profile?.name?.trim() || "Owner";
   const links = new Map(multiplayerLinks.bridgeLinks().map(link => [link.homeId, link]));
   const candidates = sharedRoomBotCandidates(room, actorId, ENVIRONMENT_ID,
-    store.bots.filter(bot => !bot.hidden).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
+    store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
     multiplayerLinks.contacts().map(bot => bot.id));
   return candidates.flatMap((id): SharedRoomBot[] => {
     const key = parseContactId(id);
@@ -6036,7 +6044,7 @@ function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
     const bot = { homeId: key.homeId, kind: "bot" as const, localId: key.localId };
     if (key.homeId === ENVIRONMENT_ID) {
       const local = store.bot(key.localId);
-      return local && !local.hidden ? [{ key: bot, id, name: local.name, color: local.color, mascotBody: local.mascotBody, avatarUrl: local.avatarUrl, avatarCrop: local.avatarCrop, remote: false, ownerName: owner }] : [];
+      return local && !local.hidden && (actorId === multiplayerActors.ownerId || local.visibility !== "private") ? [{ key: bot, id, name: local.name, color: local.color, mascotBody: local.mascotBody, avatarUrl: local.avatarUrl, avatarCrop: local.avatarCrop, remote: false, ownerName: owner }] : [];
     }
     const remote = remoteBots.roomBot(key.homeId, key.localId);
     const link = links.get(key.homeId);
@@ -12054,6 +12062,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     const peerSessionId = auth.kind === "session" && auth.scopes.includes("peer") && !auth.scopes.includes("client") && !auth.scopes.includes("admin")
       ? auth.session.id : null;
+    // Check the current record for every peer request. Persisted peer-thread
+    // grants cannot survive an owner changing a bot to Private.
+    if (peerSessionId) {
+      const directBotId = /^\/api\/bots\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
+      const threadId = /^\/api\/(?:threads|multiplayer\/peer-threads)\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
+      const bot = directBotId ? store.bot(directBotId) : threadId ? store.bot(peerThreads.botFor(peerSessionId, threadId) ?? "") : null;
+      if (bot?.visibility === "private") { req.resume(); return json(res, 404, { error: "no such bot" }); }
+    }
     const peerOwns = (botId: string, threadId: unknown): boolean =>
       !peerSessionId || (typeof threadId === "string" && peerThreads.owns(peerSessionId, botId, threadId));
     if (HOSTED_WORKSPACE && auth.kind === "session") {
@@ -12205,7 +12221,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const targetBot = store.bot(entry.botId);
           const title = task?.title ?? "";
           const privateBridge = binding ? title === `${binding.name} · linked Mac` : title.endsWith(" · linked Mac");
-          if (!task || !targetBot || targetBot.hidden || (!privateBridge && !title.startsWith("room · "))) {
+          if (!task || !targetBot || targetBot.hidden || targetBot.visibility === "private" || (!privateBridge && !title.startsWith("room · "))) {
             return json(res, 409, { error: "a renamed or private thread needs owner review before peer migration" });
           }
           if (threadBusy(entry.botId, entry.threadId)) return json(res, 409, { error: "wait for the bridge thread to finish before migrating" });
@@ -12374,8 +12390,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const key = parseContactId(id);
         return key?.kind === "bot" && key.homeId !== ENVIRONMENT_ID;
       };
+      const privateBotIds = new Set(store.bots.filter(bot => bot.visibility === "private")
+        .map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`));
+      const foreignViewer = Boolean(peerSessionId) || actorId !== multiplayerActors.ownerId;
+      const privateRoom = (room: { id: string; memberIds: string[] }): boolean =>
+        foreignViewer && (room.memberIds.some(id => privateBotIds.has(id)) ||
+          sharedRooms.allMessages(room.id).some(message =>
+            privateBotIds.has(contactId(message.actor)) || message.botTargets?.some(id => privateBotIds.has(id))));
       const listedRoom = (room: unknown) => !(room && typeof room === "object" && Array.isArray((room as { memberIds?: unknown }).memberIds) &&
-        (room as { memberIds: unknown[] }).memberIds.length === 2 && (room as { memberIds: unknown[] }).memberIds.some(remoteBotMember));
+        (((room as { memberIds: unknown[] }).memberIds.length === 2 && (room as { memberIds: unknown[] }).memberIds.some(remoteBotMember)) ||
+          privateRoom(room as { id: string; memberIds: string[] })));
+      // A saved room membership, reply, file or cursor cannot outlive privacy.
+      const roomId = /^\/api\/multiplayer\/rooms\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
+      const requestedRoom = roomId && actorId ? sharedRooms.roomFor(roomId, actorId) : null;
+      if (requestedRoom && privateRoom(requestedRoom)) { req.resume(); return json(res, 404, { error: "room unavailable" }); }
       if (multiplayerLinks.primaryActorId() && !path.startsWith("/api/multiplayer/links") &&
           !path.startsWith("/api/multiplayer/actor-bindings")) {
         if (auth.kind !== "loopback" && actorId !== multiplayerLinks.primaryActorId()) {
@@ -12429,7 +12457,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ...multiplayerActors.people(cfg.profile?.name ?? "Owner").map(person => ({
             ...person, avatar: person.id === multiplayerActors.ownerId ? ownerPhotoData() : multiplayerLinks.avatarForPerson(person.name),
           })),
-          ...store.bots.filter(bot => !bot.hidden).map(bot => ({
+          ...store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => ({
             id: `${ENVIRONMENT_ID}:bot:${bot.id}`, name: bot.name, kind: "bot" as const, homeId: ENVIRONMENT_ID, title: bot.title,
             color: bot.color, mascotBody: bot.mascotBody ?? null, avatarUrl: bot.avatarUrl ?? null, avatarCrop: bot.avatarCrop ?? "mascot",
           })),
@@ -12498,7 +12526,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const targetId = body?.targetId;
         const target = [
           ...multiplayerActors.people(cfg.profile?.name ?? "Owner"),
-          ...store.bots.filter(bot => !bot.hidden).map(bot => ({ id: `${ENVIRONMENT_ID}:bot:${bot.id}`, name: bot.name, kind: "bot" as const })),
+          ...store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => ({ id: `${ENVIRONMENT_ID}:bot:${bot.id}`, name: bot.name, kind: "bot" as const })),
         ].find(contact => contact.id === targetId);
         if (!target || targetId === actorId) return json(res, 400, { error: "choose a shared contact" });
         if (target.kind === "bot" && actorId !== multiplayerActors.ownerId) return json(res, 403, { error: "this bot is not available to you" });
@@ -12523,7 +12551,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           });
           const allowedMembers = new Set([
             ...multiplayerActors.people(cfg.profile?.name ?? "Owner").map(person => person.id),
-            ...store.bots.filter(bot => !bot.hidden).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
+            ...store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
             ...(body.memberIds.length > 2 ? linkedBots.map(bot => bot.id) : []),
           ]);
           if (body.memberIds.some((id: unknown) => typeof id !== "string" || !allowedMembers.has(id))) {
@@ -12554,7 +12582,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (body.memberIds.some((id: unknown) => parseContactId(id)?.kind !== "person")) return json(res, 400, { error: "add people to the group; mention bots when you need them" });
           const allowedMembers = new Set([
             ...multiplayerActors.people(cfg.profile?.name ?? "Owner").map(person => person.id),
-            ...store.bots.filter(bot => !bot.hidden).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
+            ...store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
             ...multiplayerLinks.contacts().filter(bot => remoteBots.roomBot(bot.homeId, parseContactId(bot.id)!.localId)).map(bot => bot.id),
           ]);
           if (body.memberIds.some((id: unknown) => typeof id !== "string" || !allowedMembers.has(id))) return json(res, 403, { error: "room contains an unavailable member" });
@@ -14997,10 +15025,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     };
     if (method === "GET" && path === "/api/bots") {
-      if (peerSessionId) return json(res, 200, {
-        bots: store.bots.filter(bot => !bot.hidden).map(bot => peerBotView(bot, peerSessionId)),
+      if (peerSessionId) {
+        const bots = store.bots.filter(bot => !bot.hidden && bot.visibility !== "private").map(bot => peerBotView(bot, peerSessionId));
+        peerKnownBots.set(peerSessionId, new Set(bots.map(bot => bot.id)));
+        return json(res, 200, {
+        bots,
         botQueuedMessages: {}, sections: [], groups: [], computerControl: {},
-      });
+        });
+      }
       const limit = pageSize(url.searchParams.get("messages"));
       if (limit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       // wireBot(), not publicBot(): publicBot() pulls the whole transcript via
@@ -16529,6 +16561,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const patch: Record<string, unknown> = {};
       Object.assign(patch, profile.patch);
+      if (body.visibility !== undefined) {
+        if (body.visibility !== "shared" && body.visibility !== "private") return json(res, 400, { error: "visibility must be shared or private" });
+        patch.visibility = body.visibility;
+      }
       let section: string | undefined | null;
       if (body.section !== undefined) {
         if (body.section === null) section = null;

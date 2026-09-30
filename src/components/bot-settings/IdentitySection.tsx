@@ -49,6 +49,13 @@ export function IdentitySection({
           onChange={(e) => patch({ title: e.target.value })}
         />
       </Field>
+      <Field label="Visibility">
+        <select className={inputCls} aria-label="Bot visibility" value={bot.visibility ?? "shared"}
+          onChange={(event) => patch({ visibility: event.target.value as "shared" | "private" })}>
+          <option value="shared">Shared with linked homes</option>
+          <option value="private">Private to this Mac and paired phone</option>
+        </select>
+      </Field>
       <div className="block">
         <div className="mb-1.5 flex items-center justify-between gap-3">
           <label htmlFor={`bot-instructions-${bot.id}`} className="text-[13px] text-ink-secondary">
@@ -72,7 +79,7 @@ export function IdentitySection({
           onChange={(e) => patch({ description: e.target.value })}
         />
         <div className="mt-1.5 flex items-start justify-between gap-3 text-[11px] text-ink-secondary">
-          <span>Shown in rosters, on the phone, and to other bots. Standing instructions belong in Soul, which has room for a full document.</span>
+          <span>Shown on this Mac and paired phone. Shared bots also appear on linked homes. Standing instructions belong in Soul.</span>
           {/* The cap only matters when someone is near it; a counter under a
               one-line field otherwise reads as an invitation to fill it. */}
           {bot.description.length > 3_000 && (

@@ -3,13 +3,16 @@
 export interface PeerEventAccess {
   owns(threadId: string): boolean;
   botView(botId: string): Record<string, unknown> | null;
+  /** Only revoke an identity this peer already received. */
+  knownBot?(botId: string): boolean;
 }
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 export function peerEvent(frame: Record<string, unknown>, access: PeerEventAccess): Record<string, unknown> | null {
   if (frame.kind === "bot") {
     if (!object(frame.bot) || typeof frame.bot.id !== "string") return null;
     const bot = access.botView(frame.bot.id);
-    return bot ? { kind: "bot", bot } : null;
+    // A visibility change must evict a previously cached virtual bot now.
+    return bot ? { kind: "bot", bot } : access.knownBot?.(frame.bot.id) ? { kind: "bot.deleted", botId: frame.bot.id } : null;
   }
   if (frame.kind === "runtime") {
     if (!object(frame.event) || typeof frame.event.threadId !== "string" || !access.owns(frame.event.threadId)) return null;

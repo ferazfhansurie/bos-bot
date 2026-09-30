@@ -17,6 +17,7 @@ describe("scoped peer events", () => {
     expect(peerEvent({ kind: "runtime", event: { threadId: "private", raw: "secret" } }, access)).toBeNull();
     expect(peerEvent({ kind: "bot", bot: { id: "bot", messages: ["secret"] } }, access)).toEqual({ kind: "bot", bot: view });
     expect(peerEvent({ kind: "bot", bot: { id: "hidden" } }, access)).toBeNull();
+    expect(peerEvent({ kind: "bot", bot: { id: "hidden" } }, { ...access, knownBot: () => true })).toEqual({ kind: "bot.deleted", botId: "hidden" });
   });
   it("relays incremental events without raw provider state or private thread references", () => {
     expect(peerEvent({ kind: "runtime", event: { threadId: "shared", type: "content.delta", payload: { delta: "hello" }, raw: "secret" } }, access))
