@@ -488,12 +488,7 @@ struct ChatListView: View {
     }
 
     private var pinnedConversations: [ConversationEntry] {
-        // Search also exposes local bot rooms. Resolve their saved pins even
-        // though the ordinary recent list shows people, shared groups and bots.
-        let localRooms = session.state.chatSummaries(activity: activity).filter {
-            if case .room = $0.chat { return true }; return false
-        }.map(ConversationEntry.local)
-        let byID = Dictionary(uniqueKeysWithValues: (orderedConversations + localRooms).map { ($0.id, $0) })
+        let byID = Dictionary(uniqueKeysWithValues: orderedConversations.map { ($0.id, $0) })
         return pinnedChats.visibleIDs(available: Set(byID.keys)).compactMap { byID[$0] }
     }
 
@@ -615,7 +610,7 @@ struct ChatListView: View {
         let contactIDs = Set(remoteContacts.map(\.id))
         let directRooms = sharedRooms.filter { $0.memberIds.count == 2 && !$0.isGroup && $0.memberIds.contains(selfID) }
         let entries: [(ConversationEntry, Double)] =
-            session.state.chatSummaries(activity: activity).filter { if case .bot = $0.chat { return true }; return false }
+            session.state.chatSummaries(activity: activity)
                 .map { (.local($0), $0.lastActivity) }
             + remoteContacts.map { contact in
                 (.contact(contact), directRooms.first(where: { $0.memberIds.contains(contact.id) })?.lastActivity ?? 0)
