@@ -4,7 +4,7 @@ import { createControlPlaneClient } from "./control-plane-client.mjs";
 const ORIGIN = "https://accounts.openmausbot.com";
 /** Separate ephemeral sign-in: never changes the Mac's existing BOS account,
  * provider logins, installation credential, or remote pairing. */
-export function signInRemoteOwner({ BrowserWindow, ipcMain, parent, environment, createClient = createControlPlaneClient }) {
+export function signInRemoteOwner({ BrowserWindow, ipcMain, parent, environment, createClient = createControlPlaneClient, timers = { setTimeout, clearTimeout } }) {
   return new Promise((resolve, reject) => {
     const channel = `remote-owner:${randomUUID()}`;
     const url = new URL("./resources/remote-full-owner.html", import.meta.url);
@@ -12,29 +12,80 @@ export function signInRemoteOwner({ BrowserWindow, ipcMain, parent, environment,
       webPreferences: { preload: fileURLToPath(new URL("./remote-full-owner-preload.cjs", import.meta.url)), sandbox: true, contextIsolation: true, nodeIntegration: false,
         partition: `remote-owner-${randomUUID()}`, additionalArguments: [`--owner-channel=${channel}`] } });
     const client = createClient({ baseURL: ORIGIN });
-    let complete = false, pending = false;
-    const timeout = setTimeout(() => win.close(), 10 * 60_000);
-    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    win.webContents.on("will-navigate", event => event.preventDefault());
-    win.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    const contents = win.webContents;
+    let state = "active", generation = 0, pending = false, cleaned = false;
+    const alive = () => !win.isDestroyed() && !contents.isDestroyed();
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      timers.clearTimeout(timeout);
+      ipcMain.removeHandler(channel);
+      win.removeListener("close", closing);
+      win.removeListener("closed", cancel);
+      win.removeListener("ready-to-show", show);
+      contents.removeListener("destroyed", cancel);
+    };
+    const dismiss = () => {
+      if (win.isDestroyed()) return;
+      try { win.close(); } catch { /* Destruction can race the native close. */ }
+    };
+    const cancel = (dismissWindow = true) => {
+      if (state !== "active") return;
+      state = "cancelled"; generation++;
+      cleanup();
+      reject(new Error("Owner sign-in cancelled"));
+      if (dismissWindow) dismiss();
+    };
+    const closing = () => cancel(false);
+    const show = () => { if (state === "active" && alive()) win.show(); };
+    const timeout = timers.setTimeout(cancel, 10 * 60_000);
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.on("will-navigate", event => event.preventDefault());
+    contents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     ipcMain.handle(channel, async (event, action, data) => {
-      if (event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame || event.senderFrame.url !== url.href || win.isDestroyed()) throw new Error("Owner window only");
+      // Check lifecycle before accessing native frame properties: those may
+      // throw once Chromium destroys the window while a request is pending.
+      if (state !== "active" || !alive() || event.sender !== contents || event.senderFrame !== contents.mainFrame || event.senderFrame.url !== url.href) throw new Error("Owner window only");
       if (action === "context") return { origin: environment.origin, environmentId: environment.environmentId };
-      if (pending || complete) return { error: "A request is already in progress" };
+      if (pending) return { error: "A request is already in progress" };
       pending = true;
+      const requestGeneration = generation;
+      const current = () => state === "active" && requestGeneration === generation && alive();
       try {
-        if (action === "request" && typeof data?.email === "string") { await client.requestOTP(data.email); return { sent: true }; }
+        if (action === "request" && typeof data?.email === "string") {
+          await client.requestOTP(data.email);
+          if (!current()) { cancel(); return { cancelled: true }; }
+          return { sent: true };
+        }
         if (action === "verify" && typeof data?.email === "string" && typeof data?.code === "string") {
           const account = await client.verifyOTP(data.email, data.code);
-          complete = true; resolve({ ...account, close: () => client.signOut(account.accountToken).catch(() => {}) }); win.close(); return { verified: true };
+          // A cancelled request can still create an account session remotely.
+          // Dispose that late result, never resolve it to the grant controller.
+          // The successful controller also receives this idempotent disposer.
+          let disposal;
+          const closeAccount = () => disposal ??= Promise.resolve()
+            .then(() => client.signOut(account.accountToken)).catch(() => {});
+          if (!current()) {
+            cancel();
+            await closeAccount();
+            return { cancelled: true };
+          }
+          state = "succeeded"; generation++;
+          cleanup(); dismiss();
+          resolve({ ...account, close: closeAccount });
+          return { verified: true };
         }
         return { error: "Invalid request" };
-      } catch { return { error: "Sign-in failed. Check the code or try again." }; }
-      finally { pending = false; }
+      } catch {
+        if (!current()) { cancel(); return { cancelled: true }; }
+        return { error: "Sign-in failed. Check the code or try again." };
+      } finally { if (requestGeneration === generation) pending = false; }
     });
-    win.once("closed", () => { clearTimeout(timeout); ipcMain.removeHandler(channel); if (!complete) reject(new Error("Owner sign-in cancelled")); });
-    win.once("ready-to-show", () => win.show());
-    win.loadFile(fileURLToPath(url)).catch(() => { if (!win.isDestroyed()) win.close(); });
+    win.once("close", closing);
+    win.once("closed", cancel);
+    contents.once("destroyed", cancel);
+    win.once("ready-to-show", show);
+    win.loadFile(fileURLToPath(url)).catch(cancel);
   });
 }
 export async function authorizeRemoteFull(accountToken, body) {
