@@ -232,15 +232,11 @@ struct ChatView: View {
                         // one arrives — the store clears it on the same frame
                         // that appends the message, so there is never a beat
                         // where both are on screen.
-                        if let live = session.state.streaming[threadId], !live.isEmpty {
-                            StreamingBubble(text: live, reasoning: nil, color: current.color)
-                                .id(Self.liveBubbleId)
-                        } else if current.busy {
+                        LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
                             WorkingSteps(
                                 items: liveSteps,
                                 startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000)
                             )
-                            .id(Self.liveBubbleId)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -282,7 +278,9 @@ struct ChatView: View {
                 // the string so this fires once per delta batch, and without
                 // animation — animating every token turns a smooth stream
                 // into a stutter, because each scroll interrupts the last.
-                .onChange(of: session.state.streaming[threadId]?.count ?? 0) { _, length in
+                // Subscribed directly, so a token scrolls without asking this
+                // whole view to re-evaluate.
+                .onReceive(session.liveText.entry(threadId).$text.map(\.count).removeDuplicates()) { length in
                     guard length > 0 else { return }
                     proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
                 }
@@ -2249,6 +2247,26 @@ struct ScreenShot: View {
 /// stops looks more broken than one that never blinks. A correct version
 /// animates opacity on a separate view, which needs a device to get right;
 /// static is honest until then.
+/// The typed-so-far reply, or the working steps before any text exists.
+/// Observes only its own thread's live text, so it is the one view a
+/// streamed token redraws.
+private struct LiveReplyRow<Working: View>: View {
+    @ObservedObject var live: LiveText
+    let color: String
+    let busy: Bool
+    @ViewBuilder let working: () -> Working
+
+    var body: some View {
+        if !live.text.isEmpty {
+            StreamingBubble(text: live.text, reasoning: nil, color: color)
+                .id(ChatView.liveBubbleId)
+        } else if busy {
+            working()
+                .id(ChatView.liveBubbleId)
+        }
+    }
+}
+
 struct StreamingBubble: View {
     let text: String?
     let reasoning: String?

@@ -7,6 +7,7 @@
 // backgrounds, it moves between wifi and cellular. So the stream is torn
 // down deliberately when the app leaves the screen, and on the way back the
 // server is asked what was missed rather than being asked for everything.
+import Combine
 import Foundation
 import OSLog
 import SwiftUI
@@ -62,7 +63,24 @@ final class Session: ObservableObject {
         case offline(String)
     }
 
-    @Published private(set) var state = CompanionState()
+    /// Everything the app draws. Not `@Published`: a streamed token only
+    /// grows `streaming`/`reasoning`, and republishing the root for that
+    /// redrew every screen in the app once per token of every thread. Those
+    /// batches fold quietly and reach the one open bubble through
+    /// `liveText`; every other change announces itself as before.
+    private(set) var state = CompanionState() {
+        willSet { if !foldingQuietly { objectWillChange.send() } }
+        didSet {
+            liveText.sync(from: state)
+            stateChanges.send(state)
+        }
+    }
+    /// Every assignment of `state`, quiet ones included, for code that
+    /// watches it outside a view (what `$state` was).
+    let stateChanges = CurrentValueSubject<CompanionState, Never>(CompanionState())
+    /// The reply being typed, per thread, observable one thread at a time.
+    let liveText = LiveTextStore()
+    private var foldingQuietly = false
     @Published private(set) var connection: Connection?
     @Published private(set) var connections: [Connection] = []
     /// Whether the live pairing may administer the workspace — see
@@ -106,6 +124,15 @@ final class Session: ObservableObject {
     /// and persisted — when a stream goes live.
     private var rotation = CandidateRotation(hosts: [])
     private var streamTask: Task<Void, Never>?
+    /// Frames received but not yet folded. Folding them ~10x a second in one
+    /// mutation, rather than one mutation per token, is what keeps several
+    /// streaming threads from saturating the main thread. The cursor only
+    /// moves when a frame is folded, so a frame still waiting here when the
+    /// stream dies is simply replayed on reconnect.
+    private var pendingFrames: [StreamFrame] = []
+    private var frameFlushTask: Task<Void, Never>?
+    private static let frameBatchInterval: Duration = .milliseconds(100)
+    private static let frameBatchLimit = 512
     /// Best-effort authenticated route refresh started by the latest live SSE
     /// hello. Kept separate so endpoint discovery never stalls event delivery.
     private var endpointRefreshTask: Task<Void, Never>?
@@ -428,7 +455,7 @@ final class Session: ObservableObject {
             connection: winner.map(stored.dialing) ?? stored,
             token: token
         )
-        self.state = CompanionState()
+        self.resetState()
         // A fresh pairing settles any restore that was still waiting on the
         // keychain — the token is in hand, so there is nothing left to retry.
         restorePending = false
@@ -529,7 +556,7 @@ final class Session: ObservableObject {
         client = nil
         token = nil
         rotation = CandidateRotation(hosts: [])
-        state = CompanionState()
+        resetState()
         resetAvatarCache()
         NotificationCoordinator.shared.setBadge(0)
         restoreSelectedConnection()
@@ -553,8 +580,7 @@ final class Session: ObservableObject {
 
     private func clearActiveConnection() {
         resetCredentialEntry()
-        streamTask?.cancel()
-        streamTask = nil
+        stopStream()
         endpointRefreshTask?.cancel()
         endpointRefreshTask = nil
         restorePending = false
@@ -568,7 +594,7 @@ final class Session: ObservableObject {
         client = nil
         token = nil
         rotation = CandidateRotation(hosts: [])
-        state = CompanionState()
+        resetState()
         resetAvatarCache()
         resetAttachmentCache()
         attachmentSendIDs.removeAll()
@@ -591,8 +617,7 @@ final class Session: ObservableObject {
     private func stopActiveRuntime() {
         resetCredentialEntry()
         streamGeneration += 1
-        streamTask?.cancel()
-        streamTask = nil
+        stopStream()
         endpointRefreshTask?.cancel()
         endpointRefreshTask = nil
         restorePending = false
@@ -601,7 +626,7 @@ final class Session: ObservableObject {
         screenWatchers = 0
         client = nil
         token = nil
-        state = CompanionState()
+        resetState()
         resetAvatarCache()
         resetAttachmentCache()
         attachmentSendIDs.removeAll()
@@ -797,8 +822,7 @@ final class Session: ObservableObject {
     /// cursor survives, so this is a gap, not a reset.
     private func restartStream() {
         guard streamTask != nil else { return }
-        streamTask?.cancel()
-        streamTask = nil
+        stopStream()
         connect()
     }
 
@@ -807,8 +831,7 @@ final class Session: ObservableObject {
     /// a known point instead of wherever the socket happened to die.
     func disconnect() {
         resetCredentialEntry()
-        streamTask?.cancel()
-        streamTask = nil
+        stopStream()
         endpointRefreshTask?.cancel()
         endpointRefreshTask = nil
         endLinger()
@@ -852,6 +875,62 @@ final class Session: ObservableObject {
         guard lingerTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(lingerTask)
         lingerTask = .invalid
+    }
+
+    /// Fold what has been received, then cancel the stream. Flushing first
+    /// keeps the cursor and the state in step: every frame that arrived is
+    /// either folded with its seq, or was never received.
+    private func stopStream() {
+        flushFrames()
+        streamTask?.cancel()
+        streamTask = nil
+    }
+
+    /// A fresh state belongs to a different stream; nothing buffered for the
+    /// old one may land in it.
+    private func resetState() {
+        pendingFrames.removeAll()
+        frameFlushTask?.cancel()
+        frameFlushTask = nil
+        state = CompanionState()
+    }
+
+    private func enqueue(_ frame: StreamFrame) {
+        pendingFrames.append(frame)
+        if pendingFrames.count >= Self.frameBatchLimit {
+            flushFrames()
+            return
+        }
+        guard frameFlushTask == nil else { return }
+        frameFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.frameBatchInterval)
+            guard !Task.isCancelled else { return }
+            self?.frameFlushTask = nil
+            self?.flushFrames()
+        }
+    }
+
+    /// Fold every pending frame, in order, as one state mutation.
+    private func flushFrames() {
+        frameFlushTask?.cancel()
+        frameFlushTask = nil
+        guard !pendingFrames.isEmpty else { return }
+        let batch = pendingFrames
+        pendingFrames.removeAll(keepingCapacity: true)
+        var next = state
+        for frame in batch {
+            next.apply(frame)
+            next.advance(to: frame.seq)
+        }
+        foldingQuietly = batch.allSatisfy(\.frame.isLiveTextOnly)
+        state = next
+        foldingQuietly = false
+        for frame in batch {
+            if case let .notify(notification) = frame.frame {
+                NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
+            }
+        }
+        NotificationCoordinator.shared.setBadge(state.unreadCount)
     }
 
     private func run() async {
@@ -906,13 +985,9 @@ final class Session: ObservableObject {
                         refreshConnectionMetadata(using: client)
                         continue
                     }
-                    state.apply(frame)
-                    if case let .notify(notification) = frame.frame {
-                        NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
-                    }
-                    NotificationCoordinator.shared.setBadge(state.unreadCount)
-                    state.advance(to: frame.seq)
+                    enqueue(frame)
                 }
+                flushFrames()
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
                 status = .offline(failureMessage(for: URLError(.networkConnectionLost)))
@@ -927,6 +1002,7 @@ final class Session: ObservableObject {
                     log.info("stream closed by us")
                     return
                 }
+                flushFrames()
                 log.error("stream failed: \(error.localizedDescription, privacy: .public)")
                 status = .offline(failureMessage(for: error))
             }
@@ -944,12 +1020,17 @@ final class Session: ObservableObject {
         // Notification navigation can refresh while run() continues folding
         // live events. Retry once if that makes the fetched snapshot stale.
         for _ in 0..<2 {
+            // Buffered frames must count as folded here, or one received
+            // during the fetch would not move the cursor and the
+            // stale-snapshot check below could not see it.
+            flushFrames()
             let expectedCursor = state.cursor
             let snapshot = try await client.fleetForHydration(messages: 50)
             try Task.checkCancellation()
             guard streamGeneration == generation, self.client?.connection.id == client.connection.id else {
                 throw CancellationError()
             }
+            flushFrames()
             guard state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads,
                                 ifCursorMatches: expectedCursor) else { continue }
             log.info("hydrated \(snapshot.fleet.bots.count, privacy: .public) bots, \(snapshot.fleet.groups.count, privacy: .public) rooms")

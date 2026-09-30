@@ -26,6 +26,19 @@ final class StoreTests: XCTestCase {
 
     // MARK: - Hydration
 
+    func testOnlyContentDeltasCountAsLiveTextOnly() {
+        let delta = Frame.runtime(RuntimeEvent(type: "content.delta", threadId: "t1", delta: "hi", streamKind: "assistant_text"))
+        let reasoning = Frame.runtime(RuntimeEvent(type: "content.delta", threadId: "t1", delta: "hm", streamKind: "reasoning_text"))
+        let done = Frame.runtime(RuntimeEvent(type: "turn.completed", threadId: "t1", delta: nil, streamKind: nil))
+        XCTAssertTrue(delta.isLiveTextOnly)
+        XCTAssertTrue(reasoning.isLiveTextOnly)
+        // ending a turn clears the live text and settles the message, so the
+        // rest of the app has to hear about it
+        XCTAssertFalse(done.isLiveTextOnly)
+        XCTAssertFalse(Frame.config.isLiveTextOnly)
+        XCTAssertFalse(Frame.hello(cursor: "s:1", resumed: true).isLiveTextOnly)
+    }
+
     func testRosterIsLoadedOnlyAfterAnAcceptedSnapshot() throws {
         var state = CompanionState()
         XCTAssertFalse(state.rosterLoaded)

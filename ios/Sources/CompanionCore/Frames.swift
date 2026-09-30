@@ -179,3 +179,13 @@ public struct StreamFrame: Decodable, Sendable {
         self.seq = seq
     }
 }
+
+extension Frame {
+    /// A token of a reply being typed, and nothing else. Frames like this
+    /// change only the live text, which the app renders per thread, so
+    /// folding them need not redraw the rest of the app.
+    public var isLiveTextOnly: Bool {
+        if case .runtime(let event) = self { return event.type == "content.delta" }
+        return false
+    }
+}
