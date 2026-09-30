@@ -1155,9 +1155,10 @@ export class Store {
 
   /** Used only with newly allocated import threads. No live actions are
    * replayed: the importer supplies inert text and freshly remapped IDs. */
-  importTranscript(threadId: string, messages: Message[], activeLeafId: string | null): void {
+  importTranscript(threadId: string, messages: Message[], activeLeafId: string | null,
+    receipt?: { kind: string; key: string; result: string }): void {
     if (this.messagesFor(threadId).length) throw new Error("Cannot import over an existing conversation");
-    mdb.importThread(threadId, messages, activeLeafId);
+    mdb.importThread(threadId, messages, activeLeafId, receipt);
     this.threads.delete(threadId);
   }
 
@@ -2057,6 +2058,26 @@ export class Store {
     if (activate) {
       this.mirrorActiveTask(bot, task);
     }
+    this.saveBots();
+    this.emit({ type: "bot", botId });
+    return task;
+  }
+
+  /** Offline migration only. A deterministic ID makes an interrupted import retryable
+   * without touching the bot's active thread or provider selection. */
+  createImportedTask(botId: string, threadId: string, title: string, createdAt: number): TaskRecord {
+    const bot = this.bot(botId);
+    if (!bot) throw new Error(`Missing target bot ${botId}`);
+    const existing = bot.tasks?.find((task) => task.threadId === threadId);
+    if (existing) return existing;
+    if (this.botByThread(threadId) || this.groupByThread(threadId)) throw new Error(`Thread ID collision ${threadId}`);
+    const task: TaskRecord = {
+      threadId, title, createdAt, resumeCursors: {},
+      modelSelection: structuredClone(bot.modelSelection),
+      approvalMode: approvalModeFor(bot), autoApprove: Boolean(bot.autoApprove),
+      alwaysAllow: [...(bot.alwaysAllow ?? [])], unread: false, activity: "idle", busy: false,
+    };
+    bot.tasks = [...(bot.tasks ?? []), task];
     this.saveBots();
     this.emit({ type: "bot", botId });
     return task;
