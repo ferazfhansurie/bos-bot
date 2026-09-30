@@ -89,11 +89,17 @@ private struct UpdateRow: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.secondary)
                         .lineLimit(1)
-                    Text(update.line.isEmpty ? " " : update.line)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.secondary)
-                        .lineLimit(update.kind == .needsYou ? 3 : 1)
-                        .multilineTextAlignment(.leading)
+                    if update.typing {
+                        TypingIndicatorView(tintColor: MausPalette.color(update.chat.color))
+                            .scaleEffect(0.8, anchor: .leading)
+                            .accessibilityLabel(update.line)
+                    } else {
+                        Text(update.line.isEmpty ? " " : update.line)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(update.kind == .needsYou ? 3 : 1)
+                            .multilineTextAlignment(.leading)
+                    }
 
                     if update.kind == .needsYou, let card = update.card, card.isPending {
                         if card.skillRequest != nil {

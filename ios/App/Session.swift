@@ -124,14 +124,21 @@ final class Session: ObservableObject {
     /// and persisted — when a stream goes live.
     private var rotation = CandidateRotation(hosts: [])
     private var streamTask: Task<Void, Never>?
-    /// Frames received but not yet folded. Folding them ~10x a second in one
-    /// mutation, rather than one mutation per token, is what keeps several
-    /// streaming threads from saturating the main thread. The cursor only
-    /// moves when a frame is folded, so a frame still waiting here when the
-    /// stream dies is simply replayed on reconnect.
+    /// Frames received but not yet folded. The first frame after a quiet
+    /// spell folds at once, so a send or an approval lands the moment the
+    /// server says so; anything that follows within the window waits and
+    /// folds with the rest in one mutation. One mutation per ~60ms rather
+    /// than one per token is what keeps several streaming threads from
+    /// saturating the main thread. The cursor only moves when a frame is
+    /// folded, so a frame still waiting here when the stream dies is simply
+    /// replayed on reconnect.
     private var pendingFrames: [StreamFrame] = []
     private var frameFlushTask: Task<Void, Never>?
-    private static let frameBatchInterval: Duration = .milliseconds(100)
+    private var lastFrameFlush: ContinuousClock.Instant?
+    /// What the app badge was last set to, so a fold that leaves the unread
+    /// count alone does not call into UserNotifications.
+    private var appliedBadge: Int?
+    private static let frameBatchInterval: Duration = .milliseconds(60)
     private static let frameBatchLimit = 512
     /// Best-effort authenticated route refresh started by the latest live SSE
     /// hello. Kept separate so endpoint discovery never stalls event delivery.
@@ -558,7 +565,7 @@ final class Session: ObservableObject {
         rotation = CandidateRotation(hosts: [])
         resetState()
         resetAvatarCache()
-        NotificationCoordinator.shared.setBadge(0)
+        applyBadge(0)
         restoreSelectedConnection()
         if connection != nil { connect() }
         if connections.isEmpty {
@@ -598,7 +605,7 @@ final class Session: ObservableObject {
         resetAvatarCache()
         resetAttachmentCache()
         attachmentSendIDs.removeAll()
-        NotificationCoordinator.shared.setBadge(0)
+        applyBadge(0)
         status = .unpaired
     }
 
@@ -630,7 +637,7 @@ final class Session: ObservableObject {
         resetAvatarCache()
         resetAttachmentCache()
         attachmentSendIDs.removeAll()
-        NotificationCoordinator.shared.setBadge(0)
+        applyBadge(0)
     }
 
     private func persistRegistry() {
@@ -902,8 +909,13 @@ final class Session: ObservableObject {
             return
         }
         guard frameFlushTask == nil else { return }
+        let now = ContinuousClock.now
+        guard let last = lastFrameFlush, now - last < Self.frameBatchInterval else {
+            flushFrames()
+            return
+        }
         frameFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.frameBatchInterval)
+            try? await Task.sleep(until: last + Self.frameBatchInterval, clock: .continuous)
             guard !Task.isCancelled else { return }
             self?.frameFlushTask = nil
             self?.flushFrames()
@@ -915,6 +927,7 @@ final class Session: ObservableObject {
         frameFlushTask?.cancel()
         frameFlushTask = nil
         guard !pendingFrames.isEmpty else { return }
+        lastFrameFlush = .now
         let batch = pendingFrames
         pendingFrames.removeAll(keepingCapacity: true)
         var next = state
@@ -922,7 +935,11 @@ final class Session: ObservableObject {
             next.apply(frame)
             next.advance(to: frame.seq)
         }
+        // A reply's first token starts the typing dot and its end stops it,
+        // so which threads are typing has to be announced; the tokens in
+        // between reach only the open bubble.
         foldingQuietly = batch.allSatisfy(\.frame.isLiveTextOnly)
+            && Self.typingThreads(in: next) == Self.typingThreads(in: state)
         state = next
         foldingQuietly = false
         for frame in batch {
@@ -930,7 +947,17 @@ final class Session: ObservableObject {
                 NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
             }
         }
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        applyBadge(state.unreadCount)
+    }
+
+    private static func typingThreads(in state: CompanionState) -> Set<String> {
+        Set(state.streaming.lazy.filter { !$0.value.isEmpty }.map(\.key))
+    }
+
+    private func applyBadge(_ count: Int) {
+        guard appliedBadge != count else { return }
+        appliedBadge = count
+        NotificationCoordinator.shared.setBadge(count)
     }
 
     private func run() async {
@@ -978,6 +1005,10 @@ final class Session: ObservableObject {
                             state.resetCursor(cursor)
                         }
                         status = .live
+                        // A push may have moved the badge while the stream
+                        // was down; set it once from the live count.
+                        appliedBadge = nil
+                        applyBadge(state.unreadCount)
                         // Remember what actually carried the stream for
                         // display and legacy ordering. Typed routes retain
                         // their explicit security priority next launch.
@@ -1034,7 +1065,7 @@ final class Session: ObservableObject {
             guard state.hydrate(snapshot.fleet, waitingThreads: snapshot.waitingThreads,
                                 ifCursorMatches: expectedCursor) else { continue }
             log.info("hydrated \(snapshot.fleet.bots.count, privacy: .public) bots, \(snapshot.fleet.groups.count, privacy: .public) rooms")
-            NotificationCoordinator.shared.setBadge(state.unreadCount)
+            applyBadge(state.unreadCount)
             return
         }
         throw APIError.status(code: 409, message: "Conversations changed while loading. Please try opening this notification again.")
@@ -2359,7 +2390,8 @@ final class Session: ObservableObject {
         }
         _ = await NotificationCoordinator.shared.requestAuthorization()
         await refreshNotificationAuthorization()
-        NotificationCoordinator.shared.setBadge(state.unreadCount)
+        appliedBadge = nil
+        applyBadge(state.unreadCount)
     }
 
     var notificationStatusText: String {
