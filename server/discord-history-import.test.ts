@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DATA_DIR } from "./config.ts";
@@ -26,6 +26,13 @@ describe("inert Partner Discord history import", () => {
     expect(() => planDiscordHistory(value)).toThrow(/Duplicate/);
     value.channels[0].messages[1].message_id = "bad";
     expect(() => planDiscordHistory(value)).toThrow(/Malformed/);
+  });
+
+  it("rejects an empty channel during planning before any task or receipt is created", () => {
+    const value = source();
+    value.channels[1].messages = [];
+    expect(() => planDiscordHistory(value)).toThrow(/Empty source channel/);
+    expect(existsSync(DATA_DIR)).toBe(false);
   });
 
   it("maps available reply IDs to stable imported IDs", () => {

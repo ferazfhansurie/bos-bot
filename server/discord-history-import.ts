@@ -44,6 +44,7 @@ export function planDiscordHistory(input: unknown): ImportPlan[] {
     }
     seenChannels.add(channelId);
     if (!Array.isArray(entry.messages)) throw new Error(`Missing messages for ${channelId}`);
+    if (entry.messages.length === 0) throw new Error(`Empty source channel ${channelId}`);
     const rows: SourceMessage[] = [];
     const sourceIds = new Set<string>();
     for (const item of entry.messages) {
