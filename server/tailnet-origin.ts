@@ -1,13 +1,9 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import { promisify } from "node:util";
+import { tailscaleCandidates, tailscaleEnvironment } from "../companion/src/listener.ts";
 
 const run = promisify(execFile);
-const TAILSCALE_BINARIES = [
-  "/usr/local/bin/tailscale",
-  "/opt/homebrew/bin/tailscale",
-  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-];
+const TAILSCALE_BUDGET_MS = 5_000;
 const CACHE_MS = 30_000;
 const cache = new Map<string, { value: string | null; until: number }>();
 
@@ -34,18 +30,34 @@ export function selectTailnetOrigin(statuses: Status[], peer?: string): string |
 
 /** Private HTTPS origin from a Running client on the peer's tailnet. */
 export async function tailnetOrigin(peer?: string): Promise<string | null> {
-  const key = peer ? new URL(peer).hostname.toLowerCase().split(".").slice(1).join(".") : "default";
+  let key = "default";
+  if (peer) {
+    try {
+      const host = new URL(peer).hostname.toLowerCase();
+      if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.ts\.net$/.test(host)) return null;
+      key = host.split(".").slice(1).join(".");
+    } catch { return null; }
+  }
   const cached = cache.get(key);
   if (cached && cached.until > Date.now()) return cached.value;
   const statuses: Status[] = [];
-  for (const binary of TAILSCALE_BINARIES) {
-    if (!existsSync(binary)) continue;
+  const deadline = Date.now() + TAILSCALE_BUDGET_MS;
+  for (const binary of tailscaleCandidates()) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     try {
       const { stdout } = await run(binary, ["status", "--json"], {
-        encoding: "utf8", timeout: 5_000, maxBuffer: 512_000,
-        env: { ...process.env, TAILSCALE_BE_CLI: "1" },
+        // The timeout kills this CLI child; a Promise race would leave it running.
+        encoding: "utf8", timeout: remaining, maxBuffer: 512_000, killSignal: "SIGKILL",
+        env: tailscaleEnvironment(),
       });
-      statuses.push(JSON.parse(stdout) as Status);
+      const status: unknown = JSON.parse(stdout);
+      if (status && typeof status === "object") statuses.push(status as Status);
+      const match = selectTailnetOrigin(statuses, peer);
+      if (match) {
+        cache.set(key, { value: match, until: Date.now() + CACHE_MS });
+        return match;
+      }
     } catch { /* another installed client may be the running one */ }
   }
   const value = selectTailnetOrigin(statuses, peer);

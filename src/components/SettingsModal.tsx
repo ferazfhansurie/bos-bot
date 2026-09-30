@@ -33,6 +33,9 @@ import { ThreadConcurrencySettings } from "./ThreadConcurrencySettings";
 import { DefaultApprovalsSettings } from "./DefaultApprovalsSettings";
 import { WorkspaceBackupSettings } from "./WorkspaceBackupSettings";
 import { CompanyBackupSettings } from "./CompanyBackupSettings";
+import { InitialsAvatar, PersonPhoto } from "./Avatar";
+import { profileInitials } from "./SidebarProfileMenu";
+import { prepareProfilePhoto, saveProfileField, saveProfilePhoto } from "@/lib/profile-photo";
 import { cn } from "@/lib/cn";
 import { setShowThreads, useShowThreads } from "@/lib/thread-preferences";
 
@@ -66,41 +69,62 @@ function sectionMatches(section: (typeof SECTIONS)[number], query: string): bool
   return [t(section.labelKey), ...section.keywords].some((part) => part.toLowerCase().includes(query));
 }
 
-/** Name + email, persisted to /api/config {profile} on blur. */
-function ProfileFields() {
+/** Owner details and photo, saved without overwriting other profile members. */
+export function ProfileFields() {
   const { state, dispatch } = useStore();
+  const configRef = useRef(state.config);
+  configRef.current = state.config;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const busyRef = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(state.config?.profile?.name ?? "");
   const [email, setEmail] = useState(state.config?.profile?.email ?? "");
-  useEffect(() => {
-    setName(state.config?.profile?.name ?? "");
-    setEmail(state.config?.profile?.email ?? "");
-  }, [state.config?.profile?.name, state.config?.profile?.email]);
+  useEffect(() => { setName(state.config?.profile?.name ?? ""); }, [state.config?.profile?.name]);
+  useEffect(() => { setEmail(state.config?.profile?.email ?? ""); }, [state.config?.profile?.email]);
 
-  const save = () => {
-    void fetch("/api/config", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ profile: { name: name.trim(), email: email.trim().toLowerCase() } }),
-    })
-      .then((r) => r.json())
-      .then((config) => dispatch({ type: "configStatus", config }))
-      .catch(() => {});
+  const run = async (work: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try { await work(); }
+    catch (failure) { setError(t("settings.profile.saveError", { message: failure instanceof Error ? failure.message : String(failure) })); }
+    finally { busyRef.current = false; setBusy(false); }
   };
-
-  const inputClass =
-    "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none";
+  const save = (field: "name" | "email", value: string) => run(async () => {
+    const config = await saveProfileField(field, value);
+    configRef.current = config;
+    dispatch({ type: "configStatus", config });
+  });
+  const photo = (file: File | null) => run(async () => {
+    try {
+      const encoded = file ? await prepareProfilePhoto(file) : null;
+      const avatarUrl = await saveProfilePhoto(encoded);
+      const current = configRef.current;
+      if (current) {
+        const config = { ...current, profile: { name: "", email: "", ...current.profile, avatarUrl } };
+        configRef.current = config;
+        dispatch({ type: "configStatus", config });
+      }
+    } finally { if (fileRef.current) fileRef.current.value = ""; }
+  });
+  const avatarUrl = state.config?.profile?.avatarUrl;
+  const inputClass = "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none";
   return (
-    <div className="flex flex-col gap-3">
-      <input aria-label={t("settings.profile.name")} value={name} onChange={(e) => setName(e.target.value)} onBlur={save} placeholder={t("settings.profile.name")} className={inputClass} />
-      <input
-        type="email"
-        aria-label={t("phone.signIn.email")}
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        onBlur={save}
-        placeholder="you@example.com"
-        className={inputClass}
-      />
+    <div className="flex flex-col gap-3" aria-busy={busy}>
+      <div className="flex items-center gap-3">
+        <div role="img" aria-label={t("settings.profile.photo")}>
+          {avatarUrl ? <PersonPhoto src={avatarUrl} size={56} /> : <InitialsAvatar initials={profileInitials(state.config?.profile)} size={56} />}
+        </div>
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" aria-label={t("settings.profile.choosePhoto")} disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void photo(file); }} />
+        <button type="button" className="ui-button" disabled={busy} onClick={() => fileRef.current?.click()}>{t("settings.profile.choosePhoto")}</button>
+        {avatarUrl && <button type="button" className="ui-button" disabled={busy} onClick={() => void photo(null)}>{t("settings.profile.removePhoto")}</button>}
+        {busy && <span role="status" className="text-sm text-ink-secondary">{t("settings.profile.saving")}</span>}
+      </div>
+      <input aria-label={t("settings.profile.name")} disabled={busy} value={name} onChange={(e) => setName(e.target.value)} onBlur={() => { if (name.trim() !== (configRef.current?.profile?.name ?? "")) void save("name", name); }} placeholder={t("settings.profile.name")} className={inputClass} />
+      <input type="email" aria-label={t("phone.signIn.email")} disabled={busy} value={email} onChange={(e) => setEmail(e.target.value)} onBlur={() => { if (email.trim().toLowerCase() !== (configRef.current?.profile?.email ?? "")) void save("email", email); }} placeholder="you@example.com" className={inputClass} />
+      {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
     </div>
   );
 }
