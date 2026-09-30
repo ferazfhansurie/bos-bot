@@ -671,6 +671,18 @@ describe("remote Full installation owner authority", () => {
   const challenge = (installationId: string) => ({ protocol: "bos.remote-full.v1", nonce: "a".repeat(64), environmentId: "00000000-0000-4000-8000-000000000001", installationId,
     serverKey: serverKeys.publicKey.export({ format: "jwk" }).x!, audience: "https://fixture.invalid", expiresAt: Date.now() + 110_000,
     operations: [{ botId: "sol", threadId: "task", name: "Sol", title: "Exact task", modelSelection: { instanceId: "codex", model: "fixture" }, revision: "b".repeat(64), mode: "full", updateBotDefault: true }] });
+  const scope = (c: ReturnType<typeof challenge>, ownerUserId: string) => ({ protocol: "bos.remote-full.enroll.v1", installationId: c.installationId,
+    environmentId: c.environmentId, serverKey: c.serverKey, audience: c.audience, ownerUserId, expiresAt: Date.now() + 110_000, confirmation: "enroll-this-server" });
+  const enroll = (c: ReturnType<typeof challenge>, token: string, credential: string, ownerUserId: string) => {
+    const binding = scope(c, ownerUserId);
+    return call("/v1/remote-full/enroll", { method: "POST", token, headers: { "x-installation-credential": credential },
+      body: { binding, serverSignature: sign(null, Buffer.from(canonical(binding)), serverKeys.privateKey).toString("base64url") } });
+  };
+  const permit = async (c: ReturnType<typeof challenge>, ownerUserId: string) => {
+    // Test-only operator provisioning. There is deliberately no HTTP issuer.
+    await env.DB.prepare("INSERT INTO remote_full_enrollment_permits VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(c.environmentId, c.installationId, ownerUserId, c.serverKey, c.audience, Date.now() + 120_000).run();
+  };
   it("requires installation proof to prepare and the actual account owner to authorize; revocation fails closed", async () => {
     const owner = await signIn("owner-full@example.com"), stranger = await signIn("stranger-full@example.com");
     const installed = await createInstall(owner.token), other = await createInstall(stranger.token);
@@ -682,6 +694,11 @@ describe("remote Full installation owner authority", () => {
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: stranger.token, body: approval })).status).toBe(403);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { ...approval, challenge: { ...c, audience: "https://evil.invalid" } } })).status).toBe(403);
     expect((await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref })).status).toBe(403);
+    // Authorize cannot establish first ownership, even with a valid owner.
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(403);
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(409);
+    await permit(c, owner.userId);
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(200);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(200);
     const verified = await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref });
     expect(verified.status).toBe(200); expect((await verified.json<{ ownerUserId: string }>()).ownerUserId).toBe(owner.userId);
@@ -691,6 +708,66 @@ describe("remote Full installation owner authority", () => {
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { ...approval, nonce: moved.nonce, challenge: moved } })).status).toBe(403);
     await call(`/v1/installations/${c.installationId}`, { method: "DELETE", token: owner.token });
     expect((await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref })).status).toBe(401);
+  });
+  it("denies arbitrary first claims, mismatched owner/credential/key and expired permits", async () => {
+    const owner = await signIn("enroll-owner@example.com"), other = await signIn("enroll-other@example.com");
+    const installed = await createInstall(owner.token), stranger = await createInstall(other.token);
+    const c = challenge(installed.installation.id);
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(409);
+    expect((await enroll(c, installed.credential, installed.credential, owner.userId)).status).toBe(401);
+    expect((await enroll(c, owner.token, "paired-or-loopback-token", owner.userId)).status).toBe(401);
+    await permit(c, owner.userId);
+    expect((await enroll(c, other.token, installed.credential, other.userId)).status).toBe(409);
+    expect((await enroll(c, owner.token, stranger.credential, owner.userId)).status).toBe(403);
+    expect((await enroll({ ...c, serverKey: generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }).x! }, owner.token, installed.credential, owner.userId)).status).toBe(403);
+    await env.DB.prepare("UPDATE remote_full_enrollment_permits SET expires_at = 0").run();
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(409);
+    expect(await env.DB.prepare("SELECT 1 FROM remote_full_bindings").first()).toBeNull();
+  });
+  it("concurrent first binding admits only the operator-reserved installation; ownership never transfers", async () => {
+    const owner = await signIn("race-owner@example.com"), other = await signIn("race-other@example.com");
+    const first = await createInstall(owner.token), second = await createInstall(other.token), sameOwner = await createInstall(owner.token);
+    const c = challenge(first.installation.id), c2 = challenge(second.installation.id), c3 = challenge(sameOwner.installation.id);
+    await permit(c, owner.userId);
+    const responses = await Promise.all([enroll(c, owner.token, first.credential, owner.userId), enroll(c2, other.token, second.credential, other.userId), enroll(c, owner.token, first.credential, owner.userId)]);
+    expect(responses.map(r => r.status)).toEqual([200, 409, 200]);
+    expect((await enroll(c3, owner.token, sameOwner.credential, owner.userId)).status).toBe(409);
+    // Even an erroneously replaced operator permit cannot overwrite a binding.
+    await env.DB.prepare("UPDATE remote_full_enrollment_permits SET installation_id = ?, owner_user_id = ?").bind(c2.installationId, other.userId).run();
+    expect((await enroll(c2, other.token, second.credential, other.userId)).status).toBe(409);
+    await call(`/v1/installations/${c.installationId}`, { method: "DELETE", token: owner.token });
+    expect((await enroll(c, owner.token, first.credential, owner.userId)).status).toBe(401);
+    expect((await enroll(c2, other.token, second.credential, other.userId)).status).toBe(409);
+    const rows = await env.DB.prepare("SELECT installation_id, owner_user_id FROM remote_full_bindings").all();
+    expect(rows.results).toEqual([{ installation_id: c.installationId, owner_user_id: owner.userId }]);
+    // DB uniqueness also holds against a second installation insert, not just API checks.
+    await expect(env.DB.prepare("INSERT INTO remote_full_bindings (installation_id, environment_id, server_key, audience, owner_user_id, confirmed_at) VALUES (?, ?, ?, ?, ?, ?)").bind(c2.installationId, c.environmentId, c.serverKey, c.audience, other.userId, Date.now()).run()).rejects.toThrow(/UNIQUE/);
+  });
+  it("credential replacement invalidates previously authorized and prepared challenges", async () => {
+    const owner = await signIn("rotate-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);
+    await permit(c, owner.userId); expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(200);
+    await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) });
+    const ref = { installationId: c.installationId, nonce: c.nonce };
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { ...ref, challenge: c, signer: "a".repeat(43) } })).status).toBe(200);
+    const next = { ...c, nonce: "d".repeat(64) };
+    await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(next) });
+    const rotated = await call(`/v1/installations/${c.installationId}/credentials/rotate`, { method: "POST", token: owner.token });
+    expect(rotated.status).toBe(201); const fresh = await rotated.json<{ credential: string }>();
+    expect((await call("/v1/remote-full/verify", { method: "POST", token: installed.credential, body: ref })).status).toBe(401);
+    expect((await call("/v1/remote-full/verify", { method: "POST", token: fresh.credential, body: ref })).status).toBe(403);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { installationId: c.installationId, nonce: next.nonce, challenge: next, signer: "a".repeat(43) } })).status).toBe(403);
+  });
+  it("legacy implicit bindings confer no authority until explicit enrollment with a permit", async () => {
+    const owner = await signIn("legacy-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);
+    await env.DB.prepare("INSERT INTO remote_full_bindings (installation_id, environment_id, server_key, audience, owner_user_id, confirmed_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(c.installationId, c.environmentId, c.serverKey, c.audience, owner.userId, Date.now()).run();
+    await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) });
+    const approval = { installationId: c.installationId, nonce: c.nonce, challenge: c, signer: "a".repeat(43) };
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(403);
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(409);
+    await permit(c, owner.userId);
+    expect((await enroll(c, owner.token, installed.credential, owner.userId)).status).toBe(200);
+    expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: approval })).status).toBe(200);
   });
   it("rejects unregistered, expired and oversized-window challenges", async () => {
     const owner = await signIn("expiry-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);

@@ -176,9 +176,10 @@ export function createControlPlaneClient({
 
   const request = async (
     path,
-    { method = "GET", token, body, allowEmpty = false, deadlineMs = timeoutMs } = {},
+    { method = "GET", token, body, allowEmpty = false, deadlineMs = timeoutMs, installationCredential } = {},
   ) => {
     const headers = new Headers({ accept: "application/json" });
+    if (installationCredential) headers.set("x-installation-credential", installationCredential);
     if (token) headers.set("authorization", `Bearer ${token}`);
     // Node's fetch sends `Sec-Fetch-Mode: cors` even though Electron is a
     // native client. Better Auth 1.7 treats that Fetch Metadata as a
@@ -298,6 +299,26 @@ export function createControlPlaneClient({
 
     async listInstallations(accountToken) {
       return accountInstallations(accountToken);
+    },
+
+    // Enrollment never calls account recovery/rotation. A lost or revoked
+    // credential fails closed; a new record is explicitly created, not adopted.
+    async inspectInstallation(credential) {
+      const { payload } = await request("/v1/installations/self", { token: credential });
+      const installation = validatedInstallation(payload.installation);
+      if (!installation) throw new ControlPlaneError("invalid_response");
+      return installation;
+    },
+    async createNewInstallation({ accountToken, clientInstanceId, name, platform, appVersion }) {
+      const { payload } = await request("/v1/installations", { method: "POST", token: accountToken,
+        body: { clientInstanceId, name, platform, appVersion } });
+      const installation = validatedInstallation(payload.installation);
+      if (!installation || installation.clientInstanceId !== clientInstanceId || !INSTALLATION_CREDENTIAL.test(payload.credential)) throw new ControlPlaneError("invalid_response");
+      return { installation, credential: payload.credential };
+    },
+    async enrollRemoteFull(accountToken, credential, body) {
+      const { payload } = await request("/v1/remote-full/enroll", { method: "POST", token: accountToken, installationCredential: credential, body });
+      if (payload.enrolled !== true) throw new ControlPlaneError("invalid_response");
     },
 
     async ensureInstallation({ accountToken, currentCredential, clientInstanceId, name, platform, appVersion }) {

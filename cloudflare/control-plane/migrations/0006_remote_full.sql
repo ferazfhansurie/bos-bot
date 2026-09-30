@@ -11,8 +11,8 @@ CREATE TABLE remote_full_challenges (
 );
 CREATE INDEX remote_full_expiry ON remote_full_challenges(expires_at);
 
--- First successful owner confirmation binds this credential-bearing installation
--- to one environment and HTTPS audience. Another paired client cannot replace it.
+-- Explicit human enrollment binds an installation to one environment.
+-- Grant authorization cannot create or replace an enrollment binding.
 CREATE TABLE remote_full_bindings (
  installation_id TEXT PRIMARY KEY REFERENCES installations(id),
  environment_id TEXT NOT NULL,
