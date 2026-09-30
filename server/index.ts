@@ -9,7 +9,7 @@ import { sharedMentionTargets } from "../shared/shared-mentions.ts";
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, rmSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { writeFileAtomic } from "./atomic.ts";
 import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -25,6 +25,7 @@ import { SharedComputers, sharedComputerOperation, sharedComputerRegistration } 
 import { MultiplayerActors } from "./multiplayer-actors.ts";
 import { PeerThreads, type PeerThread } from "./peer-threads.ts";
 import { peerEvent } from "./peer-events.ts";
+import { privateRoomForViewer } from "./private-room-visibility.ts";
 import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { RemoteBotBridge, isRemoteBotPath } from "./remote-bot-bridge.ts";
@@ -3526,6 +3527,12 @@ function broadcast(payload: Record<string, unknown>) {
   replayBuffer.push({ seq, kind, frame: kind === "screen" ? null : frame, clientFrame: kind === "screen" ? null : clientFrame });
   if (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
   for (const client of Array.from(sseClients)) {
+    if (client.sessionId) {
+      const actor = multiplayerActors.actorFor(client.sessionId);
+      if (actor && actor !== multiplayerActors.ownerId) {
+        client.res.end(); sseClients.delete(client); continue;
+      }
+    }
     if (!wants(client, kind)) continue;
     // Screen frames are replaceable and durable events are not: see
     // ./sse-fanout.ts for the backpressure/bound decision this makes.
@@ -6033,7 +6040,8 @@ function drainQueuedSends() {
 
 /** Keep a person's words off the transcript until a direct-thread slot is
  * available. Reuse the existing cancellable, idempotent composer queue. */
-async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: { name: string }) {
+async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: { name: string }, requestGuard?: () => void) {
+  requestGuard?.();
   const capacity = botAtThreadCapacity(botId);
   if (capacity || threadBusy(botId, threadId) || parksBehindCoordination(botId, threadId)) {
     const reason = capacity ? "capacity" as const : undefined;
@@ -6045,7 +6053,7 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
     });
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId, reason };
   }
-  const message = await startTurn(botId, text, { threadId, replyTo, sendId, sender });
+  const message = await startTurn(botId, text, { threadId, replyTo, sendId, sender, requestGuard });
   return { ok: true as const, threadId, message };
 }
 
@@ -6765,6 +6773,8 @@ async function startTurn(
     /** Stable identity supplied by the composer so a network retry cannot
      * dispatch the same user action twice. */
     sendId?: string;
+    /** Recheck a remote caller after asynchronous provider setup. */
+    requestGuard?: () => void;
     onDispatchError?: (message: string) => void;
     /** Recheck external access after asynchronous provider setup. */
     dispatchGuard?: () => void;
@@ -6777,6 +6787,7 @@ async function startTurn(
 ) {
   workspaceMaintenance.assertAvailable();
   opts?.dispatchGuard?.();
+  opts?.requestGuard?.();
   const profile = store.bot(botId);
   if (!profile) throw Object.assign(new Error("no such bot"), { status: 404 });
   const threadId = opts?.threadId ?? profile.threadId;
@@ -7751,6 +7762,18 @@ async function startTurn(
       // the one the person watches.
       const dispatchedConfig = sessionConfig(liveBot?.soul ?? bot.soul);
       if (strictResume && !(opts?.cardContinuation && continuingRoutine) && dispatchedConfig !== plannedConfig) dispatchContext = decideContext(dispatchedConfig);
+      // Provider setup may have awaited while the owner revoked this caller.
+      // Check immediately before the adapter receives any work.
+      if (opts?.requestGuard && process.env.FAKE_CLAUDE_PRE_DISPATCH_GATE) {
+        // Disposable fake-engine fixture only: hold this exact handoff so the
+        // test can revoke privacy during asynchronous setup without a model.
+        const gate = join(DATA_DIR, basename(process.env.FAKE_CLAUDE_PRE_DISPATCH_GATE));
+        writeFileAtomic(`${gate}.waiting`, "1");
+        const deadline = Date.now() + 10_000;
+        while (!existsSync(gate) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+        if (!existsSync(gate)) throw Object.assign(new Error("fixture dispatch gate timed out"), { status: 503 });
+      }
+      opts?.requestGuard?.();
       opts?.dispatchGuard?.();
       // Before sendTurn: an adapter may emit the whole turn before it resolves.
       handoffs.dispatching(threadId, dispatchClaimId, dispatchContext.handoff);
@@ -11936,6 +11959,7 @@ function journalEntryForClient(botId: string, entry: MemoryJournalEntry) {
   return threadTitle ? { ...visible, threadTitle } : visible;
 }
 
+const requestPrivateChecks = new WeakMap<IncomingMessage, () => void>();
 function readBody(req: IncomingMessage, limit = 1_000_000): Promise<any> {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -11966,6 +11990,8 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<any> {
       } catch {
         return fail(400, "invalid JSON body");
       }
+      try { requestPrivateChecks.get(req)?.(); }
+      catch (error) { done = true; reject(error); return; }
       done = true;
       resolve(body);
     });
@@ -12238,13 +12264,51 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     const peerSessionId = auth.kind === "session" && auth.scopes.includes("peer") && !auth.scopes.includes("client") && !auth.scopes.includes("admin")
       ? auth.session.id : null;
-    // Check the current record for every peer request. Persisted peer-thread
-    // grants cannot survive an owner changing a bot to Private.
-    if (peerSessionId) {
+    const requestActor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : multiplayerActors.ownerId;
+    const foreignClient = auth.kind === "session" &&
+      multiplayerActors.actorFor(auth.session.id) != null &&
+      multiplayerActors.actorFor(auth.session.id) !== multiplayerActors.ownerId;
+    const privateRestricted = Boolean(peerSessionId || foreignClient);
+    const currentPrivateAccess = (botId: string): boolean => {
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return false;
+      const actor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : null;
+      const foreignNow = auth.kind === "session" && actor != null && actor !== multiplayerActors.ownerId;
+      return !(peerSessionId || foreignNow) || store.bot(botId)?.visibility !== "private";
+    };
+    const assertPrivateRequest = () => {
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) throw Object.assign(new Error("session ended"), { status: 401 });
       const directBotId = /^\/api\/bots\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
       const threadId = /^\/api\/(?:threads|multiplayer\/peer-threads)\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
-      const bot = directBotId ? store.bot(directBotId) : threadId ? store.bot(peerThreads.botFor(peerSessionId, threadId) ?? "") : null;
-      if (bot?.visibility === "private") { req.resume(); return json(res, 404, { error: "no such bot" }); }
+      const bot = directBotId ? store.bot(directBotId) : threadId ? (store.botByThread(threadId) ?? store.bot(peerSessionId ? peerThreads.botFor(peerSessionId, threadId) ?? "" : "")) : null;
+      if (bot && !currentPrivateAccess(bot.id)) throw Object.assign(new Error("no such bot"), { status: 404 });
+      const roomId = /^\/api\/multiplayer\/rooms\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
+      if (roomId) {
+        const actor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : multiplayerActors.ownerId;
+        if (!actor || actor !== requestActor) throw Object.assign(new Error("room unavailable"), { status: 404 });
+        const room = sharedRooms.roomFor(roomId, actor);
+        if (!room) throw Object.assign(new Error("room unavailable"), { status: 404 });
+        const privateIds = new Set(store.bots.filter(candidate => candidate.visibility === "private")
+          .map(candidate => `${ENVIRONMENT_ID}:bot:${candidate.id}`));
+        if (privateRoomForViewer({ viewerId: actor, ownerId: multiplayerActors.ownerId, peerSession: Boolean(peerSessionId),
+          memberIds: room.memberIds, privateBotIds: privateIds,
+          messages: sharedRooms.allMessages(roomId).map(message => ({ actorId: contactId(message.actor), botTargets: message.botTargets })) })) {
+          throw Object.assign(new Error("room unavailable"), { status: 404 });
+        }
+      }
+    };
+    if (auth.kind === "session") requestPrivateChecks.set(req, assertPrivateRequest);
+    // Check the current record for every peer request. Persisted peer-thread
+    // grants cannot survive an owner changing a bot to Private.
+    if (privateRestricted) {
+      try { assertPrivateRequest(); }
+      catch (error) { req.resume(); return json(res, (error as { status: number }).status, { error: (error as Error).message }); }
+      if (foreignClient && (path === "/api/events" || path === "/api/search" || path === "/api/team-map" || path === "/api/groups" || path.startsWith("/api/groups/"))) {
+        req.resume(); return json(res, 403, { error: "this device cannot read owner-private workspace streams" });
+      }
+      if (foreignClient && /^\/api\/threads\/([\w-]+)(?:\/|$)/.test(path) &&
+          store.groupByThread(/^\/api\/threads\/([\w-]+)/.exec(path)![1]!)) {
+        req.resume(); return json(res, 403, { error: "this device cannot read owner-private channels" });
+      }
     }
     const peerOwns = (botId: string, threadId: unknown): boolean =>
       !peerSessionId || (typeof threadId === "string" && peerThreads.owns(peerSessionId, botId, threadId));
@@ -12434,6 +12498,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const displayName = url.searchParams.get("name");
         if (!displayName) { req.resume(); return json(res, 400, { error: "name is required" }); }
         saved = await saveFile(req.iterator({ destroyOnReturn: false }) as AsyncIterable<Buffer>, displayName, mime, { uploadId, expectedBytes });
+      }
+      const uploadBotId = peerThreads.botFor(peerSessionId, threadId);
+      if (!sessions.isLive(peerSessionId) || !uploadBotId || !currentPrivateAccess(uploadBotId)) {
+        // A retryable uploadId may have returned a previously committed file.
+        if (!uploadId) deleteAttachment(saved.path);
+        return json(res, 404, { error: "no such bot" });
       }
       peerThreads.recordAttachment(threadId, basename(saved.path));
       return json(res, 201, saved);
@@ -12648,13 +12718,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const key = parseContactId(id);
         return key?.kind === "bot" && key.homeId !== ENVIRONMENT_ID;
       };
-      const privateBotIds = new Set(store.bots.filter(bot => bot.visibility === "private")
-        .map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`));
-      const foreignViewer = Boolean(peerSessionId) || actorId !== multiplayerActors.ownerId;
-      const privateRoom = (room: { id: string; memberIds: string[] }): boolean =>
-        foreignViewer && (room.memberIds.some(id => privateBotIds.has(id)) ||
-          sharedRooms.allMessages(room.id).some(message =>
-            privateBotIds.has(contactId(message.actor)) || message.botTargets?.some(id => privateBotIds.has(id))));
+      const privateRoom = (room: { id: string; memberIds: string[] }, viewerId = actorId): boolean => {
+        const privateBotIds = new Set(store.bots.filter(bot => bot.visibility === "private")
+          .map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`));
+        return privateRoomForViewer({ viewerId, ownerId: multiplayerActors.ownerId, peerSession: Boolean(peerSessionId),
+          memberIds: room.memberIds, privateBotIds,
+          messages: sharedRooms.allMessages(room.id).map(message => ({ actorId: contactId(message.actor), botTargets: message.botTargets })) });
+      };
       const listedRoom = (room: unknown) => !(room && typeof room === "object" && Array.isArray((room as { memberIds?: unknown }).memberIds) &&
         (((room as { memberIds: unknown[] }).memberIds.length === 2 && (room as { memberIds: unknown[] }).memberIds.some(remoteBotMember)) ||
           privateRoom(room as { id: string; memberIds: string[] })));
@@ -12993,6 +13063,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const roomId = m[1];
         if (!sharedRooms.roomFor(roomId, actorId)) return json(res, 404, { error: "room unavailable" });
         const body = await readBody(req, 100_000);
+        if (auth.kind === "session" && (multiplayerActors.actorFor(auth.session.id) !== actorId || !sessions.isLive(auth.session.id))) return json(res, 403, { error: "room unavailable" });
+        const liveRoom = sharedRooms.roomFor(roomId, actorId);
+        if (!liveRoom || privateRoom(liveRoom)) return json(res, 404, { error: "room unavailable" });
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session ended" });
         if (!body || typeof body !== "object" || Array.isArray(body) ||
             typeof body.text !== "string" || typeof body.sendId !== "string") return json(res, 400, { error: "text and sendId required" });
@@ -13026,6 +13099,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             actorId, preference: sharedRooms.preferencesFor(roomId, actorId), available: available.map(bot => bot.id),
             explicitBots: explicitTargets, humanMentions, history: sharedRooms.allMessages(roomId),
           }));
+          if (privateRoom(room)) return json(res, 404, { error: "room unavailable" });
           result = sharedRooms.append(roomId, actorId, { actor, text: body.text, sendId: body.sendId, attachments: body.attachments, botTargets, replyTo: body.replyTo,
             humanMentions: previous?.humanMentions ?? humanMentions });
         }
@@ -13034,10 +13108,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (result.created) {
           const room = sharedRooms.roomFor(m[1], actorId)!;
           for (const memberId of room.memberIds) {
-            if (memberId !== actorId && sharedRoomShouldNotify(room.id, memberId, result.message) && multiplayerActors.people(cfg.profile?.name ?? "Owner").some(person => person.id === memberId)) {
-              void apnsPush.send(memberId, multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message",
-                result.message.text || (result.message.attachments?.length ? "Sent an attachment" : "New message"), { roomId: room.id, senderId: actorId, senderName: multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message" }).catch(error =>
-                  console.warn(`shared push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
+            if (memberId !== actorId && !privateRoom(room, memberId) && sharedRoomShouldNotify(room.id, memberId, result.message) && multiplayerActors.people(cfg.profile?.name ?? "Owner").some(person => person.id === memberId)) {
+              const pushText = result.message.text || (result.message.attachments?.length ? "Sent an attachment" : "New message");
+              if (process.env.FAKE_CLAUDE_ROOM_PUSH_OUTBOX) {
+                appendFileSync(join(DATA_DIR, basename(process.env.FAKE_CLAUDE_ROOM_PUSH_OUTBOX)), JSON.stringify({ memberId, text: pushText }) + "\n");
+              } else {
+                void apnsPush.send(memberId, multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message",
+                  pushText, { roomId: room.id, senderId: actorId, senderName: multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message" }).catch(error =>
+                    console.warn(`shared push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
+              }
             }
           }
           void runSharedBotTurn(room, result.message).catch(error =>
@@ -15325,17 +15404,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // tasks stays explicit, because that is the one field publicBot() adds
       // that messagePage() does not: wireBot() omits the key entirely for a
       // bot record carrying no tasks, where publicBot() always sent [].
+      const remoteListed = await remoteBots.listBots(limit);
+      const viewerActor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : null;
+      const foreignNow = auth.kind === "session" && viewerActor != null && viewerActor !== multiplayerActors.ownerId;
+      const visibleBots = foreignNow ? store.bots.filter(bot => bot.visibility !== "private") : store.bots;
+      const visibleBotIds = new Set(visibleBots.map(bot => bot.id));
       return json(res, 200, {
-        bots: [...store.bots.map((bot) => ({
+        bots: [...visibleBots.map((bot) => ({
           ...wireBot(bot),
           tasks: store.tasks(bot.id).map(wireTask),
           ...messagePage(bot.threadId, limit),
-        })), ...(await remoteBots.listBots(limit))],
-        botQueuedMessages: publicBotQueuedMessages(),
+        })), ...remoteListed],
+        botQueuedMessages: foreignNow ? Object.fromEntries(Object.entries(publicBotQueuedMessages()).filter(([id]) => visibleBotIds.has(id))) : publicBotQueuedMessages(),
         sections: store.sections,
-        groups: store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, limit) })),
+        groups: foreignNow ? [] : store.groups.map((g) => ({ ...publicGroupState(g), ...messagePage(g.threadId, limit) })),
         computerControl: Object.fromEntries(
-          store.bots.map((bot) => {
+          visibleBots.map((bot) => {
             const snapshot = botComputerControlSnapshot(bot.id);
             return [bot.id, { held: snapshot.held, helpReason: snapshot.helpReason }];
           }),
@@ -15637,6 +15721,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // refuses anything that is not a bare generated filename
     m = path.match(/^\/api\/attachments\/([\w.-]+)$/);
     if (m && method === "GET") {
+      const privateBotIds = new Set(store.bots.filter(bot => bot.visibility === "private").map(bot => bot.id));
+      const referencesAttachment = (message: Message) => message.attachments?.some(item => basename(item.path) === m![1]) ||
+        message.text?.includes(m![1]!) === true;
+      if (foreignClient && (store.bots.some(bot => privateBotIds.has(bot.id) &&
+          (bot.avatarUrl === path || store.tasks(bot.id).some(task => store.messagesFor(task.threadId).some(referencesAttachment)))) ||
+          store.groups.some(group => store.messagesFor(group.threadId).some(message =>
+            message.from?.botId && privateBotIds.has(message.from.botId) && referencesAttachment(message))))) {
+        return json(res, 404, { error: "no such attachment" });
+      }
       const attachment = readAttachment(m[1]!);
       if (!attachment) {
         // An image a linked Mac's bot showed in a bridge thread (or its avatar).
@@ -16317,6 +16410,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id, channelMode),
         async () => {
+          assertPrivateRequest();
           if (sendId) {
             if (cancelledChatFollowup("channel", group.id, threadId, sendId)) {
               throw Object.assign(new Error("this queued sendId was cancelled; send a new message to try again"), { status: 409 });
@@ -16784,6 +16878,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const body = await readBody(req);
+      if (body?.visibility !== undefined && auth.kind === "session" &&
+          multiplayerActors.actorFor(auth.session.id) != null &&
+          multiplayerActors.actorFor(auth.session.id) !== multiplayerActors.ownerId) {
+        return json(res, 403, { error: "only this home's owner may change bot visibility" });
+      }
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
@@ -17205,6 +17304,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 409, { error: "Stop this bot's turns before changing its MCP servers." });
         }
       }
+      // Earlier validation may have awaited a runtime cleanup. A foreign
+      // session cannot commit a private bot edit after the owner revokes it.
+      assertPrivateRequest();
       if (normalizedSelection && selectedTask) {
         const current = store.projectBotForTask(selectedTask.id, selectedTask.threadId);
         if (!current) return json(res, 404, { error: "no such task" });
@@ -17808,7 +17910,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
             }
             noteTurnTrigger(threadId, auth);
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth) });
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest });
             return { ok: true as const, threadId, message };
           }
 
@@ -17819,7 +17921,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             if (currentAtStart.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
               throw Object.assign(new Error("this thread is busy; retry when it is free"), { status: 409, code: "exclusive_busy" });
             }
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth) });
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest });
             return { ok: true as const, threadId, message };
           }
 
@@ -17847,6 +17949,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             // message into a task the bot no longer owns. A conflict leaves the
             // text in the client's composer/outbox to resend deliberately.
             const current = store.projectBotForTask(bot.id, threadId);
+            assertPrivateRequest();
             if (!current) throw Object.assign(new Error("no such bot"), { status: 404 });
             if (!store.taskByThread(bot.id, threadId)) {
               throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
@@ -17886,7 +17989,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               return { ok: true as const, steered: true as const, threadId, message };
             }
             if (!current.busy) {
-              return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth));
+              return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
             }
             const queued = queueSteeredMessage(current.id, threadId, text, {
               replyToId: replyTo?.id,
@@ -17895,9 +17998,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             });
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
-          return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth));
+          return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
         },
       );
+      assertPrivateRequest();
       return json(res, 202, receipt);
     }
 
@@ -18313,6 +18417,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const body = await readBody(req);
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (!currentPrivateAccess(bot.id)) return json(res, 404, { error: "no such bot" });
       if (peerSessionId && (bot.hidden || body?.projectId !== undefined || body?.approvalMode !== undefined)) {
         return json(res, 403, { error: "peer tasks cannot change bot permissions or projects" });
       }
