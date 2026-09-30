@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, utimesSync, writeFileSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import {
@@ -369,6 +369,17 @@ test("a rewritten descriptor or a touched binary fails attestation", async () =>
   utimesSync(fx.binary, new Date(), new Date(Date.now() + 5_000));
   assert.equal(again.attest(fx.descriptorPath, fresh), false);
   await again.stop();
+});
+
+test("launching the driver moves only its ctime and keeps attestation", async () => {
+  const host = await ready();
+  const descriptor = fx.readDescriptor();
+  const before = statSync(fx.binary, { bigint: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  chmodSync(fx.binary, Number(before.mode & 0o777n));
+  assert.notEqual(statSync(fx.binary, { bigint: true }).ctimeNs, before.ctimeNs);
+  assert.equal(host.attest(fx.descriptorPath, descriptor), true);
+  await host.stop();
 });
 
 test("a dead daemon pid fails attestation immediately", async () => {

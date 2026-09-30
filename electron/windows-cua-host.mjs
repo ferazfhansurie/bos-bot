@@ -121,6 +121,15 @@ function fileIdentity(fileSystem, file) {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
 
+// Staged SDK files are checked against this, not fileIdentity: Windows moves
+// an executable's change time (ctime) when it is launched, so the driver's
+// ctime differs from staging as soon as the daemon starts. Content changes
+// still move mtime/size/inode; permissions were verified at staging.
+function contentIdentity(fileSystem, file) {
+  const stat = fileSystem.statSync(file, { bigint: true });
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+}
+
 export function sha256File(file, fileSystem = fs) {
   return createHash("sha256").update(fileSystem.readFileSync(file)).digest("hex");
 }
@@ -160,7 +169,7 @@ export async function verifyStagedWindowsCua({ resourcesPath, identity, probe, f
       throw unavailable("sdk-integrity", `Computer use SDK file does not match the build manifest: ${name}`);
     }
     files[name] = file;
-    identities[name] = before;
+    identities[name] = contentIdentity(fileSystem, file);
   }
   for (const target of [resourcesPath, path.join(resourcesPath, "cua-sdk"), path.join(resourcesPath, "cua-sdk", "native"), manifestPath, ...Object.values(files)]) {
     let acl;
@@ -702,7 +711,7 @@ export function createWindowsCuaHost({
         if (!samePath(file, descriptorPath) || JSON.stringify(raw) !== JSON.stringify(descriptor)) return false;
         if (fileIdentity(fileSystem, descriptorPath) !== descriptorIdentity) return false;
         if (JSON.stringify(readJson(fileSystem, descriptorPath)) !== JSON.stringify(descriptor)) return false;
-        if (fileIdentity(fileSystem, staged.binary) !== staged.identities["cua-driver.exe"]) return false;
+        if (contentIdentity(fileSystem, staged.binary) !== staged.identities["cua-driver.exe"]) return false;
         if (!leaseStillOurs(fileSystem, lease.path, lease.nonce) || maintenance()) return false;
         return isProcessAlive(connection.pid) && isProcessAlive(selfPid);
       } catch {
