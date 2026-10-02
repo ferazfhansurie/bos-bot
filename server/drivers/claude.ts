@@ -1333,6 +1333,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
 
       const env = environment(turnModel);
+      if (shared || remoteWork) {
+        // A server may itself be running under a harness hook. That parent's
+        // capability must not ride into a turn whose hooks are disabled.
+        for (const key of Object.keys(env)) if (key.startsWith("OMB_HOOK_")) delete env[key];
+      }
       const authSettings = (isolated || shared) && !injected.injected
         ? readClaudeAuthSettings(env, input.environment) : {};
       // Harness hooks (item 0.2): one helper command for the events the

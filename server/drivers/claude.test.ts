@@ -365,7 +365,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
   it("enforces shared conversation-only access despite full mode, tools, integrations and a private cursor", async () => {
     const dump = join(scratch, "shared.json");
-    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280", OMB_CLAUDE_INHERIT_USER_CONFIG: "1" },
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280", OMB_CLAUDE_INHERIT_USER_CONFIG: "1", OMB_HOOK_URL: "http://parent-hook.invalid", OMB_HOOK_TOKEN_FILE: "/tmp/parent-hook-fixture", OMB_HOOK_NODE: "/tmp/parent-node-fixture", OMB_HOOK_HELPER: "/tmp/parent-helper-fixture" },
       { permissionMode: "bypassPermissions", tools: ["Bash", "Read"] });
     writeFileSync(join(scratch, ".mcp.json"), JSON.stringify({ mcpServers: { private: { command: "do-not-run" } } }));
     const imagePath = join(scratch, "attached.png");
@@ -387,7 +387,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv).not.toContain("--resume");
     expect(seen.argv).not.toContain("--permission-prompt-tool");
     expect(seen.mcpConfig).toEqual({ mcpServers: {} });
-    expect(seen.env.OMB_HOOK_TOKEN_FILE).toBeUndefined();
+    for (const key of ["OMB_HOOK_URL", "OMB_HOOK_TOKEN_FILE", "OMB_HOOK_NODE", "OMB_HOOK_HELPER"]) expect(seen.env[key], key).toBeUndefined();
     expect(JSON.stringify(seen.prompt)).toContain("shared history and latest");
     expect(JSON.stringify(seen.prompt)).toContain(image.toString("base64"));
     expect(JSON.stringify(seen)).not.toContain("private-native-session");
@@ -504,7 +504,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
   it("remote work disables native tools and user MCP while retaining only the harness transport", async () => {
     const dump = join(scratch, "remote-work.json");
-    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280", OMB_CLAUDE_INHERIT_USER_CONFIG: "1" }, { tools: ["Bash", "Read"] });
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280", OMB_CLAUDE_INHERIT_USER_CONFIG: "1", OMB_HOOK_URL: "http://parent-hook.invalid", OMB_HOOK_TOKEN_FILE: "/tmp/parent-hook-fixture", OMB_HOOK_NODE: "/tmp/parent-node-fixture", OMB_HOOK_HELPER: "/tmp/parent-helper-fixture" }, { tools: ["Bash", "Read"] });
     await instance.adapter.sendTurn({ threadId: "remote-work", text: "hostname", approvalMode: "full", remoteWork: { computerId: "worker" }, cwd: scratch,
       mcpFromUserConfig: true, integrations: { agents: { command: "node", args: ["worker-proxy"], env: {} },
         custom: { private: { command: "do-not-run", args: [], env: {} } }, hooks: { url: "http://localhost:1", token: "private-hook" } } });
@@ -517,7 +517,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.argv).toContain("--disable-slash-commands");
     expect(seen.mcpConfig.mcpServers.private).toBeUndefined();
     expect(JSON.stringify(seen)).not.toContain("private-hook");
-    expect(seen.env.OMB_HOOK_TOKEN_FILE).toBeUndefined();
+    for (const key of ["OMB_HOOK_URL", "OMB_HOOK_TOKEN_FILE", "OMB_HOOK_NODE", "OMB_HOOK_HELPER"]) expect(seen.env[key], key).toBeUndefined();
     expect(seen.mcpConfig.mcpServers.agents).toBeDefined();
   });
 

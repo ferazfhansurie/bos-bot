@@ -8746,7 +8746,7 @@ const teamSetupOptions: TeamSetupOptions = {
   validateChange: (before, fields) => {
     assertTeamComputerChangeIdle(before, { ...before, ...fields });
     if (fields.sharedWorkComputer) {
-      if (botHasActiveTurn(before.id)) throw new TeamSetupError("Wait for the bot's turn before changing its work computer", 409);
+      if (botHasActiveTurn(before.id) || routines?.activeRunForBot(before.id)) throw new TeamSetupError("Wait for the bot's work before changing its work computer", 409);
       admitSharedWorkComputer(fields.sharedWorkComputer, sharedComputers.list(before.id), sharedComputersEnabled(cfg), true);
     }
   },
