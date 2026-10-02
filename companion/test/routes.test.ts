@@ -41,6 +41,13 @@ describe("what the app may do", () => {
     expect(allowed("POST", "/api/multiplayer/rooms/r/requests/q/replay")).toBe(false);
   });
 
+  it("permits authenticated channel settings without granting deletion", () => {
+    expect(ask("PATCH", "/api/groups/room_123")).toBeNull();
+    expect(ask("PATCH", "/api/groups/room_123", false)?.status).toBe(401);
+    expect(allowed("DELETE", "/api/groups/room_123")).toBe(false);
+    expect(allowed("PATCH", "/api/groups/room_123/settings")).toBe(false);
+  });
+
   // Every request in ios/Sources/CompanionCore/Client.swift. If one of these
   // fails, a screen on the phone is broken.
   const calls: Array<[string, string]> = [
@@ -245,7 +252,7 @@ describe("what it may not", () => {
     expect(allowed("DELETE", "/api/connectors/slack/accounts/ca_123")).toBe(true);
     expect(allowed("DELETE", "/api/connectors/slack/accounts/../gmail")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/secret-cards/msg_2/provided")).toBe(false);
-    expect(allowed("PATCH", "/api/groups/room-1")).toBe(false);
+    expect(allowed("DELETE", "/api/groups/room-1")).toBe(false);
   });
 
   // Patterns are anchored, so a path that merely starts right is still a

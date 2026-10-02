@@ -326,7 +326,14 @@ public struct CompanionState: Sendable {
             // instead of starting fresh. The desktop client learned this the
             // hard way; no reason to learn it twice.
             if message.role == .bot, message.kind == .text {
-                clearStream(threadId)
+                if let botId = message.from?.botId,
+                   rooms.contains(where: { $0.threadId == threadId }) || streaming[RuntimeEvent.roomStreamKey(threadId: threadId, botId: botId)] != nil {
+                    clearStream(RuntimeEvent.roomStreamKey(threadId: threadId, botId: botId))
+                    // Legacy canonical tails may coexist during an upgrade.
+                    // Settling one attributed reply never clears another lane.
+                    streaming.removeValue(forKey: threadId)
+                    reasoning.removeValue(forKey: threadId)
+                } else { clearStream(threadId) }
             }
 
         case let .messagePatch(threadId, message):
@@ -471,16 +478,18 @@ public struct CompanionState: Sendable {
             guard let delta = event.delta, !delta.isEmpty else { return }
             switch event.streamKind {
             case "assistant_text":
-                streaming[event.threadId, default: ""] += delta
+                streaming[event.streamKey, default: ""] += delta
             case "reasoning_text":
-                reasoning[event.threadId, default: ""] += delta
+                reasoning[event.streamKey, default: ""] += delta
             default:
                 // an unknown stream kind is not ours to guess at; dropping it
                 // is better than showing thinking as if it were the answer
                 break
             }
+        case "item.completed":
+            if event.roomBotId != nil { clearStream(event.streamKey) }
         case "turn.completed", "turn.failed", "turn.aborted":
-            clearStream(event.threadId)
+            clearStream(event.streamKey)
         default:
             break
         }
@@ -498,6 +507,10 @@ public struct CompanionState: Sendable {
     public mutating func clearStream(_ threadId: String) {
         streaming.removeValue(forKey: threadId)
         reasoning.removeValue(forKey: threadId)
+        // Authoritative task switches/deletion retire all lanes for that task.
+        let prefix = threadId + ":room:"
+        for key in streaming.keys.filter({ $0.hasPrefix(prefix) }) { streaming.removeValue(forKey: key) }
+        for key in reasoning.keys.filter({ $0.hasPrefix(prefix) }) { reasoning.removeValue(forKey: key) }
     }
 
     // MARK: - Held mid-turn sends

@@ -446,10 +446,17 @@ export function roomResponders<T extends { id: string; name: string; hidden?: bo
   text: string,
   members: T[],
   defaultResponder: GroupDefaultResponder,
+  memberReplyModes?: Record<string, "always" | "mentions">,
 ): T[] {
   const available = members.filter((member) => !member.hidden);
   if (/(?:^|\s)@everyone\b/i.test(text)) return available;
   const mentioned = mentionedBots(text, available);
+  if (memberReplyModes && Object.keys(memberReplyModes).length) {
+    const targets = new Set(mentioned.map(member => member.id));
+    if (!mentioned.length) for (const member of roomResponders(text, available, defaultResponder)) targets.add(member.id);
+    return available.filter(member => memberReplyModes[member.id] === "always" ||
+      (targets.has(member.id) && (memberReplyModes[member.id] !== "mentions" || mentioned.includes(member))));
+  }
   if (mentioned.length) return mentioned;
   if (defaultResponder.kind === "everyone") return available;
   if (defaultResponder.kind === "member") {
@@ -485,6 +492,37 @@ export class Store {
   /** Room turns and old callers have their own activity slot. Clearing
    * that slot must not clear a concurrently running independent task. */
   private legacyActivities = new Map<string, BotActivity>();
+  private roomRuntimeAliases = new Map<string, { groupId: string; threadId: string; botId: string }>();
+  private roomActivities = new Map<string, { botId: string; activity: BotActivity }>();
+
+  canonicalThreadId(threadId: string): string { return this.roomRuntimeAliases.get(threadId)?.threadId ?? threadId; }
+  roomRuntimeThread(runtimeThreadId: string) { return this.roomRuntimeAliases.get(runtimeThreadId); }
+  /** One durable execution identity per member/task. It is never a visible
+   * conversation. Retain aliases after completion so late events and held
+   * recovery receipts cannot be redirected into a new task after restart. */
+  registerRoomRuntimeThread(groupId: string, threadId: string, botId: string): string {
+    threadId = this.canonicalThreadId(threadId);
+    const group = this.group(groupId);
+    if (!group?.memberIds.includes(botId) || !(group.dm ? group.threadId === threadId : this.groupTaskByThread(groupId, threadId))) throw new Error("Room execution target no longer exists");
+    const existing = [...this.roomRuntimeAliases].find(([, value]) => value.groupId === groupId && value.threadId === threadId && value.botId === botId);
+    if (existing) return existing[0];
+    const runtimeThreadId = `room-${newId()}`;
+    const next = new Map(this.roomRuntimeAliases);
+    next.set(runtimeThreadId, { groupId, threadId, botId });
+    writeFileAtomic(join(DATA_DIR, "room-runtime-aliases.json"), JSON.stringify([...next]));
+    this.roomRuntimeAliases = next;
+    return runtimeThreadId;
+  }
+  setRoomActivity(runtimeThreadId: string, botId: string, activity: BotActivity): BotRecord | null {
+    if (this.roomRuntimeAliases.get(runtimeThreadId)?.botId !== botId) throw new Error("Room activity owner mismatch");
+    const bot = this.bot(botId);
+    if (!bot) return null;
+    if (activity === "idle") this.roomActivities.delete(runtimeThreadId);
+    else this.roomActivities.set(runtimeThreadId, { botId, activity });
+    this.refreshBotActivity(bot);
+    this.emit({ type: "bot", botId });
+    return bot;
+  }
 
   constructor(defaultSelection: () => ModelSelection) {
     this.defaultSelection = defaultSelection;
@@ -498,6 +536,15 @@ export class Store {
       this.groups = JSON.parse(readFileSync(GROUPS_FILE, "utf8"));
     } catch {
       this.groups = [];
+    }
+    const aliasFile = join(DATA_DIR, "room-runtime-aliases.json");
+    if (existsSync(aliasFile)) {
+      const rows: unknown = JSON.parse(readFileSync(aliasFile, "utf8"));
+      if (!Array.isArray(rows)) throw new Error("Invalid room execution registry");
+      for (const row of rows) {
+        if (!Array.isArray(row) || row.length !== 2 || typeof row[0] !== "string" || !/^room-[\w-]+$/.test(row[0]) || !row[1] || ["groupId", "threadId", "botId"].some(key => typeof row[1][key] !== "string") || this.roomRuntimeAliases.has(row[0])) throw new Error("Invalid room execution registry");
+        this.roomRuntimeAliases.set(row[0], row[1]);
+      }
     }
     this.rememberSections([...this.bots, ...this.groups].map((record) => record.section));
     // busy never survives a restart — no turn does either. Rooms saved
@@ -822,6 +869,7 @@ export class Store {
   }
 
   groupByThread(threadId: string): GroupRecord | undefined {
+    threadId = this.canonicalThreadId(threadId);
     return this.groups.find(
       (group) => group.threadId === threadId || group.tasks?.some((task) => task.threadId === threadId),
     );
@@ -874,7 +922,7 @@ export class Store {
     );
   }
 
-  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "setupCompletedAt" | "setupSkippedAt">>): GroupRecord | null {
+  patchGroup(id: string, patch: Partial<Pick<GroupRecord, "name" | "memberIds" | "defaultResponder" | "bulletin" | "unread" | "busyBotId" | "cwd" | "pinnedMessageId" | "section" | "setupCompletedAt" | "setupSkippedAt" | "avatarUrl" | "memberReplyModes" | "notifications">>): GroupRecord | null {
     const group = this.group(id);
     if (!group) return null;
     if (Object.prototype.hasOwnProperty.call(patch, "section")) {
@@ -895,6 +943,8 @@ export class Store {
       const active = this.activeGroupTask(group.id);
       if (active) active.pinnedMessageId = patch.pinnedMessageId;
     }
+    if (group.memberReplyModes) group.memberReplyModes = Object.fromEntries(
+      Object.entries(group.memberReplyModes).filter(([id]) => group.memberIds.includes(id)));
     group.defaultResponder = normalizeGroupDefaultResponder(
       group.defaultResponder,
       group.memberIds,
@@ -997,6 +1047,7 @@ export class Store {
   }
 
   groupTaskByThread(groupId: string, threadId: string): GroupTaskRecord | undefined {
+    threadId = this.canonicalThreadId(threadId);
     const group = this.group(groupId);
     if (!group || group.dm) return undefined;
     return group.tasks?.find((task) => task.threadId === threadId);
@@ -1083,6 +1134,7 @@ export class Store {
 
   /** Toggle an emoji reaction on a message ("user" or a member botId). */
   toggleReaction(threadId: string, messageId: string, emoji: string, by: string): Message | null {
+    threadId = this.canonicalThreadId(threadId);
     const existing = this.messagesFor(threadId).find((m) => m.id === messageId);
     if (!existing) return null;
     const reactions = existing.reactions ?? [];
@@ -1092,6 +1144,7 @@ export class Store {
   }
 
   private thread(threadId: string): ThreadState {
+    threadId = this.canonicalThreadId(threadId);
     const t = this.threads.get(threadId);
     if (t) return t;
     // SQLite is the source of truth; a thread with no rows imports its
@@ -1135,6 +1188,7 @@ export class Store {
    * bounded page missing that context falls back to one rather than
    * returning messages with a broken parent chain. */
   messagesTail(threadId: string, limit: number): { messages: Message[]; hasMore: boolean; activeLeafId: string | null } {
+    threadId = this.canonicalThreadId(threadId);
     let state = this.threads.get(threadId);
     if (!state) {
       const tail = mdb.readThreadTail(threadId, messagesFile(threadId), limit);
@@ -1164,11 +1218,13 @@ export class Store {
   }
 
   activeLeaf(threadId: string): string | null {
+    threadId = this.canonicalThreadId(threadId);
     return this.thread(threadId).activeLeafId;
   }
 
   /** The visible conversation: root → activeLeafId. */
   activePath(threadId: string): Message[] {
+    threadId = this.canonicalThreadId(threadId);
     const t = this.thread(threadId);
     const byId = new Map(t.messages.map((m) => [m.id, m]));
     const path: Message[] = [];
@@ -1184,11 +1240,13 @@ export class Store {
    * visible answer. If a provider ends after commentary without emitting a
    * separate answer, that commentary remains visible as the safe fallback. */
   markTerminalAssistantMessage(threadId: string, turnId: string, outcome?: { ok: boolean; stopReason?: string }): Message | null {
-    const path = this.activePath(threadId);
+    const roomOwner = this.roomRuntimeThread(threadId);
+    const canonicalId = this.canonicalThreadId(threadId);
+    const path = this.activePath(canonicalId);
     const failed = outcome && !outcome.ok ? { turnOutcome: { ok: false, ...(outcome.stopReason ? { stopReason: outcome.stopReason.slice(0, 200) } : {}) } } : {};
     for (let i = path.length - 1; i >= 0; i -= 1) {
       const message = path[i];
-      if (message.role === "bot" && message.kind === "text" && message.turnId === turnId) {
+      if (message.role === "bot" && message.kind === "text" && message.turnId === turnId && (!roomOwner || message.from?.botId === roomOwner.botId)) {
         if (message.turnTerminal && (!failed.turnOutcome || message.turnOutcome)) return message;
         return this.patchMessage(threadId, message.id, { turnTerminal: true, ...failed });
       }
@@ -1203,16 +1261,19 @@ export class Store {
    * turnOutcome.ok=false so a waiting room never mistakes partial commentary
    * for an answer. */
   settleTurn(threadId: string, turnId: string | undefined, outcome: { ok: boolean; stopReason?: string }): Message | null {
+    const roomOwner = this.roomRuntimeThread(threadId);
+    const canonicalId = this.canonicalThreadId(threadId);
     if (turnId) {
       const marked = this.markTerminalAssistantMessage(threadId, turnId, outcome);
       if (marked) return marked;
     }
-    const path = this.activePath(threadId);
+    const path = this.activePath(canonicalId);
     const turnOutcome = { ok: outcome.ok, ...(!outcome.ok && outcome.stopReason ? { stopReason: outcome.stopReason.slice(0, 200) } : {}) };
     let lastUser = -1;
     for (let i = path.length - 1; i >= 0; i -= 1) if (path[i].role === "user") { lastUser = i; break; }
     for (let i = path.length - 1; i > lastUser; i -= 1) {
       const message = path[i];
+      if (roomOwner && message.from?.botId !== roomOwner.botId) continue;
       if (message.role !== "bot" || message.turnTerminal) {
         if (message.turnTerminal) return message;
         continue;
@@ -1230,10 +1291,12 @@ export class Store {
       ...(turnId ? { turnId } : {}),
       turnTerminal: true,
       turnOutcome,
+      ...(roomOwner ? { from: { botId: roomOwner.botId, name: this.bot(roomOwner.botId)?.name ?? "Room member", color: this.bot(roomOwner.botId)?.color ?? "blue" } } : {}),
     });
   }
 
   appendMessage(threadId: string, message: Omit<Message, "id" | "at"> & { at?: number }, command?: Command): Message {
+    threadId = this.canonicalThreadId(threadId);
     const t = this.thread(threadId);
     const full: Message = { id: newId(), at: Date.now(), parentId: t.activeLeafId, ...redactBotAuthored(message) };
     const persist = () => { mdb.appendMessage(threadId, full); return full; };
@@ -1265,6 +1328,7 @@ export class Store {
    * children are re-parented onto the inserted message, so the transcript
    * reads turn → artifact → follow-up and the leaf stays where it was. */
   insertMessageAfter(threadId: string, anchorId: string | undefined, message: Omit<Message, "id" | "at">): Message {
+    threadId = this.canonicalThreadId(threadId);
     const t = this.thread(threadId);
     const anchorExists = anchorId !== undefined && t.messages.some((m) => m.id === anchorId);
     if (!anchorExists || t.activeLeafId === anchorId) return this.appendMessage(threadId, message);
@@ -1319,6 +1383,7 @@ export class Store {
   /** Fork the conversation: a new user message that replaces `sourceId`
    * (same parent, new text) and becomes the active leaf. */
   branchMessage(threadId: string, sourceId: string, text: string): Message | null {
+    threadId = this.canonicalThreadId(threadId);
     const t = this.thread(threadId);
     const source = t.messages.find((m) => m.id === sourceId);
     if (!source) return null;
@@ -1348,6 +1413,7 @@ export class Store {
   /** Point the visible conversation at the branch containing `messageId`,
    * descending to that branch's most recently active leaf. */
   setActiveLeaf(threadId: string, messageId: string): string | null {
+    threadId = this.canonicalThreadId(threadId);
     const t = this.thread(threadId);
     if (!t.messages.some((m) => m.id === messageId)) return null;
     let cur = messageId;
@@ -1363,6 +1429,7 @@ export class Store {
   }
 
   patchMessage(threadId: string, messageId: string, patch: Partial<Message>, command?: Command): Message | null {
+    threadId = this.canonicalThreadId(threadId);
     const t = this.thread(threadId);
     const idx = t.messages.findIndex((m) => m.id === messageId);
     if (idx === -1) return null;
@@ -1713,7 +1780,7 @@ export class Store {
   }
 
   private refreshBotActivity(bot: BotRecord) {
-    const activities = [this.legacyActivities.get(bot.id), ...(bot.tasks ?? []).map((task) => task.activity)];
+    const activities = [this.legacyActivities.get(bot.id), ...[...this.roomActivities.values()].filter(owner => owner.botId === bot.id).map(owner => owner.activity), ...(bot.tasks ?? []).map((task) => task.activity)];
     bot.activity = (["waiting-on-you", "no-signal", "working", "dead"] as const)
       .find((activity) => activities.includes(activity)) ?? "idle";
     bot.busy = ACTIVITY_BUSY.has(bot.activity);

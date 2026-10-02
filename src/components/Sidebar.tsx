@@ -1,3 +1,4 @@
+import { botAvatarProfile } from "../../shared/bot-avatar";
 import { track } from "@/lib/analytics";
 import { OrganizationIdentity } from "./OrganizationIdentity";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -207,6 +208,7 @@ export function GroupListItem({
     .map((id) => state.bots.find((b) => b.id === id))
     .filter((b): b is Bot => Boolean(b));
   const last = group.messages.at(-1);
+  const roomPhoto = !group.dm ? botAvatarProfile({ avatarUrl: group.avatarUrl }).avatarUrl : undefined;
   return (
     <>
     <div className="group relative">
@@ -233,7 +235,7 @@ export function GroupListItem({
       title={density === "icons" ? group.name : undefined}
       aria-label={density === "icons" ? group.name : undefined}
     >
-      <StackedMauses members={members} density={density} />
+      {roomPhoto ? <PersonPhoto src={roomPhoto} size={density === "icons" ? 32 : 24} /> : <StackedMauses members={members} density={density} />}
       <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-[14px] font-semibold text-ink">{group.name}</span>

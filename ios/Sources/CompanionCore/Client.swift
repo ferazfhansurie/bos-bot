@@ -1575,7 +1575,8 @@ public struct CompanionClient: Sendable {
     public func send(
         text: String,
         to destination: MessageDestination,
-        sendId: String
+        sendId: String,
+        replyToId: String? = nil
     ) async throws -> SendReceipt {
         let route: String
         let threadId: String
@@ -1589,12 +1590,11 @@ public struct CompanionClient: Sendable {
             route = "/api/groups/\(id)/messages"
             threadId = selectedThreadId
         }
-        guard Self.validRouteID(threadId), Self.validSendID(sendId) else { throw APIError.badURL }
-        return try await sendForReceipt(try makeRequest(
-            "POST",
-            route,
-            body: ["text": text, "threadId": threadId, "sendId": sendId]
-        ))
+        guard Self.validRouteID(threadId), Self.validSendID(sendId),
+              replyToId.map(Self.validRouteID) ?? true else { throw APIError.badURL }
+        var body = ["text": text, "threadId": threadId, "sendId": sendId]
+        if let replyToId { body["replyToId"] = replyToId }
+        return try await sendForReceipt(try makeRequest("POST", route, body: body))
     }
 
     /// Take back a message the harness is holding.
@@ -1755,6 +1755,11 @@ public struct CompanionClient: Sendable {
 
     public func deleteTask(botId: String, threadId: String) async throws -> Bot {
         try await send(try makeRequest("DELETE", "/api/bots/\(botId)/tasks/\(threadId)"), as: BotResponse.self).bot
+    }
+
+    /// Narrow room settings patches preserve roster, tasks and transcript.
+    public func updateRoom(id: String, patch: RoomSettingsPatch) async throws -> Room {
+        try await send(try makeRequest("PATCH", "/api/groups/\(id)", encodedBody: patch), as: RoomResponse.self).group
     }
 
     public func createTask(groupId: String, title: String? = nil) async throws -> Room {

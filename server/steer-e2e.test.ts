@@ -477,7 +477,10 @@ posixOnly("mid-turn steering e2e", () => {
     expect(folded?.steered).toBe(true);
 
     // the fold reached the app-server as mid-turn input for the SAME turn
-    const nativeRows = readFileSync(join(home, ".openmausbot", "native", `${room.threadId}.ndjson`), "utf8")
+    const aliases = JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));
+    const runtimeId = aliases.find(([, owner]: [string, {threadId:string;botId:string}]) => owner.threadId === room.threadId && owner.botId === created.id)?.[0];
+    expect(runtimeId).toBeDefined();
+    const nativeRows = readFileSync(join(home, ".openmausbot", "native", `${runtimeId}.ndjson`), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line));
     const steerRow = nativeRows.find((row) => row.dir === "out" && row.msg?.method === "turn/steer")?.msg;
     expect(steerRow?.params).toMatchObject({ input: [{ type: "text", text: "steer these room words" }] });
@@ -488,7 +491,7 @@ posixOnly("mid-turn steering e2e", () => {
     expect(stderr).not.toContain("signal SIGTERM");
   }, 40_000);
 
-  it.skipIf(!acpAvailable)("a room whose engine cannot steer keeps its queue, then drains after Stop", async () => {
+  it.skipIf(!acpAvailable)("a room whose engine cannot steer keeps its queue until room-wide Stop cancels it", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });
     const room = (await api("POST", "/api/groups", {
@@ -516,11 +519,9 @@ posixOnly("mid-turn steering e2e", () => {
     expect((await getGroup())?.messages.some((m: any) => m.text === "second")).toBe(false);
 
     await api("POST", `/api/groups/${room.id}/interrupt`, {});
-    await waitFor(
-      async () => (await getGroup())?.messages.some((m: any) => m.text === "second"),
-      "the preserved room queue to drain",
-    );
-    await api("POST", `/api/groups/${room.id}/interrupt`, {});
-    await waitFor(async () => (await getGroup())?.working === false, "the drained room turn to settle");
+    await waitFor(async () => (await getGroup())?.working === false, "the stopped room turn to settle");
+    expect((await getGroup())?.messages.some((m:any)=>m.text === "second")).toBe(false);
+    expect((await api("DELETE", `/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(404);
+
   }, 40_000);
 });

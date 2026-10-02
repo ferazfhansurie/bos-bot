@@ -225,3 +225,34 @@ describe("turn dispatch cancellation boundary", () => {
     expect(admitted).toBe(true);
   });
 });
+
+
+describe("thread-scoped provider turn ids", () => {
+  it("quarantines only the cancelled lane when providers reuse an id", () => {
+    const pending = new PendingTurnCancellations();
+    const retired = new RetiredTurnRegistry();
+    pending.mark("room-a", "owner-a");
+    expect(isTurnEventQuarantined(pending, retired, { threadId: "room-a", turnId: "1" })).toBe(true);
+    pending.clear("room-a", "owner-a");
+    expect(isTurnEventQuarantined(pending, retired, { threadId: "room-a", turnId: "1" })).toBe(true);
+    expect(isTurnEventQuarantined(pending, retired, { threadId: "room-b", turnId: "1" })).toBe(false);
+    retired.retire("legacy");
+    expect(retired.has("legacy", "room-b")).toBe(false);
+  });
+
+  it("keeps generation ownership and early completions separate across lanes", () => {
+    const registry = new ProviderTurnGenerationRegistry<string>();
+    expect(registry.bind("a", "generation-a", "1")).toBe(true);
+    expect(registry.bind("b", "generation-b", "1")).toBe(true);
+    expect(registry.complete("a", "1")).toEqual({ threadId: "a", generation: "generation-a" });
+    expect(registry.complete("b", "1")).toEqual({ threadId: "b", generation: "generation-b" });
+    registry.complete("a", "2", "early-a");
+    registry.complete("b", "2", "early-b");
+    expect(registry.takeEarlyCompletion("a", "2")).toBe("early-a");
+    expect(registry.takeEarlyCompletion("b", "2")).toBe("early-b");
+    registry.bind("a", "next-a", "3");
+    registry.bind("b", "next-b", "3");
+    expect(registry.deleteGeneration("a", "next-a")).toEqual(["3"]);
+    expect(registry.complete("b", "3")).toEqual({ threadId: "b", generation: "next-b" });
+  });
+});

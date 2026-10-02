@@ -27,6 +27,7 @@ struct ChatView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var draft = ""
+    @State private var replyTarget: Message?
     @State private var showingTasks = false
     @State private var showingWalkie = false
     @State private var showingComputer = false
@@ -42,6 +43,7 @@ struct ChatView: View {
         var text = ""
         var attachments: [PendingMessageAttachment] = []
         var error: String?
+        var reply: Message?
     }
     @State private var threadDrafts: [String: ComposerSnapshot] = [:]
     @State private var preparingAttachments = false
@@ -218,7 +220,9 @@ struct ChatView: View {
                                         message: message,
                                         endsRun: endsRun(at: index, in: transcript),
                                         openLink: openLink,
-                                        openThread: openThread
+                                        openThread: openThread,
+                                        onReply: { replyTarget = $0; composerFocused = true },
+                                        replyTarget: message.replyToId.flatMap { id in messages.first { $0.id == id } }
                                     )
                                 case let .activityRun(items):
                                     ActivityRunChip(items: items, openThread: openThread)
@@ -232,11 +236,24 @@ struct ChatView: View {
                         // one arrives — the store clears it on the same frame
                         // that appends the message, so there is never a beat
                         // where both are on screen.
-                        LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
-                            WorkingSteps(
-                                items: liveSteps,
-                                startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000)
-                            )
+                        if case let .room(room) = current {
+                            ForEach(channelMembers) { bot in
+                                RoomMemberLiveReply(live: session.liveText.entry(RuntimeEvent.roomStreamKey(threadId: threadId, botId: bot.id)), bot: bot,
+                                    busy: hostLive && room.activeBotIds?.contains(bot.id) == true,
+                                    onContent: { proxy.scrollTo(Self.liveBubbleId + ":" + bot.id, anchor: .bottom) })
+                            }
+                            if room.activeBotIds == nil {
+                                LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
+                                    WorkingSteps(items: liveSteps, startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000))
+                                }
+                            }
+                        } else {
+                            LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
+                                WorkingSteps(
+                                    items: liveSteps,
+                                    startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000)
+                                )
+                            }
                         }
                     }
                     .padding(.horizontal, 16)
@@ -252,7 +269,7 @@ struct ChatView: View {
                 // The blur is only the top strip — back, computer — the way
                 // a system bar is; the transcript starts on that line and
                 // scrolls under the face and name, which float over it.
-                .safeAreaInset(edge: .top, spacing: 0) { headerBar }
+                .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 6) { headerBar; channelMemberStrip } }
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
@@ -341,11 +358,12 @@ struct ChatView: View {
         }
         .onChange(of: threadId) { previous, next in
             dictation.stop()
-            threadDrafts[previous] = ComposerSnapshot(text: draft, attachments: attachments, error: attachmentError)
+            threadDrafts[previous] = ComposerSnapshot(text: draft, attachments: attachments, error: attachmentError, reply: replyTarget)
             let restored = threadDrafts.removeValue(forKey: next) ?? ComposerSnapshot()
             draft = restored.text
             attachments = restored.attachments
             attachmentError = restored.error
+            replyTarget = restored.reply
             selectedPhotos = []
             showCommandHUD = false
             showingPlus = false
@@ -405,7 +423,10 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showingProfile) {
-            if case let .bot(bot) = current { AgentProfileView(bot: bot) }
+            switch current {
+            case let .bot(bot): AgentProfileView(bot: bot)
+            case let .room(room): ChannelSettingsView(room: room)
+            }
         }
         .sheet(item: $shareFile) { file in
             ActivityShareSheet(items: [file.url])
@@ -443,11 +464,36 @@ struct ChatView: View {
                       canOpenThreads: current.supportsTasks,
                       // A bot on another Mac has no settings or computer the
                       // server will open for this phone.
-                      canOpenSettings: current.isBot && !current.isRemoteBot,
+                      canOpenSettings: !current.isRemoteBot,
                       canWatchComputer: current.isBot && !current.isRemoteBot, onBack: { dismiss() },
                       onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
                       onComputer: { showingComputer = true }) {
             ChatAvatarView(chat: current, size: 30, state: .idle, animated: false)
+        }
+    }
+
+    private var channelMembers: [Bot] {
+        guard case let .room(room) = current else { return [] }
+        return room.memberIds.compactMap { session.state.bot($0) }
+    }
+    private var hostLive: Bool { if case .live = session.status { return true }; return false }
+    @ViewBuilder private var channelMemberStrip: some View {
+        if case let .room(room) = current {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(channelMembers) { bot in
+                        let status = ChannelMemberStatus.resolve(room: room, bot: bot, hostLive: hostLive)
+                        HStack(spacing: 5) {
+                            BotAvatarView(bot: bot, size: 24)
+                            Text(bot.name).font(.caption)
+                            Circle().fill(status == .working ? Color.green : status == .offline ? Color.gray : Color.blue).frame(width: 6, height: 6)
+                            Text(status.rawValue.capitalized).font(.caption2).foregroundStyle(.secondary)
+                        }.accessibilityElement(children: .combine)
+                    }
+                    if room.notifications == "muted" { Label("Muted", systemImage: "bell.slash").font(.caption) }
+                    else if room.notifications == "mentions" { Label("Mentions only", systemImage: "at").font(.caption) }
+                }.padding(.horizontal, 16)
+            }.padding(.bottom, 4)
         }
     }
 
@@ -583,6 +629,7 @@ struct ChatView: View {
         let draftAtSend = draft
         let text = (explicitText ?? draftAtSend).trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoingAttachments = attachments
+        let replyAtSend = replyTarget
         let chatAtSend = current
         guard !text.isEmpty || !outgoingAttachments.isEmpty,
               !preparingAttachments,
@@ -596,7 +643,8 @@ struct ChatView: View {
             let sent = await session.send(
                 text: text,
                 attachments: outgoingAttachments,
-                to: chatAtSend
+                to: chatAtSend,
+                replyToId: replyAtSend?.id
             )
             sendingMessage = false
             guard sent else {
@@ -611,8 +659,10 @@ struct ChatView: View {
                 if threadDrafts[chatAtSend.threadId]?.attachments.map(\.id) == outgoingAttachments.map(\.id) {
                     threadDrafts[chatAtSend.threadId]?.attachments = []
                 }
+                if threadDrafts[chatAtSend.threadId]?.reply?.id == replyAtSend?.id { threadDrafts[chatAtSend.threadId]?.reply = nil }
                 return
             }
+            if replyTarget?.id == replyAtSend?.id { replyTarget = nil }
             // HUD commands expand `/diff` into a longer prompt. Compare with
             // what was actually in the field at tap time, not the expanded
             // text, so the command clears without erasing a newer edit.
@@ -983,6 +1033,31 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            if let replyTarget {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Replying to " + (replyTarget.from?.name ?? (replyTarget.role == .user ? "you" : "bot"))).font(.caption.weight(.semibold))
+                        Text(replyTarget.text ?? "").font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { self.replyTarget = nil } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("Cancel reply")
+                }.padding(10).background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            }
+            if let query = ChannelTextPresentation.mentionQuery(draft), !sendingMessage, !channelMembers.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(channelMembers.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { bot in
+                            Button {
+                                draft = ChannelTextPresentation.insertingMention(bot.name, into: draft)
+                                composerFocused = true
+                            } label: {
+                                HStack(spacing: 6) { BotAvatarView(bot: bot, size: 26); Text(bot.name).font(.subheadline) }.padding(8)
+                            }.buttonStyle(.bordered).accessibilityLabel("Mention \(bot.name)")
+                        }
+                    }
+                }
+            }
+
             ChatComposerBar(
                 draft: $draft, showingPlus: $showingPlus, dictation: dictation,
                 focus: $composerFocused, name: current.name,
@@ -1048,7 +1123,7 @@ struct ChatHeaderBar<Avatar: View>: View {
             } else {
             Menu {
                 if canOpenThreads { Button("Threads", systemImage: "square.stack", action: onThreads) }
-                if canOpenSettings { Button("Bot settings", systemImage: "gearshape", action: onSettings) }
+                if canOpenSettings { Button("Conversation settings", systemImage: "gearshape", action: onSettings) }
             } label: {
                 HStack(spacing: 8) {
                     avatar()
@@ -1226,6 +1301,8 @@ struct MessageRow: View {
     let openLink: (URL, Message) -> OpenURLAction.Result
     /// Where an "Opened thread" chip goes; nil leaves the chip a receipt.
     var openThread: ((ThreadRef) -> Void)? = nil
+    var onReply: ((Message) -> Void)? = nil
+    var replyTarget: Message? = nil
     @EnvironmentObject private var session: Session
     @State private var editingText = ""
     @State private var showingEdit = false
@@ -1246,6 +1323,13 @@ struct MessageRow: View {
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+            if let reference = message.replyToId {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Replying to " + (replyTarget?.from?.name ?? (replyTarget?.role == .user ? "you" : "an earlier message"))).font(.caption.weight(.semibold))
+                    Text(replyTarget?.text ?? "Earlier message").font(.caption).lineLimit(2)
+                }.foregroundStyle(.secondary).padding(8).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityIdentifier("reply-quote-" + reference)
+            }
             content
 
             if let comm = message.comm {
@@ -1289,6 +1373,9 @@ struct MessageRow: View {
             }
         }
         .contextMenu {
+            if message.kind == .text, !(message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let onReply {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") { onReply(message) }
+            }
             ForEach(Self.reactionChoices, id: \.self) { emoji in
                 Button(emoji) {
                     Haptics.selection()
@@ -1537,12 +1624,13 @@ struct TextBubble: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    MarkdownText(source: message.text ?? "") { url in
-                        openLink(url, message)
+                    if ChannelTextPresentation.canCollapse(message) {
+                        ExpandableBotReply(source: message.text ?? "") { openLink($0, message) }
+                    } else {
+                        MarkdownText(source: message.text ?? "") { openLink($0, message) }
+                            .foregroundStyle(Color.primary).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                        .foregroundStyle(Color.primary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, customCard ? 0 : 15)
@@ -2265,6 +2353,25 @@ private struct LiveReplyRow<Working: View>: View {
         } else if busy {
             working()
                 .id(ChatView.liveBubbleId)
+        }
+    }
+}
+
+private struct RoomMemberLiveReply: View {
+    @ObservedObject var live: LiveText
+    let bot: Bot
+    let busy: Bool
+    let onContent: () -> Void
+    var body: some View {
+        if !live.text.isEmpty || !live.reasoning.isEmpty || busy {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) { BotAvatarView(bot: bot, size: 24); Text(bot.name).font(.caption.weight(.semibold)) }
+                if !live.text.isEmpty || !live.reasoning.isEmpty {
+                    StreamingBubble(text: live.text, reasoning: live.reasoning, color: bot.color)
+                } else { Label("Working…", systemImage: "ellipsis").font(.caption).foregroundStyle(.secondary) }
+            }.id(ChatView.liveBubbleId + ":" + bot.id)
+                .onReceive(live.$text.map(\.count).removeDuplicates()) { if $0 > 0 { onContent() } }
+                .onReceive(live.$reasoning.map(\.count).removeDuplicates()) { if $0 > 0 { onContent() } }
         }
     }
 }

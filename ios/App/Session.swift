@@ -198,6 +198,7 @@ final class Session: ObservableObject {
         let destination: MessageDestination
         let text: String
         let attachmentIDs: [UUID]
+        let replyToId: String?
     }
 
     private var registry = CompanionConnectionRegistry()
@@ -1211,7 +1212,8 @@ final class Session: ObservableObject {
     func send(
         text: String,
         attachments: [PendingMessageAttachment],
-        to chat: Chat
+        to chat: Chat,
+        replyToId: String? = nil
     ) async -> Bool {
         guard let client else {
             actionError = "This computer is offline."
@@ -1245,7 +1247,8 @@ final class Session: ObservableObject {
             let draftKey = AttachmentDraftKey(
                 destination: destination,
                 text: text,
-                attachmentIDs: attachments.map(\.id)
+                attachmentIDs: attachments.map(\.id),
+                replyToId: replyToId
             )
             if attachmentSendIDs.count >= 20, attachmentSendIDs[draftKey] == nil {
                 attachmentSendIDs.removeAll(keepingCapacity: true)
@@ -1291,7 +1294,7 @@ final class Session: ObservableObject {
                 urls: [],
                 attachments: uploaded
             )
-            let receipt = try await client.send(text: message, to: destination, sendId: sendID)
+            let receipt = try await client.send(text: message, to: destination, sendId: sendID, replyToId: replyToId)
             // The send succeeded on the computer it was addressed to, so the
             // draft clears either way. Its queue row belongs to that computer,
             // and must not be drawn on one selected mid-upload.
@@ -2073,7 +2076,37 @@ final class Session: ObservableObject {
     }
 
     func avatarData(for bot: Bot) async -> Data? {
-        guard let path = bot.avatarUrl, let client else { return nil }
+        guard let path = bot.avatarUrl else { return nil }
+        return await avatarData(path: path)
+    }
+
+    var roomSettingsContext: RoomSettingsContext? {
+        guard let client else { return nil }
+        return RoomSettingsContext(connectionID: client.connection.id, generation: avatarCacheGeneration)
+    }
+
+    func updateRoom(_ room: Room, patch: RoomSettingsPatch, context: RoomSettingsContext) async throws -> Room {
+        guard context.permits(roomSettingsContext), let capturedClient = client else { throw CancellationError() }
+        let updated = try await capturedClient.updateRoom(id: room.id, patch: patch)
+        guard !Task.isCancelled, context.permits(roomSettingsContext) else { throw CancellationError() }
+        state.apply(.room(updated))
+        return updated
+    }
+
+    func uploadRoomAvatar(_ data: Data, mime: String, room: Room, context: RoomSettingsContext) async throws -> Room {
+        guard context.permits(roomSettingsContext), let capturedClient = client else { throw CancellationError() }
+        let path = try await capturedClient.uploadAvatar(data: data, mime: mime)
+        // A switched pairing ends the operation. Never redirect the saved
+        // attachment to the replacement client, and never replay it.
+        guard !Task.isCancelled, context.permits(roomSettingsContext) else { throw CancellationError() }
+        let updated = try await capturedClient.updateRoom(id: room.id, patch: RoomSettingsPatch(avatarUrl: .set(path)))
+        guard !Task.isCancelled, context.permits(roomSettingsContext) else { throw CancellationError() }
+        state.apply(.room(updated))
+        return updated
+    }
+
+    func avatarData(path: String) async -> Data? {
+        guard let client else { return nil }
         let key = path as NSString
         if let cached = avatarCache.object(forKey: key) { return cached as Data }
         let generation = avatarCacheGeneration

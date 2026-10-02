@@ -1838,6 +1838,52 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("persists accepted room photo, speaking policies and notifications through the real API", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const room = (await api("POST", "/api/groups", { name: "Control fixture", memberIds: [bot.id] })).body.group;
+    const patch = { avatarUrl: "/api/attachments/generated.png", memberReplyModes: { [bot.id]: "mentions" }, notifications: "muted" };
+    try {
+      expect((await api("PATCH", `/api/groups/${room.id}`, patch)).body.group).toMatchObject(patch);
+      for (const invalid of [{ avatarUrl: "https://example.test/photo.png" }, { avatarUrl: "/api/attachments/missing.png" }, { memberReplyModes: { missing: "always" } }]) {
+        expect((await api("PATCH", `/api/groups/${room.id}`, invalid)).status).toBe(400);
+      }
+      expect((await api("GET", "/api/bots?messages=0")).body.groups.find((g: { id: string }) => g.id === room.id)).toMatchObject(patch);
+    } finally {
+      await api("DELETE", `/api/groups/${room.id}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  });
+
+  it.skipIf(process.platform !== "darwin")("dispatches this computer with Docker unavailable and an unrelated sibling VM pin", async () => {
+    const descriptorDir = join(home, "Library", "Application Support", "OpenMausBot");
+    mkdirSync(descriptorDir, { recursive: true });
+    const descriptor = join(descriptorDir, "cua-connection.json");
+    // Fake CLI never calls this stand-in: this asserts admission/MCP mounting,
+    // not native input or any live computer action.
+    writeFileSync(descriptor, JSON.stringify({ mcpCommand: process.execPath, mcpArgs: ["--version"] }), { mode: 0o600 });
+    const bot = (await api("POST", "/api/bots", { name: "Local terminal fixture", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" } })).body.bot;
+    const target = bot.threadId;
+    const sibling = (await api("POST", `/api/bots/${bot.id}/tasks`, { title: "VM sibling" })).body.task;
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { computer: "local", browser: false })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${sibling.threadId}`, { surface: "vm" })).status).toBe(200);
+      expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${target}`, { surface: "local" })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "read-only terminal fixture", threadId: target })).status).toBe(202);
+      const dump = await readJsonFileWhenReady<{ mcpConfig: { mcpServers: Record<string, { env?: Record<string, string> }> } }>(fakeClaudeDump);
+      expect(dump.mcpConfig.mcpServers.computer.env?.OMB_CUA_COMMAND).toBe(process.execPath);
+      expect((await api("GET", `/api/bots/${bot.id}/computer?threadId=${target}`)).body.surface).toBe("local");
+      const saved = (await api("GET", "/api/bots?messages=0")).body.bots.find((b: { id: string }) => b.id === bot.id);
+      expect(saved.tasks.find((t: { threadId: string }) => t.threadId === sibling.threadId).surface).toBe("vm");
+      expect(saved.tasks.find((t: { threadId: string }) => t.threadId === target).surface).toBe("local");
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: target });
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots.find((b: { id: string }) => b.id === bot.id)?.busy, { timeout: 10000 }).toBe(false);
+      await api("DELETE", `/api/bots/${bot.id}`);
+      rmSync(descriptor, { force: true });
+    }
+  }, 30_000);
+
   it("rejects an entire channel roster when any requested member is unknown", async () => {
     const bot = (await api("GET", "/api/bots?messages=0")).body.bots[0];
     const before = (await api("GET", "/api/bots?messages=0")).body.groups.length;

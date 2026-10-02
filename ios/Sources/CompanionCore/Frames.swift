@@ -29,6 +29,12 @@ public struct RuntimeEvent: Codable, Hashable, Sendable {
     /// content.delta only
     public var delta: String?
     public var streamKind: String?
+    public var roomBotId: String?
+    public var roomRuntimeThreadId: String?
+    public var streamKey: String {
+        roomBotId.map { Self.roomStreamKey(threadId: threadId, botId: $0) } ?? threadId
+    }
+    public static func roomStreamKey(threadId: String, botId: String) -> String { "\(threadId):room:\(botId)" }
 }
 
 public enum Frame: Sendable {

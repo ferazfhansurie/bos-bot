@@ -21,6 +21,10 @@ export function defaultResponderName(group: Group, members: Bot[]): string | nul
 
 export function groupResponseHint(group: Group, members: Bot[]): string {
   if (group.dm) return t("room.hint.dm");
+  if (group.memberReplyModes && Object.keys(group.memberReplyModes).length) {
+    const responders = roomRespondersForComposer("", members, group);
+    return responders.length ? t("room.hint.lead", { name: responders.map(member => member.name).join(", ") }) : t("room.hint.mentions");
+  }
   const value = effectiveDefaultResponder(group, members);
   if (value.kind === "everyone") return t("room.hint.everyone");
   if (value.kind === "mentions") return t("room.hint.mentions");
@@ -30,6 +34,10 @@ export function groupResponseHint(group: Group, members: Bot[]): string {
 
 export function groupComposerHint(group: Group, members: Bot[]): string {
   if (group.dm) return t("composer.hint.dm");
+  if (group.memberReplyModes && Object.keys(group.memberReplyModes).length) {
+    const responders = roomRespondersForComposer("", members, group);
+    return responders.length ? t("composer.hint.responder", { name: responders.map(member => member.name).join(", ") }) : t("composer.hint.mentions");
+  }
   const value = effectiveDefaultResponder(group, members);
   if (value.kind === "everyone") return t("composer.hint.everyone");
   if (value.kind === "mentions") return t("composer.hint.mentions");
@@ -44,11 +52,17 @@ export function groupComposerHint(group: Group, members: Bot[]): string {
 export function roomRespondersForComposer<T extends { id: string; name: string; hidden?: boolean }>(
   text: string,
   members: T[],
-  group: Pick<Group, "defaultResponder">,
+  group: Pick<Group, "defaultResponder" | "memberReplyModes">,
 ): T[] {
   const available = members.filter((member) => !member.hidden);
   if (/(?:^|\s)@everyone\b/i.test(text)) return available;
   const mentioned = mentionedMembers(text, available);
+  if (group.memberReplyModes && Object.keys(group.memberReplyModes).length) {
+    const targets = new Set(mentioned.map(member => member.id));
+    if (!mentioned.length) for (const member of roomRespondersForComposer(text, available, { defaultResponder: group.defaultResponder })) targets.add(member.id);
+    return available.filter(member => group.memberReplyModes?.[member.id] === "always" ||
+      targets.has(member.id) && (group.memberReplyModes?.[member.id] !== "mentions" || mentioned.includes(member)));
+  }
   if (mentioned.length) return mentioned;
   const fallback = effectiveDefaultResponder(group, available);
   if (fallback.kind === "everyone") return available;

@@ -131,6 +131,7 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   CLOUD_DESKTOP_CONTROL_ROUTE,
   // rooms — making one, and talking in one
   { method: "POST", path: /^\/api\/groups$/ },
+  { method: "PATCH", path: /^\/api\/groups\/[\w-]+$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
   // Shared people chats remain bound to the owner identity when reached
   // through this owner's paired companion; remote people use server sessions.

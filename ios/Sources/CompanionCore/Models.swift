@@ -224,6 +224,7 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     /// The message this one follows; nil at the thread root. Two messages
     /// sharing a parent are a fork.
     public var parentId: String?
+    public var replyToId: String?
     /// Set when this line began as a queued send: the id the harness quoted
     /// when it held the message, echoed back on the line that finally landed.
     /// Clients match it against their held-send rows to retire them.
@@ -575,6 +576,10 @@ public struct Room: Codable, Hashable, Identifiable, Sendable {
     public var name: String
     public var memberIds: [String]
     public var defaultResponder: GroupResponder
+    public var avatarUrl: String?
+    public var memberReplyModes: [String: String]?
+    public var notifications: String?
+    public var activeBotIds: [String]?
     public var bulletin: String
     public var unread: Bool
     public var createdAt: Double
@@ -1389,4 +1394,43 @@ public struct ProviderUsageAccount: Decodable, Sendable, Identifiable {
 public struct ProviderUsageWindow: Decodable, Sendable {
     public let usedPercent: Double?
     public let resetsAt: Double?
+}
+
+/// Omitted values remain unchanged; avatar clear is explicit JSON null.
+public struct RoomSettingsPatch: Encodable, Sendable {
+    public var name: String?
+    public var avatarUrl: BotProfilePatch.AvatarURL?
+    public var memberReplyModes: [String: String]?
+    public var notifications: String?
+    public var memberIds: [String]?
+
+    public init(name: String? = nil, avatarUrl: BotProfilePatch.AvatarURL? = nil,
+                memberReplyModes: [String: String]? = nil, notifications: String? = nil,
+                memberIds: [String]? = nil) {
+        self.name = name; self.avatarUrl = avatarUrl; self.memberReplyModes = memberReplyModes
+        self.notifications = notifications; self.memberIds = memberIds
+    }
+    enum CodingKeys: String, CodingKey { case name, avatarUrl, memberReplyModes, notifications, memberIds }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(name, forKey: .name)
+        if let avatarUrl {
+            switch avatarUrl {
+            case let .set(path): try values.encode(path, forKey: .avatarUrl)
+            case .clear: try values.encodeNil(forKey: .avatarUrl)
+            }
+        }
+        try values.encodeIfPresent(memberReplyModes, forKey: .memberReplyModes)
+        try values.encodeIfPresent(notifications, forKey: .notifications)
+        try values.encodeIfPresent(memberIds, forKey: .memberIds)
+    }
+}
+
+public extension Room {
+    func replyMode(for botId: String) -> String {
+        if let mode = memberReplyModes?[botId], ["always", "mentions"].contains(mode) { return mode }
+        if defaultResponder.kind == "everyone" { return "always" }
+        if defaultResponder.kind == "member", defaultResponder.botId == botId { return "always" }
+        return "mentions"
+    }
 }

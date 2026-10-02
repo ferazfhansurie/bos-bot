@@ -73,6 +73,7 @@ beforeAll(async () => {
   patientFinishGate = join(home, "patient-finish");
   writeFileSync(patientFinishGate, "initial turns may finish");
   writeFileSync(join(data, "config.json"), JSON.stringify({
+    threads: { maxConcurrentPerBot: 1 },
     instances: {
       // A gate keeps a direct turn busy until the test observes the room's
       // wait, rather than racing the fake CLI's 800ms closing reply. The
@@ -230,8 +231,8 @@ describe("chat rooms wait for a member busy elsewhere", { timeout: 45_000 }, () 
         waitChipOk: true,
         waitChips: 1,
         skipped: false,
-        // the round kept its order — the waited-on member still went first
-        speakers: ["Busy", "Quick"],
+        // the free member responds while the other waits for capacity
+        speakers: ["Quick", "Busy"],
       });
 
       // the 1:1 turn the room waited on was left alone to finish on its own

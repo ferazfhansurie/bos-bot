@@ -61,6 +61,7 @@ beforeAll(async () => {
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Goal wait cap test</title>");
   writeFileSync(join(staticDir, "assets", "smoke.css"), "body{}");
   writeFileSync(join(data, "config.json"), JSON.stringify({
+    threads: { maxConcurrentPerBot: 1 },
     instances: {
       reassignLead: fixture("Reassigning lead", {
         FAKE_CLAUDE_MODE: "happy",

@@ -1,3 +1,4 @@
+import { runtimeStreamKey, roomMemberStreamKey } from "@/lib/runtime-stream";
 // Server-backed store. The React app holds no transports of its own:
 // it dispatches typed commands over HTTP and folds the one SSE event
 // stream from the harness server into local state. The reducer stays
@@ -210,6 +211,10 @@ export interface Group {
   threadId: string;
   name: string;
   memberIds: string[];
+  avatarUrl?: string | null;
+  memberReplyModes?: Record<string, "always" | "mentions">;
+  notifications?: "all" | "mentions" | "muted";
+  activeBotIds?: string[];
   defaultResponder: GroupDefaultResponder;
   bulletin: string;
   unread: boolean;
@@ -937,7 +942,7 @@ export type Action =
   | {
       type: "patchGroup";
       groupId: string;
-      patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder" | "pinnedMessageId" | "section">>;
+      patch: Partial<Pick<Group, "name" | "bulletin" | "memberIds" | "defaultResponder" | "pinnedMessageId" | "section" | "avatarUrl" | "memberReplyModes" | "notifications">>;
     }
   | { type: "deleteGroup"; groupId: string }
   | { type: "newGroupTask"; groupId: string }
@@ -2439,6 +2444,14 @@ export function createStreamDeltaBuffer(onFlush: (entries: Array<[string, Pendin
       buffer.delete(threadId);
       if (!buffer.size) cancel();
     },
+    clearThread(threadId: string) {
+      for (const [key, entry] of buffer) {
+        if (key !== threadId && !key.startsWith(`${threadId}:room:`)) continue;
+        characters -= entry.text.length + entry.reasoning.length;
+        buffer.delete(key);
+      }
+      if (!buffer.size) cancel();
+    },
     flush,
     dispose() {
       cancel();
@@ -2504,6 +2517,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return { streaming, reasoning };
     });
   };
+  const clearThreadStreams = (threadId: string) => {
+    deltaBuffer.clearThread(threadId);
+    const retained = (entries: Record<string, string>) => Object.fromEntries(Object.entries(entries).filter(([key]) => key !== threadId && !key.startsWith(`${threadId}:room:`)));
+    setStream(prev => ({ streaming: retained(prev.streaming), reasoning: retained(prev.reasoning) }));
+  };
+
 
   const botPatchQueue = useMemo(
     () =>
@@ -3460,7 +3479,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           // a settled assistant bubble replaces the in-flight stream
           if (frame.message?.role === "bot" && frame.message?.kind === "text") {
-            clearStream(frame.threadId);
+            clearStream(frame.message.from?.botId ? roomMemberStreamKey(frame.threadId, frame.message.from.botId) : frame.threadId);
             // Auto-speak lives HERE rather than in the chat view so a bot
             // you switched away from still reads its answer out — which is
             // the whole point of listening while you do something else. A
@@ -3483,7 +3502,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "thread":
           rawDispatch({ type: "threadActive", threadId: frame.threadId, activeLeafId: frame.activeLeafId });
           // a rewind also invalidates any half-streamed text from the old branch
-          clearStream(frame.threadId);
+          clearThreadStreams(frame.threadId);
           break;
         case "bot": {
           const bot = frame.bot as BotAnnouncement;
@@ -3554,11 +3573,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             rawDispatch({ type: "modelVariantRuntime", event });
           }
           if (event.type === "content.delta") {
-            deltaBuffer.push(event.threadId, event.streamKind, event.delta);
+            deltaBuffer.push(runtimeStreamKey(event), event.streamKind, event.delta);
           } else if (event.type === "turn.completed") {
             // flush any buffered tail before clearing so no tokens are lost
             flushDeltas();
-            clearStream(event.threadId);
+            clearStream(runtimeStreamKey(event));
           }
           break;
         }

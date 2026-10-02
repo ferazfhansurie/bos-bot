@@ -1,3 +1,4 @@
+import { runtimeStreamKey } from "@/lib/runtime-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -69,6 +70,29 @@ describe("stream delta flushing", () => {
     const flushed = vi.fn();
     return { buffer: createStreamDeltaBuffer(flushed), frames, flushed };
   };
+
+  it("keeps interleaved room speakers separate and retiring one preserves the other's pending tail", () => {
+    const { buffer, flushed } = prepare();
+    const a = runtimeStreamKey({ threadId: "room", roomBotId: "a" });
+    const b = runtimeStreamKey({ threadId: "room", roomBotId: "b" });
+    buffer.push(a, "assistant_text", "Alpha");
+    buffer.push(b, "assistant_text", "Beta");
+    buffer.push(a, "assistant_text", " tail");
+    buffer.clear(a);
+    vi.advanceTimersByTime(100);
+    expect(flushed).toHaveBeenCalledExactlyOnceWith([[b, { text: "Beta", reasoning: "" }]]);
+    expect(runtimeStreamKey({ threadId: "private" })).toBe("private");
+  });
+
+  it("a room rewind clears its member tails without dropping unrelated private work", () => {
+    const { buffer, flushed } = prepare();
+    buffer.push(runtimeStreamKey({ threadId: "room", roomBotId: "a" }), "assistant_text", "old A");
+    buffer.push(runtimeStreamKey({ threadId: "room", roomBotId: "b" }), "assistant_text", "old B");
+    buffer.push("private", "assistant_text", "keep");
+    buffer.clearThread("room");
+    vi.advanceTimersByTime(100);
+    expect(flushed).toHaveBeenCalledExactlyOnceWith([["private", { text: "keep", reasoning: "" }]]);
+  });
 
   it("drains a paused animation frame on the timer without duplication", () => {
     const { buffer, frames, flushed } = prepare();

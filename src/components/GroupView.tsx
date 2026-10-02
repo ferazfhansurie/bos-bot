@@ -1,10 +1,11 @@
+import { roomMemberStreamKey } from "@/lib/runtime-stream";
 // A room: several bots + you in one shared thread. The sidebar and call view
 // carry the personality; avatars inside the room stay still so a busy group
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activeLocale, t } from "@/lib/i18n";
-import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, MessageSquareReply, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, Settings2, ImagePlus, MessageSquareReply, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -62,6 +63,79 @@ import {
   tailWindowStart,
 } from "@/lib/transcript-window";
 import { useReplyDraft } from "@/lib/drafts";
+import { imageAttachmentFromFile } from "@/lib/composer-attachments";
+import { botAvatarUrlFromStoredPath, botAvatarUrlSchema } from "../../shared/bot-avatar";
+import { roomMemberReplyMode, roomMemberStatus, shouldCollapseRoomReply, type RoomViewFields } from "@/lib/room-view";
+
+export function RoomAvatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }) {
+  const safe = botAvatarUrlSchema.safeParse(avatarUrl);
+  return safe.success ? <img src={safe.data} alt={name} className="size-8 shrink-0 rounded-xl object-cover" />
+    : <span aria-label={name} className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-raised text-sm font-semibold text-ink-secondary">{name.slice(0, 2).toUpperCase()}</span>;
+}
+
+export function RoomReplyText({ message, members, everyone, threadId, forceOpen = false }: { message: Message; members: Bot[]; everyone: boolean; threadId?: string; forceOpen?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = shouldCollapseRoomReply(message);
+  const open = expanded || forceOpen;
+  return <>
+    <div className={cn(collapsible && !open && "line-clamp-6")}>
+      <ChatMarkdown text={message.text ?? ""} mentionPeers={members} everyone={everyone} message={threadId ? { threadId, messageId: message.id } : undefined} />
+    </div>
+    {collapsible && <button type="button" aria-expanded={open} onClick={() => setExpanded(!open)} disabled={forceOpen} className="mt-2 text-xs font-medium text-accent hover:underline">{open ? "Show less" : "Show more"}</button>}
+  </>;
+}
+
+function RoomSettings({ group, members, onClose }: { group: Group & RoomViewFields; members: Bot[]; onClose: () => void }) {
+  const { dispatch } = useStore();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const photoInput = useRef<HTMLInputElement>(null);
+  const save = async (patch: Partial<RoomViewFields>) => {
+    const result: { group: Group } = await api(`/api/groups/${group.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+    dispatch({ type: "groupPatched", group: result.group });
+  };
+  const change = async (patch: Partial<RoomViewFields>) => {
+    setSaving(true); setError("");
+    try { await save(patch); } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSaving(false); }
+  };
+  const upload = async (file?: File) => {
+    if (!file) return;
+    setSaving(true); setError("");
+    try {
+      const attachment = await imageAttachmentFromFile(file);
+      const avatarUrl = attachment ? botAvatarUrlFromStoredPath(attachment.path) : null;
+      if (!avatarUrl) throw new Error("Choose a PNG, JPEG, GIF, or WebP image.");
+      await save({ avatarUrl });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSaving(false); if (photoInput.current) photoInput.current.value = ""; }
+  };
+  return <section aria-label="Room settings" onKeyDown={event => { if (event.key === "Escape") onClose(); }} className="mx-5 mb-3 rounded-xl border border-hairline/40 bg-panel p-4">
+    <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold text-ink">Room settings</h2><button type="button" aria-label="Close room settings" onClick={onClose} className="rounded-md p-1 text-ink-secondary hover:bg-raised"><X size={16} /></button></div>
+    <div className="mb-4 flex items-center gap-3">
+      <RoomAvatar name={group.name} avatarUrl={group.avatarUrl} />
+      <input ref={photoInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden onChange={event => void upload(event.target.files?.[0])} />
+      <button type="button" disabled={saving} onClick={() => photoInput.current?.click()} className="ui-button"><ImagePlus size={14} /> Change room photo</button>
+      {group.avatarUrl && <button type="button" disabled={saving} onClick={() => void change({ avatarUrl: null })} className="ui-button">Remove photo</button>}
+    </div>
+    <label className="mb-4 flex items-center justify-between gap-3 text-sm text-ink">Notifications
+      <select aria-label="Room notifications" disabled={saving} value={group.notifications ?? "all"} onChange={event => void change({ notifications: event.target.value as RoomViewFields["notifications"] })} className="rounded-lg border border-hairline/40 bg-raised px-3 py-2">
+        <option value="all">All messages</option><option value="mentions">Mentions only</option><option value="muted">Muted</option>
+      </select>
+    </label>
+    <p className="mb-2 text-xs text-ink-secondary">Choose which members respond to plain messages. Tagged members can always respond.</p>
+    <div className="space-y-2">{members.map(member => {
+      const status = roomMemberStatus(group, member);
+      return <div key={member.id} className="flex items-center justify-between gap-3">
+        <span className="flex min-w-0 items-center gap-2"><BotAvatar bot={member} size={24} animated={false} /><span className="truncate text-sm text-ink">{member.name}</span><span className="text-xs text-ink-secondary">{status}</span></span>
+        <select aria-label={`${member.name} reply mode`} disabled={saving} value={roomMemberReplyMode({ ...group, defaultResponder: effectiveDefaultResponder(group, members) }, member.id)} onChange={event => void change({ memberReplyModes: { ...group.memberReplyModes, [member.id]: event.target.value as "always" | "mentions" } })} className="rounded-lg border border-hairline/40 bg-raised px-3 py-2 text-sm"><option value="always">Always</option><option value="mentions">When tagged</option></select>
+      </div>;
+    })}</div>
+    {saving && <p role="status" className="mt-3 text-xs text-ink-secondary">Saving…</p>}
+    {error && <p role="alert" className="mt-3 text-xs text-danger">{error}</p>}
+  </section>;
+}
+
 
 function dayLabel(at: number): string {
   const d = new Date(at);
@@ -332,7 +406,7 @@ const Transcript = memo(function Transcript({
                   ) : (
                     <>
                       <MessageAttachmentGallery text={m.text ?? ""} attachments={m.attachments} message={{ threadId: group.threadId, messageId: m.id }} className={m.text ? undefined : "mb-0"} eager={m.id === newestMessageId || m.id === newestUserMessageId} />
-                      {m.text ? <ChatMarkdown text={m.text} mentionPeers={members} everyone={!group.dm} message={{ threadId: group.threadId, messageId: m.id }} /> : null}
+                      {m.text ? <RoomReplyText message={m} members={members} everyone={!group.dm} threadId={group.threadId} forceOpen={m.id === focusedId} /> : null}
                     </>
                   )}
                 </div>
@@ -896,7 +970,7 @@ export function GroupView({ group }: { group: Group }) {
   // right-hand controls below the renderer-drawn caption buttons.
   const { dragStyle: headerDragStyle, noDragStyle: headerNoDragStyle, controlsShiftStyle } = useCaptionChrome();
   const stream = useStreaming();
-  const streaming = stream.streaming[group.threadId];
+  const streaming = Object.entries(stream.streaming).filter(([key]) => key === group.threadId || key.startsWith(`${group.threadId}:room:`)).map(([, text]) => text).join("\n");
   const scrollRef = useRef<HTMLDivElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerDockRef = useRef<HTMLDivElement>(null);
@@ -909,6 +983,7 @@ export function GroupView({ group }: { group: Group }) {
   const [bulletinDraft, setBulletinDraft] = useState(group.bulletin);
   const [folderOpen, setFolderOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     group.threadId,
@@ -1037,6 +1112,7 @@ export function GroupView({ group }: { group: Group }) {
   // an open folder editor belongs to the room it was opened in
   useEffect(() => setFolderOpen(false), [group.id]);
   useEffect(() => setMembersOpen(false), [group.id]);
+  useEffect(() => setSettingsOpen(false), [group.id]);
   // deps track the FULL messages.length, so expanding the window (which only
   // changes windowedMessages) can never re-trigger this bottom scrollTo.
   // `follow` is intentionally omitted — see ChatView.
@@ -1117,21 +1193,14 @@ export function GroupView({ group }: { group: Group }) {
   };
 
   // Static profile avatars: one per member, a ring + dot on whoever is working.
-  const memberMauses = members.map((b) => (
-    <span
-      key={b.id}
-      title={`${b.name}${group.busyBotId === b.id ? " — working…" : ""}`}
-      className={cn(
-        "relative inline-flex rounded-full",
-        group.busyBotId === b.id && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app",
-      )}
-    >
-      <BotAvatar bot={b} state={normalizeState(b.mascotExpression) ?? "happy"} size={24} animated={false} />
-      {group.busyBotId === b.id && (
-        <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app bg-accent" />
-      )}
-    </span>
-  ));
+  const roomFields = group as Group & RoomViewFields;
+  const memberMauses = members.map((member) => {
+    const status = roomMemberStatus(roomFields, member);
+    return <span key={member.id} title={`${member.name} — ${status}`} aria-label={`${member.name}: ${status}`} className={cn("relative inline-flex rounded-full", status === "working" && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app")}>
+      <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? "happy"} size={24} animated={false} />
+      <span className={cn("absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app", status === "working" ? "bg-accent" : status === "offline" ? "bg-ink-secondary" : "bg-green-500")} />
+    </span>;
+  });
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -1149,6 +1218,7 @@ export function GroupView({ group }: { group: Group }) {
         )}
       >
         <div className="flex min-w-0 items-center gap-2" style={headerNoDragStyle}>
+          <RoomAvatar name={group.name} avatarUrl={roomFields.avatarUrl} />
           <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span>
           {!setupPending && !group.dm && <GroupTaskPicker group={group} />}
         </div>
@@ -1171,6 +1241,7 @@ export function GroupView({ group }: { group: Group }) {
           >
             <Search size={18} />
           </button>
+          {!remoteClient && !group.dm && <button type="button" aria-label="Room settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Settings2 size={18} /></button>}
           <ExportTranscriptMenu
             title={group.name}
             messages={group.messages}
@@ -1204,6 +1275,8 @@ export function GroupView({ group }: { group: Group }) {
           )}
         </div>
       </div>
+
+      {settingsOpen && !remoteClient && !group.dm && <RoomSettings key={group.id} group={roomFields} members={members} onClose={() => setSettingsOpen(false)} />}
 
       {findOpen && <ChatFindBar threadId={group.threadId} onClose={() => setFindOpen(false)} />}
 
@@ -1384,6 +1457,14 @@ export function GroupView({ group }: { group: Group }) {
               </button>
             </div>
           )}
+          {members.map(member => {
+            const text = stream.streaming[roomMemberStreamKey(group.threadId, member.id)];
+            if (!text) return null;
+            return <div key={`stream-${member.id}`} className="min-w-0" aria-label={`${member.name} is replying`}>
+              <ClusterLabel bot={member} name={member.name} color={member.color} />
+              <ChatMarkdown text={text} streaming />
+            </div>;
+          })}
           {(speaker || presenceVisible) && (
             <TurnPresence
               avatar={

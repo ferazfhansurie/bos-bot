@@ -8,7 +8,7 @@ vi.mock("./DesktopCapabilities", () => ({
   useDesktopCapabilities: () => ({}),
 }));
 
-import { RoomToolChip } from "./GroupView";
+import { RoomToolChip, RoomReplyText, RoomAvatar } from "./GroupView";
 
 const chip = (patch: Partial<Message> = {}): Message => ({
   id: "chip",
@@ -58,5 +58,26 @@ describe("RoomToolChip", () => {
     expect(markup).toContain("Sent to Eli");
     expect(markup).toContain('aria-label="Eli"');
     expect(markup).not.toContain("<button");
+  });
+});
+
+
+describe("room presentation", () => {
+  it("shows an uploaded room avatar using the private attachment route", () => {
+    const markup = renderToStaticMarkup(createElement(RoomAvatar, { name: "HQ", avatarUrl: "/api/attachments/room-photo.png" }));
+    expect(markup).toContain('src="/api/attachments/room-photo.png"');
+    expect(markup).toContain('alt="HQ"');
+    const fallback = renderToStaticMarkup(createElement(RoomAvatar, { name: "HQ", avatarUrl: "https://tracker.invalid/pixel.png" }));
+    expect(fallback).not.toContain("tracker.invalid");
+  });
+  it("keeps the full bot text in an expandable six-line preview, and opens focused replies", () => {
+    const message = { ...chip(), kind: "text" as const, text: "long answer\n".repeat(9) };
+    const markup = renderToStaticMarkup(createElement(RoomReplyText, { message, members: [], everyone: true }));
+    expect(markup).toContain("Show more");
+    expect(markup).toContain("line-clamp-6");
+    expect(markup).toContain('aria-expanded="false"');
+    const focused = renderToStaticMarkup(createElement(RoomReplyText, { message, members: [], everyone: true, forceOpen: true }));
+    expect(focused).not.toContain("line-clamp-6");
+    expect(focused).toContain('aria-expanded="true"');
   });
 });

@@ -145,8 +145,29 @@ struct ChatAvatarView: View {
         switch chat {
         case let .bot(bot):
             BotAvatarView(bot: bot, size: size, state: state, animated: animated, comets: comets)
-        case .room:
-            MausAvatar(color: "blue", size: size, state: state, animated: animated, comets: comets)
+        case let .room(room):
+            ChannelAvatarView(room: room, size: size)
+        }
+    }
+}
+
+/// Uses the same authenticated, connection-scoped attachment cache as bot faces.
+struct ChannelAvatarView: View {
+    let room: Room
+    let size: CGFloat
+    @EnvironmentObject private var session: Session
+    @State private var image: UIImage?
+    var body: some View {
+        Group {
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+            else { Image(systemName: "person.3.fill").resizable().scaledToFit().padding(size * 0.22).foregroundStyle(Color.accentColor) }
+        }
+        .frame(width: size, height: size).background(Color.accentColor.opacity(0.12)).clipShape(Circle())
+        .accessibilityLabel("\(room.name) group avatar")
+        .task(id: room.avatarUrl) {
+            image = nil
+            guard let path = room.avatarUrl, let data = await session.avatarData(path: path), !Task.isCancelled else { return }
+            image = UIImage(data: data)
         }
     }
 }

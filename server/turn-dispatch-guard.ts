@@ -31,8 +31,8 @@ export class RetiredTurnRegistry {
     this.#limit = limit;
   }
 
-  retire(turnId: string): void {
-    this.#turnIds.add(turnId);
+  retire(turnId: string, threadId?: string): void {
+    this.#turnIds.add(providerTurnKey(turnId, threadId));
     while (this.#turnIds.size > this.#limit) {
       const oldest = this.#turnIds.values().next().value;
       if (oldest === undefined) break;
@@ -40,9 +40,13 @@ export class RetiredTurnRegistry {
     }
   }
 
-  has(turnId: string | undefined): boolean {
-    return turnId !== undefined && this.#turnIds.has(turnId);
+  has(turnId: string | undefined, threadId?: string): boolean {
+    return turnId !== undefined && this.#turnIds.has(providerTurnKey(turnId, threadId));
   }
+}
+
+function providerTurnKey(turnId: string, threadId?: string): string {
+  return JSON.stringify([threadId ?? null, turnId]);
 }
 
 export type ProviderTurnGenerationOwner = { threadId: string; generation: string };
@@ -63,44 +67,45 @@ export class ProviderTurnGenerationRegistry<Outcome = never> {
   }
 
   bind(threadId: string, generation: string, turnId: string): boolean {
-    if (this.#completed.has(turnId)) return false;
-    this.#owners.set(turnId, { threadId, generation });
+    if (this.#completed.has(turnId, threadId)) return false;
+    this.#owners.set(providerTurnKey(turnId, threadId), { threadId, generation });
     return true;
   }
 
   complete(threadId: string, turnId: string, outcome?: Outcome): ProviderTurnGenerationOwner | null {
-    if (this.#completed.has(turnId)) return null;
-    const owner = this.#owners.get(turnId);
+    if (this.#completed.has(turnId, threadId)) return null;
+    const owner = this.#owners.get(providerTurnKey(turnId, threadId));
     if (owner && owner.threadId !== threadId) return null;
-    this.#completed.retire(turnId);
+    this.#completed.retire(turnId, threadId);
     if (!owner) {
       // Only a later ACK for this exact provider id may consume the result.
       // Never attribute an unbound event to the thread's current generation.
       if (outcome !== undefined) {
-        this.#earlyCompletions.set(turnId, { threadId, outcome });
+        this.#earlyCompletions.set(providerTurnKey(turnId, threadId), { threadId, outcome });
         while (this.#earlyCompletions.size > this.#limit) {
           this.#earlyCompletions.delete(this.#earlyCompletions.keys().next().value!);
         }
       }
       return null;
     }
-    this.#owners.delete(turnId);
+    this.#owners.delete(providerTurnKey(turnId, threadId));
     return owner;
   }
 
   takeEarlyCompletion(threadId: string, turnId: string): Outcome | undefined {
-    const receipt = this.#earlyCompletions.get(turnId);
+    const receipt = this.#earlyCompletions.get(providerTurnKey(turnId, threadId));
     if (receipt?.threadId !== threadId) return undefined;
-    this.#earlyCompletions.delete(turnId);
+    this.#earlyCompletions.delete(providerTurnKey(turnId, threadId));
     return receipt.outcome;
   }
 
   deleteGeneration(threadId: string, generation: string): string[] {
     const removed: string[] = [];
-    for (const [turnId, owner] of this.#owners) {
+    for (const [key, owner] of this.#owners) {
       if (owner.threadId === threadId && owner.generation === generation) {
-        this.#owners.delete(turnId);
-        this.#completed.retire(turnId);
+        this.#owners.delete(key);
+        const turnId = (JSON.parse(key) as [string, string])[1];
+        this.#completed.retire(turnId, threadId);
         removed.push(turnId);
       }
     }
@@ -196,8 +201,8 @@ export function isTurnEventQuarantined(
   retired: RetiredTurnRegistry,
   event: { threadId: string; turnId?: string },
 ): boolean {
-  if (retired.has(event.turnId)) return true;
+  if (retired.has(event.turnId, event.threadId)) return true;
   if (!pending.has(event.threadId)) return false;
-  if (event.turnId) retired.retire(event.turnId);
+  if (event.turnId) retired.retire(event.turnId, event.threadId);
   return true;
 }

@@ -28,6 +28,9 @@ export interface RuntimeEventBase {
   provider: DriverKind;
   providerInstanceId?: InstanceId;
   threadId: ThreadId;
+  /** Public room attribution; never an execution capability or visible task. */
+  roomRuntimeThreadId?: string;
+  roomBotId?: string;
   createdAt: string;
   turnId?: TurnId;
   itemId?: string;

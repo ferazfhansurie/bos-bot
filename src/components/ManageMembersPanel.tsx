@@ -4,7 +4,7 @@
 // keeps every message a departing bot already sent.
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { track } from "@/lib/analytics";
-import { useStore, type Group } from "@/state/store";
+import { api, useStore, type Group } from "@/state/store";
 import { BotPickerList } from "./BotPickerList";
 import { nextMemberIds } from "@/lib/room-members";
 
@@ -19,6 +19,8 @@ export function ManageMembersPanel({
 }) {
   const { state, dispatch } = useStore();
   const [picked, setPicked] = useState<Set<string>>(() => new Set(group.memberIds));
+  const [confirmRemoval, setConfirmRemoval] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const openedMemberIds = useRef([...group.memberIds]);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -64,13 +66,15 @@ export function ManageMembersPanel({
     };
   }, [onClose, triggerRef]);
 
-  const toggle = (id: string) =>
+  const toggle = (id: string) => {
+    setConfirmRemoval(false);
     setPicked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  };
 
   const memberIds = nextMemberIds(
     group.memberIds,
@@ -79,7 +83,8 @@ export function ManageMembersPanel({
   );
   const changed = memberIds.length !== group.memberIds.length || memberIds.some((id, i) => id !== group.memberIds[i]);
 
-  const save = () => {
+  const removed = group.memberIds.filter(id => !memberIds.includes(id));
+  const save = async () => {
     if (!memberIds.length) return;
     const opened = openedMemberIds.current;
     const rosterChanged =
@@ -88,15 +93,25 @@ export function ManageMembersPanel({
       setSaveError("This group's members changed while the panel was open. Close it and try again.");
       return;
     }
-    if (changed) {
-      dispatch({ type: "patchGroup", groupId: group.id, patch: { memberIds } });
-      track("room_members_changed", {
-        members: memberIds.length,
-        added: memberIds.filter((id) => !group.memberIds.includes(id)).length,
-        removed: group.memberIds.filter((id) => !memberIds.includes(id)).length,
-      });
+    if (removed.length && !confirmRemoval) {
+      setConfirmRemoval(true);
+      return;
     }
-    onClose();
+    setSaving(true);
+    try {
+      if (changed) {
+        const result: { group: Group } = await api(`/api/groups/${group.id}`, { method: "PATCH", body: JSON.stringify({ memberIds }) });
+        dispatch({ type: "groupPatched", group: result.group });
+        track("room_members_changed", {
+          members: memberIds.length,
+          added: memberIds.filter((id) => !group.memberIds.includes(id)).length,
+          removed: group.memberIds.filter((id) => !memberIds.includes(id)).length,
+        });
+      }
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    } finally { setSaving(false); }
   };
 
   return (
@@ -115,6 +130,7 @@ export function ManageMembersPanel({
         <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
         <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="Create a bot first — groups are made of bots." />
         {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
+        {confirmRemoval && <p role="alert" className="mt-2 text-[12px] text-ink-secondary">Remove {removed.length} {removed.length === 1 ? "member" : "members"}? Their messages stay in this room.</p>}
         {saveError && (
           <div role="alert" className="mt-2 text-[12px] text-danger">
             {saveError}
@@ -128,11 +144,11 @@ export function ManageMembersPanel({
             Cancel
           </button>
           <button
-            onClick={save}
-            disabled={!memberIds.length}
+            onClick={() => void save()}
+            disabled={!memberIds.length || saving}
             className="flex-1 rounded-lg bg-accent py-2 text-[14px] font-medium text-white hover:brightness-110 disabled:opacity-40"
           >
-            Save{memberIds.length ? ` · ${memberIds.length} ${memberIds.length === 1 ? "bot" : "bots"}` : ""}
+            {saving ? "Saving…" : confirmRemoval ? "Confirm removal" : `Save${memberIds.length ? ` · ${memberIds.length} ${memberIds.length === 1 ? "bot" : "bots"}` : ""}`}
           </button>
         </div>
       </div>

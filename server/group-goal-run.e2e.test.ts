@@ -64,6 +64,7 @@ beforeAll(async () => {
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Goal run test</title>");
   writeFileSync(join(staticDir, "assets", "smoke.css"), "body{}");
   writeFileSync(join(data, "config.json"), JSON.stringify({
+    threads: { maxConcurrentPerBot: 1 },
     instances: {
       complete: {
         driver: "claudeAgent",

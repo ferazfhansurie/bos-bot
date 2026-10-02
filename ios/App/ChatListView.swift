@@ -962,16 +962,20 @@ struct GroupTile: View {
             ZStack {
                 if let room {
                     Circle().fill(Color.secondary.opacity(0.14))
-                    let bots = memberBots(room)
-                    if let first = bots.first {
-                        BotAvatarView(bot: first, size: 34, state: .happy, animated: false)
-                            .offset(x: -9, y: -6)
-                    }
-                    if bots.count > 1 {
-                        BotAvatarView(bot: bots[1], size: 30, state: .happy, animated: false)
-                            .padding(2)
-                            .background(Circle().fill(Color(uiColor: .systemBackground)))
-                            .offset(x: 11, y: 9)
+                    if room.avatarUrl != nil {
+                        ChannelAvatarView(room: room, size: 60)
+                    } else {
+                        let bots = memberBots(room)
+                        if let first = bots.first {
+                            BotAvatarView(bot: first, size: 34, state: .happy, animated: false)
+                                .offset(x: -9, y: -6)
+                        }
+                        if bots.count > 1 {
+                            BotAvatarView(bot: bots[1], size: 30, state: .happy, animated: false)
+                                .padding(2)
+                                .background(Circle().fill(Color(uiColor: .systemBackground)))
+                                .offset(x: 11, y: 9)
+                        }
                     }
                     if room.unread {
                         Circle()

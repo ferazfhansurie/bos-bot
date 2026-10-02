@@ -465,6 +465,11 @@ export interface WireGroup {
   tasks?: GroupTask[];
   name: string;
   memberIds: string[];
+  avatarUrl?: string | null;
+  memberReplyModes?: Record<string, "always" | "mentions">;
+  notifications?: "all" | "mentions" | "muted";
+  /** Computed provider owners; never a persisted busy flag. */
+  activeBotIds?: string[];
   defaultResponder: GroupDefaultResponder;
   /** The room's shared instructions. */
   bulletin: string;

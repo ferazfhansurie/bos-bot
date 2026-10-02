@@ -22,6 +22,12 @@ describe("roomRespondersForComposer", () => {
     ).toEqual([members[1]]);
   });
 
+  it("previews per-member routing without losing legacy defaults", () => {
+    const group = { defaultResponder: { kind: "member", botId: "milind" } as const, memberReplyModes: { atlas: "always", milind: "mentions" } as const };
+    expect(roomRespondersForComposer("hello", members, group)).toEqual([members[0]]);
+    expect(roomRespondersForComposer("@Milind help", members, group)).toEqual(members);
+  });
+
   it("supports everyone and mentions-only room policies", () => {
     expect(roomRespondersForComposer("hello", members, { defaultResponder: { kind: "everyone" } })).toEqual(members);
     expect(roomRespondersForComposer("hello", members, { defaultResponder: { kind: "mentions" } })).toEqual([]);
