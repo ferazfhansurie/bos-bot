@@ -98,8 +98,17 @@ await build({
   allowOverwrite: true,
   logLevel: "info",
   external: ["typescript", "unzipper", "archiver", "@aws-sdk/client-s3"],
+  // CommonJS dependencies also read __dirname/__filename (fluent-ffmpeg does
+  // in its constructor, which new Client() reaches), so define both too.
   banner: {
-    js: 'import { createRequire as __ombWhatsAppCreateRequire } from "node:module"; const require = __ombWhatsAppCreateRequire(import.meta.url);',
+    js: [
+      'import { createRequire as __ombWhatsAppCreateRequire } from "node:module";',
+      'import { fileURLToPath as __ombWhatsAppFileURLToPath } from "node:url";',
+      'import { dirname as __ombWhatsAppDirname } from "node:path";',
+      "const require = __ombWhatsAppCreateRequire(import.meta.url);",
+      "const __filename = __ombWhatsAppFileURLToPath(import.meta.url);",
+      "const __dirname = __ombWhatsAppDirname(__filename);",
+    ].join(" "),
   },
 });
 

@@ -142,7 +142,10 @@ writeFileSync(
 // Native WhatsApp is a separately bundled runtime the server imports by path
 // (LOADED_RUNTIMES). Load it from the staged copy — whatsapp-web.js and
 // puppeteer must be inlined, since nothing can resolve from node_modules here.
-// Loading only: no client is created and no browser is launched.
+// It also CONSTRUCTS a real client (new Client() + LocalAuth, nothing more):
+// 0d5b86e loaded fine yet died on connect with "__dirname is not defined"
+// because a dependency reads it in the Client constructor. initialize() is
+// never called, so no browser launches and nothing touches WhatsApp.
 const runtimeProbe = join(staging, "server", "probe-loaded-runtimes.mjs");
 writeFileSync(
   runtimeProbe,
@@ -156,6 +159,17 @@ writeFileSync(
     "  try {",
     "    const mod = await import(pathToFileURL(path).href);",
     "    report[name] = { path, createReadOnlyClient: typeof mod.createReadOnlyClient };",
+    "    if (name === 'whatsapp' && typeof mod.createReadOnlyClient === 'function') {",
+    "      try {",
+    "        const dir = await import('node:fs').then((fs) => fs.mkdtempSync(process.cwd() + '/wa-construct-'));",
+    "        const noop = () => {};",
+    "        const client = mod.createReadOnlyClient(",
+    "          { clientId: 'smoke', authDir: dir + '/auth', cacheDir: dir + '/cache', executablePath: dir + '/no-browser', qrMaxRetries: 1, deviceName: 'smoke' },",
+    "          new Proxy({}, { get: () => noop }),",
+    "        );",
+    "        report[name].constructed = Object.keys(client).sort();",
+    "      } catch (error) { report[name].constructError = String(error && error.stack || error); }",
+    "    }",
     "  } catch (error) { report[name] = { path, error: String(error && error.message || error) }; }",
     "}",
     "console.log(JSON.stringify(report));",
@@ -257,6 +271,8 @@ if (
   !runtimeReport ||
   runtimeReport.error ||
   runtimeReport.whatsapp?.createReadOnlyClient !== "function" ||
+  runtimeReport.whatsapp.constructError ||
+  !Array.isArray(runtimeReport.whatsapp.constructed) ||
   runtimeReport.whatsapp.inside !== true
 ) {
   console.error("the packaged native WhatsApp runtime does not load from inside the packaged server dir:");
@@ -289,5 +305,6 @@ const count = Object.keys(proxyReport.resolved).length;
 console.log(`packaged server started with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
 console.log(`packaged native WhatsApp runtime loads with no node_modules in reach ✓ ${runtimeReport.whatsapp.path}`);
+console.log(`packaged native WhatsApp runtime constructs a real client ✓ [${runtimeReport.whatsapp.constructed.join(", ")}]`);
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");
 if (browserBundle) console.log(`packaged browser discovered without installation; access remains opt-in ✓ ${JSON.stringify(browserReport)}`);
