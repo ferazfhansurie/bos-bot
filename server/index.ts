@@ -47,6 +47,7 @@ import { ApnsPush } from "./apns-push.ts";
 import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
+import { MAX_BOT_RUN, isBareAck, isRoomStopCommand, trailingBotReplies } from "./room-loop-brake.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
@@ -2658,9 +2659,14 @@ function updateChannel(groupId: string, value: unknown): GroupRecord {
   }
   if (
     channelTaskBlocked(existing) &&
-    (body.memberIds !== undefined || body.defaultResponder !== undefined || body.memberReplyModes !== undefined || body.bulletin !== undefined)
+    (body.memberIds !== undefined || body.defaultResponder !== undefined || body.memberReplyModes !== undefined)
   ) {
     throw Object.assign(new Error("this channel is working or waiting on you — finish that turn first"), { status: 409 });
+  }
+  // The bulletin is read when each turn starts, so a running turn keeps the
+  // text it began with; only an open approval card holds it back.
+  if (body.bulletin !== undefined && channelAwaitsUser(existing)) {
+    throw Object.assign(new Error("this channel is waiting on you — answer the open card first"), { status: 409 });
   }
   const patch: Record<string, unknown> = {};
   if (body.name !== undefined) {
@@ -2746,7 +2752,10 @@ function updateChannel(groupId: string, value: unknown): GroupRecord {
 }
 
 const channelTaskBlocked = (group: GroupRecord) =>
-  groupIsWorking(group) ||
+  groupIsWorking(group) || channelAwaitsUser(group);
+
+/** An approval or question card in one of the room's tasks is still open. */
+const channelAwaitsUser = (group: GroupRecord) =>
   store.groupTasks(group.id).some((task) =>
     store.messagesFor(task.threadId).some(
       (message) =>
@@ -9236,14 +9245,16 @@ const webhookIngressStatus = () => ({
 // explicitly @mentions members. Responders run SEQUENTIALLY (one speaker at
 // a time — the transcript and streaming bubble stay coherent), each on a
 // fresh session with recent room context. A member's reply may @mention
-// teammates; those get one chained turn (hop 1), never deeper.
+// teammates; those get chained turns, up to MAX_GROUP_HOPS deep, each member
+// at most once per chain. The room loop brake (MAX_BOT_RUN bot replies in a
+// row) stops a chain earlier and hands the room back to a person.
 const roomHandoffTimer = setInterval(() => {
   void drainDelegatedJobs().catch(error => console.error("delegated jobs:", error));
   try { roomHandoffs.tick(); } catch (error) { console.error("room handoffs:", error); }
 }, 250);
 roomHandoffTimer.unref();
 const GROUP_CONTEXT_MESSAGES = 30;
-const MAX_GROUP_HOPS = 1;
+const MAX_GROUP_HOPS = 6;
 
 type GroupMemberTurnOutcome =
   | "settled"
@@ -10149,14 +10160,15 @@ async function executeGroupMemberTurn(
     return false;
   }
 
-  // chained mentions: a member's reply can summon teammates — one hop only
+  // chained mentions: a member's reply can summon teammates, MAX_GROUP_HOPS deep
   if (
     (orchestration?.followMentions ?? true) &&
     !orchestration?.roomHandoffId &&
     !roomHandoffs.nodes.has(internalGeneration) &&
     !isCancelled?.() &&
     hop < MAX_GROUP_HOPS &&
-    replyText.trim()
+    replyText.trim() &&
+    !isBareAck(replyText)
   ) {
     const members = group.memberIds
       .map((id) => store.bot(id))
@@ -10182,7 +10194,11 @@ async function executeGroupMemberTurn(
     }
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
+      // A member already in this chain is never called back: its own turn
+      // is still on the stack holding its execution slot, so a callback
+      // would queue behind itself forever.
       if (spoken.has(next.id)) continue;
+      if (roomLoopBrakeEngaged(threadId, bot.id)) break;
       if (operation) {
         // a summoned teammate busy elsewhere is woken later, exactly like a
         // direct responder; one skipped by the cap must not be retried as a
@@ -10596,6 +10612,61 @@ type StartGroupTurnOptions = {
   /** The person who sent it, when not the desktop owner (see Message.sender). */
   sender?: { name: string };
 };
+
+/** True once MAX_BOT_RUN bot replies have landed since the last human
+ * message. The chain stops there and the room says so, so a person (not
+ * another bot) decides whether it continues. */
+function roomLoopBrakeEngaged(threadId: string, botId: string): boolean {
+  const roomThreadId = store.canonicalThreadId(threadId);
+  const log = store.messagesFor(roomThreadId);
+  if (trailingBotReplies(log) < MAX_BOT_RUN) return false;
+  if (log.at(-1)?.tool?.name?.startsWith("paused after ")) return true;
+  const bot = store.bot(botId);
+  store.appendMessage(roomThreadId, {
+    role: "bot",
+    kind: "activity",
+    tool: { name: `paused after ${MAX_BOT_RUN} bot replies in a row${bot ? ` — ${bot.name}'s mentions wait for you` : ""}`, ok: true },
+  });
+  return true;
+}
+
+/** Room Stop: cancel queued member slots, pending followups and every live
+ * member turn on the targeted tasks (all of the room's tasks by default).
+ * Returns how many live turns were interrupted. */
+async function interruptRoom(
+  group: GroupRecord,
+  opts: { threadId?: string; botId?: string } = {},
+): Promise<number> {
+  const activeOperations = [...(groupTurnOperations.get(group.id) ?? [])]
+    .filter((operation) => !operation.cancelled);
+  // Room-wide Stop includes inactive tasks whose followups have not run yet.
+  const targetThreadIds = opts.threadId !== undefined
+    ? [opts.threadId]
+    : [...new Set([group.threadId, ...store.groupTasks(group.id).map(task => task.threadId), ...activeOperations.map(operation => operation.threadId)])];
+  const scopedRuntime = roomRuntimeSpeakers(group.id).filter(([runtimeId, speaker]) => targetThreadIds.includes(store.canonicalThreadId(runtimeId)) && (!opts.botId || speaker.botId === opts.botId));
+  // Cancel queued member execution slots too, including pre-provider setup.
+  for (const runtimeId of roomMemberQueues.keys()) {
+    const alias = store.roomRuntimeThread(runtimeId);
+    if (alias?.groupId === group.id && targetThreadIds.includes(alias.threadId) && (!opts.botId || alias.botId === opts.botId)) roomMemberCancelEpoch.set(runtimeId, (roomMemberCancelEpoch.get(runtimeId) ?? 0) + 1);
+  }
+  if (!opts.botId) {
+    for (const threadId of targetThreadIds) cancelGroupTurnOperations(group.id, threadId);
+    for (const row of chatFollowups("channel")) if (row.ownerId === group.id && targetThreadIds.includes(row.threadId) && row.status === "pending") cancelChannelMessage(group.id, row.id);
+  }
+  await Promise.all(scopedRuntime.map(async ([runtimeId, speaker]) => {
+    const busy = store.bot(speaker.botId);
+    revokeInternalCapabilitiesForThread(runtimeId);
+    await (busy ? runningTurnInstance(busy, runtimeId) : undefined)?.adapter.interruptTurn(runtimeId).catch(() => {});
+    // Only this owner's asks close. Sibling cards in the canonical room remain open.
+    for (const key of askMessageByRequest.keys()) if (key.startsWith(`${runtimeId}:`)) {
+      const id = askMessageByRequest.get(key);
+      const message = id ? store.messagesFor(runtimeId).find(message => message.id === id) : undefined;
+      if (message?.card && !message.card.answered) store.patchMessage(runtimeId, message.id, { card: { ...message.card, answered: "unavailable", dismissed: true } });
+      askMessageByRequest.delete(key);
+    }
+  }));
+  return scopedRuntime.length;
+}
 
 function startGroupTurn(
   groupId: string,
@@ -16655,6 +16726,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (via) {
         console.warn(`room message from ${requestSource(req)} through the local API (no session, no browser origin) into "${group.name}"`);
       }
+      // Typing "stop" in a room is the room's Stop button: every running
+      // member turn is cancelled and nothing new starts. It is recorded so
+      // the transcript shows why the bots went quiet.
+      if (!group.dm && channelMode === "chat" && !via && isRoomStopCommand(text)) {
+        const stopped = await interruptRoom(group);
+        const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, sender: messageSender(auth) });
+        store.appendMessage(threadId, {
+          role: "bot",
+          kind: "activity",
+          tool: { name: stopped ? `stopped ${stopped} running turn${stopped === 1 ? "" : "s"} in this room` : "nothing was running in this room", ok: true },
+        });
+        return json(res, 200, { ok: true, threadId, message, stopped });
+      }
       const receipt = await sendSequencer.run(
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id, channelMode),
@@ -16859,33 +16943,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       ) {
         return json(res, 409, { error: "this channel is working in another task" });
       }
-      // Room-wide Stop includes inactive tasks whose followups have not run yet.
-      const targetThreadIds = body.threadId !== undefined
-        ? [body.threadId]
-        : [...new Set([group.threadId, ...store.groupTasks(group.id).map(task => task.threadId), ...activeOperations.map(operation => operation.threadId)])];
       if (body.botId !== undefined && (typeof body.botId !== "string" || !group.memberIds.includes(body.botId))) return json(res, 400, { error: "botId must name a room member" });
-      const scopedRuntime = roomRuntimeSpeakers(group.id).filter(([runtimeId, speaker]) => targetThreadIds.includes(store.canonicalThreadId(runtimeId)) && (!body.botId || speaker.botId === body.botId));
-      // Cancel queued member execution slots too, including pre-provider setup.
-      for (const runtimeId of roomMemberQueues.keys()) {
-        const alias = store.roomRuntimeThread(runtimeId);
-        if (alias?.groupId === group.id && targetThreadIds.includes(alias.threadId) && (!body.botId || alias.botId === body.botId)) roomMemberCancelEpoch.set(runtimeId, (roomMemberCancelEpoch.get(runtimeId) ?? 0) + 1);
-      }
-      if (!body.botId) {
-        for (const threadId of targetThreadIds) cancelGroupTurnOperations(group.id, threadId);
-        for (const row of chatFollowups("channel")) if (row.ownerId === group.id && targetThreadIds.includes(row.threadId) && row.status === "pending") cancelChannelMessage(group.id, row.id);
-      }
-      await Promise.all(scopedRuntime.map(async ([runtimeId, speaker]) => {
-        const busy = store.bot(speaker.botId);
-        revokeInternalCapabilitiesForThread(runtimeId);
-        await (busy ? runningTurnInstance(busy, runtimeId) : undefined)?.adapter.interruptTurn(runtimeId).catch(() => {});
-        // Only this owner's asks close. Sibling cards in the canonical room remain open.
-        for (const key of askMessageByRequest.keys()) if (key.startsWith(`${runtimeId}:`)) {
-          const id = askMessageByRequest.get(key);
-          const message = id ? store.messagesFor(runtimeId).find(message => message.id === id) : undefined;
-          if (message?.card && !message.card.answered) store.patchMessage(runtimeId, message.id, { card: { ...message.card, answered: "unavailable", dismissed: true } });
-          askMessageByRequest.delete(key);
-        }
-      }));
+      await interruptRoom(group, { threadId: body.threadId, botId: body.botId });
       return json(res, 200, { ok: true });
     }
 

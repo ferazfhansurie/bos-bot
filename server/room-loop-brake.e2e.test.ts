@@ -1,0 +1,71 @@
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { expect, it } from "vitest";
+import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
+import { handleToolCall, request } from "../scripts/mcp-server.ts";
+
+async function withPair(test: (f: any) => Promise<void>) {
+  const session = await launchVerificationServer(process.env, undefined, undefined, undefined, undefined, { scripted: true });
+  const url = session.info.url;
+  const env = { OPENMAUSBOT_URL: url };
+  const cli = (...args: string[]) => runControlOmb(args, { env }) as Promise<any>;
+  const api = (path: string, body?: unknown, method = "POST") => request(path, body === undefined ? {} : { method, body: JSON.stringify(body) }, url) as Promise<any>;
+  // A browser-origin send is a person typing, not a script on loopback.
+  const say = (roomId: string, text: string) => request(`/api/groups/${roomId}/messages`, {
+    method: "POST", body: JSON.stringify({ text }), headers: { origin: url, "content-type": "application/json" },
+  }, url) as Promise<any>;
+  const tool = (name: string, args: Record<string, unknown>) => handleToolCall(name, args, (path, options) => request(path, options, url)) as Promise<any>;
+  try {
+    const ace = (await cli("new-bot", "--name", "Ace", "--section", "A")).bot;
+    const bee = (await cli("new-bot", "--name", "Bee", "--section", "A")).bot;
+    const room = (await tool("create_channel", { name: "Pair", member_ids: [ace.id, bee.id] })).channel;
+    const planPath = join(session.info.dataDir, "room-plan.json");
+    const savePlan = (plan: unknown) => writeFileSync(planPath, JSON.stringify(plan));
+    const turns = () => existsSync(`${planPath}.evidence.jsonl`)
+      ? readFileSync(`${planPath}.evidence.jsonl`, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line).botId) : [];
+    const messages = async () => (await api(`/api/threads/${room.activeTaskId}/messages`)).messages;
+    const wait = () => cli("wait", "--channel", room.id, "--timeout", "40");
+    await test({ api, cli, say, ace, bee, room, savePlan, turns, messages, wait, planPath });
+  } finally { await session.close(); }
+}
+
+it("hands the room back to a person after three bot replies in a row", () => withPair(async f => {
+  const cee = (await f.cli("new-bot", "--name", "Cee", "--section", "A")).bot;
+  const dee = (await f.cli("new-bot", "--name", "Dee", "--section", "A")).bot;
+  await f.api(`/api/groups/${f.room.id}`, { memberIds: [f.ace.id, f.bee.id, cee.id, dee.id] }, "PATCH");
+  f.savePlan({ [f.ace.id]: { reply: "@Bee @Cee @Dee each check this" } });
+  await f.cli("send-channel", "--channel", f.room.id, "--text", "@Ace start");
+  expect((await f.wait()).status).toBe("settled");
+  const log = await f.messages();
+  expect(log.filter((m: any) => m.role === "bot" && m.kind === "text")).toHaveLength(3);
+  expect(log.filter((m: any) => m.kind === "activity" && m.tool?.name?.startsWith("paused after 3 bot replies"))).toHaveLength(1);
+}), 60_000);
+
+it("does not let a bare acknowledgement summon anyone", () => withPair(async f => {
+  f.savePlan({ [f.ace.id]: { reply: "agreed @Bee" }, [f.bee.id]: { reply: "should not run" } });
+  await f.cli("send-channel", "--channel", f.room.id, "--text", "@Ace start");
+  expect((await f.wait()).status).toBe("settled");
+  expect(f.turns()).toEqual([f.ace.id]);
+}), 60_000);
+
+it("treats a typed stop as the room's Stop button", () => withPair(async f => {
+  f.savePlan({ [f.ace.id]: { reply: "@Bee your turn", delayMs: 15_000 }, [f.bee.id]: { reply: "should not run" } });
+  await f.cli("send-channel", "--channel", f.room.id, "--text", "@Ace start");
+  // Ace is mid-turn once its recent-work brief lands; give the provider a moment to start.
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline && !(await f.messages()).some((m: any) => m.kind === "activity")) await new Promise(resolve => setTimeout(resolve, 100));
+  await new Promise(resolve => setTimeout(resolve, 2_000));
+  // the bulletin is read at each turn start, so editing it mid-turn is safe
+  const edited = await f.api(`/api/groups/${f.room.id}`, { bulletin: "use ssh bos-server" }, "PATCH");
+  expect(JSON.stringify(edited)).toContain("use ssh bos-server");
+  await expect(f.api(`/api/groups/${f.room.id}`, { memberIds: [f.ace.id] }, "PATCH")).rejects.toThrow(/409/);
+  const stopped = await f.say(f.room.id, "stop");
+  expect(stopped.stopped).toBe(1);
+  // an interrupted turn ends as failed, exactly like the Stop button
+  expect((await f.wait()).status).toBe("failed");
+  expect(f.turns()).not.toContain(f.bee.id);
+  const log = await f.messages();
+  expect(log.some((m: any) => m.role === "user" && m.text === "stop")).toBe(true);
+  expect(log.some((m: any) => m.kind === "activity" && m.tool?.name === "stopped 1 running turn in this room")).toBe(true);
+  expect(log.some((m: any) => m.text === "@Bee your turn")).toBe(false);
+}), 60_000);

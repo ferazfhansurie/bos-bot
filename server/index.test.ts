@@ -2110,12 +2110,12 @@ describe("harness HTTP API", () => {
       const busyToken = await mintTestCapability(BASE, chief.id, chief.threadId);
       expect((await api("POST", `/api/groups/${roomId}/messages`, { text: "Hold this room turn" })).status).toBe(202);
       await expect.poll(async () => (await readRoom()).working).toBe(true);
-      for (const mutation of [{ action: "set_members", memberIds: [chief.id] }, { action: "set_bulletin", bulletin: "Changed mid-turn" }]) {
-        const blocked = await chiefRoomRequest(BASE, busyToken, "manage-room", { roomId, ...mutation });
-        expect(blocked.status).toBe(409);
-        expect(blocked.body.error).toMatch(/working or waiting/);
-      }
-      expect(await readRoom()).toMatchObject({ bulletin: "Updated brief ✓", memberIds: [chief.id, peer.id] });
+      const blocked = await chiefRoomRequest(BASE, busyToken, "manage-room", { roomId, action: "set_members", memberIds: [chief.id] });
+      expect(blocked.status).toBe(409);
+      expect(blocked.body.error).toMatch(/working or waiting/);
+      // the bulletin applies from the next turn, so it can change mid-turn
+      expect((await chiefRoomRequest(BASE, busyToken, "manage-room", { roomId, action: "set_bulletin", bulletin: "Changed mid-turn" })).status).toBe(200);
+      expect(await readRoom()).toMatchObject({ bulletin: "Changed mid-turn", memberIds: [chief.id, peer.id] });
     } finally {
       for (const id of roomIds) {
         await api("POST", `/api/groups/${id}/interrupt`, {});
