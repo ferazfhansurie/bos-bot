@@ -45,6 +45,8 @@ export interface ReadOnlyClientHandlers {
   onDisconnected(reason: string): void;
   onStateChange(state: string): void;
   onMessage(message: CapturedMessage): void;
+  /** a message that arrived but could not be captured, and why (never its content) */
+  onDropped(reason: string): void;
 }
 
 /** The whole client. Deliberately nothing else. */
@@ -66,8 +68,6 @@ export interface ReadOnlyClientOptions {
   /** directory LocalAuth keeps session-<clientId>/ under */
   authDir: string;
   clientId: string;
-  /** whatsapp-web.js web version cache directory */
-  cacheDir: string;
   executablePath: string;
   qrMaxRetries: number;
   deviceName: string;

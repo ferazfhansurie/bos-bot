@@ -94,7 +94,6 @@ function harness(overrides: Partial<WhatsAppNativeOptions> & { session?: boolean
   const native = new WhatsAppNative({
     authDir: "/tmp/never-used-auth",
     clientId: "bos",
-    cacheDir: "/tmp/never-used-cache",
     loadFactory: async () => factory,
     resolveBrowser: () => ({ path: "/fake/chrome", source: "env" }),
     store: {
@@ -460,6 +459,17 @@ describe("WhatsAppNative capture", () => {
     latest().handlers.onMessage(message({ id: "true_123@c.us_OUT", fromMe: true, from: "me@c.us", body: "hi back" }));
     expect(inserted.map((row) => row.fromMe)).toEqual([false, true]);
   });
+
+  it("logs a dropped message with its reason, from the live client only", async () => {
+    const lines: string[] = [];
+    const { native, clients } = harness({ log: (line) => lines.push(line) });
+    await native.connect();
+    clients[0].handlers.onReady();
+    clients[0].handlers.onDropped("the message has no readable id");
+    await native.reconnect();
+    clients[0].handlers.onDropped("from an old client");
+    expect(lines.filter((line) => line.startsWith("dropped a message"))).toEqual(["dropped a message: the message has no readable id"]);
+  });
 });
 
 describe("WhatsAppStore", () => {
@@ -584,6 +594,7 @@ describe("WhatsApp is read-only", () => {
   it("no WhatsApp source calls a send, reply, seen, presence or mutation API", () => {
     const sources = [
       "whatsapp-wwebjs.ts",
+      "whatsapp-capture.ts",
       "whatsapp-native.ts",
       "whatsapp-service.ts",
       "whatsapp-store.ts",
@@ -616,6 +627,18 @@ describe("WhatsApp is read-only", () => {
     expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["initialize", "getState", "destroy", "goInvisible", "browserPid"]);
     const invisible = returned.slice(returned.indexOf("goInvisible:"));
     expect(invisible.slice(0, invisible.indexOf("},") + 2)).toMatch(/^goInvisible: async \(\) => \{\s*await client\.sendPresenceUnavailable\(\);\s*\},$/);
+  });
+
+  it("the wrapper keeps no WhatsApp Web version cache (it stalled resumed sessions)", () => {
+    const text = readFileSync(join(import.meta.dirname, "whatsapp-wwebjs.ts"), "utf8");
+    expect(text).toMatch(/webVersionCache: \{ type: "none" \}/);
+    expect(text).not.toMatch(/type: "local"/);
+  });
+
+  it("the wrapper never swallows a capture failure silently", () => {
+    const text = readFileSync(join(import.meta.dirname, "whatsapp-wwebjs.ts"), "utf8");
+    expect(text).not.toMatch(/\.catch\(\(\) => \{\}\)/);
+    expect(text).toMatch(/handlers\.onDropped\(/);
   });
 
   it("the internal read API refuses anything but GET", () => {

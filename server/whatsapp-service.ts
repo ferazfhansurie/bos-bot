@@ -26,7 +26,6 @@ export const WHATSAPP_NATIVE_PROMPT =
 export interface WhatsAppPaths {
   root: string;
   authDir: string;
-  cacheDir: string;
   database: string;
 }
 
@@ -35,7 +34,6 @@ export function whatsappPaths(dataDir: string): WhatsAppPaths {
   return {
     root,
     authDir: join(root, "auth"),
-    cacheDir: join(root, "web-cache"),
     database: join(root, "messages.db"),
   };
 }
@@ -83,7 +81,6 @@ export class WhatsAppService {
     this.native = new WhatsAppNative({
       authDir: this.paths.authDir,
       clientId: WHATSAPP_CLIENT_ID,
-      cacheDir: this.paths.cacheDir,
       loadFactory: loadReadOnlyClientFactory,
       resolveBrowser: () => resolveWhatsAppBrowser({ env }),
       noBrowserReason: () => noBrowserReason(env),

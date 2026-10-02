@@ -12,6 +12,7 @@
 // no-send test in whatsapp-native.test.ts scans this file.
 import wwebjs from "whatsapp-web.js";
 
+import { captureFields, serializedWid } from "./whatsapp-capture.ts";
 import type {
   CapturedMessage,
   ReadOnlyClientHandlers,
@@ -21,9 +22,9 @@ import type {
 
 const { Client, LocalAuth } = wwebjs;
 
-/** WhatsApp Status updates are not conversations; they are not captured. */
-const STATUS_BROADCAST = "status@broadcast";
 const CHAT_NAME_TTL_MS = 10 * 60_000;
+/** a chat lookup that takes longer than this stores the message without a name */
+const CHAT_LOOKUP_TIMEOUT_MS = 5_000;
 
 type RawMessage = wwebjs.Message;
 
@@ -33,7 +34,10 @@ export function createReadOnlyClient(
 ): ReadOnlyWhatsAppClient {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: options.clientId, dataPath: options.authDir }),
-    webVersionCache: { type: "local", path: options.cacheDir },
+    // No version cache: a cached index turns on puppeteer request
+    // interception, and with it a resumed session stalled inside
+    // whatsapp-web.js's listener setup and never reached `ready`.
+    webVersionCache: { type: "none" },
     qrMaxRetries: options.qrMaxRetries,
     deviceName: options.deviceName,
     // never take the session away from another open WhatsApp Web tab
@@ -57,36 +61,34 @@ export function createReadOnlyClient(
   async function chatOf(message: RawMessage, fallbackId: string): Promise<{ chatId: string; chatName: string | null }> {
     const cached = chatNames.get(fallbackId);
     if (cached && Date.now() - cached.at < CHAT_NAME_TTL_MS) return { chatId: cached.chatId, chatName: cached.name };
+    let timer: NodeJS.Timeout | null = null;
     try {
       // getChat() reads the chat model from the page. It does not mark the
       // chat as seen (only Chat.sendSeen / Client.sendSeen do, never called).
-      const chat = await message.getChat();
-      const entry = { chatId: chat.id._serialized || fallbackId, name: chat.name || null, at: Date.now() };
+      const chat = await Promise.race([
+        message.getChat(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("chat lookup timed out")), CHAT_LOOKUP_TIMEOUT_MS);
+        }),
+      ]);
+      const entry = { chatId: serializedWid(chat.id) || fallbackId, name: chat.name || null, at: Date.now() };
       chatNames.set(fallbackId, entry);
       return { chatId: entry.chatId, chatName: entry.name };
     } catch {
       return { chatId: fallbackId, chatName: cached?.name ?? null };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
   async function capture(message: RawMessage): Promise<CapturedMessage | null> {
-    const id = message.id?._serialized;
-    if (!id) return null;
-    const fallbackChatId = message.fromMe ? message.to : message.from;
-    if (!fallbackChatId || fallbackChatId === STATUS_BROADCAST || message.from === STATUS_BROADCAST) return null;
-    const { chatId, chatName } = await chatOf(message, fallbackChatId);
-    return {
-      id,
-      chatId,
-      chatName,
-      from: message.from ?? "",
-      author: message.author ?? null,
-      fromMe: message.fromMe === true,
-      timestamp: Number(message.timestamp) || Math.floor(Date.now() / 1000),
-      type: String(message.type ?? "unknown"),
-      body: typeof message.body === "string" ? message.body : "",
-      hasMedia: message.hasMedia === true,
-    };
+    const fields = captureFields(message);
+    if (fields.skip !== null) {
+      if (!fields.expected) handlers.onDropped(fields.skip);
+      return null;
+    }
+    const { chatId, chatName } = await chatOf(message, fields.fallbackChatId);
+    return { ...fields.message, chatId, chatName };
   }
 
   client.on("qr", (qr: string) => handlers.onQr(qr));
@@ -101,7 +103,7 @@ export function createReadOnlyClient(
   client.on("message_create", (message: RawMessage) => {
     void capture(message).then((captured) => {
       if (captured) handlers.onMessage(captured);
-    }).catch(() => {});
+    }).catch((error: unknown) => handlers.onDropped(`capture failed: ${error instanceof Error ? error.message : String(error)}`));
   });
 
   return {

@@ -164,7 +164,7 @@ writeFileSync(
     "        const dir = await import('node:fs').then((fs) => fs.mkdtempSync(process.cwd() + '/wa-construct-'));",
     "        const noop = () => {};",
     "        const client = mod.createReadOnlyClient(",
-    "          { clientId: 'smoke', authDir: dir + '/auth', cacheDir: dir + '/cache', executablePath: dir + '/no-browser', qrMaxRetries: 1, deviceName: 'smoke' },",
+    "          { clientId: 'smoke', authDir: dir + '/auth', executablePath: dir + '/no-browser', qrMaxRetries: 1, deviceName: 'smoke' },",
     "          new Proxy({}, { get: () => noop }),",
     "        );",
     "        report[name].constructed = Object.keys(client).sort();",

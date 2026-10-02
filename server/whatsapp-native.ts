@@ -71,7 +71,6 @@ const realTimers: Timers = {
 export interface WhatsAppNativeOptions {
   authDir: string;
   clientId: string;
-  cacheDir: string;
   loadFactory: () => Promise<CreateReadOnlyClient>;
   resolveBrowser: () => BrowserResolution | null;
   noBrowserReason?: () => string;
@@ -341,7 +340,6 @@ export class WhatsAppNative {
         {
           authDir: this.options.authDir,
           clientId: this.options.clientId,
-          cacheDir: this.options.cacheDir,
           executablePath: this.browser.path,
           qrMaxRetries: this.options.qrMaxRetries,
           deviceName: this.options.deviceName,
@@ -424,6 +422,10 @@ export class WhatsAppNative {
         } catch (error) {
           this.options.log(`could not store message: ${message(error)}`);
         }
+      },
+      onDropped: (reason) => {
+        if (!live()) return;
+        this.options.log(`dropped a message: ${reason}`);
       },
     };
   }
