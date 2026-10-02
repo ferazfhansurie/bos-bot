@@ -8057,7 +8057,7 @@ async function startTurn(
     } catch (e) {
       // A provider exception/ambiguous handshake is not proof no effect ran.
       try { privateTurnDispatches.hold(dispatchClaimId); }
-      catch { console.error("Private turn hold could not be saved; dispatch remains blocked for review."); }
+      catch { console.error("Private turn hold could not be saved; its outcome-unknown card may be missing."); }
       handoffs.abandon(threadId, dispatchClaimId);
       if (computerSelectionTurns.get(threadId)?.generation === dispatchClaimId) computerSelectionTurns.delete(threadId);
       settleDirectFollowup(dispatchClaimId);
@@ -8111,9 +8111,7 @@ async function startTurn(
         notify(
           buildNotification("turn-failed", bot, threadId, redactSecretsInText(message), { avatarUrl: bot.avatarUrl }),
         );
-        if (!(e instanceof Error && "code" in e && e.code === "outcome_unknown")) {
-          reportIncident({ kind: "could-not-start", bot, threadId, detail: message });
-        }
+        reportIncident({ kind: "could-not-start", bot, threadId, detail: message });
       }
       store.setTaskActivity(bot.id, threadId, "idle");
       directTurnBots.delete(threadId);
@@ -10040,7 +10038,7 @@ async function executeGroupMemberTurn(
       })
       .catch((err) => {
         try { privateTurnDispatches.hold(internalGeneration); }
-        catch { console.error("Room turn hold could not be saved; dispatch remains blocked for review."); }
+        catch { console.error("Room turn hold could not be saved; its outcome-unknown card may be missing."); }
         onProviderHandshakeSettled?.();
         clearCancelledProviderHandshake(threadId, retirementOwner);
         if (abandoned) return;
@@ -12665,9 +12663,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const confirmed = z.object({ confirmed: z.literal(true) }).strict().safeParse(await readBody(req));
       if (!confirmed.success) return json(res, 400, { error: "Confirm that you checked the outcome and that the request finished or stopped" });
       const [, botId, threadId, receiptId] = privateReviewRoute;
-      // Only a dead host's outcome-unknown receipt can be reviewed (acknowledge
-      // refuses a live dispatch), so the bot or room being busy with newer
-      // work must not keep the old card unreviewable.
+      // Only an outcome-unknown receipt can be reviewed (acknowledge refuses a
+      // dispatch still in flight). Review is bookkeeping; it never starts or
+      // stops work, so newer turns in the bot or room must not prevent it.
       const actor = auth.kind === "session" ? `session:${auth.session.id}` : "desktop-owner";
       const savedReceipt = privateTurnDispatches.all().find(row => row.id === receiptId && row.botId === botId && store.canonicalThreadId(row.threadId) === threadId);
       if (!savedReceipt) return json(res, 404, { error: "Recovery receipt scope does not match" });
