@@ -171,7 +171,11 @@ func previewText(of message: Message) -> String {
 /// A failed step is never folded away: the reason to turn activity down is
 /// the successful noise, and losing the one chip that says something went
 /// wrong would make `reduced` a worse default than `full`.
-public func transcriptRows(_ messages: [Message], detail: ActivityDetail) -> [TranscriptRow] {
+///
+/// `foldFailures` is for rooms, where a turn is grouped under its member:
+/// the failed step joins its run and the run's chip shows the failure,
+/// instead of a bare red line between two members' replies.
+public func transcriptRows(_ messages: [Message], detail: ActivityDetail, foldFailures: Bool = false) -> [TranscriptRow] {
     let messages = messages.filter { $0.kind != .digest }
     switch detail {
     case .full:
@@ -198,7 +202,9 @@ public func transcriptRows(_ messages: [Message], detail: ActivityDetail) -> [Tr
                 rows.append(.message(message))
                 continue
             }
-            if message.tool?.ok == false {
+            // runs never span two members' turns
+            if let last = run.last, last.from?.botId != message.from?.botId { flush() }
+            if message.tool?.ok == false && !foldFailures {
                 flush()
                 rows.append(.message(message))
                 continue
@@ -208,6 +214,44 @@ public func transcriptRows(_ messages: [Message], detail: ActivityDetail) -> [Tr
         flush()
         return rows
     }
+}
+
+/// A room transcript reordered so each member's turn reads as one unit.
+///
+/// Members working side by side interleave their steps in the thread, which
+/// splits every turn into scraps under alternating names. Here a member's
+/// steps move down to sit directly above the reply they led to. Replies keep
+/// their order, so the conversation itself reads the same; only steps move.
+/// Steps with no reply yet stay above the person's next message, in the order
+/// they began. Unattributed lines stay where they are.
+public func groupRoomTurns(_ messages: [Message]) -> [Message] {
+    var out: [Message] = []
+    var order: [String] = []
+    var open: [String: [Message]] = [:]
+    func flushOpen() {
+        for botId in order { out.append(contentsOf: open[botId] ?? []) }
+        order.removeAll()
+        open.removeAll()
+    }
+    for message in messages {
+        if message.role == .user {
+            flushOpen()
+            out.append(message)
+        } else if let botId = message.from?.botId {
+            if message.kind == .activity {
+                if open[botId] == nil { order.append(botId) }
+                open[botId, default: []].append(message)
+            } else {
+                out.append(contentsOf: open.removeValue(forKey: botId) ?? [])
+                order.removeAll { $0 == botId }
+                out.append(message)
+            }
+        } else {
+            out.append(message)
+        }
+    }
+    flushOpen()
+    return out
 }
 
 /// Each working room member's steps for the turn it has in flight, keyed by

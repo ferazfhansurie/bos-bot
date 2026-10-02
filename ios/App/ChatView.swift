@@ -144,6 +144,9 @@ struct ChatView: View {
         let live = Set(memberSteps.values.joined().map(\.id))
         let settled = !live.isEmpty ? messages.filter { !live.contains($0.id) }
             : liveSteps.isEmpty ? messages : Array(messages.dropLast(liveSteps.count))
+        if case .room = current {
+            return transcriptRows(groupRoomTurns(settled), detail: detail, foldFailures: true)
+        }
         return transcriptRows(settled, detail: detail)
     }
 

@@ -66,4 +66,23 @@ final class RoomStreamingTests: XCTestCase {
         let messages = [line("a-old", .activity, from: "a"), line("ask", .text, from: nil, role: .user)]
         XCTAssertTrue(roomMemberLiveSteps(messages, botIds: ["a"]).isEmpty)
     }
+    func testGroupRoomTurnsPutsEachMembersStepsAboveItsReply() {
+        let messages = [
+            line("ask", .text, from: nil, role: .user),
+            line("a1", .activity, from: "a"), line("b1", .activity, from: "b"),
+            line("receipt", .activity, from: nil), line("a2", .activity, from: "a"),
+            line("b-said", .text, from: "b"), line("a-said", .text, from: "a"),
+            line("c1", .activity, from: "c"),
+            line("next", .text, from: nil, role: .user),
+        ]
+        XCTAssertEqual(groupRoomTurns(messages).map(\.id),
+                       ["ask", "receipt", "b1", "b-said", "a1", "a2", "a-said", "c1", "next"])
+    }
+    func testRoomRunsFoldFailuresAndNeverSpanMembers() {
+        var failed = line("a2", .activity, from: "a")
+        failed.tool = ToolActivity(name: "run", ok: false)
+        let messages = [line("a1", .activity, from: "a"), failed, line("b1", .activity, from: "b"), line("b2", .activity, from: "b")]
+        XCTAssertEqual(transcriptRows(messages, detail: .reduced, foldFailures: true).map(\.id), ["run.a1", "run.b1"])
+        XCTAssertEqual(transcriptRows(messages, detail: .reduced).map(\.id), ["a1", "a2", "run.b1"])
+    }
 }
