@@ -369,6 +369,7 @@ export class WhatsAppNative {
         this.qr = null;
         this.linkedAt = this.options.now();
         this.set("linked", null);
+        this.goInvisible(gen);
         this.startProbe(gen);
       },
       onDisconnected: (reason) => {
@@ -402,7 +403,12 @@ export class WhatsAppNative {
   private applyWaState(gen: number, state: string): void {
     switch (state.toUpperCase()) {
       case "CONNECTED":
-        if (this.ready) this.set("linked", null);
+        if (this.ready && this.state !== "linked") {
+          // back after a drop within the same client: WhatsApp may have
+          // reset presence on the new connection
+          this.set("linked", null);
+          this.goInvisible(gen);
+        }
         return;
       case "OPENING":
       case "PAIRING":
@@ -432,6 +438,15 @@ export class WhatsAppNative {
       default:
         return;
     }
+  }
+
+  /** Best-effort: never throws, never changes state. */
+  private goInvisible(gen: number): void {
+    const client = this.client;
+    if (!client || gen !== this.generation) return;
+    void Promise.resolve()
+      .then(() => client.goInvisible())
+      .catch((error) => this.options.log(`could not set presence to unavailable: ${message(error)}`));
   }
 
   private startProbe(gen: number): void {

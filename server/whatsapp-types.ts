@@ -3,7 +3,9 @@
 //
 // READ-ONLY BY CONSTRUCTION. ReadOnlyWhatsAppClient is the entire surface the
 // rest of the server ever sees of a linked WhatsApp session: start it, stop
-// it, ask whether it is alive. There is no method that sends, replies,
+// it, ask whether it is alive, and go invisible (presence "unavailable", so
+// this linked session does not hold the account "online" and mute the
+// phone's notifications). There is no method that sends, replies,
 // forwards, reacts, marks as read or changes anything on the account, and
 // incoming messages arrive as plain CapturedMessage records — never as
 // whatsapp-web.js Message objects, which carry reply()/forward()/react().
@@ -52,6 +54,9 @@ export interface ReadOnlyWhatsAppClient {
    * cannot answer. Throws when the browser is gone. */
   getState(): Promise<string | null>;
   destroy(): Promise<void>;
+  /** Set this session's presence to unavailable. Presence only: no message,
+   * receipt or chat state is touched. */
+  goInvisible(): Promise<void>;
 }
 
 export interface ReadOnlyClientOptions {

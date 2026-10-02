@@ -111,5 +111,11 @@ export function createReadOnlyClient(
       return state ? String(state) : null;
     },
     destroy: () => client.destroy(),
+    // The single presence call. An online WhatsApp Web session mutes the
+    // phone's notifications; "unavailable" keeps them ringing. It sends no
+    // message, receipt or typing state.
+    goInvisible: async () => {
+      await client.sendPresenceUnavailable();
+    },
   };
 }

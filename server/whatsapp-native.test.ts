@@ -70,6 +70,8 @@ class FakeRawClient {
   reply = vi.fn(() => { throw new Error("reply reached"); });
   markChatUnread = vi.fn(() => { throw new Error("markChatUnread reached"); });
   sendPresenceAvailable = vi.fn(() => { throw new Error("sendPresenceAvailable reached"); });
+  /** the one allowed call: presence → unavailable, via goInvisible() */
+  sendPresenceUnavailable = vi.fn(async () => {});
 }
 
 function harness(overrides: Partial<WhatsAppNativeOptions> & { session?: boolean } = {}) {
@@ -84,7 +86,7 @@ function harness(overrides: Partial<WhatsAppNativeOptions> & { session?: boolean
     raw.handlers = handlers;
     clients.push(raw);
     // what the real wrapper returns: three methods, nothing else
-    return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy() };
+    return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable() };
   };
   const native = new WhatsAppNative({
     authDir: "/tmp/never-used-auth",
@@ -267,6 +269,54 @@ describe("WhatsAppNative link state", () => {
   });
 });
 
+// ── presence ────────────────────────────────────────────────────────────
+
+describe("WhatsAppNative presence", () => {
+  it("goes invisible once after ready", async () => {
+    const { native, latest } = harness();
+    await native.connect();
+    latest().handlers.onQr("QR");
+    latest().handlers.onAuthenticated();
+    expect(latest().sendPresenceUnavailable).not.toHaveBeenCalled();
+    latest().handlers.onReady();
+    await flush();
+    expect(latest().sendPresenceUnavailable).toHaveBeenCalledTimes(1);
+    // a CONNECTED that only confirms the current state does not repeat it
+    latest().handlers.onStateChange("CONNECTED");
+    await flush();
+    expect(latest().sendPresenceUnavailable).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes invisible again on every reconnect", async () => {
+    const { native, latest, timers, clients } = harness({ session: true });
+    await native.autoStart();
+    latest().handlers.onReady();
+    // dropped and auto-retried: a new client, invisible again once ready
+    latest().handlers.onDisconnected("NAVIGATION");
+    await timers.advance(5_000);
+    latest().handlers.onReady();
+    // the Reconnect button
+    await native.reconnect();
+    latest().handlers.onReady();
+    // a drop and recovery within the same client
+    latest().handlers.onStateChange("OPENING");
+    latest().handlers.onStateChange("CONNECTED");
+    await flush();
+    expect(clients.map((raw) => raw.sendPresenceUnavailable.mock.calls.length)).toEqual([1, 1, 2]);
+  });
+
+  it("a failing presence call is logged and changes nothing", async () => {
+    const lines: string[] = [];
+    const { native, latest } = harness({ log: (line) => lines.push(line) });
+    await native.connect();
+    latest().sendPresenceUnavailable.mockRejectedValueOnce(new Error("page closed"));
+    expect(() => latest().handlers.onReady()).not.toThrow();
+    await flush();
+    expect(native.snapshot()).toMatchObject({ state: "linked", failures: 0 });
+    expect(lines.some((line) => /presence.*page closed/.test(line))).toBe(true);
+  });
+});
+
 // ── capture ─────────────────────────────────────────────────────────────
 
 describe("WhatsAppNative capture", () => {
@@ -387,7 +437,7 @@ describe("WhatsApp is read-only", () => {
         const raw = new FakeRawClient();
         raw.handlers = handlers;
         raw.options = options;
-        const wrapped = { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy() };
+        const wrapped = { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable() };
         seenKeys.push(Object.keys(wrapped).sort());
         clients.push(raw);
         return wrapped;
@@ -400,7 +450,7 @@ describe("WhatsApp is read-only", () => {
     await native.probe();
     await native.reconnect();
     await native.shutdown();
-    expect(seenKeys[0]).toEqual(["destroy", "getState", "initialize"]);
+    expect(seenKeys[0]).toEqual(["destroy", "getState", "goInvisible", "initialize"]);
     for (const raw of clients) {
       for (const spy of [raw.sendMessage, raw.sendSeen, raw.reply, raw.markChatUnread, raw.sendPresenceAvailable]) {
         expect(spy).not.toHaveBeenCalled();
@@ -419,11 +469,14 @@ describe("WhatsApp is read-only", () => {
       "whatsapp-browser.ts",
     ].map((name) => [name, readFileSync(join(import.meta.dirname, name), "utf8")] as const);
     const proxy = readFileSync(join(import.meta.dirname, "connector-proxy.ts"), "utf8");
-    const forbidden = /\.(sendMessage|sendSeen|reply|forward|react|markChatUnread|sendPresenceAvailable|sendPresenceUnavailable|sendStateTyping|sendStateRecording|delete|archive|pin|mute|clearMessages|downloadMedia|logout)\s*\(/;
+    const forbidden = /\.(sendMessage|sendSeen|reply|forward|react|markChatUnread|sendPresenceAvailable|sendStateTyping|sendStateRecording|delete|archive|pin|mute|clearMessages|downloadMedia|logout)\s*\(/;
     for (const [name, text] of sources) {
       // comments may name the methods to say they are never called
       const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
       expect(code, name).not.toMatch(forbidden);
+      // the single allowed presence call lives in the wrapper, exactly once
+      const presence = code.match(/\.sendPresenceUnavailable\s*\(/g) ?? [];
+      expect(presence.length, name).toBe(name === "whatsapp-wwebjs.ts" ? 1 : 0);
     }
     // the bridge reaches native WhatsApp only through GET read routes
     expect(proxy).toMatch(/BOS_WHATSAPP_LIST_CHATS/);
@@ -438,7 +491,9 @@ describe("WhatsApp is read-only", () => {
   it("the wrapper returns only the three read-only methods from whatsapp-web.js", () => {
     const text = readFileSync(join(import.meta.dirname, "whatsapp-wwebjs.ts"), "utf8");
     const returned = text.slice(text.lastIndexOf("return {"));
-    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["initialize", "getState", "destroy"]);
+    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["initialize", "getState", "destroy", "goInvisible"]);
+    const invisible = returned.slice(returned.indexOf("goInvisible:"));
+    expect(invisible.slice(0, invisible.indexOf("},") + 2)).toMatch(/^goInvisible: async \(\) => \{\s*await client\.sendPresenceUnavailable\(\);\s*\},$/);
   });
 
   it("the internal read API refuses anything but GET", () => {
@@ -472,7 +527,7 @@ describe("WhatsAppService tile API", () => {
       raw.options = options;
       raw.handlers = handlers;
       clients.push(raw);
-      return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy() };
+      return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable() };
     };
     const svc = new WhatsAppService({
       dataDir: dir,
