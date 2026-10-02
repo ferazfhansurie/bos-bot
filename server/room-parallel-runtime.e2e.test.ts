@@ -90,6 +90,7 @@ await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE).href)});
       questionB: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1" } },
       patient: fixture("Patient fixture", { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: patientFinishGate }),
       quick: fixture("Quick fixture", { FAKE_CLAUDE_MODE: "stream" }),
+      lead: fixture("Lead fixture", { FAKE_CLAUDE_REPLIES: JSON.stringify(["handing off @Slow", "LEAD ANSWERED ASIDE"]), FAKE_CLAUDE_REPLY_STATE: join(home,"lead-replies.txt") }),
 
     },
   }));
@@ -150,6 +151,33 @@ const snapshot = async (id: string) => (await api("GET", "/api/bots?messages=100
 const wait = async (predicate: ()=>Promise<boolean>, phase="condition") => { const end=Date.now()+15000; while(!await predicate()) { if(Date.now()>end) throw new Error(`${phase} not reached: ${stderr.slice(-1500)} `); await new Promise(r=>setTimeout(r,100)); } };
 
 describe("room runtime concurrency", { timeout: 45000 }, () => {
+  it("answers an unaddressed message through the default responder while another member is mid-turn", async () => {
+    const slow = await createBot("Slow", "patient"); const quick = await createBot("Quick", "quick");
+    const room = (await api("POST", "/api/groups", { name:"Lead", memberIds:[quick.id,slow.id], setup:{ bulletin:"",defaultResponder:{kind:"member",botId:quick.id} } })).body.group;
+    rmSync(patientFinishGate,{force:true});
+    expect((await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow LONG JOB"})).status).toBe(202);
+    await wait(async()=>Boolean((await snapshot(room.id))?.activeBotIds?.includes(slow.id)),"slow running");
+    const aside=await api("POST",`/api/groups/${room.id}/messages`,{text:"UNADDRESSED ASIDE"});
+    expect(aside.status).toBe(202);
+    await wait(async()=>Boolean((await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id)),"default responder reply");
+    writeFileSync(patientFinishGate,"done");
+    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+  });
+
+  it("answers the lead mid-hop: the lead's next message is not held behind the teammate it handed off to", async () => {
+    const slow = await createBot("Slow", "patient"); const lead = await createBot("Lead", "lead");
+    const room = (await api("POST", "/api/groups", { name:"Hop", memberIds:[lead.id,slow.id], setup:{ bulletin:"",defaultResponder:{kind:"member",botId:lead.id} } })).body.group;
+    rmSync(patientFinishGate,{force:true});
+    expect((await api("POST",`/api/groups/${room.id}/messages`,{text:"START"})).status).toBe(202);
+    await wait(async()=>Boolean((await snapshot(room.id))?.activeBotIds?.includes(slow.id)),"handed-off member running");
+    const aside=await api("POST",`/api/groups/${room.id}/messages`,{text:"UNADDRESSED ASIDE"});
+    expect(aside.status).toBe(202);
+    await wait(async()=>Boolean((await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===lead.id&&m.text.includes("LEAD ANSWERED ASIDE"))),"lead answers while the hop runs");
+    expect((await snapshot(room.id)).activeBotIds).toContain(slow.id);
+    writeFileSync(patientFinishGate,"done");
+    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+  });
+
   it("admits two addressed members independently, steers one without interruption, and stops room work without stopping a private sibling", async () => {
     const slow = await createBot("Slow", "patient"); const quick = await createBot("Quick", "quick");
     const room = (await api("POST", "/api/groups", { name:"Parallel", memberIds:[slow.id,quick.id], setup:{ bulletin:"",defaultResponder:{kind:"mentions"} } })).body.group;

@@ -3751,6 +3751,9 @@ function notify(notification: Notification | null) {
 // records the active member here before dispatching its turn.
 const groupSpeakers = new Map<string, { botId: string; name: string; color: string }>();
 const roomMemberQueues = new Map<string, Promise<boolean>>();
+// runtimeId → frees that member's lane once its own reply has settled, so a
+// person's next message to it is not held behind the teammates it summoned.
+const roomMemberLaneReleases = new Map<string, () => void>();
 const roomMemberCancelEpoch = new Map<string, number>();
 const roomRequestOwners = new Map<string, { runtimeThreadId: string; providerRequestId: string; generation: string; instanceId: string }>();
 const roomOperationOwners = new Map<string, { generation: string; operation: GroupTurnOperation }>();
@@ -9359,9 +9362,17 @@ async function runGroupMemberTurn(...args: Parameters<typeof executeGroupMemberT
   args[7] = () => Boolean(inheritedCancellation?.()) || (roomMemberCancelEpoch.get(runtimeId) ?? 0) !== epoch;
   args[12]?.runtimeThreadIds.add(runtimeId);
   const previous = roomMemberQueues.get(runtimeId);
-  const next = (previous ?? Promise.resolve(true)).catch(() => false).then(() => executeGroupMemberTurn(...args));
-  roomMemberQueues.set(runtimeId, next);
-  try { return await next; } finally { if (roomMemberQueues.get(runtimeId) === next) roomMemberQueues.delete(runtimeId); }
+  let releaseLane = () => {};
+  const laneFree = new Promise<boolean>((resolve) => { releaseLane = () => resolve(true); });
+  const next = (previous ?? Promise.resolve(true)).catch(() => false).then(() => {
+    roomMemberLaneReleases.set(runtimeId, releaseLane);
+    return executeGroupMemberTurn(...args);
+  }).finally(releaseLane);
+  roomMemberQueues.set(runtimeId, laneFree);
+  try { return await next; } finally {
+    if (roomMemberQueues.get(runtimeId) === laneFree) roomMemberQueues.delete(runtimeId);
+    if (roomMemberLaneReleases.get(runtimeId) === releaseLane) roomMemberLaneReleases.delete(runtimeId);
+  }
 }
 
 async function executeGroupMemberTurn(
@@ -10160,6 +10171,10 @@ async function executeGroupMemberTurn(
     return false;
   }
 
+  // This member's own reply is done. Waiting on the teammates it summons
+  // must not hold its lane, or the person's next message to it waits for
+  // the whole chain. Goal steps keep their serialized coordinator.
+  if (!orchestration) roomMemberLaneReleases.get(threadId)?.();
   // chained mentions: a member's reply can summon teammates, MAX_GROUP_HOPS deep
   if (
     (orchestration?.followMentions ?? true) &&
