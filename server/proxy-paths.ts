@@ -50,3 +50,11 @@ export const SPAWNED_PROXIES = {
   // check can assert it ships.
   piMcpExtension: resolveProxy("drivers/pi-mcp-extension"),
 } as const;
+
+/** Modules the server imports by path at runtime instead of inlining them,
+ * because they are bundled on their own (scripts/bundle-server.mjs). The
+ * packaged smoke test asserts each one exists and loads without node_modules. */
+export const LOADED_RUNTIMES = {
+  // whatsapp-web.js + puppeteer, loaded only when native WhatsApp starts
+  whatsapp: resolveProxy("whatsapp-wwebjs"),
+} as const;

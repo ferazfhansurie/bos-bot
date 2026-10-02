@@ -135,6 +135,7 @@ import {
   vpsAliasResourceChangeError,
 } from "./cloud-backend.ts";
 import * as composio from "./composio.ts";
+import { WhatsAppService, WHATSAPP_NATIVE_PROMPT } from "./whatsapp-service.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
 import { canAccessTeam, canReachPeer, peerAllowed, peerName, peerRosterSystemPrompt, peerStatus, peerStatusWords, reachablePeers, resolveTeammate, roomPeerRosterSystemPrompt, roomRosterLine, PEER_ACCESS_HELP } from "./peer-roster.ts";
 import { openMausStatusSystemPrompt } from "./openmaus-status-capsule.ts";
@@ -1345,6 +1346,9 @@ function cancelDirectTurnDispatch(botId: string, expectedThreadId?: string): Dir
  * browser profile or per bot (docs/plans/browser-engine.md). Null, with the
  * reason logged once, when the engine is not on this machine. */
 const browserRuntime = new BrowserRuntime();
+// Native read-only WhatsApp capture (whatsapp-service.ts): one linked-device
+// client under <data dir>/whatsapp, resumed at boot when a session exists.
+const whatsapp = new WhatsAppService({ dataDir: DATA_DIR });
 const browserLive = new BrowserLive({ runtime: browserRuntime });
 // Temporary profiles last for this server run, but are never saved to disk.
 // The viewer and the agent must address the SAME temporary browser.
@@ -1445,7 +1449,15 @@ function connectedAppsIntegration(botId: string, threadId: string, generation: s
     commsToken: token,
     botId,
     threadId,
+    whatsappNative: whatsapp.toolsAvailable(),
   });
+}
+
+/** The Connected-apps bridge has something to mount: a Composio key, or the
+ * native WhatsApp read tools. Either way the per-bot grant (bot.composio) and
+ * the engine capability still decide. */
+function connectedAppsMountable(): boolean {
+  return composio.configured(cfg) || whatsapp.toolsAvailable();
 }
 
 // ── computer control (who is driving) ──────────────────────────────────
@@ -1962,7 +1974,9 @@ function previewSystemPrompt(bot: BotRecord) {
       computer: previewPlan.computer && previewPlan.computer !== "off" && computerPromptKind ? previewPlan.computer : null,
       browser: previewPlan.computer === undefined ? false : previewPlan.browser,
     }, { note: previewPlan.note }) },
-    { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false && composio.configured(cfg) ? COMPOSIO_PROMPT : "" },
+    { id: "composio", label: "Connected apps", text: caps?.composioMcp && bot.composio !== false
+      ? `${composio.configured(cfg) ? COMPOSIO_PROMPT : ""}${whatsapp.toolsAvailable() ? WHATSAPP_NATIVE_PROMPT : ""}`
+      : "" },
     { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(customMcpServers(cfg, bot.mcpServers))) : "" },
     { id: "browser", label: "Browser", text: previewPlan.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
     { id: "coordination", label: "Team", text: agentsMounted && coordination ? ` ${coordination}` : "" },
@@ -7369,7 +7383,7 @@ async function startTurn(
       // them — a key in the config says the connections exist, not that
       // this engine can reach them — and only to a bot the user has not
       // switched off: the key is workspace-wide, the grant is per bot.
-      if (!sharedWork && bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+      if (!sharedWork && bot.composio !== false && connectedAppsMountable() && instance.adapter.capabilities.composioMcp === true) {
         const connection = await connectedAppsIntegration(bot.id, threadId, dispatchClaimId);
         if (connection) integrations.composio = connection;
       }
@@ -7912,7 +7926,9 @@ async function startTurn(
         { id: "plan", label: "Surface", text: surfacePrompt({ computer: mountedComputer, browser: Boolean(integrations.browser) }, { pinned: plan.pinned, note: plan.note, canSelect: computerSelectionTurns.has(threadId) }) },
         // gated on the integration, not the key: the hint only goes to a
         // bot whose driver actually mounted the tools
-        { id: "composio", label: "Connected apps", text: integrations.composio ? COMPOSIO_PROMPT : "" },
+        { id: "composio", label: "Connected apps", text: integrations.composio
+          ? `${integrations.composio.env.OMB_CONNECTOR_UPSTREAM_URL ? COMPOSIO_PROMPT : ""}${integrations.composio.env.OMB_WHATSAPP_NATIVE === "1" ? WHATSAPP_NATIVE_PROMPT : ""}`
+          : "" },
         { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {})) },
         { id: "browser", label: "Browser", text: integrations.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
         { id: "coordination", label: "Team", text: coordinationPrompt ? ` ${coordinationPrompt}` : "" },
@@ -9560,7 +9576,7 @@ async function executeGroupMemberTurn(
     }
   }
   try {
-    if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+    if (bot.composio !== false && connectedAppsMountable() && instance.adapter.capabilities.composioMcp === true) {
       const connection = await connectedAppsIntegration(bot.id, threadId, internalGeneration);
       if (connection) integrations.composio = connection;
     }
@@ -15266,6 +15282,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
         return json(res, 201, { messageId: message.id, label: target.label });
       }
+      if (path.startsWith("/api/internal/connectors/whatsapp/")) {
+        // Re-read the live bot: switching Connected apps off wins immediately.
+        const currentSender = store.bot(internalCapability.botId);
+        if (!currentSender || currentSender.composio === false) {
+          return json(res, 403, { error: "connected apps are not enabled for this bot" });
+        }
+        const answer = whatsapp.handleInternal(method, path, url.searchParams);
+        if (answer) return json(res, answer.status, answer.body);
+      }
       if (method === "POST" && path === "/api/internal/connectors/mcp") {
         const body = await readInternalBody();
         // Reading a streamed MCP body yields to ordinary settings requests.
@@ -20241,10 +20266,24 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
 
+    // ── native WhatsApp (tile connect/QR/state); before the generic authorize ──
+    {
+      const answer = await whatsapp.handlePublic(method, path);
+      if (answer) return json(res, answer.status, answer.body);
+    }
+
     // ── connectors (Composio) ──
     if (method === "GET" && path === "/api/connectors/catalog") {
       const { cards, source } = await composio.listToolkits(cfg);
-      return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards });
+      // The WhatsApp tile is native: present even in the curated catalog and
+      // usable without a Composio key.
+      const nativeWhatsApp = whatsapp.enabled;
+      const withWhatsApp = nativeWhatsApp
+        ? (cards.some((card) => card.slug === "whatsapp")
+          ? cards.map((card) => card.slug === "whatsapp" ? { ...card, native: true } : card)
+          : [{ slug: "whatsapp", label: "WhatsApp", blurb: "Read your chats on this Mac (read-only)", domain: "whatsapp.com", logo: null, native: true }, ...cards])
+        : cards;
+      return json(res, 200, { configured: composio.configured(cfg), mode: composio.connectionMode(cfg), source, cards: withWhatsApp, nativeWhatsApp });
     }
     if (method === "GET" && path === "/api/connectors/connected") {
       const availability = composio.connectorAvailability(cfg);
@@ -20255,10 +20294,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, {
           configured: false,
           credentialStore: availability === "unreadable" ? "unavailable" : "ok",
-          services: {},
+          services: whatsapp.withNativeState({}),
         });
       }
-      return json(res, 200, { configured: true, credentialStore: "ok", services: await composio.connectedServices(cfg) });
+      return json(res, 200, { configured: true, credentialStore: "ok", services: whatsapp.withNativeState(await composio.connectedServices(cfg)) });
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
@@ -20267,11 +20306,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, {
           configured: false,
           credentialStore: availability === "unreadable" ? "unavailable" : "ok",
-          services: {},
+          services: whatsapp.withNativeState({}),
         });
       }
       const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
-      return json(res, 200, { configured: true, services: status });
+      return json(res, 200, { configured: true, services: whatsapp.withNativeState(status) });
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/authorize$/);
     if (m && method === "POST") {
@@ -20822,6 +20861,9 @@ server.listen(PORT, "127.0.0.1", () => {
   remoteBots.start();
   void recoverSharedRoomTurns().catch(error =>
     console.warn(`room recovery could not start: ${error instanceof Error ? error.message : "unknown"}`));
+  // Resume a linked WhatsApp session (no QR) if one was saved.
+  void whatsapp.autoStart().catch(error =>
+    console.warn(`whatsapp: could not resume — ${error instanceof Error ? error.message : "unknown"}`));
 });
 
 // A second listener for `openmausbot serve --tunnel` (server/tunnel.ts): the
@@ -20866,6 +20908,8 @@ const gracefulShutdown = createGracefulShutdown({
       await Promise.all([...temporaryBrowserSessions.keys()].map((botId) => forgetTemporaryBrowser(botId)));
       await browserRuntime.closeAll();
     },
+    // close the linked WhatsApp client so its Chromium is not orphaned
+    () => whatsapp.shutdown(),
     () => flushAllProfileHistory(),
     () => flushAllMemoryJournals(),
     () => flushUsageLedger(DATA_DIR),

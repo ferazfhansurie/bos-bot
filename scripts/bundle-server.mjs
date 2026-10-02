@@ -80,6 +80,29 @@ await build({
   plugins: [yamlEsmPlugin],
 });
 
+// Native WhatsApp (server/whatsapp-wwebjs.ts) is whatsapp-web.js + puppeteer:
+// CommonJS that require()s Node builtins at runtime. Inlined into an ESM
+// bundle those become esbuild's "Dynamic require is not supported" throw, so
+// this one entry gets a real `require` via createRequire. It is its own file,
+// imported by path (proxy-paths.ts LOADED_RUNTIMES) only when WhatsApp starts,
+// so the main server bundle neither grows by megabytes nor loads puppeteer at
+// boot. The externals are optional requires that never run on this path:
+// cosmiconfig's TypeScript config loader and RemoteAuth's S3/zip helpers.
+await build({
+  entryPoints: [join(server, "whatsapp-wwebjs.ts")],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: join(root, "dist-server", "whatsapp-wwebjs.js"),
+  allowOverwrite: true,
+  logLevel: "info",
+  external: ["typescript", "unzipper", "archiver", "@aws-sdk/client-s3"],
+  banner: {
+    js: 'import { createRequire as __ombWhatsAppCreateRequire } from "node:module"; const require = __ombWhatsAppCreateRequire(import.meta.url);',
+  },
+});
+
 // External MCP clients launch this as an independent stdio process. Keep its
 // source under scripts for a pleasant checkout command (`pnpm mcp`), but ship
 // the bundled output beside the packaged harness so release users do not need

@@ -12,7 +12,7 @@
 // how the bug escaped. The copy is the whole point; do not "simplify" it away.
 import { execFile, spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,6 +139,39 @@ writeFileSync(
   ].join("\n"),
 );
 
+// Native WhatsApp is a separately bundled runtime the server imports by path
+// (LOADED_RUNTIMES). Load it from the staged copy — whatsapp-web.js and
+// puppeteer must be inlined, since nothing can resolve from node_modules here.
+// Loading only: no client is created and no browser is launched.
+const runtimeProbe = join(staging, "server", "probe-loaded-runtimes.mjs");
+writeFileSync(
+  runtimeProbe,
+  [
+    'import { existsSync } from "node:fs";',
+    'import { pathToFileURL } from "node:url";',
+    'import { LOADED_RUNTIMES } from "./proxy-paths.js";',
+    "const report = {};",
+    "for (const [name, path] of Object.entries(LOADED_RUNTIMES)) {",
+    "  if (!existsSync(path)) { report[name] = { path, error: 'missing' }; continue; }",
+    "  try {",
+    "    const mod = await import(pathToFileURL(path).href);",
+    "    report[name] = { path, createReadOnlyClient: typeof mod.createReadOnlyClient };",
+    "  } catch (error) { report[name] = { path, error: String(error && error.message || error) }; }",
+    "}",
+    "console.log(JSON.stringify(report));",
+  ].join("\n"),
+);
+let runtimeReport = null;
+try {
+  const { stdout } = await promisify(execFile)(process.execPath, [runtimeProbe], { cwd: staging, env: fixtureEnv, timeout: 60_000 });
+  runtimeReport = JSON.parse(stdout.trim().split("\n").at(-1));
+} catch (error) {
+  runtimeReport = { error: String((error && error.message) || error) };
+}
+if (runtimeReport?.whatsapp?.path && !runtimeReport.whatsapp.error) {
+  runtimeReport.whatsapp.inside = realpathSync(runtimeReport.whatsapp.path).startsWith(realpathSync(join(staging, "server")));
+}
+
 let proxyReport = null;
 try {
   const { stdout } = await promisify(execFile)(process.execPath, [probe], { cwd: staging, env: fixtureEnv });
@@ -220,6 +253,17 @@ if (!proxyReport || proxyReport.error || proxyReport.missing.length > 0) {
   process.exit(1);
 }
 
+if (
+  !runtimeReport ||
+  runtimeReport.error ||
+  runtimeReport.whatsapp?.createReadOnlyClient !== "function" ||
+  runtimeReport.whatsapp.inside !== true
+) {
+  console.error("the packaged native WhatsApp runtime does not load from inside the packaged server dir:");
+  console.error(JSON.stringify(runtimeReport, null, 2));
+  process.exit(1);
+}
+
 if (browserBundle && (browserReport?.error || browserReport?.browserEngine?.kind !== "engine" ||
   browserReport.browserEngine.version !== browserSpec.engine.version || browserReport.browserEnabled !== false)) {
   console.error("The fresh-home packaged server did not discover its browser bundle with browser access still opt-in:");
@@ -244,5 +288,6 @@ if (
 const count = Object.keys(proxyReport.resolved).length;
 console.log(`packaged server started with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
+console.log(`packaged native WhatsApp runtime loads with no node_modules in reach ✓ ${runtimeReport.whatsapp.path}`);
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");
 if (browserBundle) console.log(`packaged browser discovered without installation; access remains opt-in ✓ ${JSON.stringify(browserReport)}`);

@@ -251,4 +251,69 @@ describe("connector MCP bridge", () => {
       error: { code: -32000, message: "connected apps are unavailable" },
     });
   });
+
+  it("native WhatsApp: lists two read-only tools with no Composio upstream and reads them over GET", async () => {
+    const requests: Array<{ method?: string; url?: string; authorization?: string }> = [];
+    const harness = await listen((request, response) => {
+      requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: { state: "linked" }, messages: [{ id: "m1", body: "hi", fromMe: true }] }));
+    });
+    const lines = start({
+      OMB_HARNESS_URL: harness,
+      OMB_CONNECTOR_TOKEN: "bridge-secret",
+      OMB_BOT_ID: "bot-1",
+      OMB_THREAD_ID: "thread-1",
+      OMB_WHATSAPP_NATIVE: "1",
+      OMB_CONNECTOR_UPSTREAM_URL: "",
+    });
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
+    const list = await nextJson(lines);
+    const names = list.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toEqual(["BOS_WHATSAPP_LIST_CHATS", "BOS_WHATSAPP_LIST_MESSAGES"]);
+    for (const tool of list.result.tools) expect(tool.annotations?.readOnlyHint).toBe(true);
+    expect(names.some((name: string) => /send|reply|seen|mark/i.test(name))).toBe(false);
+
+    child!.stdin.write(`${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "BOS_WHATSAPP_LIST_MESSAGES", arguments: { chat_id: "123@c.us", limit: 5 } },
+    })}\n`);
+    const reply = await nextJson(lines);
+    expect(reply.id).toBe(2);
+    expect(reply.result.content[0].text).toContain("m1");
+    expect(requests).toEqual([{
+      method: "GET",
+      url: "/api/internal/connectors/whatsapp/messages?chat_id=123%40c.us&limit=5",
+      authorization: "Bearer bridge-secret",
+    }]);
+  });
+
+  it("native WhatsApp: a connection request for whatsapp is not turned into a Composio card", async () => {
+    let received = false;
+    const harness = await listen((_request, response) => {
+      received = true;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const lines = start({
+      OMB_HARNESS_URL: harness,
+      OMB_CONNECTOR_TOKEN: "bridge-secret",
+      OMB_BOT_ID: "bot-1",
+      OMB_THREAD_ID: "thread-1",
+      OMB_WHATSAPP_NATIVE: "1",
+    });
+    child!.stdin.write(`${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "COMPOSIO_MANAGE_CONNECTIONS", arguments: { toolkits: ["WHATSAPP"] } },
+    })}\n`);
+    const reply = await nextJson(lines);
+    expect(reply.id).toBe(3);
+    expect(JSON.stringify(reply)).toMatch(/whatsapp/i);
+    expect(received).toBe(false);
+  });
 });
+

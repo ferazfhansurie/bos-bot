@@ -16,6 +16,10 @@ const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
 const BOT_ID = process.env.OMB_BOT_ID ?? "";
 const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
 const TOKEN = process.env.OMB_CONNECTOR_TOKEN ?? process.env.OMB_COMMS_TOKEN ?? "";
+// Native read-only WhatsApp (server/whatsapp-service.ts). Mounted only for a
+// bot whose Connected-apps grant is on; the harness re-checks the grant on
+// every call. There is deliberately no write tool of any kind.
+const WHATSAPP_NATIVE = process.env.OMB_WHATSAPP_NATIVE === "1";
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const INITIALIZE_RELAY_TIMEOUT_MS = 1_000;
 const RELAY_TIMEOUT_MS = 10 * 60_000;
@@ -115,6 +119,66 @@ async function relay(message: Json, timeoutMs = RELAY_TIMEOUT_MS): Promise<Json 
   return parseUpstream(await readBounded(response), message.id);
 }
 
+const WHATSAPP_TOOLS = [
+  {
+    name: "BOS_WHATSAPP_LIST_CHATS",
+    description:
+      "List the user's recent WhatsApp chats captured on this Mac (read-only), newest activity first, with each chat's id, name, message count and latest message.",
+    inputSchema: {
+      type: "object",
+      properties: { limit: { type: "integer", minimum: 1, maximum: 200, description: "How many chats (default 30)." } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "BOS_WHATSAPP_LIST_MESSAGES",
+    description:
+      "Read captured WhatsApp messages (read-only), newest first. Both received messages and ones the user sent are included (fromMe). Filter by chat_id from BOS_WHATSAPP_LIST_CHATS, page with before (unix seconds of the oldest message already seen), or search with query.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        chat_id: { type: "string", description: "Chat id such as 15551234567@c.us or ...@g.us." },
+        before: { type: "integer", description: "Only messages older than this unix timestamp (seconds)." },
+        query: { type: "string", description: "Case-insensitive text to find in message bodies." },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "How many messages (default 50)." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+] as const;
+
+const WHATSAPP_ROUTES: Record<string, { path: string; params: string[] }> = {
+  BOS_WHATSAPP_LIST_CHATS: { path: "chats", params: ["limit"] },
+  BOS_WHATSAPP_LIST_MESSAGES: { path: "messages", params: ["chat_id", "before", "query", "limit"] },
+};
+
+async function whatsappRead(name: string, args: unknown): Promise<string> {
+  const route = WHATSAPP_ROUTES[name];
+  const input = args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {};
+  const query = new URLSearchParams();
+  for (const key of route.params) {
+    const value = input[key];
+    if (typeof value === "string" || typeof value === "number") query.set(key, String(value));
+  }
+  // GET only: the harness serves these from its local capture store.
+  const response = await fetch(`${HARNESS}/api/internal/connectors/whatsapp/${route.path}?${query}`, {
+    method: "GET",
+    headers: { authorization: `Bearer ${TOKEN}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  const text = await readBounded(response);
+  if (!response.ok) {
+    let detail = text.slice(0, 300);
+    try {
+      detail = String((JSON.parse(text) as { error?: unknown }).error ?? detail);
+    } catch {}
+    throw new Error(`WhatsApp read failed (HTTP ${response.status}): ${detail}`);
+  }
+  return text;
+}
+
 interface ConnectorRequest {
   slug: string;
   alias?: string;
@@ -195,10 +259,47 @@ async function handle(message: Json): Promise<void> {
     }
     return;
   }
+  if (method === "ping" && !UPSTREAM) {
+    if (id !== undefined) send({ jsonrpc: "2.0", id, result: {} });
+    return;
+  }
+  if (method === "tools/list" && WHATSAPP_NATIVE) {
+    let upstream: Json | null = null;
+    if (UPSTREAM) {
+      try {
+        upstream = await relay(message);
+      } catch {
+        // Composio being down must not hide the local read tools.
+      }
+    }
+    if (id === undefined) return;
+    const result = (upstream?.result ?? {}) as Json;
+    const tools = Array.isArray(result.tools) ? result.tools : [];
+    send({ ...(upstream ?? { jsonrpc: "2.0", id }), result: { ...result, tools: [...tools, ...WHATSAPP_TOOLS] } });
+    return;
+  }
   if (method === "tools/call") {
     const params = (message.params ?? {}) as Json;
     const name = String(params.name ?? "");
-    const requests = /MANAGE_CONNECTIONS$/i.test(name) ? connectorAdds(params.arguments) : [];
+    if (WHATSAPP_NATIVE && Object.hasOwn(WHATSAPP_ROUTES, name)) {
+      try {
+        send(textResult(id, await whatsappRead(name, params.arguments)));
+      } catch (error) {
+        send(textResult(id, error instanceof Error ? error.message : String(error), true));
+      }
+      return;
+    }
+    const allRequests = /MANAGE_CONNECTIONS$/i.test(name) ? connectorAdds(params.arguments) : [];
+    // WhatsApp links natively (a QR code in Connected apps), never through a
+    // Composio connection card.
+    const requests = allRequests.filter((request) => request.slug !== "whatsapp");
+    if (allRequests.length && !requests.length) {
+      send(textResult(
+        id,
+        "WhatsApp is linked on this Mac, not through a connection card. Ask the user to open Plugins → Connected apps → WhatsApp and scan the QR code. Access is read-only.",
+      ));
+      return;
+    }
     if (requests.length) {
       await showConnectorCards(requests);
       const labels = requests.map((r) => (r.alias ? `${r.slug} (${r.alias})` : r.slug)).join(", ");

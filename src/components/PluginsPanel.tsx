@@ -11,6 +11,7 @@ import type { LocaleKey } from "@/locales";
 import { readCachedInventory, writeCachedInventory } from "@/lib/connected-apps-cache";
 import { managedConnectorUnavailableReason } from "../../shared/connector-availability";
 import { McpServersPanel } from "./McpServersPanel";
+import { NativeWhatsAppTile } from "./NativeWhatsAppTile";
 
 export interface ToolkitCard {
   slug: string;
@@ -19,6 +20,8 @@ export interface ToolkitCard {
   logo: string | null;
   noAuth?: boolean;
   domain: string | null;
+  /** linked natively on this machine (WhatsApp), not through Composio */
+  native?: boolean;
 }
 
 export interface ConnectorStatus {
@@ -693,6 +696,7 @@ export function PluginsPanel() {
               </div>
               <div className="grid grid-cols-1 gap-x-10 md:grid-cols-2">
               {visible.map((card) => {
+              if (card.native && card.slug === "whatsapp") return <NativeWhatsAppTile key={card.slug} card={card} />;
               const serviceStatus = status[card.slug];
               const pending = serviceStatus?.pending;
               const failed = serviceStatus?.status && /^(expired|failed)$/i.test(serviceStatus.status);

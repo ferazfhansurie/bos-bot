@@ -143,6 +143,9 @@ interface IntegrationContext {
   commsToken: string;
   botId: string;
   threadId: string;
+  /** native read-only WhatsApp tools (whatsapp-service.ts) ride the same
+   * bridge and the same per-bot grant; they work without a Composio key */
+  whatsappNative?: boolean;
 }
 
 let managedBrokerAccess: { url: string; token: string } | null | undefined;
@@ -537,7 +540,8 @@ export async function mcpIntegration(
   cfg: AppConfig,
   context: IntegrationContext,
 ): Promise<ComposioMcpIntegration | null> {
-  if (!configured(cfg)) return null;
+  const composioReady = configured(cfg);
+  if (!composioReady && !context.whatsappNative) return null;
   return {
     command: process.execPath,
     args: [SPAWNED_PROXIES.connectors],
@@ -546,8 +550,13 @@ export async function mcpIntegration(
       // The provider-facing bridge receives only this boot's loopback token.
       // Project/broker credentials stay in the harness process, so a coding
       // agent that prints its environment cannot export a durable secret.
-      OMB_CONNECTOR_UPSTREAM_URL: `${context.harnessUrl}/api/internal/connectors/mcp`,
-      OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${context.commsToken}` }),
+      // No upstream when only native WhatsApp is mounted: the bridge then
+      // answers tools/list itself.
+      ...(composioReady ? {
+        OMB_CONNECTOR_UPSTREAM_URL: `${context.harnessUrl}/api/internal/connectors/mcp`,
+        OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${context.commsToken}` }),
+      } : {}),
+      ...(context.whatsappNative ? { OMB_WHATSAPP_NATIVE: "1" } : {}),
       OMB_HARNESS_URL: context.harnessUrl,
       // Distinct from the agents proxy token: Codex flattens mounted MCP env
       // variables into one process environment, so a shared name would let
