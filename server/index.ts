@@ -305,7 +305,7 @@ import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { buildRecoveryText, buildTurnContext, engineIsFresh, peerMessageText } from "./turn-context.ts";
 import { Handoffs, handedStateUsable, recordHanded, renderUnseen, sessionStart, unseenMessages, withUnseenMessages, type ContextMessage } from "./delta-context.ts";
-import { extractTurnImages } from "./turn-images.ts";
+import { extractTurnImages, rejectedTurnImages } from "./turn-images.ts";
 import { TurnWatchdog } from "./turn-watchdog.ts";
 import { TurnResources, workspaceResource, type TurnOwner } from "./turn-resources.ts";
 import { turnRecoveryBlocker } from "./turn-recovery-blocker.ts";
@@ -6125,6 +6125,36 @@ bus.subscribe((event: RuntimeEvent) => {
   settleInboxThreads();
 });
 
+// A picture sent while a turn runs must reach it as the picture, or say
+// plainly that it did not. Boundary steers retry the same queued head at
+// every tool result, so each note is posted once per message and reason.
+const steerImageNotes = new Set<string>();
+function noteSteerImageNotDelivered(
+  threadId: string,
+  queueKey: string,
+  detail: string,
+  from?: { botId: string; name: string; color: string },
+): void {
+  const key = `${threadId}\0${queueKey}\0${detail}`;
+  if (steerImageNotes.has(key)) return;
+  steerImageNotes.add(key);
+  if (steerImageNotes.size > 1000) steerImageNotes.delete(steerImageNotes.values().next().value!);
+  store.appendMessage(threadId, {
+    role: "bot",
+    kind: "activity",
+    ...(from ? { from } : {}),
+    tool: { name: `image not delivered: ${detail}`, ok: false },
+  });
+}
+
+/** Attachment tags that will not become native image input (missing file,
+ * oversized, not an app attachment) — the steer still carries the words. */
+function noteRejectedSteerImages(threadId: string, queueKey: string, text: string, from?: { botId: string; name: string; color: string }): void {
+  for (const rejected of rejectedTurnImages(text)) {
+    noteSteerImageNotDelivered(threadId, queueKey, `${rejected.name} — ${rejected.reason}`, from);
+  }
+}
+
 async function steerInboxQueue(botId: string, threadId: string, queueId: string, attended = false) {
   const bot = store.projectBotForTask(botId, threadId);
   if (!bot) return { ok: false, queued: false, threadId };
@@ -6132,19 +6162,32 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
   if (!held) return { ok: false, queued: false, threadId: bot.threadId };
   const currentAtStart = store.projectBotForTask(bot.id, bot.threadId);
   const instance = currentAtStart?.busy ? runningTurnInstance(currentAtStart, bot.threadId) : undefined;
+  const heldPrompt = held.items.map(item => item.prompt).join("\n\n");
   let steerInput;
-  try { steerInput = extractTurnImages(held.items.map(item => item.prompt).join("\n\n")); }
-  catch (error) { restoreHeldSteeredQueue(held); throw error; }
-  if (steerInput.images.length && instance?.adapter.capabilities.nativeImageSteer !== true) {
+  try { steerInput = extractTurnImages(heldPrompt); }
+  catch (error) {
     restoreHeldSteeredQueue(held);
+    if (currentAtStart?.busy) noteSteerImageNotDelivered(bot.threadId, queueId, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+  const liveSteer = Boolean(currentAtStart?.busy && instance?.adapter.capabilities.queueing && instance.adapter.steer);
+  if (currentAtStart?.busy) noteRejectedSteerImages(bot.threadId, queueId, heldPrompt);
+  if (steerInput.images.length && (!liveSteer || instance?.adapter.capabilities.nativeImageSteer !== true)) {
+    restoreHeldSteeredQueue(held);
+    if (currentAtStart?.busy) {
+      noteSteerImageNotDelivered(bot.threadId, queueId, `${bot.name}'s engine can't take images during a turn — it will get the image after this reply`);
+    }
     return ({ ok: true, queued: true, threadId: bot.threadId, reason: "This provider will receive the image after its current reply finishes." });
   }
   const steerTarget = handoffs.current(bot.threadId);
   let steered: SteerOutcome = "refused";
-  if (currentAtStart?.busy && instance?.adapter.capabilities.queueing && instance.adapter.steer) {
+  if (liveSteer && instance?.adapter.steer) {
     steered = await instance.adapter
       .steer(bot.threadId, steerInput.text, { images: steerInput.images })
       .catch((): SteerOutcome => "indeterminate");
+  }
+  if (steered === "refused" && steerInput.images.length && store.projectBotForTask(bot.id, bot.threadId)?.busy) {
+    noteSteerImageNotDelivered(bot.threadId, queueId, "the running turn could not take the image — it will get it after this reply");
   }
   // The steer was awaited adapter work: re-read every ownership
   // invariant before writing anything, exactly like the live-send path.
@@ -16916,8 +16959,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const speakerBotId = claimedSpeaker?.botId;
       const speaker = speakerBotId ? store.bot(speakerBotId) : undefined;
       const instance = speaker ? runningTurnInstance(speaker, runtimeThreadId) : undefined;
+      const speakerFrom = speaker ? { botId: speaker.id, name: speaker.name, color: speaker.color } : undefined;
+      const imageWaitNote = speaker ? `${speaker.name}'s engine can't take images during a turn — it will get the image after this reply` : "";
       if (!speaker || !instance?.adapter.capabilities.queueing || !instance.adapter.steer) {
         restoreHeldChannelQueue(held);
+        if (speaker && head && head.id === m[2] && head.text.includes("<attached-image")) {
+          noteSteerImageNotDelivered(targetThreadId, head.id, imageWaitNote, speakerFrom);
+        }
         return json(res, 200, { ok: true, queued: true, threadId: targetThreadId });
       }
       if (!head || head.id !== m[2]) {
@@ -16929,14 +16977,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const replyTo = resolveHeldReplyTarget(held, resolveReplyTarget);
       let steerInput;
       try { steerInput = extractTurnImages(head.text); }
-      catch (error) { restoreHeldChannelQueue(held); throw error; }
+      catch (error) {
+        restoreHeldChannelQueue(held);
+        noteSteerImageNotDelivered(targetThreadId, head.id, error instanceof Error ? error.message : String(error), speakerFrom);
+        throw error;
+      }
+      noteRejectedSteerImages(targetThreadId, head.id, head.text, speakerFrom);
       if (steerInput.images.length && instance.adapter.capabilities.nativeImageSteer !== true) {
         restoreHeldChannelQueue(held);
+        noteSteerImageNotDelivered(targetThreadId, head.id, imageWaitNote, speakerFrom);
         return json(res, 200, { ok: true, queued: true, threadId: targetThreadId, reason: "This provider will receive the image after its current reply finishes." });
       }
       const steered = await instance.adapter
         .steer(runtimeThreadId, promptWithReply(steerInput.text, replyTo, cfg.profile?.name?.trim() || "User"), { images: steerInput.images })
         .catch((): SteerOutcome => "indeterminate");
+      if (steered === "refused" && steerInput.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
+        noteSteerImageNotDelivered(targetThreadId, head.id, "the running turn could not take the image — it will get it after this reply", speakerFrom);
+      }
       // The steer was awaited adapter work: re-read every ownership
       // invariant before writing anything, exactly like the 1:1 path. A
       // speaker change, a channel switch, or a settled room restores the

@@ -1985,11 +1985,20 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
      * next model call. "refused" when nothing is running here to steer or
      * the stdin write provably failed; the caller queues those words. */
     const steer = async (threadId: string, text: string, options?: SteerOptions): Promise<SteerOutcome> => {
-      // This adapter only verifies text steering. Never silently drop images.
-      if (options?.images?.length) return "refused";
       const s = sessions.get(threadId);
       if (!s || !s.turn || s.turn.settled || s.closing || s.child.exitCode !== null) return "refused";
-      return (await writeUser(s, threadId, claudeUserMessage(text, undefined))) ? "steered" : "refused";
+      // Mid-turn input is the same stream-json user message a turn opens
+      // with, so admitted images ride as the same native image blocks. The
+      // bytes are read before anything is written: an attachment that
+      // vanished since admission is "refused" (provably not delivered), never
+      // a text-only steer that silently drops the picture.
+      let message: ClaudeUserMessage;
+      try {
+        message = claudeUserMessage(text, options?.images);
+      } catch {
+        return "refused";
+      }
+      return (await writeUser(s, threadId, message)) ? "steered" : "refused";
     };
 
     // Sign in from Settings: the unmodified CLI's own login, driven over pipes
@@ -2098,7 +2107,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           browserMcp: true,
           images: true,
           nativeImageInput: true,
-          nativeImageSteer: false,
+          nativeImageSteer: true,
           effortLevels: ["low", "medium", "high", "xhigh", "max"],
           queueing: true,
           // Only while this CLI can be told to refresh a resumed session's

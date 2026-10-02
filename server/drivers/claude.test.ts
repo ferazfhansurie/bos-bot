@@ -1789,12 +1789,21 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-steer", text: "first" });
     await recorder.until((e) => e.type === "item.completed" && e.itemType === "tool");
     expect(instance.adapter.capabilities.queueing).toBe(true);
-    expect(instance.adapter.capabilities.nativeImageSteer).toBe(false);
-    await expect(instance.adapter.steer!("t-steer", "image must wait", {
-      images: [{ path: join(scratch, "image.png"), mime: "image/png", bytes: 8 }],
+    expect(instance.adapter.capabilities.nativeImageSteer).toBe(true);
+    // An attachment that vanished after admission is provably not sent:
+    // never a caption-only steer that silently loses the picture.
+    await expect(instance.adapter.steer!("t-steer", "image gone", {
+      images: [{ path: join(scratch, "missing.png"), mime: "image/png", bytes: 8 }],
     })).resolves.toBe("refused");
     expect(existsSync(received)).toBe(false);
     await expect(instance.adapter.steer!("t-steer", "and also this")).resolves.toBe("steered");
+    await expect.poll(() => existsSync(received)).toBe(true);
+    rmSync(received);
+    const imagePath = join(scratch, "steer.png");
+    writeFileSync(imagePath, "steer pixels");
+    await expect(instance.adapter.steer!("t-steer", "look at this", {
+      images: [{ path: imagePath, mime: "image/png", bytes: 12 }],
+    })).resolves.toBe("steered");
     // Hold the turn until the child has consumed the steer; an 800ms timer
     // can finish before a loaded CI runner resumes this test's continuation.
     await expect.poll(() => existsSync(received)).toBe(true);
@@ -1804,8 +1813,16 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const reply = recorder.events.find(
       (e) => e.type === "item.completed" && e.itemType === "assistant_text" && (e as { text: string }).text.startsWith("reply to:"),
     ) as { text: string };
-    expect(reply.text).toContain("steered: and also this");
+    expect(reply.text).toContain("steered: and also this | [image image/png steer pixels] look at this");
     expect(recorder.events.every((e) => e.turnId === turnId)).toBe(true);
+    const steeredImage = readFileSync(join(NATIVE_DIR, "t-steer.ndjson"), "utf8").trim().split("\n")
+      .map((line) => JSON.parse(line))
+      .filter((row) => row.dir === "out" && row.source === "claude.sdk.message")
+      .at(-1);
+    expect(steeredImage.msg.message.content).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "[image data: 16 base64 chars]" } },
+      { type: "text", text: "look at this" },
+    ]);
     await expect(instance.adapter.steer!("t-steer", "late")).resolves.toBe("refused");
   });
 

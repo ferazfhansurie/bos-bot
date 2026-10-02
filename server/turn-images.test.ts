@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { extractTurnImages } from "./turn-images.ts";
+import { extractTurnImages, rejectedTurnImages } from "./turn-images.ts";
 
 const IDS = [
   "123e4567-e89b-42d3-a456-426614174000",
@@ -54,6 +54,28 @@ describe("turn image admission", () => {
       { path: jpg, mime: "image/jpeg", bytes: 9 },
     ]);
     expect(result.text).not.toContain(root);
+  });
+
+  it("names every standalone tag that will not become a native image, with a reason", () => {
+    const root = store();
+    const outside = store("-outside");
+    const kept = image(root, 0);
+    const empty = image(root, 1, ".png", 0);
+    const foreign = image(outside, 2);
+    const source = [
+      `<attached-image path="${kept}" name="kept.png" />`,
+      `<attached-image path="${join(root, `${IDS[3]}.png`)}" name="gone.png" />`,
+      `<attached-image path="${empty}" />`,
+      `<attached-image path="${foreign}" name="elsewhere.png" />`,
+      "`<attached-image path=\"/x.png\" />`",
+    ].join("\n\n");
+
+    expect(rejectedTurnImages(source, { attachmentsDir: root })).toEqual([
+      { name: "gone.png", reason: "the attachment file is missing" },
+      { name: `${IDS[1]}.png`, reason: "the attachment file is empty" },
+      { name: "elsewhere.png", reason: "it is not an app attachment" },
+    ]);
+    expect(rejectedTurnImages("no attachments here", { attachmentsDir: root })).toEqual([]);
   });
 
   it("leaves inline, fenced, missing, outside-store, and non-generated tags as text", () => {

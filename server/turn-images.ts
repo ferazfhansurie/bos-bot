@@ -28,7 +28,7 @@ type MarkdownNode = {
   };
 };
 
-type TagCandidate = { start: number; end: number; path: string };
+type TagCandidate = { start: number; end: number; path: string; name?: string };
 
 const OWNED_IMAGE_NAME =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg|gif|webp)$/;
@@ -90,7 +90,7 @@ function imageTagCandidates(text: string): TagCandidate[] {
     if (text.slice(lineStart, start).trim() || text.slice(end, lineEnd).trim()) return;
     const match = IMAGE_TAG.exec(node.value);
     if (!match) return;
-    candidates.push({ start, end, path: decodeAttachmentAttribute(match[1]!) });
+    candidates.push({ start, end, path: decodeAttachmentAttribute(match[1]!), name: match[2] ? decodeAttachmentAttribute(match[2]) : undefined });
   });
   return candidates;
 }
@@ -119,6 +119,41 @@ function ownedImage(path: string, attachmentsDir: string): TurnImageInput | null
   } catch {
     return null;
   }
+}
+
+/** Why an image tag could not become native input, in words a person can
+ * act on. Mirrors ownedImage's checks without widening what it admits. */
+function rejectionReason(path: string, attachmentsDir: string): string {
+  const name = path.split(/[\\/]/).at(-1) ?? "";
+  if (!path || path.includes("\0") || !OWNED_IMAGE_NAME.test(name) || resolve(path) !== resolve(attachmentsDir, name)) {
+    return "it is not an app attachment";
+  }
+  try {
+    const entry = lstatSync(resolve(attachmentsDir, name));
+    if (!entry.isFile() || entry.isSymbolicLink()) return "the attachment is not a regular file";
+    if (entry.size <= 0) return "the attachment file is empty";
+    if (entry.size > IMAGE_MAX_BYTES) return `the attachment is larger than ${Math.floor(IMAGE_MAX_BYTES / (1024 * 1024))} MB`;
+    return "the attachment could not be read";
+  } catch {
+    return "the attachment file is missing";
+  }
+}
+
+/** Image tags in `text` that extractTurnImages would leave as plain text,
+ * each with its display name and reason. Callers that must never lose a
+ * picture silently (mid-turn steering) surface these instead. */
+export function rejectedTurnImages(
+  text: string,
+  options: Pick<ExtractTurnImagesOptions, "attachmentsDir"> = {},
+): { name: string; reason: string }[] {
+  if (!text.includes("<attached-image")) return [];
+  const attachmentsDir = options.attachmentsDir ?? ATTACHMENTS_DIR;
+  return imageTagCandidates(text)
+    .filter((tag) => ownedImage(tag.path, attachmentsDir) === null)
+    .map((tag) => ({
+      name: tag.name || tag.path.split(/[\\/]/).at(-1) || "image",
+      reason: rejectionReason(tag.path, attachmentsDir),
+    }));
 }
 
 export interface ExtractTurnImagesOptions {

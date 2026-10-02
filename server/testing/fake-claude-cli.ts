@@ -270,6 +270,17 @@ const promptText = (prompt: JsonValue): string => {
   return typeof m?.content === "string" ? m.content : "";
 };
 
+// A steered line may carry native image blocks; name each so a test can see
+// the picture itself (not just its caption) reached the running turn.
+const steeredText = (prompt: JsonValue): string => {
+  const m = prompt && typeof prompt === "object" && !Array.isArray(prompt) ? (prompt as { message?: { content?: unknown } }).message : undefined;
+  if (!Array.isArray(m?.content)) return promptText(prompt);
+  return m.content.map((block: { type?: string; text?: string; source?: { media_type?: string; data?: string } }) =>
+    block?.type === "image"
+      ? `[image ${block.source?.media_type ?? "?"} ${Buffer.from(block.source?.data ?? "", "base64").toString("utf8")}]`
+      : block?.type === "text" ? (block.text ?? "").trim() : "").filter(Boolean).join(" ");
+};
+
 const finishIfDone = () => {
   if (stdinEnded && !turnRunning) process.exit(0);
 };
@@ -532,7 +543,7 @@ process.stdin.on("data", (c) => {
       continue;
     }
     if (turnRunning) {
-      steered.push(promptText(prompt));
+      steered.push(steeredText(prompt));
       if (process.env.FAKE_CLAUDE_STEER_RECEIVED) writeFileSync(process.env.FAKE_CLAUDE_STEER_RECEIVED, "received");
     } else {
       playTurn(prompt);
