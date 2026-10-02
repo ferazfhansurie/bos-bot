@@ -867,7 +867,13 @@ public struct Profile: Codable, Hashable, Sendable {
     public var email: String
 }
 
+public struct InboxThreadSettings: Codable, Sendable {
+    public var maxConcurrentPerBot: Int?
+    public var autoSettleDays: Int?
+}
 public struct ConfigStatus: Codable, Sendable {
+    public var threads: InboxThreadSettings?
+
     public var composio: ConfigFlag?
     public var box: ConfigFlag?
     public var tts: ConfigFlag?

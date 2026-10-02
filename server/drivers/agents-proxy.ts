@@ -515,7 +515,7 @@ const TOOLS = [
   {
     name: "close_thread",
     description:
-      "Mark a thread you opened (or one of your own) as finished once you have read its result: it leaves the person's default sidebar list (still under all threads, with a note saying you closed it) and list_threads reports it as closed. Nothing is deleted — deleting stays the person's decision — and a thread that is still running cannot be closed; wait for it or leave it. Use the thread id from list_threads or from the start_thread result. If a close is refused, do not retry it.",
+      "Mark a thread you opened (or one of your own) as finished once you have read its result: it leaves the person's default sidebar list (still under all threads, with a note saying you closed it) and list_threads reports it as closed. Nothing is deleted — deleting stays the person's decision — and a thread that is still running cannot be closed. On your CURRENT thread, request closure after verifying the brief is done: closure waits for successful completion and for unread replies or pending input to clear. Use the thread id from list_threads or from the start_thread result. If a close is refused, do not retry it.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -1284,6 +1284,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (!threadId) return { text: "close_thread needs the thread_id from list_threads or start_thread.", isError: true };
     const r = await api(`/api/internal/threads/${encodeURIComponent(threadId)}/close`, { method: "POST", body: JSON.stringify({ fromBotId: BOT_ID, fromThreadId: THREAD_ID }) });
     if (r.error) return { text: `Couldn't close that thread: ${String(r.error)}`, isError: true };
+    if (r.pending) return { text: "Self-close requested. Finish with your verified result; closure waits for successful completion and for unread replies or pending human input to clear." };
     return { text: `Closed #${String(r.title)}${r.botName ? ` on @${String(r.botName)}` : ""}. It stays in the person's sidebar, idle, with a note that you closed it.` };
   }
   if (name === "start_thread") {

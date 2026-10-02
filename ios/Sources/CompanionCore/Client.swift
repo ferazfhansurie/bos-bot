@@ -1111,6 +1111,32 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("GET", "/api/provider-usage"), as: ProviderUsageResponse.self)
     }
 
+    public func setThreadSettlement(days: Int) async throws -> ConfigStatus {
+        guard (0...3650).contains(days) else { throw APIError.badURL }
+        let current = try await config()
+        return try await send(try makeRequest("PATCH", "/api/config", body: [
+            "threads": ["maxConcurrentPerBot": current.threads?.maxConcurrentPerBot ?? 3, "autoSettleDays": days]
+        ]), as: ConfigStatus.self)
+    }
+
+    public func steerQueued(queueId: String, to destination: MessageDestination) async throws {
+        let route: String
+        let threadId: String
+        switch destination {
+        case let .bot(id, thread):
+            guard Self.validRouteID(id) else { throw APIError.badURL }
+            route = "/api/bots/\(id)/queue/\(queueId)/steer"
+            threadId = thread
+        case let .room(id, thread):
+            guard Self.validRouteID(id) else { throw APIError.badURL }
+            route = "/api/groups/\(id)/queue/\(queueId)/steer"
+            threadId = thread
+        }
+        guard Self.validRouteID(queueId), Self.validRouteID(threadId) else { throw APIError.badURL }
+        try await send(try makeRequest("POST", route, body: ["threadId": threadId]))
+        // SSE owns removal: a refused steer can return 200 and retain the queue.
+    }
+
     public func config() async throws -> ConfigStatus {
         try await send(try makeRequest("GET", "/api/config"), as: ConfigStatus.self)
     }

@@ -669,7 +669,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
 
       // the first send starts a turn that stays open until the gate exists
       const first = await api("POST", `/api/bots/${bot.id}/messages`, { text: "first task please" });
-      expect(first.status).toBe(202);
+      expect(first.status, JSON.stringify(first.body)).toBe(202);
       expect(first.body.queued).toBeUndefined();
       expect((await botById(bot.id)).busy).toBe(true);
 
@@ -728,7 +728,7 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       const bot = await newBot("steerStop", "Stoppable");
 
       const first = await api("POST", `/api/bots/${bot.id}/messages`, { text: "long job" });
-      expect(first.status).toBe(202);
+      expect(first.status, JSON.stringify(first.body)).toBe(202);
       expect((await botById(bot.id)).busy).toBe(true);
 
       const queued = await api("POST", `/api/bots/${bot.id}/messages`, { text: "after stop please" });

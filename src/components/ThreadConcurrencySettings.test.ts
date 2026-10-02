@@ -18,7 +18,8 @@ describe("ThreadConcurrencySettings", () => {
     fixture.shared = undefined;
     const markup = renderToStaticMarkup(createElement(ThreadConcurrencySettings));
     expect(markup).toContain('value="3" selected=""');
-    expect(markup.match(/<option /g)).toHaveLength(10);
+    expect(markup.match(/<option /g)).toHaveLength(16);
+    expect(markup).toContain("thread-settle-days");
     expect(markup).toContain('value="10"');
     expect(markup).toContain("Extra messages queue until a slot opens.");
     expect(markup).toContain("Maximum running threads per bot");

@@ -19,6 +19,9 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Threads") {
+                NavigationLink("Inbox settlement") { InboxSettlementSettings() }
+            }
             Section("Computer") {
                 if let connection = session.connection {
                     NavigationLink {
@@ -713,6 +716,45 @@ private extension Session.Status {
         case .unpaired: return Text("Not paired")
         case .unauthorized: return Text("Needs pairing")
         case .offline: return Text("Offline")
+        }
+    }
+}
+
+private struct InboxSettlementSettings: View {
+    @EnvironmentObject private var session: Session
+    @State private var days = 3
+    @State private var loaded = false
+    @State private var saving = false
+    var body: some View {
+        Form {
+            Picker("Close idle threads after", selection: $days) {
+                ForEach([0, 1, 3, 7, 14, 30], id: \.self) { value in
+                    Text(value == 0 ? "Off" : "\(value) days").tag(value)
+                }
+            }
+            .disabled(!loaded || saving)
+            .onChange(of: days) { _, value in
+                guard loaded else { return }
+                saving = true
+                Task {
+                    await session.setThreadSettlement(days: value)
+                    if let config = await session.configStatus() {
+                        loaded = false
+                        days = config.threads?.autoSettleDays ?? 3
+                        loaded = true
+                    }
+                    saving = false
+                }
+            }
+            Text("Unread replies, questions, approvals and running work stay open. Closed threads remain in All threads.")
+                .foregroundStyle(.secondary)
+        }
+        .navigationTitle("Inbox settlement")
+        .task {
+            if let config = await session.configStatus() {
+                days = config.threads?.autoSettleDays ?? 3
+                loaded = true
+            }
         }
     }
 }

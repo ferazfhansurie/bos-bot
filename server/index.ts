@@ -186,6 +186,7 @@ import {
   customMcpServers,
   roomHandoffLimits,
 } from "./config.ts";
+import { inboxCanClose, inboxShouldSettle, type InboxCandidate } from "./thread-inbox.ts";
 import { sweepThreadEventLogs, type ThreadLogRetentionCandidate } from "./thread-retention.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
@@ -6044,8 +6045,96 @@ bus.subscribe((event: RuntimeEvent) => {
 bus.subscribe((event: RuntimeEvent) => {
   if (shouldIgnoreProviderEvent(event)) return;
   if (event.type !== "turn.completed") return;
+  const owner = store.botByThread(event.threadId);
+  if (owner && !event.ok) store.patchTask(owner.id, event.threadId, { closeWhenDone: undefined });
   drainQueuedSends();
   drainDelegationWakes();
+  settleInboxThreads();
+});
+
+async function steerInboxQueue(botId: string, threadId: string, queueId: string, attended = false) {
+  const bot = store.projectBotForTask(botId, threadId);
+  if (!bot) return { ok: false, queued: false, threadId };
+  const held = holdSteeredQueue(bot.id, bot.threadId, queueId);
+  if (!held) return { ok: false, queued: false, threadId: bot.threadId };
+  const currentAtStart = store.projectBotForTask(bot.id, bot.threadId);
+  const instance = currentAtStart?.busy ? runningTurnInstance(currentAtStart, bot.threadId) : undefined;
+  let steerInput;
+  try { steerInput = extractTurnImages(held.items.map(item => item.prompt).join("\n\n")); }
+  catch (error) { restoreHeldSteeredQueue(held); throw error; }
+  if (steerInput.images.length && instance?.adapter.capabilities.nativeImageSteer !== true) {
+    restoreHeldSteeredQueue(held);
+    return ({ ok: true, queued: true, threadId: bot.threadId, reason: "This provider will receive the image after its current reply finishes." });
+  }
+  const steerTarget = handoffs.current(bot.threadId);
+  let steered: SteerOutcome = "refused";
+  if (currentAtStart?.busy && instance?.adapter.capabilities.queueing && instance.adapter.steer) {
+    steered = await instance.adapter
+      .steer(bot.threadId, steerInput.text, { images: steerInput.images })
+      .catch((): SteerOutcome => "indeterminate");
+  }
+  // The steer was awaited adapter work: re-read every ownership
+  // invariant before writing anything, exactly like the live-send path.
+  const current = store.projectBotForTask(bot.id, bot.threadId);
+  // "indeterminate" never restores: the words may already be folded into
+  // the turn that was live when they were sent, and replaying them into
+  // a fresh follow-up turn would run them twice. Record them whenever
+  // the destination still exists, busy or not.
+  if (
+    ((steered === "steered" || steered === "indeterminate") && current) &&
+    store.taskByThread(bot.id, bot.threadId)
+  ) {
+    if (attended) clearUnattended(bot.threadId);
+    const messages = held.items.map((item) => store.appendMessage(bot.threadId, {
+      role: "user",
+      kind: "text",
+      text: item.text,
+      replyToId: item.replyToId,
+      sendId: item.sendId,
+      queueId: item.messageId,
+      peerAsk: item.peerAsk,
+      steered: steered === "steered",
+    }));
+    if (steered === "indeterminate") store.appendMessage(bot.threadId, {
+      role: "bot", kind: "activity",
+      tool: { name: "Queued message delivery outcome unknown — review before resending", ok: false },
+    });
+    // Offered to the next turn again unless the person stops this one.
+    if (steered === "steered") for (const message of messages) handoffs.steered(bot.threadId, steerTarget, instance?.instanceId, message.id);
+    const queueIds = held.items.map((item) => item.messageId);
+    settleHeldSteeredQueue(held);
+    return ({ ok: true, steered: steered === "steered", outcomeUnknown: steered === "indeterminate", threadId: bot.threadId, messages, queueIds });
+  }
+  if (steered === "indeterminate") {
+    // No destination is left: settle so a restart cannot replay words a
+    // dead turn may already have run.
+    settleHeldSteeredQueue(held);
+    if (!store.taskByThread(bot.id, bot.threadId)) {
+      throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
+    }
+    throw Object.assign(new Error("no such bot"), { status: 404 });
+  }
+  if (!current || !store.taskByThread(bot.id, bot.threadId)) {
+    settleHeldSteeredQueue(held);
+    throw Object.assign(new Error("no such bot or target task"), { status: 404 });
+  }
+  restoreHeldSteeredQueue(held);
+  // The turn may have settled while the steer was refused; a queue that
+  // is now drainable must not strand behind a missed settle.
+  if (current && !current.busy) drainQueuedSends();
+  return ({ ok: true, queued: true, threadId: bot.threadId });
+}
+
+bus.subscribe((event: RuntimeEvent) => {
+  if (shouldIgnoreProviderEvent(event) || event.type !== "item.completed" || event.itemType !== "tool") return;
+  const bot = store.botByThread(event.threadId);
+  if (!bot || computerSelectionTurns.get(event.threadId)?.selected) return;
+  const head = queuedSteerSnapshot((owner, thread) => owner === bot.id && thread === event.threadId)[event.threadId]?.[0];
+  if (!head || head.reason === "capacity") return;
+  // holdSteeredQueue owns the delivery claim before the first await.
+  void steerInboxQueue(bot.id, event.threadId, head.queueId).catch(error => {
+    console.warn("inbox boundary steer failed", error instanceof Error ? error.message : String(error));
+  });
 });
 
 function drainQueuedSends() {
@@ -7034,6 +7123,7 @@ async function startTurn(
   // opener) picked it back up, so its row returns to the sidebar and
   // list_threads stops calling it closed. No-op on an open thread.
   store.setTaskClosedBy(bot.id, threadId, null);
+  store.patchTask(bot.id, threadId, { closeWhenDone: undefined });
   // The badge is "this bot answered you, and you have not looked yet". A
   // person starting a turn has looked; a teammate's hop has not — the fold
   // never re-marks an internal turn, so clearing here would silently spend
@@ -11701,7 +11791,7 @@ function configStatus() {
     // not a secret — the settings picker shows it; "" = follow the system
     language: cfg.language ?? "",
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
-    threads: { maxConcurrentPerBot: maxConcurrentBotThreads(cfg), parallelProjectFolder: parallelProjectFolderThreads(cfg) },
+    threads: { maxConcurrentPerBot: maxConcurrentBotThreads(cfg), parallelProjectFolder: parallelProjectFolderThreads(cfg), autoSettleDays: cfg.threads?.autoSettleDays ?? 3 },
     approvals: {
       defaultMode: defaultApprovalMode(cfg),
       keepAcrossModelSwitch: keepApprovalAcrossModelSwitch(cfg),
@@ -13635,7 +13725,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (owner.id !== from.id && task.openedBy?.botId !== from.id) {
           return json(res, 403, { error: "that thread is not yours to close — only the bot that opened it, or its own bot, can" });
         }
-        if (threadId === fromThreadId) return json(res, 400, { error: "you cannot close the thread you are speaking in — finish your turn instead" });
+        if (threadId === fromThreadId) {
+          store.patchTask(owner.id, threadId, { closeWhenDone: { botId: from.id, name: from.name, at: Date.now() } });
+          return json(res, 200, { pending: true, threadId, title: task.title, botName: owner.name });
+        }
+        const closeCandidate = threadInboxCandidate(owner.id, threadId);
+        if (!task.closedBy && (!closeCandidate || !inboxCanClose(closeCandidate) || store.messagesFor(threadId).some(m => m.card && !m.card.answered && !m.card.dismissed))) return json(res, 409, { error: "this thread still has unread replies, pending input or work" });
         if (threadBusy(owner.id, threadId) || queuedThreadPosition(owner.id, threadId) !== null || roomHandoffs.activeDirect(threadId)) {
           return json(res, 409, { error: `#${task.title} is still running — wait for it to finish (list_threads), or the person can stop it from the app` });
         }
@@ -16907,6 +17002,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!peerOwns(m[1], body?.threadId)) return json(res, 403, { error: "thread is not part of this peer link" });
       const current = requestedTaskBot(m[1], body?.threadId);
       store.patchTask(current.id, current.threadId, { unread: false });
+      settleInboxThreads();
       const bot = store.bot(current.id)!;
       const visible = wireBot(bot);
       broadcast({ kind: "bot", bot: visible });
@@ -17988,75 +18084,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return { ok: true as const, threadId, message };
           }
 
-          // Claude can accept the message inside its live turn. If the write
-          // loses a race with turn settlement, or the engine cannot steer, the
-          // existing server-side queue records it atomically for the next turn.
           if (currentAtStart.busy) {
-            const instance = runningTurnInstance(currentAtStart, threadId);
-            let steered: SteerOutcome = "refused";
-            // A live text steer has no image side channel. Keep an attachment
-            // message intact for the next ordinary turn, where central image
-            // admission can hand it to the provider natively.
-            const steerInput = extractTurnImages(text);
-            const carriesImages = steerInput.images.length > 0;
-            const steerTarget = handoffs.current(threadId);
-            if ((!carriesImages || instance?.adapter.capabilities.nativeImageSteer === true) && !computerSelectionTurns.get(threadId)?.selected && instance?.adapter.capabilities.queueing && instance.adapter.steer) {
-              steered = await instance.adapter
-                .steer(threadId, promptWithReply(steerInput.text, replyTo, cfg.profile?.name?.trim() || "User"), { images: steerInput.images })
-                .catch((): SteerOutcome => "indeterminate");
-            }
-            // steer() is awaited adapter work. The turn can settle, the task can
-            // switch, or the whole bot can be deleted before its acknowledgement
-            // arrives. Re-read every ownership invariant before appending even a
-            // successful steer; otherwise that late acknowledgement writes a user
-            // message into a task the bot no longer owns. A conflict leaves the
-            // text in the client's composer/outbox to resend deliberately.
-            const current = store.projectBotForTask(bot.id, threadId);
-            assertPrivateRequest();
-            if (!current) throw Object.assign(new Error("no such bot"), { status: 404 });
-            if (!store.taskByThread(bot.id, threadId)) {
-              throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
-            }
-            const delivered = steered !== "refused";
-            if (delivered) {
-              if (steered === "steered" && !current.busy) {
-                throw Object.assign(
-                  new Error("the running turn ended before the steered message could be recorded"),
-                  { status: 409 },
-                );
-              }
-              // "indeterminate" falls through to the same record: the words
-              // may already be folded into a turn whose acknowledgement was
-              // lost, and handing them back for a resend could run them
-              // twice. Recording them once is the honest outcome.
-              // A person steering a webhook turn is present, and auto mode may
-              // follow them again. But this route is also reachable from the
-              // bot's own shell on a headless server (loopback is the owner
-              // there), and "continue" typed by the turn itself must not be
-              // the thing that lifts the block written against it — so only
-              // a request that proves a person (a paired session, or the
-              // desktop's owner capability, which every mutation there has
-              // already shown) clears the mark.
-              if (auth.kind === "session" || DESKTOP_MANAGED) clearUnattended(threadId);
-              const message = store.appendMessage(threadId, {
-                role: "user",
-                kind: "text",
-                text,
-                replyToId: replyTo?.id,
-                sendId,
-                steered: true,
-                sender: messageSender(auth),
-              });
-              // Offered to the next turn again unless the person stops this one.
-              handoffs.steered(threadId, steerTarget, instance?.instanceId, message.id);
-              return { ok: true as const, steered: true as const, threadId, message };
-            }
-            if (!current.busy) {
-              return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
-            }
-            const queued = queueSteeredMessage(current.id, threadId, text, {
-              replyToId: replyTo?.id,
-              sendId,
+            // New input supersedes a previous done-condition.
+            store.patchTask(currentAtStart.id, threadId, { closeWhenDone: undefined });
+            const queued = queueSteeredMessage(currentAtStart.id, threadId, text, {
+              replyToId: replyTo?.id, sendId,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
@@ -18091,67 +18123,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // Lift the whole queue atomically: a settle racing this request can
       // drain it as a follow-up, or this request can steer it into the live
       // turn — never both for the same words.
-      const held = holdSteeredQueue(bot.id, bot.threadId, m[2]);
-      if (!held) return json(res, 404, { error: "no such queued message" });
-      const currentAtStart = store.projectBotForTask(bot.id, bot.threadId);
-      const instance = currentAtStart?.busy ? runningTurnInstance(currentAtStart, bot.threadId) : undefined;
-      let steerInput;
-      try { steerInput = extractTurnImages(held.items.map(item => item.prompt).join("\n\n")); }
-      catch (error) { restoreHeldSteeredQueue(held); throw error; }
-      if (steerInput.images.length && instance?.adapter.capabilities.nativeImageSteer !== true) {
-        restoreHeldSteeredQueue(held);
-        return json(res, 200, { ok: true, queued: true, threadId: bot.threadId, reason: "This provider will receive the image after its current reply finishes." });
-      }
-      const steerTarget = handoffs.current(bot.threadId);
-      let steered: SteerOutcome = "refused";
-      if (currentAtStart?.busy && instance?.adapter.capabilities.queueing && instance.adapter.steer) {
-        steered = await instance.adapter
-          .steer(bot.threadId, steerInput.text, { images: steerInput.images })
-          .catch((): SteerOutcome => "indeterminate");
-      }
-      // The steer was awaited adapter work: re-read every ownership
-      // invariant before writing anything, exactly like the live-send path.
-      const current = store.projectBotForTask(bot.id, bot.threadId);
-      // "indeterminate" never restores: the words may already be folded into
-      // the turn that was live when they were sent, and replaying them into
-      // a fresh follow-up turn would run them twice. Record them whenever
-      // the destination still exists, busy or not.
-      if (
-        (steered === "steered" && current?.busy ||
-          steered === "indeterminate" && current) &&
-        store.taskByThread(bot.id, bot.threadId)
-      ) {
-        if (auth.kind === "session" || DESKTOP_MANAGED) clearUnattended(bot.threadId);
-        const messages = held.items.map((item) => store.appendMessage(bot.threadId, {
-          role: "user",
-          kind: "text",
-          text: item.text,
-          replyToId: item.replyToId,
-          sendId: item.sendId,
-          queueId: item.messageId,
-          peerAsk: item.peerAsk,
-          steered: true,
-        }));
-        // Offered to the next turn again unless the person stops this one.
-        for (const message of messages) handoffs.steered(bot.threadId, steerTarget, instance?.instanceId, message.id);
-        const queueIds = held.items.map((item) => item.messageId);
-        settleHeldSteeredQueue(held);
-        return json(res, 200, { ok: true, steered: true, threadId: bot.threadId, messages, queueIds });
-      }
-      if (steered === "indeterminate") {
-        // No destination is left: settle so a restart cannot replay words a
-        // dead turn may already have run.
-        settleHeldSteeredQueue(held);
-        if (!store.taskByThread(bot.id, bot.threadId)) {
-          throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
-        }
-        throw Object.assign(new Error("no such bot"), { status: 404 });
-      }
-      restoreHeldSteeredQueue(held);
-      // The turn may have settled while the steer was refused; a queue that
-      // is now drainable must not strand behind a missed settle.
-      if (current && !current.busy) drainQueuedSends();
-      return json(res, 200, { ok: true, queued: true, threadId: bot.threadId });
+      return json(res, 200, await steerInboxQueue(bot.id, bot.threadId, m[2], auth.kind === "session" || DESKTOP_MANAGED));
     }
 
     // Compaction shares normal turn admission and Stop, but never executes
@@ -19960,6 +19932,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // Provider keys change the fleet. Profile, language, voice, VPS, room
       // timeout, and onboarding progress changes do not rebuild it: no driver
       // reads them, and they should not interrupt in-flight turns.
+      if (patch.threads) settleInboxThreads();
       const reloadKeys = providerReloadKeys(patch);
       // Config is already durable. A provider credential or runtime change
       // invalidates every old child immediately, including when browser
@@ -20480,6 +20453,39 @@ try {
 } catch (error) {
   console.warn(`attachments: startup partial cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
 }
+
+function threadInboxCandidate(botId: string, threadId: string): InboxCandidate | null {
+  const task = store.taskByThread(botId, threadId);
+  if (!task) return null;
+  const candidate: InboxCandidate = {
+    lastActivityAt: Math.max(task.lastActivityAt ?? task.createdAt, store.messagesTail(threadId, 1).messages.at(-1)?.at ?? 0),
+    closed: Boolean(task.closedBy), archived: Boolean(task.archivedAt),
+    unread: task.unread === true, busy: threadBusy(botId, threadId),
+    queued: queuedThreadPosition(botId, threadId) !== null,
+    needsInput: task.activity === "waiting-on-you",
+    pendingWork: roomHandoffs.activeDirect(threadId) || privateTurnDispatches.pending().some(d => d.threadId === threadId),
+  };
+  // A mature candidate alone needs the full pending-card check. Do not hydrate
+  // every old transcript just to discover that a busy/unread thread is protected.
+  if (inboxCanClose(candidate) && (task.closeWhenDone || inboxShouldSettle(candidate, cfg.threads?.autoSettleDays ?? 3))) {
+    candidate.needsInput = store.messagesFor(threadId).some(m => m.card && !m.card.answered && !m.card.dismissed);
+  }
+  return candidate;
+}
+function settleInboxThreads(now = Date.now()): void {
+  const days = cfg.threads?.autoSettleDays ?? 3;
+  for (const bot of store.bots) for (const task of bot.tasks ?? []) {
+    const candidate = threadInboxCandidate(bot.id, task.threadId);
+    if (!candidate || !(task.closeWhenDone ? inboxCanClose(candidate) : inboxShouldSettle(candidate, days, now))) continue;
+    // No await between the eligibility observation and metadata commit.
+    store.setTaskClosedBy(bot.id, task.threadId, task.closeWhenDone ?? { botId: bot.id, name: "Inbox", at: now });
+    if (task.closeWhenDone) store.patchTask(bot.id, task.threadId, { closeWhenDone: undefined });
+  }
+}
+// Do not sweep at startup before dispatch recovery has marked uncertain work.
+setInterval(() => {
+  try { settleInboxThreads(); } catch (error) { console.warn("inbox settlement failed", error instanceof Error ? error.message : String(error)); }
+}, 60_000).unref();
 
 // #1280: retention for per-thread event logs. Off unless configured, and
 // even then it only removes log files — transcripts, thread records, and

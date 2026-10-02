@@ -120,6 +120,8 @@ export interface WireTask {
   openedBy?: TaskOpenedBy;
   /** Set by close_thread; absent while the thread is open. */
   closedBy?: TaskClosedBy;
+  /** A self-close waits for successful completion and for human attention to clear. */
+  closeWhenDone?: TaskClosedBy;
   /** When the person archived this thread. Absent = unarchived. */
   archivedAt?: number;
   /** Defaults are copied when a task is created. */

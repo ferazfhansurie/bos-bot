@@ -29,6 +29,7 @@ posixOnly("mid-turn steering e2e", () => {
   let stderr = "";
   let steerGate: string;
   let steerFinishGate: string;
+  let toolResultGate: string;
   let codexSteerGate: string;
 
   const api = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> => {
@@ -54,6 +55,7 @@ posixOnly("mid-turn steering e2e", () => {
     chmodSync(FAKE_CODEX, 0o755);
     home = mkdtempSync(join(tmpdir(), "omb-steer-"));
     mkdirSync(join(home, ".openmausbot"), { recursive: true });
+    toolResultGate = join(home, "tool-result.gate");
     steerGate = join(home, "delayed-steer.gate");
     steerFinishGate = join(home, "finish-steered-turn.gate");
     codexSteerGate = join(home, "codex-steer-refused.gate");
@@ -65,7 +67,7 @@ posixOnly("mid-turn steering e2e", () => {
           claude: { driver: "claudeAgent", environment: { FAKE_CLAUDE_MODE: "slow" }, config: { cli: FAKE_CLAUDE, permissionMode: "bypassPermissions" } },
           claudeSteer: {
             driver: "claudeAgent",
-            environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: steerFinishGate },
+            environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: steerFinishGate, FAKE_CLAUDE_TOOL_RESULT_GATE: toolResultGate },
             config: { cli: FAKE_CLAUDE, permissionMode: "bypassPermissions" },
           },
           claudeRace: {
@@ -78,6 +80,11 @@ posixOnly("mid-turn steering e2e", () => {
           // codex parks its turn on an unanswered question; turn/steer folds
           // new input into that live turn without ending it
           codex: { driver: "codex", environment: { FAKE_CODEX_MODE: "question", FAKE_CODEX_ASK_HOLD: "1" }, config: { cli: FAKE_CODEX } },
+          codexUnknown: {
+            driver: "codex",
+            environment: { FAKE_CODEX_MODE: "question", FAKE_CODEX_ASK_HOLD: "1", FAKE_CODEX_STEER_HANG: "1", FAKE_CODEX_STEER_TIMEOUT_MS: "150" },
+            config: { cli: FAKE_CODEX },
+          },
           codexRace: {
             driver: "codex",
             environment: {
@@ -120,9 +127,10 @@ posixOnly("mid-turn steering e2e", () => {
   });
 
   it(
-    "a message during a Claude turn is steered into it: 202, in the transcript in order and marked, folded into the reply",
+    "queues input until the next tool result, then steers it once into the same Claude turn",
     async () => {
       rmSync(steerFinishGate, { force: true });
+      writeFileSync(toolResultGate, "hold result");
       const created = (await api("POST", "/api/bots")).body.bot;
       await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "claudeSteer", model: "claude-fake" } });
       const instances = (await api("GET", "/api/instances")).body.instances;
@@ -139,7 +147,10 @@ posixOnly("mid-turn steering e2e", () => {
         writeFileSync(steerFinishGate, "finish");
       }
       expect(second.status).toBe(202);
-      expect(second.body.steered).toBe(true);
+      expect(second.body.queued).toBe(true);
+      expect((await getBot(created.id)).messages.some((m: any) => m.text === "and also this")).toBe(false);
+      rmSync(toolResultGate, { force: true });
+      await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.text === "and also this" && m.steered), "boundary delivery");
 
       await waitFor(async () => (await getBot(created.id)).busy === false, "the turn to settle");
       const bot = await getBot(created.id);
@@ -256,10 +267,11 @@ posixOnly("mid-turn steering e2e", () => {
     // The fake has paused stdin after the first prompt. This exceeds a pipe's
     // writable buffer, so the steer promise cannot acknowledge until the gate
     // opens; meanwhile the first turn is free to settle normally.
-    const delayed = api("POST", `/api/bots/${created.id}/messages`, {
-      text: `delayed ownership check ${"x".repeat(900_000)}`,
-      threadId: created.threadId,
+    const queued = await api("POST", `/api/bots/${created.id}/messages`, {
+      text: `delayed ownership check ${"x".repeat(900_000)}`, threadId: created.threadId,
     });
+    expect(queued.body.queued).toBe(true);
+    const delayed = api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, { threadId: created.threadId });
     const prematurelySettled = await Promise.race([
       delayed.then(() => true),
       new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
@@ -312,7 +324,9 @@ posixOnly("mid-turn steering e2e", () => {
 
     const second = await api("POST", `/api/bots/${created.id}/messages`, { text: "and also this" });
     expect(second.status).toBe(202);
-    expect(second.body.steered).toBe(true);
+    expect(second.body.queued).toBe(true);
+    const explicit = await api("POST", `/api/bots/${created.id}/queue/${second.body.queueId}/steer`, { threadId: created.threadId });
+    expect(explicit.body.steered).toBe(true);
     const steered = (await getBot(created.id)).messages.find((m: any) => m.text === "and also this");
     expect(steered.steered).toBe(true);
 
@@ -333,7 +347,9 @@ posixOnly("mid-turn steering e2e", () => {
       const text = `${caption}\n\n<attached-image path="${imagePath}" name="steer.png" />`;
       const imageReceipt = await api("POST", `/api/bots/${created.id}/messages`, { text });
       expect(imageReceipt.status).toBe(202);
-      expect(imageReceipt.body).toMatchObject({ steered: true });
+      expect(imageReceipt.body).toMatchObject({ queued: true });
+      const imageSteer = await api("POST", `/api/bots/${created.id}/queue/${imageReceipt.body.queueId}/steer`, { threadId: created.threadId });
+      expect(imageSteer.body).toMatchObject({ steered: true });
       const rows = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8").trim().split("\n").map(line => JSON.parse(line));
       const call = rows.filter(row => row.dir === "out" && row.msg?.method === "turn/steer").at(-1)?.msg;
       expect(call.params.expectedTurnId).toBe("turn-1");
@@ -348,6 +364,25 @@ posixOnly("mid-turn steering e2e", () => {
     expect(JSON.stringify(bot.messages)).not.toContain("SIGTERM");
     expect(stderr).not.toContain("signal SIGTERM");
   }, 40_000);
+
+  it("records an uncertain steer once and never restores it for replay", async () => {
+    const created = (await api("POST", "/api/bots")).body.bot;
+    const instance = (await api("GET", "/api/instances")).body.instances.find((i: any) => i.instanceId === "codexUnknown");
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "codexUnknown", model: instance.models.default } });
+    await api("POST", `/api/bots/${created.id}/messages`, { text: "start held turn" });
+    await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.card), "held unknown-delivery turn");
+    const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: "uncertain input", threadId: created.threadId });
+    const route = `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`;
+    const outcome = await api("POST", route, { threadId: created.threadId });
+    expect(outcome.body).toMatchObject({ outcomeUnknown: true, steered: false });
+    const bot = await getBot(created.id);
+    expect(bot.messages.filter((m: any) => m.text === "uncertain input")).toHaveLength(1);
+    expect(bot.messages.some((m: any) => m.tool?.name.includes("delivery outcome unknown"))).toBe(true);
+    expect((await api("POST", route, { threadId: created.threadId })).body).not.toMatchObject({ steered: true });
+    const native = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(native.filter(row => row.dir === "out" && row.msg?.method === "turn/steer")).toHaveLength(1);
+    await api("POST", `/api/bots/${created.id}/interrupt`);
+  }, 20_000);
 
   it("the queue steer endpoint pulls a codex queue into the running turn once the engine can steer", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;

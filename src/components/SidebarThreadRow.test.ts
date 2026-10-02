@@ -127,6 +127,13 @@ describe("threads a bot closed", () => {
     ];
     expect(visibleSidebarThreads(rows, "current").map((task) => task.threadId)).toEqual(["current", "unread", "busy"]);
   });
+  it("dims running work while unread replies, human input and selection stay clear", () => {
+    const running = { threadId: "h", title: "Running", busy: true };
+    expect(render(running)).toContain("opacity-50");
+    expect(render({ ...running, unread: true })).not.toContain("opacity-50");
+    expect(render({ ...running, activity: "waiting-on-you" })).not.toContain("opacity-50");
+    expect(render(running, true)).not.toContain("opacity-50");
+  });
   it("says who closed it under the title, dims the row, and says Closed in the tooltip", () => {
     expect(threadByline({ openedBy, closedBy: { ...closedBy, name: "Scout" } })).toBe("closed by Scout");
     expect(threadByline({ openedBy })).toBe("opened by Parker");

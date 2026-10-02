@@ -537,6 +537,21 @@ describe("list_threads", () => {
 });
 
 describe("close_thread", () => {
+  it("defers self-close until completion and keeps the final unread result open until read", async () => {
+    const bot = await createBot("Inbox", "gated");
+    try {
+      const token = await heldTurn(bot, "Verify then close this brief.");
+      expect((await api("POST", `/api/internal/threads/${bot.threadId}/close`, {}, token)).body).toMatchObject({ pending: true });
+      expect((await taskOf(bot.id, bot.threadId)).closedBy).toBeUndefined();
+      release(bot.threadId);
+      await expect.poll(async () => (await taskOf(bot.id, bot.threadId))?.busy, { timeout: 15_000 }).toBe(false);
+      expect((await taskOf(bot.id, bot.threadId)).closedBy).toBeUndefined();
+      expect((await taskOf(bot.id, bot.threadId)).unread).toBe(true);
+      expect((await api("POST", `/api/bots/${bot.id}/read`, { threadId: bot.threadId })).status).toBe(200);
+      expect((await taskOf(bot.id, bot.threadId)).closedBy).toMatchObject({ name: "Inbox" });
+    } finally { release(bot.threadId); }
+  });
+
   it("closes your own thread and one you opened on a teammate, refuses a teammate's other thread and a running one", async () => {
     const pm = await createBot("Parker", "gated");
     const qa = await createBot("Quinn", "gated");
@@ -570,7 +585,8 @@ describe("close_thread", () => {
       const own = (await api("POST", `/api/bots/${pm.id}/tasks`, { title: "Notes" })).body.task.threadId as string;
       expect((await close(own)).status).toBe(200);
       expect((await taskOf(pm.id, own)).closedBy).toMatchObject({ name: "Parker" });
-      expect((await close(pm.threadId)).status).toBe(400);
+      expect((await close(pm.threadId)).body).toMatchObject({ pending: true });
+      expect((await taskOf(pm.id, pm.threadId)).closeWhenDone).toMatchObject({ name: "Parker" });
       // a new turn in a closed thread reopens it
       rmSync(join(gates, `${own}.gate`), { force: true });
       rmSync(join(gates, `${own}.json`), { force: true });
@@ -581,7 +597,7 @@ describe("close_thread", () => {
       // a running thread is refused: Quinn, speaking in its own thread, cannot close the one it speaks in,
       // nor a sibling thread of its own while a turn is held open there
       const asQuinn = await mintedToken(qa.id, qa.threadId);
-      expect((await close(qa.threadId, asQuinn)).status).toBe(400);
+      expect((await close(qa.threadId, asQuinn)).body).toMatchObject({ pending: true });
       const busyOther = (await api("POST", `/api/bots/${qa.id}/tasks`, { title: "Busy one" })).body.task.threadId as string;
       rmSync(join(gates, `${busyOther}.gate`), { force: true });
       rmSync(join(gates, `${busyOther}.json`), { force: true });

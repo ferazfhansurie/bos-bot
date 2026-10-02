@@ -107,6 +107,7 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
   const actionRef = useRef<HTMLButtonElement>(null);
   const status = task.activity === "waiting-on-you" ? t("task.waiting") : isWorking(task) ? t("chat.activity.working") : task.queued ? t("task.queued") : null;
   const byline = threadByline(task);
+  const dimRunning = isWorking(task) && task.activity !== "waiting-on-you" && !task.unread && !current;
   const closed = Boolean(task.closedBy) && !status;
   const archived = isArchived(task);
   const openMenu = (x: number, y: number) => setMenu({ left: Math.max(8, Math.min(x, window.innerWidth - 228)), top: Math.max(8, Math.min(y, window.innerHeight - 190)) });
@@ -144,7 +145,7 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
         onClick={onSelect} onDoubleClick={startRename}
         onContextMenu={(event) => { event.preventDefault(); openMenu(event.clientX, event.clientY); }}
         onKeyDown={(event) => { if (event.key === "ContextMenu" || event.shiftKey && event.key === "F10") { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.left, rect.bottom); } }}
-        className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-md pl-3 pr-1 text-left text-[13px] font-medium outline-none focus-visible:ring-1 focus-visible:ring-accent/60", compact ? "min-h-7 py-1" : "min-h-8 py-1.5", current ? "font-semibold text-ink" : "text-ink-secondary hover:text-ink")}>
+        className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-md pl-3 pr-1 text-left text-[13px] font-medium outline-none focus-visible:ring-1 focus-visible:ring-accent/60", compact ? "min-h-7 py-1" : "min-h-8 py-1.5", dimRunning && "opacity-50", current ? "font-semibold text-ink" : "text-ink-secondary hover:text-ink")}>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className={cn("min-w-0 truncate", task.unread && "font-semibold text-ink", (closed || archived) && !current && "text-ink-secondary/70")}>{task.title}</span>
           {byline && <span className="min-w-0 truncate text-[10.5px] leading-tight text-ink-secondary/80">{byline}</span>}

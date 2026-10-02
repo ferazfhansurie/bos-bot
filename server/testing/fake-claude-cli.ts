@@ -459,6 +459,12 @@ const playTurn = (prompt: JsonValue) => {
       if (index === replyParts.length - 1) content.push({ type: "tool_use", id: defaultToolId, name: "Bash", input: { command: "echo hi" } });
       out({ type: "assistant", message: { content, usage } });
     });
+    // Deterministic inbox fixture: hold the result while the server queues input.
+    const resultGate = process.env.FAKE_CLAUDE_TOOL_RESULT_GATE;
+    if (resultGate) {
+      const deadline = Date.now() + 10_000;
+      while (existsSync(resultGate) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
     out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: defaultToolId, is_error: false, content: [{ type: "text", text: "hi" }] }] } });
     runHooks("PostToolUse", { tool_name: "Bash", tool_input: { command: "echo hi" }, tool_response: "hi", tool_use_id: defaultToolId });
   }

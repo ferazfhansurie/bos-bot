@@ -1332,6 +1332,19 @@ final class Session: ObservableObject {
 
     /// Take back a held message. The row only goes when the computer agrees;
     /// an entry that already drained counts as agreement.
+    func setThreadSettlement(days: Int) async {
+        await perform { _ = try await $0.setThreadSettlement(days: days) }
+    }
+
+    func steerQueued(_ send: QueuedSend, threadId: String, in chat: Chat) async {
+        let destination: MessageDestination
+        switch chat {
+        case let .bot(bot): destination = .bot(id: bot.id, threadId: threadId)
+        case let .room(room): destination = .room(id: room.id, threadId: threadId)
+        }
+        await perform { try await $0.steerQueued(queueId: send.queueId, to: destination) }
+    }
+
     func cancelQueued(_ send: QueuedSend, threadId: String, in chat: Chat) async {
         let connectionID = client?.connection.id
         let destination: MessageDestination

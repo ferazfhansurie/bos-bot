@@ -24,7 +24,7 @@ struct BotThreadRow: View {
     /// A closed or archived thread with nothing live in it reads quieter,
     /// like the desktop's dimmed row; a live status or unread outranks both.
     private var dimmed: Bool {
-        (task.isClosed || task.isArchived) && runtime == nil && task.unread != true
+        task.isWorking && task.activity != "waiting-on-you" && task.unread != true && !selected
     }
 
     var body: some View {
@@ -71,9 +71,10 @@ struct BotThreadRow: View {
             }
         }
         .padding(.vertical, 3)
+        .opacity(dimmed ? 0.5 : 1)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityValue(task.isArchived ? "Archived" : dimmed ? "Closed" : "")
+        .accessibilityValue(task.isArchived ? "Archived" : task.isClosed ? "Closed" : dimmed ? "Running" : "")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

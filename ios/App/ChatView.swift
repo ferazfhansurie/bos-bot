@@ -870,7 +870,9 @@ struct ChatView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             if !heldSends.isEmpty {
-                QueuedSendList(sends: heldSends) { send in
+                QueuedSendList(sends: heldSends, steer: { send in
+                    await session.steerQueued(send, threadId: threadId, in: current)
+                }) { send in
                     Task { await session.cancelQueued(send, threadId: threadId, in: current) }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -2311,6 +2313,8 @@ struct StreamingBubble: View {
 /// capacity rather than because a turn is running.
 private struct QueuedSendList: View {
     let sends: [QueuedSend]
+    let steer: (QueuedSend) async -> Void
+    @State private var steering = false
     let cancel: (QueuedSend) -> Void
 
     private var showsCapacityNote: Bool {
@@ -2335,6 +2339,16 @@ private struct QueuedSendList: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    if index == 0 {
+                        Button("Steer") {
+                            guard !steering else { return }
+                            steering = true
+                            Task { await steer(send); steering = false }
+                        }
+                        .disabled(steering)
+                        .onChange(of: sends) { _, _ in steering = false }
+                        .accessibilityLabel("Steer queued message now")
+                    }
                     Button {
                         cancel(send)
                     } label: {

@@ -514,7 +514,7 @@ export interface ConfigStatus {
   box: { configured: boolean };
   vps: { configured: boolean; sshAlias: string };
   rooms: { turnTimeoutMinutes: number };
-  threads?: { maxConcurrentPerBot: number; parallelProjectFolder?: boolean };
+  threads?: { autoSettleDays?: number; maxConcurrentPerBot: number; parallelProjectFolder?: boolean };
   /** Workspace-wide permission defaults. Absent means today's behavior: a
    * new bot starts on Ask, and an elevated mode resets to Ask whenever a bot
    * or thread moves to another engine. */

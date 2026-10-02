@@ -429,6 +429,7 @@ const appConfigSchema = z.object({
     autoCompact: z.boolean().optional(),
   }).optional(),
   threads: z.object({
+    autoSettleDays: z.number().int().min(0).max(3650).optional(),
     maxConcurrentPerBot: z.number().int().min(1).max(MAX_CONCURRENT_BOT_THREADS),
     parallelProjectFolder: z.boolean().optional(),
     /** Cap each per-thread events/ and native/ NDJSON log at this many
@@ -484,7 +485,7 @@ export interface AppConfig {
   profile?: { name?: string; email?: string; avatarUrl?: string };
   approvals?: { defaultMode?: ApprovalMode; keepAcrossModelSwitch?: boolean };
   rooms?: { turnTimeoutMinutes: number; handoffLifetimeMinutes?: number; handoffMinRunwayMinutes?: number; handoffHardCapMinutes?: number };
-  threads?: { maxConcurrentPerBot: number; parallelProjectFolder?: boolean; eventLogMaxBytes?: number; eventLogRetentionDays?: number };
+  threads?: { autoSettleDays?: number; maxConcurrentPerBot: number; parallelProjectFolder?: boolean; eventLogMaxBytes?: number; eventLogRetentionDays?: number };
   context?: { rebuildBytes?: number; compactAt?: number; autoCompact?: boolean };
   /** Shared preserves the historical singleton. Per-bot gives every bot a
    * separate container, durable workspace, viewer and lease. */
