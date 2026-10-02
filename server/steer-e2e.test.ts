@@ -245,6 +245,90 @@ posixOnly("mid-turn steering e2e", () => {
     ]);
   }, 40_000);
 
+  it("steers a pasted image into the running Claude turn as a native image, and says when one cannot go", async () => {
+    rmSync(steerFinishGate, { force: true });
+    rmSync(toolResultGate, { force: true });
+    const created = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "claudeSteer", model: "claude-fake" } });
+    expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first" })).status).toBe(202);
+    await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.kind === "activity" && m.tool?.name === "Bash"), "the tool chip");
+
+    const attachments = join(home, ".openmausbot", "attachments");
+    mkdirSync(attachments, { recursive: true });
+    const imagePath = join(attachments, "123e4567-e89b-42d3-a456-426614174010.png");
+    writeFileSync(imagePath, "steered pixels");
+    const missingPath = join(attachments, "123e4567-e89b-42d3-a456-426614174011.png");
+    try {
+      const imageText = `look at this\n\n<attached-image path="${imagePath}" name="shot.png" />`;
+      const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: imageText });
+      expect(queued.body).toMatchObject({ queued: true });
+      const steered = await api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, { threadId: created.threadId });
+      expect(steered.body).toMatchObject({ steered: true });
+      expect((await getBot(created.id)).messages.find((m: any) => m.text === imageText)?.steered).toBe(true);
+      const outgoing = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8")
+        .trim().split("\n").map((line) => JSON.parse(line))
+        .filter((row) => row.dir === "out" && row.source === "claude.sdk.message").at(-1)?.msg;
+      expect(outgoing.message.content).toEqual([
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "[image data: 20 base64 chars]" } },
+        { type: "text", text: "look at this\n\n" },
+      ]);
+
+      // A tag whose file is gone keeps the words moving and says so.
+      const missingText = `and this one\n\n<attached-image path="${missingPath}" name="gone.png" />`;
+      const missing = await api("POST", `/api/bots/${created.id}/messages`, { text: missingText });
+      const missingSteer = await api("POST", `/api/bots/${created.id}/queue/${missing.body.queueId}/steer`, { threadId: created.threadId });
+      expect(missingSteer.body).toMatchObject({ steered: true });
+      const notes = (await getBot(created.id)).messages.filter((m: any) => m.kind === "activity" && m.tool?.name.startsWith("image not delivered"));
+      expect(notes.map((m: any) => m.tool.name)).toEqual(["image not delivered: gone.png — the attachment file is missing"]);
+    } finally {
+      writeFileSync(steerFinishGate, "finish");
+    }
+    await waitFor(async () => (await getBot(created.id)).busy === false, "the image-steered turn to settle");
+    const replies = (await getBot(created.id)).messages.filter((m: any) => m.role === "bot" && m.kind === "text" && m.text.startsWith("reply to:"));
+    expect(replies).toHaveLength(1);
+    expect(replies[0].text).toContain("steered: [image image/png steered pixels] look at this");
+  }, 40_000);
+
+  it("a room steer carries a pasted image into the running Claude member turn", async () => {
+    rmSync(steerFinishGate, { force: true });
+    rmSync(toolResultGate, { force: true });
+    const created = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "claudeSteer", model: "claude-fake" } });
+    const room = (await api("POST", "/api/groups", {
+      name: "Image steer room",
+      memberIds: [created.id],
+      setup: { bulletin: "", defaultResponder: { kind: "member", botId: created.id } },
+    })).body.group;
+    const getGroup = async () =>
+      (await api("GET", "/api/bots?messages=60")).body.groups.find((g: any) => g.id === room.id);
+    const imagePath = join(home, ".openmausbot", "attachments", "123e4567-e89b-42d3-a456-426614174012.png");
+    mkdirSync(dirname(imagePath), { recursive: true });
+    writeFileSync(imagePath, "room pixels");
+    try {
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "first room turn" })).status).toBe(202);
+      await waitFor(async () => (await getGroup())?.messages.some((m: any) => m.kind === "activity" && m.tool?.name === "Bash"), "the room tool chip");
+      const imageText = `check the screenshot\n\n<attached-image path="${imagePath}" name="room.png" />`;
+      const queued = await api("POST", `/api/groups/${room.id}/messages`, { text: imageText });
+      expect(queued.body).toMatchObject({ ok: true, queued: true });
+      const steered = await api("POST", `/api/groups/${room.id}/queue/${queued.body.queueId}/steer`, { threadId: room.threadId });
+      expect(steered.body).toMatchObject({ ok: true, steered: true });
+      expect((await getGroup())?.messages.find((m: any) => m.text === imageText)?.steered).toBe(true);
+      const aliases = JSON.parse(readFileSync(join(home, ".openmausbot", "room-runtime-aliases.json"), "utf8"));
+      const runtimeId = aliases.find(([, owner]: [string, { threadId: string; botId: string }]) => owner.threadId === room.threadId && owner.botId === created.id)?.[0];
+      const outgoing = readFileSync(join(home, ".openmausbot", "native", `${runtimeId}.ndjson`), "utf8")
+        .trim().split("\n").map((line) => JSON.parse(line))
+        .filter((row) => row.dir === "out" && row.source === "claude.sdk.message").at(-1)?.msg;
+      expect(outgoing.message.content[0]).toEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: "[image data: 16 base64 chars]" } });
+      expect(outgoing.message.content.at(-1).text).toContain("check the screenshot");
+      expect((await getGroup())?.messages.some((m: any) => m.tool?.name?.startsWith("image not delivered"))).toBe(false);
+    } finally {
+      writeFileSync(steerFinishGate, "finish");
+    }
+    await waitFor(async () => (await getGroup())?.working === false, "the image-steered room turn to settle");
+    const reply = (await getGroup())?.messages.find((m: any) => m.role === "bot" && m.kind === "text" && m.text.startsWith("reply to:"));
+    expect(reply?.text).toContain("[image image/png room pixels]");
+  }, 40_000);
+
   // Unskipped 2026-09-16: the first CI run on the PR head (bbed1455, run
   // 35044994016) passed this test on all three OS legs, so the quarantine
   // condition (CI green) is met. The local failure stays recorded: the DELETE 503 is
