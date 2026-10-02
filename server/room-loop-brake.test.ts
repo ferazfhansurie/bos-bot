@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BOT_RUN, isBareAck, isRoomStopCommand, trailingBotReplies } from "./room-loop-brake.ts";
+import { MAX_BOT_RUN, deferMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback, trailingBotReplies } from "./room-loop-brake.ts";
 
 describe("room loop brake", () => {
   it("recognises a bare stop and nothing longer", () => {
@@ -25,5 +25,18 @@ describe("room loop brake", () => {
     expect(trailingBotReplies([user, bot, bot, bot])).toBe(MAX_BOT_RUN);
     expect(trailingBotReplies([bot, bot, user])).toBe(0);
     expect(trailingBotReplies([user, bot, { role: "user", kind: "text", text: "scripted", via: "api" }, bot])).toBe(2);
+  });
+
+  it("calls back one member mentioned after it already spoke, once per chain", () => {
+    const spoken = new Set(["bos", "dev"]);
+    expect(takeMentionCallback(spoken)).toBeNull();
+    deferMentionCallback(spoken, "bos", 2);
+    deferMentionCallback(spoken, "dev", 3);
+    expect(takeMentionCallback(spoken)).toEqual({ botId: "bos", hop: 2 });
+    expect(takeMentionCallback(spoken)).toBeNull();
+    // bos tagging dev back after its callback never starts a ping-pong.
+    deferMentionCallback(spoken, "dev", 3);
+    expect(takeMentionCallback(spoken)).toBeNull();
+    expect(takeMentionCallback(new Set(["bos"]))).toBeNull();
   });
 });

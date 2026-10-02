@@ -307,14 +307,17 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect((await api("DELETE",`/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(200);
     await api("POST",`/api/groups/${room.id}/interrupt`,{});
   });
-  it("brakes reciprocal bot mentions after one hop even when both members are always responders", async () => {
+  it("brakes reciprocal bot mentions after one callback even when both members are always responders", async () => {
     const a=await createBot("LoopA","loopA"); const b=await createBot("LoopB","loopB");
     const room=(await api("POST","/api/groups",{name:"Loop brake",memberIds:[a.id,b.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
     await api("PATCH",`/api/groups/${room.id}`,{memberReplyModes:{[a.id]:"always",[b.id]:"always"}});
     await api("POST",`/api/groups/${room.id}/messages`,{text:"@LoopA start"});
     await wait(async()=>!(await snapshot(room.id)).working);
     const messages=(await snapshot(room.id)).messages;
-    expect(messages.filter((m:any)=>m.role==="bot"&&m.kind==="text").map((m:any)=>m.from.botId).sort()).toEqual([a.id,b.id].sort());
+    // Both answer, the one tagged back gets exactly one callback, then the chain stops.
+    const speakers=messages.filter((m:any)=>m.role==="bot"&&m.kind==="text").map((m:any)=>m.from.botId);
+    expect(speakers).toHaveLength(3);
+    expect(new Set(speakers)).toEqual(new Set([a.id,b.id]));
   });
   it("publishes canonical room events with distinct member lane attribution", async () => {
     const a=await createBot("StreamA","quick"); const b=await createBot("StreamB","quick");

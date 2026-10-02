@@ -54,3 +54,26 @@ export function trailingBotReplies(messages: readonly BrakeMessage[]): number {
   }
   return count;
 }
+
+/** Mentions of members who already spoke in a chain, keyed by that chain's
+ * `spoken` set. A chain gets one callback at most, so two bots tagging each
+ * other still stop after a single reply back instead of ping-ponging. */
+const mentionCallbacks = new WeakMap<Set<string>, { pending: Map<string, number>; done: Set<string> }>();
+
+export function deferMentionCallback(spoken: Set<string>, botId: string, hop: number): void {
+  let entry = mentionCallbacks.get(spoken);
+  if (!entry) mentionCallbacks.set(spoken, entry = { pending: new Map(), done: new Set() });
+  if (entry.done.size || entry.pending.size) return;
+  entry.pending.set(botId, hop);
+}
+
+/** Next deferred callback for a settled chain, marked done so it never repeats. */
+export function takeMentionCallback(spoken: Set<string>): { botId: string; hop: number } | null {
+  const entry = mentionCallbacks.get(spoken);
+  const next = entry?.pending.entries().next();
+  if (!entry || !next || next.done) return null;
+  const [botId, hop] = next.value;
+  entry.pending.delete(botId);
+  entry.done.add(botId);
+  return { botId, hop };
+}

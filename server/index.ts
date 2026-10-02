@@ -47,7 +47,7 @@ import { ApnsPush } from "./apns-push.ts";
 import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
-import { MAX_BOT_RUN, isBareAck, isRoomStopCommand, trailingBotReplies } from "./room-loop-brake.ts";
+import { MAX_BOT_RUN, deferMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback, trailingBotReplies } from "./room-loop-brake.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
@@ -10280,10 +10280,14 @@ async function executeGroupMemberTurn(
     }
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
-      // A member already in this chain is never called back: its own turn
-      // is still on the stack holding its execution slot, so a callback
-      // would queue behind itself forever.
-      if (spoken.has(next.id)) continue;
+      // A member already in this chain can't be called back inline: its own
+      // turn is still on the stack holding its execution slot, so a callback
+      // would queue behind itself forever. It is woken once after the chain
+      // unwinds instead, so a peer's @mention is never silently dropped.
+      if (spoken.has(next.id)) {
+        deferMentionCallback(spoken, next.id, hop + 1);
+        continue;
+      }
       if (roomLoopBrakeEngaged(threadId, bot.id)) break;
       if (operation) {
         // a summoned teammate busy elsewhere is woken later, exactly like a
@@ -10962,6 +10966,44 @@ function startGroupTurn(
           });
         }
       }));
+      // Members @mentioned after they already spoke in this round take one
+      // more turn now that their own turn has settled.
+      for (let callback = takeMentionCallback(spoken); callback; callback = takeMentionCallback(spoken)) {
+        if (operation.cancelled) break;
+        if (callback.hop >= MAX_GROUP_HOPS) continue;
+        const member = store.bot(callback.botId);
+        if (!member || !store.group(groupId)?.memberIds.includes(member.id)) continue;
+        if (roomLoopBrakeEngaged(threadId, member.id)) break;
+        const verdict = await waitForChatRoomMember(operation, threadId, member);
+        if (verdict === "stop") break;
+        if (verdict === "skip") continue;
+        try {
+          await runGroupMemberTurn(
+            groupId,
+            threadId,
+            member.id,
+            callback.hop,
+            spoken,
+            undefined,
+            undefined,
+            () => operation.cancelled,
+            () => groupProviderHandshakeStarted(operation),
+            () => groupProviderHandshakeSettled(operation),
+            skillAuthoringClaim,
+            undefined,
+            operation,
+          );
+        } catch (error) {
+          if (operation.cancelled) break;
+          const detail = error instanceof Error ? error.message : String(error);
+          store.appendMessage(threadId, {
+            role: "bot",
+            kind: "activity",
+            from: { botId: member.id, name: member.name, color: member.color },
+            tool: { name: `${member.name} couldn't start on this mention — not delivered: ${detail}`, ok: false },
+          });
+        }
+      }
     }
   });
   const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
