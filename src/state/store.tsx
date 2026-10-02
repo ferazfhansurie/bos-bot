@@ -368,6 +368,7 @@ export interface Bot {
   /** Where this bot works: a computer, only the built-in browser tab, or
    * nowhere; unset = auto (cloud box if one exists, else local). */
   computer?: "cloud" | "vm" | "local" | "browser" | "off";
+  sharedWorkComputer?: { id: string; name: string };
   /** Which cloud computer backs `computer: "cloud"`; absent means Box. */
   cloudBackend?: CloudBackend;
   /** Allow Auto to prepare/start the managed VPS container. Off by default. */
@@ -1521,7 +1522,7 @@ export function reducer(state: AppState, action: Action): AppState {
         // The slim deletion broadcast can arrive before the full snapshot.
         // Finish that switch once, replaying any events received in between.
         // Later duplicate HTTP snapshots must not overwrite newer messages.
-        return reducer(switching, { type: "taskSwitched", bot: { ...before, ...action.bot, computer: action.bot.computer, section: action.bot.section, messages: action.bot.messages, browserProfile: action.bot.browserProfile } });
+        return reducer(switching, { type: "taskSwitched", bot: { ...before, ...action.bot, computer: action.bot.computer, sharedWorkComputer: action.bot.sharedWorkComputer, section: action.bot.section, messages: action.bot.messages, browserProfile: action.bot.browserProfile } });
       }
       const openingRemoteThread = switchedThread && Boolean(before.remote) && before.threadId.includes("-pending-");
       const openingMessages = openingRemoteThread ? before.messages.filter(message => message.id.startsWith("optimistic-")) : [];
@@ -1538,6 +1539,7 @@ export function reducer(state: AppState, action: Action): AppState {
         // Resetting Works on to Auto removes the field from the complete
         // server frame; merging alone would keep the old target highlighted.
         computer: action.bot.computer,
+        sharedWorkComputer: action.bot.sharedWorkComputer,
         // A complete frame omits section after another client moves the bot
         // into General. Retaining the old label strands an empty team in UI.
         section: action.bot.section,
@@ -2041,6 +2043,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...bot,
         ...action.bot,
         computer: action.bot.computer,
+        sharedWorkComputer: action.bot.sharedWorkComputer,
         messages: action.bot.messages ?? [],
         // The snapshot decides whether this thread has scrollback. Merging
         // would carry the previous thread's answer onto a new one.

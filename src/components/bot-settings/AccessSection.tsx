@@ -175,6 +175,41 @@ function McpServersCard({ bot, patch }: { bot: Bot; patch: (patch: { mcpServers:
   );
 }
 
+function SharedWorkComputer({ bot }: { bot: Bot }) {
+  const [computers, setComputers] = useState<Array<{ id: string; name: string; terminal: boolean }>>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void api<{ computers: Array<{ id: string; name: string; terminal: boolean }> }>(`/api/work-computers?botId=${encodeURIComponent(bot.id)}`)
+      .then(result => { if (!cancelled) setComputers(result.computers.filter(computer => computer.terminal)); })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
+  }, [bot.id]);
+  const saved = bot.sharedWorkComputer;
+  const online = saved && computers.some(computer => computer.id === saved.id);
+  if (!saved && !computers.length && !error) return null;
+  const save = async (id: string) => {
+    const selected = computers.find(computer => computer.id === id);
+    setSaving(true); setError(null);
+    try {
+      await api(`/api/bots/${bot.id}`, { method: "PATCH", body: JSON.stringify({ sharedWorkComputer: selected ? { id: selected.id, name: selected.name } : null }) });
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setSaving(false); }
+  };
+  return <div className="rounded-xl bg-card p-4">
+    <div className="text-[15px] font-medium text-ink">Work computer</div>
+    <div className="mt-1 text-[13px] text-ink-secondary">Run this bot’s terminal and file work on a connected computer.</div>
+    <select aria-label="Default work computer" className={cn(inputCls, "mt-3")} disabled={saving || bot.busy} value={saved?.id ?? ""} onChange={event => void save(event.target.value)}>
+      <option value="">Follow Works on</option>
+      {saved && !online && <option value={saved.id}>{saved.name} — offline</option>}
+      {computers.map(computer => <option key={computer.id} value={computer.id}>{computer.name}</option>)}
+    </select>
+    {saved && <div className="mt-2 text-[12px] text-ink-secondary">{online ? "Connected." : "Offline — work pauses."} This bot’s terminal and files stay on {saved.name}; this Mac’s terminal and files are disabled.</div>}
+    {error && <div role="alert" className="mt-2 text-[12px] text-red-400">{error}</div>}
+  </div>;
+}
+
 export function AccessSection({
   bot,
   derived,
@@ -224,6 +259,7 @@ export function AccessSection({
 
   return (
     <div className="flex flex-col gap-4">
+      <SharedWorkComputer bot={bot} />
       <div className="rounded-xl bg-card p-4">
         <div className="text-[15px] font-medium text-ink">Works on</div>
         <div className="mt-0.5 text-[13px] text-ink-secondary">
@@ -240,7 +276,7 @@ export function AccessSection({
           ] as const).map(([mode, label], i) => (
             <button
               key={mode ?? "auto"}
-              disabled={(mode === "local" && !localSelectable) || (mode === "browser" && !browserSelectable)}
+              disabled={Boolean(bot.sharedWorkComputer) || (mode === "local" && !localSelectable) || (mode === "browser" && !browserSelectable)}
               title={
                 mode === "local" && !localSelectable
                   ? localDisabledReason ?? undefined
@@ -310,7 +346,7 @@ export function AccessSection({
         )}
       </div>
 
-      <WorkingFolder bot={bot} />
+      {!bot.sharedWorkComputer && <WorkingFolder bot={bot} />}
 
       <div className="rounded-xl bg-card p-4">
         <div className="flex items-center justify-between gap-4">

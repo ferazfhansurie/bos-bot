@@ -111,6 +111,8 @@ export interface SendTurnInput {
    * host files, private native sessions, configuration instructions and tools.
    * Unsupported adapters must reject before launching a provider turn. */
   sharedContext?: { mode: "conversation-only" };
+  /** Native host work tools are forbidden; only the harness agents transport is mounted. */
+  remoteWork?: { computerId: string };
   /** Per-bot approval policy, reasserted by providers on every turn so a
    * resumed native session cannot retain a stale, more permissive mode. */
   approvalMode?: ApprovalMode;
@@ -246,6 +248,8 @@ export interface ProviderAdapter {
     /** Supports the enforced sharedContext policy. Absent/false must fail
      * closed at dispatch; prompt instructions alone do not qualify. */
     sharedContextIsolation?: boolean;
+    /** Enforces native host tool/config restrictions for remoteWork turns. */
+    remoteWorkIsolation?: boolean;
     /** True when the driver mounts turn.integrations.agents as MCP tools —
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */

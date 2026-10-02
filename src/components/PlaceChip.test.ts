@@ -66,3 +66,15 @@ describe("PlaceChip composer trigger", () => {
     expect(html).not.toMatch(/<span class="truncate">This computer<\/span>/);
   });
 });
+
+
+it("shows the saved work computer instead of a native Mac pin", () => {
+  const html = renderToStaticMarkup(createElement(PlaceChip, {
+    bot: { ...bot, sharedWorkComputer: { id: "134b9a68-9d6d-4653-915a-8e63a03d27f4", name: "Laptop" } },
+    task: { surface: "local" }, live: false, onPin: () => {},
+  } satisfies ComponentProps<typeof PlaceChip>));
+  expect(html).toContain('aria-label="Work computer: Laptop"');
+  expect(html).toContain("Offline work pauses");
+  expect(html).not.toContain("aria-haspopup");
+  expect(html).not.toContain("Where this conversation works: This computer");
+});

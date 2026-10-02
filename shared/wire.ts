@@ -213,6 +213,8 @@ export interface WireBot {
   modelSelection: ModelSelection;
   /** where the bot works ("Works on"). Unset = auto. */
   computer?: Surface | "off";
+  /** Explicit shared worker identity. Overrides local surface selection; never falls back. */
+  sharedWorkComputer?: { id: string; name: string };
   /** Which cloud computer backs computer: "cloud"; absent means Box. */
   cloudBackend?: CloudBackend;
   /** Auto mode may prepare/start this bot's managed VPS container. */

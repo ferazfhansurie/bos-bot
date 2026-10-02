@@ -1077,6 +1077,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     const retryState = new Map<string, { attempt: number; cancelled: boolean; rebuilt?: boolean }>();
 
     const sendTurn = async (turn: SendTurnInput, logicalTurnId?: string) => {
+      const remoteWork = turn.remoteWork !== undefined;
+      if (remoteWork) {
+        if (!cliVersionChecked) {
+          cliVersion = parseClaudeCliVersion(await readCliVersion(environment()) ?? "");
+          cliVersionChecked = true;
+        }
+        if (!cliVersion || !versionAtLeast(cliVersion, [2, 1, 280])) throw new Error("Remote work requires verified Claude Code 2.1.280 or newer; no turn was sent.");
+        if (!turn.integrations?.agents) throw new Error("Remote work requires its harness transport; native Mac tools will not be substituted.");
+        turn = { ...turn, integrations: { agents: turn.integrations.agents }, mcpFromUserConfig: false };
+      }
       const shared = turn.sharedContext !== undefined;
       if (shared) {
         if (turn.sharedContext?.mode !== "conversation-only") throw new Error("Unsupported shared conversation policy.");
@@ -1153,6 +1163,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       ];
       if (shared) args.push("--tools", "", "--restricted", "--safe-mode", "--strict-mcp-config",
         "--setting-sources", "", "--disable-slash-commands", "--no-chrome", "--no-session-persistence");
+      else if (remoteWork) args.push("--tools", "", "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands", "--no-chrome");
       else if (config.tools !== undefined) args.push("--tools", config.tools.join(","));
       if (config.disallowedTools?.length) {
         args.push("--disallowedTools", config.disallowedTools.join(","));
@@ -1166,7 +1177,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         }
       }
       const isolated = !inheritsUserConfig(turnEnvironment);
-      if (isolated && !shared) {
+      if (isolated && !shared && !remoteWork) {
         // A bot gets the tools and instructions its owner gave it, not
         // whatever this machine's Claude Code happens to be set up with.
         // Without these the CLI silently adds, to EVERY turn of every bot:
@@ -1278,7 +1289,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // of MCP servers, so a server the bot's OWN project declares would
       // otherwise vanish with the machine's. Merge it last: a project file
       // can add servers but never shadow a harness-owned mount.
-      if (isolated && turn.cwd && !shared) {
+      if (isolated && turn.cwd && !shared && !remoteWork) {
         for (const [name, server] of Object.entries(projectMcpServers(turn.cwd))) {
           if (Object.hasOwn(mcpServers, name)) continue;
           mcpServers[name] = server;
@@ -1343,6 +1354,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       }
       const settings: Record<string, unknown> = { ...authSettings };
       if (hooks) settings.hooks = claudeHookSettings(HOOK_HELPER_PATH);
+      if (remoteWork) settings.disableAllHooks = true;
       const authSettingsPath = mcpConfigPath && Object.keys(settings).length
         ? join(dirname(mcpConfigPath), "auth-settings.json") : null;
       if (authSettingsPath) args.push("--settings", authSettingsPath);
@@ -2072,6 +2084,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         capabilities: {
           sessionModelSwitch: "in-session",
           sharedContextIsolation: true,
+          remoteWorkIsolation: true,
           agentsMcp: true,
         customMcp: true,
           computerMcp: true,

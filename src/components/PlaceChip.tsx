@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { Check, Monitor } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { browserAvailable, builtInBrowserEnabled } from "@/lib/feature-flags";
@@ -63,6 +63,15 @@ export function PlaceChip({ bot, task, live, disabled = false, onPin }: {
 
   const choose = (surface: Place | null) => { setOpen(false); if (surface !== (task?.surface ?? null)) onPin(surface); };
   const botDefault = bot.computer ?? "auto";
+  if (bot.sharedWorkComputer) return (
+    <span className="relative flex items-center gap-1.5 rounded-full px-2 text-[12px] text-ink-secondary"
+      aria-label={`Work computer: ${bot.sharedWorkComputer.name}`}
+      title={`Terminal and files on ${bot.sharedWorkComputer.name}. Offline work pauses. Change the default in this bot’s settings.`}>
+      <Monitor size={16} aria-hidden="true" />
+      <span className="max-w-32 truncate">{bot.sharedWorkComputer.name}</span>
+      {live && <span className="size-1.5 animate-pulse rounded-full bg-success" />}
+    </span>
+  );
 
   return (
     <div className="relative flex items-center" ref={wrapperRef}>

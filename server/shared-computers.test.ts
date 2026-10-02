@@ -85,3 +85,33 @@ it("shared screen calls respect local turns, human takeover, lease expiry and re
   resources.release(local); control.acquire("remote"); control.close();
   expect(resources.claim("computer:host", local)).toBe(true);
 });
+
+
+describe("bot-scoped shared computer grants", () => {
+  it("hides restricted computers and refuses unauthenticated or other bots", async () => {
+    const broker = new SharedComputers(() => true);
+    const bot = randomUUID(), other = randomUUID();
+    const computer = { ...registration(), allowedBotIds: [bot] };
+    broker.register(computer, "owner", secret);
+    expect(broker.list(bot)).toEqual([computer]);
+    expect(broker.list(other)).toEqual([]);
+    for (const caller of [undefined, other]) {
+      await expect(broker.request({ computer_id: computer.id, action: "list_files" }, () => true, caller)).rejects.toMatchObject({ status: 403 });
+    }
+    broker.close();
+  });
+  it("revoking a bot invalidates its delivered lease without replay", async () => {
+    const broker = new SharedComputers(() => true);
+    const bot = randomUUID(), other = randomUUID();
+    const computer = { ...registration(), allowedBotIds: [bot] };
+    broker.register(computer, "owner", secret);
+    const result = broker.request({ computer_id: computer.id, action: "list_files" }, () => true, bot);
+    const rejection = expect(result).rejects.toThrow(/turn ended/);
+    const job = await broker.poll(computer.id, "owner", secret);
+    broker.register({ ...computer, allowedBotIds: [other] }, "owner", secret);
+    expect(broker.liveJob(computer.id, "owner", secret, job!.id)).toBe(false);
+    broker.complete(computer.id, "owner", secret, job!.id, {});
+    await rejection;
+    broker.close();
+  });
+});

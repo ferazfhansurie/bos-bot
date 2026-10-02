@@ -383,3 +383,16 @@ describe("source-home remote approval", () => {
     });
   }
 });
+
+
+it("routes a saved work computer through reviewed Chief setup without creating grants", async () => {
+  const h = harness();
+  const target = { id: "134b9a68-9d6d-4653-915a-8e63a03d27f4", name: "Laptop" };
+  const request = h.propose([{ action: "update", botId: h.peer.id, fields: { sharedWorkComputer: target } }]);
+  expect(h.messages[0].card?.teamSetupRequest?.operations[0].fields.sharedWorkComputer).toEqual(target);
+  expect(h.messages[0].card?.subtitle).toContain("no grants are created");
+  expect(h.peer.sharedWorkComputer).toBeUndefined();
+  await h.resolve(request.requestId);
+  expect(h.peer.sharedWorkComputer).toEqual(target);
+  expect(h.validateChange).toHaveBeenCalled();
+});

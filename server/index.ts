@@ -22,6 +22,7 @@ import { draftSummary, foldPoint } from "./compaction-summary.ts";
 import { compactBudget, contextWindowFor, shouldCompact } from "./context-budget.ts";
 import { autoCompactWindow } from "./drivers/claude.ts";
 import { SharedComputers, sharedComputerOperation, sharedComputerRegistration } from "./shared-computers.ts";
+import { admitSharedWorkComputer, assertSharedWorkComputerOperation, sharedWorkComputerSchema } from "./shared-work-computer.ts";
 import { MultiplayerActors } from "./multiplayer-actors.ts";
 import { PeerThreads, type PeerThread } from "./peer-threads.ts";
 import { peerEvent } from "./peer-events.ts";
@@ -4210,7 +4211,7 @@ const LOCAL_VM_IDLE_MS = 8 * 60 * 60_000;
 const LOCAL_VM_DESKTOP_WAIT_MS = 90_000;
 const localVmIdles = new Map<string, LocalVmIdleTimer>();
 
-function inheritedTeamComputer(bot: Pick<BotRecord, "section" | "computer" | "cloudBackend">): TeamComputerRecord | undefined {
+function inheritedTeamComputer(bot: Pick<BotRecord, "section" | "computer" | "cloudBackend" | "sharedWorkComputer">): TeamComputerRecord | undefined {
   return teamComputers.forBot(bot);
 }
 
@@ -6945,8 +6946,9 @@ async function startTurn(
     throw Object.assign(new Error("shared conversation access has ended"), { status: 403 });
   }
   const sharedContext = sharedBotTasks.hasThread(threadId) || peerThreads.hasThread(threadId);
+  if (sharedContext && projectedBot.sharedWorkComputer) throw Object.assign(new Error("This bot is pinned to a private work computer. Shared conversations pause rather than use native host tools."), { status: 409 });
   const bot = sharedContext ? { ...projectedBot, soul: "", description: "", section: undefined,
-    chiefOfStaff: false, computer: "off" as const, browser: false, composio: false,
+    chiefOfStaff: false, computer: "off" as const, sharedWorkComputer: undefined, browser: false, composio: false,
     mcpServers: [], playbooks: [], approvalMode: "ask" as const, autoApprove: false, alwaysAllow: [] } : projectedBot;
   // Routines and legacy peer delivery already have their own completion
   // owners. Only ordinary chats opt into this scheduler; its child turns
@@ -6994,7 +6996,7 @@ async function startTurn(
   }
   const task = store.taskByThread(bot.id, threadId);
   if (!task) throw Object.assign(new Error("no such task"), { status: 404 });
-  const plan = turnSurfacePlan(bot, opts?.runOn, threadId);
+  const plan = bot.sharedWorkComputer ? { computer: "off" as const, browser: false, pinned: null, clearPin: false, note: "Shared work computer selected; native Mac tools are disabled." } : turnSurfacePlan(bot, opts?.runOn, threadId);
   const instance = turnInstance(bot, opts?.runOn, threadId);
   if (!instance) {
     throw Object.assign(
@@ -7009,6 +7011,10 @@ async function startTurn(
   if (sharedContext && instance.adapter.capabilities.sharedContextIsolation !== true) {
     throw Object.assign(new Error("this provider cannot safely answer shared conversations yet; choose a supported provider for this bot"), { status: 409 });
   }
+  const sharedWork = bot.sharedWorkComputer ? admitSharedWorkComputer(bot.sharedWorkComputer,
+    sharedComputers.list(bot.id), sharedComputersEnabled(cfg), instance.adapter.capabilities.remoteWorkIsolation === true &&
+      instance.adapter.capabilities.agentsMcp === true && (opts?.commsDepth ?? 0) < MAX_COMMS_DEPTH) : undefined;
+  if (sharedWork && opts?.runOn === "cloud") throw Object.assign(new Error("This bot is pinned to its shared work computer; cloud execution is not a fallback."), { status: 409 });
   // Resolve only transport tags from this newly submitted text. The original
   // string remains the durable message. Native-image providers get a
   // path-free prompt and bounded inputs instead of needing a Read tool;
@@ -7114,7 +7120,7 @@ async function startTurn(
   directTurnBots.set(threadId, bot);
   beginInternalCapabilityGeneration(threadId, dispatchClaimId);
   if (!opts?.computerSelectionContinuation && !opts?.cardContinuation && !opts?.automationSource && !opts?.unattended &&
-      !opts?.commsDepth && !opts?.coordination && !inheritedTeamComputer(bot) && bot.computer !== "off" && agentsMounted) {
+      !opts?.commsDepth && !opts?.coordination && !inheritedTeamComputer(bot) && !sharedWork && bot.computer !== "off" && agentsMounted) {
     const source = store.activePath(threadId).findLast(message => message.id === userMessage?.id && message.role === "user" && !message.peerAsk);
     if (source) computerSelectionTurns.set(threadId, { generation: dispatchClaimId, botId: bot.id, source, text });
   }
@@ -7295,7 +7301,7 @@ async function startTurn(
 
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       let browser: Awaited<ReturnType<typeof browserIntegration>> = null;
-      const selectedSkills = sharedContext ? [] : selectBundledSkills(
+      const selectedSkills = sharedContext || sharedWork ? [] : selectBundledSkills(
         providerText,
         [
           ...(instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : []),
@@ -7311,14 +7317,14 @@ async function startTurn(
       // them — a key in the config says the connections exist, not that
       // this engine can reach them — and only to a bot the user has not
       // switched off: the key is workspace-wide, the grant is per bot.
-      if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
+      if (!sharedWork && bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
         const connection = await connectedAppsIntegration(bot.id, threadId, dispatchClaimId);
         if (connection) integrations.composio = connection;
       }
       // user-configured MCP servers (config.json mcpServers): same rule as
       // composio — only to a driver that can mount them. Their tools are
       // never pre-allowed, so every call rides the normal permission flow.
-      if (!sharedContext && instance.adapter.capabilities.customMcp === true) {
+      if (!sharedContext && !sharedWork && instance.adapter.capabilities.customMcp === true) {
         const custom = customMcpServers(cfg, bot.mcpServers);
         if (Object.keys(custom).length) integrations.custom = custom;
       }
@@ -7326,7 +7332,7 @@ async function startTurn(
       // than the user's home: a bot with file tools and acceptEdits gets a
       // desk, not the whole house — and the workspace is where its
       // MEMORY.md lives. API/box engines have no local filesystem story.
-      const worksInWorkspace = supportsWorkspaceFiles(instance.driverKind);
+      const worksInWorkspace = !sharedWork && supportsWorkspaceFiles(instance.driverKind);
       if (worksInWorkspace && !sharedContext) {
         ensureWorkspace(bot.id);
         // baseline for the journal's turn-boundary diff (see the bus hook)
@@ -7710,7 +7716,7 @@ async function startTurn(
         const ownThreadCreation = boundedCoordination && !opts?.coordination && Boolean(origin && !origin.peerAsk);
         integrations.agents = agentsIntegration(bot.id, threadId, commsDepth, skillAuthoring, dispatchClaimId, opts?.coordination?.id, boundedCoordination, ownThreadCreation);
       }
-      if (instance.adapter.capabilities.hooks === true && hooksEnabled()) {
+      if (!sharedWork && instance.adapter.capabilities.hooks === true && hooksEnabled()) {
         integrations.hooks = hooksIntegration(bot.id, threadId, dispatchClaimId);
       }
       // @mentions in the user's message (the composer's tagging UI) become
@@ -7850,6 +7856,7 @@ async function startTurn(
         { id: "files", label: "File locations", text: !sharedContext && worksInWorkspace && opts?.runOn !== "cloud" ? workspaceLocationsPrompt(bot.id, cwd, liveBot?.cwd ?? bot.cwd) : "" },
         { id: "computer", label: "Computer", text: computerPrompt(computerPromptKind) },
         { id: "team-computer", label: "Team computer", text: teamComputerPrompt(teamComputer) },
+        { id: "shared-work", label: "Work computer", text: sharedWork ? `Your work computer is ${sharedWork.name}, id ${sharedWork.id}. Native Mac shell and filesystem tools are disabled. Use list_shared_computers and shared_computer for all work. If unavailable, pause; never substitute this Mac. The AI and conversation remain here.` : "" },
         { id: "plan", label: "Surface", text: surfacePrompt({ computer: mountedComputer, browser: Boolean(integrations.browser) }, { pinned: plan.pinned, note: plan.note, canSelect: computerSelectionTurns.has(threadId) }) },
         // gated on the integration, not the key: the hint only goes to a
         // bot whose driver actually mounted the tools
@@ -7906,6 +7913,14 @@ async function startTurn(
       }
       opts?.requestGuard?.();
       opts?.dispatchGuard?.();
+      if (sharedWork) {
+        assertSharedWorkComputerOperation(sharedWork, store.bot(bot.id)?.sharedWorkComputer, sharedWork.id);
+        admitSharedWorkComputer(sharedWork, sharedComputers.list(bot.id), sharedComputersEnabled(cfg), true);
+        const agents = integrations.agents;
+        if (!agents) throw new Error("The shared work transport is unavailable; native tools will not be substituted.");
+        for (const key of Object.keys(integrations) as (keyof typeof integrations)[]) delete integrations[key];
+        integrations.agents = agents;
+      }
       // Before sendTurn: an adapter may emit the whole turn before it resolves.
       handoffs.dispatching(threadId, dispatchClaimId, dispatchContext.handoff);
       // Commit authority before invoking an adapter: it may perform effects or
@@ -7916,6 +7931,7 @@ async function startTurn(
       const dispatch = await guardTurnDispatch(instance.adapter.sendTurn({
         threadId,
         ...(sharedContext ? { sharedContext: { mode: "conversation-only" as const } } : {}),
+        ...(sharedWork ? { remoteWork: { computerId: sharedWork.id } } : {}),
         botId: bot.id,
         text: dispatchContext.turnText,
         refreshSystemPrompt: true,
@@ -8727,7 +8743,13 @@ const teamSetupOptions: TeamSetupOptions = {
     if (result.state !== "applied" || result.result?.state !== "applied") throw new Error(`Remote outcome is ${result.state ?? "unknown"}; retain receipt ${result.requestId ?? request.requestId} and do not repeat.`);
     return result.result;
   },
-  validateChange: (before, fields) => assertTeamComputerChangeIdle(before, { ...before, ...fields }),
+  validateChange: (before, fields) => {
+    assertTeamComputerChangeIdle(before, { ...before, ...fields });
+    if (fields.sharedWorkComputer) {
+      if (botHasActiveTurn(before.id)) throw new TeamSetupError("Wait for the bot's turn before changing its work computer", 409);
+      admitSharedWorkComputer(fields.sharedWorkComputer, sharedComputers.list(before.id), sharedComputersEnabled(cfg), true);
+    }
+  },
   ownsThread: (botId, threadId) => Boolean(connectorThread(botId, threadId)),
   targetBusy: (botId, sourceThreadId) => {
     if (!sourceThreadId) return Boolean(store.bot(botId)?.busy || hasDirectDispatch(botId) || activeGroupTurnForBot(botId) || routines?.activeRunForBot(botId));
@@ -9314,6 +9336,10 @@ async function runGroupMemberTurn(
     ? group.threadId === threadId
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
   if (!group || !bot || !ownsThread) return false;
+  if (bot.sharedWorkComputer) {
+    onDispatchError?.("This bot is pinned to a shared work computer. Room dispatch is not supported for that destination yet; no Mac tools were started.");
+    return false;
+  }
   if (turnRecoveryBlocker(privateTurnDispatches.all(), { threadId })) {
     onDispatchError?.("Review the interrupted request in this conversation before continuing; its outcome is unknown.");
     return false;
@@ -13462,6 +13488,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     // ── internal peer-agent comms (localhost + bot capability only) ───
     // The agents-proxy (spawned inside a bot's agent process) calls these to
+    if (method === "GET" && path === "/api/work-computers") {
+      const botId = url.searchParams.get("botId") ?? undefined;
+      return json(res, 200, { computers: sharedComputersEnabled(cfg) ? sharedComputers.list(botId).map(({ allowedBotIds: _grants, ...entry }) => entry) : [] });
+    }
+
     // discover peers and hand a message to one. Not part of the public API.
     if (path.startsWith("/api/internal/")) {
       const internalCapability = authorizedInternalCapability(req.headers.authorization);
@@ -13624,12 +13655,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       // Off by default: both fall through to the same "unknown internal
       // endpoint" 404 a never-implemented route returns.
-      if (method === "GET" && path === "/api/internal/shared-computers" && sharedComputersEnabled(cfg)) return json(res, 200, { computers: sharedComputers.list() });
+      if (method === "GET" && path === "/api/internal/shared-computers" && sharedComputersEnabled(cfg)) {
+        const pinned = directTurnBots.get(internalCapability.threadId)?.sharedWorkComputer;
+        return json(res, 200, { computers: sharedComputers.list(internalSender.id).filter(entry => !pinned || entry.id === pinned.id) });
+      }
       if (method === "POST" && path === "/api/internal/shared-computers" && sharedComputersEnabled(cfg)) {
         const parsed = sharedComputerOperation.safeParse(await readInternalBody());
         if (!sharedComputersEnabled(cfg)) return json(res, 404, { error: "unknown internal endpoint" });
         if (!parsed.success) return json(res, 400, { error: "Invalid shared computer operation" });
-        return json(res, 200, { result: await sharedComputers.request(parsed.data, () => sharedComputersEnabled(cfg) && internalCapabilityIsActive(internalCapability)) });
+        const pinned = directTurnBots.get(internalCapability.threadId)?.sharedWorkComputer;
+        if (pinned) assertSharedWorkComputerOperation(pinned, internalSender.sharedWorkComputer, parsed.data.computer_id);
+        return json(res, 200, { result: await sharedComputers.request(parsed.data, () => sharedComputersEnabled(cfg) && internalCapabilityIsActive(internalCapability) &&
+          (!pinned || store.bot(internalSender.id)?.sharedWorkComputer?.id === pinned.id), internalSender.id) });
       }
       if (method === "GET" && path === "/api/internal/agents") {
         const sender = internalSender;
@@ -13906,7 +13943,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, {
           teams: teamSetupTeams().filter((name) => canAccessTeam(chief, name)),
           bots: store.bots.filter((bot) => !bot.hidden && canAccessTeam(chief, bot.section) && (bot.id === chief.id || peerAllowed(chief, bot.id)))
-            .map((bot) => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section ?? "", modelSelection: bot.modelSelection })),
+            .map((bot) => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section ?? "", modelSelection: bot.modelSelection, sharedWorkComputer: bot.sharedWorkComputer,
+              availableWorkComputers: sharedComputersEnabled(cfg) ? sharedComputers.list(bot.id).filter(entry => entry.terminal).map(({ id, name }) => ({ id, name })) : [] })),
           instances: instances.map((instance) => ({ instanceId: instance.instanceId, driverKind: instance.driverKind, displayName: instance.displayName,
             state: instance.snapshot.state, models: instance.models, effortLevels: instance.capabilities?.effortLevels ?? [] })),
           scope: "Bot model defaults apply to groups and new threads; existing threads retain their models. Full Access applies requested team setup immediately; other modes return a review card. Existing unauthorized teams remain outside this Chief's scope.",
@@ -17120,6 +17158,17 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       for (const key of ["unread", "cloudBackend", "color", "mascotExpression", "mascotBody", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
+      }
+      if (Object.prototype.hasOwnProperty.call(body, "sharedWorkComputer")) {
+        if (!existingBot) return json(res, 404, { error: "no such bot" });
+        if (botHasActiveTurn(existingBot.id) || activeGroupTurnForBot(existingBot.id) || activeRoutineRunForThread(existingBot.threadId)) return json(res, 409, { error: "Wait for this bot's work to finish before changing its work computer." });
+        if (body.sharedWorkComputer === null) patch.sharedWorkComputer = undefined;
+        else {
+          const parsed = sharedWorkComputerSchema.safeParse(body.sharedWorkComputer);
+          if (!parsed.success) return json(res, 400, { error: "sharedWorkComputer requires a saved UUID and name." });
+          const selected = admitSharedWorkComputer(parsed.data, sharedComputers.list(existingBot.id), sharedComputersEnabled(cfg), true);
+          patch.sharedWorkComputer = selected;
+        }
       }
       const computerSpecified = Object.prototype.hasOwnProperty.call(body, "computer");
       let requestedComputer = existingBot?.computer;

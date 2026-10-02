@@ -1,3 +1,4 @@
+import { sharedWorkComputerSchema } from "./shared-work-computer.ts";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { newId, type ModelSelection } from "./contracts.ts";
@@ -10,6 +11,7 @@ import type { TeamSetupFields, TeamSetupOperation, TeamSetupRequest, TeamSetupRe
 const section = (value?: string) => value?.trim() || "";
 const teamName = z.string().trim().min(1).max(60).refine(fitsOnOneLine).refine((value) => redactSecretsInText(value) === value, "Team names cannot contain credentials");
 const fieldsSchema = z.object({
+  sharedWorkComputer: sharedWorkComputerSchema.optional(),
   name: z.string().optional(), title: z.string().optional(), description: z.string().optional(), soul: z.string().optional(),
   section: z.string().trim().max(60).refine(fitsOnOneLine).refine((value) => redactSecretsInText(value) === value, "Team names cannot contain credentials").optional(),
   modelSelection: z.object({ instanceId: z.string().trim().min(1), model: z.string().trim().min(1), effort: z.string().optional() }).strict().optional(),
@@ -35,7 +37,7 @@ export function teamSetupRevision(bot: BotRecord): string {
     hidden: Boolean(bot.hidden), chiefOfStaff: Boolean(bot.chiefOfStaff), peers: bot.peers,
     managedSections: bot.managedSections,
     approvalMode: bot.approvalMode, autoApprove: bot.autoApprove, approvalGrant: bot.approvalGrant,
-    receipt: bot.lastTeamSetupReceipt?.requestId,
+    receipt: bot.lastTeamSetupReceipt?.requestId, sharedWorkComputer: bot.sharedWorkComputer,
   })).digest("hex");
 }
 
@@ -85,12 +87,13 @@ export class TeamSetupRequestService {
   }
 
   private fields(input: z.infer<typeof fieldsSchema>, current?: BotRecord): TeamSetupFields {
-    const { section: targetSection, modelSelection, ...profile } = input;
+    const { section: targetSection, modelSelection, sharedWorkComputer, ...profile } = input;
     const safe = Object.fromEntries(Object.entries(profile).map(([key, value]) => [key, redactSecretsInText(value!)]));
     const parsed = parseBotProfilePatch(safe, true);
     if (!parsed.ok) throw new TeamSetupError(parsed.error);
     const result: TeamSetupFields = { ...parsed.patch };
     if (targetSection !== undefined) result.section = targetSection;
+    if (sharedWorkComputer) result.sharedWorkComputer = sharedWorkComputer;
     if (modelSelection) {
       const selection = modelSelection as ModelSelection;
       const error = this.options.validateModel(selection, current);
@@ -166,7 +169,7 @@ export class TeamSetupRequestService {
       // Validate profiles locally, but provider/account and target scope belong to the remote catalog.
       const plan = parsed.data;
       for (const op of plan.operations) {
-        const { modelSelection: _model, section: _section, ...profile } = op.fields;
+        const { modelSelection: _model, section: _section, sharedWorkComputer: _work, ...profile } = op.fields;
         const checked = parseBotProfilePatch(Object.fromEntries(Object.entries(profile).map(([k, v]) => [k, redactSecretsInText(v!)])), true);
         if (!checked.ok) throw new TeamSetupError(checked.error);
         Object.assign(op.fields, checked.patch);
@@ -253,6 +256,7 @@ export class TeamSetupRequestService {
         lines.push(`${key === "modelSelection" ? "Default engine/model" : key}: ${current ? `${JSON.stringify(before ?? "")} → ` : ""}${key === "section" ? JSON.stringify(value || "General") : JSON.stringify(value)}`);
       }
     }
+    if (request.operations.some(operation => operation.fields.sharedWorkComputer)) lines.push("Selected work computers supply terminal and granted files. Native host tools are disabled and offline targets pause work; no grants are created by this setup.");
     if (!request.deletion) lines.push("\nDefault models apply to groups and new threads. Every existing thread keeps its current model and permissions.", "New bots start in Ask with connected apps disabled. Existing execution permissions are unchanged.");
     lines.push(immediate ? (request.delegation ? "The deployment delegation auto-applies this scoped request without another confirmation; it grants no Full Access." : "Full Access applies this request in the current turn without another confirmation.") : "After this decision the Chief continues once with the result.");
     const title = request.deletion ? `Delete @${request.deletion.name}?` : `Apply setup for ${request.operations.length} ${request.operations.length === 1 ? "bot" : "bots"}?`;

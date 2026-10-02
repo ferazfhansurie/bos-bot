@@ -7,6 +7,7 @@ export interface TeamSetupFields {
   soul?: string;
   section?: string;
   modelSelection?: ModelSelection;
+  sharedWorkComputer?: { id: string; name: string };
 }
 
 export interface TeamSetupOperation {

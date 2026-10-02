@@ -1913,3 +1913,18 @@ describe("soul", () => {
     }
   });
 });
+
+
+it("persists the work-computer identity across restart and clearing without changing other bots", () => {
+  const store = new Store(selection);
+  const bot = store.createBot({}, { seedMessages: false });
+  const untouched = store.createBot({}, { seedMessages: false });
+  const target = { id: "134b9a68-9d6d-4653-915a-8e63a03d27f4", name: "Laptop" };
+  store.patchBot(bot.id, { sharedWorkComputer: target });
+  const restored = new Store(selection);
+  expect(restored.bot(bot.id)?.sharedWorkComputer).toEqual(target);
+  expect(restored.projectBotForTask(bot.id, bot.threadId)?.sharedWorkComputer).toEqual(target);
+  expect(restored.bot(untouched.id)?.sharedWorkComputer).toBeUndefined();
+  restored.patchBot(bot.id, { sharedWorkComputer: undefined });
+  expect(new Store(selection).bot(bot.id)?.sharedWorkComputer).toBeUndefined();
+});

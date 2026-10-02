@@ -502,6 +502,25 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.env.ANTHROPIC_API_KEY).toBe("sk-ant-workspace-fixture");
   });
 
+  it("remote work disables native tools and user MCP while retaining only the harness transport", async () => {
+    const dump = join(scratch, "remote-work.json");
+    await create(undefined, { FAKE_CLAUDE_DUMP: dump, FAKE_CLAUDE_VERSION: "2.1.280", OMB_CLAUDE_INHERIT_USER_CONFIG: "1" }, { tools: ["Bash", "Read"] });
+    await instance.adapter.sendTurn({ threadId: "remote-work", text: "hostname", approvalMode: "full", remoteWork: { computerId: "worker" }, cwd: scratch,
+      mcpFromUserConfig: true, integrations: { agents: { command: "node", args: ["worker-proxy"], env: {} },
+        custom: { private: { command: "do-not-run", args: [], env: {} } }, hooks: { url: "http://localhost:1", token: "private-hook" } } });
+    await recorder.until(e => e.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const value = (flag: string) => seen.argv[seen.argv.indexOf(flag) + 1];
+    expect(value("--tools")).toBe("");
+    expect(value("--setting-sources")).toBe("");
+    expect(seen.argv).toContain("--strict-mcp-config");
+    expect(seen.argv).toContain("--disable-slash-commands");
+    expect(seen.mcpConfig.mcpServers.private).toBeUndefined();
+    expect(JSON.stringify(seen)).not.toContain("private-hook");
+    expect(seen.env.OMB_HOOK_TOKEN_FILE).toBeUndefined();
+    expect(seen.mcpConfig.mcpServers.agents).toBeDefined();
+  });
+
   it("keeps user and system prompts off argv and strips identity env vars", async () => {
     await create();
     const dump = join(scratch, "dump.json");

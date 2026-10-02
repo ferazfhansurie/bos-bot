@@ -591,6 +591,7 @@ const TOOLS = [
               name: { type: "string", maxLength: 100 }, title: { type: "string", maxLength: 200 },
               description: { type: "string", maxLength: 4000 }, soul: { type: "string", description: "Standing instructions; required with name/title/modelSelection for every new bot." },
               section: { type: "string", maxLength: 60, description: "Exact authorized existing team, or a team explicitly named in newTeams. Empty string means General." },
+              sharedWorkComputer: { type: "object", additionalProperties: false, properties: { id: { type: "string", format: "uuid" }, name: { type: "string", minLength: 1, maxLength: 120 } }, required: ["id", "name"], description: "Saved shared computer from the target bot’s availableWorkComputers in list_team_setup. Only existing grants apply; offline pauses and native host tools are disabled." },
               modelSelection: { type: "object", additionalProperties: false, properties: {
                 instanceId: { type: "string" }, model: { type: "string" }, effort: { type: "string" },
               }, required: ["instanceId", "model"] },

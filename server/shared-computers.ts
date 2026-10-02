@@ -5,6 +5,7 @@ const folder = z.object({ id: z.string().uuid(), name: z.string().min(1).max(120
 export const sharedComputerRegistration = z.object({
   id: z.string().uuid(), name: z.string().min(1).max(120), environmentId: z.string().uuid(),
   folders: z.array(folder).max(20), terminal: z.boolean(), computer: z.boolean(),
+  allowedBotIds: z.array(z.string().uuid()).min(1).max(100).optional(),
 }).strict();
 export const sharedComputerOperation = z.object({
   computer_id: z.string().uuid(),
@@ -46,7 +47,10 @@ export class SharedComputers {
     if (!entry || entry.owner !== owner || !this.sessionLive(owner) || !/^[a-f0-9]{64}$/.test(secret) || !timingSafeEqual(Buffer.from(secret), Buffer.from(entry.secret))) throw failure("Shared computer is disconnected or not authorized", 403);
     return entry;
   }
-  list() { return [...this.computers.values()].filter(entry => this.online(entry)).map(entry => entry.registration); }
+  private allowed(entry: Computer, botId?: string) {
+    return !entry.registration.allowedBotIds || (botId !== undefined && entry.registration.allowedBotIds.includes(botId));
+  }
+  list(botId?: string) { return [...this.computers.values()].filter(entry => this.online(entry) && (botId === undefined || this.allowed(entry, botId))).map(entry => entry.registration); }
   async poll(id: string, owner: string, secret: string) {
     const entry = this.authorize(id, owner, secret);
     if (entry.wake) throw failure("A computer poll is already running");
@@ -85,14 +89,15 @@ export class SharedComputers {
     this.computers.delete(id); entry.wake?.();
     for (const job of entry.jobs.values()) this.finish(entry, job, failure("Computer disconnected. An in-flight action may have completed; inspect before retrying."));
   }
-  request(operation: Operation, active: () => boolean): Promise<unknown> {
+  request(operation: Operation, active: () => boolean, botId?: string): Promise<unknown> {
     const entry = this.computers.get(operation.computer_id);
     if (!entry || !this.online(entry)) return Promise.reject(failure("This shared computer is offline. Keep its desktop app open; do not substitute files on the server."));
+    if (!this.allowed(entry, botId)) return Promise.reject(failure("This bot has no grant for this shared computer", 403));
     if (entry.jobs.size >= 1) return Promise.reject(failure("This shared computer is busy. Wait for its current action to finish."));
     if (!active()) return Promise.reject(failure("The requesting turn ended", 401));
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      const job: Job = { id, operation, active, sent: false, resolve, reject, timer: setTimeout(() => this.finish(entry, job, failure("Computer action timed out. Its outcome is unknown; inspect before retrying.")), 45_000) };
+      const job: Job = { id, operation, active: () => active() && this.allowed(entry, botId), sent: false, resolve, reject, timer: setTimeout(() => this.finish(entry, job, failure("Computer action timed out. Its outcome is unknown; inspect before retrying.")), 45_000) };
       entry.jobs.set(id, job); entry.wake?.();
     });
   }
