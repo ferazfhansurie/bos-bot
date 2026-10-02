@@ -57,6 +57,9 @@ export interface ReadOnlyWhatsAppClient {
   /** Set this session's presence to unavailable. Presence only: no message,
    * receipt or chat state is touched. */
   goInvisible(): Promise<void>;
+  /** pid of this client's own Chromium, if launched — used only to force-kill
+   * that one process when destroy() hangs */
+  browserPid(): number | null;
 }
 
 export interface ReadOnlyClientOptions {

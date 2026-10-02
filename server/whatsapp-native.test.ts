@@ -2,13 +2,13 @@
 // driven only by client events and the liveness probe, capture is exactly-once,
 // saved sessions resume without a QR, failures back off and trip a breaker,
 // and nothing that writes to the account is reachable.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveWhatsAppBrowser } from "./whatsapp-browser.ts";
-import { WhatsAppNative, type WhatsAppNativeOptions } from "./whatsapp-native.ts";
+import { fileLinkedMarker, WhatsAppNative, type WhatsAppNativeOptions } from "./whatsapp-native.ts";
 import { WhatsAppService } from "./whatsapp-service.ts";
 import { WhatsAppStore } from "./whatsapp-store.ts";
 import type {
@@ -70,6 +70,8 @@ class FakeRawClient {
   reply = vi.fn(() => { throw new Error("reply reached"); });
   markChatUnread = vi.fn(() => { throw new Error("markChatUnread reached"); });
   sendPresenceAvailable = vi.fn(() => { throw new Error("sendPresenceAvailable reached"); });
+  static nextPid = 40_000;
+  pid = FakeRawClient.nextPid++;
   /** the one allowed call: presence → unavailable, via goInvisible() */
   sendPresenceUnavailable = vi.fn(async () => {});
 }
@@ -79,6 +81,7 @@ function harness(overrides: Partial<WhatsAppNativeOptions> & { session?: boolean
   const clients: FakeRawClient[] = [];
   const inserted: CapturedMessage[] = [];
   const seen = new Set<string>();
+  const killed: number[] = [];
   let session = overrides.session ?? false;
   const factory: CreateReadOnlyClient = (options, handlers) => {
     const raw = new FakeRawClient();
@@ -86,7 +89,7 @@ function harness(overrides: Partial<WhatsAppNativeOptions> & { session?: boolean
     raw.handlers = handlers;
     clients.push(raw);
     // what the real wrapper returns: three methods, nothing else
-    return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable() };
+    return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable(), browserPid: () => raw.pid };
   };
   const native = new WhatsAppNative({
     authDir: "/tmp/never-used-auth",
@@ -103,11 +106,18 @@ function harness(overrides: Partial<WhatsAppNativeOptions> & { session?: boolean
       },
       count: () => inserted.length,
     },
-    sessionExists: () => session,
-    releaseStaleProfile: () => {},
-    clearSession: () => {
-      session = false;
+    marker: {
+      exists: () => session,
+      write: () => {
+        session = true;
+      },
+      remove: () => {
+        session = false;
+      },
     },
+    killProcess: (pid) => killed.push(pid),
+    releaseStaleProfile: () => {},
+    clearSession: () => {},
     timers,
     now: () => timers.now,
     log: () => {},
@@ -118,6 +128,8 @@ function harness(overrides: Partial<WhatsAppNativeOptions> & { session?: boolean
     timers,
     clients,
     inserted,
+    killed,
+    saved: () => session,
     latest: () => clients.at(-1)!,
     setSession: (value: boolean) => {
       session = value;
@@ -266,6 +278,116 @@ describe("WhatsAppNative link state", () => {
     await native.shutdown();
     expect(latest().destroy).toHaveBeenCalledTimes(1);
     expect(timers.pending()).toEqual([]);
+  });
+});
+
+// ── saved-session marker ────────────────────────────────────────────────
+
+describe("WhatsAppNative saved-session marker", () => {
+  it("only a session that reached ready is saved", async () => {
+    const h = harness();
+    await h.native.connect();
+    h.latest().handlers.onQr("QR");
+    h.latest().handlers.onAuthenticated();
+    expect(h.saved()).toBe(false);
+    h.latest().handlers.onReady();
+    expect(h.saved()).toBe(true);
+    expect(h.native.snapshot().sessionExists).toBe(true);
+  });
+
+  it("an unfinished QR flow is not saved: no boot autostart and no retries", async () => {
+    const h = harness();
+    await h.native.connect();
+    h.latest().handlers.onQr("QR");
+    h.latest().handlers.onDisconnected("NAVIGATION");
+    expect(h.native.snapshot()).toMatchObject({ state: "disconnected", nextRetryAt: null });
+    await h.timers.advance(60 * 60_000);
+    expect(h.clients).toHaveLength(1);
+    await h.native.autoStart();
+    expect(h.clients).toHaveLength(1);
+  });
+
+  it("QR expiry with no marker destroys the client so no headless Chrome lingers", async () => {
+    const h = harness();
+    await h.native.connect();
+    h.latest().handlers.onQr("QR");
+    h.latest().handlers.onDisconnected("Max qrcode retries reached");
+    await flush();
+    expect(h.clients[0].destroy).toHaveBeenCalledTimes(1);
+    expect(h.saved()).toBe(false);
+  });
+
+  it("LOGOUT, unpaired, auth failure and a fresh QR all remove the marker", async () => {
+    for (const lose of [
+      (handlers: ReadOnlyClientHandlers) => handlers.onDisconnected("LOGOUT"),
+      (handlers: ReadOnlyClientHandlers) => handlers.onStateChange("UNPAIRED"),
+      (handlers: ReadOnlyClientHandlers) => handlers.onAuthFailure("bad"),
+      (handlers: ReadOnlyClientHandlers) => handlers.onQr("QR"),
+    ]) {
+      const h = harness({ session: true });
+      await h.native.autoStart();
+      lose(h.latest().handlers);
+      expect(h.saved()).toBe(false);
+      await h.native.shutdown();
+    }
+  });
+
+  it("the default marker is <data>/whatsapp/linked.json, written atomically", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-wa-marker-"));
+    try {
+      const service = new WhatsAppService({ dataDir: dir, env: {}, native: { loadFactory: async () => { throw new Error("unused"); } } });
+      const marker = fileLinkedMarker(join(dir, "whatsapp", "linked.json"), () => 42);
+      expect(marker.exists()).toBe(false);
+      marker.write();
+      expect(JSON.parse(readFileSync(join(dir, "whatsapp", "linked.json"), "utf8"))).toEqual({ linkedAt: 42 });
+      expect(readdirSync(join(dir, "whatsapp")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+      expect(service.native.snapshot().sessionExists).toBe(true);
+      marker.remove();
+      expect(service.native.snapshot().sessionExists).toBe(false);
+      service.store.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── bounded destroy ─────────────────────────────────────────────────────
+
+describe("WhatsAppNative bounded destroy", () => {
+  it("a hung destroy is bounded at 15s, then only that client's browser pid is killed", async () => {
+    const h = harness();
+    await h.native.connect();
+    const old = h.clients[0];
+    old.destroy.mockImplementation(() => new Promise(() => {}));
+    const reconnecting = h.native.reconnect();
+    await flush();
+    expect(h.clients).toHaveLength(1);
+    await h.timers.advance(14_999);
+    expect(h.clients).toHaveLength(1);
+    expect(h.killed).toEqual([]);
+    await h.timers.advance(1);
+    await reconnecting;
+    expect(h.killed).toEqual([old.pid]);
+    expect(h.clients).toHaveLength(2);
+    expect(h.native.snapshot().state).toBe("linking");
+  });
+
+  it("a prompt destroy kills nothing", async () => {
+    const h = harness();
+    await h.native.connect();
+    await h.native.reconnect();
+    await h.native.shutdown();
+    expect(h.killed).toEqual([]);
+  });
+
+  it("shutdown never hangs on a stuck destroy", async () => {
+    const h = harness();
+    await h.native.connect();
+    h.latest().destroy.mockImplementation(() => new Promise(() => {}));
+    const done = h.native.shutdown();
+    await h.timers.advance(15_000);
+    await done;
+    expect(h.killed).toEqual([h.latest().pid]);
   });
 });
 
@@ -437,7 +559,7 @@ describe("WhatsApp is read-only", () => {
         const raw = new FakeRawClient();
         raw.handlers = handlers;
         raw.options = options;
-        const wrapped = { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable() };
+        const wrapped = { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable(), browserPid: () => raw.pid };
         seenKeys.push(Object.keys(wrapped).sort());
         clients.push(raw);
         return wrapped;
@@ -450,7 +572,7 @@ describe("WhatsApp is read-only", () => {
     await native.probe();
     await native.reconnect();
     await native.shutdown();
-    expect(seenKeys[0]).toEqual(["destroy", "getState", "goInvisible", "initialize"]);
+    expect(seenKeys[0]).toEqual(["browserPid", "destroy", "getState", "goInvisible", "initialize"]);
     for (const raw of clients) {
       for (const spy of [raw.sendMessage, raw.sendSeen, raw.reply, raw.markChatUnread, raw.sendPresenceAvailable]) {
         expect(spy).not.toHaveBeenCalled();
@@ -491,7 +613,7 @@ describe("WhatsApp is read-only", () => {
   it("the wrapper returns only the three read-only methods from whatsapp-web.js", () => {
     const text = readFileSync(join(import.meta.dirname, "whatsapp-wwebjs.ts"), "utf8");
     const returned = text.slice(text.lastIndexOf("return {"));
-    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["initialize", "getState", "destroy", "goInvisible"]);
+    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["initialize", "getState", "destroy", "goInvisible", "browserPid"]);
     const invisible = returned.slice(returned.indexOf("goInvisible:"));
     expect(invisible.slice(0, invisible.indexOf("},") + 2)).toMatch(/^goInvisible: async \(\) => \{\s*await client\.sendPresenceUnavailable\(\);\s*\},$/);
   });
@@ -527,7 +649,7 @@ describe("WhatsAppService tile API", () => {
       raw.options = options;
       raw.handlers = handlers;
       clients.push(raw);
-      return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable() };
+      return { initialize: () => raw.initialize(), getState: () => raw.getState(), destroy: () => raw.destroy(), goInvisible: () => raw.sendPresenceUnavailable(), browserPid: () => raw.pid };
     };
     const svc = new WhatsAppService({
       dataDir: dir,

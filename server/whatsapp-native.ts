@@ -14,8 +14,8 @@
 // Read-only: the client type (whatsapp-types.ts) has no send/reply/seen
 // method at all, and messages arrive here as plain records.
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readlinkSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { LOADED_RUNTIMES } from "./proxy-paths.ts";
@@ -76,7 +76,16 @@ export interface WhatsAppNativeOptions {
   resolveBrowser: () => BrowserResolution | null;
   noBrowserReason?: () => string;
   store: { insert(message: CapturedMessage): boolean; count(): number };
-  sessionExists?: () => boolean;
+  /** "Saved" means a session that has reached `ready` at least once: only
+   * then does BOS resume it at boot or retry after a failure. A half-done
+   * QR flow leaves a LocalAuth profile on disk but no marker. */
+  marker?: LinkedMarker;
+  /** where the default file marker lives (<data>/whatsapp/linked.json) */
+  markerFile?: string;
+  /** force-kills one process (a client's own Chromium) after destroy() hangs */
+  killProcess?: (pid: number) => void;
+  /** how long a new launch waits for the previous client's destroy() */
+  destroyTimeoutMs?: number;
   /** frees a profile left locked by a crashed previous run */
   releaseStaleProfile?: (sessionDir: string) => void;
   /** drops a session WhatsApp rejected, so Rescan shows a fresh QR code */
@@ -103,12 +112,24 @@ export function sessionDirFor(authDir: string, clientId: string): string {
   return join(authDir, `session-${clientId}`);
 }
 
-function hasSavedSession(sessionDir: string): boolean {
-  try {
-    return existsSync(sessionDir) && readdirSync(sessionDir).length > 0;
-  } catch {
-    return false;
-  }
+export interface LinkedMarker {
+  exists(): boolean;
+  write(): void;
+  remove(): void;
+}
+
+/** A small JSON file, written atomically (temp file + rename). */
+export function fileLinkedMarker(file: string, now: () => number = Date.now): LinkedMarker {
+  return {
+    exists: () => existsSync(file),
+    write: () => {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      const temp = `${file}.${process.pid}.tmp`;
+      writeFileSync(temp, `${JSON.stringify({ linkedAt: now() })}\n`, { mode: 0o600 });
+      renameSync(temp, file);
+    },
+    remove: () => rmSync(file, { force: true }),
+  };
 }
 
 /** Chrome refuses a profile whose SingletonLock names a live process. After a
@@ -168,7 +189,8 @@ export class WhatsAppNative {
   private generation = 0;
   private ready = false;
   private starting: Promise<void> | null = null;
-  private destroying: Promise<void> = Promise.resolve();
+  /** clients torn down whose destroy() has not finished yet */
+  private destroys = new Set<{ done: Promise<void>; pid: number | null; settled: boolean }>();
   private retryTimer: unknown = null;
   private probeTimer: unknown = null;
   private startTimer: unknown = null;
@@ -178,8 +200,12 @@ export class WhatsAppNative {
   constructor(options: WhatsAppNativeOptions) {
     const sessionDir = sessionDirFor(options.authDir, options.clientId);
     this.sessionDir = sessionDir;
+    const markerFile = options.markerFile ?? join(dirname(options.authDir), "linked.json");
     this.options = {
-      sessionExists: () => hasSavedSession(sessionDir),
+      markerFile,
+      marker: fileLinkedMarker(markerFile, options.now),
+      killProcess: (pid) => process.kill(pid, "SIGKILL"),
+      destroyTimeoutMs: 15_000,
       releaseStaleProfile,
       clearSession: (dir) => rmSync(dir, { recursive: true, force: true }),
       timers: realTimers,
@@ -207,7 +233,7 @@ export class WhatsAppNative {
       state: this.state,
       qr: this.state === "qr_pending" ? this.qr : null,
       reason: this.reason,
-      sessionExists: this.options.sessionExists(),
+      sessionExists: this.saved(),
       browser: this.browser,
       failures: this.failures,
       circuitOpen: this.circuitOpen,
@@ -220,7 +246,7 @@ export class WhatsAppNative {
 
   /** Server boot: resume a saved session without a QR; otherwise stay idle. */
   autoStart(): Promise<void> {
-    if (!this.options.sessionExists()) {
+    if (!this.saved()) {
       this.set("not_linked", null);
       return Promise.resolve();
     }
@@ -249,7 +275,8 @@ export class WhatsAppNative {
       // The saved session is the one WhatsApp refused (auth_failure, unpaired,
       // blocked): resuming it would only fail again. Clear BOS's own profile
       // once its browser has closed, so the next start shows a QR code.
-      await this.destroying;
+      await this.awaitDestroys();
+      this.forget();
       try {
         this.options.clearSession(this.sessionDir);
       } catch (error) {
@@ -264,14 +291,7 @@ export class WhatsAppNative {
     this.stopped = true;
     this.clearRetry();
     this.teardown();
-    let cap: unknown = null;
-    await Promise.race([
-      this.destroying,
-      new Promise<void>((resolve) => {
-        cap = this.options.timers.setTimeout(resolve, 10_000);
-      }),
-    ]);
-    if (cap) this.options.timers.clearTimeout(cap);
+    await this.awaitDestroys();
   }
 
   // ── lifecycle ────────────────────────────────────────────────────────
@@ -302,7 +322,7 @@ export class WhatsAppNative {
     try {
       // A previous client's Chromium must be gone before a new one opens the
       // same profile: two browsers on one LocalAuth directory corrupt it.
-      await this.destroying;
+      await this.awaitDestroys();
       factory = await this.options.loadFactory();
     } catch (error) {
       if (gen !== this.generation) return;
@@ -347,6 +367,9 @@ export class WhatsAppNative {
     return {
       onQr: (qr) => {
         if (!live()) return;
+        // WhatsApp asking for a QR means no valid session exists (never
+        // linked, or unlinked while BOS was off): stop resuming at boot.
+        this.forget();
         this.qr = qr;
         this.armStartTimer(gen);
         this.set("qr_pending", null);
@@ -368,6 +391,11 @@ export class WhatsAppNative {
         this.resetBreaker();
         this.qr = null;
         this.linkedAt = this.options.now();
+        try {
+          this.options.marker.write();
+        } catch (error) {
+          this.options.log(`could not record the linked session: ${message(error)}`);
+        }
         this.set("linked", null);
         this.goInvisible(gen);
         this.startProbe(gen);
@@ -489,11 +517,13 @@ export class WhatsAppNative {
     this.teardown();
     this.options.log(reason);
     if (rescan) {
+      // WhatsApp refused or unlinked it: nothing is saved any more
+      this.forget();
       this.set("needs_rescan", reason);
       return;
     }
     this.failures += 1;
-    if (!this.options.sessionExists()) {
+    if (!this.saved()) {
       // Nothing saved to resume: a retry would only paint another QR code
       // nobody asked for. The person presses Connect again.
       this.set("disconnected", reason);
@@ -525,8 +555,72 @@ export class WhatsAppNative {
     const client = this.client;
     this.client = null;
     if (client) {
-      const previous = this.destroying;
-      this.destroying = previous.then(() => client.destroy()).catch(() => {});
+      let pid: number | null = null;
+      try {
+        pid = client.browserPid();
+      } catch {}
+      const entry = { done: Promise.resolve(), pid, settled: false };
+      entry.done = Promise.resolve()
+        .then(() => client.destroy())
+        .catch(() => {})
+        .finally(() => {
+          entry.settled = true;
+          this.dropDestroy(entry);
+        });
+      this.destroys.add(entry);
+    }
+  }
+
+  // (filter, not Set#delete: the no-send scan bans `.delete(` outright,
+  // because Message#delete would delete on the account)
+  private dropDestroy(entry: { done: Promise<void>; pid: number | null; settled: boolean }): void {
+    this.destroys = new Set([...this.destroys].filter((other) => other !== entry));
+  }
+
+  /** Wait for torn-down clients to close their browsers, but never forever:
+   * after destroyTimeoutMs, SIGKILL that client's own Chromium (its pid only)
+   * so a new client never opens the same profile next to a live one. */
+  private async awaitDestroys(): Promise<void> {
+    const pending = [...this.destroys];
+    if (!pending.length) return;
+    let timer: unknown = null;
+    const timedOut = await Promise.race([
+      Promise.all(pending.map((entry) => entry.done)).then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = this.options.timers.setTimeout(() => resolve(true), this.options.destroyTimeoutMs);
+      }),
+    ]);
+    if (timer) this.options.timers.clearTimeout(timer);
+    if (!timedOut) return;
+    for (const entry of pending) {
+      if (entry.settled) continue;
+      this.dropDestroy(entry);
+      if (entry.pid === null) {
+        this.options.log(`a previous WhatsApp client did not close within ${this.options.destroyTimeoutMs / 1000}s and has no browser pid to stop`);
+        continue;
+      }
+      try {
+        this.options.killProcess(entry.pid);
+        this.options.log(`a previous WhatsApp client did not close within ${this.options.destroyTimeoutMs / 1000}s; stopped its browser (pid ${entry.pid})`);
+      } catch (error) {
+        this.options.log(`could not stop the previous WhatsApp browser (pid ${entry.pid}): ${message(error)}`);
+      }
+    }
+  }
+
+  private saved(): boolean {
+    try {
+      return this.options.marker.exists();
+    } catch {
+      return false;
+    }
+  }
+
+  private forget(): void {
+    try {
+      this.options.marker.remove();
+    } catch (error) {
+      this.options.log(`could not clear the linked-session marker: ${message(error)}`);
     }
   }
 

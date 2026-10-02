@@ -117,5 +117,12 @@ export function createReadOnlyClient(
     goInvisible: async () => {
       await client.sendPresenceUnavailable();
     },
+    browserPid: () => {
+      try {
+        return client.pupBrowser?.process()?.pid ?? null;
+      } catch {
+        return null;
+      }
+    },
   };
 }
