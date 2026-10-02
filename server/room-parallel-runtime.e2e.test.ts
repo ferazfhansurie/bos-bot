@@ -178,6 +178,42 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     await api("POST",`/api/groups/${room.id}/interrupt`,{});
   });
 
+  for (const via of ["owner", "paired session"] as const) it(`answers an @mention of the lead mid-hop from the ${via}`, async () => {
+    const slow = await createBot("Slow", "patient"); const lead = await createBot("Lead", "lead");
+    const room = (await api("POST", "/api/groups", { name:"Hop", memberIds:[lead.id,slow.id], setup:{ bulletin:"",defaultResponder:{kind:"member",botId:lead.id} } })).body.group;
+    let headers: Record<string,string> = {};
+    if (via === "paired session") {
+      const pairing = await api("POST", "/api/auth/pairing", { scopes: ["admin","client"] });
+      const paired = await api("POST", "/api/auth/pair", { code: pairing.body.code, label: "lead cli" });
+      expect(paired.status).toBe(200);
+      headers = { authorization: `Bearer ${paired.body.token}` };
+    }
+    rmSync(patientFinishGate,{force:true});
+    expect((await api("POST",`/api/groups/${room.id}/messages`,{text:"START"})).status).toBe(202);
+    await wait(async()=>Boolean((await snapshot(room.id))?.activeBotIds?.includes(slow.id)),"handed-off member running");
+    const aside=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Lead ADDRESSED ASIDE"},headers);
+    expect(aside.status).toBe(202);
+    expect(aside.body.queued).toBeUndefined();
+    await wait(async()=>Boolean((await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===lead.id&&m.text.includes("LEAD ANSWERED ASIDE"))),"lead answers the addressed aside while the hop runs");
+    writeFileSync(patientFinishGate,"done");
+    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+  });
+
+  it("still answers an @mention when the room context names the phone and another member's turn holds it", async () => {
+    const slow = await createBot("Slow", "patient"); const quick = await createBot("Quick", "quick");
+    const room = (await api("POST", "/api/groups", { name:"Phone", memberIds:[quick.id,slow.id], setup:{ bulletin:"",defaultResponder:{kind:"member",botId:quick.id} } })).body.group;
+    rmSync(patientFinishGate,{force:true});
+    expect((await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow LONG JOB, check it on the phone"})).status).toBe(202);
+    await wait(async()=>Boolean((await snapshot(room.id))?.activeBotIds?.includes(slow.id)),"phone holder running");
+    const aside=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Quick ADDRESSED ASIDE"});
+    expect(aside.status).toBe(202);
+    expect(aside.body.queued).toBeUndefined();
+    await wait(async()=>Boolean((await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id)),"addressed member answers without the held phone");
+    expect((await snapshot(room.id)).messages.some((m:any)=>m.kind==="activity"&&m.from?.botId===quick.id&&/phone is in use/.test(m.tool?.name??""))).toBe(true);
+    writeFileSync(patientFinishGate,"done");
+    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+  });
+
   it("admits two addressed members independently, steers one without interruption, and stops room work without stopping a private sibling", async () => {
     const slow = await createBot("Slow", "patient"); const quick = await createBot("Quick", "quick");
     const room = (await api("POST", "/api/groups", { name:"Parallel", memberIds:[slow.id,quick.id], setup:{ bulletin:"",defaultResponder:{kind:"mentions"} } })).body.group;

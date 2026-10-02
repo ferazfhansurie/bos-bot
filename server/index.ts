@@ -9531,7 +9531,7 @@ async function executeGroupMemberTurn(
   );
   const turnImages = usesNativeImageInput ? resolvedLatestImages.images : [];
   const skills = availableSkills();
-  const selectedSkills = mergeSkills(
+  let selectedSkills = mergeSkills(
     selectBundledSkills(
       roomContext,
       instance.adapter.capabilities.phoneMcp === true ? ["phoneMcp"] : [],
@@ -9543,9 +9543,21 @@ async function executeGroupMemberTurn(
       skills,
     ),
   );
-  if (selectedSkills.some((skill) => skill.manifest.requiredCapabilities.includes("phoneMcp"))) {
-    if (!claimTurnResource(resourceOwner, "computer:phone")) throw new Error("another thread is using the phone — wait for it to finish");
-    integrations.phone = phoneIntegration();
+  const needsPhone = (skill: (typeof selectedSkills)[number]) => skill.manifest.requiredCapabilities.includes("phoneMcp");
+  if (selectedSkills.some(needsPhone)) {
+    if (claimTurnResource(resourceOwner, "computer:phone")) {
+      integrations.phone = phoneIntegration();
+    } else {
+      // The room transcript mentioning the phone is not a reason to drop the
+      // reply. Another turn holds it, so this one answers without phone tools.
+      selectedSkills = selectedSkills.filter((skill) => !needsPhone(skill));
+      store.appendMessage(threadId, {
+        role: "bot",
+        kind: "activity",
+        from: { botId: bot.id, name: bot.name, color: bot.color },
+        tool: { name: `the phone is in use by another turn — ${bot.name} is replying without phone tools`, ok: true },
+      });
+    }
   }
   try {
     if (bot.composio !== false && composio.configured(cfg) && instance.adapter.capabilities.composioMcp === true) {
@@ -10862,21 +10874,34 @@ function startGroupTurn(
           spoken.add(responder.id);
           return;
         }
-        if (!(await runGroupMemberTurn(
-          groupId,
-          threadId,
-          responder.id,
-          0,
-          spoken,
-          undefined,
-          undefined,
-          () => operation.cancelled,
-          () => groupProviderHandshakeStarted(operation),
-          () => groupProviderHandshakeSettled(operation),
-          skillAuthoringClaim,
-          undefined,
-          operation,
-        ))) return;
+        try {
+          await runGroupMemberTurn(
+            groupId,
+            threadId,
+            responder.id,
+            0,
+            spoken,
+            undefined,
+            undefined,
+            () => operation.cancelled,
+            () => groupProviderHandshakeStarted(operation),
+            () => groupProviderHandshakeSettled(operation),
+            skillAuthoringClaim,
+            undefined,
+            operation,
+          );
+        } catch (error) {
+          // The room queue settles quietly, so a setup failure that escapes
+          // here would leave the person's message with no reply and no sign.
+          if (operation.cancelled) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          store.appendMessage(threadId, {
+            role: "bot",
+            kind: "activity",
+            from: { botId: responder.id, name: responder.name, color: responder.color },
+            tool: { name: `${responder.name} couldn't start on this message — not delivered: ${detail}`, ok: false },
+          });
+        }
       }));
     }
   });
