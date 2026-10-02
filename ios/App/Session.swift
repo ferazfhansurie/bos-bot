@@ -273,6 +273,7 @@ final class Session: ObservableObject {
                 for (threadID, page) in pages { state.merge(page, intoThread: threadID) }
             }
             status = .live
+            if arguments.contains("-stream-preview") { startStreamPreview() }
             return
         }
 #endif
@@ -902,6 +903,56 @@ final class Session: ObservableObject {
         frameFlushTask = nil
         state = CompanionState()
     }
+
+#if DEBUG
+    /// Offline stand-in for a long run, for measuring the chat while it
+    /// streams: a long history, then a reply typed at provider speed with a
+    /// tool step every 700ms, all through the same batching as the wire.
+    private func startStreamPreview() {
+        let threadId = "preview-gmail"
+        func frame(_ json: [String: Any]) -> StreamFrame? {
+            guard let data = try? JSONSerialization.data(withJSONObject: json) else { return nil }
+            return try? JSONDecoder().decode(StreamFrame.self, from: data)
+        }
+        let paragraph = "Checked the **inbox** and grouped what matters: three invoices due this week, a contract redline from `legal@`, and two threads that need a reply today. "
+        let start = Date().timeIntervalSince1970 * 1000
+        for index in 0..<50 {
+            let message: [String: Any] = [
+                "id": "stream-history-\(index)", "role": index % 2 == 0 ? "user" : "bot", "kind": "text",
+                "at": start - Double(50 - index) * 60_000,
+                "text": index % 2 == 0 ? "check item \(index) and tell me what changed" : String(repeating: paragraph, count: 3) + "\n\n- one\n- two\n- three"
+            ]
+            if let seeded = frame(["kind": "message", "threadId": threadId, "message": message]) { state.apply(seeded.frame) }
+        }
+        Task { @MainActor [weak self] in
+            // Start on the first keystroke so the test can reach the
+            // composer while the app is still idle.
+            while !MainThreadProbe.shared.isTyping && !ProcessInfo.processInfo.arguments.contains("-stream-preview-autostart") { try? await Task.sleep(for: .milliseconds(50)) }
+            if let self, var bot = self.state.bot("preview-pepper") { bot.busy = true; self.state.apply(.bot(bot)) }
+            // Paragraphs and a short list, the shape a real long reply has.
+            let reply = String(repeating: paragraph, count: 2) + "\n\n- first thing to check\n- second thing to check\n\n"
+            let words = reply.split(separator: " ", omittingEmptySubsequences: false).map { $0 + " " }
+            var seq = 1, tick = 0
+            let end = ContinuousClock.now + .seconds(90)
+            while ContinuousClock.now < end, let self {
+                tick += 1
+                let delta = (0..<4).map { words[(tick * 4 + $0) % words.count] }.joined()
+                if let token = frame(["kind": "runtime", "seq": seq, "event": ["type": "content.delta", "threadId": threadId, "streamKind": "assistant_text", "delta": delta]]) {
+                    self.enqueue(token)
+                }
+                seq += 1
+                if tick % 28 == 0, let step = frame(["kind": "message", "seq": seq, "threadId": threadId, "message": [
+                    "id": "stream-step-\(tick)", "role": "bot", "kind": "activity", "at": Date().timeIntervalSince1970 * 1000,
+                    "tool": ["name": "Bash", "ok": true, "summary": "grep -rn invoice mail/\(tick)"]
+                ]]) {
+                    self.enqueue(step)
+                    seq += 1
+                }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
+    }
+#endif
 
     private func enqueue(_ frame: StreamFrame) {
         pendingFrames.append(frame)

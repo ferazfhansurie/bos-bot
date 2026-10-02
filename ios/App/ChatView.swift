@@ -26,7 +26,13 @@ struct ChatView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @State private var draft = ""
+    /// The draft lives in its own object so a keystroke redraws the
+    /// composer, not this whole view and every row of the transcript.
+    @State private var composerDraft = ComposerDraft()
+    private var draft: String {
+        get { composerDraft.text }
+        nonmutating set { composerDraft.text = newValue }
+    }
     @State private var replyTarget: Message?
     /// Bots picked in the @ drawer. Sent as `@name` text, so they route the
     /// same as typed mentions.
@@ -194,6 +200,10 @@ struct ChatView: View {
     }
 
     var body: some View {
+#if DEBUG
+        let _ = MainThreadProbe.shared.chatBody()
+
+#endif
         // Read the transcript once for this render. Pagination changes the
         // array as a unit; repeatedly reaching through ObservableObject for
         // every row only recomputes the same value.
@@ -434,6 +444,7 @@ struct ChatView: View {
             cancelThreadOpen()
         }
         .onDisappear {
+            session.liveText.composing = false
             dictation.stop()
             resetFilePreview()
             cancelThreadOpen()
@@ -543,12 +554,6 @@ struct ChatView: View {
     }
 
     // MARK: - Mentions
-
-    private var mentionMatches: [Bot]? {
-        guard let query = ChannelTextPresentation.mentionQuery(draft), !sendingMessage, !channelMembers.isEmpty else { return nil }
-        let matches = ChannelMentionPicker.matching(channelMembers, query: query)
-        return matches.isEmpty ? nil : matches
-    }
 
     private var workingMembers: Set<String> {
         guard case let .room(room) = current else { return [] }
@@ -1062,7 +1067,7 @@ struct ChatView: View {
 
             if showCommandHUD {
                 CommandSkillHUDView(
-                    text: $draft,
+                    text: $composerDraft.text,
                     isVisible: $showCommandHUD,
                     commands: current.isRemoteBot
                         ? CommandSkillHUDView.defaultCommands.filter { $0.id != "computer" && $0.id != "steer" }
@@ -1084,12 +1089,14 @@ struct ChatView: View {
                     }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if draft.isEmpty && attachments.isEmpty && !current.busy
+            } else if attachments.isEmpty && !current.busy
                         && !hasPendingApproval && !storedChips.isEmpty {
-                PredictiveActionChipsView(chips: storedChips, accentColor: MausPalette.color(current.color)) { chip in
-                    submit(chip.prompt)
+                EmptyDraftOnly(composer: composerDraft) {
+                    PredictiveActionChipsView(chips: storedChips, accentColor: MausPalette.color(current.color)) { chip in
+                        submit(chip.prompt)
+                    }
+                    .transition(.opacity)
                 }
-                .transition(.opacity)
             }
 
             if !attachments.isEmpty {
@@ -1119,10 +1126,9 @@ struct ChatView: View {
                     Button { self.replyTarget = nil } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("Cancel reply")
                 }.padding(10).background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
             }
-            if let matches = mentionMatches {
-                ChannelMentionDrawer(bots: matches, working: workingMembers, picked: mentionPicks,
-                                     onToggle: toggleMention, onDone: closeMentionDrawer)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            if !sendingMessage, !channelMembers.isEmpty {
+                ChannelMentionDrawerHost(composer: composerDraft, members: channelMembers, working: workingMembers,
+                                         picked: mentionPicks, onToggle: toggleMention, onDone: closeMentionDrawer)
             }
             if !mentionPicks.isEmpty {
                 ChannelMentionChips(picked: mentionPicks) { bot in
@@ -1131,25 +1137,37 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            ChatComposerBar(
-                draft: $draft, showingPlus: $showingPlus, dictation: dictation,
-                focus: $composerFocused, name: current.name,
-                busy: preparingAttachments || sendingMessage,
-                hasAttachments: !attachments.isEmpty || !mentionPicks.isEmpty, supportsVoiceChat: true,
-                onDraftChange: { value in
-                    withAnimation(.easeInOut(duration: 0.15)) { showCommandHUD = value.hasPrefix("/") }
-                },
-                onSend: { submit() },
-                onVoice: {
-                    UserDefaults.standard.set(current.id, forKey: "walkie.target")
-                    showingWalkie = true
-                }
-            )
+            // The binding is made inside DraftBinding: making it here reads
+            // the draft, which would redraw this view on every keystroke.
+            DraftBinding(composer: composerDraft) { draft in
+                ChatComposerBar(
+                    draft: draft, showingPlus: $showingPlus, dictation: dictation,
+                    focus: $composerFocused, name: current.name,
+                    busy: preparingAttachments || sendingMessage,
+                    hasAttachments: !attachments.isEmpty || !mentionPicks.isEmpty, supportsVoiceChat: true,
+                    onDraftChange: { value in
+#if DEBUG
+                        MainThreadProbe.shared.typing(!value.isEmpty)
+#endif
+                        if session.liveText.composing == value.isEmpty {
+                            session.liveText.composing = !value.isEmpty
+                        }
+                        let wantsHUD = value.hasPrefix("/")
+                        if showCommandHUD != wantsHUD {
+                            withAnimation(.easeInOut(duration: 0.15)) { showCommandHUD = wantsHUD }
+                        }
+                    },
+                    onSend: { submit() },
+                    onVoice: {
+                        UserDefaults.standard.set(current.id, forKey: "walkie.target")
+                        showingWalkie = true
+                    }
+                )
+            }
         }
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
-        .animation(.snappy(duration: 0.22), value: mentionMatches?.map(\.id))
         .frame(maxWidth: CompanionLayout.chatWidth)
         .frame(maxWidth: .infinity)
     }
@@ -1192,6 +1210,58 @@ private struct ArrivalSpring: ViewModifier {
 extension View {
     func arrivalSpring(_ active: Bool, fromTrailing: Bool, reduceMotion: Bool) -> some View {
         modifier(ArrivalSpring(active: active, fromTrailing: fromTrailing, reduceMotion: reduceMotion))
+    }
+}
+
+@Observable
+final class ComposerDraft {
+    var text = ""
+}
+
+/// Its content only while the draft is empty. Reading the draft here rather
+/// than in ChatView keeps keystrokes from redrawing the transcript.
+private struct EmptyDraftOnly<Content: View>: View {
+    let composer: ComposerDraft
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        if composer.text.isEmpty { content() }
+    }
+}
+
+/// Hands its content a binding to the draft, made in this view's body so a
+/// keystroke redraws only this.
+private struct DraftBinding<Content: View>: View {
+    @Bindable var composer: ComposerDraft
+    @ViewBuilder let content: (Binding<String>) -> Content
+    var body: some View { content($composer.text) }
+}
+
+/// The @ drawer, for the name being typed. Reading the draft here rather
+/// than in ChatView keeps keystrokes from redrawing the transcript.
+private struct ChannelMentionDrawerHost: View {
+    let composer: ComposerDraft
+    let members: [Bot]
+    let working: Set<String>
+    let picked: [Bot]
+    let onToggle: (Bot) -> Void
+    let onDone: () -> Void
+
+    private var matches: [Bot]? {
+        guard let query = ChannelTextPresentation.mentionQuery(composer.text) else { return nil }
+        let matches = ChannelMentionPicker.matching(members, query: query)
+        return matches.isEmpty ? nil : matches
+    }
+
+    var body: some View {
+        let matches = matches
+        VStack(spacing: 0) {
+            if let matches {
+                ChannelMentionDrawer(bots: matches, working: working, picked: picked,
+                                     onToggle: onToggle, onDone: onDone)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy(duration: 0.22), value: matches?.map(\.id))
     }
 }
 

@@ -35,13 +35,25 @@ struct MarkdownText: View {
         let blocks = Markdown.blocks(source)
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { item in
-                view(for: item.element, tail: caret && item.offset == blocks.count - 1)
+                // Equatable, so while a reply streams only the block being
+                // typed re-parses; the finished ones above it are skipped.
+                MarkdownBlockView(block: item.element, tail: caret && item.offset == blocks.count - 1)
+                    .equatable()
             }
         }
         .environment(\.openURL, OpenURLAction { url in
             openLink?(url) ?? .systemAction(url)
         })
     }
+}
+
+/// One block of a reply. Separate from MarkdownText so SwiftUI can compare
+/// it and leave it alone when the text it holds has not changed.
+private struct MarkdownBlockView: View, Equatable {
+    let block: MarkdownBlock
+    let tail: Bool
+
+    var body: some View { view(for: block, tail: tail) }
 
     @ViewBuilder
     private func view(for block: MarkdownBlock, tail: Bool) -> some View {
