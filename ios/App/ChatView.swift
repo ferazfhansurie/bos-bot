@@ -68,6 +68,11 @@ struct ChatView: View {
     @State private var islandExpanded = false
     @State private var islandVisible = false
     @State private var facePhase: CGFloat = 0
+    /// Whether the reader is at the newest line, and when each room member's
+    /// row last pulled the transcript down. A plain object, not state: it
+    /// changes on every scroll and every token, and none of that should
+    /// re-evaluate this view.
+    @State private var follow = ScrollFollow()
 
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @AppStorage(PrefKey.islandSeen) private var islandSeen = ""
@@ -130,21 +135,46 @@ struct ChatView: View {
     /// belong to the working indicator below the transcript, which shows
     /// them as they land. They fold into a normal run row the moment the
     /// turn settles, so nothing is drawn twice and nothing disappears.
-    private var rows: [TranscriptRow] {
+    ///
+    /// A room running members side by side has no single tail: each working
+    /// member's steps are drawn in its own live row, so those ids are left
+    /// out here instead.
+    private func rows(memberSteps: [String: [Message]]) -> [TranscriptRow] {
         let detail = ActivityDetail(rawValue: activityDetail) ?? .reduced
-        let settled = liveSteps.isEmpty ? messages : Array(messages.dropLast(liveSteps.count))
+        let live = Set(memberSteps.values.joined().map(\.id))
+        let settled = !live.isEmpty ? messages.filter { !live.contains($0.id) }
+            : liveSteps.isEmpty ? messages : Array(messages.dropLast(liveSteps.count))
         return transcriptRows(settled, detail: detail)
     }
 
     /// The tail of activity belonging to the turn in flight.
     private var liveSteps: [Message] {
         guard current.busy, (ActivityDetail(rawValue: activityDetail) ?? .reduced) != .hidden else { return [] }
+        // Parallel rooms split their activity per member; see memberSteps.
+        if case let .room(room) = current, room.activeBotIds != nil { return [] }
         var tail: [Message] = []
         for message in messages.reversed() {
             guard message.kind == .activity else { break }
             tail.insert(message, at: 0)
         }
         return tail
+    }
+
+    /// Each working room member's steps so far, for the room's per-member
+    /// live rows. Empty outside a room running members side by side.
+    private var memberSteps: [String: [Message]] {
+        guard case let .room(room) = current, let active = room.activeBotIds, !active.isEmpty,
+              (ActivityDetail(rawValue: activityDetail) ?? .reduced) != .hidden
+        else { return [:] }
+        return roomMemberLiveSteps(messages, botIds: active)
+    }
+
+    /// When a member's turn began, for its live row's clock: its first step,
+    /// else the person's latest message — not the transcript's last line,
+    /// which every other member's reply moves.
+    private func memberStartedAt(_ steps: [Message]?) -> Date {
+        let ms = steps?.first?.at ?? messages.last(where: { $0.role == .user })?.at ?? messages.last?.at
+        return ms.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
     }
 
     /// The composer's chip row, as edited in Settings.
@@ -164,7 +194,8 @@ struct ChatView: View {
         // Read the transcript once for this render. Pagination changes the
         // array as a unit; repeatedly reaching through ObservableObject for
         // every row only recomputes the same value.
-        let transcript = rows
+        let steps = memberSteps
+        let transcript = rows(memberSteps: steps)
         let _ = arrivals.track(threadId: threadId, messages: messages.map { ($0.id, $0.at) }, now: Date().timeIntervalSince1970)
         // A VStack with the composer as a sibling, rather than a scroll view
         // with `.safeAreaInset`. The inset version sized itself to its
@@ -247,7 +278,12 @@ struct ChatView: View {
                             ForEach(channelMembers) { bot in
                                 RoomMemberLiveReply(live: session.liveText.entry(RuntimeEvent.roomStreamKey(threadId: threadId, botId: bot.id)), bot: bot,
                                     busy: hostLive && room.activeBotIds?.contains(bot.id) == true,
-                                    onContent: { proxy.scrollTo(Self.liveBubbleId + ":" + bot.id, anchor: .bottom) })
+                                    steps: steps[bot.id] ?? [],
+                                    startedAt: memberStartedAt(steps[bot.id]),
+                                    onContent: { hasContent in
+                                        let id = Self.liveBubbleId + ":" + bot.id
+                                        if follow.shouldScroll(id, hasContent: hasContent) { proxy.scrollTo(id, anchor: .bottom) }
+                                    })
                             }
                             if room.activeBotIds == nil {
                                 LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
@@ -281,6 +317,7 @@ struct ChatView: View {
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
                 .defaultScrollAnchor(.bottom)
+                .modifier(TrackPinnedToBottom(follow: follow))
                 // Tapping the transcript puts the keyboard away. The composer
                 // is a sibling of this scroll view rather than inside it, so
                 // nothing else here drops its focus — until this, the only way
@@ -2438,21 +2475,70 @@ private struct LiveReplyRow<Working: View>: View {
     }
 }
 
+/// One room member's reply in flight: its text as typed, or the same
+/// working steps a 1:1 shows before any text exists. Observes only that
+/// member's live text, so its tokens redraw this row and nothing else.
 private struct RoomMemberLiveReply: View {
     @ObservedObject var live: LiveText
     let bot: Bot
     let busy: Bool
-    let onContent: () -> Void
+    let steps: [Message]
+    let startedAt: Date
+    /// Something in the row grew; true while it has anything to show.
+    /// ChatView decides whether that is worth a scroll.
+    let onContent: (Bool) -> Void
     var body: some View {
         if !live.text.isEmpty || !live.reasoning.isEmpty || busy {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) { BotAvatarView(bot: bot, size: 24); Text(bot.name).font(.caption.weight(.semibold)) }
                 if !live.text.isEmpty || !live.reasoning.isEmpty {
                     StreamingBubble(text: live.text, reasoning: live.reasoning, color: bot.color)
-                } else { Label("Working…", systemImage: "ellipsis").font(.caption).foregroundStyle(.secondary) }
+                } else { WorkingSteps(items: steps, startedAt: startedAt) }
             }.id(ChatView.liveBubbleId + ":" + bot.id)
-                .onReceive(live.$text.map(\.count).removeDuplicates()) { if $0 > 0 { onContent() } }
-                .onReceive(live.$reasoning.map(\.count).removeDuplicates()) { if $0 > 0 { onContent() } }
+                // One subscription for both streams, so a token is one
+                // callback however many lanes it touches.
+                .onReceive(live.$text.map(\.count).combineLatest(live.$reasoning.map(\.count)).map { $0 + $1 }.removeDuplicates()) { onContent($0 > 0) }
+                .onChange(of: steps.count) { _, _ in onContent(true) }
+        }
+    }
+}
+
+/// Following a room's live rows without fighting the reader.
+///
+/// Two or three members streaming at once each asked for a scroll on every
+/// token, which is a layout pass per character per member — the lag in a
+/// busy room. A row now scrolls the first time it has something to show and
+/// then at most every quarter second, and only while the reader is at the
+/// newest line: someone who has scrolled up to read is left there.
+final class ScrollFollow {
+    var pinned = true
+    private var lastScroll: [String: Date] = [:]
+    private static let interval: TimeInterval = 0.25
+
+    func shouldScroll(_ id: String, hasContent: Bool, now: Date = Date()) -> Bool {
+        guard hasContent else { lastScroll[id] = nil; return false }
+        guard pinned else { return false }
+        if let last = lastScroll[id], now.timeIntervalSince(last) < Self.interval { return false }
+        lastScroll[id] = now
+        return true
+    }
+}
+
+/// Keeps `ScrollFollow.pinned` current. The geometry callback is iOS 18;
+/// on 17 the reader counts as pinned, which is how it behaved before.
+private struct TrackPinnedToBottom: ViewModifier {
+    let follow: ScrollFollow
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: Bool.self) { geometry in
+                // a generous margin: a streaming row grows between frames,
+                // and the reader resting on the last line counts as at it
+                geometry.visibleRect.maxY >= geometry.contentSize.height - 80
+            } action: { _, pinned in
+                follow.pinned = pinned
+            }
+        } else {
+            content
         }
     }
 }

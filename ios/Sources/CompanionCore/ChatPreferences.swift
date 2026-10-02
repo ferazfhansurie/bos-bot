@@ -209,3 +209,28 @@ public func transcriptRows(_ messages: [Message], detail: ActivityDetail) -> [Tr
         return rows
     }
 }
+
+/// Each working room member's steps for the turn it has in flight, keyed by
+/// bot id, oldest first.
+///
+/// A 1:1's live steps are simply the activity tail of the thread. A room
+/// running members side by side interleaves them, so that tail belongs to
+/// nobody: each member's steps are its own `from` activity since its last
+/// word in the room, read past the other members' lines. The person's
+/// latest message is the floor, so a member that ended its last turn on a
+/// tool step does not drag those steps into the new one. Unattributed
+/// activity (the harness's own receipts) stays in the transcript.
+public func roomMemberLiveSteps(_ messages: [Message], botIds: [String]) -> [String: [Message]] {
+    var steps: [String: [Message]] = [:]
+    for botId in botIds {
+        var tail: [Message] = []
+        for message in messages.reversed() {
+            if message.role == .user { break }
+            guard message.from?.botId == botId else { continue }
+            guard message.kind == .activity else { break }
+            tail.insert(message, at: 0)
+        }
+        if !tail.isEmpty { steps[botId] = tail }
+    }
+    return steps
+}

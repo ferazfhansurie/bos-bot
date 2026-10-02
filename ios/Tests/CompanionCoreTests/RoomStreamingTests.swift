@@ -42,4 +42,28 @@ final class RoomStreamingTests: XCTestCase {
         XCTAssertEqual(event.streamKey, "private")
         XCTAssertNil(event.roomRuntimeThreadId)
     }
+
+    private func line(_ id: String, _ kind: Message.Kind, from bot: String?, role: Message.Role = .bot) -> Message {
+        var message = Message(id: id, role: role, kind: kind, at: 1)
+        if kind == .activity { message.tool = ToolActivity(name: "run", ok: true) }
+        message.from = bot.map { Sender(botId: $0, name: $0.uppercased(), color: "blue") }
+        return message
+    }
+    func testRoomMemberLiveStepsSplitInterleavedActivityPerMember() {
+        let messages = [
+            line("a-old", .activity, from: "a"), line("a-said", .text, from: "a"),
+            line("ask", .text, from: nil, role: .user),
+            line("a1", .activity, from: "a"), line("b1", .activity, from: "b"),
+            line("receipt", .activity, from: nil), line("a2", .activity, from: "a"),
+            line("b-said", .text, from: "b"), line("a3", .activity, from: "a"),
+        ]
+        let steps = roomMemberLiveSteps(messages, botIds: ["a", "b", "c"])
+        XCTAssertEqual(steps["a"]?.map(\.id), ["a1", "a2", "a3"])
+        XCTAssertNil(steps["b"], "b spoke after its step, so that step is settled")
+        XCTAssertNil(steps["c"])
+    }
+    func testRoomMemberLiveStepsStopAtThePersonsLatestMessage() {
+        let messages = [line("a-old", .activity, from: "a"), line("ask", .text, from: nil, role: .user)]
+        XCTAssertTrue(roomMemberLiveSteps(messages, botIds: ["a"]).isEmpty)
+    }
 }
