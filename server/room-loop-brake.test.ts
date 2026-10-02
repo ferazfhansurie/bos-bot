@@ -24,5 +24,6 @@ describe("room loop brake", () => {
     expect(trailingBotReplies([bot, user, bot, activity, bot])).toBe(2);
     expect(trailingBotReplies([user, bot, bot, bot])).toBe(MAX_BOT_RUN);
     expect(trailingBotReplies([bot, bot, user])).toBe(0);
+    expect(trailingBotReplies([user, bot, { role: "user", kind: "text", text: "scripted", via: "api" }, bot])).toBe(2);
   });
 });

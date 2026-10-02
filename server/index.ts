@@ -16699,11 +16699,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const threadId = body.threadId ?? group.threadId;
       noteTurnTrigger(threadId, auth);
-      try {
-        assertWithinBudget(cfg, DATA_DIR);
-      } catch (error) {
-        return json(res, 409, { error: error instanceof Error ? error.message : String(error), code: "spend_cap" });
-      }
       const ownsThread = group.dm
         ? group.threadId === threadId
         : Boolean(store.groupTaskByThread(group.id, threadId));
@@ -16727,17 +16722,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         console.warn(`room message from ${requestSource(req)} through the local API (no session, no browser origin) into "${group.name}"`);
       }
       // Typing "stop" in a room is the room's Stop button: every running
-      // member turn is cancelled and nothing new starts. It is recorded so
-      // the transcript shows why the bots went quiet.
-      if (!group.dm && channelMode === "chat" && !via && isRoomStopCommand(text)) {
-        const stopped = await interruptRoom(group);
-        const message = store.appendMessage(threadId, { role: "user", kind: "text", text, sendId, sender: messageSender(auth) });
-        store.appendMessage(threadId, {
-          role: "bot",
-          kind: "activity",
-          tool: { name: stopped ? `stopped ${stopped} running turn${stopped === 1 ? "" : "s"} in this room` : "nothing was running in this room", ok: true },
-        });
-        return json(res, 200, { ok: true, threadId, message, stopped });
+      // member turn is cancelled and nothing new starts. A person's stop is
+      // never refused by the spend cap; a script's is an ordinary message.
+      const roomStop = !group.dm && !via && isRoomStopCommand(text);
+      if (!roomStop) {
+        try {
+          assertWithinBudget(cfg, DATA_DIR);
+        } catch (error) {
+          return json(res, 409, { error: error instanceof Error ? error.message : String(error), code: "spend_cap" });
+        }
       }
       const receipt = await sendSequencer.run(
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
@@ -16773,6 +16766,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             throw Object.assign(new Error("the channel switched tasks before it could receive the message"), {
               status: 409,
             });
+          }
+          if (roomStop) {
+            const stopped = await interruptRoom(current);
+            const message = store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId: replyTo?.id, sendId, channelMode, sender: messageSender(auth) });
+            store.appendMessage(threadId, {
+              role: "bot",
+              kind: "activity",
+              tool: { name: stopped ? `stopped ${stopped} running turn${stopped === 1 ? "" : "s"} in this room` : "nothing was running in this room", ok: true },
+            });
+            return { ok: true as const, threadId, message, stopped };
           }
           const activeRecipients = roomRuntimeSpeakers(current.id, threadId).map(([, speaker]) => speaker.botId);
           const recipients = roomResponders(text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), current.defaultResponder, current.memberReplyModes);

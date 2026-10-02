@@ -38,14 +38,17 @@ export function isBareAck(text: string): boolean {
   return true;
 }
 
-type BrakeMessage = { role: string; kind?: string; text?: string };
+type BrakeMessage = { role: string; kind?: string; text?: string; via?: string };
 
-/** Bot replies posted since the last human message (activity rows ignored). */
+/** Bot replies posted since the last human message. Activity rows and
+ * script posts through the local API (a bot's shell can make those) are
+ * neither, so they never reset the count. */
 export function trailingBotReplies(messages: readonly BrakeMessage[]): number {
   let count = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!;
     if (message.kind && message.kind !== "text") continue;
+    if (message.role === "user" && message.via === "api") continue;
     if (message.role === "user") break;
     if (message.role === "bot" && message.text?.trim()) count++;
   }

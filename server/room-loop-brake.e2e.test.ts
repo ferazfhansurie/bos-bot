@@ -25,7 +25,7 @@ async function withPair(test: (f: any) => Promise<void>) {
       ? readFileSync(`${planPath}.evidence.jsonl`, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line).botId) : [];
     const messages = async () => (await api(`/api/threads/${room.activeTaskId}/messages`)).messages;
     const wait = () => cli("wait", "--channel", room.id, "--timeout", "40");
-    await test({ api, cli, say, ace, bee, room, savePlan, turns, messages, wait, planPath });
+    await test({ url, api, cli, say, ace, bee, room, savePlan, turns, messages, wait, planPath });
   } finally { await session.close(); }
 }
 
@@ -59,13 +59,18 @@ it("treats a typed stop as the room's Stop button", () => withPair(async f => {
   const edited = await f.api(`/api/groups/${f.room.id}`, { bulletin: "use ssh bos-server" }, "PATCH");
   expect(JSON.stringify(edited)).toContain("use ssh bos-server");
   await expect(f.api(`/api/groups/${f.room.id}`, { memberIds: [f.ace.id] }, "PATCH")).rejects.toThrow(/409/);
-  const stopped = await f.say(f.room.id, "stop");
+  const send = () => request(`/api/groups/${f.room.id}/messages`, {
+    method: "POST", body: JSON.stringify({ text: "stop", sendId: "4f9d2c1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f" }), headers: { origin: f.url, "content-type": "application/json" },
+  }, f.url) as Promise<any>;
+  const stopped = await send();
   expect(stopped.stopped).toBe(1);
+  // a retried send of the same stop is the same message, not a second stop
+  expect((await send()).message?.id).toBe(stopped.message.id);
   // an interrupted turn ends as failed, exactly like the Stop button
   expect((await f.wait()).status).toBe("failed");
   expect(f.turns()).not.toContain(f.bee.id);
   const log = await f.messages();
-  expect(log.some((m: any) => m.role === "user" && m.text === "stop")).toBe(true);
+  expect(log.filter((m: any) => m.role === "user" && m.text === "stop")).toHaveLength(1);
   expect(log.some((m: any) => m.kind === "activity" && m.tool?.name === "stopped 1 running turn in this room")).toBe(true);
   expect(log.some((m: any) => m.text === "@Bee your turn")).toBe(false);
 }), 60_000);
