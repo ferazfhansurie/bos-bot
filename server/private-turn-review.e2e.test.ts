@@ -6,12 +6,13 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { launchVerificationServer, verificationServerEnvironment } from "../scripts/control-omb.ts";
 import { waitForExit } from "./testing/cleanup.ts";
-it("allows explicit admin review of scoped unknown work without replay and durably releases its hold", async () => {
+it("never replays unknown work, never blocks new sends, and allows review while the bot is busy", async () => {
  const root=mkdtempSync(join(tmpdir(),"omb-review-fixture-"));
  const env={...process.env,FAKE_CLAUDE_MODE:"slow",FAKE_CLAUDE_SLOW_FINISH_GATE:join(root,"finish"),FAKE_CLAUDE_PROMPTS:join(root,"prompts.ndjson")};
  const fixture=await launchVerificationServer(env);let restarted:ChildProcess|undefined;let providerPid:number|undefined;
  const {url,dataDir}=fixture.info;
  const api=async(method:string,path:string,body?:unknown,token?:string)=>{const res=await fetch(url+path,{method,headers:{"content-type":"application/json",origin:url,...(token?{authorization:`Bearer ${token}`}:{})},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(15000)});return {status:res.status,body:await res.json() as any};};
+ const busy=async(id:string)=>Boolean((await api("GET","/api/bots?messages=1")).body.bots.find((b:any)=>b.id===id)?.busy);
  const journal=()=>JSON.parse(readFileSync(join(dataDir,"private-turn-dispatches.json"),"utf8"));
  const restart=async()=>{const log=openSync(fixture.info.logPath,"a",0o600);restarted=spawn(process.execPath,["--experimental-strip-types",fileURLToPath(new URL("./index.ts",import.meta.url))],{env:{...verificationServerEnvironment(env,dataDir,Number(new URL(url).port)),...Object.fromEntries(["HOME","USERPROFILE","XDG_CONFIG_HOME","XDG_DATA_HOME","LOCALAPPDATA","HERMES_HOME"].map(key=>[key,join(root,"provider-home",key)]))},stdio:["ignore",log,log]});closeSync(log);await expect.poll(async()=>{try{return (await api("GET","/api/health")).status;}catch{return 0;}},{timeout:20000}).toBe(200);};
  try {
@@ -33,48 +34,51 @@ it("allows explicit admin review of scoped unknown work without replay and durab
   writeFileSync(join(dataDir,"config.json"),JSON.stringify(config));
   await restart();
   const promptsBefore=readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8");
+  const prompts=()=>readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8").trim().split("\n").filter(Boolean);
+  const baseline=prompts().length;
+  // File-replacing and archive actions stay held until review.
   expect((await api("POST","/api/workspace-backup/export",{password:"synthetic backup password"})).status).toBe(409);
-  expect((await api("POST",`/api/bots/${bot.id}/messages`,{text:"blocked before review",threadId:bot.threadId})).status).toBe(409);
-  expect(readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8")).toBe(promptsBefore);
   expect((await api("POST",`/api/bots/${bot.id}/checkpoints/restore`,{cwd:receipt.cwd,hash:"a".repeat(40)})).status).toBe(409);
+  expect(readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8")).toBe(promptsBefore);
+  // An unreviewed interrupted request is only a warning: new sends in the same
+  // thread, an overlapping project and a room all start, and nothing replays.
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{text:"new request while unreviewed",threadId:bot.threadId})).status).toBe(202);
+  await expect.poll(()=>prompts().length,{timeout:15000}).toBe(baseline+1);
   const other=(await api("POST","/api/bots",{cwd:receipt.cwd,name:"Overlapping review fixture",modelSelection:{instanceId:"claude",model:"claude-sonnet-5"},requireAvailableModel:true})).body.bot;
   expect((await api("PATCH",`/api/bots/${other.id}`,{cwd:receipt.cwd})).status).toBe(200);
-  expect((await api("POST",`/api/bots/${other.id}/messages`,{text:"overlapping work refused",threadId:other.threadId})).status).toBe(202);
-  await expect.poll(async()=>{const messages=(await api("GET",`/api/threads/${other.threadId}/messages?limit=50`)).body.messages;return messages.some((m:any)=>JSON.stringify(m).includes("outcome is unknown"));},{timeout:15000}).toBe(true);
-  expect(readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8")).toBe(promptsBefore);
-  const roomCreated=await api("POST","/api/groups",{name:"Held room review fixture",memberIds:[other.id],setup:{cwd:receipt.cwd,bulletin:"Only fixture work.",defaultResponder:{kind:"member",botId:other.id}}});
+  expect((await api("POST",`/api/bots/${other.id}/messages`,{text:"overlapping work proceeds",threadId:other.threadId})).status).toBe(202);
+  await expect.poll(()=>prompts().length,{timeout:15000}).toBe(baseline+2);
+  const roomCreated=await api("POST","/api/groups",{name:"Room review fixture",memberIds:[other.id],setup:{cwd:receipt.cwd,bulletin:"Only fixture work.",defaultResponder:{kind:"member",botId:other.id}}});
   expect(roomCreated.status).toBe(201);const room=roomCreated.body.group;
   expect((await api("PATCH",`/api/groups/${room.id}`,{cwd:receipt.cwd})).status).toBe(200);
-  expect((await api("POST",`/api/groups/${room.id}/messages`,{text:"ordinary room work must stay held"})).status).toBe(202);
-  await expect.poll(async()=>{const messages=(await api("GET",`/api/threads/${room.threadId}/messages?limit=50`)).body.messages;return messages.some((m:any)=>JSON.stringify(m).includes("outcome is unknown"));},{timeout:15000}).toBe(true);
-  const routineCreated=await api("POST","/api/routines",{name:"Held room routine fixture",prompt:"Room routine work must stay held",target:"room-goal",groupId:room.id,botId:other.id,runOn:"maus",schedule:{type:"once",at:Date.now()+60000},durationMinutes:30});
-  expect(routineCreated.status).toBe(201);
-  const runCreated=await api("POST",`/api/routines/${routineCreated.body.routine.id}/run`);expect(runCreated.status).toBe(201);
-  let routineThread="";
-  await expect.poll(async()=>{const calendar=(await api("GET","/api/routines")).body;const run=calendar.runs.find((r:any)=>r.id===runCreated.body.run.id);routineThread=run?.threadId??"";return run?.status;},{timeout:15000}).toBe("failed");
-  expect(routineThread).not.toBe(room.threadId);
-  const routineMessages=(await api("GET",`/api/threads/${routineThread}/messages?limit=50`)).body.messages;
-  expect(routineMessages.some((m:any)=>JSON.stringify(m).includes("outcome is unknown"))).toBe(true);
-  // Give queued incident/report work time to settle before acknowledging.
-  await new Promise(resolve=>setTimeout(resolve,1000));
-  expect(readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8")).toBe(promptsBefore);
+  await expect.poll(()=>busy(other.id),{timeout:15000}).toBe(false);
+  expect((await api("POST",`/api/groups/${room.id}/messages`,{text:"room work proceeds"})).status).toBe(202);
+  await expect.poll(()=>prompts().length,{timeout:15000}).toBe(baseline+3);
+  expect(prompts().slice(baseline).some(line=>line.includes("one uncertain request"))).toBe(false);
+  // Review must succeed while the same bot is busy with newer work.
+  rmSync(env.FAKE_CLAUDE_SLOW_FINISH_GATE,{force:true});
+  await expect.poll(()=>busy(bot.id),{timeout:15000}).toBe(false);
+  expect((await api("POST",`/api/bots/${bot.id}/messages`,{text:"busy while reviewing",threadId:bot.threadId})).status).toBe(202);
+  await expect.poll(()=>prompts().length,{timeout:15000}).toBe(baseline+4);
+  expect(await busy(bot.id)).toBe(true);
   expect((await api("POST",path,{confirmed:false})).status).toBe(400);
   expect((await api("POST",path.replace(bot.threadId,"wrong-thread"),{confirmed:true})).status).toBe(404);
   const reviewed=await api("POST",path,{confirmed:true});expect(reviewed.status).toBe(200);
+  writeFileSync(env.FAKE_CLAUDE_SLOW_FINISH_GATE,"finish");
   expect(reviewed.body.receipt).toMatchObject({id:receipt.id,state:"outcome-unknown",reviewedBy:"desktop-owner"});
   expect(reviewed.body.receipt.reviewedAt).toBeGreaterThan(0);
   expect((await api("POST",path,{confirmed:true})).body.receipt).toEqual(reviewed.body.receipt);
   expect(journal().records[0]).toEqual(reviewed.body.receipt);
   const messages=(await api("GET",`/api/threads/${bot.threadId}/messages?limit=50`)).body.messages;
   expect(messages.some((m:any)=>m.tool?.recovery?.id===receipt.id&&m.tool.recovery.reviewedAt===reviewed.body.receipt.reviewedAt)).toBe(true);
-  expect(readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8")).toBe(promptsBefore);
+  expect(prompts().length).toBe(baseline+4);
   await expect.poll(async()=> (await api("POST","/api/workspace-backup/export",{password:"synthetic backup password"})).status,{timeout:15000}).toBe(200);
   await waitForExit(restarted,{signal:"SIGTERM"});await restart();
   expect(journal().records[0]).toEqual(reviewed.body.receipt);
-  expect(readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8")).toBe(promptsBefore);
+  expect(prompts().length).toBe(baseline+4);
   const restored=(await api("GET",`/api/threads/${bot.threadId}/messages?limit=50`)).body.messages;
   expect(restored.some((m:any)=>m.tool?.recovery?.reviewedAt===reviewed.body.receipt.reviewedAt)).toBe(true);
   expect((await api("POST",`/api/bots/${bot.id}/messages`,{text:"explicit new request after review",threadId:bot.threadId})).status).toBe(202);
-  await expect.poll(()=>readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8").trim().split("\n").length,{timeout:15000}).toBe(promptsBefore.trim().split("\n").length+1);
+  await expect.poll(()=>readFileSync(env.FAKE_CLAUDE_PROMPTS,"utf8").trim().split("\n").length,{timeout:15000}).toBe(baseline+5);
  }finally{if(providerPid)try{process.kill(providerPid,"SIGTERM");}catch{}await waitForExit(restarted,{signal:"SIGTERM"});await fixture.close();rmSync(root,{recursive:true,force:true});}
 },60000);

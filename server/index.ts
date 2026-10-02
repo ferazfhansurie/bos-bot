@@ -1089,9 +1089,8 @@ const teamComputerTurns = new Map<string, { owner: TurnOwner; computerId: string
 const settlingResourceOwners = new Map<string, string>();
 
 function claimTurnResource(owner: TurnOwner, resource: string, options?: { shared: boolean }): boolean {
-  if (resource.startsWith("workspace:") && turnRecoveryBlocker(privateTurnDispatches.all(), { workspace: resource })) {
-    throw Object.assign(new Error("Review the interrupted request in this project before continuing; its outcome is unknown."), { status: 409, code: "outcome_unknown" });
-  }
+  // An interrupted, unreviewed request is shown as a warning card only. It
+  // never holds the project: nothing replays it, so new work cannot collide.
   if (!turnResources.claim(resource, owner, options)) return false;
   turnResourceOwners.set(owner.threadId, owner);
   return true;
@@ -3772,9 +3771,6 @@ function refreshRoomSpeakers(groupId: string) {
 }
 function setRuntimeActivity(botId: string, threadId: string, activity: Parameters<typeof store.setActivity>[1]) {
   return store.roomRuntimeThread(threadId) ? store.setRoomActivity(threadId, botId, activity) : store.setActivity(botId, activity);
-}
-function roomRecoveryBlocked(threadId: string) {
-  return turnRecoveryBlocker(privateTurnDispatches.all().map(row => ({ ...row, threadId: store.canonicalThreadId(row.threadId) })), { threadId: store.canonicalThreadId(threadId) });
 }
 
 
@@ -6972,9 +6968,6 @@ async function startTurn(
   const profile = store.bot(botId);
   if (!profile) throw Object.assign(new Error("no such bot"), { status: 404 });
   const threadId = opts?.threadId ?? profile.threadId;
-  if (turnRecoveryBlocker(privateTurnDispatches.all(), { threadId })) {
-    throw Object.assign(new Error("Review the interrupted request in this conversation before continuing; its outcome is unknown."), { status: 409, code: "outcome_unknown" });
-  }
   const continuingRoutine = opts?.cardContinuation ? activeRoutineRunForThread(threadId) : null;
   if (continuingRoutine) {
     const onDispatchError = opts?.onDispatchError;
@@ -9404,10 +9397,6 @@ async function executeGroupMemberTurn(
     onDispatchError?.("This bot is pinned to a shared work computer. Room dispatch is not supported for that destination yet; no Mac tools were started.");
     return false;
   }
-  if (roomRecoveryBlocked(threadId)) {
-    onDispatchError?.("Review the interrupted request in this conversation before continuing; its outcome is unknown.");
-    return false;
-  }
   if (bot.approvalGrant) {
     onDispatchError?.(`${bot.name}'s approval level is still being confirmed — skipped this round`);
     return true;
@@ -10633,9 +10622,6 @@ function startGroupTurn(
     : Boolean(store.groupTaskByThread(group.id, threadId));
   if (!ownsThread) {
     throw Object.assign(new Error("no such room task"), { status: 404 });
-  }
-  if (roomRecoveryBlocked(threadId)) {
-    throw Object.assign(new Error("Review the interrupted request in this conversation before continuing; its outcome is unknown."), { status: 409, code: "outcome_unknown" });
   }
   const members = group.memberIds
     .map((id) => store.bot(id))
@@ -12679,8 +12665,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const confirmed = z.object({ confirmed: z.literal(true) }).strict().safeParse(await readBody(req));
       if (!confirmed.success) return json(res, 400, { error: "Confirm that you checked the outcome and that the request finished or stopped" });
       const [, botId, threadId, receiptId] = privateReviewRoute;
-      const group = store.groupByThread(threadId!);
-      if (botHasActiveTurn(botId!) || (group && groupIsWorking(group))) return json(res, 409, { error: "Finish or stop this active request before reviewing it" });
+      // Only a dead host's outcome-unknown receipt can be reviewed (acknowledge
+      // refuses a live dispatch), so the bot or room being busy with newer
+      // work must not keep the old card unreviewable.
       const actor = auth.kind === "session" ? `session:${auth.session.id}` : "desktop-owner";
       const savedReceipt = privateTurnDispatches.all().find(row => row.id === receiptId && row.botId === botId && store.canonicalThreadId(row.threadId) === threadId);
       if (!savedReceipt) return json(res, 404, { error: "Recovery receipt scope does not match" });
