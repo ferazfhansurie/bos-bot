@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# installer guard: refuses a build that carries commits not on the release branch.
+#   bin/unmerged-check <candidate-sha> [release-ref]
+# exit 0 = every candidate commit is on release (same sha or same patch, so
+# cherry-picks count); 1 = lists the commits that aren't; 2 = bad input.
+set -uo pipefail
+cand=${1:-}
+rel=${2:-${BOS_RELEASE_REF:-release/bos-1.0}}
+[ -n "$cand" ] || { echo "usage: bin/unmerged-check <candidate-sha> [release-ref]" >&2; exit 2; }
+cd "$(dirname "$0")/.." || exit 2
+c=$(git rev-parse --verify -q "$cand^{commit}") || { echo "unknown candidate: $cand" >&2; exit 2; }
+git rev-parse --verify -q "$rel^{commit}" >/dev/null || { echo "unknown release ref: $rel" >&2; exit 2; }
+missing=$(git cherry -v "$rel" "$c" | sed -n 's/^+ //p')
+if [ -z "$missing" ]; then
+  echo "ok: $(git rev-parse --short "$c") has nothing outside $rel"
+  exit 0
+fi
+echo "not ok: $(git rev-parse --short "$c") has $(printf '%s\n' "$missing" | wc -l | tr -d ' ') commit(s) not on $rel:"
+printf '%s\n' "$missing" | sed 's/^/  /'
+exit 1
