@@ -205,18 +205,23 @@ export function jobBlocks(label: string, details: LaunchdJobDetails | null): str
   return null;
 }
 
-/** Output of release/v1.3-build/preflight.py (read-only, prints json). Only
- * its live-job finding refuses an update; the rest is reported. */
+/** Output of electron/resources/updater/preflight.py (read-only, prints
+ * json; shipped at Contents/Resources/updater/preflight.py). The update is
+ * admitted only on ok=true with no live install job; idle one-shot install
+ * jobs are reported, never blocking. */
 export interface PreflightReport { ok?: boolean; checks?: { blocking_jobs?: string[]; idle_jobs?: string[]; health_ok?: boolean; health_pid_is_server?: boolean; single_main_app?: boolean }; launchd?: Array<{ label?: string; reason?: string; state?: string }> }
-export function preflightVerdict(report: PreflightReport): { blocking: string[]; notes: string[] } {
+export function preflightVerdict(report: PreflightReport): { refuse: string | null; blocking: string[]; failed: string[]; notes: string[] } {
   const checks = report.checks ?? {};
-  const blocking = Array.isArray(checks.blocking_jobs) ? checks.blocking_jobs.filter((label): label is string => typeof label === "string") : [];
-  const notes: string[] = [];
-  const idle = Array.isArray(checks.idle_jobs) ? checks.idle_jobs.filter(label => typeof label === "string") : [];
-  if (idle.length) notes.push(`preflight: idle install jobs loaded, not blocking: ${idle.join(", ")}`);
+  const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((label): label is string => typeof label === "string") : [];
+  const blocking = strings(checks.blocking_jobs);
+  const idle = strings(checks.idle_jobs);
   const failed = (["health_ok", "health_pid_is_server", "single_main_app"] as const).filter(key => checks[key] === false);
-  if (failed.length) notes.push(`preflight: not ok (${failed.join(", ")}); reported, not blocking`);
-  return { blocking, notes };
+  const notes: string[] = [];
+  if (idle.length) notes.push(`preflight: idle install jobs loaded, not blocking: ${idle.join(", ")}`);
+  let refuse: string | null = null;
+  if (blocking.length) refuse = `preflight found live install jobs: ${blocking.join(", ")}`;
+  else if (report.ok !== true) refuse = `preflight not ok${failed.length ? ` (${failed.join(", ")})` : report.ok === false ? "" : " (no verdict in its report)"}`;
+  return { refuse, blocking, failed, notes };
 }
 
 export function updateDir(dataDir: string, updateId: string): string { return join(updatesDir(dataDir), updateId); }
@@ -462,8 +467,12 @@ export interface DarwinExecutorOptions {
   codesign?: boolean;
   requireLaunchd?: boolean;
   uid?: number | null;
-  /** release/v1.3-build/preflight.py, when shipped; skipped when absent. */
+  /** Contents/Resources/updater/preflight.py (process.resourcesPath in the
+   * packaged app; OMB_UPDATER_PREFLIGHT overrides for dev/test). Undefined =
+   * no preflight configured (dev run): skipped with a note. */
   preflight?: string;
+  /** Packaged build: a missing preflight script refuses the update instead of skipping it. */
+  requirePreflight?: boolean;
   /** Test-only (OMB_UPDATE_SANDBOX=1): a staged bundle outside updates/candidate and a fault to inject. */
   sandbox?: { stagedPath?: string; fault?: string };
   runPreflight?: (path: string) => Promise<string>;
@@ -485,10 +494,34 @@ export function describeStagedApp(appPath: string): Candidate {
 function defaultRunPreflight(path: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("/usr/bin/python3", [path], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) return reject(new Error(`preflight failed: ${String(stderr).trim().slice(0, 300) || error.message}`));
+      if (error) {
+        const code = typeof (error as NodeJS.ErrnoException & { code?: unknown }).code === "number" ? ` (exit ${String((error as { code?: unknown }).code)})` : "";
+        return reject(new Error(`preflight exited with an error${code}: ${String(stderr).trim().slice(0, 300) || error.message}`));
+      }
       resolve(String(stdout));
     });
   });
+}
+
+/** The preflight gate, first thing in admission: nothing is locked, planned
+ * or swapped until the shipped script says ok. Refuses on a missing script
+ * (packaged), a failed run, unreadable json, ok=false, or a live install job. */
+async function runPreflightGate(options: DarwinExecutorOptions): Promise<string[]> {
+  if (!options.preflight) return ["preflight not configured; skipped"];
+  if (!existsSync(options.preflight)) {
+    if (options.requirePreflight) throw err(`preflight script missing at ${options.preflight}; refusing to update`, 409);
+    return [`preflight script not found at ${options.preflight}; skipped`];
+  }
+  let output: string;
+  try { output = await (options.runPreflight ?? defaultRunPreflight)(options.preflight); }
+  catch (error) { throw err(`preflight refused: ${error instanceof Error ? error.message : String(error)}`, 409); }
+  let report: PreflightReport;
+  try { report = JSON.parse(output) as PreflightReport; }
+  catch (error) { throw err(`preflight refused: its output is not json (${error instanceof Error ? error.message : String(error)})`, 409); }
+  if (!report || typeof report !== "object") throw err("preflight refused: its output is not a report", 409);
+  const verdict = preflightVerdict(report);
+  if (verdict.refuse) throw err(verdict.refuse, 409);
+  return verdict.notes;
 }
 
 export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorOptions): UpdateExecutor {
@@ -501,7 +534,7 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
   return {
     candidate,
     async admit() {
-      const notes: string[] = [];
+      const notes: string[] = await runPreflightGate(options);
       const { running, idle, staleOwn } = classifyLaunchdJobs(await host.launchdList());
       const blocking = running.map(label => `${label} (running)`);
       for (const label of idle) {
@@ -514,14 +547,6 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
       for (const label of staleOwn) {
         log(`[update] removing finished update job ${label}`);
         try { await host.bootout(uid, label); } catch (error) { log(`[update] bootout ${label} failed: ${error instanceof Error ? error.message : String(error)}`); }
-      }
-      if (options.preflight && existsSync(options.preflight)) {
-        let report: PreflightReport;
-        try { report = JSON.parse(await (options.runPreflight ?? defaultRunPreflight)(options.preflight)) as PreflightReport; }
-        catch (error) { notes.push(`preflight unreadable, not blocking: ${error instanceof Error ? error.message : String(error)}`); report = {}; }
-        const verdict = preflightVerdict(report);
-        if (verdict.blocking.length) throw err(`preflight found live install jobs: ${verdict.blocking.join(", ")}`, 409);
-        notes.push(...verdict.notes);
       }
       return notes;
     },

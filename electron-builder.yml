@@ -44,6 +44,9 @@ files:
   - "!electron/resources/recorder-helper.swift"
   - "!electron/resources/recorder-helper-Info.plist"
   - "!electron/resources/OpenMausBot Recorder.app/**"
+  # updater/preflight.py ships via mac.extraResources (it must be a real file
+  # python can run, not an asar entry); keep it out of the archive.
+  - "!electron/resources/updater/**"
   - "!**/node_modules/**"
   - package.json
 
@@ -110,6 +113,12 @@ mac:
       to: cloudflared/cloudflared
     - from: dist-native/browser/darwin-${arch}
       to: browser-engine
+    # read-only launchd/health preflight the 1.3 updater runs before it admits
+    # an update or restart (server/updater.ts createDarwinExecutor). Lands at
+    # Contents/Resources/updater/preflight.py; a packaged build refuses to
+    # update when it is missing.
+    - from: electron/resources/updater/preflight.py
+      to: updater/preflight.py
   extendInfo:
     NSMicrophoneUsageDescription: BOS Bot uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: BOS Bot transcribes your voice on-device to type messages for you.
