@@ -191,6 +191,12 @@ struct ChatListView: View {
                    path.isEmpty, let first = chats.first {
                     path.append(first.chat)
                 }
+                // `-open-chat room-hq`: any chat by id, rooms included
+                let args = ProcessInfo.processInfo.arguments
+                if let i = args.firstIndex(of: "-open-chat"), i + 1 < args.count, path.isEmpty,
+                   let match = session.state.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
+                    path.append(match.chat)
+                }
             }
 #endif
             .sheet(isPresented: $showingUpdates) {
