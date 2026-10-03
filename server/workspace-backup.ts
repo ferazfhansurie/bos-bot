@@ -34,6 +34,11 @@ const EXCLUDED = new Set([
   ".openmausbot-server-child", "environment-id", ".remote-full", "sessions.json", "tunnel-account.json",
   "team-computers.json", "private-turn-dispatches.json", "desktop-lifecycle.json", "host-recovery-state.json", "desktop-update-receipt.json", ".host-recovery-owner",
   "openmausbot-server.lease", "box-create-requests.lock", "messages.db-wal", "messages.db-shm",
+  // Isolated CLI login home for staging and server-only hosts (HOME,
+  // USERPROFILE, LOCALAPPDATA point here). It holds provider credentials, and
+  // Windows populates it with OS junctions such as INetCache\Content.IE5, so it
+  // is never part of a workspace snapshot and survives a restore untouched.
+  "provider-home",
 ]);
 const EXCLUSION_NOTES = [
   "Device pairing, server identity, live leases and runtime files (existing destination identities are preserved).",
