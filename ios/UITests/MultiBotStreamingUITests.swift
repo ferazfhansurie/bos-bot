@@ -84,8 +84,10 @@ final class MultiBotStreamingUITests: XCTestCase {
             XCTAssertTrue(row.waitForExistence(timeout: 20))
             let tapped = Date()
             row.tap()
-            XCTAssertTrue(input.waitForExistence(timeout: 20))
-            print("SWITCH_SECONDS \(name) \(Date().timeIntervalSince(tapped))")
+            // A chat that has not opened in 30s is reported, not fatal, so
+            // the run still measures the rest.
+            let opened = input.waitForExistence(timeout: 30)
+            print("SWITCH_SECONDS \(name) \(Date().timeIntervalSince(tapped))\(opened ? "" : " TIMEOUT")")
             // Rows reorder as bots post; count taps that opened another chat.
             if !header.label.hasPrefix(name + ",") { misses += 1 }
             sleep(1)

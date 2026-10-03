@@ -41,6 +41,10 @@ struct ChatListView: View {
     @State private var groupDeleteError: String?
     @FocusState private var searchFocused: Bool
 
+#if DEBUG
+    @MainActor private static var debugRouted = false
+#endif
+
     /// Room for the floating bar, so the last row can scroll clear of it.
     private static let barClearance: CGFloat = 20
 
@@ -184,6 +188,9 @@ struct ChatListView: View {
             // Preview-only routes let the screenshot harness reach screens
             // that normally require a paired computer and a tap.
             .task {
+                // The list reappears on every back; route only at launch.
+                guard !Self.debugRouted else { return }
+                Self.debugRouted = true
                 if ProcessInfo.processInfo.arguments.contains("-open-new-section") {
                     showingNewSection = true
                 }
@@ -213,7 +220,7 @@ struct ChatListView: View {
                     showingWalkie = false
                     path.append(chat)
                 }
-                .environmentObject(session)
+                .session(session)
             }
             .sheet(isPresented: $showingNewBot) {
                 NavigationStack {
