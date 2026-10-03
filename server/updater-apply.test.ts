@@ -115,7 +115,7 @@ describe.skipIf(!hasPython)("detached updater script (sandboxed swap)", () => {
   it("agrees with the TypeScript tree digest", async () => {
     const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "new");
     const probe = join(root, "digest.py");
-    writeFileSync(probe, UPDATER_APPLY_SCRIPT.split("\ndef digests")[0].replace(/^HERE = .*\n^PLAN = .*\n^LIVE = .*\n^STAGED = .*\n^BACKUP = .*\n^RESULT = .*\n^PORTS = .*\n^LOG = .*\n/m, "") +
+    writeFileSync(probe, UPDATER_APPLY_SCRIPT.split("\ndef digests")[0].replace(/^HERE = [\s\S]*?^LOG = .*\n/m, "") +
       `\nimport json, sys\nprint(json.dumps({"server": tree_digest(sys.argv[1], "server"), "ui": tree_digest(sys.argv[1], "ui")}))\n`);
     const out = await new Promise<string>((resolve, reject) => execFile(PYTHON, [probe, staged], (e, o, err) => e ? reject(new Error(err)) : resolve(o)));
     expect(JSON.parse(out)).toEqual(appDigests(staged));
