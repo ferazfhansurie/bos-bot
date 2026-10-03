@@ -26,6 +26,58 @@ public enum ChannelTextPresentation {
     }
 }
 
+/// The room header's stack: working bots first so the busy ones are always
+/// visible, a few faces, and a count for the rest.
+public struct ChannelRoster: Sendable {
+    public let shown: [Bot]
+    public let overflow: Int
+    public let working: Set<String>
+
+    public init(room: Room, members: [Bot], hostLive: Bool, limit: Int = 4) {
+        let status = Dictionary(members.map { ($0.id, ChannelMemberStatus.resolve(room: room, bot: $0, hostLive: hostLive)) }, uniquingKeysWith: { a, _ in a })
+        let working = Set(members.filter { status[$0.id] == .working }.map(\.id))
+        let ordered = members.filter { working.contains($0.id) } + members.filter { !working.contains($0.id) }
+        self.shown = Array(ordered.prefix(limit))
+        self.overflow = max(0, ordered.count - limit)
+        self.working = working
+    }
+}
+
+/// The @ drawer. Picks are held beside the draft and written back as plain
+/// `@name` text on send, so the server routes them exactly as typed ones.
+public enum ChannelMentionPicker {
+    /// Name prefix first, then anywhere in the name or role.
+    public static func matching(_ bots: [Bot], query: String) -> [Bot] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return bots }
+        let prefix = bots.filter { $0.name.lowercased().hasPrefix(q.lowercased()) }
+        let rest = bots.filter { bot in
+            !prefix.contains { $0.id == bot.id }
+                && (bot.name.localizedCaseInsensitiveContains(q) || bot.title.localizedCaseInsensitiveContains(q))
+        }
+        return prefix + rest
+    }
+
+    /// The draft without the unfinished `@query` the drawer is filtering on.
+    public static func removingQuery(from draft: String) -> String {
+        guard ChannelTextPresentation.mentionQuery(draft) != nil, let at = draft.lastIndex(of: "@") else { return draft }
+        return String(draft[..<at])
+    }
+
+    /// What goes to the server: each pick as `@name`, ahead of the message,
+    /// skipping any name the draft already mentions.
+    public static func outgoing(_ draft: String, picks: [Bot]) -> String {
+        var body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // a bare @ left open from the drawer is not part of the message
+        if body == "@" || body.hasSuffix(" @") { body = String(body.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines) }
+        let lower = body.lowercased()
+        let tags = picks.map { "@" + $0.name }.filter { tag in
+            !lower.contains(tag.lowercased() + " ") && !lower.hasSuffix(tag.lowercased())
+        }
+        return (tags + (body.isEmpty ? [] : [body])).joined(separator: " ")
+    }
+}
+
 /// A settings sheet belongs to the pairing generation that opened it. Going
 /// away and back to the same host cannot revive its pending operations.
 public struct RoomSettingsContext: Equatable, Sendable {

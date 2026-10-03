@@ -28,6 +28,9 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var draft = ""
     @State private var replyTarget: Message?
+    /// Bots picked in the @ drawer. Sent as `@name` text, so they route the
+    /// same as typed mentions.
+    @State private var mentionPicks: [Bot] = []
     @State private var showingTasks = false
     @State private var showingWalkie = false
     @State private var showingComputer = false
@@ -273,7 +276,7 @@ struct ChatView: View {
                 // The blur is only the top strip — back, computer — the way
                 // a system bar is; the transcript starts on that line and
                 // scrolls under the face and name, which float over it.
-                .safeAreaInset(edge: .top, spacing: 0) { VStack(spacing: 6) { headerBar; channelMemberStrip } }
+                .safeAreaInset(edge: .top, spacing: 0) { headerBar }
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
@@ -344,6 +347,15 @@ struct ChatView: View {
             // Profile parity screenshots without automating a tap through the
             // animated island/header transition.
             if ProcessInfo.processInfo.arguments.contains("-open-profile") { showingProfile = true }
+            // `-mention-picks a,b -mention-draft @p`: the @ drawer mid-pick
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "-mention-picks"), i + 1 < args.count {
+                let names = args[i + 1].split(separator: ",").map(String.init)
+                mentionPicks = names.compactMap { name in channelMembers.first { $0.name == name } }
+            }
+            if let i = args.firstIndex(of: "-mention-draft"), i + 1 < args.count {
+                draft = args[i + 1]; composerFocused = true
+            }
 #endif
         }
         .onChange(of: selectedThreadWasRemoved) { _, removed in
@@ -368,6 +380,7 @@ struct ChatView: View {
             attachments = restored.attachments
             attachmentError = restored.error
             replyTarget = restored.reply
+            mentionPicks = []
             selectedPhotos = []
             showCommandHUD = false
             showingPlus = false
@@ -471,7 +484,7 @@ struct ChatView: View {
                       canOpenSettings: !current.isRemoteBot,
                       canWatchComputer: current.isBot && !current.isRemoteBot, onBack: { dismiss() },
                       onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
-                      onComputer: { showingComputer = true }) {
+                      onComputer: { showingComputer = true }, accessory: rosterAccessory) {
             ChatAvatarView(chat: current, size: 30, state: .idle, animated: false)
         }
     }
@@ -481,24 +494,41 @@ struct ChatView: View {
         return room.memberIds.compactMap { session.state.bot($0) }
     }
     private var hostLive: Bool { if case .live = session.status { return true }; return false }
-    @ViewBuilder private var channelMemberStrip: some View {
-        if case let .room(room) = current {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(channelMembers) { bot in
-                        let status = ChannelMemberStatus.resolve(room: room, bot: bot, hostLive: hostLive)
-                        HStack(spacing: 5) {
-                            BotAvatarView(bot: bot, size: 24)
-                            Text(bot.name).font(.caption)
-                            Circle().fill(status == .working ? Color.green : status == .offline ? Color.gray : Color.blue).frame(width: 6, height: 6)
-                            Text(status.rawValue.capitalized).font(.caption2).foregroundStyle(.secondary)
-                        }.accessibilityElement(children: .combine)
-                    }
-                    if room.notifications == "muted" { Label("Muted", systemImage: "bell.slash").font(.caption) }
-                    else if room.notifications == "mentions" { Label("Mentions only", systemImage: "at").font(.caption) }
-                }.padding(.horizontal, 16)
-            }.padding(.bottom, 4)
+    private var rosterAccessory: AnyView? {
+        guard case let .room(room) = current else { return nil }
+        return AnyView(ChannelRosterChip(
+            roster: ChannelRoster(room: room, members: channelMembers, hostLive: hostLive),
+            notifications: room.notifications
+        ) { showingProfile = true })
+    }
+
+    // MARK: - Mentions
+
+    private var mentionMatches: [Bot]? {
+        guard let query = ChannelTextPresentation.mentionQuery(draft), !sendingMessage, !channelMembers.isEmpty else { return nil }
+        let matches = ChannelMentionPicker.matching(channelMembers, query: query)
+        return matches.isEmpty ? nil : matches
+    }
+
+    private var workingMembers: Set<String> {
+        guard case let .room(room) = current else { return [] }
+        return Set(channelMembers.filter { ChannelMemberStatus.resolve(room: room, bot: $0, hostLive: hostLive) == .working }.map(\.id))
+    }
+
+    /// A pick keeps the drawer open on a fresh @ so the next one is one tap.
+    private func toggleMention(_ bot: Bot) {
+        Haptics.selection()
+        withAnimation(.snappy(duration: 0.22)) {
+            if let index = mentionPicks.firstIndex(where: { $0.id == bot.id }) { mentionPicks.remove(at: index) }
+            else { mentionPicks.append(bot) }
         }
+        draft = ChannelMentionPicker.removingQuery(from: draft) + "@"
+        composerFocused = true
+    }
+
+    private func closeMentionDrawer() {
+        draft = ChannelMentionPicker.removingQuery(from: draft)
+        composerFocused = true
     }
 
     // MARK: - The + sheet
@@ -631,7 +661,8 @@ struct ChatView: View {
         // open the microphone after the message has already been sent.
         dictation.stop()
         let draftAtSend = draft
-        let text = (explicitText ?? draftAtSend).trimmingCharacters(in: .whitespacesAndNewlines)
+        let picksAtSend = explicitText == nil ? mentionPicks : []
+        let text = (explicitText ?? ChannelMentionPicker.outgoing(draftAtSend, picks: picksAtSend)).trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoingAttachments = attachments
         let replyAtSend = replyTarget
         let chatAtSend = current
@@ -673,6 +704,7 @@ struct ChatView: View {
             if draft == draftAtSend {
                 draft = ""
             }
+            if !picksAtSend.isEmpty, mentionPicks.map(\.id) == picksAtSend.map(\.id) { mentionPicks = [] }
             if attachments.map(\.id) == outgoingAttachments.map(\.id) {
                 attachments = []
             }
@@ -1047,26 +1079,23 @@ struct ChatView: View {
                     Button { self.replyTarget = nil } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("Cancel reply")
                 }.padding(10).background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
             }
-            if let query = ChannelTextPresentation.mentionQuery(draft), !sendingMessage, !channelMembers.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(channelMembers.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }) { bot in
-                            Button {
-                                draft = ChannelTextPresentation.insertingMention(bot.name, into: draft)
-                                composerFocused = true
-                            } label: {
-                                HStack(spacing: 6) { BotAvatarView(bot: bot, size: 26); Text(bot.name).font(.subheadline) }.padding(8)
-                            }.buttonStyle(.bordered).accessibilityLabel("Mention \(bot.name)")
-                        }
-                    }
+            if let matches = mentionMatches {
+                ChannelMentionDrawer(bots: matches, working: workingMembers, picked: mentionPicks,
+                                     onToggle: toggleMention, onDone: closeMentionDrawer)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            if !mentionPicks.isEmpty {
+                ChannelMentionChips(picked: mentionPicks) { bot in
+                    withAnimation(.snappy(duration: 0.22)) { mentionPicks.removeAll { $0.id == bot.id } }
                 }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             ChatComposerBar(
                 draft: $draft, showingPlus: $showingPlus, dictation: dictation,
                 focus: $composerFocused, name: current.name,
                 busy: preparingAttachments || sendingMessage,
-                hasAttachments: !attachments.isEmpty, supportsVoiceChat: true,
+                hasAttachments: !attachments.isEmpty || !mentionPicks.isEmpty, supportsVoiceChat: true,
                 onDraftChange: { value in
                     withAnimation(.easeInOut(duration: 0.15)) { showCommandHUD = value.hasPrefix("/") }
                 },
@@ -1080,6 +1109,7 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 8)
+        .animation(.snappy(duration: 0.22), value: mentionMatches?.map(\.id))
         .frame(maxWidth: CompanionLayout.chatWidth)
         .frame(maxWidth: .infinity)
     }
@@ -1135,9 +1165,13 @@ struct ChatHeaderBar<Avatar: View>: View {
     let onThreads: () -> Void
     let onSettings: () -> Void
     let onComputer: () -> Void
+    /// A second row that belongs to the header, under the same glass: the
+    /// room roster. Drawn inside so the transcript scrolls beneath it.
+    var accessory: AnyView? = nil
     @ViewBuilder let avatar: () -> Avatar
 
     var body: some View {
+        VStack(spacing: 6) {
         HStack(alignment: .top) {
             Button(action: onBack) {
                 HStack(spacing: 4) {
@@ -1187,7 +1221,10 @@ struct ChatHeaderBar<Avatar: View>: View {
                 Color.clear.frame(width: 44, height: 44)
             }
         }
-        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+        .padding(.horizontal, 16).padding(.top, 4)
+        if let accessory { accessory }
+        }
+        .padding(.bottom, 8)
         .frame(maxWidth: CompanionLayout.headerWidth).frame(maxWidth: .infinity)
         .background(
             Rectangle().fill(.ultraThinMaterial)

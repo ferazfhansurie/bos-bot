@@ -1,0 +1,274 @@
+{
+ "bots": [
+  {
+   "id": "room-bos",
+   "threadId": "room-thread-bos",
+   "name": "bos",
+   "title": "COO",
+   "description": "",
+   "notifications": true,
+   "color": "blue",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000000,
+   "messages": []
+  },
+  {
+   "id": "room-oracle",
+   "threadId": "room-thread-oracle",
+   "name": "oracle",
+   "title": "Head of Ops",
+   "description": "",
+   "notifications": true,
+   "color": "green",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000001,
+   "messages": []
+  },
+  {
+   "id": "room-dev",
+   "threadId": "room-thread-dev",
+   "name": "dev",
+   "title": "CTO \u00b7 BOS platform",
+   "description": "",
+   "notifications": true,
+   "color": "blue",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000002,
+   "messages": []
+  },
+  {
+   "id": "room-yap",
+   "threadId": "room-thread-yap",
+   "name": "yap",
+   "title": "Head of Marketing",
+   "description": "",
+   "notifications": true,
+   "color": "purple",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000003,
+   "messages": []
+  },
+  {
+   "id": "room-bud",
+   "threadId": "room-thread-bud",
+   "name": "bud",
+   "title": "Head of Client Delivery",
+   "description": "",
+   "notifications": true,
+   "color": "orange",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000004,
+   "messages": []
+  },
+  {
+   "id": "room-sen",
+   "threadId": "room-thread-sen",
+   "name": "sen",
+   "title": "Head of Sales & Finance",
+   "description": "",
+   "notifications": true,
+   "color": "yellow",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000005,
+   "messages": []
+  },
+  {
+   "id": "room-pix",
+   "threadId": "room-thread-pix",
+   "name": "pix",
+   "title": "Frontend builder",
+   "description": "",
+   "notifications": true,
+   "color": "pink",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000006,
+   "messages": []
+  },
+  {
+   "id": "room-pipe",
+   "threadId": "room-thread-pipe",
+   "name": "pipe",
+   "title": "Backend builder",
+   "description": "",
+   "notifications": true,
+   "color": "cyan",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000007,
+   "messages": []
+  },
+  {
+   "id": "room-port",
+   "threadId": "room-thread-port",
+   "name": "port",
+   "title": "Cross-platform builder",
+   "description": "",
+   "notifications": true,
+   "color": "green",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000008,
+   "messages": []
+  },
+  {
+   "id": "room-nit",
+   "threadId": "room-thread-nit",
+   "name": "nit",
+   "title": "QA operator",
+   "description": "",
+   "notifications": true,
+   "color": "red",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000009,
+   "messages": []
+  },
+  {
+   "id": "room-ink",
+   "threadId": "room-thread-ink",
+   "name": "ink",
+   "title": "Content writer",
+   "description": "",
+   "notifications": true,
+   "color": "purple",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000010,
+   "messages": []
+  },
+  {
+   "id": "room-tab",
+   "threadId": "room-thread-tab",
+   "name": "tab",
+   "title": "Invoices + ledger operator",
+   "description": "",
+   "notifications": true,
+   "color": "orange",
+   "unread": false,
+   "modelSelection": {
+    "instanceId": "preview",
+    "model": "preview"
+   },
+   "createdAt": 1787028000011,
+   "messages": []
+  }
+ ],
+ "groups": [
+  {
+   "id": "room-hq",
+   "threadId": "room-thread-hq",
+   "name": "HQ",
+   "memberIds": [
+    "room-bos",
+    "room-oracle",
+    "room-dev",
+    "room-yap",
+    "room-bud",
+    "room-sen",
+    "room-pix",
+    "room-pipe",
+    "room-port",
+    "room-nit",
+    "room-ink",
+    "room-tab"
+   ],
+   "defaultResponder": {
+    "kind": "mentions"
+   },
+   "bulletin": "firaz's main room.",
+   "unread": false,
+   "createdAt": 1787028000100,
+   "pinned": true,
+   "activeBotIds": [
+    "room-dev",
+    "room-pix",
+    "room-pipe"
+   ],
+   "messages": [
+    {
+     "id": "m1",
+     "role": "user",
+     "kind": "text",
+     "at": 1787028001000,
+     "text": "@dev phone also needs polish. better bots on top, and @ should open a drawer."
+    },
+    {
+     "id": "m2",
+     "role": "bot",
+     "kind": "text",
+     "at": 1787028060000,
+     "from": {
+      "botId": "room-dev",
+      "name": "dev",
+      "color": "blue"
+     },
+     "text": "on it. the header row is overlapping messages on your screenshot too, i'll fix that while we're in there."
+    },
+    {
+     "id": "m3",
+     "role": "bot",
+     "kind": "text",
+     "at": 1787028120000,
+     "from": {
+      "botId": "room-pipe",
+      "name": "pipe",
+      "color": "cyan"
+     },
+     "text": "the legacy fixture has finished, and the suite has moved on. i'll hand @dev the commit with the focused results."
+    },
+    {
+     "id": "m4",
+     "role": "bot",
+     "kind": "text",
+     "at": 1787028180000,
+     "from": {
+      "botId": "room-bos",
+      "name": "bos",
+      "color": "blue"
+     },
+     "text": "done, everyone except pipe is in one team now. @yap try ink and cut again, the section block should be gone."
+    }
+   ]
+  }
+ ]
+}
