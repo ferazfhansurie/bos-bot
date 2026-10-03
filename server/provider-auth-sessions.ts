@@ -81,7 +81,11 @@ export class ProviderAuthSessions {
     flow.busy = true;
     try {
       await flow.instance.completeAuthentication(flowId, callbackUrl);
-      if (this.flows.get(instanceId) === flow) this.flows.delete(instanceId);
+      // Success: keep the finished flow so its owner's follow-up /status
+      // still answers "succeeded" (deleting it here made a working sign-in
+      // read as a 404 "no longer available"), but release the slot at once
+      // like any other terminal state. The next start() replaces it.
+      flow.expiresAt = 0;
     } finally { flow.busy = false; }
   }
 

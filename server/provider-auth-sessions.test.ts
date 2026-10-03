@@ -88,7 +88,28 @@ describe("provider login ownership", () => {
     await sessions.start(instance, "owner");
     await sessions.complete("codex", "owner", "random-flow", "callback");
     expect(instance.completeAuthentication).toHaveBeenCalledWith("random-flow", "callback");
-    await expect(sessions.status("codex", "owner", "random-flow")).rejects.toMatchObject({ status: 404 });
+    await expect(sessions.status("codex", "owner", "random-flow")).resolves.toMatchObject({ flowId: "random-flow" });
+    await expect(sessions.status("codex", "other", "random-flow")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("reports a completed sign-in as succeeded to its owner and frees the slot", async () => {
+    const { sessions, instance } = fixture();
+    await sessions.start(instance, "owner");
+    instance.completeAuthentication.mockImplementation(async () => {
+      instance.getAuthentication.mockResolvedValue({ phase: "succeeded", flowId: "random-flow", authorizationUrl: null, expiresAt: null });
+    });
+    await sessions.complete("codex", "owner", "random-flow", "pasted-code");
+    await expect(sessions.status("codex", "owner", "random-flow")).resolves.toMatchObject({ phase: "succeeded" });
+    expect(sessions.active).toBe(false);
+    await expect(sessions.start(instance, "other")).resolves.toMatchObject({ phase: "waiting" });
+  });
+
+  it("keeps the flow open for a retry when completion fails", async () => {
+    const { sessions, instance } = fixture();
+    await sessions.start(instance, "owner");
+    instance.completeAuthentication.mockRejectedValueOnce(new Error("bad code"));
+    await expect(sessions.complete("codex", "owner", "random-flow", "bad")).rejects.toThrow("bad code");
+    await expect(sessions.start(instance, "other")).rejects.toMatchObject({ status: 409 });
   });
 
   it("keeps the original flow recoverable when same-owner resume fails", async () => {
