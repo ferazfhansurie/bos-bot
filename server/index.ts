@@ -210,6 +210,7 @@ import {
   type RequestOutcome,
   type RuntimeEvent,
   type SteerOutcome,
+  type TurnImageInput,
   newId,
 } from "./contracts.ts";
 import { RETRY_MAX_ATTEMPTS } from "./drivers/retry.ts";
@@ -6164,6 +6165,24 @@ function noteRejectedSteerImages(threadId: string, queueKey: string, text: strin
   }
 }
 
+/** The words of a steer whose images the running turn would not take
+ * natively, with each picture named by its app attachment path so the
+ * engine can open it with its own file tools during this turn. */
+function imageFileSteerText(input: { text: string; images: readonly TurnImageInput[] }): string {
+  const files = input.images.map(image => `- ${image.path}`).join("\n");
+  const label = input.images.length === 1 ? "image is" : "images are";
+  return `${input.text.trimEnd()}${input.text.trim() ? "\n\n" : ""}[The attached ${label} saved here; open with your file Read tool:]\n${files}`;
+}
+
+function noteSteerImagesAsFiles(threadId: string, from?: { botId: string; name: string; color: string }): void {
+  store.appendMessage(threadId, {
+    role: "bot",
+    kind: "activity",
+    ...(from ? { from } : {}),
+    tool: { name: "image sent to the running turn as a file it can open", ok: true },
+  });
+}
+
 async function steerInboxQueue(botId: string, threadId: string, queueId: string, attended = false) {
   const bot = store.projectBotForTask(botId, threadId);
   if (!bot) return { ok: false, queued: false, threadId };
@@ -6181,7 +6200,7 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
   }
   const liveSteer = Boolean(currentAtStart?.busy && instance?.adapter.capabilities.queueing && instance.adapter.steer);
   if (currentAtStart?.busy) noteRejectedSteerImages(bot.threadId, queueId, heldPrompt);
-  if (steerInput.images.length && (!liveSteer || instance?.adapter.capabilities.nativeImageSteer !== true)) {
+  if (steerInput.images.length && !liveSteer) {
     restoreHeldSteeredQueue(held);
     if (currentAtStart?.busy) {
       noteSteerImageNotDelivered(bot.threadId, queueId, `${bot.name}'s engine can't take images during a turn — it will get the image after this reply`);
@@ -6190,10 +6209,22 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
   }
   const steerTarget = handoffs.current(bot.threadId);
   let steered: SteerOutcome = "refused";
+  let imagesAsFiles = false;
   if (liveSteer && instance?.adapter.steer) {
-    steered = await instance.adapter
-      .steer(bot.threadId, steerInput.text, { images: steerInput.images })
-      .catch((): SteerOutcome => "indeterminate");
+    if (!steerInput.images.length || instance.adapter.capabilities.nativeImageSteer === true) {
+      steered = await instance.adapter
+        .steer(bot.threadId, steerInput.text, { images: steerInput.images })
+        .catch((): SteerOutcome => "indeterminate");
+    }
+    // Native image input was refused (provably undelivered) or not offered
+    // mid-turn: send the same words now with the pictures as files the
+    // engine can open, rather than parking them until the reply ends.
+    if (steered === "refused" && steerInput.images.length && store.projectBotForTask(bot.id, bot.threadId)?.busy) {
+      steered = await instance.adapter
+        .steer(bot.threadId, imageFileSteerText(steerInput))
+        .catch((): SteerOutcome => "indeterminate");
+      imagesAsFiles = steered !== "refused";
+    }
   }
   if (steered === "refused" && steerInput.images.length && store.projectBotForTask(bot.id, bot.threadId)?.busy) {
     noteSteerImageNotDelivered(bot.threadId, queueId, "the running turn could not take the image — it will get it after this reply");
@@ -6224,6 +6255,7 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
       role: "bot", kind: "activity",
       tool: { name: "Queued message delivery outcome unknown — review before resending", ok: false },
     });
+    if (imagesAsFiles) noteSteerImagesAsFiles(bot.threadId);
     // Offered to the next turn again unless the person stops this one.
     if (steered === "steered") for (const message of messages) handoffs.steered(bot.threadId, steerTarget, instance?.instanceId, message.id);
     const queueIds = held.items.map((item) => item.messageId);
@@ -6302,14 +6334,22 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
     throw error;
   }
   noteRejectedSteerImages(targetThreadId, head.id, head.text, speakerFrom);
-  if (steerInput.images.length && instance.adapter.capabilities.nativeImageSteer !== true) {
-    restoreHeldChannelQueue(held);
-    noteSteerImageNotDelivered(targetThreadId, head.id, imageWaitNote, speakerFrom);
-    return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId, reason: "This provider will receive the image after its current reply finishes." } };
+  const replyAuthor = cfg.profile?.name?.trim() || "User";
+  let steered: SteerOutcome = "refused";
+  if (!steerInput.images.length || instance.adapter.capabilities.nativeImageSteer === true) {
+    steered = await instance.adapter
+      .steer(runtimeThreadId, promptWithReply(steerInput.text, replyTo, replyAuthor), { images: steerInput.images })
+      .catch((): SteerOutcome => "indeterminate");
   }
-  const steered = await instance.adapter
-    .steer(runtimeThreadId, promptWithReply(steerInput.text, replyTo, cfg.profile?.name?.trim() || "User"), { images: steerInput.images })
-    .catch((): SteerOutcome => "indeterminate");
+  // Same fallback as the 1:1 path: a refused native image is provably
+  // undelivered, so the words go now with the pictures as openable files.
+  let imagesAsFiles = false;
+  if (steered === "refused" && steerInput.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
+    steered = await instance.adapter
+      .steer(runtimeThreadId, promptWithReply(imageFileSteerText(steerInput), replyTo, replyAuthor))
+      .catch((): SteerOutcome => "indeterminate");
+    imagesAsFiles = steered !== "refused";
+  }
   if (steered === "refused" && steerInput.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
     noteSteerImageNotDelivered(targetThreadId, head.id, "the running turn could not take the image — it will get it after this reply", speakerFrom);
   }
@@ -6346,6 +6386,7 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
         ? "Queued message delivery outcome unknown — review before resending"
         : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: false },
     });
+    if (imagesAsFiles) noteSteerImagesAsFiles(targetThreadId, speakerFrom);
     settleHeldChannelQueueHead(held);
     return { status: 200, body: {
       ok: true,
@@ -6369,6 +6410,36 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
   // is now drainable must not strand behind a missed settle.
   if (after && !groupIsWorking(after)) drainQueuedChannelSends();
   return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId } };
+}
+
+/** Receipt for a send that was folded into a running turn. A recorded but
+ * unsteered row is an uncertain delivery: shown once, never replayed. */
+function sendSteerReceipt(threadId: string, message: Message) {
+  return message.steered
+    ? { ok: true as const, threadId, message, steered: true as const }
+    : { ok: true as const, threadId, message, steered: false as const, outcomeUnknown: true as const };
+}
+
+/** A room message addressed to a member that is mid-turn steers into that
+ * turn as it is sent, through the same FIFO claim the tool-boundary delivery
+ * uses: earlier queued lines go first and nothing is delivered twice. */
+async function steerRoomSendNow(groupId: string, threadId: string, queueId: string) {
+  const deliveredMessage = () => store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
+  for (const [runtimeThreadId] of roomRuntimeSpeakers(groupId, threadId)) {
+    try { await steerRoomAtToolBoundary(runtimeThreadId); }
+    catch (error) { console.warn("room send-time steer failed", error instanceof Error ? error.message : String(error)); }
+    if (deliveredMessage()) break;
+  }
+  const delivered = deliveredMessage();
+  if (delivered) return sendSteerReceipt(threadId, delivered);
+  // Still waiting: say so in the room rather than leaving a silent chip.
+  const head = channelQueueHead(groupId, threadId);
+  if (head?.id === queueId && !head.text.includes("<attached-image")) store.appendMessage(threadId, {
+    role: "bot",
+    kind: "activity",
+    tool: { name: "not delivered yet: no addressed bot could take this into its running turn — it is queued for after the current reply", ok: false },
+  });
+  return { ok: true as const, queued: true as const, queueId, threadId };
 }
 
 const roomBoundarySteers = new Set<string>();
@@ -6444,6 +6515,50 @@ function drainQueuedSends() {
     (botId, threadId) => threadBusy(botId, threadId) || botAtThreadCapacity(botId) || Boolean(activeGroupTurnForBot(botId))
       || parksBehindCoordination(botId, threadId),
   );
+}
+
+/** A send-time steer the running turn refused is provably undelivered: it
+ * stays one queued chip for the next turn, and the thread says so instead of
+ * looking sent. Image refusals carry their own note. */
+function noteSendSteerRefused(threadId: string, text: string, name: string, from?: { botId: string; name: string; color: string }): void {
+  if (text.includes("<attached-image")) return;
+  store.appendMessage(threadId, {
+    role: "bot",
+    kind: "activity",
+    ...(from ? { from } : {}),
+    tool: { name: `not delivered yet: ${name}'s running turn refused the message — it is queued for after this reply`, ok: false },
+  });
+}
+
+/** A send that lands on a running turn steers into it right away instead of
+ * waiting for a tool boundary or a second Enter. It goes through the same
+ * atomic queue claim as every other steer, so it is delivered once: either
+ * folded into the live turn now, or (provably undelivered) left queued for
+ * the next turn. */
+async function steerSendNow(botId: string, threadId: string, queueId: string, attended: boolean) {
+  const queuedReceipt = () => {
+    const pending = queuedSteerSnapshot((owner, thread) => owner === botId && thread === threadId)[threadId]
+      ?.find(item => item.queueId === queueId);
+    return pending ? { ok: true as const, queued: true as const, queueId, threadId, ...(pending.reason ? { reason: pending.reason } : {}) } : null;
+  };
+  try {
+    await steerInboxQueue(botId, threadId, queueId, attended);
+  } catch (error) {
+    // A gone bot or task is the answer to this send, not a queued chip.
+    if (typeof (error as { status?: unknown })?.status === "number") throw error;
+    console.warn("send-time steer failed", error instanceof Error ? error.message : String(error));
+  }
+  const delivered = store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
+  if (delivered) return sendSteerReceipt(threadId, delivered);
+  // Another claim (a tool-boundary steer or the settle drain) may hold it
+  // right now; it stays a queued chip until that claim records it.
+  const queued = queuedReceipt();
+  if (queued) {
+    const pending = queuedSteerSnapshot((owner, thread) => owner === botId && thread === threadId)[threadId]?.find(item => item.queueId === queueId);
+    const bot = store.projectBotForTask(botId, threadId);
+    if (pending && bot?.busy) noteSendSteerRefused(threadId, pending.text, bot.name);
+  }
+  return queued ?? { ok: true as const, queued: true as const, queueId, threadId };
 }
 
 /** Keep a person's words off the transcript until a direct-thread slot is
@@ -17050,7 +17165,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               via,
               sender: messageSender(auth),
             });
-            return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
+            return steerRoomSendNow(current.id, threadId, queued.id);
           }
           const message = startGroupTurn(current.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth) });
           return { ok: true as const, threadId, message };
@@ -18436,7 +18551,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               replyToId: replyTo?.id, sendId,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
-            return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
+            return steerSendNow(currentAtStart.id, threadId, queued.id, auth.kind === "session" || DESKTOP_MANAGED);
           }
           return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
         },

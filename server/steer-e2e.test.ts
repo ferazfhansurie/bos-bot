@@ -127,7 +127,7 @@ posixOnly("mid-turn steering e2e", () => {
   });
 
   it(
-    "queues input until the next tool result, then steers it once into the same Claude turn",
+    "steers a busy send into the same Claude turn at once, with no queued chip",
     async () => {
       rmSync(steerFinishGate, { force: true });
       writeFileSync(toolResultGate, "hold result");
@@ -147,10 +147,12 @@ posixOnly("mid-turn steering e2e", () => {
         writeFileSync(steerFinishGate, "finish");
       }
       expect(second.status).toBe(202);
-      expect(second.body.queued).toBe(true);
-      expect((await getBot(created.id)).messages.some((m: any) => m.text === "and also this")).toBe(false);
+      expect(second.body).toMatchObject({ ok: true, steered: true });
+      expect(second.body.queued).toBeUndefined();
+      expect((await getBot(created.id)).messages.filter((m: any) => m.text === "and also this" && m.steered)).toHaveLength(1);
+      // no chip left behind: the queue id is already settled
+      expect((await api("POST", `/api/bots/${created.id}/queue/${second.body.message.queueId}/steer`, { threadId: created.threadId })).body.queued).not.toBe(true);
       rmSync(toolResultGate, { force: true });
-      await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.text === "and also this" && m.steered), "boundary delivery");
 
       await waitFor(async () => (await getBot(created.id)).busy === false, "the turn to settle");
       const bot = await getBot(created.id);
@@ -175,7 +177,7 @@ posixOnly("mid-turn steering e2e", () => {
     40_000,
   );
 
-  it("delivers queued room messages once at the member's tool boundary without a manual steer", async () => {
+  it("steers room messages to the busy addressed member as they are sent, once each", async () => {
     rmSync(steerFinishGate, { force: true });
     writeFileSync(toolResultGate, "hold the room member's tool result");
     const created = (await api("POST", "/api/bots")).body.bot;
@@ -197,18 +199,14 @@ posixOnly("mid-turn steering e2e", () => {
         api("POST", `/api/groups/${room.id}/messages`, body),
         api("POST", `/api/groups/${room.id}/messages`, body),
       ]);
-      expect(first.body.queued).toBe(true);
-      expect(retry.body.queueId).toBe(first.body.queueId);
+      expect(first.body).toMatchObject({ ok: true, steered: true });
+      expect(retry.body.message?.id).toBe(first.body.message.id);
       const second = await api("POST", `/api/groups/${room.id}/messages`, { text: aside, sendId: "room-boundary-aside" });
-      expect(second.body.queued).toBe(true);
-      expect((await getRoom()).messages.some((m: any) => m.text === pasted)).toBe(false);
+      expect(second.body).toMatchObject({ ok: true, steered: true });
+      expect((await getRoom()).messages.filter((m: any) => m.text === pasted && m.steered)).toHaveLength(1);
       rmSync(toolResultGate, { force: true });
-      await waitFor(async () => {
-        const messages = (await getRoom()).messages;
-        return [pasted, aside].every(text => messages.some((m: any) => m.text === text && m.steered));
-      }, "both room messages at the tool boundary", 5_000);
       expect((await getRoom()).working).toBe(true);
-      for (const queueId of [first.body.queueId, second.body.queueId]) {
+      for (const queueId of [first.body.message.queueId, second.body.message.queueId]) {
         expect((await api("POST", `/api/groups/${room.id}/queue/${queueId}/steer`, { botId: created.id })).status).toBe(404);
       }
       writeFileSync(steerFinishGate, "finish");
@@ -229,7 +227,7 @@ posixOnly("mid-turn steering e2e", () => {
     }
   }, 40_000);
 
-  it("keeps two queued attachment messages as two native images in one follow-up turn", async () => {
+  it("steers two attachment messages into the running turn as native images, once each", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, {
       modelSelection: { instanceId: "claude", model: "claude-fake" },
@@ -254,27 +252,17 @@ posixOnly("mid-turn steering e2e", () => {
     const secondReceipt = await api("POST", `/api/bots/${created.id}/messages`, { text: secondAttachedText });
 
     expect(firstReceipt.status).toBe(202);
-    expect(firstReceipt.body).toMatchObject({ ok: true, queued: true });
-    expect(firstReceipt.body.steered).toBeUndefined();
+    expect(firstReceipt.body).toMatchObject({ ok: true, steered: true });
     expect(secondReceipt.status).toBe(202);
-    expect(secondReceipt.body).toMatchObject({ ok: true, queued: true });
-    expect(secondReceipt.body.steered).toBeUndefined();
-    expect(
-      (await getBot(created.id)).messages.some(
-        (message: any) => message.text === firstAttachedText || message.text === secondAttachedText,
-      ),
-    ).toBe(false);
-
-    await waitFor(
-      async () => {
-        const messages = (await getBot(created.id)).messages;
-        return [firstAttachedText, secondAttachedText].every((text) =>
-          messages.some((message: any) => message.text === text),
-        );
-      },
-      "both attached messages to drain",
-    );
-    await waitFor(async () => (await getBot(created.id)).busy === false, "the attached follow-up to settle");
+    expect(secondReceipt.body).toMatchObject({ ok: true, steered: true });
+    const sent = (await getBot(created.id)).messages;
+    for (const text of [firstAttachedText, secondAttachedText]) {
+      expect(sent.filter((message: any) => message.role === "user" && message.text === text)).toHaveLength(1);
+    }
+    for (const receipt of [firstReceipt, secondReceipt]) {
+      expect((await api("POST", `/api/bots/${created.id}/queue/${receipt.body.message.queueId}/steer`, { threadId: created.threadId })).body.queued).not.toBe(true);
+    }
+    await waitFor(async () => (await getBot(created.id)).busy === false, "the image-steered turn to settle");
 
     const nativeRows = readFileSync(
       join(home, ".openmausbot", "native", `${created.threadId}.ndjson`),
@@ -283,19 +271,18 @@ posixOnly("mid-turn steering e2e", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    const followUp = nativeRows
+    const steers = nativeRows
       .filter((row) => row.dir === "out" && row.source === "claude.sdk.message")
-      .at(-1)?.msg;
-    expect(followUp.message.content).toEqual([
-      {
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data: "[image data: 12 base64 chars]" },
-      },
-      {
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data: "[image data: 16 base64 chars]" },
-      },
-      { type: "text", text: "look at this\n\n\n\nand this\n\n" },
+      .slice(-2).map((row) => row.msg.message.content);
+    expect(steers).toEqual([
+      [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "[image data: 12 base64 chars]" } },
+        { type: "text", text: "look at this\n\n" },
+      ],
+      [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "[image data: 16 base64 chars]" } },
+        { type: "text", text: "and this\n\n" },
+      ],
     ]);
   }, 40_000);
 
@@ -314,9 +301,7 @@ posixOnly("mid-turn steering e2e", () => {
     const missingPath = join(attachments, "123e4567-e89b-42d3-a456-426614174011.png");
     try {
       const imageText = `look at this\n\n<attached-image path="${imagePath}" name="shot.png" />`;
-      const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: imageText });
-      expect(queued.body).toMatchObject({ queued: true });
-      const steered = await api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, { threadId: created.threadId });
+      const steered = await api("POST", `/api/bots/${created.id}/messages`, { text: imageText });
       expect(steered.body).toMatchObject({ steered: true });
       expect((await getBot(created.id)).messages.find((m: any) => m.text === imageText)?.steered).toBe(true);
       const outgoing = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8")
@@ -329,8 +314,7 @@ posixOnly("mid-turn steering e2e", () => {
 
       // A tag whose file is gone keeps the words moving and says so.
       const missingText = `and this one\n\n<attached-image path="${missingPath}" name="gone.png" />`;
-      const missing = await api("POST", `/api/bots/${created.id}/messages`, { text: missingText });
-      const missingSteer = await api("POST", `/api/bots/${created.id}/queue/${missing.body.queueId}/steer`, { threadId: created.threadId });
+      const missingSteer = await api("POST", `/api/bots/${created.id}/messages`, { text: missingText });
       expect(missingSteer.body).toMatchObject({ steered: true });
       const notes = (await getBot(created.id)).messages.filter((m: any) => m.kind === "activity" && m.tool?.name.startsWith("image not delivered"));
       expect(notes.map((m: any) => m.tool.name)).toEqual(["image not delivered: gone.png — the attachment file is missing"]);
@@ -362,9 +346,7 @@ posixOnly("mid-turn steering e2e", () => {
       expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "first room turn" })).status).toBe(202);
       await waitFor(async () => (await getGroup())?.messages.some((m: any) => m.kind === "activity" && m.tool?.name === "Bash"), "the room tool chip");
       const imageText = `check the screenshot\n\n<attached-image path="${imagePath}" name="room.png" />`;
-      const queued = await api("POST", `/api/groups/${room.id}/messages`, { text: imageText });
-      expect(queued.body).toMatchObject({ ok: true, queued: true });
-      const steered = await api("POST", `/api/groups/${room.id}/queue/${queued.body.queueId}/steer`, { threadId: room.threadId });
+      const steered = await api("POST", `/api/groups/${room.id}/messages`, { text: imageText });
       expect(steered.body).toMatchObject({ ok: true, steered: true });
       expect((await getGroup())?.messages.find((m: any) => m.text === imageText)?.steered).toBe(true);
       const aliases = JSON.parse(readFileSync(join(home, ".openmausbot", "room-runtime-aliases.json"), "utf8"));
@@ -405,11 +387,9 @@ posixOnly("mid-turn steering e2e", () => {
     // The fake has paused stdin after the first prompt. This exceeds a pipe's
     // writable buffer, so the steer promise cannot acknowledge until the gate
     // opens; meanwhile the first turn is free to settle normally.
-    const queued = await api("POST", `/api/bots/${created.id}/messages`, {
+    const delayed = api("POST", `/api/bots/${created.id}/messages`, {
       text: `delayed ownership check ${"x".repeat(900_000)}`, threadId: created.threadId,
     });
-    expect(queued.body.queued).toBe(true);
-    const delayed = api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, { threadId: created.threadId });
     const prematurelySettled = await Promise.race([
       delayed.then(() => true),
       new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
@@ -462,9 +442,7 @@ posixOnly("mid-turn steering e2e", () => {
 
     const second = await api("POST", `/api/bots/${created.id}/messages`, { text: "and also this" });
     expect(second.status).toBe(202);
-    expect(second.body.queued).toBe(true);
-    const explicit = await api("POST", `/api/bots/${created.id}/queue/${second.body.queueId}/steer`, { threadId: created.threadId });
-    expect(explicit.body.steered).toBe(true);
+    expect(second.body.steered).toBe(true);
     const steered = (await getBot(created.id)).messages.find((m: any) => m.text === "and also this");
     expect(steered.steered).toBe(true);
 
@@ -485,9 +463,7 @@ posixOnly("mid-turn steering e2e", () => {
       const text = `${caption}\n\n<attached-image path="${imagePath}" name="steer.png" />`;
       const imageReceipt = await api("POST", `/api/bots/${created.id}/messages`, { text });
       expect(imageReceipt.status).toBe(202);
-      expect(imageReceipt.body).toMatchObject({ queued: true });
-      const imageSteer = await api("POST", `/api/bots/${created.id}/queue/${imageReceipt.body.queueId}/steer`, { threadId: created.threadId });
-      expect(imageSteer.body).toMatchObject({ steered: true });
+      expect(imageReceipt.body).toMatchObject({ steered: true });
       const rows = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8").trim().split("\n").map(line => JSON.parse(line));
       const call = rows.filter(row => row.dir === "out" && row.msg?.method === "turn/steer").at(-1)?.msg;
       expect(call.params.expectedTurnId).toBe("turn-1");
@@ -509,10 +485,9 @@ posixOnly("mid-turn steering e2e", () => {
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "codexUnknown", model: instance.models.default } });
     await api("POST", `/api/bots/${created.id}/messages`, { text: "start held turn" });
     await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.card), "held unknown-delivery turn");
-    const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: "uncertain input", threadId: created.threadId });
-    const route = `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`;
-    const outcome = await api("POST", route, { threadId: created.threadId });
+    const outcome = await api("POST", `/api/bots/${created.id}/messages`, { text: "uncertain input", threadId: created.threadId });
     expect(outcome.body).toMatchObject({ outcomeUnknown: true, steered: false });
+    const route = `/api/bots/${created.id}/queue/${outcome.body.message.queueId}/steer`;
     const bot = await getBot(created.id);
     expect(bot.messages.filter((m: any) => m.text === "uncertain input")).toHaveLength(1);
     expect(bot.messages.some((m: any) => m.tool?.name.includes("delivery outcome unknown"))).toBe(true);
@@ -530,10 +505,9 @@ posixOnly("mid-turn steering e2e", () => {
     const getGroup=async()=>(await api("GET","/api/bots?messages=100")).body.groups.find((g:any)=>g.id===room.id);
     await api("POST",`/api/groups/${room.id}/messages`,{text:"start held room turn"});
     await waitFor(async()=>(await getGroup()).messages.some((m:any)=>m.card),"room held turn");
-    const queued=await api("POST",`/api/groups/${room.id}/messages`,{text:"uncertain room input"});
-    const route=`/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
-    const outcome=await api("POST",route,{threadId:room.threadId});
-    expect(outcome.body).toMatchObject({steered:false,outcomeUnknown:true,delivery:"outcome_unknown",consumption:"unconfirmed"});
+    const outcome=await api("POST",`/api/groups/${room.id}/messages`,{text:"uncertain room input"});
+    expect(outcome.body).toMatchObject({steered:false,outcomeUnknown:true});
+    const route=`/api/groups/${room.id}/queue/${outcome.body.message.queueId}/steer`;
     const messages=(await getGroup()).messages;
     expect(messages.filter((m:any)=>m.text==="uncertain room input")).toHaveLength(1);
     expect(messages.find((m:any)=>m.text==="uncertain room input").steered).toBe(false);
@@ -559,6 +533,8 @@ posixOnly("mid-turn steering e2e", () => {
     const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: "steer these queued words" });
     expect(queued.body).toMatchObject({ ok: true, queued: true });
     expect((await getBot(created.id)).messages.some((m: any) => m.text === "steer these queued words")).toBe(false);
+    // a refused send-time steer is said out loud, never shown as delivered
+    expect((await getBot(created.id)).messages.filter((m: any) => m.tool?.name?.startsWith("not delivered yet:"))).toHaveLength(1);
 
     rmSync(codexSteerGate, { force: true });
     const steered = await api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, {
@@ -618,19 +594,10 @@ posixOnly("mid-turn steering e2e", () => {
     await waitFor(async () => (await getGroup())?.busyBotId === created.id, "the room turn to start");
     await waitFor(async () => (await getGroup())?.messages.some((m: any) => m.card), "the room question card");
 
-    // Enter still queues in rooms: the send lands as a queued chip, not a turn
-    const queued = await api("POST", `/api/groups/${room.id}/messages`, { text: "steer these room words" });
-    expect(queued.status).toBe(202);
-    expect(queued.body).toMatchObject({ ok: true, queued: true });
-    expect((await getGroup())?.messages.some((m: any) => m.text === "steer these room words")).toBe(false);
-
-    // the room Steer chip routes through the same non-interrupting fold
-    const steered = await api("POST", `/api/groups/${room.id}/queue/${queued.body.queueId}/steer`, {
-      threadId: room.threadId,
-    });
-    expect(steered.status).toBe(200);
+    // Enter in a room steers straight into the busy addressed member's turn
+    const steered = await api("POST", `/api/groups/${room.id}/messages`, { text: "steer these room words" });
+    expect(steered.status).toBe(202);
     expect(steered.body).toMatchObject({ ok: true, steered: true });
-    expect(steered.body.queueIds).toEqual([queued.body.queueId]);
     const folded = (await getGroup())?.messages.find((m: any) => m.text === "steer these room words");
     expect(folded?.steered).toBe(true);
 

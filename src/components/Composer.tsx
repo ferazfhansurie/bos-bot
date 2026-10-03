@@ -58,8 +58,6 @@ import { useThreadRefs } from "./ThreadRefs";
 import {
   QueuedComposerMessages,
   composerCanSteerQueuedMessages,
-  doubleEnterSteerWindowExpiresAt,
-  doubleEnterSteersQueue,
 } from "./ComposerQueuedMessages";
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
 import { mentionChoicesForQuery } from "@/lib/mentions";
@@ -406,23 +404,6 @@ export function Composer({
     }
   };
   useEffect(() => setSteering(false), [threadId, queueHeadId]);
-  // Double-Enter gesture: when a send lands as a queued chip on a busy
-  // steer-capable thread (live steer lost its race, an attachment, an
-  // older CLI), a second Enter within a short window pulls that queue into
-  // the running turn. Plain sends never consult the window, so they keep
-  // their normal latency.
-  const steerAgainUntilRef = useRef(0);
-  const prevPendingCountRef = useRef(pendingCount);
-  useEffect(() => {
-    const expiresAt = doubleEnterSteerWindowExpiresAt(
-      prevPendingCountRef.current,
-      pendingCount,
-      busy,
-      canSteer,
-    );
-    if (expiresAt !== null) steerAgainUntilRef.current = expiresAt;
-    prevPendingCountRef.current = pendingCount;
-  }, [pendingCount, busy, canSteer]);
   // Most engines acknowledge interruption quickly, but a lost response must
   // not leave a control claiming to steer forever. Queue drain or turn end
   // clears it immediately; twenty seconds is the final recovery floor.
@@ -1087,17 +1068,6 @@ export function Composer({
             // Shift+Enter inserts a newline; plain Enter sends
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              // The second Enter of the gesture: the chip above is waiting,
-              // the composer is empty, and the window is open — steer the
-              // queue into the running turn instead of waiting it out.
-              if (
-                canSteer &&
-                doubleEnterSteersQueue(steerAgainUntilRef.current, Date.now(), pendingCount, hasContent)
-              ) {
-                steerAgainUntilRef.current = 0;
-                steerQueued();
-                return;
-              }
               send();
             }
             if (e.key === "Escape" && recording) setRecording(false);
@@ -1116,9 +1086,7 @@ export function Composer({
               : shared
                 ? "Message… @mention a person or bot"
               : busy && canSteer
-                ? pendingCount > 0
-                  ? t("composer.placeholder.steerQueued", { name: busyName })
-                  : t("composer.placeholder.steer", { name: busyName })
+                ? t("composer.placeholder.steer", { name: busyName })
               : busy
                 ? group
                   ? t("composer.placeholder.queueGroup", { name: busyName })

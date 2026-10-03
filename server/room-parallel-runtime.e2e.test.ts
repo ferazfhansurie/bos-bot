@@ -235,11 +235,10 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(next.status).toBe(202); expect(next.body.queued).not.toBe(true);
     await wait(async()=>Boolean((await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id)));
     expect((await snapshot(room.id)).activeBotIds).toContain(slow.id);
-    // Same addressed member queues, then an explicit steer feeds only that running owner.
+    // The same busy addressed member gets the send steered straight into its running turn.
     const correction=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow CORRECTION"});
-    expect(correction.body.queued).toBe(true);
-    const steered=await api("POST",`/api/groups/${room.id}/queue/${correction.body.queueId}/steer`,{botId:slow.id});
-    expect(steered.body.steered).toBe(true);
+    expect(correction.body).toMatchObject({ok:true,steered:true});
+    expect(correction.body.queued).toBeUndefined();
     writeFileSync(patientFinishGate,"finish the steered room turn");
     await wait(async()=>!(await snapshot(room.id)).working);
     const replies=(await snapshot(room.id)).messages.filter((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===slow.id&&m.turnTerminal);
@@ -250,17 +249,17 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     // The same bot can own a distinct private task while it is speaking in the room.
     expect((await api("POST",`/api/bots/${slow.id}/messages`,{text:"PRIVATE SIBLING"})).status).toBe(202);
     await wait(async()=>Boolean((await api("GET","/api/bots?messages=0")).body.bots.find((b:any)=>b.id===slow.id)?.tasks?.some((t:any)=>t.busy)));
-    const pending=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow NEVER RUN AFTER STOP"});
-    expect(pending.body.queued).toBe(true);
+    const pending=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow STEERED BEFORE STOP"});
+    expect(pending.body.steered).toBe(true);
     expect((await api("POST",`/api/groups/${room.id}/interrupt`,{})).status).toBe(200);
-    expect((await api("DELETE",`/api/groups/${room.id}/queue/${pending.body.queueId}`)).status).toBe(404);
+    expect((await api("DELETE",`/api/groups/${room.id}/queue/${pending.body.message.queueId}`)).status).toBe(404);
     await wait(async()=>!(await snapshot(room.id)).working);
     expect((await api("GET","/api/bots?messages=0")).body.bots.find((b:any)=>b.id===slow.id).busy).toBe(true);
     writeFileSync(patientFinishGate,"release private sibling");
     await wait(async()=>!(await api("GET","/api/bots?messages=0")).body.bots.find((b:any)=>b.id===slow.id).busy);
     const current=await snapshot(room.id);
     expect(current.tasks).toHaveLength(1);
-    expect(current.messages.filter((m:any)=>m.kind==="text"&&m.role==="user").map((m:any)=>m.text)).toEqual(["@Slow FIRST","@Quick SECOND","@Slow CORRECTION","@Slow HELD STOP RUN"]);
+    expect(current.messages.filter((m:any)=>m.kind==="text"&&m.role==="user").map((m:any)=>m.text)).toEqual(["@Slow FIRST","@Quick SECOND","@Slow CORRECTION","@Slow HELD STOP RUN","@Slow STEERED BEFORE STOP"]);
   });
   it("steers a pasted mid-tool message once and reports transport admission without claiming consumption", async () => {
     const slow=await createBot("Slow","patient");
@@ -271,11 +270,11 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.from?.botId===slow.id&&m.tool?.name==="Bash"));
     const text='@Slow correction\n\n<pasted-text index="1">\nFULL PASTED INPUT\nsecond line\n</pasted-text>';
     const body={text,sendId:"paste-steer-once"};
-    const [queued,retry]=await Promise.all([api("POST",`/api/groups/${room.id}/messages`,body),api("POST",`/api/groups/${room.id}/messages`,body)]);
-    expect(queued.body.queueId).toBe(retry.body.queueId);
-    const route=`/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
-    const steered=await api("POST",route,{botId:slow.id});
-    expect(steered.body).toMatchObject({steered:true,delivery:"transport_written",consumption:"unconfirmed"});
+    const [steered,retry]=await Promise.all([api("POST",`/api/groups/${room.id}/messages`,body),api("POST",`/api/groups/${room.id}/messages`,body)]);
+    expect(steered.body).toMatchObject({steered:true});
+    expect(retry.body.message?.id).toBe(steered.body.message.id);
+    expect(steered.body.message.steerDelivery).toBe("transport_written");
+    const route=`/api/groups/${room.id}/queue/${steered.body.message.queueId}/steer`;
     const messages=(await snapshot(room.id)).messages;
     expect(messages.filter((m:any)=>m.text===text)).toHaveLength(1);
     expect(messages.some((m:any)=>m.tool?.name?.includes("consumption is unconfirmed"))).toBe(true);
@@ -287,20 +286,22 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(replies[0].text).toContain("FULL PASTED INPUT\nsecond line");
   });
 
-  it("refuses steering an addressed queued message to a different selected member", async () => {
+  it("steers an addressed room message only into the addressed busy member", async () => {
     const slow=await createBot("Slow","patient");
     const other=await createBot("Other","patient");
     const room=(await api("POST","/api/groups",{name:"Recipient steer",memberIds:[slow.id,other.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
     rmSync(patientFinishGate,{force:true});
     await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow @Other start"});
     await wait(async()=>(await snapshot(room.id)).activeBotIds?.length===2);
-    const queued=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Other private correction"});
-    const route=`/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
-    const wrong=await api("POST",route,{botId:slow.id});
-    expect(wrong.status).toBe(409);
-    expect(wrong.body.error).toContain("addressed");
-    expect((await snapshot(room.id)).messages.some((m:any)=>m.text==="@Other private correction")).toBe(false);
-    expect((await api("POST",route,{botId:other.id})).body.steered).toBe(true);
+    const sent=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Other private correction"});
+    expect(sent.body).toMatchObject({steered:true});
+    // Slow was never offered it: only Other's runtime received the words.
+    const aliases=JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));
+    const runtimeFor=(botId:string)=>aliases.find(([,owner]:[string,{threadId:string;botId:string}])=>owner.threadId===room.threadId&&owner.botId===botId)?.[0];
+    const native=(botId:string)=>readFileSync(join(home,".openmausbot","native",`${runtimeFor(botId)}.ndjson`),"utf8");
+    expect(native(other.id)).toContain("private correction");
+    expect(native(slow.id)).not.toContain("private correction");
+    expect((await snapshot(room.id)).messages.filter((m:any)=>m.text==="@Other private correction")).toHaveLength(1);
     await api("POST",`/api/groups/${room.id}/interrupt`,{});
   });
 
