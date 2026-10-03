@@ -86,6 +86,12 @@ await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE).href)});
       approvalB: {...fixture("Approval B", { FAKE_CLAUDE_MODE: "hang", FAKE_APPROVAL_DUMP_DIR: approvalDumps, FAKE_CLAUDE_TEXT_DUMP: join(home,"approvalB-text.json") }),config:{cli:approvalCli}},
       loopA: fixture("Loop A", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@LoopB continue"]), FAKE_CLAUDE_REPLY_STATE: join(home,"loopA-replies.txt") }),
       loopB: fixture("Loop B", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@LoopA continue"]), FAKE_CLAUDE_REPLY_STATE: join(home,"loopB-replies.txt") }),
+      chainA: fixture("Chain A", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainB check the route"]) }),
+      chainB: fixture("Chain B", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainC check the queue"]) }),
+      chainC: fixture("Chain C", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainD check the handoff"]) }),
+      chainD: fixture("Chain D", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainE verify the result"]) }),
+      chainE: fixture("Chain E", { FAKE_CLAUDE_REPLIES: JSON.stringify(["verified the result"]) }),
+      callbackC: fixture("Callback C", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainA the checks passed"]) }),
       questionA: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1" } },
       questionB: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1" } },
       patient: fixture("Patient fixture", { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: patientFinishGate }),
@@ -307,7 +313,28 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect((await api("DELETE",`/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(200);
     await api("POST",`/api/groups/${room.id}/interrupt`,{});
   });
-  it("brakes reciprocal bot mentions after one callback even when both members are always responders", async () => {
+  it("wakes a mentioned bot after the fourth consecutive bot reply", async () => {
+    const members = [];
+    for (const letter of ["A", "B", "C", "D", "E"]) members.push(await createBot(`Chain${letter}`, `chain${letter}`));
+    const room = (await api("POST", "/api/groups", { name: "Uncapped handoff", memberIds: members.map(bot => bot.id), setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@ChainA start" })).status).toBe(202);
+    await wait(async () => !(await snapshot(room.id)).working);
+    const messages = (await snapshot(room.id)).messages;
+    expect(messages.filter((m: any) => m.role === "bot" && m.kind === "text").map((m: any) => m.from.botId)).toEqual(members.map(bot => bot.id));
+    expect(messages.some((m: any) => m.tool?.name?.startsWith("paused after "))).toBe(false);
+  });
+  it("delivers a lead callback after three consecutive bot replies", async () => {
+    const a = await createBot("ChainA", "chainA");
+    const b = await createBot("ChainB", "chainB");
+    const c = await createBot("ChainC", "callbackC");
+    const room = (await api("POST", "/api/groups", { name: "Lead callback", memberIds: [a.id, b.id, c.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@ChainA start" })).status).toBe(202);
+    await wait(async () => !(await snapshot(room.id)).working);
+    const messages = (await snapshot(room.id)).messages;
+    expect(messages.filter((m: any) => m.role === "bot" && m.kind === "text").map((m: any) => m.from.botId)).toEqual([a.id, b.id, c.id, a.id]);
+    expect(messages.some((m: any) => m.tool?.name?.startsWith("paused after "))).toBe(false);
+  });
+  it("deduplicates reciprocal bot mentions after one callback even when both members are always responders", async () => {
     const a=await createBot("LoopA","loopA"); const b=await createBot("LoopB","loopB");
     const room=(await api("POST","/api/groups",{name:"Loop brake",memberIds:[a.id,b.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
     await api("PATCH",`/api/groups/${room.id}`,{memberReplyModes:{[a.id]:"always",[b.id]:"always"}});
