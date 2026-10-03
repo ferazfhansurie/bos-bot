@@ -468,6 +468,26 @@ posixOnly("mid-turn steering e2e", () => {
     await api("POST", `/api/bots/${created.id}/interrupt`);
   }, 20_000);
 
+  it("records an uncertain room steer once without claiming delivery or replaying it", async () => {
+    const created=(await api("POST","/api/bots")).body.bot;
+    const instance=(await api("GET","/api/instances")).body.instances.find((i:any)=>i.instanceId==="codexUnknown");
+    await api("PATCH",`/api/bots/${created.id}`,{modelSelection:{instanceId:"codexUnknown",model:instance.models.default}});
+    const room=(await api("POST","/api/groups",{name:"Uncertain room steer",memberIds:[created.id],setup:{bulletin:"",defaultResponder:{kind:"member",botId:created.id}}})).body.group;
+    const getGroup=async()=>(await api("GET","/api/bots?messages=100")).body.groups.find((g:any)=>g.id===room.id);
+    await api("POST",`/api/groups/${room.id}/messages`,{text:"start held room turn"});
+    await waitFor(async()=>(await getGroup()).messages.some((m:any)=>m.card),"room held turn");
+    const queued=await api("POST",`/api/groups/${room.id}/messages`,{text:"uncertain room input"});
+    const route=`/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
+    const outcome=await api("POST",route,{threadId:room.threadId});
+    expect(outcome.body).toMatchObject({steered:false,outcomeUnknown:true,delivery:"outcome_unknown",consumption:"unconfirmed"});
+    const messages=(await getGroup()).messages;
+    expect(messages.filter((m:any)=>m.text==="uncertain room input")).toHaveLength(1);
+    expect(messages.find((m:any)=>m.text==="uncertain room input").steered).toBe(false);
+    expect(messages.some((m:any)=>m.tool?.name.includes("delivery outcome unknown"))).toBe(true);
+    expect((await api("POST",route,{threadId:room.threadId})).status).toBe(404);
+    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+  },20000);
+
   it("the queue steer endpoint pulls a codex queue into the running turn once the engine can steer", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     const instances = (await api("GET", "/api/instances")).body.instances;

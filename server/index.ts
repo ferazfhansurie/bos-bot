@@ -2860,9 +2860,11 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
   // UI keeps showing this thread working. Fresh work still queues behind a
   // busy teammate's whole bot (#1238); an owed resume only needs its own
   // thread free and a thread slot to admit it.
-  busy: n => !n.groupId && n.status === "resume"
-    ? threadBusy(n.botId, n.threadId) || botAtThreadCapacity(n.botId)
-    : Boolean(store.bot(n.botId)?.busy || (n.groupId && store.group(n.groupId) && groupIsWorking(store.group(n.groupId)!))),
+  busy: n => n.groupId
+    ? roomMemberQueues.has(store.registerRoomRuntimeThread(n.groupId, n.threadId, n.botId)) || botAtThreadCapacity(n.botId)
+    : n.status === "resume"
+      ? threadBusy(n.botId, n.threadId) || botAtThreadCapacity(n.botId)
+      : Boolean(store.bot(n.botId)?.busy),
   changed: (groupIds, directThreadIds) => {
     for (const id of groupIds) {
       const group = store.group(id);
@@ -2993,7 +2995,9 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
     const abort = () => { operation.cancelled = true; operation.cancellation.abort(); };
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
-    const run = (groupQueues.get(group.id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    const previous = groupQueues.get(group.id) ?? Promise.resolve();
+    // Coordinated work owns a member lane, not the entire room queue.
+    const run = Promise.resolve().then(async () => {
       if (operation.cancelled) return;
       const problem = roomHandoffProblem(node, parent);
       if (problem) throw new Error(problem);
@@ -3008,7 +3012,7 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
       signal.removeEventListener("abort", abort);
       finishGroupTurnOperation(group.id, operation);
     });
-    groupQueues.set(group.id, tracked.catch(() => {}));
+    groupQueues.set(group.id, Promise.allSettled([previous, tracked]).then(() => {}));
     await tracked;
     return { ok: result.outcome === "settled", text: result.stopReason || result.replyText || result.outcome || "The addressed agent could not run" };
   },
@@ -9308,12 +9312,12 @@ const webhookIngressStatus = () => ({
 // ── config hot-reload ─────────────────────────────────────────────────
 // ── group turn engine ──────────────────────────────────────────────────
 // Room messages go to the configured default responder unless the user
-// explicitly @mentions members. Responders run SEQUENTIALLY (one speaker at
-// a time — the transcript and streaming bubble stay coherent), each on a
-// fresh session with recent room context. A member's reply may @mention
-// teammates; those get chained turns, up to MAX_GROUP_HOPS deep, each member
-// at most once inline, with one deferred callback for a member tagged back.
-// Consecutive bot replies do not pause mention routing.
+// explicitly @mentions members. Responders run concurrently in member lanes,
+// each with recent room context and independently attributed runtime events.
+// Reply mentions dispatch in subsequent waves, up to MAX_GROUP_HOPS deep.
+// Distinct source/recipient/content routes can call a member back repeatedly;
+// a repeated route cannot loop within the same user round. Goal mode keeps
+// its serialized coordinator.
 const roomHandoffTimer = setInterval(() => {
   void drainDelegatedJobs().catch(error => console.error("delegated jobs:", error));
   try { roomHandoffs.tick(); } catch (error) { console.error("room handoffs:", error); }
@@ -9415,7 +9419,7 @@ const approvalBus: ApprovalBus = { store, broadcast, notify, autoApply: fullAcce
 
 async function runGroupMemberTurn(...args: Parameters<typeof executeGroupMemberTurn>): Promise<boolean> {
   // Goal steps retain their existing serialized coordinator execution identity.
-  if (args[11]) return executeGroupMemberTurn(...args);
+  if (args[11] && !args[11].roomHandoffId) return executeGroupMemberTurn(...args);
   const [groupId, originalThreadId, botId] = args;
   const canonicalId = store.canonicalThreadId(originalThreadId);
   const runtimeId = store.registerRoomRuntimeThread(groupId, canonicalId, botId);
@@ -10286,42 +10290,12 @@ async function executeGroupMemberTurn(
     }
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (isCancelled?.()) return false;
-      // A member already in this chain can't be called back inline: its own
-      // turn is still on the stack holding its execution slot, so a callback
-      // would queue behind itself forever. It is woken once after the chain
-      // unwinds instead, so a peer's @mention is never silently dropped.
-      if (spoken.has(next.id)) {
-        deferMentionCallback(spoken, next.id, hop + 1);
-        continue;
-      }
-      if (operation) {
-        // a summoned teammate busy elsewhere is woken later, exactly like a
-        // direct responder; one skipped by the cap must not be retried as a
-        // direct responder of the same round
-        const verdict = await waitForChatRoomMember(operation, threadId, next);
-        if (verdict === "stop") return false;
-        if (verdict === "skip") {
-          spoken.add(next.id);
-          continue;
-        }
-      }
-      if (!(await runGroupMemberTurn(
-        groupId,
-        threadId,
-        next.id,
-        hop + 1,
-        spoken,
-        undefined,
-        undefined,
-        isCancelled,
-        onProviderHandshakeStarted,
-        onProviderHandshakeSettled,
-        skillAuthoringClaim,
-        undefined,
-        operation,
-      ))) {
-        return false;
-      }
+      // Dispatch after this execution releases its slot. All mentions in
+      // the next wave may work together, including callbacks to a lead.
+      // Equal routes within this user round are loops/retries, while new
+      // results from the same bot are legitimate follow-up deliveries.
+      deferMentionCallback(spoken, next.id, hop + 1,
+        JSON.stringify([bot.id, replyText.trim().replace(/\s+/g, " ")]));
     }
   }
   return true;
@@ -10954,42 +10928,38 @@ function startGroupTurn(
           });
         }
       }));
-      // Members @mentioned after they already spoke in this round take one
-      // more turn now that their own turn has settled.
-      for (let callback = takeMentionCallback(spoken); callback; callback = takeMentionCallback(spoken)) {
+      // Drain one settled wave at a time. Siblings work concurrently;
+      // runGroupMemberTurn's member lane serializes multiple results for
+      // the same lead without holding other bots behind that lead.
+      for (;;) {
         if (operation.cancelled) break;
-        if (callback.hop >= MAX_GROUP_HOPS) continue;
-        const member = store.bot(callback.botId);
-        if (!member || !store.group(groupId)?.memberIds.includes(member.id)) continue;
-        const verdict = await waitForChatRoomMember(operation, threadId, member);
-        if (verdict === "stop") break;
-        if (verdict === "skip") continue;
-        try {
-          await runGroupMemberTurn(
-            groupId,
-            threadId,
-            member.id,
-            callback.hop,
-            spoken,
-            undefined,
-            undefined,
-            () => operation.cancelled,
-            () => groupProviderHandshakeStarted(operation),
-            () => groupProviderHandshakeSettled(operation),
-            skillAuthoringClaim,
-            undefined,
-            operation,
-          );
-        } catch (error) {
-          if (operation.cancelled) break;
-          const detail = error instanceof Error ? error.message : String(error);
-          store.appendMessage(threadId, {
-            role: "bot",
-            kind: "activity",
-            from: { botId: member.id, name: member.name, color: member.color },
-            tool: { name: `${member.name} couldn't start on this mention — not delivered: ${detail}`, ok: false },
-          });
-        }
+        const callbacks = [];
+        for (let callback = takeMentionCallback(spoken); callback; callback = takeMentionCallback(spoken)) callbacks.push(callback);
+        if (!callbacks.length) break;
+        await Promise.all(callbacks.map(async (callback) => {
+          if (operation.cancelled || callback.hop >= MAX_GROUP_HOPS) return;
+          const member = store.bot(callback.botId);
+          if (!member || !store.group(groupId)?.memberIds.includes(member.id)) return;
+          const verdict = await waitForChatRoomMember(operation, threadId, member);
+          if (verdict !== "run") return;
+          try {
+            await runGroupMemberTurn(
+              groupId, threadId, member.id, callback.hop, spoken,
+              undefined, undefined, () => operation.cancelled,
+              () => groupProviderHandshakeStarted(operation),
+              () => groupProviderHandshakeSettled(operation),
+              skillAuthoringClaim, undefined, operation,
+            );
+          } catch (error) {
+            if (operation.cancelled) return;
+            const detail = error instanceof Error ? error.message : String(error);
+            store.appendMessage(threadId, {
+              role: "bot", kind: "activity",
+              from: { botId: member.id, name: member.name, color: member.color },
+              tool: { name: `${member.name} couldn't start on this mention — not delivered: ${detail}`, ok: false },
+            });
+          }
+        }));
       }
     }
   });
@@ -14789,14 +14759,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (method === "POST" && path === "/api/internal/coordinate-bots") {
           const parsed = z.object({
             groupId: z.string().min(1).max(128).optional(),
-            botIds: z.array(z.string().min(1).max(128)).min(1).max(4).refine(ids => new Set(ids).size === ids.length),
+            botIds: z.array(z.string().min(1).max(128)).min(1).refine(ids => new Set(ids).size === ids.length),
             message: z.string().trim().min(1).max(4000), requestKey: z.string().regex(/^[\w-]{1,100}$/),
             rework: z.boolean().default(false),
             // Only ever a name for a thread, so it travels under the same
             // one-line rule as a peer thread title.
             label: z.string().trim().min(1).max(60).refine(fitsOnOneLine).optional(),
           }).safeParse(await readInternalBody());
-          if (!parsed.success) return json(res, 400, { error: "Provide 1-4 distinct botIds, message (1-4000 characters), a short requestKey (letters, digits, underscores or hyphens) and an optional one-line label of at most 60 characters." });
+          if (!parsed.success) return json(res, 400, { error: "Provide one or more distinct botIds, message (1-4000 characters), a short requestKey (letters, digits, underscores or hyphens) and an optional one-line label of at most 60 characters." });
           const groupId = parsed.data.groupId ?? source?.id;
           const destination = groupId ? store.group(groupId) : undefined;
           if (groupId && !destination) return json(res, 404, { error: "No such room; use list_room_targets." });
@@ -16979,6 +16949,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const [head] = held.items;
       const active = roomRuntimeSpeakers(current.id, targetThreadId);
       const mentioned = head ? roomResponders(head.text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), { kind: "mentions" }) : [];
+      if (body?.botId !== undefined && mentioned.length &&
+        (mentioned.length !== 1 || mentioned[0]?.id !== body.botId)) {
+        restoreHeldChannelQueue(held);
+        return json(res, 409, { error: "Steer the addressed room member; the selected member does not match this message." });
+      }
       const targeted = typeof body?.botId === "string" ? active.filter(([, speaker]) => speaker.botId === body.botId)
         : mentioned.length ? active.filter(([, speaker]) => mentioned.some(member => member.id === speaker.botId)) : active;
       if (targeted.length > 1 || (body?.botId !== undefined && targeted.length !== 1)) {
@@ -17048,12 +17023,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           queueId: head.id,
           via: head.via,
           sender: head.sender,
-          steered: true,
+          steered: steered === "steered",
+          steerDelivery: steered === "indeterminate" ? "outcome_unknown" : instance.adapter.provider === "claudeAgent" ? "transport_written" : "provider_accepted",
+        });
+        const delivery = message.steerDelivery;
+        if (steered === "indeterminate" || delivery === "transport_written") store.appendMessage(targetThreadId, {
+          role: "bot", kind: "activity", from: speakerFrom,
+          tool: { name: steered === "indeterminate"
+            ? "Queued message delivery outcome unknown — review before resending"
+            : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: false },
         });
         settleHeldChannelQueueHead(held);
         return json(res, 200, {
           ok: true,
-          steered: true,
+          steered: steered === "steered",
+          outcomeUnknown: steered === "indeterminate",
+          delivery,
+          consumption: "unconfirmed",
           threadId: targetThreadId,
           messages: [message],
           queueIds: [head.id],

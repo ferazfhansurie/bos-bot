@@ -326,6 +326,8 @@ export interface WireMessage {
   };
   /** user messages sent INTO a running turn (capabilities.queueing). */
   steered?: boolean;
+  /** Admission evidence for steering; never proof the model consumed it. */
+  steerDelivery?: "transport_written" | "provider_accepted" | "outcome_unknown";
   /** A user-role message that arrived through the server's HTTP API. */
   via?: "api";
   /** Which person sent this user message, when the workspace has more than

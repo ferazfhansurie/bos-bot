@@ -84,14 +84,19 @@ await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE).href)});
       // own @mentions back out
       approvalA: {...fixture("Approval A", { FAKE_CLAUDE_MODE: "hang", FAKE_APPROVAL_DUMP_DIR: approvalDumps, FAKE_CLAUDE_TEXT_DUMP: join(home,"approvalA-text.json") }),config:{cli:approvalCli}},
       approvalB: {...fixture("Approval B", { FAKE_CLAUDE_MODE: "hang", FAKE_APPROVAL_DUMP_DIR: approvalDumps, FAKE_CLAUDE_TEXT_DUMP: join(home,"approvalB-text.json") }),config:{cli:approvalCli}},
-      loopA: fixture("Loop A", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@LoopB continue"]), FAKE_CLAUDE_REPLY_STATE: join(home,"loopA-replies.txt") }),
-      loopB: fixture("Loop B", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@LoopA continue"]), FAKE_CLAUDE_REPLY_STATE: join(home,"loopB-replies.txt") }),
+      loopA: fixture("Loop A", { FAKE_CLAUDE_REPLIES: JSON.stringify(Array(10).fill("@LoopB continue")), FAKE_CLAUDE_REPLY_STATE: join(home,"loopA-replies.txt") }),
+      loopB: fixture("Loop B", { FAKE_CLAUDE_REPLIES: JSON.stringify(Array(10).fill("@LoopA continue")), FAKE_CLAUDE_REPLY_STATE: join(home,"loopB-replies.txt") }),
       chainA: fixture("Chain A", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainB check the route"]) }),
       chainB: fixture("Chain B", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainC check the queue"]) }),
       chainC: fixture("Chain C", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainD check the handoff"]) }),
       chainD: fixture("Chain D", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainE verify the result"]) }),
       chainE: fixture("Chain E", { FAKE_CLAUDE_REPLIES: JSON.stringify(["verified the result"]) }),
       callbackC: fixture("Callback C", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainA the checks passed"]) }),
+      director: fixture("Director", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@Reviewer check route", "@Builder implement route", "REVIEWED FINAL RESULT"]), FAKE_CLAUDE_REPLY_STATE: join(home, "director-replies.txt") }),
+      reviewer: fixture("Reviewer", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@Director route checked"]) }),
+      builder: fixture("Builder", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@Director implementation checked"]) }),
+      parallelLead: fixture("Parallel lead", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@Worker1 @Worker2 @Worker3 @Worker4 @Worker5 check your part", ...Array.from({length:5}, (_,i)=>`REVIEWED RESULT ${i+1}`)]), FAKE_CLAUDE_REPLY_STATE: join(home, "parallel-lead-replies.txt") }),
+      ...Object.fromEntries(Array.from({length:5}, (_,i)=>[`worker${i+1}`, fixture(`Worker ${i+1}`, { FAKE_CLAUDE_REPLIES: JSON.stringify([`@Lead RESULT ${i+1}`]), FAKE_CLAUDE_TOOL_RESULT_GATE: join(home, "workers-tool.gate") })])),
       questionA: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1" } },
       questionB: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1" } },
       patient: fixture("Patient fixture", { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: patientFinishGate }),
@@ -257,6 +262,48 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(current.tasks).toHaveLength(1);
     expect(current.messages.filter((m:any)=>m.kind==="text"&&m.role==="user").map((m:any)=>m.text)).toEqual(["@Slow FIRST","@Quick SECOND","@Slow CORRECTION","@Slow HELD STOP RUN"]);
   });
+  it("steers a pasted mid-tool message once and reports transport admission without claiming consumption", async () => {
+    const slow=await createBot("Slow","patient");
+    const other=await createBot("Other","quick");
+    const room=(await api("POST","/api/groups",{name:"Paste steer",memberIds:[slow.id,other.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    rmSync(patientFinishGate,{force:true});
+    await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow START"});
+    await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.from?.botId===slow.id&&m.tool?.name==="Bash"));
+    const text='@Slow correction\n\n<pasted-text index="1">\nFULL PASTED INPUT\nsecond line\n</pasted-text>';
+    const body={text,sendId:"paste-steer-once"};
+    const [queued,retry]=await Promise.all([api("POST",`/api/groups/${room.id}/messages`,body),api("POST",`/api/groups/${room.id}/messages`,body)]);
+    expect(queued.body.queueId).toBe(retry.body.queueId);
+    const route=`/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
+    const steered=await api("POST",route,{botId:slow.id});
+    expect(steered.body).toMatchObject({steered:true,delivery:"transport_written",consumption:"unconfirmed"});
+    const messages=(await snapshot(room.id)).messages;
+    expect(messages.filter((m:any)=>m.text===text)).toHaveLength(1);
+    expect(messages.some((m:any)=>m.tool?.name?.includes("consumption is unconfirmed"))).toBe(true);
+    expect((await api("POST",route,{botId:slow.id})).status).toBe(404);
+    writeFileSync(patientFinishGate,"finish");
+    await wait(async()=>!(await snapshot(room.id)).working);
+    const replies=(await snapshot(room.id)).messages.filter((m:any)=>m.role==="bot"&&m.kind==="text"&&m.turnTerminal&&m.from?.botId===slow.id);
+    expect(replies).toHaveLength(1);
+    expect(replies[0].text).toContain("FULL PASTED INPUT\nsecond line");
+  });
+
+  it("refuses steering an addressed queued message to a different selected member", async () => {
+    const slow=await createBot("Slow","patient");
+    const other=await createBot("Other","patient");
+    const room=(await api("POST","/api/groups",{name:"Recipient steer",memberIds:[slow.id,other.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    rmSync(patientFinishGate,{force:true});
+    await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow @Other start"});
+    await wait(async()=>(await snapshot(room.id)).activeBotIds?.length===2);
+    const queued=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Other private correction"});
+    const route=`/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
+    const wrong=await api("POST",route,{botId:slow.id});
+    expect(wrong.status).toBe(409);
+    expect(wrong.body.error).toContain("addressed");
+    expect((await snapshot(room.id)).messages.some((m:any)=>m.text==="@Other private correction")).toBe(false);
+    expect((await api("POST",route,{botId:other.id})).body.steered).toBe(true);
+    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+  });
+
   it("keeps duplicate provider approval ids in exact lanes and rejects a stale token on the next turn", async () => {
     const a=await createBot("ApproveA","approvalA"); const b=await createBot("ApproveB","approvalB");
     expect((await api("PATCH",`/api/bots/${a.id}`,{approvalMode:"ask"})).status).toBe(200); expect((await api("PATCH",`/api/bots/${b.id}`,{approvalMode:"ask"})).status).toBe(200);
@@ -334,16 +381,47 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(messages.filter((m: any) => m.role === "bot" && m.kind === "text").map((m: any) => m.from.botId)).toEqual([a.id, b.id, c.id, a.id]);
     expect(messages.some((m: any) => m.tool?.name?.startsWith("paused after "))).toBe(false);
   });
-  it("deduplicates reciprocal bot mentions after one callback even when both members are always responders", async () => {
+  it("delivers the second lead callback after reviewer and builder results", async () => {
+    const director = await createBot("Director", "director");
+    const reviewer = await createBot("Reviewer", "reviewer");
+    const builder = await createBot("Builder", "builder");
+    const room = (await api("POST", "/api/groups", {name:"Sequential results",memberIds:[director.id,reviewer.id,builder.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    await api("POST", `/api/groups/${room.id}/messages`, {text:"@Director start"});
+    await wait(async()=>!(await snapshot(room.id)).working);
+    const messages=(await snapshot(room.id)).messages;
+    expect(messages.filter((m:any)=>m.role==="bot"&&m.kind==="text"&&m.turnTerminal).map((m:any)=>m.from.botId)).toEqual([director.id,reviewer.id,director.id,builder.id,director.id]);
+    expect(messages.filter((m:any)=>m.text==="REVIEWED FINAL RESULT")).toHaveLength(1);
+  });
+
+  it("runs five mentioned workers concurrently and returns each result callback exactly once", async () => {
+    const lead=await createBot("Lead","parallelLead");
+    const workers=[];
+    for(let i=1;i<=5;i++) workers.push(await createBot(`Worker${i}`,`worker${i}`));
+    const room=(await api("POST","/api/groups",{name:"Five concurrent workers",memberIds:[lead.id,...workers.map(b=>b.id)],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    const gate=join(home,"workers-tool.gate");
+    writeFileSync(gate,"hold workers mid tool call");
+    try {
+      await api("POST",`/api/groups/${room.id}/messages`,{text:"@Lead start"});
+      await expect.poll(async()=>new Set((await snapshot(room.id)).activeBotIds),{timeout:6000}).toEqual(new Set(workers.map(b=>b.id)));
+    } finally { rmSync(gate,{force:true}); }
+    await wait(async()=>!(await snapshot(room.id)).working);
+    const messages=(await snapshot(room.id)).messages;
+    for(let i=1;i<=5;i++) {
+      expect(messages.filter((m:any)=>m.text===`@Lead RESULT ${i}`)).toHaveLength(1);
+      expect(messages.filter((m:any)=>m.text===`REVIEWED RESULT ${i}`)).toHaveLength(1);
+    }
+  });
+
+  it("deduplicates reciprocal source-content routes even when both members are always responders", async () => {
     const a=await createBot("LoopA","loopA"); const b=await createBot("LoopB","loopB");
     const room=(await api("POST","/api/groups",{name:"Loop brake",memberIds:[a.id,b.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
     await api("PATCH",`/api/groups/${room.id}`,{memberReplyModes:{[a.id]:"always",[b.id]:"always"}});
     await api("POST",`/api/groups/${room.id}/messages`,{text:"@LoopA start"});
     await wait(async()=>!(await snapshot(room.id)).working);
     const messages=(await snapshot(room.id)).messages;
-    // Both answer, the one tagged back gets exactly one callback, then the chain stops.
+    // Each source-content route runs once; a repeated route cannot ping-pong.
     const speakers=messages.filter((m:any)=>m.role==="bot"&&m.kind==="text").map((m:any)=>m.from.botId);
-    expect(speakers).toHaveLength(3);
+    expect(speakers).toHaveLength(4);
     expect(new Set(speakers)).toEqual(new Set([a.id,b.id]));
   });
   it("publishes canonical room events with distinct member lane attribution", async () => {

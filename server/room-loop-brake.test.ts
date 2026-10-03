@@ -16,16 +16,30 @@ describe("room stop and mention routing", () => {
     }
   });
 
-  it("calls back one member mentioned after it already spoke, once per chain", () => {
+  it("delivers distinct results to the same lead and deduplicates a repeated result", () => {
+    const spoken = new Set(["bos", "dev", "pix", "pipe"]);
+    expect(takeMentionCallback(spoken)).toBeNull();
+    deferMentionCallback(spoken, "dev", 2, "pix:tests checked");
+    deferMentionCallback(spoken, "dev", 2, "pipe:server checked");
+    deferMentionCallback(spoken, "dev", 2, "pix:tests checked");
+    expect(takeMentionCallback(spoken)).toEqual({ botId: "dev", hop: 2 });
+    expect(takeMentionCallback(spoken)).toEqual({ botId: "dev", hop: 2 });
+    expect(takeMentionCallback(spoken)).toBeNull();
+    deferMentionCallback(spoken, "dev", 4, "pix:tests checked");
+    expect(takeMentionCallback(spoken)).toBeNull();
+    deferMentionCallback(spoken, "dev", 4, "pix:implementation checked");
+    expect(takeMentionCallback(spoken)).toEqual({ botId: "dev", hop: 4 });
+    expect(takeMentionCallback(new Set(["dev"]))).toBeNull();
+  });
+
+  it("keeps different recipients and separate user rounds independent", () => {
     const spoken = new Set(["bos", "dev"]);
-    expect(takeMentionCallback(spoken)).toBeNull();
-    deferMentionCallback(spoken, "bos", 2);
-    deferMentionCallback(spoken, "dev", 3);
-    expect(takeMentionCallback(spoken)).toEqual({ botId: "bos", hop: 2 });
-    expect(takeMentionCallback(spoken)).toBeNull();
-    // bos tagging dev back after its callback never starts a ping-pong.
-    deferMentionCallback(spoken, "dev", 3);
-    expect(takeMentionCallback(spoken)).toBeNull();
-    expect(takeMentionCallback(new Set(["bos"]))).toBeNull();
+    deferMentionCallback(spoken, "bos", 2, "pipe:result");
+    deferMentionCallback(spoken, "dev", 2, "pipe:result");
+    expect(takeMentionCallback(spoken)?.botId).toBe("bos");
+    expect(takeMentionCallback(spoken)?.botId).toBe("dev");
+    const round = new Set(["dev"]);
+    deferMentionCallback(round, "dev", 2, "pipe:result");
+    expect(takeMentionCallback(round)?.botId).toBe("dev");
   });
 });
