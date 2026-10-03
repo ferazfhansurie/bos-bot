@@ -40,6 +40,28 @@ struct PreparedPhoneCredential: Equatable, Sendable {
     fileprivate let envelope: PhoneSecretEnvelope
 }
 
+/// The session, for views that only call into it. `@EnvironmentObject`
+/// subscribes a view to every change the session publishes, so when each
+/// transcript row held one, any bot finishing a tool step anywhere redrew
+/// every row of the open chat. Reading it from here subscribes to nothing.
+private struct SessionActionsKey: EnvironmentKey {
+    static let defaultValue: Session? = nil
+}
+
+extension EnvironmentValues {
+    var sessionActions: Session? {
+        get { self[SessionActionsKey.self] }
+        set { self[SessionActionsKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Both ways in: observed, and as a plain reference for action-only views.
+    func session(_ session: Session) -> some View {
+        environmentObject(session).environment(\.sessionActions, session)
+    }
+}
+
 @MainActor
 final class Session: ObservableObject {
 
@@ -139,6 +161,16 @@ final class Session: ObservableObject {
     /// count alone does not call into UserNotifications.
     private var appliedBadge: Int?
     private static let frameBatchInterval: Duration = .milliseconds(60)
+    /// A batch with a saved message or a bot change in it redraws every
+    /// screen that reads the session. With several bots working, their tool
+    /// steps alone arrived several times a second and each redraw relaid the
+    /// open transcript, so typing and scrolling stalled. Those batches still
+    /// fold at once; the redraw they announce waits until this long after
+    /// the last one, so it lands at most a few times a second. A stream
+    /// starting or ending is always announced at once.
+    private static let loudPublishInterval: Duration = .milliseconds(250)
+    private var lastLoudPublish: ContinuousClock.Instant?
+    private var deferredPublish: Task<Void, Never>?
     private static let frameBatchLimit = 512
     /// Best-effort authenticated route refresh started by the latest live SSE
     /// hello. Kept separate so endpoint discovery never stalls event delivery.
@@ -902,6 +934,8 @@ final class Session: ObservableObject {
         pendingFrames.removeAll()
         frameFlushTask?.cancel()
         frameFlushTask = nil
+        deferredPublish?.cancel()
+        deferredPublish = nil
         state = CompanionState()
     }
 
@@ -1053,16 +1087,39 @@ final class Session: ObservableObject {
         // A reply's first token starts the typing dot and its end stops it,
         // so which threads are typing has to be announced; the tokens in
         // between reach only the open bubble.
-        foldingQuietly = batch.allSatisfy(\.frame.isLiveTextOnly)
-            && Self.typingThreads(in: next) == Self.typingThreads(in: state)
+        let typingChanged = Self.typingThreads(in: next) != Self.typingThreads(in: state)
+        let quiet = batch.allSatisfy(\.frame.isLiveTextOnly) && !typingChanged
+        let now = ContinuousClock.now
+        let held = !quiet && !typingChanged
+            && lastLoudPublish.map { now - $0 < Self.loudPublishInterval } == true
+        foldingQuietly = quiet || held
         state = next
         foldingQuietly = false
+        if held {
+            schedulePublish()
+        } else if !quiet {
+            lastLoudPublish = now
+            deferredPublish?.cancel()
+            deferredPublish = nil
+        }
         for frame in batch {
             if case let .notify(notification) = frame.frame {
                 NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
             }
         }
         applyBadge(state.unreadCount)
+    }
+
+    /// Announce a held fold once the interval since the last one is up.
+    private func schedulePublish() {
+        guard deferredPublish == nil, let last = lastLoudPublish else { return }
+        deferredPublish = Task { [weak self] in
+            try? await Task.sleep(until: last + Self.loudPublishInterval, clock: .continuous)
+            guard !Task.isCancelled, let self else { return }
+            self.deferredPublish = nil
+            self.lastLoudPublish = .now
+            self.objectWillChange.send()
+        }
     }
 
     private static func typingThreads(in state: CompanionState) -> Set<String> {

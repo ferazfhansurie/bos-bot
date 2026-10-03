@@ -13,7 +13,8 @@ struct BotAvatarView: View {
     var animated = false
     var comets = false
 
-    @EnvironmentObject private var session: Session
+    @Environment(\.sessionActions) private var sessionActions
+    private var session: Session { sessionActions! }
     @State private var image: UIImage?
     @State private var failed = false
 
@@ -155,7 +156,8 @@ struct ChatAvatarView: View {
 struct ChannelAvatarView: View {
     let room: Room
     let size: CGFloat
-    @EnvironmentObject private var session: Session
+    @Environment(\.sessionActions) private var sessionActions
+    private var session: Session { sessionActions! }
     @State private var image: UIImage?
     var body: some View {
         Group {

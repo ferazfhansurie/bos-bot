@@ -109,7 +109,8 @@ struct TranscriptAttachmentView: View {
     let messageId: String
     var foreground: Color = BubbleColor.mineText
 
-    @EnvironmentObject private var session: Session
+    @Environment(\.sessionActions) private var sessionActions
+    private var session: Session { sessionActions! }
     @State private var thumbnail: UIImage?
     @State private var thumbnailLoading = false
     @State private var previewLoading = false

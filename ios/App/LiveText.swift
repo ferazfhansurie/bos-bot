@@ -46,6 +46,16 @@ final class LiveTextStore {
         didSet { if !composing, oldValue { publish() } }
     }
     private static let composingInterval: Duration = .milliseconds(250)
+    /// With more than one reply streaming, every bubble's step re-measures
+    /// the transcript on its own beat and together they kept the main
+    /// thread busy enough to stall scrolling and switching chats. Several
+    /// replies step together at this pace instead; one alone still streams
+    /// at the frame batch rate.
+    private static let busyInterval: Duration = .milliseconds(150)
+    private var interval: Duration? {
+        if composing { return Self.composingInterval }
+        return latest.streaming.values.lazy.filter { !$0.isEmpty }.count > 1 ? Self.busyInterval : nil
+    }
     private var lastPublish: ContinuousClock.Instant?
     private var pendingPublish: Task<Void, Never>?
 
@@ -62,12 +72,12 @@ final class LiveTextStore {
         latest = (state.streaming, state.reasoning)
         // A reply that ended (or a thread cleared) lands at once, so the
         // bubble never lingers behind the message that replaced it.
-        guard composing, !finished else { publish(); return }
+        guard let interval, !finished else { publish(); return }
         guard pendingPublish == nil else { return }
         let now = ContinuousClock.now
-        guard let last = lastPublish, now - last < Self.composingInterval else { publish(); return }
+        guard let last = lastPublish, now - last < interval else { publish(); return }
         pendingPublish = Task { [weak self] in
-            try? await Task.sleep(until: last + Self.composingInterval, clock: .continuous)
+            try? await Task.sleep(until: last + interval, clock: .continuous)
             guard !Task.isCancelled else { return }
             self?.publish()
         }

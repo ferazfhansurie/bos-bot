@@ -209,7 +209,12 @@ struct ChatView: View {
         // every row only recomputes the same value.
         let steps = memberSteps
         let transcript = rows(memberSteps: steps)
-        let _ = arrivals.track(threadId: threadId, messages: messages.map { ($0.id, $0.at) }, now: Date().timeIntervalSince1970)
+        let visible = messages
+        let _ = arrivals.track(threadId: threadId, messages: visible.map { ($0.id, $0.at) }, now: Date().timeIntervalSince1970)
+        // Each row's branch versions, worked out once for the whole
+        // transcript rather than by every row scanning all of it.
+        let versions = Self.versionsByParent(session.state.transcript(forThread: threadId))
+        let replyTargets = Dictionary(visible.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // A VStack with the composer as a sibling, rather than a scroll view
         // with `.safeAreaInset`. The inset version sized itself to its
         // content, so a short transcript left the composer floating in the
@@ -272,8 +277,10 @@ struct ChatView: View {
                                         openLink: openLink,
                                         openThread: openThread,
                                         onReply: { replyTarget = $0; composerFocused = true },
-                                        replyTarget: message.replyToId.flatMap { id in messages.first { $0.id == id } }
+                                        replyTarget: message.replyToId.flatMap { replyTargets[$0] },
+                                        versions: Self.versions(of: message, in: versions)
                                     )
+                                    .equatable()
                                     .arrivalSpring(arrives(message), fromTrailing: message.role == .user, reduceMotion: reduceMotion)
                                 case let .activityRun(items):
                                     ActivityRunChip(items: items, openThread: openThread)
@@ -483,7 +490,7 @@ struct ChatView: View {
             WalkieView { selected in
                 showingWalkie = false
                 if selected.id == current.id { selectedThreadId = selected.threadId }
-            }.environmentObject(session)
+            }.session(session)
         }
         .sheet(isPresented: $showingTasks) {
             if current.supportsTasks {
@@ -1494,17 +1501,17 @@ struct MessageRow: View {
     var openThread: ((ThreadRef) -> Void)? = nil
     var onReply: ((Message) -> Void)? = nil
     var replyTarget: Message? = nil
-    @EnvironmentObject private var session: Session
+    /// Every version of this message when it was edited and retried, in
+    /// order; empty when there is only the one.
+    var versions: [Message] = []
+    @Environment(\.sessionActions) private var sessionActions
+    private var session: Session { sessionActions! }
     @State private var editingText = ""
     @State private var showingEdit = false
     /// The text being selected, and the sheet's presentation in one value.
     @State private var selecting: SelectableText?
 
     private static let reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"]
-
-    private var versions: [Message] {
-        session.state.versions(of: message, inThread: chat.threadId)
-    }
 
     /// Transport tags contain paths on the paired computer. They belong in
     /// attachment cards, never on the clipboard or in the text-selection UI.
@@ -1663,6 +1670,45 @@ struct MessageRow: View {
         Dictionary(grouping: reactions, by: \.emoji)
             .map { (emoji: $0.key, count: $0.value.count, mine: $0.value.contains { $0.by == "user" }) }
             .sorted { $0.emoji < $1.emoji }
+    }
+}
+
+extension MessageRow: Equatable {
+    /// Only what the row draws. The closures are rebuilt on every ChatView
+    /// render and do the same thing each time, so they are not compared;
+    /// without this every row redrew whenever anything in the app changed.
+    static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
+        lhs.message == rhs.message && lhs.endsRun == rhs.endsRun
+            && lhs.replyTarget == rhs.replyTarget && lhs.versions == rhs.versions
+            && (lhs.openThread == nil) == (rhs.openThread == nil)
+            && (lhs.onReply == nil) == (rhs.onReply == nil)
+            && lhs.chat.threadId == rhs.chat.threadId && lhs.chat.name == rhs.chat.name
+            && lhs.chat.color == rhs.chat.color && lhs.chat.isRemoteBot == rhs.chat.isRemoteBot
+            && lhs.chat.remoteHomeName == rhs.chat.remoteHomeName
+            && lhs.chat.botBusy == rhs.chat.botBusy
+    }
+}
+
+private extension Chat {
+    var botBusy: Bool {
+        if case let .bot(bot) = self { return bot.busy == true }
+        return false
+    }
+}
+
+extension ChatView {
+    /// User text messages grouped by the message they branch from, keeping
+    /// only groups with more than one version. Same order as
+    /// `CompanionState.versions(of:inThread:)`.
+    static func versionsByParent(_ transcript: [Message]) -> [String?: [Message]] {
+        Dictionary(grouping: transcript.filter { $0.role == .user && $0.kind == .text }, by: \.parentId)
+            .filter { $0.value.count > 1 }
+            .mapValues { $0.sorted { $0.at == $1.at ? $0.id < $1.id : $0.at < $1.at } }
+    }
+
+    static func versions(of message: Message, in versions: [String?: [Message]]) -> [Message] {
+        guard message.role == .user, message.kind == .text else { return [] }
+        return versions[message.parentId] ?? []
     }
 }
 
@@ -2306,7 +2352,8 @@ struct CredentialRequestCardView: View {
 struct CardView: View {
     let chat: Chat
     let message: Message
-    @EnvironmentObject private var session: Session
+    @Environment(\.sessionActions) private var sessionActions
+    private var session: Session { sessionActions! }
     @State private var answering = false
 
     /// The option this card offers that means "go ahead".
@@ -2482,7 +2529,8 @@ struct CardView: View {
 struct ScreenShot: View {
     let threadId: String
     let message: Message
-    @EnvironmentObject private var session: Session
+    @Environment(\.sessionActions) private var sessionActions
+    private var session: Session { sessionActions! }
     @State private var image: UIImage?
 
     var body: some View {
