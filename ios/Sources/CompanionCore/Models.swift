@@ -1396,6 +1396,51 @@ public struct ProviderUsageWindow: Decodable, Sendable {
     public let resetsAt: Double?
 }
 
+/// GET /api/update/status — the mac's staged-build updater (1.3). The phone
+/// only reads it: updates run on the mac. Timestamps are left out on purpose
+/// (the server may send epoch ms or ISO strings) since the row never shows them.
+public struct UpdateStatusResponse: Decodable, Sendable, Equatable {
+    public struct Build: Decodable, Sendable, Equatable {
+        public let version: String
+        public let sha: String
+    }
+    public struct BusyTurn: Decodable, Sendable, Equatable {
+        public let botId: String
+        public let threadId: String
+    }
+    public struct LastResult: Decodable, Sendable, Equatable {
+        public let state: String
+        public let detail: String?
+    }
+    public let state: String
+    public let current: Build
+    public let candidate: Build?
+    public let busyTurns: [BusyTurn]?
+    public let lastResult: LastResult?
+
+    static let running: Set<String> = ["checkpointing", "stopping", "applying", "relaunching", "verifying"]
+
+    /// One line for the Settings row, mirroring the desktop's labels.
+    public var summary: String {
+        switch state {
+        case "checkpointing": return "Updating · saving open work"
+        case "stopping": return "Updating · pausing bots"
+        case "applying": return "Updating · installing"
+        case "relaunching": return "Updating · relaunching"
+        case "verifying": return "Updating · checking the new build"
+        case "ready": return "\(candidate?.version ?? "New build") ready · update from the mac"
+        default:
+            switch lastResult?.state {
+            case "rolled_back": return "Rolled back: \(lastResult?.detail ?? "the new build failed its check")"
+            case "failed": return "Update failed: \(lastResult?.detail ?? "unknown error")"
+            default: return "Up to date"
+            }
+        }
+    }
+
+    public var isRunning: Bool { Self.running.contains(state) }
+}
+
 /// Omitted values remain unchanged; avatar clear is explicit JSON null.
 public struct RoomSettingsPatch: Encodable, Sendable {
     public var name: String?

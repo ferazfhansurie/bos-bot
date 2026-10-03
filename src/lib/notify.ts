@@ -2,6 +2,10 @@
 // The server decides *whether* something is worth an interruption (it owns
 // the per-bot toggle); this only decides how to show it here.
 import type { Notification } from "../../shared/notification";
+import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
+import { flatMascotBody } from "../../shared/flat-mascot-bodies";
+import type { MascotBodyId } from "../../shared/mascot-bodies";
+import { MAUS_COLORS, type MausColor } from "./mascot";
 
 export type NotifyFrame = Notification;
 
@@ -27,6 +31,76 @@ export interface NotificationBotIdentity {
  * profile has one. Pure so the grouping rule stays testable on its own. */
 export function buildNotificationOptions(bot: NotificationBotIdentity): NotificationOptions {
   return { tag: `openmausbot:${bot.id}`, icon: bot.avatarUrl ?? undefined };
+}
+
+/** What a notification shows as the sending bot's face: the same choice
+ * BotAvatar makes in the app, so a room's banners carry whoever spoke. */
+export interface NotificationAvatarBot {
+  id: string;
+  color: MausColor;
+  avatarUrl?: string | null;
+  avatarCrop?: BotAvatarCrop;
+  mascotBody?: MascotBodyId | null;
+}
+
+/** The bot's photo when its profile shows one; otherwise null, and the
+ * mascot is drawn instead. */
+export function notificationPhoto(bot: Pick<NotificationAvatarBot, "avatarUrl" | "avatarCrop">): string | null {
+  const profile = botAvatarProfile(bot);
+  return profile.avatarUrl && profile.avatarCrop !== "mascot" ? profile.avatarUrl : null;
+}
+
+/** The resting mascot as standalone SVG markup: body in the bot's colour,
+ * the two-stroke face. Mirrors MausAvatar's static render. */
+export function mascotSvg(color: MausColor, bodyId?: MascotBodyId | null): string {
+  const body = flatMascotBody(bodyId ?? "circle");
+  const fill = (MAUS_COLORS as Record<string, string>)[color] ?? "#808080";
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 100 100">` +
+    `<path d="${body.path}" fill="${fill}"/>` +
+    `<g transform="translate(${body.faceX} ${body.faceY})" fill="none" stroke="#151515" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">` +
+    `<path d="M 51 43 L 54 52"/><path d="M 73 39 L 76 48"/></g></svg>`
+  );
+}
+
+const mascotIcons = new Map<string, Promise<string | undefined>>();
+
+/** OS notification centres do not draw SVG, so the mascot is rasterised to a
+ * PNG once per look and reused. */
+function mascotIcon(color: MausColor, bodyId?: MascotBodyId | null): Promise<string | undefined> {
+  const key = `${color}|${bodyId ?? "circle"}`;
+  const cached = mascotIcons.get(key);
+  if (cached) return cached;
+  const started = new Promise<string | undefined>((resolve) => {
+    if (typeof Image === "undefined" || typeof document === "undefined") return resolve(undefined);
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 128;
+        const context = canvas.getContext("2d");
+        if (!context) return resolve(undefined);
+        context.drawImage(image, 0, 0, 128, 128);
+        resolve(canvas.toDataURL("image/png"));
+      } catch {
+        resolve(undefined);
+      }
+    };
+    image.onerror = () => resolve(undefined);
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(mascotSvg(color, bodyId))}`;
+  });
+  mascotIcons.set(key, started);
+  return started;
+}
+
+/** The icon for a notification from this bot. A bot this client does not
+ * know (a linked Mac's) falls back to the avatar the frame carried. */
+export async function notificationIcon(
+  bot: NotificationAvatarBot | undefined,
+  frameAvatarUrl?: string | null,
+): Promise<string | undefined> {
+  if (!bot) return frameAvatarUrl ?? undefined;
+  return notificationPhoto(bot) ?? (await mascotIcon(bot.color, bot.mascotBody));
 }
 
 /** Show one unless the exact destination conversation is already visible.

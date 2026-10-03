@@ -1111,6 +1111,10 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("GET", "/api/provider-usage"), as: ProviderUsageResponse.self)
     }
 
+    public func updateStatus() async throws -> UpdateStatusResponse {
+        try await send(try makeRequest("GET", "/api/update/status"), as: UpdateStatusResponse.self)
+    }
+
     public func setThreadSettlement(days: Int) async throws -> ConfigStatus {
         guard (0...3650).contains(days) else { throw APIError.badURL }
         let current = try await config()

@@ -511,6 +511,10 @@ export interface WireGroup {
  * `bot.queued` frame carries them: threadId → queued items. */
 export type BotQueuedMessages = Record<string, Array<{ queueId: string; text: string; reason?: "capacity" }>>;
 
+export type UpdateRunState =
+  | "idle" | "ready" | "checkpointing" | "stopping" | "applying"
+  | "relaunching" | "verifying" | "done" | "rolled_back" | "failed";
+
 export type ServerFrame =
   | { kind: "sections"; sections: string[] }
   | { kind: "bot.queued"; queues: BotQueuedMessages }
@@ -532,6 +536,8 @@ export type ServerFrame =
   | { kind: "computer"; botId: string; state: "provisioning" | "waking" }
   | { kind: "computer-control"; botId: string; held: boolean; helpReason: string | null }
   | { kind: "bot.deleted"; botId: string }
+  /** Staged-build updater progress (1.3 /api/update contract). */
+  | { kind: "update.state"; state: UpdateRunState; updateId?: string; detail?: string }
   /** The config status object spread flat into the frame; its full typing
    * is the deferred client-model extraction (see j1-phase-bc-progress). */
   | ({ kind: "config" } & Record<string, unknown>);

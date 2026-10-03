@@ -9,6 +9,10 @@ public struct SharedContact: Codable, Hashable, Identifiable, Sendable {
     public let color: String?
     public let mascotBody: String?
     public let avatar: String?
+    /// A bot's stored profile image and the crop it is shown with; same
+    /// rule as `Bot`: the photo replaces the mascot unless the crop is mascot.
+    public var avatarUrl: String? = nil
+    public var avatarCrop: AvatarCrop? = nil
     /// For a bot that lives on another linked Mac: whose it is.
     public let ownerName: String?
     public let remote: Bool?

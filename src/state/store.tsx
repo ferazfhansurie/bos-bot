@@ -37,13 +37,14 @@ import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { answerResponse, dismissResponse } from "@/lib/card-answer";
 import { currentCall } from "@/lib/call";
-import { showNotification, type NotificationTarget } from "@/lib/notify";
+import { notificationIcon, showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { roleProfilePatch, type BotRole } from "@/lib/bot-roles";
 import { t } from "@/lib/i18n";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
+import { noteUpdateFrame } from "@/lib/bos-update";
 
 const MAX_ROUTINE_RUNS = 2_000;
 const ACTIVE_ROUTINE_RUN_STATUSES = new Set<RoutineRun["status"]>(["queued", "running", "waiting"]);
@@ -706,7 +707,8 @@ export type AppSettingsSection =
   | "usage"
   | "people"
   | "backups"
-  | "workspaces";
+  | "workspaces"
+  | "updates";
 
 export type BotSettingsSection =
   | "overview"
@@ -3621,11 +3623,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // unread:false back. Opening a bot from its own notification and
           // watching the badge return on the next hydration is exactly the
           // bug that makes notifications feel broken.
-          showNotification(
-            frame.notification,
-            (target) => openNotificationTarget(dispatch, target, stateRef.current),
-            stateRef.current.bots.find((bot) => bot.id === frame.notification.botId)?.avatarUrl,
-            visibleNotificationThread(stateRef.current),
+          // in a room the sender is notification.botId, so the banner wears
+          // that bot's face (photo or mascot), not the room's or the app's
+          void notificationIcon(
+            stateRef.current.bots.find((bot) => bot.id === frame.notification.botId),
+            frame.notification.avatarUrl,
+          ).then((icon) =>
+            showNotification(
+              frame.notification,
+              (target) => openNotificationTarget(dispatch, target, stateRef.current),
+              icon,
+              visibleNotificationThread(stateRef.current),
+            ),
           );
           break;
         case "group.deleted":
@@ -3680,6 +3689,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "bot.deleted":
           botPatchQueue.cancel(frame.botId);
           rawDispatch({ type: "deleteBot", botId: frame.botId });
+          break;
+        case "update.state":
+          noteUpdateFrame(frame);
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately

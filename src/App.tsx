@@ -21,6 +21,7 @@ import { InspectorPanel } from "@/components/InspectorPanel";
 import { SettingsModal } from "@/components/SettingsModal";
 import { WorkspaceBackupRecovery } from "@/components/WorkspaceBackupSettings";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { BosUpdateToast } from "@/components/BosUpdate";
 import { DesktopCapabilitiesProvider, useDesktopCapabilities } from "@/components/DesktopCapabilities";
 import { WindowCaptionButtons } from "@/components/WindowCaptionButtons";
 import { RoutinesPage } from "@/components/RoutinesPage";
@@ -232,6 +233,7 @@ function Shell() {
       {window.ogb?.appChannel === "staging" && <div role="status" className="shrink-0 border-b border-amber-400/30 bg-amber-400/10 px-3 py-1 text-center text-xs text-amber-300">BOS Staging</div>}
       {/* fixed-position popup, bottom-left — outside the layout flow */}
       <UpdateBanner />
+      <BosUpdateToast />
       <div className="relative flex min-h-0 flex-1">
       {!calendarFocus && <button
         type="button"

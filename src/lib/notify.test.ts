@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildNotificationOptions,
+  mascotSvg,
+  notificationIcon,
+  notificationPhoto,
   requestNotificationPermission,
   showNotification,
   type NotifyFrame,
@@ -122,5 +125,31 @@ describe("buildNotificationOptions", () => {
       tag: "openmausbot:bot-9",
       icon: undefined,
     });
+  });
+});
+
+describe("the sending bot's face", () => {
+  const photo = "/api/attachments/123e4567-e89b-12d3-a456-426614174000.png";
+
+  it("uses the photo only when the profile shows it", () => {
+    expect(notificationPhoto({ avatarUrl: photo, avatarCrop: "circle" })).toBe(photo);
+    // a stored photo behind the mascot crop is not what the app shows
+    expect(notificationPhoto({ avatarUrl: photo, avatarCrop: "mascot" })).toBeNull();
+    expect(notificationPhoto({ avatarUrl: photo })).toBeNull();
+    expect(notificationPhoto({ avatarUrl: "https://tracker.example/x.png", avatarCrop: "circle" })).toBeNull();
+  });
+
+  it("draws the bot's own mascot body and colour", () => {
+    const svg = mascotSvg("green", "blob");
+    expect(svg).toContain("M 51 12 C 75 8");
+    expect(svg).not.toContain("#808080");
+    expect(mascotSvg("green", "nope" as never)).toContain("M 50 10 C 72 10");
+  });
+
+  it("picks the sender in a room, and falls back to the frame for unknown bots", async () => {
+    const sender = { id: "scout", color: "green" as const, avatarUrl: photo, avatarCrop: "rounded" as const };
+    await expect(notificationIcon(sender)).resolves.toBe(photo);
+    await expect(notificationIcon(undefined, photo)).resolves.toBe(photo);
+    await expect(notificationIcon(undefined)).resolves.toBeUndefined();
   });
 });

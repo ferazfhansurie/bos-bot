@@ -3,7 +3,7 @@
 // is the stuff shared by every bot: who you are, your keys, and the
 // machine your bots can borrow.
 import { useEffect, useRef, useState } from "react";
-import { Archive, Coins, FlaskConical, KeyRound, Monitor, Palette, Search, TabletSmartphone, Terminal, User, Users, X, Building2 } from "lucide-react";
+import { Archive, Coins, FlaskConical, KeyRound, Monitor, Palette, RefreshCw, Search, TabletSmartphone, Terminal, User, Users, X, Building2 } from "lucide-react";
 import { api, useStore, type AppSettingsSection, type ConfigStatus } from "@/state/store";
 import { analyticsEnabled, setAnalyticsEnabled } from "@/lib/analytics";
 import { browserAvailable, browserUnavailableReason, builtInBrowserEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
@@ -26,6 +26,7 @@ import { OrganizationSettings } from "./OrganizationSettings";
 import { Card, SettingRow, Switch } from "./SettingsPrimitives";
 import { shortcutLabel } from "./ShortcutHint";
 import { UsageSection } from "./UsageSection";
+import { UpdatesSettings } from "./BosUpdate";
 import { useToolCallsToggle } from "@/hooks/use-tool-calls-toggle";
 import { WorkspacesSection, workspacesAvailable } from "./WorkspacesSection";
 import { SkinPicker } from "./SkinPicker";
@@ -50,7 +51,8 @@ const SECTIONS: Array<{
   icon: typeof User;
   keywords: string[];
 }> = [
-  { id: "general", labelKey: "settings.section.general", icon: User, keywords: ["profile", "name", "email", "analytics", "updates", "threads", "parallel", "concurrency", "permissions", "approval", "access", "full access"] },
+  { id: "general", labelKey: "settings.section.general", icon: User, keywords: ["profile", "name", "email", "analytics", "threads", "parallel", "concurrency", "permissions", "approval", "access", "full access"] },
+  { id: "updates", labelKey: "settings.section.updates", icon: RefreshCw, keywords: ["update", "updates", "restart", "version", "build", "relaunch", "rollback"] },
   { id: "desktopWorkspaces", labelKey: "settings.section.desktopWorkspaces", icon: Building2, keywords: ["workspace", "cloud", "hosted", "vps", "server", "connect", "pair", "switch", "local"] },
   { id: "organization", labelKey: "settings.section.organization", icon: Building2, keywords: ["company", "organization", "sign in", "enroll", "managed", "models", "disconnect"] },
   { id: "appearance", labelKey: "settings.section.appearance", icon: Palette, keywords: ["skin", "theme", "appearance", "tools", "tool calls", "threads", "show threads", "hide threads", "sidebar", "display"] },
@@ -649,7 +651,6 @@ export function SettingsModal() {
                 <DefaultApprovalsSettings />
                 <div>
                   {!remoteActive && <ReplayTourRow />}
-                  <UpdatesRow />
                   <DiagnosticsRow />
                 </div>
               </>
@@ -727,6 +728,15 @@ export function SettingsModal() {
             )}
 
             {section === "computer" && <LocalComputerSection />}
+
+            {section === "updates" && (
+              <>
+                <UpdatesSettings />
+                <div>
+                  <UpdatesRow />
+                </div>
+              </>
+            )}
 
             {section === "usage" && <UsageSection />}
             {section === "people" && <PeopleSection />}

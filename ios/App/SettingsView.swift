@@ -48,6 +48,16 @@ struct SettingsView: View {
             }
 
             if session.connection != nil {
+                Section {
+                    UpdateStatusRow()
+                } header: {
+                    Text("BOS updates")
+                } footer: {
+                    Text("Updates install on the mac from Settings > Updates. Bots that are working are paused and pick up where they left off.")
+                }
+            }
+
+            if session.connection != nil {
                 Section("Subscription limits") {
                     NavigationLink { ProviderUsageView() } label: {
                         Label("Claude & Codex", systemImage: "chart.bar.fill")
@@ -397,6 +407,41 @@ private struct AppearancePreview: View {
             .fill(mine ? accent : theirs)
             .frame(width: compact ? width * 0.8 : width, height: compact ? 11 : 14)
             .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+    }
+}
+
+/// Read-only: the phone shows what the mac's updater is doing and never
+/// starts an update itself.
+private struct UpdateStatusRow: View {
+    @EnvironmentObject private var session: Session
+    @State private var status: UpdateStatusResponse?
+    @State private var loaded = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: status?.isRunning == true ? "arrow.triangle.2.circlepath" : status?.state == "ready" ? "arrow.up.circle.fill" : "checkmark.circle")
+                .foregroundStyle(status?.state == "ready" ? Color.accentColor : Color.secondary)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.map { "BOS \($0.current.version)" } ?? "BOS")
+                Text(status?.summary ?? (loaded ? "Unavailable on this computer" : "Checking…"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            if status?.isRunning == true { ProgressView() }
+        }
+        .accessibilityElement(children: .combine)
+        .task {
+            // poll while the screen is up: fast during a run, slow otherwise
+            while !Task.isCancelled {
+                status = await session.loadUpdateStatus()
+                loaded = true
+                try? await Task.sleep(for: .seconds(status?.isRunning == true ? 2 : 30))
+            }
+        }
     }
 }
 

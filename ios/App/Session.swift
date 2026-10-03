@@ -2193,6 +2193,11 @@ final class Session: ObservableObject {
         return try await client.providerUsage().accounts
     }
 
+    func loadUpdateStatus() async -> UpdateStatusResponse? {
+        guard let client else { return nil }
+        return try? await client.updateStatus()
+    }
+
     // MARK: - Routines
 
     func loadRoutines() async -> (routines: [Routine], runs: [RoutineRun]) {
