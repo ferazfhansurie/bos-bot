@@ -232,6 +232,8 @@ interface PendingHandoff extends Handoff {
   stopped: boolean;
   /** messages written into the running turn */
   steers: string[];
+  /** messages whose delivery into the running turn is unknown */
+  uncertain: string[];
 }
 
 /** Turn events that show the provider working on the prompt. Error narration
@@ -248,6 +250,8 @@ function actedOn(event: RuntimeEvent): boolean {
  * so what it carried stays eligible for the next turn. */
 export class Handoffs {
   private readonly pending = new Map<string, PendingHandoff>();
+  /** Turns already settled: a steer's answer can arrive after its turn ended. */
+  private readonly settled = new WeakSet<PendingHandoff>();
   private readonly store: HandoffStore;
 
   constructor(store: HandoffStore) {
@@ -257,7 +261,7 @@ export class Handoffs {
   /** Registered when the turn claims the thread, before any provider work. */
   begin(threadId: string, claimId: string, handoff: Handoff): void {
     this.pending.set(threadId, {
-      ...handoff, claimId, dispatched: false, replaced: false, rebuilt: false, accepted: false, stopped: false, steers: [],
+      ...handoff, claimId, dispatched: false, replaced: false, rebuilt: false, accepted: false, stopped: false, steers: [], uncertain: [],
     });
   }
 
@@ -291,8 +295,32 @@ export class Handoffs {
    * the person stops this turn. */
   steered(threadId: string, target: object | undefined, instanceId: string | undefined, messageId: string): void {
     const pending = this.pending.get(threadId);
-    if (!pending || pending !== target || pending.instanceId !== instanceId) return;
-    pending.steers.push(messageId);
+    if (pending && pending === target && pending.instanceId === instanceId) {
+      pending.steers.push(messageId);
+      return;
+    }
+    // Accepted just as the turn ended, and the person had stopped it: withdrawn too.
+    const done = this.settledTarget(target, instanceId);
+    if (done?.stopped) this.credit(threadId, done, [messageId]);
+  }
+
+  /** A message whose delivery into the running turn is unknown (the answer
+   * was lost, or the turn ended or was stopped while it was in flight). The
+   * session may already hold it, so it is never offered to a later turn:
+   * counted as received, whether the turn is still running or already over. */
+  uncertain(threadId: string, target: object | undefined, instanceId: string | undefined, messageId: string): void {
+    const pending = this.pending.get(threadId);
+    if (pending && pending === target && pending.instanceId === instanceId) {
+      pending.uncertain.push(messageId);
+      return;
+    }
+    const done = this.settledTarget(target, instanceId);
+    if (done) this.credit(threadId, done, [messageId]);
+  }
+
+  private settledTarget(target: object | undefined, instanceId: string | undefined): PendingHandoff | undefined {
+    const done = target as PendingHandoff | undefined;
+    return done && this.settled.has(done) && done.instanceId === instanceId ? done : undefined;
   }
 
   /** The person pressed Stop: what they sent into this turn is withdrawn. */
@@ -335,10 +363,14 @@ export class Handoffs {
   }
 
   private settle(threadId: string, pending: PendingHandoff): void {
-    if (!pending.stopped) return;
-    const withdrawn = [...pending.own, ...pending.steers];
+    this.settled.add(pending);
+    const withdrawn = pending.stopped ? [...pending.own, ...pending.steers] : [];
+    this.credit(threadId, pending, [...withdrawn, ...pending.uncertain]);
+  }
+
+  private credit(threadId: string, pending: PendingHandoff, received: readonly string[]): void {
     // A replacement never accepted holds no record; the next turn replays.
-    if (pending.accepted || !pending.replaced) this.add(threadId, pending, withdrawn);
+    if (pending.accepted || !pending.replaced) this.add(threadId, pending, received);
   }
 
   private accept(threadId: string, pending: PendingHandoff): void {

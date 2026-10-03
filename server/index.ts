@@ -6148,7 +6148,8 @@ function noteSteerImageNotDelivered(
   detail: string,
   from?: { botId: string; name: string; color: string },
 ): void {
-  const key = `${threadId}\0${queueKey}\0${detail}`;
+  // Per member: in a room, each busy addressee that refuses gets its own note.
+  const key = `${threadId}\0${queueKey}\0${from?.botId ?? ""}\0${detail}`;
   if (steerImageNotes.has(key)) return;
   steerImageNotes.add(key);
   if (steerImageNotes.size > 1000) steerImageNotes.delete(steerImageNotes.values().next().value!);
@@ -6261,6 +6262,9 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
     if (imagesAsFiles) noteSteerImagesAsFiles(bot.threadId);
     // Offered to the next turn again unless the person stops this one.
     if (steered === "steered") for (const message of messages) handoffs.steered(bot.threadId, steerTarget, instance?.instanceId, message.id);
+    // Uncertain words are recorded once and never offered to a later turn,
+    // even when the turn ended (or was stopped) while they were in flight.
+    else for (const message of messages) handoffs.uncertain(bot.threadId, steerTarget, instance?.instanceId, message.id);
     const queueIds = held.items.map((item) => item.messageId);
     settleHeldSteeredQueue(held);
     return ({ ok: true, steered: steered === "steered", outcomeUnknown: steered === "indeterminate", threadId: bot.threadId, messages, queueIds });
@@ -6478,6 +6482,24 @@ async function steerRecordedIntoMember(groupId: string, threadId: string, botId:
   return steered;
 }
 
+/** One busy room addressee refused the recorded row mid-turn; it gets the
+ * row after its current reply. Nothing to say when it is no longer busy. */
+function noteRoomMemberSteerRefused(groupId: string, threadId: string, botId: string, recorded: Message): void {
+  const member = store.bot(botId);
+  if (!member || !roomRuntimeSpeakers(groupId, threadId).some(([, speaker]) => speaker.botId === botId)) return;
+  const from = { botId: member.id, name: member.name, color: member.color };
+  if ((recorded.text ?? "").includes("<attached-image")) {
+    noteSteerImageNotDelivered(threadId, recorded.queueId ?? recorded.id, "the running turn could not take the image — it will get it after this reply", from);
+    return;
+  }
+  store.appendMessage(threadId, {
+    role: "bot",
+    kind: "activity",
+    from,
+    tool: { name: `not delivered yet: ${member.name}'s running turn refused the message — it will get it after this reply`, ok: false },
+  });
+}
+
 /** A room send naming several members while some are mid-turn: steer the
  * row into every busy addressee, then start the idle ones (and any busy one
  * that refused, behind its own lane) off the same recorded row, so each
@@ -6508,13 +6530,20 @@ async function steerAddressedRoomSend(groupId: string, threadId: string, queueId
   }
   // Steered or uncertain: the row is recorded once and never replayed.
   const later = [...idleBotIds];
+  const refusedBusy: string[] = [];
   for (const botId of busyBotIds) {
     if (botId === primary || (roomStopEpoch.get(groupId) ?? 0) !== stopEpoch) continue;
     // Uncertain counts as delivered (never replayed); a refusal answers after its current reply.
-    if (await steerRecordedIntoMember(groupId, threadId, botId, recorded, replyTo) === "refused") later.push(botId);
+    if (await steerRecordedIntoMember(groupId, threadId, botId, recorded, replyTo) === "refused") {
+      later.push(botId);
+      refusedBusy.push(botId);
+    }
   }
   // Stopped while a steer was in flight: start nobody else.
   if ((roomStopEpoch.get(groupId) ?? 0) !== stopEpoch || !later.length) return sendSteerReceipt(threadId, recorded);
+  // A busy addressee that refused waits for its current reply: say so for
+  // its copy, whichever order the addressees were tried in.
+  for (const botId of refusedBusy) noteRoomMemberSteerRefused(groupId, threadId, botId, recorded);
   try {
     startGroupTurn(groupId, recorded.text ?? "", replyTo, recorded.sendId, "chat", queueId, {
       threadId, via: recorded.via, sender: recorded.sender, recordedMessage: recorded, responderIds: later,
