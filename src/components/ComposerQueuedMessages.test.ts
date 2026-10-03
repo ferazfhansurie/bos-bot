@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   QueuedComposerMessages,
   composerCanSteerQueuedMessages,
-  queuedChipLabel,
 } from "./ComposerQueuedMessages";
 
 const oneItem = [{ queueId: "q1", text: "actually stop at 10\nand use the smaller model" }];
@@ -159,11 +158,49 @@ describe("QueuedComposerMessages", () => {
   });
 });
 
-describe("queuedChipLabel", () => {
-  it("shows the words and an attachment count, never the raw tag that could be re-sent", () => {
-    const label = queuedChipLabel('balance tu 550 lagi?\n\n<attached-image path="/tmp/042c.png" name="image.png" />');
-    expect(label).toBe("balance tu 550 lagi? · 1 attached");
-    expect(label).not.toContain("<attached-image");
-    expect(queuedChipLabel("plain\n\nwords")).toBe("plain\n\nwords");
+describe("queued chip preview", () => {
+  const pasted = "<pasted-text index=\"1\">\nrow one\nrow two\n</pasted-text>";
+
+  it("shows a pasted block as a summary, never its wrapper tags", () => {
+    const html = renderToStaticMarkup(createElement(QueuedComposerMessages, {
+      items: [{ queueId: "q1", text: `@pix look\n\n${pasted}` }],
+      onCancel: () => {},
+    }));
+    expect(html).toContain("@pix look");
+    expect(html).toContain("Pasted · 2 lines");
+    expect(html).not.toContain("pasted-text");
+  });
+
+  it("shows an attached image as a chip, never the raw tag that could be re-sent", () => {
+    const html = renderToStaticMarkup(createElement(QueuedComposerMessages, {
+      items: [{ queueId: "q1", text: 'balance tu 550 lagi?\n\n<attached-image path="/tmp/042c.png" name="image.png" />' }],
+      onCancel: () => {},
+    }));
+    expect(html).toContain("balance tu 550 lagi?");
+    expect(html).toContain("image.png");
+    expect(html).not.toContain("attached-image");
+  });
+
+  it("names the room member Steer will reach", () => {
+    const html = renderToStaticMarkup(createElement(QueuedComposerMessages, {
+      items: oneItem,
+      onSteer: () => {},
+      steerMode: "next",
+      steerTargetName: "pix",
+      onCancel: () => {},
+    }));
+    expect(html).toContain("Steer pix");
+    expect(html).toContain("Send this into pix&#x27;s running turn now");
+  });
+
+  it("replaces Steer with the reason when the server would not deliver it", () => {
+    const html = renderToStaticMarkup(createElement(QueuedComposerMessages, {
+      items: oneItem,
+      onSteer: () => {},
+      steerUnavailable: "Waits for pix",
+      onCancel: () => {},
+    }));
+    expect(html).toContain("Waits for pix");
+    expect(html).not.toContain(">Steer<");
   });
 });

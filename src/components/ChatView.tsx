@@ -499,7 +499,11 @@ function Bubble({
                   <ThreadRefText text={visibleText} peers={mentionPeers} />
                 </div>
               )}
-              {message.steered && (
+              {message.steerDelivery === "outcome_unknown" ? (
+                <div className="mt-1 text-[11px] text-warning" title={t("chat.steerUnknownHint")}>
+                  {t("chat.steerUnknown")}
+                </div>
+              ) : message.steered && (
                 <div className="mt-1 text-[11px] text-ink-secondary/70" title={t("chat.sentMidTurnHint")}>
                   {t("chat.sentMidTurn")}
                 </div>

@@ -1382,7 +1382,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "es": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -2765,7 +2773,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "fr": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -4148,7 +4164,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "hi": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -5531,7 +5555,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "ja": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -6914,7 +6946,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "pt-br": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -7556,6 +7596,12 @@
       "keys.aboutAria": "865cb604bf97d2ebd9a36bc4166170c23c9c36bd26c9da89e9d909e15d83df11",
       "keys.helpAria": "0b1b409b5a7e7f8c405350a5de7096d584ea4895cef4b33adf84c76bae2d5024",
       "keys.optional": "59be71333c960fd08e7e4fe9862206d9355f0a9884121a5b50ef8b36efdfe4cf",
+      "keys.configured": "84aebc69a1bf739a343be9c66edfd3160f77220ea69789a8147dd4ae261fd188",
+      "keys.testAuthenticated": "ccbf5ccf32628e4fa775ed0cdab386e2eec95535dd68b193dc352b3dc6d605ed",
+      "keys.testCatalog": "56fbd7c4703dacd77378644aca62037e27fbf1832cf028ff182b867111bb0290",
+      "keys.testCatalogNoModels": "32a9a00166054e2a323cbeda221f3cf0bff3c123d31c80e91c20660216d56c13",
+      "keys.testDraft": "70c508af0e0d49676c68a85825785a166fe657389d17602010988eef374f844b",
+      "keys.testSaved": "0e6b094d50025c9a1c0c2b61ae0f989ca6bd261d370eb35a8fc2d3cbaf7e7b4b",
       "keys.connected": "22965568d22a14ee17af055d2870b50afcfe9fd94a83eec3196e266932297bb2",
       "keys.replace": "3842185c988b04ce6451ccf94b6ed65b708fc76825c8da436432771e2cf579ab",
       "keys.removeKey": "b461240eece0d9e119036ca3abc07d264f50679f9cc76c679240ec18f34dc660",
@@ -8286,12 +8332,6 @@
       "remote.signInAccess.invalid": "f7571753e84241b531638ab312bb1b704d261eebae3a05d27f24c02a5ba5061e",
       "remote.signInAccess.note": "ce9c15dc3fe23bbed92cb66d4cd54b8fdf0498f52f6bd2250067134b1ac65783",
       "remote.signInAccess.error": "71a471a7b15e8647dda8cab60737a1b41901bdcbe3be10f477a9163b723f4e1d",
-      "keys.configured": "84aebc69a1bf739a343be9c66edfd3160f77220ea69789a8147dd4ae261fd188",
-      "keys.testAuthenticated": "ccbf5ccf32628e4fa775ed0cdab386e2eec95535dd68b193dc352b3dc6d605ed",
-      "keys.testCatalog": "56fbd7c4703dacd77378644aca62037e27fbf1832cf028ff182b867111bb0290",
-      "keys.testCatalogNoModels": "32a9a00166054e2a323cbeda221f3cf0bff3c123d31c80e91c20660216d56c13",
-      "keys.testDraft": "70c508af0e0d49676c68a85825785a166fe657389d17602010988eef374f844b",
-      "keys.testSaved": "0e6b094d50025c9a1c0c2b61ae0f989ca6bd261d370eb35a8fc2d3cbaf7e7b4b",
       "engines.icon.label": "567678203b1cd073a2d4d4ed70538c463c2219e5016729cc785addb85a790947",
       "engines.icon.selectAria": "0ff08a2967b0447be8c4ad42dab258da7d81de4c322f80348dd4cb89d34bc6fe",
       "engines.icon.default": "77728294df621c7bd673e970d29e6d9075e1698b6872b3e1e12585691a429490",
@@ -8304,7 +8344,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "zh": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -9687,7 +9735,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "zh-tw": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -11621,7 +11677,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     },
     "uk": {
       "noEngines.title": "af88855a5f80377de709995229ba3907df9e8fb3b940fbf7c0d9cbe6eea54afe",
@@ -13594,7 +13658,15 @@
       "engines.icon.formatError": "cac21e64a1b0dc3a421bd88e8d23ce185c76a2c4c78f465873f0f3cbcf928500",
       "engines.icon.sizeError": "4ad3162859ca86617999a6ee558f3095de4bb527dd28cb1b837032010a67d5db",
       "engines.icon.invalidError": "57ce920ff252ec0e89155c21acbb2d755994b17dc776dee89e61e31137876b9b",
-      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b"
+      "engines.icon.dimensionError": "d437467fed2405ebedf3d892c484ec1f2d024d7def8b953fd7d561c1ca3f324b",
+      "composer.queued.steerTo": "0914643f2b7059c693e1460aa53e060a4cef05b39271334327a5f096fccc5781",
+      "composer.queued.steerToHint": "0722bf8ad105cdd8294434a9f1c0e26b2f8e56308a4aa7b5dd8d218dafcea977",
+      "composer.queued.steerChoose": "02c05cf0271f26a3dbbbbebbf3136725f805d46b14bba388d6d7ba695483ef2b",
+      "composer.queued.waitsFor": "2531232d274f0b61f6e9bb6cf34a5d52a2172866b6cd64aa896e60201db22971",
+      "composer.queued.waitsForTurn": "92c952660e80c0dbb03951fcf74106cda6477acc67d7e86aa38305d0f5437e9f",
+      "composer.queued.pasted": "a2706b6301f202106a49edbbb6760043865a7ea005cc14a2bcd499adab173cb2",
+      "chat.steerUnknown": "0ec90f981e072817b164dc38d508baeb8f1b74b03030bb51653ff6e8fa9f48b6",
+      "chat.steerUnknownHint": "61428ed3158cfa9501b969db51ea15927dd5f61bf30678b437e20d2671bd730f"
     }
   }
 }

@@ -1379,5 +1379,13 @@
   "engines.icon.formatError": "Importez une image PNG, JPEG ou WebP.",
   "engines.icon.sizeError": "Les icônes de fournisseur ne doivent pas dépasser 128 Ko.",
   "engines.icon.invalidError": "Importez une image PNG, JPEG ou WebP complète de 128 Ko et {dimension} × {dimension} pixels maximum.",
-  "engines.icon.dimensionError": "Les icônes de fournisseur ne doivent pas dépasser {dimension} × {dimension} pixels."
+  "engines.icon.dimensionError": "Les icônes de fournisseur ne doivent pas dépasser {dimension} × {dimension} pixels.",
+  "composer.queued.steerTo": "Réorienter {name}",
+  "composer.queued.steerToHint": "Envoyer ceci maintenant dans le tour en cours de {name}",
+  "composer.queued.steerChoose": "Mentionnez un bot pour réorienter",
+  "composer.queued.waitsFor": "Attend {name}",
+  "composer.queued.waitsForTurn": "Attend son tour",
+  "composer.queued.pasted": "Collé · {lines} lignes",
+  "chat.steerUnknown": "livraison incertaine",
+  "chat.steerUnknownHint": "Envoyé pendant que le bot travaillait, mais on ne sait pas si le tour en cours l'a reçu. Vérifiez la réponse avant de le renvoyer."
 }

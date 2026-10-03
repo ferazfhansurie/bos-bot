@@ -1379,5 +1379,13 @@
   "engines.icon.formatError": "PNG、JPEG、WebP 画像をアップロードしてください。",
   "engines.icon.sizeError": "プロバイダーアイコンは 128 KB 以下にしてください。",
   "engines.icon.invalidError": "128 KB 以下、{dimension} × {dimension} ピクセル以下の完全な PNG、JPEG、WebP 画像をアップロードしてください。",
-  "engines.icon.dimensionError": "プロバイダーアイコンは {dimension} × {dimension} ピクセル以下にしてください。"
+  "engines.icon.dimensionError": "プロバイダーアイコンは {dimension} × {dimension} ピクセル以下にしてください。",
+  "composer.queued.steerTo": "{name} を誘導",
+  "composer.queued.steerToHint": "今すぐ {name} の実行中のターンに送る",
+  "composer.queued.steerChoose": "誘導するボットを1つメンションしてください",
+  "composer.queued.waitsFor": "{name} を待機中",
+  "composer.queued.waitsForTurn": "順番を待機中",
+  "composer.queued.pasted": "貼り付け · {lines} 行",
+  "chat.steerUnknown": "配信不明",
+  "chat.steerUnknownHint": "ボットの作業中に送信されましたが、実行中のターンが受け取ったかは不明です。再送する前に返信を確認してください。"
 }

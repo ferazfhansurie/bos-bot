@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { setLocale } from "./i18n";
-import { goalCoordinatorForComposer, groupComposerHint, roomRespondersForComposer } from "./group-routing";
+import { goalCoordinatorForComposer, groupComposerHint, roomRespondersForComposer, roomSteerTarget } from "./group-routing";
 import type { GroupDefaultResponder } from "@/state/store";
 
 describe("roomRespondersForComposer", () => {
@@ -85,5 +85,30 @@ describe("composer hint, in the reader's language", () => {
 
     setLocale("ja");
     expect(groupComposerHint(room({ kind: "everyone" }), members)).toBe("全員が応答します");
+  });
+});
+
+describe("roomSteerTarget", () => {
+  const members = [
+    { id: "pipe", name: "pipe" },
+    { id: "pix", name: "pix" },
+    { id: "nit", name: "nit" },
+  ];
+
+  it("steers the addressed member, not whichever member is listed busy first", () => {
+    expect(roomSteerTarget("@pix tighten the chip", members, ["pipe", "pix"])).toEqual({ kind: "member", member: members[1] });
+  });
+
+  it("steers the only active member when the message mentions nobody", () => {
+    expect(roomSteerTarget("also check the logs", members, ["nit"])).toEqual({ kind: "member", member: members[2] });
+  });
+
+  it("refuses to guess between several running members", () => {
+    expect(roomSteerTarget("also check the logs", members, ["pipe", "nit"])).toMatchObject({ kind: "ambiguous" });
+    expect(roomSteerTarget("@pipe @nit both of you", members, ["pipe", "nit"])).toMatchObject({ kind: "ambiguous" });
+  });
+
+  it("waits when the addressed member isn't running", () => {
+    expect(roomSteerTarget("@pix later", members, ["pipe"])).toEqual({ kind: "waiting", members: [members[1]] });
   });
 });

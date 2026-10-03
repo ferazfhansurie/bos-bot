@@ -2282,5 +2282,13 @@
   "appCrash.title": "{app} hit a problem",
   "appCrash.body": "Something on this screen stopped working. Your bots, chats and settings are safe. Reload to get back to where you were.",
   "appCrash.reload": "Reload",
-  "appCrash.details": "Technical details"
+  "appCrash.details": "Technical details",
+  "composer.queued.steerTo": "Steer {name}",
+  "composer.queued.steerToHint": "Send this into {name}'s running turn now",
+  "composer.queued.steerChoose": "Mention one bot to steer",
+  "composer.queued.waitsFor": "Waits for {name}",
+  "composer.queued.waitsForTurn": "Waits for its turn",
+  "composer.queued.pasted": "Pasted · {lines} lines",
+  "chat.steerUnknown": "delivery unknown",
+  "chat.steerUnknownHint": "Sent while the bot was working, but it's unclear whether the running turn received it. Check the reply before sending it again."
 }

@@ -1379,5 +1379,13 @@
   "engines.icon.formatError": "PNG, JPEG या WebP छवि अपलोड करें।",
   "engines.icon.sizeError": "प्रदाता के आइकन का आकार 128 KB या उससे कम होना चाहिए।",
   "engines.icon.invalidError": "128 KB और {dimension} × {dimension} पिक्सेल तक की पूर्ण PNG, JPEG या WebP छवि अपलोड करें।",
-  "engines.icon.dimensionError": "प्रदाता के आइकन का आकार अधिकतम {dimension} × {dimension} पिक्सेल होना चाहिए।"
+  "engines.icon.dimensionError": "प्रदाता के आइकन का आकार अधिकतम {dimension} × {dimension} पिक्सेल होना चाहिए।",
+  "composer.queued.steerTo": "{name} को भेजें",
+  "composer.queued.steerToHint": "इसे अभी {name} की चालू बारी में भेजें",
+  "composer.queued.steerChoose": "भेजने के लिए एक बॉट का ज़िक्र करें",
+  "composer.queued.waitsFor": "{name} का इंतज़ार",
+  "composer.queued.waitsForTurn": "अपनी बारी का इंतज़ार",
+  "composer.queued.pasted": "चिपकाया · {lines} पंक्तियाँ",
+  "chat.steerUnknown": "पहुँच अनिश्चित",
+  "chat.steerUnknownHint": "बॉट के काम करते समय भेजा गया, पर यह साफ़ नहीं कि चालू बारी को मिला या नहीं। दोबारा भेजने से पहले जवाब देखें।"
 }
