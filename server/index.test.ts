@@ -444,6 +444,8 @@ beforeAll(async () => {
         // the engine that runs a turn on the bot's cloud computer (the app
         // registers it by default); it talks only to the Box stub
         computer: { driver: "boxAgent", displayName: "Computer" },
+        // a driver BOS stopped shipping: kept in config, hidden from lists
+        oldGrok: { driver: "grokAgent", displayName: "Old Grok" },
       },
     }),
   );
@@ -2322,6 +2324,9 @@ describe("harness HTTP API", () => {
       snapshot: { state: "unavailable" },
     });
     expect(ghost.snapshot.reason).toContain("not-a-real-driver");
+    // removed BOS engines never list as dead rows
+    expect(body.instances.map((instance: { instanceId: string }) => instance.instanceId)).not.toContain("oldGrok");
+    expect(body.instances.map((instance: { instanceId: string }) => instance.instanceId)).not.toContain("computer");
     expect(body.instances).toContainEqual(expect.objectContaining({
       instanceId: "claude",
       driverKind: "claudeAgent",
@@ -5957,6 +5962,18 @@ describe("harness HTTP API", () => {
     const card = room.messages.find((message: { id: string }) => message.id === "stranded-card").card;
     expect(card.dismissed).toBe(true);
     expect(card.answered).toBe("unavailable");
+
+    // a repeat answer (double-click) is a no-op, not a second decision
+    const repeat = await api("POST", "/api/threads/test-stranded-room-thread/respond", {
+      requestId: "stranded-request",
+      behavior: "deny",
+    });
+    expect(repeat.status).toBe(200);
+    expect(repeat.body).toMatchObject({ ok: true, alreadySettled: true });
+    const after = (await api("GET", "/api/bots")).body.groups.find(
+      (group: { id: string }) => group.id === "test-stranded-room",
+    );
+    expect(after.messages.find((message: { id: string }) => message.id === "stranded-card").card.answered).toBe("unavailable");
 
     // a room with nothing pending still reports that plainly
     const nothing = await api("POST", "/api/threads/test-pinned-room-thread/respond", {

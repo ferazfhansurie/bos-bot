@@ -2277,5 +2277,9 @@
   "toolRecovery.help": "Check any external effects and make sure any orphaned work has stopped. Marking reviewed records your check and releases this request's hold; it does not run the request again.",
   "toolRecovery.checkbox": "I checked the outcome and that this request has finished or stopped",
   "toolRecovery.saving": "Saving review…",
-  "toolRecovery.mark": "Mark reviewed"
+  "toolRecovery.mark": "Mark reviewed",
+  "appCrash.title": "{app} hit a problem",
+  "appCrash.body": "Something on this screen stopped working. Your bots, chats and settings are safe. Reload to get back to where you were.",
+  "appCrash.reload": "Reload",
+  "appCrash.details": "Technical details"
 }

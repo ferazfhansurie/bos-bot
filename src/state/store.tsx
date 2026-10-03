@@ -1,3 +1,4 @@
+import { claimDecision, releaseDecision } from "@/lib/approval-submit";
 import { runtimeStreamKey, roomMemberStreamKey } from "@/lib/runtime-stream";
 import { createStreamStore, roomStreamingMembers, type StreamState, type StreamStore } from "@/lib/stream-store";
 // Server-backed store. The React app holds no transports of its own:
@@ -2945,6 +2946,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }).catch(showError);
           break;
         case "decideRequest": {
+          // a second click while the first answer is in flight is dropped
+          if (!claimDecision(action.threadId, action.requestId)) break;
           const respond = () =>
             api(`/api/threads/${action.threadId}/respond`, {
               method: "POST",
@@ -2984,7 +2987,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               // otherwise it could resume work under a stale approval level.
               showError(error);
               action.onError?.(error instanceof Error ? error.message : String(error));
-            });
+            })
+            .finally(() => releaseDecision(action.threadId, action.requestId));
           break;
         }
         case "answerCard": {

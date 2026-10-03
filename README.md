@@ -16,34 +16,18 @@ Talk to them like contacts. Watch them work. Approve what matters.
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-2B2E3A?logo=electron&logoColor=9FEAF9)
 ![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex-d97757)
-[![Release](https://img.shields.io/github/v/release/milind-soni/OpenMausBot?label=release&color=1084fe&cacheSeconds=300)](https://github.com/milind-soni/OpenMausBot/releases/latest)
 ![PRs](https://img.shields.io/badge/PRs-welcome-38d591)
 
 <br>
 
-<a href="https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/OpenMausBot?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Apple%20silicon%29&labelColor=070707&color=1084fe&cacheSeconds=300" alt="Download the latest OpenMausBot for Mac with Apple silicon (.dmg)" height="40">
-</a>
-&nbsp;
-<a href="https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-intel.dmg">
-  <img src="https://img.shields.io/github/v/release/milind-soni/OpenMausBot?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Mac%20%28Intel%29&labelColor=070707&color=2a9d8f&cacheSeconds=300" alt="Download the latest OpenMausBot for Intel Macs (.dmg)" height="40">
-</a>
-&nbsp;
-<a href="https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-setup.exe">
-  <img src="https://img.shields.io/github/v/release/milind-soni/OpenMausBot?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Windows&labelColor=070707&color=4cc2ff&cacheSeconds=300" alt="Download the latest OpenMausBot for Windows (.exe)" height="40">
-</a>
-&nbsp;
-<a href="https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-amd64.deb">
-  <img src="https://img.shields.io/github/v/release/milind-soni/OpenMausBot?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20%20Download%20for%20Ubuntu&labelColor=070707&color=e95420&cacheSeconds=300" alt="Download the latest OpenMausBot for Ubuntu (.deb)" height="40">
+<!-- BOS download page. TODO(dev): confirm https://bos.aihlete.com/download is the real BOS download URL. -->
+<a href="https://bos.aihlete.com/download">
+  <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20%20Download%20BOS-Mac%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-1084fe?style=for-the-badge&labelColor=070707" alt="Download BOS for Mac, Windows or Ubuntu" height="40">
 </a>
 
-<sub>[latest release](https://github.com/milind-soni/OpenMausBot/releases/latest) &nbsp;·&nbsp; macOS: Apple silicon & Intel · signed & notarized .dmg &nbsp;·&nbsp; Windows: x64 installer &nbsp;·&nbsp; Ubuntu 24.04 x64: .deb or AppImage beta &nbsp;·&nbsp; [all releases](https://github.com/milind-soni/OpenMausBot/releases)</sub>
+<sub>[download BOS](https://bos.aihlete.com/download) &nbsp;·&nbsp; macOS: Apple silicon & Intel .dmg &nbsp;·&nbsp; Windows: x64 installer &nbsp;·&nbsp; Ubuntu 24.04 x64: .deb or AppImage beta</sub>
 
 <br>
-
-<a href="https://buy.polar.sh/polar_cl_bbnfWFUrWONIF4HnUpZf1p0if0eUYg3HeXct73b48Yg">
-  <img src="https://img.shields.io/badge/%E2%9D%A4%EF%B8%8F%20%20Support%20OpenMausBot-any%20amount%20%C2%B7%20or%20monthly-38d591?style=for-the-badge&labelColor=070707" alt="Support OpenMausBot — one-time any amount or monthly, via Polar" height="40">
-</a>
 
 <br>
 <br>
@@ -158,9 +142,8 @@ in **Teams → Import**.
 The format stays portable: OpenMausBot reads the structured YAML frontmatter for a reliable one-click
 install, while Grok, Claude, ChatGPT, and people can follow the ordinary Markdown playbook. Connections
 remain off until you approve them, routines arrive paused, and packages never carry credentials,
-conversations, permissions, memory, or computer access. Browse the
-[open-source playbook repository](https://github.com/milind-soni/openmausbot-teams) or read its
-[portable format](https://github.com/milind-soni/openmausbot-teams/blob/main/FORMAT.md).
+conversations, permissions, memory, or computer access. The portable format comes from the upstream OpenMausBot
+[playbook repository](https://github.com/milind-soni/openmausbot-teams) ([format](https://github.com/milind-soni/openmausbot-teams/blob/main/FORMAT.md)); a BOS team library is not published yet.
 
 ### 🎧 Bots that talk back
 
@@ -254,14 +237,14 @@ See [MCP server setup and tool reference](docs/mcp-server.md).
 
 ## Quick start
 
-**Released builds ([latest release](https://github.com/milind-soni/OpenMausBot/releases/latest)):** the harness server is embedded, so no separate server setup is required.
+**Released builds ([download BOS](https://bos.aihlete.com/download)):** the harness server is embedded, so no separate server setup is required.
 
 | | Download | Install |
 |---|---|---|
-| **macOS** (Apple silicon) | [OpenMausBot.dmg](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot.dmg) | Drag it to Applications, open it. Signed & notarized. |
-| **macOS** (Intel) | [OpenMausBot-intel.dmg](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-intel.dmg) | Same app, built for Intel Macs. Signed & notarized. |
-| **Windows** (x64) | [OpenMausBot-setup.exe](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-setup.exe) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
-| **Ubuntu 24.04** (x64) | [OpenMausBot-amd64.deb](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-amd64.deb) · [OpenMausBot.AppImage](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot.AppImage) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
+| **macOS** (Apple silicon) | [BOS-Bot.dmg](https://bos.aihlete.com/download) | Drag it to Applications, open it. Signed & notarized. |
+| **macOS** (Intel) | [BOS-Bot-intel.dmg](https://bos.aihlete.com/download) | Same app, built for Intel Macs. Signed & notarized. |
+| **Windows** (x64) | [BOS-Bot-setup.exe](https://bos.aihlete.com/download) | Run it — one-click, per-user, no admin rights. The installer isn't code-signed yet, so SmartScreen shows "unknown publisher": **More info → Run anyway**. |
+| **Ubuntu 24.04** (x64) | [BOS-Bot-x64.deb](https://bos.aihlete.com/download) · [BOS-Bot.AppImage](https://bos.aihlete.com/download) | Install the `.deb` with APT (recommended), or make the AppImage executable and run it. Beta; GNOME is the supported desktop. |
 
 See the [Ubuntu Desktop guide](docs/linux-desktop.md) for installation, capabilities, and troubleshooting.
 Any desktop build can also pair as a client to another Windows, macOS, or Ubuntu host over Tailscale; see [desktop-to-desktop companion mode](docs/desktop-companion.md).
@@ -270,7 +253,7 @@ Any desktop build can also pair as a client to another Windows, macOS, or Ubuntu
 **From source:**
 
 ```sh
-git clone https://github.com/milind-soni/OpenMausBot && cd OpenMausBot
+git clone https://github.com/firazfhansurie/bos-bot && cd bos-bot
 pnpm install
 
 pnpm dev:server    # harness server → 127.0.0.1:8799
@@ -303,8 +286,8 @@ pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
 The Linux preview is user-initiated and never enables local bot control or Auto routing. On Xorg, the reviewed Cua
 Driver 0.19.3 runtime starts only after explicit opt-in and without its full-screen cursor overlay. On Wayland the
 app never starts it and clears legacy opt-ins while that real-seat safety gate remains unresolved. Chat, preview,
-Cloud, and Local VM remain available on both sessions. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and tracking
-issues [#29](https://github.com/milind-soni/OpenMausBot/issues/29),
+Cloud, and Local VM remain available on both sessions. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and upstream OpenMausBot
+tracking issues [#29](https://github.com/milind-soni/OpenMausBot/issues/29),
 [#345](https://github.com/milind-soni/OpenMausBot/issues/345), and
 [#113](https://github.com/milind-soni/OpenMausBot/issues/113).
 
@@ -369,23 +352,18 @@ No code needed at all for your own engines: any ACP-speaking CLI or OpenAI-compa
 plugs in through config — see [`docs/custom-engines.md`](docs/custom-engines.md).
 Users can add their own MCP tool servers with zero code via [`docs/custom-mcp-servers.md`](docs/custom-mcp-servers.md).
 
-## Support the project
+## Support
 
-OpenMausBot is free and open source. If it does real work for you, you can
-[buy the project a coffee or become a monthly supporter](https://buy.polar.sh/polar_cl_bbnfWFUrWONIF4HnUpZf1p0if0eUYg3HeXct73b48Yg) —
-one-time any amount, or monthly. Payments are handled by [Polar](https://polar.sh/supamaus),
-which takes care of receipts and taxes; nothing about the app ever sits behind a paywall.
+Questions, bugs and feedback: <https://bos.aihlete.com/support>.
 
 ## Run from a terminal or on a server
 
-With Node 24 or newer, install once and run:
+> **Not published for BOS yet.** The `openmausbot` package on npm is the upstream
+> project, not BOS — don't install it for BOS. Until a BOS terminal package ships
+> (TODO(dev): package name), run BOS from source (see Quick start). The commands
+> below describe the upstream CLI flow this will follow.
 
-```sh
-npm install -g openmausbot
-openmausbot
-```
-
-Or use `npx openmausbot` without a global install. First launch guides you with
+The terminal flow: First launch guides you with
 arrow-key choices: choose AI access, sign in or paste a hidden API key, choose
 a model, and optionally connect a phone. Next time, the same command reuses your
 saved setup and opens the local workspace. Keep the terminal open; Ctrl-C stops

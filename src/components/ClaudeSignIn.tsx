@@ -25,6 +25,19 @@ function endedFlow(phase: "expired" | "failed"): DeviceSignInStatus {
   return { phase, flowId: null, authorizationUrl: null, expiresAt: null, ...(phase === "failed" ? { message: t("engineSetup.device.flowEnded") } : {}) };
 }
 
+/** What the sign-in reads as after the server accepted the pasted code.
+ * `/complete` only answers ok once the CLI reported success, so that is
+ * terminal: a follow-up status that is gone (older servers dropped the flow
+ * on completion) still means "connected", never "failed". */
+export async function statusAfterComplete(flowId: string, readStatus: () => Promise<DeviceSignInStatus>): Promise<DeviceSignInStatus> {
+  try {
+    return await readStatus();
+  } catch (cause) {
+    if (!deviceFlowUnavailable(cause)) throw cause;
+    return { phase: "succeeded", flowId, authorizationUrl: null, expiresAt: null };
+  }
+}
+
 /** Settings → Engines → Claude on a hosted server: open Anthropic's sign-in
  * page, paste the code it shows, done. The server drives the unmodified CLI. */
 export function ClaudeSignIn({ instanceId }: { instanceId: string }) {
@@ -77,8 +90,9 @@ export function ClaudeSignIn({ instanceId }: { instanceId: string }) {
     setBusy("finish");
     setError(null);
     try {
-      await api(`${base}/complete`, { method: "POST", body: JSON.stringify({ flowId: auth.flowId, code: code.trim() }) });
-      const { auth: next }: { auth: DeviceSignInStatus } = await api(`${base}/status?flowId=${encodeURIComponent(auth.flowId)}`);
+      const flowId = auth.flowId;
+      await api(`${base}/complete`, { method: "POST", body: JSON.stringify({ flowId, code: code.trim() }) });
+      const next = await statusAfterComplete(flowId, async () => (await api<{ auth: DeviceSignInStatus }>(`${base}/status?flowId=${encodeURIComponent(flowId)}`)).auth);
       setAuth(next);
       setCode("");
       if (next.phase === "succeeded") await refresh();
