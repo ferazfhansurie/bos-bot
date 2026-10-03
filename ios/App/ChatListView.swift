@@ -405,7 +405,7 @@ struct ChatListView: View {
             sharedMe = me
             sharedContacts = contacts
             sharedRooms = rooms
-            cacheNotificationAvatars(contacts)
+            await cacheNotificationAvatars(contacts)
             if let roomID = UserDefaults.standard.string(forKey: "bos.pendingSharedRoomPush"),
                let room = rooms.first(where: { $0.id == roomID }) {
                 UserDefaults.standard.removeObject(forKey: "bos.pendingSharedRoomPush")
@@ -417,13 +417,14 @@ struct ChatListView: View {
         }
     }
 
-    @MainActor private func cacheNotificationAvatars(_ contacts: [SharedContact]) {
+    /// Push banners in a room show whoever sent the message, so each sender's
+    /// face is cached where the notification extension can read it: the
+    /// bot's own photo when its profile shows one, else its mascot.
+    @MainActor private func cacheNotificationAvatars(_ contacts: [SharedContact]) async {
         for contact in contacts {
             if contact.kind == "bot" {
-                let renderer = ImageRenderer(content: MausAvatar(color: contact.color ?? "green", size: 128,
-                                                                  bodyId: contact.mascotBody, animated: false)
-                    .frame(width: 128, height: 128))
-                if let data = renderer.uiImage?.pngData() {
+                if let data = await notificationAvatar(color: contact.color ?? "green", body: contact.mascotBody,
+                                                       avatarUrl: contact.avatarUrl, crop: contact.avatarCrop) {
                     NotificationAvatarCache.store(data, for: contact.id)
                 }
             } else if let avatar = contact.avatar,
@@ -434,13 +435,31 @@ struct ChatListView: View {
             }
         }
         for bot in session.state.bots {
-            let renderer = ImageRenderer(content: MausAvatar(color: bot.color, size: 128,
-                                                              bodyId: bot.mascotBody, animated: false)
-                .frame(width: 128, height: 128))
-            if let data = renderer.uiImage?.pngData() {
+            if let data = await notificationAvatar(color: bot.color, body: bot.mascotBody,
+                                                   avatarUrl: bot.avatarUrl, crop: bot.avatarCrop) {
                 NotificationAvatarCache.store(data, for: "bot:\(bot.id)")
             }
         }
+    }
+
+    /// 128pt PNG of what BotAvatarView would draw: the masked photo, or the
+    /// mascot whenever there is no usable picture.
+    @MainActor private func notificationAvatar(color: String, body: String?, avatarUrl: String?, crop: AvatarCrop?) async -> Data? {
+        let crop = crop ?? .mascot
+        if crop != .mascot, let avatarUrl, let data = await session.avatarData(path: avatarUrl),
+           let photo = UIImage(data: data) {
+            let mask: AnyShape = switch crop {
+            case .circle: AnyShape(Circle())
+            case .rounded: AnyShape(RoundedRectangle(cornerRadius: 128 * 0.22, style: .continuous))
+            case .square, .mascot: AnyShape(Rectangle())
+            }
+            let renderer = ImageRenderer(content: Image(uiImage: photo).resizable().scaledToFill()
+                .frame(width: 128, height: 128).clipShape(mask))
+            if let png = renderer.uiImage?.pngData() { return png }
+        }
+        let renderer = ImageRenderer(content: MausAvatar(color: color, size: 128, bodyId: body, animated: false)
+            .frame(width: 128, height: 128))
+        return renderer.uiImage?.pngData()
     }
 
     @ViewBuilder

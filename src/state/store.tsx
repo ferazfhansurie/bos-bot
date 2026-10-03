@@ -37,7 +37,7 @@ import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { answerResponse, dismissResponse } from "@/lib/card-answer";
 import { currentCall } from "@/lib/call";
-import { showNotification, type NotificationTarget } from "@/lib/notify";
+import { notificationIcon, showNotification, type NotificationTarget } from "@/lib/notify";
 import { speaker } from "@/lib/tts";
 import { roleProfilePatch, type BotRole } from "@/lib/bot-roles";
 import { t } from "@/lib/i18n";
@@ -3623,11 +3623,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // unread:false back. Opening a bot from its own notification and
           // watching the badge return on the next hydration is exactly the
           // bug that makes notifications feel broken.
-          showNotification(
-            frame.notification,
-            (target) => openNotificationTarget(dispatch, target, stateRef.current),
-            stateRef.current.bots.find((bot) => bot.id === frame.notification.botId)?.avatarUrl,
-            visibleNotificationThread(stateRef.current),
+          // in a room the sender is notification.botId, so the banner wears
+          // that bot's face (photo or mascot), not the room's or the app's
+          void notificationIcon(
+            stateRef.current.bots.find((bot) => bot.id === frame.notification.botId),
+            frame.notification.avatarUrl,
+          ).then((icon) =>
+            showNotification(
+              frame.notification,
+              (target) => openNotificationTarget(dispatch, target, stateRef.current),
+              icon,
+              visibleNotificationThread(stateRef.current),
+            ),
           );
           break;
         case "group.deleted":
