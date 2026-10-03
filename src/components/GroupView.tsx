@@ -18,6 +18,7 @@ import {
   type Message,
 } from "@/state/store";
 import { BotAvatar } from "./Avatar";
+import { RoomRoster } from "./RoomRoster";
 import { ThreadChip } from "./ThreadChip";
 import { ToolActivity } from "./ToolActivity";
 import { ThreadRefText } from "./ThreadRefs";
@@ -1192,15 +1193,8 @@ export function GroupView({ group }: { group: Group }) {
     }
   };
 
-  // Static profile avatars: one per member, a ring + dot on whoever is working.
   const roomFields = group as Group & RoomViewFields;
-  const memberMauses = members.map((member) => {
-    const status = roomMemberStatus(roomFields, member);
-    return <span key={member.id} title={`${member.name} — ${status}`} aria-label={`${member.name}: ${status}`} className={cn("relative inline-flex rounded-full", status === "working" && "ring-2 ring-accent/50 ring-offset-1 ring-offset-app")}>
-      <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? "happy"} size={24} animated={false} />
-      <span className={cn("absolute -right-0.5 -top-0.5 size-2 rounded-full border border-app", status === "working" ? "bg-accent" : status === "offline" ? "bg-ink-secondary" : "bg-green-500")} />
-    </span>;
-  });
+  const memberMauses = <RoomRoster room={roomFields} members={members} />;
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">

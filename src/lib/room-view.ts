@@ -19,6 +19,19 @@ export function roomMemberStatus(room: Pick<RoomViewFields, "activeBotIds"> & { 
   return "idle";
 }
 
+// Header roster for big rooms: working bots first, then the rest in room
+// order, offline last; only the first `max` are drawn and the rest become a
+// "+n" count, so 20 bots never push the header controls off screen.
+export function roomRosterPreview<T>(members: T[], statusOf: (member: T) => "working" | "idle" | "offline", max = 5): { visible: T[]; rest: T[] } {
+  const rank = { working: 0, idle: 1, offline: 2 } as const;
+  const ordered = members.map((member, index) => ({ member, index, rank: rank[statusOf(member)] }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ member }) => member);
+  // Never trade one avatar for a "+1" pill that takes the same room.
+  const cap = ordered.length > max ? Math.max(1, max - 1) : ordered.length;
+  return { visible: ordered.slice(0, cap), rest: ordered.slice(cap) };
+}
+
 export function shouldCollapseRoomReply(message: { role: string; kind: string; text?: string | null }): boolean {
   return message.role === "bot" && message.kind === "text" && Boolean(message.text && (message.text.length > 600 || message.text.split("\n").length > 6));
 }
