@@ -53,8 +53,11 @@ switching and Stop can be exercised without a real provider or account.
     prematurely appearing in the transcript. Stop Gmail: iCloud should start
     and show its normal working animation. Raising the limit starts waiting
     work; lowering it leaves active work alone. Reload to check persistence.
-11. Click a bot's main row: it must open its last-selected conversation without
-    expanding the thread tree. Its separate chevron controls the tree. Repeat
+11. Click a bot's main row: it must open the server's currently selected
+    conversation without expanding the thread tree. If another client or daily
+    automation selected a new thread while this window showed an older one,
+    clicking the bot must load the new transcript. Its separate chevron controls
+    the tree. Repeat
     in Comfortable, Compact, and the Icons view (history is in the header in
     Icons view).
 12. In **Settings → Appearance**, turn **Show threads** off. Bot trees, folder

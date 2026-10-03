@@ -13,6 +13,7 @@ import {
   persistTaskApproval,
   pinBotThreadAction,
   reducer,
+  refreshBotSelection,
   requestConfirmedBotDeletion,
   visibleNotificationThread,
   type AppState,
@@ -196,6 +197,56 @@ describe("independent bot threads", () => {
     const read = reducer(patched, { type: "select", id: bot.id });
     expect(read.bots[0]?.unread).toBe(true);
     expect(read.bots[0]?.tasks?.[1]?.unread).toBe(true);
+  });
+
+  it("opens the server-selected dated thread on bot selection while retaining yesterday's history", async () => {
+    let state = reducer(start(), { type: "botPatched", bot: { ...bot, threadId: "second", messages: [] } });
+    state = reducer(state, { type: "select", id: bot.id });
+    const today: Message = { id: "today", role: "bot", kind: "text", text: "Today's conversation", at: 3 };
+    const request = vi.fn().mockResolvedValueOnce({ bots: [{ ...bot, threadId: "second", messages: [] }] })
+      .mockResolvedValueOnce({ messages: [today], activeLeafId: today.id, hasMore: false });
+    await refreshBotSelection(bot.id, () => state.bots[0], (fresh) => {
+      state = reducer(state, { type: "taskSwitched", bot: fresh });
+    }, request);
+    expect(request.mock.calls.map(([path]) => path)).toEqual(["/api/bots?messages=0", "/api/threads/second/messages?limit=200"]);
+    expect(state.bots[0]).toMatchObject({ threadId: "second", messages: [today], activeLeafId: today.id, hasMore: false });
+    expect(state.bots[0]?.tasks).toEqual(bot.tasks);
+  });
+
+  it("does not replace live messages or fetch scrollback when the server selects the already visible thread", async () => {
+    const apply = vi.fn();
+    const request = vi.fn().mockResolvedValue({ bots: [{ ...bot, messages: [] }] });
+    await refreshBotSelection(bot.id, () => bot, apply, request);
+    expect(request).toHaveBeenCalledExactlyOnceWith("/api/bots?messages=0");
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it.each(["roster", "transcript"])("ignores a late %s response after explicit navigation", async (stage) => {
+    let current: Bot | undefined = bot;
+    let resolve!: (value: unknown) => void;
+    const delayed = new Promise((done) => { resolve = done; });
+    const snapshot = { bots: [{ ...bot, threadId: "second" }] };
+    const request = stage === "roster" ? vi.fn().mockReturnValue(delayed)
+      : vi.fn().mockResolvedValueOnce(snapshot).mockReturnValueOnce(delayed);
+    const apply = vi.fn();
+    const pending = refreshBotSelection(bot.id, () => current, apply, request);
+    await Promise.resolve();
+    current = undefined;
+    resolve(stage === "roster" ? snapshot : { messages: [], activeLeafId: null, hasMore: false });
+    await pending;
+    expect(apply).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(stage === "roster" ? 1 : 2);
+  });
+
+  it("clears earlier background frames on bot selection, then replays only events racing the new snapshot", () => {
+    const earlier: Message = { id: "reply", role: "bot", kind: "text", text: "Earlier", at: 3 };
+    const latest = { ...earlier, text: "Latest" };
+    let state = reducer(start(), { type: "messageAdded", threadId: "second", message: earlier });
+    state = reducer(state, { type: "select", id: bot.id });
+    expect(state.backgroundThreadEvents.second).toBeUndefined();
+    state = reducer(state, { type: "messagePatched", threadId: "second", message: latest });
+    state = reducer(state, { type: "taskSwitched", bot: { ...bot, threadId: "second", messages: [earlier] } });
+    expect(state.bots[0]?.messages).toEqual([latest]);
   });
 
   it("drops deleted-thread approvals before a slim deletion frame is followed by its transcript", () => {
