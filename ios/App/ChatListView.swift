@@ -207,6 +207,7 @@ struct ChatListView: View {
                    let match = session.state.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
                     path.append(match.chat)
                 }
+                if Autopilot.scenario == "switch" { Task { await runSwitchAutopilot() } }
             }
 #endif
             .sheet(isPresented: $showingUpdates) {
@@ -906,6 +907,43 @@ struct ChatListView: View {
             }
         }
     }
+
+#if DEBUG
+    /// `-autopilot switch`: back to the list, then into bos, oracle and HQ
+    /// twice over, timing each until the screen has appeared.
+    @MainActor private func runSwitchAutopilot() async {
+        try? await Task.sleep(for: .seconds(3))
+        Autopilot.log("START switch")
+        /// Make the change, then wait for the frame after the hook fires.
+        func until(appeared: Bool, after change: () -> Void) async {
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                let hook = { DispatchQueue.main.async { done.resume() } }
+                if appeared {
+                    Autopilot.chatAppeared = { Autopilot.chatAppeared = nil; hook() }
+                } else {
+                    Autopilot.chatDisappeared = { Autopilot.chatDisappeared = nil; hook() }
+                }
+                change()
+            }
+        }
+        for name in ["bos", "oracle", "HQ", "bos", "oracle", "HQ"] {
+            if !path.isEmpty {
+                let back = Date()
+                await until(appeared: false) { path = NavigationPath() }
+                Autopilot.log("SWITCH_SECONDS back \(Date().timeIntervalSince(back))")
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let summary = session.state.chatSummaries(activity: activity).first(where: { $0.chat.name == name }) else {
+                Autopilot.log("MISSING \(name)"); continue
+            }
+            let tapped = Date()
+            await until(appeared: true) { path.append(homeChat(summary.chat)) }
+            Autopilot.log("SWITCH_SECONDS \(name) \(Date().timeIntervalSince(tapped))")
+            try? await Task.sleep(for: .seconds(1))
+        }
+        Autopilot.finish()
+    }
+#endif
 
     // MARK: - Data
 

@@ -379,6 +379,9 @@ struct ChatView: View {
                     proxy.scrollTo(messageId, anchor: .center)
                     session.consumeFocus(messageId)
                 }
+#if DEBUG
+                .task { await runAutopilot(proxy) }
+#endif
             }
             .id(threadId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -418,6 +421,10 @@ struct ChatView: View {
         .onChange(of: selectedThreadWasRemoved) { _, removed in
             if removed { dismiss() }
         }
+#if DEBUG
+        .onAppear { Autopilot.chatAppeared?() }
+        .onDisappear { Autopilot.chatDisappeared?() }
+#endif
         .onChange(of: session.state.hasLoadedPage(forThread: threadId)) { _, loaded in
             let requestedThread = threadId
             if !loaded { Task { await session.loadThreadIfNeeded(requestedThread) } }
@@ -1195,6 +1202,40 @@ extension ChatView {
 
 /// A new bubble pops up from its own side: a small lift and scale with a
 /// little overshoot, then it settles. Runs once, when the row is inserted.
+#if DEBUG
+extension ChatView {
+    /// `-autopilot scroll|typing`: the UI test's gestures without the UI
+    /// test. Sixteen long scrolls, or six sentences typed a key at a time.
+    @MainActor fileprivate func runAutopilot(_ proxy: ScrollViewProxy) async {
+        guard let scenario = Autopilot.scenario, scenario == "scroll" || scenario == "typing" else { return }
+        try? await Task.sleep(for: .seconds(3))
+        Autopilot.log("START \(scenario)")
+        if scenario == "scroll" {
+            for swipe in 0..<16 {
+                let transcript = rows(memberSteps: memberSteps)
+                // the test's pattern: down, down, up, up
+                if swipe % 4 < 2, let first = transcript.first {
+                    withAnimation(.easeOut(duration: 0.4)) { proxy.scrollTo(first.id, anchor: .top) }
+                } else if let last = transcript.last {
+                    withAnimation(.easeOut(duration: 0.4)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+        } else {
+            composerFocused = true
+            try? await Task.sleep(for: .seconds(1))
+            for _ in 0..<6 {
+                for character in "the quick brown fox jumps over the lazy dog " {
+                    draft.append(character)
+                    try? await Task.sleep(for: .milliseconds(40))
+                }
+            }
+        }
+        Autopilot.finish()
+    }
+}
+#endif
+
 private struct ArrivalSpring: ViewModifier {
     let active: Bool
     let fromTrailing: Bool
