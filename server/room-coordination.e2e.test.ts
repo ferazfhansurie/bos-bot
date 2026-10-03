@@ -145,16 +145,83 @@ it.each(["recipient", "source-reader", "destination-reader"])("refuses cross-sec
   expect(await f.messages(f.destination.activeTaskId)).toEqual([]);
   expect((await f.messages(f.source.activeTaskId)).some((m: any) => m.text === "Assigned")).toBe(true);
   const discovery = f.provider().find((turn: any) => turn.botId === f.sender.id).evidence[1];
-  if (role === "source-reader") expect(discovery.result.isError).toBe(true);
-  else expect(JSON.parse(discovery.result.content[0].text).rooms).toEqual([]);
+  expect(discovery.result.isError).not.toBe(true);
+  const rooms = JSON.parse(discovery.result.content[0].text).rooms;
+  expect(rooms.some((room: any) => room.id === f.destination.id)).toBe(false);
+  if (role === "source-reader") expect(rooms.map((room: any) => room.id)).toEqual([f.source.id]);
+  else expect(rooms).toEqual([]);
 }), 45_000);
 
-it("refuses same-room coordination in a mixed section room", () => withRooms(async f => {
-  await f.api(`/api/bots/${f.target.id}`, { section: "Other company" }, "PATCH");
+it.each(["id", "name"])("coordinates mixed-team room members by %s and resumes the sender", slot => withRooms(async f => {
+  await f.api(`/api/bots/${f.target.id}`, { section: "Engineering" }, "PATCH");
   await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id] });
-  f.plan[f.sender.id].steps = [{ expectError: true, arguments: { bot_ids: [f.target.id], message: "Review CSV", request_key: "review" } }];
+  f.plan[f.sender.id].steps = [
+    { tool: "list_bots", arguments: {} },
+    { arguments: { bot_ids: [slot === "id" ? f.target.id : f.target.name], message: "Review CSV", request_key: "review" } },
+  ];
   await f.start(); expect((await f.wait()).status).toBe("settled");
-  expect(f.nodes()).toEqual([]);
+  expect(f.provider().map((turn: any) => turn.botId)).toEqual([f.sender.id, f.target.id, f.sender.id]);
+  expect(f.nodes().every((n: any) => n.status === "completed")).toBe(true);
+  const discovery = JSON.parse(f.provider()[0].evidence[1].result.content[0].text);
+  expect(discovery.bots.map((b: any) => b.id)).toContain(f.target.id);
+  expect(discovery.rooms.find((r: any) => r.id === f.source.id).members.map((b: any) => b.id)).toContain(f.target.id);
+  const roster = f.provider()[0].evidence.find((e: any) => e.step?.tool === "list_bots").response;
+  expect(JSON.stringify(roster.result)).toContain(f.target.id);
+  expect((await f.messages(f.source.activeTaskId)).some((m: any) => m.text === "Built CSV")).toBe(true);
+  expect((await f.messages(f.source.activeTaskId)).some((m: any) => m.text === "Reviewed downstream outcome")).toBe(true);
+  expect(await f.messages(f.destination.activeTaskId)).toEqual([]);
+}), 45_000);
+
+it.each(["peer", "membership"])("withholds mixed-team room work after queued %s access is revoked", revoked => withRooms(async f => {
+  await f.api(`/api/bots/${f.target.id}`, { section: "Engineering" }, "PATCH");
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id] });
+  const gateFile = join(f.session.info.dataDir, "mixed-team-busy.gate");
+  f.plan[f.target.id].gateFile = gateFile;
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id], message: "Review CSV", request_key: "review" } }];
+  f.savePlan(); await f.cli("send", "--bot", f.target.id, "--text", "Independent work");
+  await f.start();
+  await expect.poll(() => f.nodes().find((n: any) => n.parentId)?.status, { timeout: 15_000 }).toBe("queued");
+  if (revoked === "peer") await f.api(`/api/bots/${f.sender.id}`, { peers: [] }, "PATCH");
+  else await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id] });
+  writeFileSync(gateFile, "release");
+  expect((await f.wait()).status).toBe("settled");
+  expect(f.nodes().find((n: any) => n.parentId).status).toBe("failed");
+  expect(f.provider().filter((turn: any) => turn.botId === f.target.id)).toHaveLength(1);
+  expect((await f.messages(f.source.activeTaskId)).some((m: any) => m.tool?.name.includes("Result withheld"))).toBe(true);
+}), 45_000);
+
+it("queues a busy mixed-team member and returns its result in the same room", () => withRooms(async f => {
+  await f.api(`/api/bots/${f.target.id}`, { section: "Engineering" }, "PATCH");
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id] });
+  const gateFile = join(f.session.info.dataDir, "mixed-team-return.gate");
+  f.plan[f.target.id].gateFile = gateFile;
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id], message: "Review CSV", request_key: "review" } }];
+  f.savePlan(); await f.cli("send", "--bot", f.target.id, "--text", "Independent work");
+  await f.start();
+  await expect.poll(() => f.nodes().find((n: any) => n.parentId)?.status, { timeout: 15_000 }).toBe("queued");
+  writeFileSync(gateFile, "release");
+  expect((await f.wait()).status).toBe("settled");
+  expect(f.nodes().every((n: any) => n.status === "completed")).toBe(true);
+  expect(f.provider().filter((turn: any) => turn.botId === f.target.id)).toHaveLength(2);
+  expect((await f.messages(f.source.activeTaskId)).filter((m: any) => m.text === "Reviewed downstream outcome")).toHaveLength(1);
+}), 45_000);
+
+it("withholds a mixed-team result receipt after peer access is revoked during the recipient turn", () => withRooms(async f => {
+  await f.api(`/api/bots/${f.target.id}`, { section: "Engineering" }, "PATCH");
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id] });
+  const gateFile = join(f.session.info.dataDir, "mixed-team-inflight.gate");
+  f.plan[f.target.id] = { gateFile, reply: "WITHHELD_MIXED_TEAM_RESULT" };
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id], message: "Review CSV", request_key: "review" } }];
+  await f.start();
+  await expect.poll(() => f.nodes().find((n: any) => n.parentId)?.status, { timeout: 15_000 }).toBe("running");
+  await f.api(`/api/bots/${f.sender.id}`, { peers: [] }, "PATCH");
+  writeFileSync(gateFile, "release");
+  expect((await f.wait()).status).toBe("settled");
+  const resumed = f.provider().filter((turn: any) => turn.botId === f.sender.id).at(-1);
+  // A reply already shared in the same room remains part of its transcript.
+  // The handoff result envelope and receipt must still reflect revocation.
+  expect(JSON.stringify(resumed.prompt)).toContain("Result withheld: route or membership changed");
+  expect((await f.messages(f.source.activeTaskId)).some((m: any) => m.tool?.name.includes("Result withheld"))).toBe(true);
 }), 45_000);
 
 it("rechecks section membership before queued work dispatch and withholds its result", () => withRooms(async f => {

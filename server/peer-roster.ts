@@ -90,16 +90,20 @@ export function peerStatusWords(status: PeerStatus): string {
 export const peerAllowed = (from: { peers?: string[] }, targetId: string): boolean =>
   !Array.isArray(from.peers) || from.peers.includes(targetId);
 
-export function canReachPeer(from: RosterMember, target: RosterMember): boolean {
-  return from.id !== target.id && !target.hidden && canAccessTeam(from, target.section) && peerAllowed(from, target.id);
+/** Room scope is supplied from the current server-owned membership only.
+ * Sharing a room permits contact there, without granting either member access
+ * to the other's team or private conversations. Explicit peer limits still apply. */
+export function canReachPeer(from: RosterMember, target: RosterMember, roomMemberIds?: readonly string[]): boolean {
+  const sharesRoom = roomMemberIds?.includes(from.id) && roomMemberIds.includes(target.id);
+  return from.id !== target.id && !target.hidden && (canAccessTeam(from, target.section) || Boolean(sharesRoom)) && peerAllowed(from, target.id);
 }
 
 /** The peers a bot can both see and reach right now. The roster, list_bots
  * and @mention resolution all read this one list, so what a bot is TOLD
  * about its team can never be wider than what the comms endpoints will
  * actually let it do. */
-export function reachablePeers<T extends RosterMember>(bots: readonly T[], from: RosterMember): T[] {
-  return bots.filter(bot => canReachPeer(from, bot));
+export function reachablePeers<T extends RosterMember>(bots: readonly T[], from: RosterMember, roomMemberIds?: readonly string[]): T[] {
+  return bots.filter(bot => canReachPeer(from, bot, roomMemberIds));
 }
 
 /** What a bot wrote in a bot-id slot, resolved to a teammate.
@@ -118,6 +122,7 @@ export function resolveTeammate<T extends RosterMember>(
   bots: readonly T[],
   from: RosterMember,
   raw: string,
+  roomMemberIds?: readonly string[],
 ): { id: string; byName: boolean } | { error: string } {
   const wanted = raw.trim();
   if (bots.some(bot => bot.id === wanted)) return { id: wanted, byName: false };
@@ -127,7 +132,7 @@ export function resolveTeammate<T extends RosterMember>(
   // other text that lands in a model's context, never a bot's persona.
   const shown = peerName(wanted) || wanted;
   if (!name) return { error: `No bot with id "${shown}" — call list_bots and copy the exact id from the result` };
-  const matches = reachablePeers(bots, from).filter(bot => fold(bot.name) === name);
+  const matches = reachablePeers(bots, from, roomMemberIds).filter(bot => fold(bot.name) === name);
   if (matches.length === 1) return { id: matches[0]!.id, byName: true };
   if (matches.length > 1) {
     return { error: `${matches.length} reachable teammates are named "${shown}" — call list_bots and use the id of the one you mean` };

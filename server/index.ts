@@ -2795,20 +2795,23 @@ function roomHandoffProblem(node: Pick<RoomHandoff, "groupId" | "threadId" | "bo
   if (node.groupId && (!group || group.dm || !store.groupTaskByThread(group.id, node.threadId))) return "Destination room task no longer exists";
   if (!node.groupId && !store.taskByThread(bot.id, node.threadId)) return "Destination bot task no longer exists";
   if (group && !group.memberIds.includes(bot.id)) return "The addressed agent is no longer a member of this room";
-  // Every reader matters, including members not addressed to speak. The
-  // recipient must be allowed to read its destination; the sender's grant
-  // cannot silently give a specialist access to another team's transcript.
+  // Membership authorizes the current room's shared conversation. Crossing
+  // into another room still requires team access for every reader: sharing
+  // one room must not expose a team's unrelated room or private threads.
   const outsideSection = (room: GroupRecord, speaker: BotRecord) => room.memberIds.some(id => {
     const member = store.bot(id);
     return member && !canAccessTeam(speaker, member.section);
   });
-  if (group && outsideSection(group, bot)) return "Destination room includes a member outside the agent's section";
   if (group && roomSetupPending(group)) return "Destination room setup is unfinished";
   if (parent) {
     const from = store.bot(parent.botId);
     const source = parent.groupId ? store.group(parent.groupId) : undefined;
     if (!from || from.hidden || (parent.groupId ? !source || !source.memberIds.includes(from.id) || !store.groupTaskByThread(source.id, parent.threadId) : !store.taskByThread(from.id, parent.threadId))) return "Source membership or task was removed";
-    if (!canAccessTeam(from, bot.section) || (source && outsideSection(source, from))) return "Room work cannot cross the sender's section boundary";
+    const sameRoom = source && group && source.id === group.id;
+    if (!sameRoom) {
+      if (group && outsideSection(group, bot)) return "Destination room includes a member outside the agent's section";
+      if (!canAccessTeam(from, bot.section) || (source && outsideSection(source, from))) return "Room work cannot cross the sender's section boundary";
+    }
     if (source && group && source.id === group.id && parent.threadId !== node.threadId) return "Same-room work must stay in the originating conversation";
     if (!peerAllowed(from, bot.id)) return "The recipient is not an allowed peer of the sender";
   }
@@ -11148,15 +11151,9 @@ function lastHumanRoomMessageAt(group: GroupRecord): number | undefined {
 /** Whether `bot` may write into `group` from outside a turn there, and the
  * exact refusal when it may not.
  *
- * Room membership is the one place the app's section boundary does not
- * reach: list_bots, ask_bot, delegate_bot and create_bot are all scoped to
- * the sender's section, but a person is free to put bots from two sections
- * in one room. A tool that pushed text into such a room would therefore be
- * the first way one section speaks to another with nobody in the loop, so
- * this refuses it outright rather than trying to judge when that is
- * harmless. The cost is real — a genuinely cross-section room cannot be
- * posted into from outside — and it is the cheaper mistake: the person can
- * still relay, and the boundary keeps meaning exactly one thing.
+ * A person adding bots to a room authorizes its shared conversation even
+ * when those bots belong to different sidebar teams. This does not grant
+ * team access or expose any member's unrelated rooms and direct threads.
  *
  * Membership is read from the record here and never from a tool argument;
  * the argument only names which room to look up. */
@@ -11173,16 +11170,6 @@ function roomPostEligibility(
   }
   if (!group.memberIds.includes(bot.id)) {
     return { ok: false, status: 403, error: "you are not a member of that room" };
-  }
-  const outsider = group.memberIds
-    .map((id) => store.bot(id))
-    .find((member) => member && !canAccessTeam(bot, member.section));
-  if (outsider) {
-    return {
-      ok: false,
-      status: 403,
-      error: `that room includes @${outsider.name}, who is outside your section — tell the user what you wanted to post there instead`,
-    };
   }
   // A room whose setup the person has not finished has never been opened
   // for business, and its first message decides whether setup still counts
@@ -13939,7 +13926,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // does what, who has no job description yet). Every bot reads this
         // now, not just the Chief, so it answers the same reachability
         // question the roster does — same peers, same order.
-        const bots = reachablePeers(store.bots, sender)
+        const sourceRoom = internalCapability.roomCoordination ? connectorThread(sender.id, internalCapability.threadId)?.group : undefined;
+        const bots = reachablePeers(store.bots, sender, sourceRoom && !sourceRoom.dm ? sourceRoom.memberIds : undefined)
           .map((b) => {
             const status = peerStatus(b.activity, b.busy);
             return {
@@ -14783,7 +14771,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!internalCapability.roomCoordination || (source && (source.dm || !source.memberIds.includes(internalSender.id)))) {
           return json(res, 403, { error: "Coordination requires an active chat turn. Finish together already manages its own teammate turns." });
         }
-        const address = { groupId: source?.id, threadId: internalCapability.threadId, botId: internalSender.id };
+        const address = { groupId: source?.id,
+          threadId: source ? store.canonicalThreadId(internalCapability.threadId) : internalCapability.threadId,
+          botId: internalSender.id };
         const problem = roomHandoffProblem(address);
         if (problem) return json(res, 403, { error: problem });
         if (method === "GET" && path === "/api/internal/room-targets") {
@@ -14796,7 +14786,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const remote = internalSender.chiefOfStaff && !internalSender.hidden ? await delegatedRosterFor(internalSender.id) : { bots: [], errors: [] };
           requireActiveInternalCapability();
           return json(res, 200, { errors: remote.errors, currentRoom: source ? { id: source.id, name: source.name, workingFolder: source.cwd || null } : null,
-            bots: [...reachablePeers(store.bots, internalSender).map(bot => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section, busy: bot.busy })), ...remote.bots],
+            bots: [...reachablePeers(store.bots, internalSender, source?.memberIds).map(bot => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section, busy: bot.busy })), ...remote.bots],
             rooms, note: "Without group_id: use this room when in a room, otherwise your standing conversation with that teammate — every assignment you send it continues the same thread, so write as if it remembers the last one. Each bot uses its own environment and permissions. Files are not transferred: pass absolute paths only when accessible to the recipient, otherwise pass the content." });
         }
         if (method === "POST" && path === "/api/internal/coordinate-bots") {
@@ -14828,7 +14818,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               if (!remoteRoster.bots.some(bot => bot.id === raw)) return json(res, 403, { error: remoteRoster.errors.join("; ") || "No live delegation for this remote target" });
               botIds.push(raw); continue;
             }
-            const resolved = resolveTeammate(store.bots, internalSender, raw);
+            const resolved = resolveTeammate(store.bots, internalSender, raw,
+              source && destination?.id === source.id ? source.memberIds : undefined);
             if ("error" in resolved) return json(res, 403, { error: resolved.error });
             botIds.push(resolved.id);
           }

@@ -305,3 +305,23 @@ describe("renderRoster status wording", () => {
     expect(prompt).toContain("- Ghost — Archivist (unavailable — needs setup)");
   });
 });
+
+
+describe("shared room peer scope", () => {
+  const members = ["self", "elsewhere", "hidden"];
+  it("includes another team's member only while the sender shares that room", () => {
+    expect(reachablePeers(fleet, self, members).map(bot => bot.id)).toEqual(["writer", "coder", "elsewhere"]);
+    expect(reachablePeers(fleet, self, ["elsewhere"]).map(bot => bot.id)).toEqual(["writer", "coder"]);
+    expect(reachablePeers(fleet, self).map(bot => bot.id)).toEqual(["writer", "coder"]);
+    expect(canAccessTeam(self, "Personal")).toBe(false);
+  });
+  it("keeps hidden, self and explicit peer restrictions in a shared room", () => {
+    expect(reachablePeers(fleet, { ...self, peers: [] }, members)).toEqual([]);
+    expect(reachablePeers(fleet, { ...self, peers: ["self", "hidden", "elsewhere"] }, members).map(bot => bot.id)).toEqual(["elsewhere"]);
+  });
+  it("resolves a shared member's name without granting access outside the room", () => {
+    expect(resolveTeammate(fleet, self, "Scout", members)).toEqual({ id: "elsewhere", byName: true });
+    expect(resolveTeammate(fleet, self, "Scout")).toHaveProperty("error");
+    expect(resolveTeammate(fleet, { ...self, peers: [] }, "Scout", members)).toHaveProperty("error");
+  });
+});
