@@ -7,7 +7,7 @@
 // the detail printed raw in a monospace block that is NEVER truncated
 // (it scrolls instead), and the buttons ordered least-destructive-last so
 // the primary action sits under your thumb.
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { useStore, type Bot, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { botControlAvailable } from "@/lib/remote-bot";
@@ -16,6 +16,7 @@ import type { LocaleKey } from "@/locales";
 import { SkillRequestPreview } from "@/components/SkillRequestPreview";
 import { toolLabel } from "./ApprovalCard";
 import { reviewedSkillSha256 } from "../../shared/skill-request";
+import { approvalActionsLocked, approvalActionsUnlockIn, type LastDecision } from "@/lib/approval-submit";
 
 interface ApprovalLabels {
   [tool: string]: LocaleKey;
@@ -226,7 +227,22 @@ export function PendingApprovalActions({
   const reviewedSha256 = pending.message.card?.skillRequest
     ? reviewedSkillSha256(pending.message.card.skillRequest)
     : undefined;
-  const decide = (behavior: "allow" | "deny", always = false) =>
+  // In-flight guard: one answer per click, and a freshly shown request (the
+  // next one in the queue) ignores clicks briefly so a double-click can't
+  // approve something the person never saw.
+  const [last, setLast] = useState<LastDecision | null>(null);
+  const [, setTick] = useState(0);
+  const locked = approvalActionsLocked(last, pending.requestId, Date.now());
+  useEffect(() => {
+    const wait = approvalActionsUnlockIn(last, pending.requestId, Date.now());
+    if (wait === null) return;
+    const timer = window.setTimeout(() => setTick((n) => n + 1), wait + 1);
+    return () => window.clearTimeout(timer);
+  }, [last, pending.requestId]);
+  const decide = (behavior: "allow" | "deny", always = false) => {
+    if (approvalActionsLocked(last, pending.requestId, Date.now())) return;
+    const requestId = pending.requestId;
+    setLast({ requestId, at: Date.now() });
     dispatch({
       type: "decideRequest",
       threadId,
@@ -238,9 +254,12 @@ export function PendingApprovalActions({
       // provider's card hands the allow to the provider for its session
       alwaysAllow: always && canAlwaysAllow && bot && pending.allowKey ? { botId: bot.id, key: pending.allowKey } : undefined,
       always: always && canAlwaysAllow && !pending.allowKey && pending.allowSession ? true : undefined,
+      // a failed answer leaves the card open: let them try again
+      onError: () => setLast((current) => (current?.requestId === requestId ? null : current)),
     });
+  };
 
-  const base = "rounded-full px-3.5 py-1.5 text-[13.5px] transition-colors";
+  const base = "rounded-full px-3.5 py-1.5 text-[13.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-50";
   return (
     <div className="flex flex-wrap items-center justify-end gap-2 px-2 py-2">
       {!durableRequest && (
@@ -250,6 +269,8 @@ export function PendingApprovalActions({
       )}
       <button
         onClick={() => decide("deny")}
+        disabled={locked}
+        aria-busy={locked || undefined}
         autoFocus={isTeamSetup}
         className={cn(base, "border border-danger/40 text-danger hover:bg-danger/10")}
       >
@@ -258,6 +279,7 @@ export function PendingApprovalActions({
       {canAlwaysAllow && bot && pending.allowKey && (
         <button
           onClick={() => decide("allow", true)}
+          disabled={locked}
           title={t("approval.action.stopAsking", { name: bot.name, key: pending.allowKey })}
           className={cn(base, "border border-hairline/50 text-ink hover:bg-control")}
         >
@@ -267,6 +289,7 @@ export function PendingApprovalActions({
       {canAlwaysAllow && !pending.allowKey && pending.allowSession && (
         <button
           onClick={() => decide("allow", true)}
+          disabled={locked}
           title={t("approval.action.alwaysAllowSessionHint")}
           className={cn(base, "border border-hairline/50 text-ink hover:bg-control")}
         >
@@ -275,7 +298,8 @@ export function PendingApprovalActions({
       )}
       <button
         onClick={() => decide("allow")}
-        disabled={isSkillRequest && !reviewedSha256}
+        disabled={locked || (isSkillRequest && !reviewedSha256)}
+        aria-busy={locked || undefined}
         className={cn(
           base,
           "bg-accent font-medium text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40",

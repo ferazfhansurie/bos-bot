@@ -5958,6 +5958,18 @@ describe("harness HTTP API", () => {
     expect(card.dismissed).toBe(true);
     expect(card.answered).toBe("unavailable");
 
+    // a repeat answer (double-click) is a no-op, not a second decision
+    const repeat = await api("POST", "/api/threads/test-stranded-room-thread/respond", {
+      requestId: "stranded-request",
+      behavior: "deny",
+    });
+    expect(repeat.status).toBe(200);
+    expect(repeat.body).toMatchObject({ ok: true, alreadySettled: true });
+    const after = (await api("GET", "/api/bots")).body.groups.find(
+      (group: { id: string }) => group.id === "test-stranded-room",
+    );
+    expect(after.messages.find((message: { id: string }) => message.id === "stranded-card").card.answered).toBe("unavailable");
+
     // a room with nothing pending still reports that plainly
     const nothing = await api("POST", "/api/threads/test-pinned-room-thread/respond", {
       requestId: "never-existed",

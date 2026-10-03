@@ -18650,6 +18650,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           (group.busyBotId ? store.bot(group.busyBotId) : undefined)
         : store.botByThread(threadId);
       if (!owner && !pending) return json(res, 404, { error: "nothing is waiting on an answer in this conversation" });
+      // A repeat answer (double-click, retry after a slow response) must not
+      // re-deliver or overwrite the recorded decision.
+      if (pending?.card?.answered) return json(res, 200, { ok: true, outcome: "unavailable", alreadySettled: true });
       const requestOwner = owner ? botForThread(owner.id, threadId) : null;
       const outcome = await answerRequest(threadId, requestOwner?.modelSelection.instanceId ?? "", requestId, behavior, body.message, owner ? { id: owner.id, name: owner.name } : undefined, body.always === true);
       return json(res, 200, { ok: true, outcome });
