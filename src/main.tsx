@@ -5,6 +5,7 @@ import { readSessionState, takePairingCodeFromLocation, takeInvitedEmailFromLoca
 import { bootstrapBrand } from "./lib/brand";
 import { applySkin, readSkin } from "./lib/skins";
 import { PairPage } from "./pair/PairPage";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import "./styles.css";
 
 // Before the first paint, not inside a component: stamping the skin during
@@ -25,5 +26,9 @@ async function chooseRoot(): Promise<React.ReactNode> {
 }
 
 void Promise.all([bootstrapBrand(), chooseRoot()]).then(([, root]) => {
-  createRoot(document.getElementById("root")!).render(<StrictMode>{root}</StrictMode>);
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <AppErrorBoundary>{root}</AppErrorBoundary>
+    </StrictMode>,
+  );
 });
