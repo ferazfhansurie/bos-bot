@@ -12831,6 +12831,8 @@ const LIVE_APP_PATH = (() => {
   const fromExec = /^(.*\.app)\/Contents\//.exec(process.execPath)?.[1];
   return (UPDATE_SANDBOX && process.env.OMB_UPDATE_APP_PATH) || process.env.OMB_UPDATER_LIVE_APP || fromStatic || fromExec || "";
 })();
+const UPDATE_RESOURCES_PATH = process.env.OMB_RESOURCES_PATH || (LIVE_APP_PATH ? join(LIVE_APP_PATH, "Contents", "Resources") : "");
+const UPDATE_PREFLIGHT_PATH = process.env.OMB_UPDATER_PREFLIGHT || (UPDATE_RESOURCES_PATH && !UPDATE_SANDBOX ? join(UPDATE_RESOURCES_PATH, "updater", "preflight.py") : undefined);
 const UPDATE_OWNER_PREFIX = "update:";
 // win32: Electron main owns the installer and the relaunch; ask it over the
 // private port. Elsewhere: launchd + the detached python job.
@@ -12843,8 +12845,12 @@ const updateExecutor: UpdateExecutor = process.platform === "win32"
     {
       dataDir: DATA_DIR, liveApp: LIVE_APP_PATH,
       codesign: !UPDATE_SANDBOX && process.env.OMB_UPDATER_CODESIGN !== "0", requireLaunchd: !UPDATE_SANDBOX,
-      // release/v1.3-build/preflight.py: read-only, prints json. Runs when shipped in the bundle or pointed at.
-      preflight: process.env.OMB_UPDATER_PREFLIGHT || (LIVE_APP_PATH && !UPDATE_SANDBOX ? join(LIVE_APP_PATH, "Contents", "Resources", "updater", "preflight.py") : undefined),
+      // Contents/Resources/updater/preflight.py (electron-builder mac.extraResources),
+      // reached through process.resourcesPath, which the desktop hands us as
+      // OMB_RESOURCES_PATH. Read-only, prints json; admission refuses unless
+      // it says ok. OMB_UPDATER_PREFLIGHT points dev/test runs at a copy.
+      preflight: UPDATE_PREFLIGHT_PATH,
+      requirePreflight: Boolean(UPDATE_PREFLIGHT_PATH) && !UPDATE_SANDBOX,
       ...(UPDATE_SANDBOX ? { sandbox: { ...(process.env.OMB_UPDATE_STAGED_PATH ? { stagedPath: process.env.OMB_UPDATE_STAGED_PATH } : {}), ...(process.env.OMB_UPDATE_FAULT ? { fault: process.env.OMB_UPDATE_FAULT } : {}) } } : {}),
       log: line => console.log(line),
     },

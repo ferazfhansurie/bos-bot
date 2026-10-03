@@ -1,7 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   UpdateCoordinator, appDigests, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
@@ -23,11 +26,14 @@ function fakeApp(root: string, name: string, stamp: string): string {
 interface Harness {
   dataDir: string; live: string; events: UpdateEvent[]; turns: BusyTurn[]; stopped: number; quiesced: number; unquiesced: number;
   launchd: string; bootstraps: string[]; bootouts: string[]; resumed: Array<{ turn: CheckpointTurn; result: UpdateResult }>;
-  details: Record<string, LaunchdJobDetails | null>; preflight: string | null; logs: string[];
+  details: Record<string, LaunchdJobDetails | null>; preflight: string | null; logs: string[]; calls: string[];
   executor(options?: Partial<DarwinExecutorOptions>): UpdateExecutor;
   make(overrides?: Partial<UpdaterHooks>, executor?: Partial<DarwinExecutorOptions>): UpdateCoordinator;
   settle(): Promise<void>;
 }
+
+const PREFLIGHT_OK = JSON.stringify({ ok: true, checks: { health_ok: true, health_pid_is_server: true, single_main_app: true, blocking_jobs: [], idle_jobs: [] } });
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function harness(root: string): Harness {
   const dataDir = join(root, "data");
@@ -35,10 +41,11 @@ function harness(root: string): Harness {
   const live = fakeApp(join(root, "Applications"), "BOS Bot.app", "old");
   const h: Harness = {
     dataDir, live, events: [], turns: [], stopped: 0, quiesced: 0, unquiesced: 0, launchd: "PID\tStatus\tLabel\n-\t0\tcom.apple.Finder\n",
-    bootstraps: [], bootouts: [], resumed: [], details: {}, preflight: null, logs: [],
+    // preflight: what the fake python prints; null = the script failed (non-zero exit)
+    bootstraps: [], bootouts: [], resumed: [], details: {}, preflight: PREFLIGHT_OK, logs: [], calls: [],
     executor(options = {}) {
       const host: UpdaterHost = {
-        launchdList: async () => h.launchd,
+        launchdList: async () => { h.calls.push("launchd"); return h.launchd; },
         jobDetails: async (_uid, label) => h.details[label] ?? null,
         bootstrap: async (_uid, plist) => { h.bootstraps.push(plist); },
         bootout: async (_uid, label) => { h.bootouts.push(label); },
@@ -50,7 +57,7 @@ function harness(root: string): Harness {
       if (!existsSync(preflightPath)) writeFileSync(preflightPath, "# fake\n");
       return createDarwinExecutor(host, {
         dataDir, liveApp: live, codesign: false, requireLaunchd: false, uid: 501,
-        preflight: preflightPath, runPreflight: async () => { if (h.preflight === null) throw new Error("python exploded"); return h.preflight; },
+        preflight: preflightPath, runPreflight: async () => { h.calls.push("preflight"); if (h.preflight === null) throw new Error("python exploded (exit 1)"); return h.preflight; },
         log: line => h.logs.push(line), ...options,
       });
     },
@@ -145,31 +152,80 @@ describe("updater coordinator", () => {
     expect(jobBlocks("ai.bos.bos.restart-now", { keepAlive: false, runAtLoad: false })).toBeNull();
   });
 
-  it("asks preflight.py when it is there and refuses only on its live-job finding", async () => {
+  it("runs preflight first in admission and admits on ok=true, reporting idle one-shot jobs without blocking", async () => {
     stage(h);
-    h.preflight = JSON.stringify({ ok: false, checks: { health_ok: true, health_pid_is_server: false, single_main_app: true, blocking_jobs: [], idle_jobs: ["ai.bos.bos.steer-t9-install"] } });
+    h.preflight = JSON.stringify({ ok: true, checks: { health_ok: true, health_pid_is_server: true, single_main_app: true, blocking_jobs: [], idle_jobs: ["ai.bos.bos.steer-t9-install"] } });
     const { notes } = await h.make().apply({ force: true });
-    expect(notes).toEqual(expect.arrayContaining([expect.stringMatching(/preflight: idle install jobs loaded, not blocking: ai\.bos\.bos\.steer-t9-install/), expect.stringMatching(/preflight: not ok \(health_pid_is_server\); reported, not blocking/)]));
+    expect(h.calls.slice(0, 2)).toEqual(["preflight", "launchd"]); // before the launchd scan, the lock and the plan
+    expect(notes).toEqual(expect.arrayContaining([expect.stringMatching(/preflight: idle install jobs loaded, not blocking: ai\.bos\.bos\.steer-t9-install/)]));
     await h.settle();
-    rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
+    expect(h.bootstraps).toHaveLength(1);
+  });
+
+  it("refuses at admission when preflight says ok=false, before any lock, plan or handoff", async () => {
+    stage(h);
+    h.preflight = JSON.stringify({ ok: false, checks: { health_ok: true, health_pid_is_server: false, single_main_app: true, blocking_jobs: [], idle_jobs: [] } });
+    await expect(h.make().apply({ force: true })).rejects.toMatchObject({ status: 409, message: /^preflight not ok \(health_pid_is_server\)$/ });
+    expect(h.calls).toEqual(["preflight"]); // launchd was never consulted
+    expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    expect(pendingUpdates(h.dataDir)).toEqual([]);
+    expect(h.bootstraps).toHaveLength(0);
+    expect(h.events).toEqual([]);
+    // a live install job is its own, named refusal
     h.preflight = JSON.stringify({ ok: false, checks: { blocking_jobs: ["ai.bos.bos.restart-keepalive"], idle_jobs: [] } });
     await expect(h.make().apply({ force: true })).rejects.toMatchObject({ status: 409, message: /preflight found live install jobs: ai\.bos\.bos\.restart-keepalive/ });
-    h.preflight = null; // python failed: reported, not blocking
-    const second = await h.make().apply({ force: true });
-    expect(second.notes).toEqual(expect.arrayContaining([expect.stringMatching(/preflight unreadable, not blocking: python exploded/)]));
+    // and so are a crashed script, non-json output and a report with no verdict
+    h.preflight = null;
+    await expect(h.make().apply({ force: true })).rejects.toMatchObject({ status: 409, message: /preflight refused: python exploded \(exit 1\)/ });
+    h.preflight = "Traceback (most recent call last)";
+    await expect(h.make().apply({ force: true })).rejects.toMatchObject({ status: 409, message: /preflight refused: its output is not json/ });
+    h.preflight = JSON.stringify({ checks: { blocking_jobs: [] } });
+    await expect(h.make().apply({ force: true })).rejects.toMatchObject({ status: 409, message: /preflight not ok \(no verdict in its report\)/ });
+    expect(h.bootstraps).toHaveLength(0);
+    expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    // restart goes through the same gate
+    await expect(h.make().restart({ force: true })).rejects.toMatchObject({ status: 409, message: /preflight not ok/ });
+    expect(h.bootstraps).toHaveLength(0);
+  });
+
+  it("refuses when the packaged build is missing its preflight script; an unconfigured dev run skips it", async () => {
+    stage(h);
+    const missing = join(root, "Resources", "updater", "preflight.py");
+    await expect(h.make({}, { preflight: missing, requirePreflight: true }).apply({ force: true }))
+      .rejects.toMatchObject({ status: 409, message: new RegExp(`preflight script missing at ${missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; refusing to update`) });
+    expect(h.calls).toEqual([]);
+    expect(h.bootstraps).toHaveLength(0);
+    expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    // not required (OMB_UPDATER_PREFLIGHT pointed somewhere stale in a dev run): noted, not blocking
+    const stale = await h.make({}, { preflight: missing, requirePreflight: false }).apply({ force: true });
+    expect(stale.notes).toEqual(expect.arrayContaining([expect.stringMatching(/preflight script not found at .*preflight\.py; skipped/)]));
     await h.settle();
     rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
-    h.preflight = JSON.stringify({ ok: false, checks: { blocking_jobs: ["x"] } });
-    const absent = await h.make({}, { preflight: join(root, "nope.py") }).apply({ force: true }); // not shipped: skipped
-    expect(absent.notes ?? []).not.toEqual(expect.arrayContaining([expect.stringMatching(/preflight/)]));
+    const none = await h.make({}, { preflight: undefined }).apply({ force: true });
+    expect(none.notes).toEqual(expect.arrayContaining(["preflight not configured; skipped"]));
     await h.settle();
+  });
+
+  it("ships the checked-in preflight.py to Contents/Resources/updater via electron-builder, outside the asar", () => {
+    const script = join(REPO, "electron", "resources", "updater", "preflight.py");
+    expect(existsSync(script)).toBe(true);
+    const source = readFileSync(script, "utf8");
+    expect(source).toMatch(/never unloads, kills or restarts/);
+    expect(source).not.toMatch(/launchctl",\s*"(bootout|unload|kill|kickstart)/);
+    expect(source).toMatch(/print\(json\.dumps\(res/);
+    execFileSync("/usr/bin/python3", ["-c", `import ast,sys; ast.parse(open(sys.argv[1]).read())`, script], { stdio: "pipe" });
+    const config = parseYaml(readFileSync(join(REPO, "electron-builder.yml"), "utf8")) as { files: string[]; mac: { extraResources: Array<{ from: string; to: string }> } };
+    expect(config.mac.extraResources).toContainEqual({ from: "electron/resources/updater/preflight.py", to: "updater/preflight.py" });
+    expect(config.files).toContain("!electron/resources/updater/**");
   });
 
   it("classifies launchd rows", () => {
     expect(classifyLaunchdJobs("PID\tStatus\tLabel\n-\t0\tcom.apple.Finder\n99\t0\tai.bos.bot.update.11111111\n-\t0\tai.bos.bot.update.22222222\n7\t0\tai.bos.steer.keepalive\n-\t0\tcom.openmausbot.installer\n-\t0\tapplication.ai.bos.bot.123.456\n"))
       .toEqual({ running: ["ai.bos.bot.update.11111111", "ai.bos.steer.keepalive"], idle: ["com.openmausbot.installer"], staleOwn: ["ai.bos.bot.update.22222222"] });
-    expect(preflightVerdict({})).toEqual({ blocking: [], notes: [] });
-    expect(preflightVerdict({ ok: true, checks: { blocking_jobs: ["a"], idle_jobs: ["b"] } })).toEqual({ blocking: ["a"], notes: ["preflight: idle install jobs loaded, not blocking: b"] });
+    expect(preflightVerdict({})).toEqual({ refuse: "preflight not ok (no verdict in its report)", blocking: [], failed: [], notes: [] });
+    expect(preflightVerdict({ ok: true, checks: { blocking_jobs: ["a"], idle_jobs: ["b"] } })).toEqual({ refuse: "preflight found live install jobs: a", blocking: ["a"], failed: [], notes: ["preflight: idle install jobs loaded, not blocking: b"] });
+    expect(preflightVerdict({ ok: true, checks: { blocking_jobs: [], idle_jobs: ["b"] } })).toEqual({ refuse: null, blocking: [], failed: [], notes: ["preflight: idle install jobs loaded, not blocking: b"] });
+    expect(preflightVerdict({ ok: false, checks: { health_ok: false, single_main_app: false } })).toEqual({ refuse: "preflight not ok (health_ok, single_main_app)", blocking: [], failed: ["health_ok", "single_main_app"], notes: [] });
   });
 
   it("keeps the lock and the quiesced workspace when the executor cannot say whether it handed off", async () => {
