@@ -40,6 +40,28 @@ struct PreparedPhoneCredential: Equatable, Sendable {
     fileprivate let envelope: PhoneSecretEnvelope
 }
 
+/// The session, for views that only call into it. `@EnvironmentObject`
+/// subscribes a view to every change the session publishes, so when each
+/// transcript row held one, any bot finishing a tool step anywhere redrew
+/// every row of the open chat. Reading it from here subscribes to nothing.
+private struct SessionActionsKey: EnvironmentKey {
+    static let defaultValue: Session? = nil
+}
+
+extension EnvironmentValues {
+    var sessionActions: Session? {
+        get { self[SessionActionsKey.self] }
+        set { self[SessionActionsKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Both ways in: observed, and as a plain reference for action-only views.
+    func session(_ session: Session) -> some View {
+        environmentObject(session).environment(\.sessionActions, session)
+    }
+}
+
 @MainActor
 final class Session: ObservableObject {
 
@@ -139,6 +161,16 @@ final class Session: ObservableObject {
     /// count alone does not call into UserNotifications.
     private var appliedBadge: Int?
     private static let frameBatchInterval: Duration = .milliseconds(60)
+    /// A batch with a saved message or a bot change in it redraws every
+    /// screen that reads the session. With several bots working, their tool
+    /// steps alone arrived several times a second and each redraw relaid the
+    /// open transcript, so typing and scrolling stalled. Those batches still
+    /// fold at once; the redraw they announce waits until this long after
+    /// the last one, so it lands at most a few times a second. A stream
+    /// starting or ending is always announced at once.
+    private static let loudPublishInterval: Duration = .milliseconds(250)
+    private var lastLoudPublish: ContinuousClock.Instant?
+    private var deferredPublish: Task<Void, Never>?
     private static let frameBatchLimit = 512
     /// Best-effort authenticated route refresh started by the latest live SSE
     /// hello. Kept separate so endpoint discovery never stalls event delivery.
@@ -233,7 +265,7 @@ final class Session: ObservableObject {
         }
         if (arguments.contains("-store-preview") || arguments.contains("-computer-switcher-preview")),
            let url = Bundle.main.url(
-               forResource: arguments.contains("-images-preview") ? "ImagePreview" : (arguments.contains("-threads-preview") ? "ThreadPreview" : "StorePreview"),
+               forResource: arguments.contains("-room-preview") ? "RoomPreview" : arguments.contains("-images-preview") ? "ImagePreview" : (arguments.contains("-threads-preview") ? "ThreadPreview" : "StorePreview"),
                withExtension: "json"
            ),
            let data = try? Data(contentsOf: url),
@@ -273,6 +305,8 @@ final class Session: ObservableObject {
                 for (threadID, page) in pages { state.merge(page, intoThread: threadID) }
             }
             status = .live
+            if arguments.contains("-stream-preview-bots") { startMultiStreamPreview() }
+            else if arguments.contains("-stream-preview") { startStreamPreview() }
             return
         }
 #endif
@@ -900,8 +934,122 @@ final class Session: ObservableObject {
         pendingFrames.removeAll()
         frameFlushTask?.cancel()
         frameFlushTask = nil
+        deferredPublish?.cancel()
+        deferredPublish = nil
         state = CompanionState()
     }
+
+#if DEBUG
+    /// Offline stand-in for a long run, for measuring the chat while it
+    /// streams: a long history, then a reply typed at provider speed with a
+    /// tool step every 700ms, all through the same batching as the wire.
+    private func startStreamPreview() {
+        let threadId = "preview-gmail"
+        func frame(_ json: [String: Any]) -> StreamFrame? {
+            guard let data = try? JSONSerialization.data(withJSONObject: json) else { return nil }
+            return try? JSONDecoder().decode(StreamFrame.self, from: data)
+        }
+        let paragraph = "Checked the **inbox** and grouped what matters: three invoices due this week, a contract redline from `legal@`, and two threads that need a reply today. "
+        let start = Date().timeIntervalSince1970 * 1000
+        for index in 0..<50 {
+            let message: [String: Any] = [
+                "id": "stream-history-\(index)", "role": index % 2 == 0 ? "user" : "bot", "kind": "text",
+                "at": start - Double(50 - index) * 60_000,
+                "text": index % 2 == 0 ? "check item \(index) and tell me what changed" : String(repeating: paragraph, count: 3) + "\n\n- one\n- two\n- three"
+            ]
+            if let seeded = frame(["kind": "message", "threadId": threadId, "message": message]) { state.apply(seeded.frame) }
+        }
+        Task { @MainActor [weak self] in
+            // Start on the first keystroke so the test can reach the
+            // composer while the app is still idle.
+            while !MainThreadProbe.shared.isTyping && !ProcessInfo.processInfo.arguments.contains("-stream-preview-autostart") { try? await Task.sleep(for: .milliseconds(50)) }
+            if let self, var bot = self.state.bot("preview-pepper") { bot.busy = true; self.state.apply(.bot(bot)) }
+            // Paragraphs and a short list, the shape a real long reply has.
+            let reply = String(repeating: paragraph, count: 2) + "\n\n- first thing to check\n- second thing to check\n\n"
+            let words = reply.split(separator: " ", omittingEmptySubsequences: false).map { $0 + " " }
+            var seq = 1, tick = 0
+            let end = ContinuousClock.now + .seconds(90)
+            while ContinuousClock.now < end, let self {
+                tick += 1
+                let delta = (0..<4).map { words[(tick * 4 + $0) % words.count] }.joined()
+                if let token = frame(["kind": "runtime", "seq": seq, "event": ["type": "content.delta", "threadId": threadId, "streamKind": "assistant_text", "delta": delta]]) {
+                    self.enqueue(token)
+                }
+                seq += 1
+                if tick % 28 == 0, let step = frame(["kind": "message", "seq": seq, "threadId": threadId, "message": [
+                    "id": "stream-step-\(tick)", "role": "bot", "kind": "activity", "at": Date().timeIntervalSince1970 * 1000,
+                    "tool": ["name": "Bash", "ok": true, "summary": "grep -rn invoice mail/\(tick)"]
+                ]]) {
+                    self.enqueue(step)
+                    seq += 1
+                }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
+    }
+
+    /// `-room-preview -stream-preview-bots`: four bots at once, the load that
+    /// lagged the phone. Two answer in the HQ room and two in their own 1:1s,
+    /// each typing at provider speed with tool steps, item events and the
+    /// room's active list changing as they go.
+    private func startMultiStreamPreview() {
+        func frame(_ json: [String: Any]) -> StreamFrame? {
+            guard let data = try? JSONSerialization.data(withJSONObject: json) else { return nil }
+            return try? JSONDecoder().decode(StreamFrame.self, from: data)
+        }
+        let room = "room-thread-hq"
+        // (thread, room member streaming there or nil for a 1:1, bot id)
+        let streams: [(thread: String, roomBot: String?, bot: String)] = [
+            (room, "room-dev", "room-dev"), (room, "room-pix", "room-pix"),
+            ("room-thread-bos", nil, "room-bos"), ("room-thread-oracle", nil, "room-oracle")
+        ]
+        let paragraph = "Checked the **inbox** and grouped what matters: three invoices due this week, a contract redline from `legal@`, and two threads that need a reply today. "
+        let start = Date().timeIntervalSince1970 * 1000
+        for thread in Set(streams.map(\.thread)) {
+            for index in 0..<60 {
+                var message: [String: Any] = [
+                    "id": "\(thread)-history-\(index)", "role": index % 2 == 0 ? "user" : "bot", "kind": "text",
+                    "at": start - Double(60 - index) * 60_000,
+                    "text": index % 2 == 0 ? "check item \(index) and tell me what changed" : String(repeating: paragraph, count: 3) + "\n\n- one\n- two\n- three"
+                ]
+                if thread == room, index % 2 == 1 { message["from"] = ["botId": streams[index / 2 % 2].bot, "name": "dev", "color": "blue"] }
+                if let seeded = frame(["kind": "message", "threadId": thread, "message": message]) { state.apply(seeded.frame) }
+            }
+        }
+        Task { @MainActor [weak self] in
+            MainThreadProbe.shared.start()
+            for stream in streams { if let self, var bot = self.state.bot(stream.bot) { bot.busy = true; self.state.apply(.bot(bot)) } }
+            let reply = String(repeating: paragraph, count: 2) + "\n\n- first thing to check\n- second thing to check\n\n"
+            let words = reply.split(separator: " ", omittingEmptySubsequences: false).map { $0 + " " }
+            var seq = 1, tick = 0
+            let end = ContinuousClock.now + .seconds(180)
+            while ContinuousClock.now < end, let self {
+                tick += 1
+                for (n, stream) in streams.enumerated() {
+                    var event: [String: Any] = ["type": "content.delta", "threadId": stream.thread, "streamKind": "assistant_text",
+                                                "delta": (0..<4).map { words[(tick * 4 + $0 + n * 7) % words.count] }.joined()]
+                    if let bot = stream.roomBot { event["roomBotId"] = bot }
+                    if let token = frame(["kind": "runtime", "seq": seq, "event": event]) { self.enqueue(token) }
+                    seq += 1
+                    // Each bot runs a tool about every 700ms, staggered, and the
+                    // server relays its item events alongside the step.
+                    if (tick + n * 7) % 28 == 0 {
+                        var item: [String: Any] = ["type": "item.started", "threadId": stream.thread]
+                        if let bot = stream.roomBot { item["roomBotId"] = bot }
+                        if let started = frame(["kind": "runtime", "seq": seq, "event": item]) { self.enqueue(started); seq += 1 }
+                        var message: [String: Any] = [
+                            "id": "\(stream.bot)-step-\(tick)", "role": "bot", "kind": "activity", "at": Date().timeIntervalSince1970 * 1000,
+                            "tool": ["name": "Bash", "ok": true, "summary": "grep -rn invoice mail/\(tick)"]
+                        ]
+                        if let bot = stream.roomBot { message["from"] = ["botId": bot, "name": bot, "color": "blue"] }
+                        if let step = frame(["kind": "message", "seq": seq, "threadId": stream.thread, "message": message]) { self.enqueue(step); seq += 1 }
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
+    }
+#endif
 
     private func enqueue(_ frame: StreamFrame) {
         pendingFrames.append(frame)
@@ -939,16 +1087,39 @@ final class Session: ObservableObject {
         // A reply's first token starts the typing dot and its end stops it,
         // so which threads are typing has to be announced; the tokens in
         // between reach only the open bubble.
-        foldingQuietly = batch.allSatisfy(\.frame.isLiveTextOnly)
-            && Self.typingThreads(in: next) == Self.typingThreads(in: state)
+        let typingChanged = Self.typingThreads(in: next) != Self.typingThreads(in: state)
+        let quiet = batch.allSatisfy(\.frame.isLiveTextOnly) && !typingChanged
+        let now = ContinuousClock.now
+        let held = !quiet && !typingChanged
+            && lastLoudPublish.map { now - $0 < Self.loudPublishInterval } == true
+        foldingQuietly = quiet || held
         state = next
         foldingQuietly = false
+        if held {
+            schedulePublish()
+        } else if !quiet {
+            lastLoudPublish = now
+            deferredPublish?.cancel()
+            deferredPublish = nil
+        }
         for frame in batch {
             if case let .notify(notification) = frame.frame {
                 NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
             }
         }
         applyBadge(state.unreadCount)
+    }
+
+    /// Announce a held fold once the interval since the last one is up.
+    private func schedulePublish() {
+        guard deferredPublish == nil, let last = lastLoudPublish else { return }
+        deferredPublish = Task { [weak self] in
+            try? await Task.sleep(until: last + Self.loudPublishInterval, clock: .continuous)
+            guard !Task.isCancelled, let self else { return }
+            self.deferredPublish = nil
+            self.lastLoudPublish = .now
+            self.objectWillChange.send()
+        }
     }
 
     private static func typingThreads(in state: CompanionState) -> Set<String> {

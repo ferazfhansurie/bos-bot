@@ -36,7 +36,7 @@ struct CompanionApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(session)
+                .session(session)
                 .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
                 .tint((AppTheme(rawValue: theme) ?? .midnight).accent)
                 // One modifier is the whole language seam. SwiftUI resolves a

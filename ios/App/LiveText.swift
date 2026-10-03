@@ -37,18 +37,59 @@ final class LiveTextStore {
         streamEnded[key].map { Date().timeIntervalSince($0) < seconds } ?? false
     }
 
+    /// Whether someone is typing in a composer. Each step of a streaming
+    /// bubble re-measures the whole transcript above it on the main thread,
+    /// and at the frame rate that crowds out keystrokes. While a draft is
+    /// open the bubble steps a few times a second instead; the text it shows
+    /// is the same, only coarser.
+    var composing = false {
+        didSet { if !composing, oldValue { publish() } }
+    }
+    private static let composingInterval: Duration = .milliseconds(250)
+    /// With more than one reply streaming, every bubble's step re-measures
+    /// the transcript on its own beat and together they kept the main
+    /// thread busy enough to stall scrolling and switching chats. Several
+    /// replies step together at this pace instead; one alone still streams
+    /// at the frame batch rate.
+    private static let busyInterval: Duration = .milliseconds(150)
+    private var interval: Duration? {
+        if composing { return Self.composingInterval }
+        return latest.streaming.values.lazy.filter { !$0.isEmpty }.count > 1 ? Self.busyInterval : nil
+    }
+    private var lastPublish: ContinuousClock.Instant?
+    private var pendingPublish: Task<Void, Never>?
+
     /// Copy the state's live text into the per-thread objects, touching only
     /// the ones whose text actually changed.
     func sync(from state: CompanionState) {
         guard state.streaming != latest.streaming || state.reasoning != latest.reasoning else { return }
-        let now = Date()
+        let endedAt = Date()
         for (key, text) in latest.streaming where !text.isEmpty && (state.streaming[key] ?? "").isEmpty {
-            streamEnded[key] = now
+            streamEnded[key] = endedAt
         }
+        let finished = state.streaming.count < latest.streaming.count
+            || state.reasoning.count < latest.reasoning.count
         latest = (state.streaming, state.reasoning)
+        // A reply that ended (or a thread cleared) lands at once, so the
+        // bubble never lingers behind the message that replaced it.
+        guard let interval, !finished else { publish(); return }
+        guard pendingPublish == nil else { return }
+        let now = ContinuousClock.now
+        guard let last = lastPublish, now - last < interval else { publish(); return }
+        pendingPublish = Task { [weak self] in
+            try? await Task.sleep(until: last + interval, clock: .continuous)
+            guard !Task.isCancelled else { return }
+            self?.publish()
+        }
+    }
+
+    private func publish() {
+        pendingPublish?.cancel()
+        pendingPublish = nil
+        lastPublish = .now
         for (threadId, live) in entries {
-            let text = state.streaming[threadId] ?? ""
-            let reasoning = state.reasoning[threadId] ?? ""
+            let text = latest.streaming[threadId] ?? ""
+            let reasoning = latest.reasoning[threadId] ?? ""
             if live.text != text { live.text = text }
             if live.reasoning != reasoning { live.reasoning = reasoning }
         }
