@@ -12163,9 +12163,19 @@ function persistMcpServers(next: Record<string, unknown>): void {
   cfg.mcpServers = next;
 }
 
+// The 15 engine drivers BOS stopped shipping in 931fbbf. Old configs and the
+// default fleet still name them, so they'd list as dead "unknown driver"
+// rows. Hide just these; any other unknown driver stays a visible shadow so
+// a mistyped custom engine can still be repaired.
+const REMOVED_DRIVER_KINDS: ReadonlySet<string> = new Set([
+  "grok", "grokAgent", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "opencodeGo",
+  "qwenAgent", "hermesAgent", "customAcp", "piAgent", "openai-compat", "antigravityAgent", "boxAgent", "minimax",
+].filter((kind) => !BUILT_IN_DRIVERS.some((driver) => driver.driverKind === kind)));
+
 async function describeInstances() {
   const configs = instanceConfigs(cfg);
-  return (await registry.describe()).map((instance) => {
+  const shipped = (await registry.describe()).filter((instance) => !REMOVED_DRIVER_KINDS.has(instance.driverKind));
+  return shipped.map((instance) => {
     const entry = configs[instance.instanceId];
     // hosted BOS Free set up before it carried an icon still shows the model it runs
     const icon = entry?.icon ?? (entry?.driver === "openrouter-free" && (entry.config as { hosted?: unknown } | undefined)?.hosted === true ? { kind: "preset" as const, preset: "deepseek" as const } : undefined);

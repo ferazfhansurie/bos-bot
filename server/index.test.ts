@@ -444,6 +444,8 @@ beforeAll(async () => {
         // the engine that runs a turn on the bot's cloud computer (the app
         // registers it by default); it talks only to the Box stub
         computer: { driver: "boxAgent", displayName: "Computer" },
+        // a driver BOS stopped shipping: kept in config, hidden from lists
+        oldGrok: { driver: "grokAgent", displayName: "Old Grok" },
       },
     }),
   );
@@ -2322,6 +2324,9 @@ describe("harness HTTP API", () => {
       snapshot: { state: "unavailable" },
     });
     expect(ghost.snapshot.reason).toContain("not-a-real-driver");
+    // removed BOS engines never list as dead rows
+    expect(body.instances.map((instance: { instanceId: string }) => instance.instanceId)).not.toContain("oldGrok");
+    expect(body.instances.map((instance: { instanceId: string }) => instance.instanceId)).not.toContain("computer");
     expect(body.instances).toContainEqual(expect.objectContaining({
       instanceId: "claude",
       driverKind: "claudeAgent",
