@@ -44,6 +44,7 @@ import { t } from "@/lib/i18n";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
+import { noteUpdateFrame } from "@/lib/bos-update";
 
 const MAX_ROUTINE_RUNS = 2_000;
 const ACTIVE_ROUTINE_RUN_STATUSES = new Set<RoutineRun["status"]>(["queued", "running", "waiting"]);
@@ -706,7 +707,8 @@ export type AppSettingsSection =
   | "usage"
   | "people"
   | "backups"
-  | "workspaces";
+  | "workspaces"
+  | "updates";
 
 export type BotSettingsSection =
   | "overview"
@@ -3680,6 +3682,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "bot.deleted":
           botPatchQueue.cancel(frame.botId);
           rawDispatch({ type: "deleteBot", botId: frame.botId });
+          break;
+        case "update.state":
+          noteUpdateFrame(frame);
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately
