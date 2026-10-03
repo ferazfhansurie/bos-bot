@@ -47,7 +47,7 @@ import { ApnsPush } from "./apns-push.ts";
 import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
-import { MAX_BOT_RUN, deferMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback, trailingBotReplies } from "./room-loop-brake.ts";
+import { deferMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
@@ -9312,8 +9312,8 @@ const webhookIngressStatus = () => ({
 // a time — the transcript and streaming bubble stay coherent), each on a
 // fresh session with recent room context. A member's reply may @mention
 // teammates; those get chained turns, up to MAX_GROUP_HOPS deep, each member
-// at most once per chain. The room loop brake (MAX_BOT_RUN bot replies in a
-// row) stops a chain earlier and hands the room back to a person.
+// at most once inline, with one deferred callback for a member tagged back.
+// Consecutive bot replies do not pause mention routing.
 const roomHandoffTimer = setInterval(() => {
   void drainDelegatedJobs().catch(error => console.error("delegated jobs:", error));
   try { roomHandoffs.tick(); } catch (error) { console.error("room handoffs:", error); }
@@ -10294,7 +10294,6 @@ async function executeGroupMemberTurn(
         deferMentionCallback(spoken, next.id, hop + 1);
         continue;
       }
-      if (roomLoopBrakeEngaged(threadId, bot.id)) break;
       if (operation) {
         // a summoned teammate busy elsewhere is woken later, exactly like a
         // direct responder; one skipped by the cap must not be retried as a
@@ -10709,23 +10708,6 @@ type StartGroupTurnOptions = {
   sender?: { name: string };
 };
 
-/** True once MAX_BOT_RUN bot replies have landed since the last human
- * message. The chain stops there and the room says so, so a person (not
- * another bot) decides whether it continues. */
-function roomLoopBrakeEngaged(threadId: string, botId: string): boolean {
-  const roomThreadId = store.canonicalThreadId(threadId);
-  const log = store.messagesFor(roomThreadId);
-  if (trailingBotReplies(log) < MAX_BOT_RUN) return false;
-  if (log.at(-1)?.tool?.name?.startsWith("paused after ")) return true;
-  const bot = store.bot(botId);
-  store.appendMessage(roomThreadId, {
-    role: "bot",
-    kind: "activity",
-    tool: { name: `paused after ${MAX_BOT_RUN} bot replies in a row${bot ? ` — ${bot.name}'s mentions wait for you` : ""}`, ok: true },
-  });
-  return true;
-}
-
 /** Room Stop: cancel queued member slots, pending followups and every live
  * member turn on the targeted tasks (all of the room's tasks by default).
  * Returns how many live turns were interrupted. */
@@ -10979,7 +10961,6 @@ function startGroupTurn(
         if (callback.hop >= MAX_GROUP_HOPS) continue;
         const member = store.bot(callback.botId);
         if (!member || !store.group(groupId)?.memberIds.includes(member.id)) continue;
-        if (roomLoopBrakeEngaged(threadId, member.id)) break;
         const verdict = await waitForChatRoomMember(operation, threadId, member);
         if (verdict === "stop") break;
         if (verdict === "skip") continue;

@@ -1,8 +1,4 @@
-// Server-side brakes that keep a room of bots from talking in circles.
-// Instructions can ask bots to stay quiet; these hold even when they don't.
-
-/** Most bot replies a room runs in a row before a human has to speak. */
-export const MAX_BOT_RUN = 3;
+// Room Stop commands, acknowledgement filtering and deferred mention routing.
 
 /** "stop", "/stop", "Stop." — the whole message, nothing else. */
 export function isRoomStopCommand(text: string): boolean {
@@ -36,23 +32,6 @@ export function isBareAck(text: string): boolean {
     else return false;
   }
   return true;
-}
-
-type BrakeMessage = { role: string; kind?: string; text?: string; via?: string };
-
-/** Bot replies posted since the last human message. Activity rows and
- * script posts through the local API (a bot's shell can make those) are
- * neither, so they never reset the count. */
-export function trailingBotReplies(messages: readonly BrakeMessage[]): number {
-  let count = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]!;
-    if (message.kind && message.kind !== "text") continue;
-    if (message.role === "user" && message.via === "api") continue;
-    if (message.role === "user") break;
-    if (message.role === "bot" && message.text?.trim()) count++;
-  }
-  return count;
 }
 
 /** Mentions of members who already spoke in a chain, keyed by that chain's

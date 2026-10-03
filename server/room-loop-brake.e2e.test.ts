@@ -29,18 +29,6 @@ async function withPair(test: (f: any) => Promise<void>) {
   } finally { await session.close(); }
 }
 
-it("hands the room back to a person after three bot replies in a row", () => withPair(async f => {
-  const cee = (await f.cli("new-bot", "--name", "Cee", "--section", "A")).bot;
-  const dee = (await f.cli("new-bot", "--name", "Dee", "--section", "A")).bot;
-  await f.api(`/api/groups/${f.room.id}`, { memberIds: [f.ace.id, f.bee.id, cee.id, dee.id] }, "PATCH");
-  f.savePlan({ [f.ace.id]: { reply: "@Bee @Cee @Dee each check this" } });
-  await f.cli("send-channel", "--channel", f.room.id, "--text", "@Ace start");
-  expect((await f.wait()).status).toBe("settled");
-  const log = await f.messages();
-  expect(log.filter((m: any) => m.role === "bot" && m.kind === "text")).toHaveLength(3);
-  expect(log.filter((m: any) => m.kind === "activity" && m.tool?.name?.startsWith("paused after 3 bot replies"))).toHaveLength(1);
-}), 60_000);
-
 it("does not let a bare acknowledgement summon anyone", () => withPair(async f => {
   f.savePlan({ [f.ace.id]: { reply: "agreed @Bee" }, [f.bee.id]: { reply: "should not run" } });
   await f.cli("send-channel", "--channel", f.room.id, "--text", "@Ace start");
