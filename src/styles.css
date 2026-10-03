@@ -690,12 +690,12 @@ body {
 }
 /* mascot arrives at the tail */
 @keyframes turn-mascot-in {
-  from { opacity: 0; transform: scale(0.82); }
+  from { opacity: 0; transform: scale(0.6); }
   to { opacity: 1; transform: scale(1); }
 }
 @keyframes turn-mascot-out {
   from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.88); }
+  to { opacity: 0; transform: scale(0.6); }
 }
 /* the reply grows up from the mascot, staying on the left edge */
 @keyframes turn-answer-in {
@@ -710,11 +710,11 @@ body {
 }
 .turn-mascot-in {
   transform-origin: 18px 18px;
-  animation: turn-mascot-in 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: turn-mascot-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 .turn-mascot-out {
   transform-origin: 18px 18px;
-  animation: turn-mascot-out 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: turn-mascot-out 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .turn-answer {
   transform-origin: 18px 100%;
@@ -1516,23 +1516,29 @@ button:disabled.bg-danger {
 }
 
 /* ─── grok-style room polish ────────────────────────────────────────────
-   Soft and short (200–300ms), transform/opacity only so four bots
+   Timings and curves are the ones dev measured from grok bot's bundle
+   (grok-ref/NOTES.md). Transform/opacity/filter only so four bots
    streaming at once stay on the compositor. Reduce motion gets the still
    version at the end of this block. */
+:root {
+  --room-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --room-ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
 
-/* A working bot's avatar breathes and shifts shape instead of spinning
-   dots. Transform-only squash/stretch, so it works on photos and mascots. */
+/* A working bot's avatar breathes (opacity .72-1 every 2.4s) and shifts
+   shape on the same beat instead of spinning dots. Transform-only
+   squash/stretch, so it works on photos and mascots. */
 @keyframes bot-morph {
-  0%, 100% { transform: scale(1, 1) rotate(0deg); }
+  0%, 100% { transform: scale(1, 1) rotate(0deg); opacity: 1; }
   25% { transform: scale(1.06, 0.94) rotate(-3deg); }
-  50% { transform: scale(0.95, 1.05) rotate(2deg); }
+  50% { transform: scale(0.95, 1.05) rotate(2deg); opacity: 0.72; }
   75% { transform: scale(1.04, 0.97) rotate(-1deg); }
 }
 .bot-morph {
   display: inline-flex;
-  animation: bot-morph 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  animation: bot-morph 2.4s ease-in-out infinite;
   transform-origin: 50% 70%;
-  will-change: transform;
+  will-change: transform, opacity;
 }
 
 /* Live status text swaps with a short crossfade when the step changes. */
@@ -1540,30 +1546,31 @@ button:disabled.bg-danger {
   from { opacity: 0; transform: translateY(3px); }
   to { opacity: 1; transform: none; }
 }
-.status-swap { display: inline-block; animation: status-swap 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.status-swap { display: inline-block; animation: status-swap 0.2s var(--room-ease-out) both; }
 
-/* Streamed words fade in as they land rather than popping. Only words
-   mounted after the first paint animate; React keeps the earlier spans. */
+/* Streamed words land from a slight blur, 50ms apart within a chunk
+   (StreamWord sets the delay). Only words mounted after the first paint
+   animate; React keeps the earlier spans. */
 @keyframes stream-word-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from { opacity: 0; filter: blur(4px); }
+  to { opacity: 1; filter: none; }
 }
-.stream-word { animation: stream-word-in 0.26s ease-out both; }
+.stream-word { animation: stream-word-in 0.2s ease-out both; }
 
-/* A live reply bubble arrives with a small spring, same shape as the
+/* A live reply bubble grows in from its left edge, same shape as the
    finished one so the handoff to the transcript does not jump. */
 @keyframes bubble-in {
-  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  from { opacity: 0; transform: scale(0.92); }
   to { opacity: 1; transform: none; }
 }
 .bubble-in {
-  transform-origin: 18px 100%;
-  animation: bubble-in 0.3s cubic-bezier(0.34, 1.36, 0.64, 1) both;
+  transform-origin: left center;
+  animation: bubble-in 0.18s var(--room-ease-out) both;
 }
 
 /* Finished steps settle into a faint tag under the reply. */
 .step-tag {
-  animation: status-swap 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: status-swap 0.2s var(--room-ease-out) both;
 }
 
 /* Rendered @mentions read as chips: avatar + name on a lighter pill. Only
@@ -1591,16 +1598,16 @@ button:disabled.bg-danger {
 }
 
 /* Composer height eases between line counts instead of snapping. */
-.mention-editor textarea { transition: height 0.16s cubic-bezier(0.22, 1, 0.36, 1); }
+.mention-editor textarea { transition: height 0.15s var(--room-ease-out); }
 
 /* Press feedback on buttons, hover lift on room bubbles' actions. */
 .ui-button:active:not(:disabled),
 .ui-icon-button:active:not(:disabled),
 .press:active:not(:disabled) {
   transform: scale(0.97);
-  transition: transform 0.08s ease-out;
+  transition: transform 0.1s ease-out;
 }
-.press { transition: transform 0.2s cubic-bezier(0.34, 1.36, 0.64, 1), background-color 0.15s ease; }
+.press { transition: transform 0.2s var(--room-ease-pop), background-color 0.15s ease; }
 
 @media (prefers-reduced-motion: reduce) {
   .bot-morph, .status-swap, .stream-word, .bubble-in, .step-tag { animation: none; }

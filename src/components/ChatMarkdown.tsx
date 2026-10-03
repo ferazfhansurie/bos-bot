@@ -519,6 +519,26 @@ function wrapWords(node: StreamHastNode) {
 }
 const STREAM_REHYPE = [rehypeStreamWords];
 
+// Words that mount in the same frame are one streamed chunk; each lands
+// 50ms after the one before it. Capped so a long first paint never lags
+// behind the stream.
+const WORD_STAGGER_MS = 50;
+const WORD_STAGGER_MAX_MS = 300;
+let chunkStartedAt = -Infinity;
+let chunkWords = 0;
+function nextWordDelay(): number {
+  const now = performance.now();
+  if (now - chunkStartedAt > 16) {
+    chunkStartedAt = now;
+    chunkWords = 0;
+  }
+  return Math.min(chunkWords++ * WORD_STAGGER_MS, WORD_STAGGER_MAX_MS);
+}
+function StreamWord({ children }: { children?: ReactNode }) {
+  const [delay] = useState(nextWordDelay);
+  return <span className="stream-word" style={delay ? { animationDelay: `${delay}ms` } : undefined}>{children}</span>;
+}
+
 function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers = NO_MENTION_PEERS, everyone = false }: {
   text: string; streaming?: boolean; message?: MessageAttachmentContext;
   mentionPeers?: readonly MentionPeer[]; everyone?: boolean;
@@ -585,6 +605,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
             const link = threadLinkFromProps(props as Record<string, unknown>);
             if (link) return <ThreadLink target={link.target} ambiguous={link.ambiguous}>{props.children}</ThreadLink>;
             const { node: _node, children, ...rest } = props;
+            if (rest.className === "stream-word") return <StreamWord>{children}</StreamWord>;
             return <span {...rest}>{children}</span>;
           },
           a({ href, children }: { href?: string; children?: ReactNode }) {
