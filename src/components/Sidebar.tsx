@@ -90,6 +90,17 @@ import {
   userSectionName,
   type SectionDropPlace,
 } from "@/lib/sidebar-layout";
+import {
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_RAIL_WIDTH,
+  SIDEBAR_RESIZE_STEP,
+  clampSidebarWidth,
+  loadSidebarWidth,
+  resolveSidebarDrag,
+  saveSidebarWidth,
+  sidebarAutoRail,
+} from "@/lib/sidebar-resize";
 import { sidebarSectionAttention } from "@/lib/sidebar-attention";
 import { botListItemPointerIntent } from "@/lib/sidebar-selection";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
@@ -1602,7 +1613,25 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     restoreBot?: { id: string; name: string };
   } | null>(null);
   const [query, setQuery] = useState("");
-  const [density, setDensityState] = useState<SidebarDensity>(() => loadSidebarDensity());
+  const [savedDensity, setDensityState] = useState<SidebarDensity>(() => loadSidebarDensity());
+  const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
+  const [windowWidth, setWindowWidth] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
+  const [resizing, setResizing] = useState(false);
+  // Only the snap to/from the rail animates; a live drag follows the pointer.
+  const [snapAnimating, setSnapAnimating] = useState(false);
+  const resizeDrag = useRef<{
+    x: number;
+    startRaw: number;
+    collapsed: boolean;
+    width: number;
+    origDensity: SidebarDensity;
+    origWidth: number;
+  } | null>(null);
+  // A window too narrow for the sidebar plus a usable chat shows the rail
+  // without touching the saved width or density. Below md the sidebar is a
+  // slide-over drawer, so it keeps its full width there.
+  const autoRail = windowWidth >= 768 && savedDensity !== "icons" && sidebarAutoRail(windowWidth, sidebarWidth);
+  const density: SidebarDensity = autoRail && !resizing ? "icons" : savedDensity;
   const [lastExpandedDensity, setLastExpandedDensity] = useState<Exclude<SidebarDensity, "icons">>(() => {
     const saved = loadSidebarDensity();
     return saved === "icons" ? "comfortable" : saved;
@@ -1628,7 +1657,126 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     setDensityOpen(false);
   };
 
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!snapAnimating) return;
+    const timer = window.setTimeout(() => setSnapAnimating(false), 200);
+    return () => window.clearTimeout(timer);
+  }, [snapAnimating]);
+
+  const applyResize = (rawWidth: number) => {
+    const drag = resizeDrag.current;
+    if (!drag) return;
+    const next = resolveSidebarDrag(rawWidth, drag.collapsed, drag.width);
+    if (next.collapsed !== drag.collapsed) {
+      setSnapAnimating(true);
+      setDensity(next.collapsed ? "icons" : lastExpandedDensity);
+    }
+    if (next.width !== drag.width) setSidebarWidth(next.width);
+    drag.collapsed = next.collapsed;
+    drag.width = next.width;
+  };
+
+  const endResize = (cancel: boolean) => {
+    const drag = resizeDrag.current;
+    if (!drag) return;
+    resizeDrag.current = null;
+    setResizing(false);
+    document.body.style.removeProperty("cursor");
+    document.body.style.removeProperty("user-select");
+    if (cancel) {
+      if (drag.collapsed !== (drag.origDensity === "icons")) {
+        setSnapAnimating(true);
+        setDensity(drag.origDensity);
+      }
+      setSidebarWidth(drag.origWidth);
+      return;
+    }
+    saveSidebarWidth(drag.width);
+  };
+
+  const onResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const collapsed = density === "icons";
+    resizeDrag.current = {
+      x: event.clientX,
+      startRaw: collapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth,
+      collapsed,
+      width: sidebarWidth,
+      origDensity: savedDensity,
+      origWidth: sidebarWidth,
+    };
+    // Grabbing an auto-railed sidebar works from the rail it shows.
+    if (collapsed && savedDensity !== "icons") setDensity("icons");
+    setResizing(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  const onResizeMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = resizeDrag.current;
+    if (!drag) return;
+    const rtl = document.documentElement.dir === "rtl";
+    const delta = (event.clientX - drag.x) * (rtl ? -1 : 1);
+    applyResize(drag.startRaw + delta);
+  };
+
+  const onResizeEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeDrag.current) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    endResize(false);
+  };
+
+  useEffect(() => {
+    if (!resizing) return;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        endResize(true);
+      }
+    };
+    const cancelOnBlur = () => endResize(true);
+    window.addEventListener("keydown", cancelOnEscape, true);
+    window.addEventListener("blur", cancelOnBlur);
+    return () => {
+      window.removeEventListener("keydown", cancelOnEscape, true);
+      window.removeEventListener("blur", cancelOnBlur);
+    };
+  });
+
+  const onResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const rtl = document.documentElement.dir === "rtl";
+    const step = event.key === "ArrowRight" ? SIDEBAR_RESIZE_STEP : event.key === "ArrowLeft" ? -SIDEBAR_RESIZE_STEP : 0;
+    if (!step) return;
+    event.preventDefault();
+    const grow = (rtl ? -step : step) > 0;
+    if (density === "icons") {
+      if (grow) {
+        setSnapAnimating(true);
+        setDensity(lastExpandedDensity);
+      }
+      return;
+    }
+    if (!grow && sidebarWidth <= SIDEBAR_MIN_WIDTH) {
+      setSnapAnimating(true);
+      setDensity("icons");
+      return;
+    }
+    const next = clampSidebarWidth(sidebarWidth + (grow ? SIDEBAR_RESIZE_STEP : -SIDEBAR_RESIZE_STEP));
+    setSidebarWidth(next);
+    saveSidebarWidth(next);
+  };
+
   const toggleCollapsed = () => {
+    setSnapAnimating(true);
     if (density === "icons") setDensity(lastExpandedDensity);
     else {
       setLastExpandedDensity(density);
@@ -1883,8 +2031,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       data-native-view-overlay
       data-sidebar
       className={cn(
-        "flex h-full shrink-0 flex-col border-r border-hairline/40 bg-panel transition-[width] duration-200",
-        density === "icons" ? "w-[80px]" : density === "compact" ? "w-[272px]" : "w-[320px]",
+        "relative flex h-full shrink-0 flex-col border-r border-hairline/40 bg-panel",
+        snapAnimating && "transition-[width] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
         // Below md only: the sidebar leaves the flow and slides in over the chat.
         // Scoped with max-md: rather than cancelled with md: on purpose — Tailwind
         // v4 emits the native `translate` property, and any value other than
@@ -1896,7 +2044,35 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         "max-md:transition-transform max-md:duration-200",
         open ? "max-md:translate-x-0" : "max-md:-translate-x-full",
       )}
+      style={{ width: density === "icons" ? SIDEBAR_RAIL_WIDTH : sidebarWidth }}
     >
+      {/* Drag to resize; under 210px it snaps to the avatar rail. Invisible
+          until hovered, accent while dragging. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("sidebar.resizeAria")}
+        aria-valuemin={SIDEBAR_RAIL_WIDTH}
+        aria-valuemax={SIDEBAR_MAX_WIDTH}
+        aria-valuenow={density === "icons" ? SIDEBAR_RAIL_WIDTH : sidebarWidth}
+        tabIndex={0}
+        data-sidebar-resize
+        data-resizing={resizing || undefined}
+        onKeyDown={onResizeKeyDown}
+        onPointerDown={onResizeStart}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeEnd}
+        onPointerCancel={onResizeEnd}
+        className="group/resize absolute inset-y-0 -right-1 z-20 flex w-2 cursor-col-resize justify-center outline-none max-md:hidden"
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "h-full w-0.5 rounded-[1px] transition-colors duration-150",
+            resizing ? "bg-accent" : "bg-transparent group-hover/resize:bg-hairline group-focus-visible/resize:bg-accent",
+          )}
+        />
+      </div>
       {/* macOS owns inset traffic lights; Linux/Windows use native chrome. */}
       <div
         className={cn("flex items-center pt-3.5 pb-1", density === "icons" ? "flex-col gap-1 px-2" : "justify-between px-4")}
