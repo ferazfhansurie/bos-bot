@@ -55,6 +55,8 @@ struct ChatView: View {
     @State private var fileDownloadTask: Task<Void, Never>?
     @State private var fileDownloadRequestID: UUID?
     @State private var threadOpenTask: Task<Void, Never>?
+    /// Messages that land while the chat is open spring in; history stays still.
+    @State private var arrivals = MessageArrivals()
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
     /// The opening beat: the island grows with the bot's face in it, then
@@ -160,6 +162,7 @@ struct ChatView: View {
         // array as a unit; repeatedly reaching through ObservableObject for
         // every row only recomputes the same value.
         let transcript = rows
+        let _ = arrivals.track(threadId: threadId, messages: messages.map { ($0.id, $0.at) }, now: Date().timeIntervalSince1970)
         // A VStack with the composer as a sibling, rather than a scroll view
         // with `.safeAreaInset`. The inset version sized itself to its
         // content, so a short transcript left the composer floating in the
@@ -224,6 +227,7 @@ struct ChatView: View {
                                         onReply: { replyTarget = $0; composerFocused = true },
                                         replyTarget: message.replyToId.flatMap { id in messages.first { $0.id == id } }
                                     )
+                                    .arrivalSpring(arrives(message), fromTrailing: message.role == .user, reduceMotion: reduceMotion)
                                 case let .activityRun(items):
                                     ActivityRunChip(items: items, openThread: openThread)
                                 }
@@ -1078,6 +1082,46 @@ struct ChatView: View {
         .padding(.bottom, 8)
         .frame(maxWidth: CompanionLayout.chatWidth)
         .frame(maxWidth: .infinity)
+    }
+}
+
+extension ChatView {
+    /// A message springs in when it landed while the chat was open, unless
+    /// it is a reply that was just streamed: that one is already on screen.
+    fileprivate func arrives(_ message: Message) -> Bool {
+        guard arrivals.isArriving(message.id) else { return false }
+        guard message.role != .user else { return true }
+        if session.liveText.streamEndedRecently(threadId) { return false }
+        if let botId = message.from?.botId,
+           session.liveText.streamEndedRecently(RuntimeEvent.roomStreamKey(threadId: threadId, botId: botId)) { return false }
+        return true
+    }
+}
+
+/// A new bubble pops up from its own side: a small lift and scale with a
+/// little overshoot, then it settles. Runs once, when the row is inserted.
+private struct ArrivalSpring: ViewModifier {
+    let active: Bool
+    let fromTrailing: Bool
+    let reduceMotion: Bool
+    @State private var settled = false
+
+    func body(content: Content) -> some View {
+        let resting = !active || reduceMotion || settled
+        content
+            .scaleEffect(resting ? 1 : 0.92, anchor: fromTrailing ? .bottomTrailing : .bottomLeading)
+            .offset(y: resting ? 0 : 6)
+            .opacity(resting ? 1 : 0)
+            .onAppear {
+                guard active, !reduceMotion else { return }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { settled = true }
+            }
+    }
+}
+
+extension View {
+    func arrivalSpring(_ active: Bool, fromTrailing: Bool, reduceMotion: Bool) -> some View {
+        modifier(ArrivalSpring(active: active, fromTrailing: fromTrailing, reduceMotion: reduceMotion))
     }
 }
 
