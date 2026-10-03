@@ -3,8 +3,12 @@ import { STAGING } from "./release-channel.mjs";
 // stages the downloaded ZIP immediately and the explicit restart applies it.
 // One state object is broadcast on every transition.
 //
-// Only runs in the packaged, signed+notarized app (mac auto-update requires
-// signing). In dev it's a no-op so the browser/dev shell is unaffected.
+// Only runs in packaged live builds (staging has no feed). mac auto-update
+// requires the signed+notarized app; the 1.0 Windows build is unsigned, and its
+// app-update.yml carries no publisherName, so electron-updater installs the
+// sha512-verified installer without an Authenticode check (see
+// electron-builder.live.cjs). In dev it's a no-op so the browser/dev shell is
+// unaffected.
 // electron-updater is vendored (electron/vendor/electron-updater.cjs) because
 // the packaged app ships no node_modules.
 import { app, clipboard, ipcMain } from "electron";
@@ -105,6 +109,9 @@ export function startUpdater({ prepareInstall = null } = {}) {
     return;
   }
   autoUpdater.autoDownload = false; // button-driven download
+  // Stable line only: a GitHub release marked pre-release (or a beta feed
+  // file) is never offered to installed apps.
+  autoUpdater.allowPrerelease = false;
   // Squirrel.Mac has a second, native staging pass after the ZIP download.
   // Start it immediately so "Restart to update" never has to begin that slow
   // pass and wait indefinitely. Windows keeps the explicit installer click.
