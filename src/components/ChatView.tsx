@@ -140,6 +140,7 @@ import {
   tailWindowStart,
 } from "@/lib/transcript-window";
 import { appendComposerDraft, useReplyDraft } from "@/lib/drafts";
+import { isArriving, trackArrivals, type ArrivalState } from "@/lib/message-arrivals";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
@@ -323,6 +324,7 @@ function Bubble({
   bot,
   message,
   emerging = false,
+  arriving = false,
   eagerAttachments = false,
   editing,
   isLastBotText,
@@ -337,6 +339,8 @@ function Bubble({
   bot: Bot;
   message: Message;
   emerging?: boolean;
+  /** Landed while the chat was open: springs in from its own side. */
+  arriving?: boolean;
   eagerAttachments?: boolean;
   editing: boolean;
   isLastBotText: boolean;
@@ -448,6 +452,7 @@ function Bubble({
           className={cn(
             "w-fit max-w-[min(42rem,78%)] rounded-2xl text-[15px] leading-relaxed",
             emerging && "turn-answer",
+            arriving && !emerging && (user ? "msg-spring origin-right" : "msg-spring origin-left"),
             user && webhookView
               ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
@@ -708,6 +713,9 @@ const MessagesList = memo(function MessagesList({
 }) {
   const { state, dispatch } = useStore();
   const showToolCalls = showToolCallsEnabled(state.config);
+  // Messages that land while the chat is open spring in; history stays still.
+  const arrivals = useRef<ArrivalState | null>(null);
+  arrivals.current = trackArrivals(arrivals.current, bot.threadId, transcript, Date.now());
   // Finished tool chips become compact runs; settled assistant narration
   // becomes one reversible turn row while the terminal answer stays visible.
   const items = useMemo(() => shared ? messages.map(message => ({ kind: "message" as const, message })) : groupTranscript(messages), [messages, locale, shared]);
@@ -872,6 +880,7 @@ const MessagesList = memo(function MessagesList({
                   message={m}
                   shared={shared}
                   emerging={m.id === emergingId}
+                  arriving={isArriving(arrivals.current, m.id)}
                   eagerAttachments={m.id === newestMessageId || m.id === newestUserMessageId}
                   editing={editingId === m.id}
                   isLastBotText={m.id === lastBotTextId}

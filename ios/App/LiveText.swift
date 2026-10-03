@@ -6,6 +6,7 @@
 // thread; here each thread has its own object, so a token redraws exactly
 // the bubble watching that thread and nothing else.
 import Combine
+import Foundation
 import CompanionCore
 
 @MainActor
@@ -28,11 +29,22 @@ final class LiveTextStore {
     }
 
     private var latest = (streaming: [String: String](), reasoning: [String: String]())
+    private var streamEnded: [String: Date] = [:]
+
+    /// The reply typed under `key` just became a saved message. That message
+    /// is already on screen as the stream was, so it should not arrive again.
+    func streamEndedRecently(_ key: String, within seconds: TimeInterval = 2) -> Bool {
+        streamEnded[key].map { Date().timeIntervalSince($0) < seconds } ?? false
+    }
 
     /// Copy the state's live text into the per-thread objects, touching only
     /// the ones whose text actually changed.
     func sync(from state: CompanionState) {
         guard state.streaming != latest.streaming || state.reasoning != latest.reasoning else { return }
+        let now = Date()
+        for (key, text) in latest.streaming where !text.isEmpty && (state.streaming[key] ?? "").isEmpty {
+            streamEnded[key] = now
+        }
         latest = (state.streaming, state.reasoning)
         for (threadId, live) in entries {
             let text = state.streaming[threadId] ?? ""
