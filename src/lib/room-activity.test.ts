@@ -18,9 +18,13 @@ describe("roomActivityVisible", () => {
     expect(roomActivityVisible(chip({}), true)).toBe(true);
   });
 
-  it("always shows a failure", () => {
-    expect(roomActivityVisible(chip({ tool: { name: "Ran a command", ok: false } }), false)).toBe(true);
-    expect(roomActivityVisible(chip({ tool: { name: "error: engine missing" } }), false)).toBe(true);
+  it("hides a failure with the rest of the tool calls, and shows it when they're on", () => {
+    const failed = chip({ tool: { name: "Ran a command", ok: false } });
+    const errored = chip({ tool: { name: "error: engine missing" } });
+    expect(roomActivityVisible(failed, false)).toBe(false);
+    expect(roomActivityVisible(errored, false)).toBe(false);
+    expect(roomActivityVisible(failed, true)).toBe(true);
+    expect(roomActivityVisible(errored, true)).toBe(true);
   });
 
   // the trace that a teammate was consulted must not depend on a developer

@@ -5,7 +5,7 @@ import { roomMemberStreamKey } from "@/lib/runtime-stream";
 // default responder; @mentions override that routing.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activeLocale, t } from "@/lib/i18n";
-import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, Settings2, ImagePlus, MessageSquareReply, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, Settings2, ImagePlus, MessageSquareReply, Pin, PinOff, Plus, Search, Wrench, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -25,6 +25,7 @@ import { ToolActivity } from "./ToolActivity";
 import { ThreadRefText } from "./ThreadRefs";
 import { TurnPresence } from "./TurnPresence";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
+import { useToolCallsToggle } from "@/hooks/use-tool-calls-toggle";
 import { CompactionChip, DigestChip } from "./DigestChip";
 import { roomActivityVisible } from "@/lib/room-activity";
 import { normalizeState } from "@/lib/mascot";
@@ -590,6 +591,29 @@ function RoomWorkingFolder({ group }: { group: Group }) {
 /** The folder this room's turns run in — the pinned folder once a turn ran,
  * else the room folder a first turn would pin. Always present so the desk
  * is settable before any folder exists; quiet (icon only) until then. */
+/** Show/hide tool calls, right in the room. Off, a bot's steps live only in
+ * its thinking line; on, each one stays behind as a chip. */
+export function ToolCallsToggle() {
+  const { enabled, saving, error, toggle } = useToolCallsToggle();
+  const label = enabled ? t("chat.toolCalls.hide") : t("chat.toolCalls.show");
+  return (
+    <button
+      type="button"
+      onClick={() => void toggle()}
+      disabled={saving}
+      aria-label={label}
+      aria-pressed={enabled}
+      title={error || label}
+      className={cn(
+        "rounded-md p-1.5 hover:bg-raised disabled:cursor-wait",
+        error ? "text-danger" : enabled ? "text-accent" : "text-ink-secondary hover:text-ink",
+      )}
+    >
+      <Wrench size={18} />
+    </button>
+  );
+}
+
 function RoomWorkingFolderChip({ group, onToggle }: { group: Group; onToggle: () => void }) {
   const folder = group.pinnedCwd === undefined ? group.cwd : (group.pinnedCwd ?? undefined);
   if (!folder) {
@@ -1265,6 +1289,7 @@ export function GroupView({ group }: { group: Group }) {
           >
             <Search size={18} />
           </button>
+          {!remoteClient && <ToolCallsToggle />}
           {!remoteClient && !group.dm && <button type="button" aria-label="Room settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Settings2 size={18} /></button>}
           <ExportTranscriptMenu
             title={group.name}
