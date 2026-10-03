@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { roomMemberReplyMode, roomMemberStatus, roomRosterPreview, shouldCollapseRoomReply } from "./room-view";
+import { roomMemberReplyMode, sameBubbleRun, roomMemberStatus, roomRosterPreview, shouldCollapseRoomReply } from "./room-view";
 
 describe("room view compatibility", () => {
   it("keeps legacy lead routing until a member gets an explicit override", () => {
@@ -32,5 +32,16 @@ describe("room view compatibility", () => {
     expect(shouldCollapseRoomReply({ role: "bot", kind: "options", text: "x".repeat(700) })).toBe(false);
     expect(shouldCollapseRoomReply({ role: "user", kind: "text", text: "x".repeat(700) })).toBe(false);
     expect(shouldCollapseRoomReply({ role: "bot", kind: "text", text: "done" })).toBe(false);
+  });
+  it("groups back-to-back bubbles from one sender into a run", () => {
+    const at = new Date(2026, 9, 3, 12).getTime();
+    const a = { role: "bot", kind: "text", at, from: { botId: "a" } };
+    expect(sameBubbleRun(a, { ...a, at: at + 1000 })).toBe(true);
+    expect(sameBubbleRun(a, { ...a, from: { botId: "b" } })).toBe(false);
+    expect(sameBubbleRun(a, { ...a, role: "user", from: undefined })).toBe(false);
+    expect(sameBubbleRun(a, { ...a, kind: "activity" })).toBe(false);
+    expect(sameBubbleRun(a, { ...a, comm: { to: "b" } })).toBe(false);
+    expect(sameBubbleRun(a, { ...a, at: at + 24 * 3600_000 })).toBe(false);
+    expect(sameBubbleRun(undefined, a)).toBe(false);
   });
 });

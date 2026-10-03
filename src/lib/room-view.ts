@@ -35,3 +35,13 @@ export function roomRosterPreview<T>(members: T[], statusOf: (member: T) => "wor
 export function shouldCollapseRoomReply(message: { role: string; kind: string; text?: string | null }): boolean {
   return message.role === "bot" && message.kind === "text" && Boolean(message.text && (message.text.length > 600 || message.text.split("\n").length > 6));
 }
+
+type RunMessage = { role: string; kind?: string; at: number; comm?: unknown; from?: { botId?: string } | null };
+
+/** Consecutive text bubbles from one sender on one day form a run: the name
+ * shows on the first, the avatar on the last, and they sit 4px apart. */
+export function sameBubbleRun(a: RunMessage | undefined, b: RunMessage | undefined): boolean {
+  if (!a || !b || a.kind !== "text" || b.kind !== "text" || a.comm || b.comm) return false;
+  if (a.role !== b.role || a.from?.botId !== b.from?.botId) return false;
+  return new Date(a.at).toDateString() === new Date(b.at).toDateString();
+}

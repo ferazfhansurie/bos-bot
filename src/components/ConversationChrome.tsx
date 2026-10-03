@@ -10,5 +10,5 @@ export function ConversationComposerFrame({ children }: { children: ReactNode })
 }
 
 export function conversationBubbleClass(mine: boolean) {
-  return `w-fit max-w-[min(42rem,78%)] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed text-ink ${mine ? "bg-bubble-user whitespace-pre-wrap" : "bg-card"}`;
+  return `w-fit max-w-[min(42rem,78%)] rounded-2xl p-3 text-[15px] leading-relaxed text-ink ${mine ? "bg-bubble-user whitespace-pre-wrap" : "bg-card"}`;
 }

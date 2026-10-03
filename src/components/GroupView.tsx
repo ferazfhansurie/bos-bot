@@ -5,7 +5,7 @@ import { roomMemberStreamKey } from "@/lib/runtime-stream";
 // default responder; @mentions override that routing.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activeLocale, t } from "@/lib/i18n";
-import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, Settings2, ImagePlus, MessageSquareReply, Pin, PinOff, Plus, Search, Wrench, X } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, Settings2, ImagePlus, MessageSquareReply, Pin, PinOff, Search, Wrench, X } from "lucide-react";
 import {
   api,
   useStore,
@@ -28,7 +28,7 @@ import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { useToolCallsToggle } from "@/hooks/use-tool-calls-toggle";
 import { CompactionChip, DigestChip } from "./DigestChip";
 import { roomActivityVisible } from "@/lib/room-activity";
-import { normalizeState } from "@/lib/mascot";
+import { MAUS_COLORS, normalizeState } from "@/lib/mascot";
 import { effectiveDefaultResponder, groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { Composer } from "./Composer";
@@ -68,7 +68,7 @@ import {
 import { useReplyDraft } from "@/lib/drafts";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { botAvatarUrlFromStoredPath, botAvatarUrlSchema } from "../../shared/bot-avatar";
-import { roomMemberReplyMode, roomMemberStatus, shouldCollapseRoomReply, type RoomViewFields } from "@/lib/room-view";
+import { roomMemberReplyMode, roomMemberStatus, sameBubbleRun, shouldCollapseRoomReply, type RoomViewFields } from "@/lib/room-view";
 
 export function RoomAvatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }) {
   const safe = botAvatarUrlSchema.safeParse(avatarUrl);
@@ -88,7 +88,7 @@ export function RoomReplyText({ message, members, everyone, threadId, forceOpen 
   </>;
 }
 
-function RoomSettings({ group, members, onClose }: { group: Group & RoomViewFields; members: Bot[]; onClose: () => void }) {
+function RoomSettings({ group, members, setupPending, onToggleFolder, onClose }: { group: Group & RoomViewFields; members: Bot[]; setupPending: boolean; onToggleFolder: () => void; onClose: () => void }) {
   const { dispatch } = useStore();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -121,6 +121,12 @@ function RoomSettings({ group, members, onClose }: { group: Group & RoomViewFiel
       <button type="button" disabled={saving} onClick={() => photoInput.current?.click()} className="ui-button"><ImagePlus size={14} /> Change room photo</button>
       {group.avatarUrl && <button type="button" disabled={saving} onClick={() => void change({ avatarUrl: null })} className="ui-button">Remove photo</button>}
     </div>
+    {!setupPending && (
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <DefaultResponderSelect group={group} members={members} />
+        <RoomWorkingFolderChip group={group} onToggle={onToggleFolder} />
+      </div>
+    )}
     <label className="mb-4 flex items-center justify-between gap-3 text-sm text-ink">Notifications
       <select aria-label="Room notifications" disabled={saving} value={group.notifications ?? "all"} onChange={event => void change({ notifications: event.target.value as RoomViewFields["notifications"] })} className="rounded-lg border border-hairline/40 bg-raised px-3 py-2">
         <option value="all">All messages</option><option value="mentions">Mentions only</option><option value="muted">Muted</option>
@@ -202,8 +208,18 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
   );
 }
 
-/** 16px profile avatar + name, shown once per sender cluster. */
-function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: string }) {
+/** Sender name above the first bubble of a run, in the bot's own color.
+ * Text bubbles carry the avatar beside them, so their label lines up with
+ * the bubble edge; cards and tool runs keep the small avatar inline. */
+function ClusterLabel({ bot, name, color, bubble = false }: { bot?: Bot; name: string; color: string; bubble?: boolean }) {
+  const tint = (MAUS_COLORS as Record<string, string>)[bot?.color ?? color];
+  if (bubble) {
+    return (
+      <div className="-mb-2 mt-1 truncate pl-[42px] text-[12px] font-medium" style={{ color: tint }}>
+        {name}
+      </div>
+    );
+  }
   return (
     <div className="mt-1 flex items-center gap-1.5 pl-0.5">
       <BotAvatar
@@ -214,7 +230,7 @@ function ClusterLabel({ bot, name, color }: { bot?: Bot; name: string; color: st
         motionKey={0}
         animated={false}
       />
-      <span className="text-[11px] font-medium text-ink-secondary">{name}</span>
+      <span className="text-[11px] font-medium" style={{ color: tint }}>{name}</span>
     </div>
   );
 }
@@ -266,8 +282,11 @@ const Transcript = memo(function Transcript({
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
+  // Hidden runs are dropped here, not at render, so the bubbles either side
+  // of one still read as neighbours.
   const items = useMemo(() => groupActivityRuns(messages.filter(message =>
-    message.kind !== "activity" || roomActivityVisible(message, showToolCalls))), [messages, showToolCalls]);
+    message.kind !== "activity" || roomActivityVisible(message, showToolCalls)))
+    .filter((item) => showToolCalls || item.kind !== "run"), [messages, showToolCalls]);
   const newestMessageId = messages.at(-1)?.id;
   const newestUserMessageId = [...messages].reverse().find((message) => message.role === "user")?.id;
   const focus = state.focusMessage;
@@ -280,7 +299,6 @@ const Transcript = memo(function Transcript({
         const first = item.kind === "run" ? item.messages[0] : item.message;
         const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
         if (item.kind === "run") {
-          if (!showToolCalls) return null;
           const cluster = !prev || prev.role !== first.role || prev.from?.botId !== first.from?.botId || newDay;
           return (
             <div key={item.id} className="contents">
@@ -304,6 +322,9 @@ const Transcript = memo(function Transcript({
         }
         const m = item.message;
         const user = m.role === "user";
+        const following = items[i + 1];
+        const runStarts = !sameBubbleRun(prev, m);
+        const runEnds = !sameBubbleRun(m, following && following.kind !== "run" ? following.message : undefined);
         const attachments = user && m.text ? splitTranscriptAttachments(m.text) : null;
         const newCluster = !prev || prev.role !== m.role || prev.from?.botId !== m.from?.botId || Boolean(prev.comm) || newDay;
         const routineOwner = m.kind === "routine.run" ? memberOf(m.from?.botId) : undefined;
@@ -359,8 +380,22 @@ const Transcript = memo(function Transcript({
           ) : m.kind === "digest" ? (
             showToolCalls ? <DigestChip message={m} /> : null
           ) : m.kind === "text" && (m.text || m.attachments?.length) ? (
-            <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
+            <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start", !runStarts && "-mt-2")}>
               <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
+                {!user && (
+                  <span className="w-6 shrink-0 self-end">
+                    {runEnds && m.from && (
+                      <BotAvatar
+                        bot={memberOf(m.from.botId) ?? { name: m.from.name, color: m.from.color as Bot["color"] }}
+                        state={normalizeState(memberOf(m.from.botId)?.mascotExpression) ?? "happy"}
+                        size={24}
+                        motion="none"
+                        motionKey={0}
+                        animated={false}
+                      />
+                    )}
+                  </span>
+                )}
                 {user && (
                   <>
                     <button
@@ -377,7 +412,7 @@ const Transcript = memo(function Transcript({
                 )}
                 <div
                   className={cn(
-                    "w-fit max-w-[min(42rem,78%)] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed",
+                    "w-fit max-w-[min(42rem,78%)] rounded-2xl p-3 text-[15px] leading-relaxed",
                     !user && m.id === emergingId && "turn-answer",
                     user ? "chat-text whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
                   )}
@@ -442,7 +477,7 @@ const Transcript = memo(function Transcript({
               </div>
             )}
             {!user && m.from && newCluster && !(m.kind === "activity" && m.comm) && (
-              <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} />
+              <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} bubble={m.kind === "text"} />
             )}
             {row}
           </div>
@@ -1001,12 +1036,18 @@ const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member, memb
   if (text) streamedAt.set(member.id, Date.now());
   if (!text) return null;
   return <div className="flex min-w-0 flex-col items-start" aria-label={`${member.name} is replying`}>
-    <ClusterLabel bot={member} name={member.name} color={member.color} />
-    <div className="bubble-in w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
-      <ChatMarkdown text={text} streaming mentionPeers={members} everyone={everyone} />
+    <ClusterLabel bot={member} name={member.name} color={member.color} bubble />
+    <div className="mt-3 flex w-full items-end gap-1.5">
+      <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? "happy"} size={24} motion="none" motionKey={0} animated={false} />
+      <div className="bubble-in w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card p-3 text-[15px] leading-relaxed text-ink">
+        <ChatMarkdown text={text} streaming mentionPeers={members} everyone={everyone} />
+      </div>
     </div>
   </div>;
 });
+
+// The room title: avatar stack + name in one soft centered pill.
+const ROOM_NAME_PILL = "flex min-w-0 max-w-full items-center gap-2 rounded-full bg-panel/80 py-1 pl-1 pr-3.5 text-[14px] font-semibold text-ink ring-1 ring-hairline/40";
 
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
@@ -1248,7 +1289,7 @@ export function GroupView({ group }: { group: Group }) {
   };
 
   const roomFields = group as Group & RoomViewFields;
-  const memberMauses = <RoomRoster room={roomFields} members={members} max={8} />;
+  const memberMauses = <RoomRoster room={roomFields} members={members} max={5} showWorking={false} />;
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -1256,22 +1297,46 @@ export function GroupView({ group }: { group: Group }) {
       {membersOpen && !remoteClient && !group.dm && (
         <ManageMembersPanel group={group} onClose={closeMembers} triggerRef={membersTriggerRef} />
       )}
-      {/* Header: room name, task picker and room controls. */}
+      {/* Header: the room is one centered pill (avatars + name); only the
+          everyday controls stay on the right, the rest live in room settings. */}
       <div
         style={headerDragStyle}
         className={cn(
-          "flex items-center justify-between px-5 py-3",
+          "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-5 py-3",
           // Room for the drawer button, which overlays this corner below md.
           "pl-11 md:pl-5",
         )}
       >
-        <div className="flex min-w-0 items-center gap-2" style={headerNoDragStyle}>
-          <RoomAvatar name={group.name} avatarUrl={roomFields.avatarUrl} />
-          <span className="truncate text-[15px] font-semibold text-ink">{group.name}</span>
+        <div className="flex min-w-0 items-center" style={headerNoDragStyle}>
           {!setupPending && !group.dm && <GroupTaskPicker group={group} />}
         </div>
+        <div className="flex min-w-0 justify-center" style={headerNoDragStyle}>
+          {group.dm || remoteClient ? (
+            <span className={ROOM_NAME_PILL}>
+              {memberMauses}
+              <span className="truncate">{group.name}</span>
+            </span>
+          ) : (
+            // Click the pill to manage members.
+            <button
+              ref={membersTriggerRef}
+              type="button"
+              onClick={() => setMembersOpen(true)}
+              title={t("room.members.manage")}
+              aria-label={`${group.name}, ${
+                members.length === 1
+                  ? t("room.members.ariaOne")
+                  : t("room.members.ariaMany", { count: members.length })
+              }`}
+              className={cn(ROOM_NAME_PILL, "transition-colors duration-150 hover:bg-raised")}
+            >
+              {memberMauses}
+              <span className="truncate">{group.name}</span>
+            </button>
+          )}
+        </div>
         <div
-          className="flex items-center gap-1.5"
+          className="flex items-center justify-end gap-1"
           // The caption buttons sit over the header's right end; drop this
           // control row 16px (visual only) below the 26px overlay.
           style={controlsShiftStyle}
@@ -1282,7 +1347,7 @@ export function GroupView({ group }: { group: Group }) {
             aria-label={t("chat.find")}
             aria-pressed={findOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised",
+              "rounded-full p-1.5 hover:bg-raised",
               findOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title={t("chat.findShortcut")}
@@ -1290,48 +1355,17 @@ export function GroupView({ group }: { group: Group }) {
             <Search size={18} />
           </button>
           {!remoteClient && <ToolCallsToggle />}
-          {!remoteClient && !group.dm && <button type="button" aria-label="Room settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><Settings2 size={18} /></button>}
+          <GroupCallButton group={group} members={members} />
           <ExportTranscriptMenu
             title={group.name}
             messages={group.messages}
             isGroup
           />
-          <GroupCallButton group={group} members={members} />
-          {!remoteClient && !setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
-          {!remoteClient && !setupPending && !group.dm && <DefaultResponderSelect group={group} members={members} />}
+          {!remoteClient && !group.dm && <button type="button" aria-label="Room settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)} className={cn("rounded-full p-1.5 hover:bg-raised", settingsOpen ? "text-accent" : "text-ink-secondary hover:text-ink")}><Settings2 size={18} /></button>}
         </div>
       </div>
 
-      {/* Bot list along the top, under the title like the phone app: working
-          bots first with a ring + pulsing dot, the rest folded into +n. */}
-      <div className="flex justify-center px-5 pb-1.5" style={headerNoDragStyle}>
-        <div className="flex items-center rounded-full border border-hairline/40 bg-panel/80 px-1.5 py-1 shadow-sm">
-          {group.dm || remoteClient ? (
-            memberMauses
-          ) : (
-            // Click the row to manage members; the dashed + says it's editable.
-            <button
-              ref={membersTriggerRef}
-              type="button"
-              onClick={() => setMembersOpen(true)}
-              title={t("room.members.manage")}
-              aria-label={
-                members.length === 1
-                  ? t("room.members.ariaOne")
-                  : t("room.members.ariaMany", { count: members.length })
-              }
-              className="flex items-center gap-1.5 rounded-full py-0.5 pl-1 pr-1.5 hover:bg-raised/60"
-            >
-              {memberMauses}
-              <span className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-hairline/70 text-ink-secondary">
-                <Plus size={11} />
-              </span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {settingsOpen && !remoteClient && !group.dm && <RoomSettings key={group.id} group={roomFields} members={members} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && !remoteClient && !group.dm && <RoomSettings key={group.id} group={roomFields} members={members} setupPending={setupPending} onToggleFolder={() => setFolderOpen((open) => !open)} onClose={() => setSettingsOpen(false)} />}
 
       {findOpen && <ChatFindBar threadId={group.threadId} onClose={() => setFindOpen(false)} />}
 
