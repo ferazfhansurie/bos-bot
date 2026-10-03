@@ -9,7 +9,15 @@ handoff loop inside those turns.
 The tools are `list_room_targets` and `coordinate_bots`. Discovery includes
 reachable bots as well as rooms. The latter addresses 1–4 existing bots in this
 room (default), or — in ordinary direct chat without a room — the sender's one
-standing conversation with each recipient. A Chief can reach additional teams only
+standing conversation with each recipient. Within the current room, the owner's
+membership selection permits bots from different teams to coordinate there.
+Room discovery and posting also accept mixed-team membership. Handoffs still enforce
+current membership, explicit peer restrictions, hidden-bot checks and peer approvals.
+`list_bots` and `list_room_targets`
+include those shared members during room turns. This does not grant either bot
+access to another team's private conversations or unrelated rooms. Cross-room
+handoffs retain the existing checks for every room reader. A Chief can reach
+additional teams only
 after the owner grants that access in [team settings](team-access.md).
 Recipients run sequentially per room, with their own models, permissions and
 working environments. Busy recipients queue. Once all requested results arrive,
@@ -152,7 +160,9 @@ preview/server processes afterward; retain evidence without credentials.
 
 ## Limits and safety
 
-Existing peer allow-lists/approvals and every room reader's section still apply.
+Existing peer allow-lists/approvals always apply. Section checks for every room
+reader apply when work crosses rooms; same-room work uses current membership.
+Queued work and returned results recheck these rules after membership changes.
 Ordinary chats use one bounded coordination tool for teammate work instead of
 the competing ask/delegate/peer-thread execution paths. A top-level direct turn
 can still use `start_thread` to open separate work on itself, without moving the
