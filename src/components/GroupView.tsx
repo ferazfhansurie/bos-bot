@@ -69,6 +69,7 @@ import { useReplyDraft } from "@/lib/drafts";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { botAvatarUrlFromStoredPath, botAvatarUrlSchema } from "../../shared/bot-avatar";
 import { roomMemberReplyMode, roomMemberStatus, sameBubbleRun, shouldCollapseRoomReply, type RoomViewFields } from "@/lib/room-view";
+import { isArriving, trackArrivals, type ArrivalState } from "@/lib/message-arrivals";
 
 export function RoomAvatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }) {
   const safe = botAvatarUrlSchema.safeParse(avatarUrl);
@@ -264,6 +265,7 @@ const Transcript = memo(function Transcript({
   messages,
   transcript,
   emergingId,
+  streamedAt,
   onReply,
 }: {
   group: Group;
@@ -275,9 +277,15 @@ const Transcript = memo(function Transcript({
   /** Full room transcript, used to resolve quoted messages outside the mounted window. */
   transcript: Message[];
   emergingId?: string | null;
+  /** When each member last streamed; its saved reply is already on screen. */
+  streamedAt: ReadonlyMap<string, number>;
   onReply: (message: Message) => void;
 }) {
   const { state, dispatch } = useStore();
+  // Messages that land while the room is open spring in; history stays still.
+  const arrivals = useRef<ArrivalState | null>(null);
+  const now = Date.now();
+  arrivals.current = trackArrivals(arrivals.current, group.threadId, transcript, now);
   const showToolCalls = showToolCallsEnabled(state.config);
   const memberOf = (id?: string) => members.find((b) => b.id === id);
   // Several bots working at once turn a room into a wall of chips; fold the
@@ -380,7 +388,14 @@ const Transcript = memo(function Transcript({
           ) : m.kind === "digest" ? (
             showToolCalls ? <DigestChip message={m} /> : null
           ) : m.kind === "text" && (m.text || m.attachments?.length) ? (
-            <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start", !runStarts && "-mt-2")}>
+            <div className={cn(
+              "group flex w-full flex-col",
+              user ? "items-end" : "items-start",
+              !runStarts && "-mt-2",
+              isArriving(arrivals.current, m.id) && m.id !== emergingId
+                && !(m.from?.botId && now - (streamedAt.get(m.from.botId) ?? 0) < 2000)
+                && (user ? "msg-spring origin-right" : "msg-spring origin-left"),
+            )}>
               <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
                 {!user && (
                   <span className="w-6 shrink-0 self-end">
@@ -1534,6 +1549,7 @@ export function GroupView({ group }: { group: Group }) {
             messages={windowedMessages}
             transcript={group.messages}
             emergingId={popping?.streamed ? undefined : popping?.id}
+            streamedAt={streamedAt}
             onReply={selectReply}
           />
           {laterCount > 0 && (

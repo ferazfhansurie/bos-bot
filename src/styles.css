@@ -1547,6 +1547,11 @@ button:disabled.bg-danger {
   to { opacity: 1; transform: none; }
 }
 .status-swap { display: inline-block; animation: status-swap 0.2s var(--room-ease-out) both; }
+/* The step label shimmers while it works. Both run in one declaration: on
+   its own this rule would override Tailwind's animate-shimmer utility. */
+.status-swap.thinking-shimmer {
+  animation: status-swap 0.2s var(--room-ease-out) both, shimmer 2s linear infinite;
+}
 
 /* Streamed words land from a slight blur, 50ms apart within a chunk
    (StreamWord sets the delay). Only words mounted after the first paint
@@ -1567,6 +1572,14 @@ button:disabled.bg-danger {
   transform-origin: left center;
   animation: bubble-in 0.18s var(--room-ease-out) both;
 }
+
+/* A message that lands while the room is open springs in from its own
+   side (the row sets origin-left/right): a small overshoot, then settles. */
+@keyframes msg-spring {
+  from { opacity: 0; transform: translateY(6px) scale(0.92); }
+  to { opacity: 1; transform: none; }
+}
+.msg-spring { animation: msg-spring 0.26s var(--room-ease-pop) both; }
 
 /* Finished steps settle into a faint tag under the reply. */
 .step-tag {
@@ -1610,7 +1623,7 @@ button:disabled.bg-danger {
 .press { transition: transform 0.2s var(--room-ease-pop), background-color 0.15s ease; }
 
 @media (prefers-reduced-motion: reduce) {
-  .bot-morph, .status-swap, .stream-word, .bubble-in, .step-tag { animation: none; }
+  .bot-morph, .status-swap, .stream-word, .bubble-in, .msg-spring, .step-tag, .status-swap.thinking-shimmer { animation: none; }
   .mention-editor textarea { transition: none; }
   .ui-button:active, .ui-icon-button:active, .press:active { transform: none; }
 }
