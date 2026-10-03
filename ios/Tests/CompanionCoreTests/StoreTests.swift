@@ -26,15 +26,18 @@ final class StoreTests: XCTestCase {
 
     // MARK: - Hydration
 
-    func testOnlyContentDeltasCountAsLiveTextOnly() {
+    func testOnlyRuntimeEventsCountAsLiveTextOnly() {
         let delta = Frame.runtime(RuntimeEvent(type: "content.delta", threadId: "t1", delta: "hi", streamKind: "assistant_text"))
         let reasoning = Frame.runtime(RuntimeEvent(type: "content.delta", threadId: "t1", delta: "hm", streamKind: "reasoning_text"))
+        let started = Frame.runtime(RuntimeEvent(type: "item.started", threadId: "t1", delta: nil, streamKind: nil))
         let done = Frame.runtime(RuntimeEvent(type: "turn.completed", threadId: "t1", delta: nil, streamKind: nil))
         XCTAssertTrue(delta.isLiveTextOnly)
         XCTAssertTrue(reasoning.isLiveTextOnly)
-        // ending a turn clears the live text and settles the message, so the
-        // rest of the app has to hear about it
-        XCTAssertFalse(done.isLiveTextOnly)
+        // tool progress from every bot in a room must not redraw the app
+        XCTAssertTrue(started.isLiveTextOnly)
+        // a turn end only clears live text; the session still announces it
+        // when that changes which threads are typing
+        XCTAssertTrue(done.isLiveTextOnly)
         XCTAssertFalse(Frame.config.isLiveTextOnly)
         XCTAssertFalse(Frame.hello(cursor: "s:1", resumed: true).isLiveTextOnly)
     }

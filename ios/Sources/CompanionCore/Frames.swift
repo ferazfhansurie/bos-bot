@@ -187,11 +187,14 @@ public struct StreamFrame: Decodable, Sendable {
 }
 
 extension Frame {
-    /// A token of a reply being typed, and nothing else. Frames like this
-    /// change only the live text, which the app renders per thread, so
-    /// folding them need not redraw the rest of the app.
+    /// A raw runtime event. The store folds these into the live text and
+    /// nothing else (tokens grow it, turn ends clear it, the rest — item
+    /// starts, tool progress, usage — it ignores), and the app renders live
+    /// text per thread, so folding them need not redraw the rest of the app.
+    /// A room with several bots working sends a steady stream of the
+    /// non-token kinds; treating each as a change redrew every screen.
     public var isLiveTextOnly: Bool {
-        if case .runtime(let event) = self { return event.type == "content.delta" }
+        if case .runtime = self { return true }
         return false
     }
 }
