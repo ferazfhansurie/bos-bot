@@ -1,5 +1,6 @@
 import type { Message } from "./store.ts";
 import { z } from "zod";
+import { sameAttachedSend } from "./steer-queue.ts";
 
 const sendIdSchema = z.string().regex(/^[A-Za-z0-9_-]{16,80}$/).optional();
 
@@ -37,6 +38,31 @@ export function acceptedSendMatch(
     return { kind: "conflict" };
   }
   return { kind: "match", message };
+}
+
+/** How long a client retry under a fresh sendId still counts as the same send. */
+export const ATTACHED_RETRY_WINDOW_MS = 10 * 60_000;
+
+/** A client that lost the first receipt (timeout, relaunch, edited spacing)
+ * can retry an attachment send under a new sendId after the first copy was
+ * already delivered. Every picked file gets its own upload path, so the same
+ * path in the newest user message, from the same sender and reply target,
+ * shortly after, is that retry, not a deliberate repeat. Plain text and any
+ * send with another user message in between are never matched. */
+export function deliveredAttachedRetry(
+  messages: Message[],
+  text: string,
+  options: { replyToId?: string; channelMode?: "chat" | "goal"; via?: "api"; senderName?: string; now?: number },
+): Message | undefined {
+  const same = sameAttachedSend(text);
+  if (!same) return undefined;
+  const last = messages.findLast((message) => message.role === "user" && message.kind === "text");
+  if (!last || last.peerAsk || last.peerPost || last.from || !same(last.text ?? "")) return undefined;
+  if ((options.now ?? Date.now()) - last.at > ATTACHED_RETRY_WINDOW_MS) return undefined;
+  if (last.replyToId !== options.replyToId) return undefined;
+  if ((last.channelMode ?? "chat") !== (options.channelMode ?? "chat")) return undefined;
+  if (last.via !== options.via || last.sender?.name !== options.senderName) return undefined;
+  return last;
 }
 
 /** Coalesces simultaneous retries onto the first request's exact outcome. */

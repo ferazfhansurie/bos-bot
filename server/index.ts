@@ -279,6 +279,7 @@ import {
 } from "./channel-queue.ts";
 import {
   acceptedSendMatch,
+  deliveredAttachedRetry,
   parseSendId,
   sendFingerprint,
   SendSequencer,
@@ -6446,39 +6447,86 @@ async function steerRoomSendNow(groupId: string, threadId: string, queueId: stri
   return { ok: true as const, queued: true as const, queueId, threadId };
 }
 
-async function steerMixedRoomSend(groupId: string, threadId: string, queueId: string, busyBotId: string, idleBotIds: string[], replyTo?: Message) {
+/** Steer an already-recorded room row into one more busy addressee's live
+ * turn. Nothing is written to the transcript here: the row exists once. */
+async function steerRecordedIntoMember(groupId: string, threadId: string, botId: string, recorded: Message, replyTo?: Message): Promise<SteerOutcome> {
+  const live = roomRuntimeSpeakers(groupId, threadId).find(([, speaker]) => speaker.botId === botId);
+  const member = store.bot(botId);
+  if (!live || !member) return "refused";
+  const [runtimeThreadId, claimedSpeaker] = live;
+  const instance = runningTurnInstance(member, runtimeThreadId);
+  if (!instance?.adapter.capabilities.queueing || !instance.adapter.steer) return "refused";
+  const from = { botId: member.id, name: member.name, color: member.color };
+  let input;
+  try { input = extractTurnImages(recorded.text ?? ""); }
+  catch { return "refused"; }
+  const replyAuthor = cfg.profile?.name?.trim() || "User";
+  let steered: SteerOutcome = "refused";
+  if (!input.images.length || instance.adapter.capabilities.nativeImageSteer === true) {
+    steered = await instance.adapter.steer(runtimeThreadId, promptWithReply(input.text, replyTo, replyAuthor), { images: input.images })
+      .catch((): SteerOutcome => "indeterminate");
+  }
+  if (steered === "refused" && input.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
+    steered = await instance.adapter.steer(runtimeThreadId, promptWithReply(imageFileSteerText(input), replyTo, replyAuthor))
+      .catch((): SteerOutcome => "indeterminate");
+    if (steered !== "refused") noteSteerImagesAsFiles(threadId, from);
+  }
+  if (steered === "indeterminate") store.appendMessage(threadId, {
+    role: "bot", kind: "activity", from,
+    tool: { name: `delivery to ${member.name} outcome unknown — review before resending`, ok: false },
+  });
+  return steered;
+}
+
+/** A room send naming several members while some are mid-turn: steer the
+ * row into every busy addressee, then start the idle ones (and any busy one
+ * that refused, behind its own lane) off the same recorded row, so each
+ * addressee gets the words once and no unaddressed member is touched. */
+async function steerAddressedRoomSend(groupId: string, threadId: string, queueId: string, busyBotIds: string[], idleBotIds: string[], replyTo?: Message) {
   const stopEpoch = roomStopEpoch.get(groupId) ?? 0;
-  let receipt;
-  try { receipt = await steerRoomQueue(groupId, threadId, queueId, busyBotId, true); }
-  catch (error) { console.warn("mixed room steer failed", error instanceof Error ? error.message : String(error)); }
-  const recorded = store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
-  if (!receipt || !recorded) {
-    // Refused (or the head moved): the one queued item still reaches every
-    // addressee exactly once on the next turn. Say so instead of a silent chip.
+  const recordedRow = () => store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
+  // The first busy addressee that takes it records the row once (the queue
+  // claim); a refusal restores the head, so the next one can try.
+  let primary: string | undefined;
+  for (const botId of busyBotIds) {
+    try { await steerRoomQueue(groupId, threadId, queueId, botId, true); }
+    catch (error) { console.warn("addressed room steer failed", error instanceof Error ? error.message : String(error)); }
+    if (recordedRow()) { primary = botId; break; }
+    if (channelQueueHead(groupId, threadId)?.id !== queueId) break;
+  }
+  const recorded = recordedRow();
+  if (!primary || !recorded) {
+    // Refused everywhere (or the head moved): the one queued item still
+    // reaches every addressee exactly once on the next turn. Say so.
     const head = channelQueueHead(groupId, threadId);
     if (head?.id === queueId && !head.text.includes("<attached-image")) store.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
-      tool: { name: "not delivered yet: the busy addressee couldn't take this mid-turn — it is queued for everyone addressed after the current reply", ok: false },
+      tool: { name: "not delivered yet: no busy addressee could take this mid-turn — it is queued for everyone addressed after the current reply", ok: false },
     });
     return { ok: true as const, queued: true as const, queueId, threadId };
   }
-  // Steered or uncertain: the row is recorded once and never replayed. The
-  // idle addressees start now, in parallel, from that same row, unless the
-  // room was stopped while the steer was in flight.
-  if ((roomStopEpoch.get(groupId) ?? 0) !== stopEpoch) return sendSteerReceipt(threadId, recorded);
+  // Steered or uncertain: the row is recorded once and never replayed.
+  const later = [...idleBotIds];
+  for (const botId of busyBotIds) {
+    if (botId === primary || (roomStopEpoch.get(groupId) ?? 0) !== stopEpoch) continue;
+    // Uncertain counts as delivered (never replayed); a refusal answers after its current reply.
+    if (await steerRecordedIntoMember(groupId, threadId, botId, recorded, replyTo) === "refused") later.push(botId);
+  }
+  // Stopped while a steer was in flight: start nobody else.
+  if ((roomStopEpoch.get(groupId) ?? 0) !== stopEpoch || !later.length) return sendSteerReceipt(threadId, recorded);
   try {
     startGroupTurn(groupId, recorded.text ?? "", replyTo, recorded.sendId, "chat", queueId, {
-      threadId, via: recorded.via, sender: recorded.sender, recordedMessage: recorded, responderIds: idleBotIds,
+      threadId, via: recorded.via, sender: recorded.sender, recordedMessage: recorded, responderIds: later,
     });
   } catch (error) {
     // The row is already recorded, so a retry would only match it. Say who missed it.
     const reason = error instanceof Error ? error.message : String(error);
-    console.warn("mixed room start failed", reason);
+    console.warn("addressed room start failed", reason);
     store.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
-      tool: { name: `delivered to the busy addressee only — the others couldn't start: ${reason}`, ok: false },
+      tool: { name: `delivered to the busy addressees only — the others couldn't start: ${reason}`, ok: false },
     });
   }
   return sendSteerReceipt(threadId, recorded);
@@ -17189,6 +17237,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
             }
           }
+          if (!roomStop) {
+            const retried = deliveredAttachedRetry(store.messagesFor(threadId), text, { replyToId: replyTo?.id, channelMode, via, senderName: messageSender(auth)?.name });
+            if (retried) return { ok: true as const, threadId, message: retried };
+          }
           const current = store.group(group.id);
           if (!current) throw Object.assign(new Error("no such group"), { status: 404 });
           if (current.threadId !== threadId) {
@@ -17220,15 +17272,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             });
             // A duplicate that joined a waiting item was already tried and refused.
             if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
-            // Mixed send: exactly one addressee is mid-turn and the rest are
-            // idle. Steer the busy one, then start only the idle ones off the
-            // same recorded row, so each addressee gets the words once and no
-            // unaddressed member is touched. Anything else keeps the FIFO path.
+            // Several addressees, some mid-turn: steer every busy one and
+            // start the idle ones off the same recorded row (see
+            // steerAddressedRoomSend). A single busy addressee, or a send
+            // behind an existing queue, keeps the FIFO path.
             const busy = recipients.filter(recipient => activeRecipients.includes(recipient.id));
             const idle = recipients.filter(recipient => !activeRecipients.includes(recipient.id));
             const goalRunning = [...(groupTurnOperations.get(current.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled);
-            if (channelMode === "chat" && !hadQueue && !goalRunning && busy.length === 1 && idle.length) {
-              return steerMixedRoomSend(current.id, threadId, queued.id, busy[0]!.id, idle.map(member => member.id), replyTo);
+            // Several busy recipients only steer when each was @mentioned; an
+            // unaddressed line in an everyone-room is ambiguous and waits.
+            const named = busy.length > 1 ? roomResponders(text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), { kind: "mentions" }) : [];
+            const busyNamed = busy.length === 1 || busy.every(member => named.some(mention => mention.id === member.id));
+            if (channelMode === "chat" && !hadQueue && !goalRunning && busy.length && busyNamed && (busy.length > 1 || idle.length)) {
+              return steerAddressedRoomSend(current.id, threadId, queued.id, busy.map(member => member.id), idle.map(member => member.id), replyTo);
             }
             return steerRoomSendNow(current.id, threadId, queued.id);
           }
@@ -18573,6 +18629,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               return { ok: true as const, queued: true as const, queueId: queued.id, threadId, reason: queued.reason };
             }
           }
+
+          const retried = deliveredAttachedRetry(store.messagesFor(threadId), text, { replyToId: replyTo?.id, senderName: messageSender(auth)?.name });
+          if (retried) return retried.steered ? { ok: true as const, threadId, message: retried, steered: true as const } : { ok: true as const, threadId, message: retried };
 
           const currentAtStart = store.projectBotForTask(bot.id, threadId);
           if (!currentAtStart) throw Object.assign(new Error("no such bot"), { status: 404 });

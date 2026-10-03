@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { acceptedSendMatch, parseSendId, sendFingerprint, SendSequencer } from "./send-idempotency.ts";
+import { acceptedSendMatch, ATTACHED_RETRY_WINDOW_MS, deliveredAttachedRetry, parseSendId, sendFingerprint, SendSequencer } from "./send-idempotency.ts";
 import type { Message } from "./store.ts";
 
 function userMessage(overrides: Partial<Message> = {}): Message {
@@ -108,5 +108,32 @@ describe("send idempotency", () => {
     expect(secondWork).not.toHaveBeenCalled();
 
     await expect(sequencer.run("same-error", "one", secondWork)).resolves.toBe(2);
+  });
+
+  describe("retry of a delivered attachment send under a fresh sendId", () => {
+    const image = '<attached-image path="/a/1111.png" mime="image/png" />';
+    const sent = userMessage({ id: "sent", at: 1_000, text: `look\n\n${image}` });
+    const now = 1_000 + 60_000;
+
+    it("matches the delivered copy even if only the spacing differs", () => {
+      expect(deliveredAttachedRetry([sent], `look ${image}`, { now })).toBe(sent);
+      expect(deliveredAttachedRetry([sent, userMessage({ id: "reply", role: "bot", text: "nice" })], `look\n\n${image}`, { now })).toBe(sent);
+    });
+
+    it("keeps deliberate repeats: plain text, a fresh upload, or a message in between", () => {
+      const plain = userMessage({ at: 1_000, text: "again" });
+      expect(deliveredAttachedRetry([plain], "again", { now })).toBeUndefined();
+      expect(deliveredAttachedRetry([sent], 'look <attached-image path="/a/2222.png" mime="image/png" />', { now })).toBeUndefined();
+      expect(deliveredAttachedRetry([sent, userMessage({ id: "later", at: 2_000, text: "and this" })], `look ${image}`, { now })).toBeUndefined();
+    });
+
+    it("only matches the same sender, reply target, mode and a recent send", () => {
+      expect(deliveredAttachedRetry([sent], `look ${image}`, { now: 1_000 + ATTACHED_RETRY_WINDOW_MS + 1 })).toBeUndefined();
+      expect(deliveredAttachedRetry([sent], `look ${image}`, { now, replyToId: "other" })).toBeUndefined();
+      expect(deliveredAttachedRetry([sent], `look ${image}`, { now, channelMode: "goal" })).toBeUndefined();
+      expect(deliveredAttachedRetry([sent], `look ${image}`, { now, senderName: "phone@x" })).toBeUndefined();
+      expect(deliveredAttachedRetry([sent], `look ${image}`, { now, via: "api" })).toBeUndefined();
+      expect(deliveredAttachedRetry([{ ...sent, peerAsk: { botId: "b", name: "b" } }], `look ${image}`, { now })).toBeUndefined();
+    });
   });
 });

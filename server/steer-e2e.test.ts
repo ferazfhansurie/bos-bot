@@ -589,6 +589,20 @@ posixOnly("mid-turn steering e2e", () => {
     expect(native().filter((row) => row.msg?.method === "thread/resume")).toHaveLength(1);
     expect(native().filter((row) => row.msg?.method === "turn/steer")).toHaveLength(2);
     expect((await api("DELETE", `/api/bots/${created.id}/queue/${queued.body.queueId}`, { threadId: created.threadId })).status).toBe(404);
+
+    // After delivery, a client retry under yet another sendId returns the
+    // delivered row and dispatches nothing; a fresh upload is a real repeat.
+    const delivered = (await getBot(created.id)).messages.find((m: any) => m.role === "user" && m.text === imageText);
+    const retry = await api("POST", `/api/bots/${created.id}/messages`, { text: `balance tu 550 lagi?\n${tag}`, sendId: "0c3a7c1e-4c55-4d7e-9f2a-retryafter001" });
+    expect(retry.body).toMatchObject({ ok: true, message: { id: delivered.id } });
+    expect(retry.body.queued).toBeUndefined();
+    expect((await getBot(created.id)).messages.filter((m: any) => m.role === "user" && m.text?.includes(tag))).toHaveLength(1);
+    expect(native().filter((row) => row.msg?.method === "thread/resume")).toHaveLength(1);
+    const freshPath = join(attachments, "123e4567-e89b-42d3-a456-426614174098.png");
+    writeFileSync(freshPath, "same pixels, picked again");
+    const repeat = await api("POST", `/api/bots/${created.id}/messages`, { text: `balance tu 550 lagi?\n\n<attached-image path="${freshPath}" name="image.png" />`, sendId: "0c3a7c1e-4c55-4d7e-9f2a-repeatsend01" });
+    expect(repeat.body.message?.id ?? repeat.body.queueId).toBeTruthy();
+    expect(repeat.body.message?.id).not.toBe(delivered.id);
   }, 40_000);
 
   it.skipIf(!acpAvailable)("an engine without live steering keeps its queue through the steer endpoint, then drains after Stop", async () => {

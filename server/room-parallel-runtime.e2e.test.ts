@@ -339,6 +339,45 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(done.filter((m:any)=>m.role==="user"&&m.queueId===sent.body.message.queueId)).toHaveLength(1);
   });
 
+  it("steers one send into every busy addressee at once, starts the idle one, and leaves the busy bystander alone", async () => {
+    const slow=await createBot("SlowA","patient");
+    const slow2=await createBot("SlowB","patient");
+    const quick=await createBot("QuickC","quick");
+    const bystander=await createBot("BystanderD","patient");
+    const room=(await api("POST","/api/groups",{name:"Multi busy steer",memberIds:[slow.id,slow2.id,quick.id,bystander.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    rmSync(patientFinishGate,{force:true});
+    await api("POST",`/api/groups/${room.id}/messages`,{text:"@SlowA @SlowB @BystanderD start"});
+    await wait(async()=>(await snapshot(room.id)).activeBotIds?.length===3);
+    const aliases=()=>JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));
+    const native=(botId:string)=>aliases().filter(([,owner]:[string,{threadId:string;botId:string}])=>owner.threadId===room.threadId&&owner.botId===botId)
+      .map(([id]:[string])=>{ try { return readFileSync(join(home,".openmausbot","native",`${id}.ndjson`),"utf8"); } catch { return ""; } }).join("\n");
+    const count=(haystack:string,token:string)=>haystack.split(token).length-1;
+    // All addressees busy: both get it now, nobody queues.
+    const allBusy=await api("POST",`/api/groups/${room.id}/messages`,{text:"@SlowA @SlowB BOTHBUSY",sendId:"multi-busy-send-0001"});
+    expect(allBusy.body).toMatchObject({ok:true,steered:true});
+    expect(allBusy.body.queued).toBeUndefined();
+    expect(count(native(slow.id),"BOTHBUSY")).toBe(1);
+    expect(count(native(slow2.id),"BOTHBUSY")).toBe(1);
+    expect(count(native(bystander.id),"BOTHBUSY")).toBe(0);
+    // Two busy plus one idle: both steered, the idle one starts while they still run.
+    const mixed=await api("POST",`/api/groups/${room.id}/messages`,{text:"@SlowA @SlowB @QuickC MULTIMIX",sendId:"multi-busy-send-0002"});
+    expect(mixed.body).toMatchObject({ok:true,steered:true});
+    await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id));
+    expect((await snapshot(room.id)).activeBotIds).toEqual(expect.arrayContaining([slow.id,slow2.id,bystander.id]));
+    expect(count(native(slow.id),"MULTIMIX")).toBe(1);
+    expect(count(native(slow2.id),"MULTIMIX")).toBe(1);
+    expect(count(native(quick.id),"MULTIMIX")).toBe(1);
+    expect(count(native(bystander.id),"MULTIMIX")).toBe(0);
+    const rows=(await snapshot(room.id)).messages.filter((m:any)=>m.role==="user");
+    expect(rows.filter((m:any)=>m.text==="@SlowA @SlowB BOTHBUSY")).toHaveLength(1);
+    expect(rows.filter((m:any)=>m.text==="@SlowA @SlowB @QuickC MULTIMIX")).toHaveLength(1);
+    // Nothing is left queued to replay later.
+    expect((await api("DELETE",`/api/groups/${room.id}/queue/${allBusy.body.message.queueId}`)).status).toBe(404);
+    expect((await api("DELETE",`/api/groups/${room.id}/queue/${mixed.body.message.queueId}`)).status).toBe(404);
+    writeFileSync(patientFinishGate,"finish");
+    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+  });
+
   it("keeps duplicate provider approval ids in exact lanes and rejects a stale token on the next turn", async () => {
     const a=await createBot("ApproveA","approvalA"); const b=await createBot("ApproveB","approvalB");
     expect((await api("PATCH",`/api/bots/${a.id}`,{approvalMode:"ask"})).status).toBe(200); expect((await api("PATCH",`/api/bots/${b.id}`,{approvalMode:"ask"})).status).toBe(200);
