@@ -1178,6 +1178,7 @@ export function BotListItem({
       {/* flex, not inline: an inline wrapper adds a baseline gap under the
           avatar and makes the row taller than before the presence dot */}
       <span className="relative flex shrink-0">
+        <span className={cn("flex", working && "bot-morph")}>
         <BotAvatar
           bot={bot}
           state={stateForBot({ ...bot, messages: visible })}
@@ -1190,6 +1191,7 @@ export function BotListItem({
           // decorative; busy/unread/motion are the real signals).
           animated={Boolean(bot.busy) || Boolean(bot.unread) || (mascotMotion?.kind ?? "none") !== "none"}
         />
+        </span>
         {working && (
           // presence dot: green while the bot is working, ringed in the row's
           // ground so it reads on both a photo and the mascot. Also the only

@@ -53,10 +53,12 @@ export function TurnPresence({
           phase === "out" && "turn-mascot-out",
         )}
       >
-        {avatar}
+        {/* the bot's own avatar is the indicator: it shifts shape while it works */}
+        <span className={cn("flex", showWorking && "bot-morph")}>{avatar}</span>
         {showWorking ? (
           <span className="flex items-baseline gap-2 leading-none">
-            <span className="thinking-shimmer animate-shimmer text-[13px]" aria-live="polite">
+            {/* keyed so a new step crossfades in instead of the text snapping */}
+            <span key={label} className="status-swap thinking-shimmer animate-shimmer text-[13px]" aria-live="polite">
               {label}
             </span>
             {since !== null && (

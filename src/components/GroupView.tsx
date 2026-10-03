@@ -176,7 +176,7 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
             }
           }}
           title={t("room.openBot", { name: comm.withName })}
-          className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
+          className="press step-tag flex items-center gap-1.5 rounded-full px-2 py-1 text-[12px] text-ink-secondary/70 hover:bg-raised hover:text-ink"
         >
           <BotAvatar bot={withBot ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} />
           <span className="max-w-[480px] truncate">{tool.name}</span>
@@ -187,11 +187,11 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
   }
   if (!comm) return <ToolActivity tool={tool} />;
   return (
-    <div className="flex justify-start">
+    <div className="step-tag flex justify-start pl-1">
       <div
         className={cn(
-          "flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px]",
-          tool.ok === false ? "text-danger" : "text-ink-secondary",
+          "flex items-center gap-1.5 text-[12px]",
+          tool.ok === false ? "text-danger" : "text-ink-secondary/70",
         )}
       >
         {comm && <BotAvatar bot={state.bots.find(b => b.id === comm.withBotId) ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} />}
@@ -967,12 +967,20 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
 }
 // One member's in-flight reply. It subscribes to its own stream key, so a
 // token repaints this bubble alone, not the transcript, header or composer.
-const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member }: { threadId: string; member: Bot }) {
+// It wears the finished bubble's exact shape, so when the saved reply takes
+// its place the room does not jump. `streamedAt` notes when each member last
+// streamed, so that saved reply skips its own entrance.
+const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member, members, everyone, streamedAt }: {
+  threadId: string; member: Bot; members: Bot[]; everyone: boolean; streamedAt: Map<string, number>;
+}) {
   const text = useStreamText(roomMemberStreamKey(threadId, member.id));
+  if (text) streamedAt.set(member.id, Date.now());
   if (!text) return null;
-  return <div className="min-w-0" aria-label={`${member.name} is replying`}>
+  return <div className="flex min-w-0 flex-col items-start" aria-label={`${member.name} is replying`}>
     <ClusterLabel bot={member} name={member.name} color={member.color} />
-    <ChatMarkdown text={text} streaming />
+    <div className="bubble-in w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed text-ink">
+      <ChatMarkdown text={text} streaming mentionPeers={members} everyone={everyone} />
+    </div>
   </div>;
 });
 
@@ -1034,7 +1042,8 @@ export function GroupView({ group }: { group: Group }) {
   const waiting =
     Boolean(speaker && showWorkingDots(true, group.messages.at(-1), speaker.id)) || awaited !== undefined;
   const wasWaiting = useRef(false);
-  const [popping, setPopping] = useState<{ id: string; botId?: string } | null>(null);
+  const [popping, setPopping] = useState<{ id: string; botId?: string; streamed?: boolean } | null>(null);
+  const streamedAt = useRef(new Map<string, number>()).current;
   const poppingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (poppingTimer.current) clearTimeout(poppingTimer.current);
@@ -1051,9 +1060,12 @@ export function GroupView({ group }: { group: Group }) {
   useLayoutEffect(() => {
     if (lastGroupMessage?.role !== "bot" || lastGroupMessage.kind !== "text" || !wasWaiting.current) return;
     wasWaiting.current = false;
+    const botId = lastGroupMessage.from?.botId;
     setPopping({
       id: lastGroupMessage.id,
-      botId: lastGroupMessage.from?.botId,
+      botId,
+      // a reply the room already watched stream in is already on screen
+      streamed: botId !== undefined && Date.now() - (streamedAt.get(botId) ?? 0) < 2000,
     });
     const messageId = lastGroupMessage.id;
     if (poppingTimer.current) clearTimeout(poppingTimer.current);
@@ -1462,7 +1474,7 @@ export function GroupView({ group }: { group: Group }) {
             locale={activeLocale()}
             messages={windowedMessages}
             transcript={group.messages}
-            emergingId={popping?.id}
+            emergingId={popping?.streamed ? undefined : popping?.id}
             onReply={selectReply}
           />
           {laterCount > 0 && (
@@ -1475,7 +1487,7 @@ export function GroupView({ group }: { group: Group }) {
               </button>
             </div>
           )}
-          {members.map(member => <RoomStreamBubble key={`stream-${member.id}`} threadId={group.threadId} member={member} />)}
+          {members.map(member => <RoomStreamBubble key={`stream-${member.id}`} threadId={group.threadId} member={member} members={members} everyone={!group.dm} streamedAt={streamedAt} />)}
           {(speaker || presenceVisible) && (
             <TurnPresence
               avatar={

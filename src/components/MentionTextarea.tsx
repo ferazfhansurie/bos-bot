@@ -2,6 +2,26 @@ import { useCallback, useLayoutEffect, useRef, type RefObject, type TextareaHTML
 import { type MentionPeer } from "@/lib/mentions";
 import { MentionText } from "./MentionText";
 
+let twinEl: HTMLTextAreaElement | null = null;
+function measureTwin(input: HTMLTextAreaElement, style: CSSStyleDeclaration): HTMLTextAreaElement {
+  if (!twinEl || !twinEl.isConnected) {
+    twinEl = document.createElement("textarea");
+    twinEl.setAttribute("aria-hidden", "true");
+    twinEl.tabIndex = -1;
+    Object.assign(twinEl.style, { position: "absolute", top: "0", left: "-9999px", visibility: "hidden", overflow: "hidden", height: "0", minHeight: "0", transition: "none" });
+    document.body.appendChild(twinEl);
+  }
+  const twin = twinEl;
+  twin.style.boxSizing = "content-box";
+  for (const key of ["font", "letterSpacing", "lineHeight", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "whiteSpace", "wordBreak", "overflowWrap", "tabSize", "direction"] as const) {
+    twin.style[key] = style[key];
+  }
+  // clientWidth includes horizontal padding; content-box width must not.
+  twin.style.width = `${input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)}px`;
+  twin.value = input.value;
+  return twin;
+}
+
 /** A native textarea retains selection, undo, IME and accessibility. Its
  * aria-hidden mirror paints mentions without changing wrapping or caret offsets. */
 export function MentionTextarea({ inputRef, peers, everyone = false, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
@@ -22,9 +42,12 @@ export function MentionTextarea({ inputRef, peers, everyone = false, ...props }:
     const input = inputRef.current;
     if (!input) return;
     const scrollTop = input.scrollTop;
-    const line = parseFloat(getComputedStyle(input).lineHeight) || 24;
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, line * 6)}px`;
+    const style = getComputedStyle(input);
+    const line = parseFloat(style.lineHeight) || 24;
+    // Measure on an offscreen twin so the real textarea never passes through
+    // height:auto; going px to px lets its height ease instead of snapping.
+    const twin = measureTwin(input, style);
+    input.style.height = `${Math.min(twin.scrollHeight, line * 6)}px`;
     input.scrollTop = scrollTop;
     sync();
   }, [inputRef, sync]);

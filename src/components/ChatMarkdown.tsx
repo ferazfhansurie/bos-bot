@@ -494,6 +494,31 @@ const NO_MENTION_PEERS: readonly MentionPeer[] = [];
 // holding one must reach the parser byte-for-byte as written.
 const MARKDOWN_IMAGE = "![";
 
+type StreamHastNode = { type: string; tagName?: string; value?: string; properties?: Record<string, unknown>; children?: StreamHastNode[] };
+
+/** While a reply streams, wrap each word of its last block in a span so the
+ * words that land next fade in. Earlier blocks stay plain text: React keeps
+ * already-mounted spans, so only new words run the animation. */
+export function rehypeStreamWords() {
+  return (tree: StreamHastNode) => {
+    const blocks = tree.children?.filter((child) => child.type === "element") ?? [];
+    const last = blocks.at(-1);
+    if (last) wrapWords(last);
+  };
+}
+function wrapWords(node: StreamHastNode) {
+  if (!node.children || node.tagName === "pre" || node.tagName === "code") return;
+  // a mention chip stays one unit so it reads the same mid-stream and after
+  if (String(node.properties?.className ?? "").includes("mention-highlight")) return;
+  node.children = node.children.flatMap((child): StreamHastNode[] => {
+    if (child.type !== "text" || !child.value) { wrapWords(child); return [child]; }
+    return child.value.split(/(\s+)/).filter(Boolean).map((part) => /^\s+$/.test(part)
+      ? { type: "text", value: part }
+      : { type: "element", tagName: "span", properties: { className: ["stream-word"] }, children: [{ type: "text", value: part }] });
+  });
+}
+const STREAM_REHYPE = [rehypeStreamWords];
+
 function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers = NO_MENTION_PEERS, everyone = false }: {
   text: string; streaming?: boolean; message?: MessageAttachmentContext;
   mentionPeers?: readonly MentionPeer[]; everyone?: boolean;
@@ -509,6 +534,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
       <Markdown
         remarkPlugins={[remarkGfm, remarkWindowsPathDestinations, unwrapLinkedImages, [remarkMentions, { peers: mentionPeers, everyone }], remarkThreadRefs(threads, currentBotId)]}
+        rehypePlugins={streaming ? STREAM_REHYPE : undefined}
         urlTransform={chatUrlTransform}
         components={{
           pre({ children }: { children?: ReactNode }) {

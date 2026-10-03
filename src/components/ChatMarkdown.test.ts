@@ -556,3 +556,19 @@ describe("mention roster comparison", () => {
     expect(samePeers(roster, [roster[0]!])).toBe(false);
   });
 });
+
+describe("streamed word fade", () => {
+  it("wraps only the last block's words while streaming, never code or mentions", () => {
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, {
+      text: "first block here\n\nsecond @Atlas `code bit` end", streaming: true, mentionPeers: [{ name: "Atlas" }],
+    }));
+    expect(html).toContain("<p dir=\"ltr\">first block here</p>");
+    expect(html.match(/class="stream-word"/g)).toHaveLength(2);
+    expect(html).toContain('<span class="mention-highlight">@Atlas</span>');
+    expect(html).toContain(">code bit</code>");
+  });
+  it("renders plain text once the reply is saved", () => {
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, { text: "all done" }));
+    expect(html).not.toContain("stream-word");
+  });
+});
