@@ -4,7 +4,7 @@ import "./staging-bootstrap.mjs";
 import { stagingServerEnvironment } from "./staging-environment.mjs";
 import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEME } from "./release-channel.mjs";
 import { attachLaunchSplash } from "./launch-splash.mjs";
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -26,6 +26,7 @@ import {
 } from "./diagnostics.mjs";
 import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
 import { activateExistingWindow, releaseSingleInstanceLock } from "./single-instance.mjs";
+import { closeToTrayEnabled, createCloseToTray } from "./close-to-tray.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { createServerSupervisor } from "./server-supervisor.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
@@ -111,6 +112,8 @@ let desktopWorkspaceManager = null;
 let desktopWorkspaceOwner = null;
 let pendingPackageInstallUrl = packageUrlFromCommandLine(process.argv);
 let mainWindow = null;
+// Windows only: closing the main window hides it to the tray (close-to-tray.mjs).
+let closeToTray = null;
 const serverUnavailableWindows = new WeakSet();
 let unreadCount = 0;
 let unreadOverlayIcon = null;
@@ -1937,6 +1940,10 @@ function createWindow() {
     win.once("closed", clearSkinSyncFallback);
   }
   installWindowStatePersistence(win);
+  win.on("close", (event) => { closeToTray?.handleClose(event, win); });
+  // Windows shutdown/logoff must not be held up by a hide-on-close window.
+  win.on("query-session-end", () => closeToTray?.markQuitting());
+  win.on("session-end", () => closeToTray?.markQuitting());
   applyUnreadBadge(win);
   if (restored.maximized) win.maximize();
   win.once("closed", () => {
@@ -2911,6 +2918,21 @@ app.whenReady().then(async () => {
   // The outbound connector never starts while computer sharing is off: no
   // poll loop, no registration, no grant replay from disk.
   void refreshSharedComputersAllowed().then((allowed) => { if (allowed) sharingController().start(); });
+  if (closeToTrayEnabled({ platform: process.platform, env: process.env })) {
+    closeToTray = createCloseToTray({
+      createTray: () => new Tray(nativeImage.createFromPath(APP_ICON).resize({ width: 16, height: 16 })),
+      buildMenu: (template) => Menu.buildFromTemplate(template),
+      title: STAGING ? "BOS Staging" : "BOS Bot",
+      onOpen: () => {
+        if (!activateExistingWindow(mainWindow ? [mainWindow] : [])) createWindow();
+      },
+      onQuit: () => {
+        closeToTray?.markQuitting();
+        app.quit();
+      },
+      log: slog,
+    });
+  }
   createWindow();
   // Reconcile incomplete setup and resume interrupted sign-out only after the
   // local app is usable. This background network work never gates LAN pairing
@@ -2982,6 +3004,8 @@ process.once("SIGINT", requestSignalQuit);
 process.once("SIGTERM", requestSignalQuit);
 
 app.on("before-quit", (e) => {
+  // Any quit (menu, tray, updater, signal) really closes the hidden window.
+  closeToTray?.markQuitting();
   // Intent is durable before any asynchronous shutdown. A failed write must
   // not look like a host crash to an external recovery owner.
   try { desktopHostLifecycle?.quit(); }

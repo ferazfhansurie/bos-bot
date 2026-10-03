@@ -33,6 +33,7 @@ it("sends updater progress to a reopened window without restarting the updater",
   attachUpdaterWindow(first);
   registerUpdaterIpc();
   startUpdater();
+  expect(updater.allowPrerelease).toBe(false);
   const listenerCount = updater.on.mock.calls.length;
   const timerCount = vi.getTimerCount();
 

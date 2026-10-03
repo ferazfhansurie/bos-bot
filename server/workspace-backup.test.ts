@@ -378,6 +378,29 @@ describe("encrypted full workspace backups", () => {
     expect(readdirSync(join(root, ".backups"))).toEqual([]);
   });
 
+  it("omits the isolated provider home, including its Windows cache junctions and login files", async () => {
+    const root = directory();
+    writeFileSync(join(root, "regular"), "data");
+    const home = join(root, "provider-home");
+    const cache = join(home, "AppData", "Local", "Microsoft", "Windows", "INetCache");
+    mkdirSync(join(cache, "IE"), { recursive: true });
+    symlinkSync(join(cache, "IE"), join(cache, "Content.IE5"), process.platform === "win32" ? "junction" : "dir");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", ".credentials.json"), "{\"token\":\"never exported\"}");
+    const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    try {
+      const exported = await createWorkspaceBackup(root, { password: PASSWORD });
+      expect(existsSync(exported.path)).toBe(true);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("refuses external and arbitrary internal symlinks while reporting omitted managed discovery links", async () => {
     const root = directory();
     const outside = directory();

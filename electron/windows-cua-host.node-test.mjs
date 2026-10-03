@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, utimesSync, writeFileSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import {
@@ -16,6 +16,7 @@ import {
   installWindowsCuaAttestation,
   sessionAvailability,
   startServerOnlyWindowsCua,
+  probeEnvironment,
 } from "./windows-cua-host.mjs";
 import {
   LOGON_SID, OTHER_SID, SELF_PID, SESSION_ID, USER_SID, createFixture, privateAcl, resourceAcl, settle,
@@ -238,6 +239,26 @@ test("daemon exit relaunches once through the same owner", async () => {
   await host.stop();
 });
 
+test("relaunch: false leaves computer use unavailable after a daemon exit", async () => {
+  const host = await ready(fx.make({ relaunch: false }));
+  fx.hosts[0].exit();
+  await settle();
+  assert.equal(host.status().state, "unavailable");
+  assert.equal(host.status().reasonCode, "daemon-exited");
+  assert.equal(fx.hosts.length, 1, "no second daemon");
+  assert.equal(fx.readDescriptor().mode, "unavailable");
+  await host.stop();
+});
+
+test("probe environment is a frozen allowlist, not the live process env", () => {
+  const source = { SystemRoot: "C:\\Windows", PATH: "C:\\x", TEMP: "C:\\t", OMB_ANTHROPIC_API_KEY: "k", COMPOSIO_API_KEY: "c", BOX_TOKEN: "b" };
+  const env = probeEnvironment(source);
+  assert.deepEqual(env, { SystemRoot: "C:\\Windows", PATH: "C:\\x", TEMP: "C:\\t" });
+  source.PATH = "changed";
+  assert.equal(env.PATH, "C:\\x");
+  assert.ok(Object.isFrozen(env));
+});
+
 test("maintenance before a restart prevents the relaunch", async () => {
   const host = await ready();
   writeFileSync(fx.maintenanceMarker, "");
@@ -348,6 +369,17 @@ test("a rewritten descriptor or a touched binary fails attestation", async () =>
   utimesSync(fx.binary, new Date(), new Date(Date.now() + 5_000));
   assert.equal(again.attest(fx.descriptorPath, fresh), false);
   await again.stop();
+});
+
+test("launching the driver moves only its ctime and keeps attestation", async () => {
+  const host = await ready();
+  const descriptor = fx.readDescriptor();
+  const before = statSync(fx.binary, { bigint: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  chmodSync(fx.binary, Number(before.mode & 0o777n));
+  assert.notEqual(statSync(fx.binary, { bigint: true }).ctimeNs, before.ctimeNs);
+  assert.equal(host.attest(fx.descriptorPath, descriptor), true);
+  await host.stop();
 });
 
 test("a dead daemon pid fails attestation immediately", async () => {
@@ -577,7 +609,7 @@ test("server-only launcher start is opt-in and wires env, attestation and signal
     createHost: (options) => { created.push(options); return fake; },
     install: (host) => events.push(host === fake ? "install" : "wrong"),
   });
-  assert.deepEqual(created, [{ dataDir: "C:\\data", resourcesPath: "C:\\res", environmentId: "partner-server-01", maintenanceMarker: "C:\\m.lock" }]);
+  assert.deepEqual(created, [{ dataDir: "C:\\data", resourcesPath: "C:\\res", environmentId: "partner-server-01", maintenanceMarker: "C:\\m.lock", relaunch: false }]);
   assert.deepEqual(result.env, { OMB_CUA_WINDOWS_SUPERVISED: "1", OMB_CUA_WINDOWS_DESCRIPTOR: fake.descriptorPath });
   assert.deepEqual(events, ["install", "start"]);
   processRef.emit("SIGTERM");
@@ -585,4 +617,59 @@ test("server-only launcher start is opt-in and wires env, attestation and signal
   await settle();
   assert.deepEqual(events, ["install", "start", "stop"], "one stop for any number of signals");
   assert.deepEqual(exits, [0]);
+});
+
+test("server-only host never pre-empts the server's own graceful exit", async () => {
+  const processRef = new EventEmitter();
+  const exits = [];
+  processRef.exit = (code) => exits.push(code);
+  let finishStop;
+  const events = [];
+  const fake = {
+    descriptorPath: "C:\\data\\cua-windows\\cua-connection.json",
+    start: async () => ({ state: "ready" }),
+    stop: () => new Promise((resolve) => { events.push("stop"); finishStop = resolve; }),
+  };
+  const config = { computerUse: true, dataDir: "C:\\data", resources: "C:\\res", environmentId: "partner-server-01", maintenanceMarker: "C:\\m.lock" };
+  await startServerOnlyWindowsCua(config, { processRef, createHost: () => fake, install: () => {} });
+  // The server registers its own handler after the host starts.
+  processRef.on("SIGINT", () => events.push("server-cleanup"));
+  processRef.emit("SIGINT");
+  await settle();
+  assert.deepEqual(events, ["stop", "server-cleanup"]);
+  assert.deepEqual(exits, [], "host does not exit while the server handles the signal");
+  processRef.exit(0); // server finished persisting sessions/db/lease
+  await settle();
+  assert.deepEqual(exits, [], "server exit waits for the host stop");
+  finishStop();
+  await settle();
+  assert.deepEqual(exits, [0]);
+});
+
+test("server-only start is bounded and reports a stop requested while starting", async () => {
+  const processRef = new EventEmitter();
+  const exits = [];
+  processRef.exit = (code) => exits.push(code);
+  const events = [];
+  const fake = {
+    descriptorPath: "C:\\data\\cua-windows\\cua-connection.json",
+    start: () => new Promise(() => { events.push("start-hung"); }),
+    stop: async () => { events.push("stop"); },
+  };
+  const config = { computerUse: true, dataDir: "C:\\data", resources: "C:\\res", environmentId: "partner-server-01", maintenanceMarker: "C:\\m.lock" };
+  const result = await startServerOnlyWindowsCua(config, { processRef, createHost: () => fake, install: () => {}, startTimeoutMs: 20 });
+  assert.equal(result.startTimedOut, true);
+  assert.deepEqual(events, ["start-hung", "stop"], "a hung start is stopped, the server is not held");
+  assert.equal(result.stopRequested(), false);
+
+  const processRef2 = new EventEmitter();
+  processRef2.exit = (code) => exits.push(code);
+  let release;
+  const slow = { descriptorPath: fake.descriptorPath, start: () => new Promise((r) => { release = r; }), stop: async () => {} };
+  const pending = startServerOnlyWindowsCua(config, { processRef: processRef2, createHost: () => slow, install: () => {} });
+  await settle();
+  processRef2.emit("SIGINT");
+  release({ state: "ready" });
+  const second = await pending;
+  assert.equal(second.stopRequested(), true, "launcher must skip the server import");
 });

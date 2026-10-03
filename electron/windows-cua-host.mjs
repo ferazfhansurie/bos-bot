@@ -121,6 +121,15 @@ function fileIdentity(fileSystem, file) {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
 
+// Staged SDK files are checked against this, not fileIdentity: Windows moves
+// an executable's change time (ctime) when it is launched, so the driver's
+// ctime differs from staging as soon as the daemon starts. Content changes
+// still move mtime/size/inode; permissions were verified at staging.
+function contentIdentity(fileSystem, file) {
+  const stat = fileSystem.statSync(file, { bigint: true });
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+}
+
 export function sha256File(file, fileSystem = fs) {
   return createHash("sha256").update(fileSystem.readFileSync(file)).digest("hex");
 }
@@ -160,7 +169,7 @@ export async function verifyStagedWindowsCua({ resourcesPath, identity, probe, f
       throw unavailable("sdk-integrity", `Computer use SDK file does not match the build manifest: ${name}`);
     }
     files[name] = file;
-    identities[name] = before;
+    identities[name] = contentIdentity(fileSystem, file);
   }
   for (const target of [resourcesPath, path.join(resourcesPath, "cua-sdk"), path.join(resourcesPath, "cua-sdk", "native"), manifestPath, ...Object.values(files)]) {
     let acl;
@@ -317,6 +326,10 @@ export function createWindowsCuaHost({
   isProcessAlive = processAlive,
   selfPid = process.pid,
   restartBudget = { max: 2, windowMs: 10 * 60_000, cooldownMs: 30 * 60_000 },
+  // false: a daemon exit leaves computer use unavailable until the next host
+  // start. Server-only mode needs this: a relaunch after the server loaded would
+  // inherit credentials the server has since written into process.env.
+  relaunch = true,
   sessionPollMs = 15_000,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -581,6 +594,7 @@ export function createWindowsCuaHost({
     connection = null;
     hostAbort = null;
     if (maintenance()) return fail(unavailable("maintenance", "Maintenance is in progress"));
+    if (!relaunch) return fail(unavailable("daemon-exited", "Computer-use daemon exited; restart the server to re-enable computer use"));
     if (recordFailure()) return fail(unavailable("restart-budget-exhausted", "Computer-use daemon kept exiting; restart budget exhausted"));
     set("starting");
     try {
@@ -697,7 +711,7 @@ export function createWindowsCuaHost({
         if (!samePath(file, descriptorPath) || JSON.stringify(raw) !== JSON.stringify(descriptor)) return false;
         if (fileIdentity(fileSystem, descriptorPath) !== descriptorIdentity) return false;
         if (JSON.stringify(readJson(fileSystem, descriptorPath)) !== JSON.stringify(descriptor)) return false;
-        if (fileIdentity(fileSystem, staged.binary) !== staged.identities["cua-driver.exe"]) return false;
+        if (contentIdentity(fileSystem, staged.binary) !== staged.identities["cua-driver.exe"]) return false;
         if (!leaseStillOurs(fileSystem, lease.path, lease.nonce) || maintenance()) return false;
         return isProcessAlive(connection.pid) && isProcessAlive(selfPid);
       } catch {
@@ -744,10 +758,16 @@ export function serverOnlyCuaEnvironment(descriptorPath) {
  * Signals stop the host (revoking its descriptor) before the process exits;
  * the daemon's parent-liveness pipe covers a hard kill.
  */
+const STOP_EXIT_GRACE_MS = 3_000;
+// The server must never wait on the host for long: past this, the host is
+// stopped (it cannot publish or spawn after stop) and the server starts without it.
+const HOST_START_TIMEOUT_MS = 15_000;
+
 export async function startServerOnlyWindowsCua(config, {
   createHost = createWindowsCuaHost,
   install = installWindowsCuaAttestation,
   processRef = process,
+  startTimeoutMs = HOST_START_TIMEOUT_MS,
 } = {}) {
   if (config?.computerUse !== true) return null;
   const host = createHost({
@@ -755,16 +775,37 @@ export async function startServerOnlyWindowsCua(config, {
     resourcesPath: config.resources,
     environmentId: config.environmentId,
     maintenanceMarker: config.maintenanceMarker,
+    relaunch: false,
   });
   install(host);
   const env = serverOnlyCuaEnvironment(host.descriptorPath);
+  // The server owns process exit: its shutdown persists sessions, closes the
+  // message DB and releases the data-dir lease. A signal only starts the host
+  // stop; the server's exit then waits (bounded) for it so the daemon is not
+  // orphaned. The host exits by itself only when nothing else handles the signal.
   let stopping = null;
-  const stopAndExit = (signal) => {
-    stopping ??= host.stop().catch(() => {}).finally(() => processRef.exit(signal === "SIGINT" ? 130 : 0));
+  let exiting = false;
+  const realExit = processRef.exit.bind(processRef);
+  const exitOnce = (code) => { if (!exiting) { exiting = true; realExit(code); } };
+  processRef.exit = (code) => {
+    if (!stopping) return realExit(code);
+    const timer = setTimeout(() => exitOnce(code), STOP_EXIT_GRACE_MS);
+    void stopping.finally(() => { clearTimeout(timer); exitOnce(code); });
   };
-  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) processRef.once(signal, () => stopAndExit(signal));
-  await host.start();
-  return { host, env };
+  const onSignal = (signal) => {
+    stopping ??= host.stop().catch(() => {});
+    if (processRef.listenerCount(signal) === 0) void stopping.finally(() => exitOnce(signal === "SIGINT" ? 130 : 0));
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) processRef.once(signal, () => onSignal(signal));
+  let timer;
+  const started = await Promise.race([
+    host.start().then(() => true, () => true),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(false), startTimeoutMs); }),
+  ]);
+  clearTimeout(timer);
+  if (!started) void host.stop().catch(() => {});
+  // A stop requested while the host was starting means the server must not load.
+  return { host, env, startTimedOut: !started, stopRequested: () => stopping !== null };
 }
 
 // ---------------------------------------------------------------------------
@@ -959,7 +1000,18 @@ export function parseWindowsProbeOutput(op, stdout) {
   return reply.value;
 }
 
-export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 20_000, environment = process.env } = {}) {
+// Probes get a fixed, minimal environment captured when the probe is created,
+// never the live process.env (the server writes credentials into it later).
+const PROBE_ENV_KEYS = ["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATH", "PATHEXT", "TEMP", "TMP", "PSModulePath",
+  "USERPROFILE", "USERNAME", "USERDOMAIN", "COMPUTERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS"];
+
+export function probeEnvironment(source = process.env) {
+  const out = {};
+  for (const key of PROBE_ENV_KEYS) if (typeof source[key] === "string") out[key] = source[key];
+  return Object.freeze(out);
+}
+
+export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 20_000, environment = probeEnvironment() } = {}) {
   const systemRoot = environment.SystemRoot ?? "C:\\Windows";
   const powershell = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const encoded = encodeWindowsProbeCommand();

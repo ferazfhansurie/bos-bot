@@ -147,8 +147,10 @@ win:
     # verifies cua-sdk/manifest.json before loading the staged SDK.
     - from: electron/windows-cua-host.mjs
       to: cua-host/windows-cua-host.mjs
-  # Ordinary staging remains update-free. Live packaging adds forceCodeSigning,
-  # a configured stable publisher and signature verification in live.cjs.
+  # Ordinary staging remains update-free. Live packaging (live.cjs) either
+  # signs (forceCodeSigning, stable publisher, update signature verification)
+  # or, with BOS_WINDOWS_SIGNING=unsigned (1.0 alpha), ships unsigned with no
+  # publisherName so electron-updater can still install updates.
 
 nsis:
   oneClick: true
