@@ -551,6 +551,46 @@ posixOnly("mid-turn steering e2e", () => {
     expect(stderr).not.toContain("signal SIGTERM");
   }, 40_000);
 
+  it("a refused image steer queues one item, folds a whitespace-collapsed re-send into it, and delivers the image exactly once", async () => {
+    writeFileSync(codexSteerGate, "refuse live steers for the refused-image test");
+    const created = (await api("POST", "/api/bots")).body.bot;
+    const instances = (await api("GET", "/api/instances")).body.instances;
+    const model = instances.find((i: any) => i.instanceId === "codexRace").models.default;
+    await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "codexRace", model } });
+    expect((await api("POST", `/api/bots/${created.id}/messages`, { text: "first gated turn" })).status).toBe(202);
+    await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.card), "the gated question card");
+
+    const attachments = join(home, ".openmausbot", "attachments");
+    mkdirSync(attachments, { recursive: true });
+    const imagePath = join(attachments, "123e4567-e89b-42d3-a456-426614174099.png");
+    writeFileSync(imagePath, "refused pixels");
+    const tag = `<attached-image path="${imagePath}" name="image.png" />`;
+    const imageText = `balance tu 550 lagi?\n\n${tag}`;
+    const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: imageText, sendId: "9a74c727-5bda-4940-b41f-17e32b9e8695" });
+    expect(queued.body).toMatchObject({ ok: true, queued: true });
+    // Live rows 21/22: the same send again with its blank lines collapsed joins the one item.
+    const again = await api("POST", `/api/bots/${created.id}/messages`, { text: `balance tu 550 lagi? ${tag}`, sendId: "d7f1469c-2f09-48ce-ae9f-c576dee0dead" });
+    expect(again.body).toMatchObject({ ok: true, queued: true, queueId: queued.body.queueId });
+    expect((await getBot(created.id)).messages.some((m: any) => m.text?.includes(tag))).toBe(false);
+
+    // The duplicate never re-tried the refused steer: one native steer attempt, one file fallback.
+    const native = () => readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.dir === "out");
+    expect(native().filter((row) => row.msg?.method === "turn/steer")).toHaveLength(2);
+    expect((await getBot(created.id)).messages.filter((m: any) => m.tool?.name?.startsWith("image not delivered"))).toHaveLength(1);
+    rmSync(codexSteerGate, { force: true });
+    // Stop drains the one waiting item into one next turn. (The fake codex
+    // cannot resume its thread after Stop, so that turn ends at resume; what
+    // this proves is the server side: one dispatch, one row, nothing left.)
+    await api("POST", `/api/bots/${created.id}/interrupt`);
+    await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.role === "user" && m.text === imageText), "the queued image to drain");
+    await waitFor(async () => (await getBot(created.id)).busy === false, "the drained turn to settle");
+    expect((await getBot(created.id)).messages.filter((m: any) => m.role === "user" && m.text?.includes(tag))).toHaveLength(1);
+    expect(native().filter((row) => row.msg?.method === "thread/resume")).toHaveLength(1);
+    expect(native().filter((row) => row.msg?.method === "turn/steer")).toHaveLength(2);
+    expect((await api("DELETE", `/api/bots/${created.id}/queue/${queued.body.queueId}`, { threadId: created.threadId })).status).toBe(404);
+  }, 40_000);
+
   it.skipIf(!acpAvailable)("an engine without live steering keeps its queue through the steer endpoint, then drains after Stop", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "acp", model: "fake-model" } });

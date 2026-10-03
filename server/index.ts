@@ -3779,6 +3779,8 @@ const roomMemberQueues = new Map<string, Promise<boolean>>();
 // person's next message to it is not held behind the teammates it summoned.
 const roomMemberLaneReleases = new Map<string, () => void>();
 const roomMemberCancelEpoch = new Map<string, number>();
+// Bumped by every non-member-scoped room Stop, so an awaited steer can tell it was stopped.
+const roomStopEpoch = new Map<string, number>();
 const roomRequestOwners = new Map<string, { runtimeThreadId: string; providerRequestId: string; generation: string; instanceId: string }>();
 const roomOperationOwners = new Map<string, { generation: string; operation: GroupTurnOperation }>();
 const roomRequestPublicIds = new Map<string, string>();
@@ -6283,7 +6285,7 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
 }
 
 // Explicit Steer and automatic tool-boundary delivery share one atomic claim.
-async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: string, botId?: string) {
+async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: string, botId?: string, oneOfAddressed = false) {
   const current = store.group(groupId);
   if (!current) return { status: 404, body: { error: "no such room" } };
   // Which engine owns the running room turn on this thread? The same
@@ -6294,8 +6296,10 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
   const [head] = held.items;
   const active = roomRuntimeSpeakers(current.id, targetThreadId);
   const mentioned = head ? roomResponders(head.text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), { kind: "mentions" }) : [];
+  // A mixed send names several members; the server may steer it into the
+  // one busy addressee while the idle ones start fresh (see the send route).
   if (botId !== undefined && mentioned.length &&
-    (mentioned.length !== 1 || mentioned[0]?.id !== botId)) {
+    (oneOfAddressed ? !mentioned.some(member => member.id === botId) : mentioned.length !== 1 || mentioned[0]?.id !== botId)) {
     restoreHeldChannelQueue(held);
     return { status: 409, body: { error: "Steer the addressed room member; the selected member does not match this message." } };
   }
@@ -6440,6 +6444,44 @@ async function steerRoomSendNow(groupId: string, threadId: string, queueId: stri
     tool: { name: "not delivered yet: no addressed bot could take this into its running turn — it is queued for after the current reply", ok: false },
   });
   return { ok: true as const, queued: true as const, queueId, threadId };
+}
+
+async function steerMixedRoomSend(groupId: string, threadId: string, queueId: string, busyBotId: string, idleBotIds: string[], replyTo?: Message) {
+  const stopEpoch = roomStopEpoch.get(groupId) ?? 0;
+  let receipt;
+  try { receipt = await steerRoomQueue(groupId, threadId, queueId, busyBotId, true); }
+  catch (error) { console.warn("mixed room steer failed", error instanceof Error ? error.message : String(error)); }
+  const recorded = store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
+  if (!receipt || !recorded) {
+    // Refused (or the head moved): the one queued item still reaches every
+    // addressee exactly once on the next turn. Say so instead of a silent chip.
+    const head = channelQueueHead(groupId, threadId);
+    if (head?.id === queueId && !head.text.includes("<attached-image")) store.appendMessage(threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: "not delivered yet: the busy addressee couldn't take this mid-turn — it is queued for everyone addressed after the current reply", ok: false },
+    });
+    return { ok: true as const, queued: true as const, queueId, threadId };
+  }
+  // Steered or uncertain: the row is recorded once and never replayed. The
+  // idle addressees start now, in parallel, from that same row, unless the
+  // room was stopped while the steer was in flight.
+  if ((roomStopEpoch.get(groupId) ?? 0) !== stopEpoch) return sendSteerReceipt(threadId, recorded);
+  try {
+    startGroupTurn(groupId, recorded.text ?? "", replyTo, recorded.sendId, "chat", queueId, {
+      threadId, via: recorded.via, sender: recorded.sender, recordedMessage: recorded, responderIds: idleBotIds,
+    });
+  } catch (error) {
+    // The row is already recorded, so a retry would only match it. Say who missed it.
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn("mixed room start failed", reason);
+    store.appendMessage(threadId, {
+      role: "bot",
+      kind: "activity",
+      tool: { name: `delivered to the busy addressee only — the others couldn't start: ${reason}`, ok: false },
+    });
+  }
+  return sendSteerReceipt(threadId, recorded);
 }
 
 const roomBoundarySteers = new Set<string>();
@@ -10949,6 +10991,10 @@ type StartGroupTurnOptions = {
   via?: "api";
   /** The person who sent it, when not the desktop owner (see Message.sender). */
   sender?: { name: string };
+  /** Mixed busy/idle send: the words are already recorded (steered into the
+   * busy addressee), so only these idle addressees start, off that row. */
+  recordedMessage?: Message;
+  responderIds?: string[];
 };
 
 /** Room Stop: cancel queued member slots, pending followups and every live
@@ -10971,6 +11017,7 @@ async function interruptRoom(
     if (alias?.groupId === group.id && targetThreadIds.includes(alias.threadId) && (!opts.botId || alias.botId === opts.botId)) roomMemberCancelEpoch.set(runtimeId, (roomMemberCancelEpoch.get(runtimeId) ?? 0) + 1);
   }
   if (!opts.botId) {
+    roomStopEpoch.set(group.id, (roomStopEpoch.get(group.id) ?? 0) + 1);
     for (const threadId of targetThreadIds) cancelGroupTurnOperations(group.id, threadId);
     for (const row of chatFollowups("channel")) if (row.ownerId === group.id && targetThreadIds.includes(row.threadId) && row.status === "pending") cancelChannelMessage(group.id, row.id);
   }
@@ -11023,7 +11070,7 @@ function startGroupTurn(
   if (options.goalCoordinatorBotId && (channelMode !== "goal" || !requestedGoalCoordinator)) {
     throw Object.assign(new Error("the selected goal coordinator is not an active room member"), { status: 409 });
   }
-  const message = store.appendMessage(threadId, {
+  const message = options.recordedMessage ?? store.appendMessage(threadId, {
     role: "user",
     kind: "text",
     text,
@@ -11050,6 +11097,11 @@ function startGroupTurn(
     });
   }
   let responders = roomResponders(text, members, group.defaultResponder, group.memberReplyModes);
+  if (options.responderIds) {
+    responders = responders.filter(responder => options.responderIds!.includes(responder.id));
+    // A scoped start never falls back to someone else (e.g. the dm last speaker).
+    if (!responders.length) return message;
+  }
   const explicitlyMentionedLead = roomResponders(text, availableMembers, { kind: "mentions" })[0];
   const goalCoordinator = channelMode === "goal"
     ? requestedGoalCoordinator ?? explicitlyMentionedLead ?? selectGroupGoalCoordinator(availableMembers, group.defaultResponder)
@@ -17158,6 +17210,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const recipients = roomResponders(text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), current.defaultResponder, current.memberReplyModes);
           const independentAddress = channelMode === "chat" && recipients.length > 0 && recipients.every(recipient => !activeRecipients.includes(recipient.id)) && ![...(groupTurnOperations.get(current.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled);
           if (groupIsWorking(current) && !independentAddress) {
+            const hadQueue = Boolean(channelQueueHead(current.id, threadId));
             const queued = queueChannelMessage(current.id, threadId, text, {
               replyToId: replyTo?.id,
               sendId,
@@ -17165,6 +17218,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               via,
               sender: messageSender(auth),
             });
+            // A duplicate that joined a waiting item was already tried and refused.
+            if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
+            // Mixed send: exactly one addressee is mid-turn and the rest are
+            // idle. Steer the busy one, then start only the idle ones off the
+            // same recorded row, so each addressee gets the words once and no
+            // unaddressed member is touched. Anything else keeps the FIFO path.
+            const busy = recipients.filter(recipient => activeRecipients.includes(recipient.id));
+            const idle = recipients.filter(recipient => !activeRecipients.includes(recipient.id));
+            const goalRunning = [...(groupTurnOperations.get(current.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled);
+            if (channelMode === "chat" && !hadQueue && !goalRunning && busy.length === 1 && idle.length) {
+              return steerMixedRoomSend(current.id, threadId, queued.id, busy[0]!.id, idle.map(member => member.id), replyTo);
+            }
             return steerRoomSendNow(current.id, threadId, queued.id);
           }
           const message = startGroupTurn(current.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth) });
@@ -18551,6 +18616,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               replyToId: replyTo?.id, sendId,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
+            // A duplicate that joined a waiting item was already tried and refused.
+            if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
             return steerSendNow(currentAtStart.id, threadId, queued.id, auth.kind === "session" || DESKTOP_MANAGED);
           }
           return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);

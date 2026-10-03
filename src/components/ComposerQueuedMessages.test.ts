@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   QueuedComposerMessages,
   composerCanSteerQueuedMessages,
+  queuedChipLabel,
 } from "./ComposerQueuedMessages";
 
 const oneItem = [{ queueId: "q1", text: "actually stop at 10\nand use the smaller model" }];
@@ -155,5 +156,14 @@ describe("QueuedComposerMessages", () => {
       createElement(QueuedComposerMessages, { items: [], onCancel: () => undefined }),
     );
     expect(markup).toBe("");
+  });
+});
+
+describe("queuedChipLabel", () => {
+  it("shows the words and an attachment count, never the raw tag that could be re-sent", () => {
+    const label = queuedChipLabel('balance tu 550 lagi?\n\n<attached-image path="/tmp/042c.png" name="image.png" />');
+    expect(label).toBe("balance tu 550 lagi? · 1 attached");
+    expect(label).not.toContain("<attached-image");
+    expect(queuedChipLabel("plain\n\nwords")).toBe("plain\n\nwords");
   });
 });

@@ -305,6 +305,40 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     await api("POST",`/api/groups/${room.id}/interrupt`,{});
   });
 
+  it("steers a mixed send into the busy addressee while the idle addressee starts in parallel, once each", async () => {
+    const slow=await createBot("Slow","patient");
+    const quick=await createBot("Quick","quick");
+    const bystander=await createBot("Bystander","patient");
+    const room=(await api("POST","/api/groups",{name:"Mixed steer",memberIds:[slow.id,quick.id,bystander.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    rmSync(patientFinishGate,{force:true});
+    await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow @Bystander start"});
+    await wait(async()=>(await snapshot(room.id)).activeBotIds?.length===2);
+    const text="@Slow @Quick MIXEDTOKEN";
+    const [sent,retry]=await Promise.all([api("POST",`/api/groups/${room.id}/messages`,{text,sendId:"mixed-send-once-0001"}),api("POST",`/api/groups/${room.id}/messages`,{text,sendId:"mixed-send-once-0001"})]);
+    expect(sent.body).toMatchObject({ok:true,steered:true});
+    expect(sent.body.queued).toBeUndefined();
+    expect(retry.body.message?.id).toBe(sent.body.message.id);
+    // Quick answers while Slow's turn is still running: parallel, not queued behind it.
+    await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id));
+    expect((await snapshot(room.id)).activeBotIds).toContain(slow.id);
+    const aliases=JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));
+    const runtimesFor=(botId:string)=>aliases.filter(([,owner]:[string,{threadId:string;botId:string}])=>owner.threadId===room.threadId&&owner.botId===botId).map(([id]:[string])=>id);
+    const native=(botId:string)=>runtimesFor(botId).map((id:string)=>{ try { return readFileSync(join(home,".openmausbot","native",`${id}.ndjson`),"utf8"); } catch { return ""; } }).join("\n");
+    const count=(haystack:string)=>haystack.split("MIXEDTOKEN").length-1;
+    expect(count(native(slow.id))).toBe(1);
+    expect(count(native(bystander.id))).toBe(0);
+    expect(count(native(quick.id))).toBe(1);
+    expect((await snapshot(room.id)).messages.filter((m:any)=>m.role==="user"&&m.text===text)).toHaveLength(1);
+    expect((await api("DELETE",`/api/groups/${room.id}/queue/${sent.body.message.queueId}`)).status).toBe(404);
+    writeFileSync(patientFinishGate,"finish");
+    await wait(async()=>!(await snapshot(room.id)).working);
+    // Nothing replays after the turns settle: still one user row. (The fake
+    // engine echoes @mentions, so later bot-to-bot chains are fixture noise.)
+    const done=(await snapshot(room.id)).messages;
+    expect(done.filter((m:any)=>m.role==="user"&&m.text===text)).toHaveLength(1);
+    expect(done.filter((m:any)=>m.role==="user"&&m.queueId===sent.body.message.queueId)).toHaveLength(1);
+  });
+
   it("keeps duplicate provider approval ids in exact lanes and rejects a stale token on the next turn", async () => {
     const a=await createBot("ApproveA","approvalA"); const b=await createBot("ApproveB","approvalB");
     expect((await api("PATCH",`/api/bots/${a.id}`,{approvalMode:"ask"})).status).toBe(200); expect((await api("PATCH",`/api/bots/${b.id}`,{approvalMode:"ask"})).status).toBe(200);

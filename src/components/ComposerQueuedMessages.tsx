@@ -1,6 +1,19 @@
 import { CornerDownRight, Trash2 } from "lucide-react";
 
+import { splitTranscriptAttachments } from "@/lib/composer-attachments";
 import { t } from "@/lib/i18n";
+
+/** What a queued chip shows: the words, then how many files ride along. The
+ * raw <attached-…> tags stay out of view so the chip text can't be copied
+ * and re-sent as a second copy of the same image. */
+export function queuedChipLabel(text: string): string {
+  const { display, images, files } = splitTranscriptAttachments(text);
+  const count = images.length + files.length;
+  if (!count) return text;
+  const words = display.replace(/\s+/g, " ");
+  const attached = t("composer.queued.attached", { count: String(count) });
+  return words ? `${words} · ${attached}` : attached;
+}
 
 export function composerCanSteerQueuedMessages(
   busy: boolean,
@@ -11,7 +24,6 @@ export function composerCanSteerQueuedMessages(
   return busy && !locked && !approvalPending && pendingCount > 0;
 }
 
-/** How long a just-queued chip accepts a second Enter as "steer it now". */
 /** Messages held by the harness until the running turn settles.
  *
  * The queue sits directly above the composer rather than pretending these
@@ -80,8 +92,8 @@ export function QueuedComposerMessages({
               className="shrink-0 text-ink-secondary"
               aria-hidden="true"
             />
-            <span dir="auto" className="min-w-0 flex-1 truncate text-[14px] text-ink" title={item.text}>
-              {item.text}
+            <span dir="auto" className="min-w-0 flex-1 truncate text-[14px] text-ink" title={queuedChipLabel(item.text)}>
+              {queuedChipLabel(item.text)}
             </span>
             {index === 0 && onSteer && (
               <button

@@ -649,6 +649,7 @@
   "composer.queued.regionOne": "1 queued message",
   "composer.queued.regionMany": "{count} queued messages",
   "composer.queued.list": "Queued messages",
+  "composer.queued.attached": "{count} attached",
   "composer.queued.capacity": "Queued — starts when this bot has a free thread slot.",
   "settings.threads.title": "Parallel threads",
   "settings.threads.subtitle": "Choose how much each bot can work on at once.",
