@@ -429,18 +429,31 @@ describe.skipIf(!posixOnly || !backendPresent)("updater acceptance: contract (ne
 
   it("refuses when another updater/keepalive job exists", async () => {
     await reboot();
+    // The previous restart can still be finishing after relaunch; admission
+    // must be judged from an idle coordinator, not "already running".
+    await h.waitFor(async () => ["idle", "ready"].includes((await status()).state), "coordinator idle before keepalive check", 60_000);
     writeFileSync(join(jobs, "ai.bos.bot.restart-keepalive.plist"), "<plist><dict><key>Label</key><string>ai.bos.bot.restart-keepalive</string><key>KeepAlive</key><true/></dict></plist>");
+    const updates = join(h.data, "updates");
+    const dirsBefore = existsSync(updates) ? readdirSync(updates).sort() : [];
+    const stream = h.collectEvents();
     try {
+      // Refused at admission, synchronously: 409 with the KeepAlive reason, no
+      // updateId, no new update dir (so no checkpoint/plan), no state events,
+      // coordinator still idle/ready. A later "failed" no longer passes.
       const res = await h.api("POST", "/api/update/apply", {});
-      if (res.status === 202) {
-        const end = await waitTerminal();
-        expect(end.lastResult?.state ?? end.state).toBe("failed");
-        expect(JSON.stringify(end.lastResult?.detail ?? "")).toMatch(/keepalive|updater|job/i);
-      } else {
-        expect(res.status).toBeGreaterThanOrEqual(400);
-      }
+      expect(res.status).toBe(409);
+      expect(res.body.updateId).toBeUndefined();
+      expect(res.body.error).toMatch(/^another installer or restart job is active: .*ai\.bos\.bot\.restart-keepalive \(KeepAlive\)/);
+      await sleep(1500);
+      const dirsAfter = existsSync(updates) ? readdirSync(updates).sort() : [];
+      expect(dirsAfter).toEqual(dirsBefore);
+      expect(existsSync(join(updates, "apply.lock"))).toBe(false);
+      expect(stream.events.filter((e) => ["checkpointing", "stopping", "applying", "relaunching"].includes(e.state))).toEqual([]);
+      const s = await status();
+      expect(["idle", "ready"]).toContain(s.state);
       expect(treeHash(live)).toBe(liveHashBefore);
     } finally {
+      stream.close();
       rmSync(join(jobs, "ai.bos.bot.restart-keepalive.plist"), { force: true });
     }
   }, 150_000);
