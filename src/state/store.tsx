@@ -1408,6 +1408,16 @@ export function reducer(state: AppState, action: Action): AppState {
     case "configStatus":
       return { ...state, config: action.config };
     case "select": {
+      const bot = state.bots.find((candidate) => candidate.id === action.id);
+      if (bot) {
+        // The bot row refreshes the server's selection. Its next snapshot
+        // already includes earlier background events; replay only races
+        // after this click, just as for an explicit thread switch.
+        const threads = new Set([bot.threadId, ...(bot.tasks ?? []).map((task) => task.threadId)]);
+        state = { ...state, backgroundThreadEvents: Object.fromEntries(
+          Object.entries(state.backgroundThreadEvents).filter(([threadId]) => !threads.has(threadId)),
+        ) };
+      }
       if (state.groups.some((g) => g.id === action.id)) {
         return {
           ...state,
@@ -2189,6 +2199,26 @@ export async function createBotWithRole(role?: BotRole, request: typeof api = ap
  * Kept at the server's own page maximum so one page fills more than the
  * transcript window mounts. */
 export const MESSAGE_PAGE_SIZE = 200;
+
+/** A bot row follows the server's current selection (including daily
+ * rollover). Background announcements alone must not navigate a window.
+ * Read only roster metadata, then page the one differing conversation.
+ * `current` returns undefined once a newer navigation owns the selection. */
+export async function refreshBotSelection(
+  botId: string,
+  current: () => Bot | undefined,
+  apply: (bot: Bot) => void,
+  request: typeof api = api,
+): Promise<void> {
+  const { bots } = await request<{ bots: Bot[] }>("/api/bots?messages=0");
+  const fresh = bots.find((bot) => bot.id === botId);
+  const visible = current();
+  if (!fresh || !visible || fresh.threadId === visible.threadId) return;
+  const page = await request<Pick<Bot, "messages" | "hasMore" | "activeLeafId">>(
+    `/api/threads/${fresh.threadId}/messages?limit=${MESSAGE_PAGE_SIZE}`,
+  );
+  if (current()) apply({ ...fresh, ...page });
+}
 
 export async function api<T = any>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
   // timeoutMs races the fetch against AbortSignal.timeout, combined with any
@@ -3078,6 +3108,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "select": {
           const bot = stateRef.current.bots.find((b) => b.id === action.id);
           const group = stateRef.current.groups.find((g) => g.id === action.id);
+          if (bot) {
+            const revision = (navigation.get(bot.id) ?? 0) + 1;
+            navigation.set(bot.id, revision);
+            void refreshBotSelection(bot.id, () => {
+              if (navigation.get(bot.id) !== revision || stateRef.current.selectedId !== bot.id) return undefined;
+              return stateRef.current.bots.find((candidate) => candidate.id === bot.id);
+            }, (fresh) => {
+              dispatch({ type: "taskSwitched", bot: { ...fresh, ...botPatchQueue.overlayFor(bot.id) } });
+              api(`/api/bots/${bot.id}/read`, { method: "POST", body: JSON.stringify({ threadId: fresh.threadId }) }).catch(() => {});
+            }).catch(showError);
+          }
           if (bot?.unread) {
             api(`/api/bots/${action.id}/read`, { method: "POST", body: JSON.stringify({ threadId: bot.threadId }) }).catch(() => {});
           } else if (group?.unread) {
