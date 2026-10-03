@@ -228,15 +228,14 @@ struct ChatView: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    // VStack, not LazyVStack. A lazy stack does not know how
-                    // tall it is until its rows have been built, so
-                    // `.defaultScrollAnchor(.bottom)` anchors against an
-                    // estimate and the chat opens somewhere in the middle of
-                    // the conversation. Building all of it up front makes the
-                    // height exact and the anchor land on the newest message.
-                    // A thread holds 50 messages until you ask for more, so
-                    // there is nothing here worth being lazy about.
-                    VStack(alignment: .leading, spacing: 14) {
+                    // Lazy: only the rows on screen are built and laid out.
+                    // An eager VStack measured every message's text whenever
+                    // anything in the list changed, which with several bots
+                    // streaming was most of each frame. A lazy stack only
+                    // estimates the height of rows it has not built, so the
+                    // anchor alone can open mid-way; the explicit scroll to
+                    // the newest row on appear below settles it.
+                    LazyVStack(alignment: .leading, spacing: 14) {
                         // room for the floating face when scrolled to the top
                         Color.clear.frame(height: 4)
 
@@ -375,7 +374,13 @@ struct ChatView: View {
                 .task {
                     guard let messageId = session.focusedMessageId,
                           messages.contains(where: { $0.id == messageId })
-                    else { return }
+                    else {
+                        // Open on the newest message. The bottom anchor
+                        // aims at an estimate until the rows near it are
+                        // built; scrolling to the row itself is exact.
+                        if let last = transcript.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        return
+                    }
                     proxy.scrollTo(messageId, anchor: .center)
                     session.consumeFocus(messageId)
                 }
