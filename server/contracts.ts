@@ -336,11 +336,13 @@ export interface ProviderAdapter {
    * Pass images only when `capabilities.nativeImageSteer` is true; otherwise
    * queue the complete message, preserving both text and attachments.
    *
-   * - "steered" — the engine accepted the input into the live turn.
+   * - "steered" — the provider transport accepted input for the live turn.
+   *   Claude confirms a stdin write; Codex confirms its steer RPC. Neither
+   *   proves the model consumed or acted on the input.
    * - "refused" — provably NOT delivered (no live turn, explicit RPC
    *   refusal, failed stdin write): the caller may queue it for the next
    *   turn without risk of running it twice.
-   * - "indeterminate" — delivered, but the outcome is unknown (the RPC
+   * - "indeterminate" — delivery may have happened, but the outcome is unknown (the RPC
    *   timed out after accept, transport failed, or the turn settled while
    *   the answer was in flight). The caller must NOT re-queue: the words
    *   may already be running, and replaying them would execute them twice. */

@@ -131,6 +131,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_STEER_ERROR;
     delete process.env.FAKE_CODEX_STEER_ERROR_FILE;
     delete process.env.FAKE_CODEX_STEER_HANG;
+    delete process.env.FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE;
+    delete process.env.FAKE_CODEX_STEER_SETTLE_GRACE_MS;
     delete process.env.FAKE_CODEX_STEER_TIMEOUT_MS;
     delete process.env.FAKE_CODEX_INTERRUPT_SILENT;
     delete process.env.FAKE_CODEX_INTERRUPT_GRACE_MS;
@@ -1600,6 +1602,21 @@ describe("CodexDriver turns (fake app-server)", () => {
     await expect(instance.adapter.steer!(threadId, "", {
       images: [{ path: join(scratch, "late.png"), mime: "image/png", bytes: 8 }],
     })).resolves.toBe("refused");
+  }, 20_000);
+
+  it("a steer the server refuses just after the turn ended is refused, not indeterminate", async () => {
+    const dump = join(scratch, "codex-steer-refused-after-complete.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    process.env.FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE = "1";
+    await create({ mode: "approval" });
+    const threadId = "t-codex-steer-refused-after-complete";
+    await instance.adapter.sendTurn({ threadId, text: "one" });
+    await recorder.until((e) => e.type === "request.opened");
+    // turn/completed reaches the driver before the explicit refusal: the
+    // engine provably never took the words, so they may be queued.
+    await expect(instance.adapter.steer!(threadId, "late words")).resolves.toBe("refused");
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: true });
+    expect(recorder.events.some((e) => e.type === "runtime.error")).toBe(false);
   }, 20_000);
 
   it("Stop interrupts through the protocol and reports no signal error", async () => {

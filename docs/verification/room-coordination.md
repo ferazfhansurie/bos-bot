@@ -7,7 +7,7 @@ remains unchanged and owns its own teammate turns; it does not run a competing
 handoff loop inside those turns.
 
 The tools are `list_room_targets` and `coordinate_bots`. Discovery includes
-reachable bots as well as rooms. The latter addresses 1–4 existing bots in this
+reachable bots as well as rooms. The latter addresses one or more distinct existing bots in this
 room (default), or — in ordinary direct chat without a room — the sender's one
 standing conversation with each recipient. Within the current room, the owner's
 membership selection permits bots from different teams to coordinate there.
@@ -19,8 +19,9 @@ access to another team's private conversations or unrelated rooms. Cross-room
 handoffs retain the existing checks for every room reader. A Chief can reach
 additional teams only
 after the owner grants that access in [team settings](team-access.md).
-Recipients run sequentially per room, with their own models, permissions and
-working environments. Busy recipients queue. Once all requested results arrive,
+Recipients run concurrently on separate room-member lanes, with their own models,
+permissions and working environments. Multiple deliveries to the same member
+serialize on its lane. Busy recipients queue. Once all requested results arrive,
 the sender resumes in the original conversation. A lead can consult its own
 specialists; it never inherits the parent Chief's cross-team access or permissions.
 Advice is not a verification
@@ -60,6 +61,16 @@ every outstanding assignment has settled and the resumed coordination has
 finished. Steering stays the default; Stop keeps its conversation-scoped
 behavior either way.
 
+Messages queued for a room member already running a tool are offered to that
+same member when its next tool result arrives. This uses the same atomic queue
+claim as explicit Steer, preserves FIFO order and complete pasted text, and
+drains consecutive messages addressed to that member. Messages for another
+member, ambiguous recipients and Goal work stay queued. Providers that refuse
+live input retain the queue for the normal follow-up. A successful Claude pipe
+write is recorded as `transport_written`; model consumption remains unconfirmed
+until its response provides evidence. An uncertain delivery is recorded once
+and never automatically replayed.
+
 Stop is scoped to the conversation it was pressed in. It ends that bot's turn
 and stops the conversation awaiting its teammates, so nothing resumes into a
 stopped chat. An assignment that had not started yet is cancelled, since
@@ -79,6 +90,7 @@ conversation.
 
 ```sh
 pnpm exec vitest run server/room-handoffs.test.ts server/room-coordination.e2e.test.ts src/components/GroupView.test.ts src/lib/room-activity.test.ts --maxWorkers=2
+pnpm exec vitest run server/room-parallel-runtime.e2e.test.ts server/steer-e2e.test.ts
 pnpm exec vitest run server/group-goal-run.e2e.test.ts server/group-goal-wait-cap.e2e.test.ts server/drivers/agents-proxy.test.ts --maxWorkers=2
 pnpm exec vitest run server/room-recovery.e2e.test.ts server/testing/room-handoff-agent.test.ts
 pnpm exec vitest run server/direct-coordination.e2e.test.ts --maxWorkers=1
@@ -213,3 +225,32 @@ now explicitly require real coordination receipts for named-bot participation;
 this is guidance, not a guarantee that every model report is truthful. The
 explicit nested run proves actual recipient execution, not merely a plausible
 final summary. These live results do not establish every provider's quality.
+
+## Room plumbing regression checks
+
+Run the real-server fixtures with synthetic providers only:
+
+```sh
+pnpm exec vitest run server/room-coordination.e2e.test.ts server/room-parallel-runtime.e2e.test.ts server/steer-e2e.test.ts
+```
+
+These cover same-room coordination from a runtime alias, five concurrent
+coordinated recipients, five concurrent mentioned workers with individual lead
+callbacks, a second lead callback after review and implementation, reciprocal
+mention deduplication, cancellation and membership revocation. Mention delivery
+is deduplicated per source, recipient and normalized result content within a
+user round; it retains the existing six-hop bound.
+
+Room steer receipts distinguish `delivery: transport_written` (Claude stdin),
+`provider_accepted` (steer RPC), and `outcome_unknown`. `consumption: unconfirmed`
+never asserts the model read or acted on the words. Unknown transport outcomes
+are recorded once with an activity warning and are not restored for automatic
+replay. A queue send's stable `sendId` deduplicates retries; editing its text or
+recipient under that same ID is a conflict. Distinct send IDs are distinct user
+messages, including identical content addressed to different members.
+
+A queued message addressed to a member cannot be explicitly steered to another
+member. Pasted-text wrappers carry their complete content to the provider;
+the composer preview currently renders the raw serialized text and remains a
+separate frontend issue. These fake-provider checks do not attest installed or
+live-model behavior.

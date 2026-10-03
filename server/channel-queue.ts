@@ -8,6 +8,7 @@
 
 import { newId } from "./contracts.ts";
 import { chatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
+import { sameAttachedSend } from "./steer-queue.ts";
 
 interface ChannelQueueItem {
   id: string;
@@ -41,6 +42,8 @@ export function restoreChannelMessages(): void {
 
 export interface QueuedChannelMessage {
   id: string;
+  /** A duplicate send joined this already-waiting item. */
+  joined?: boolean;
 }
 
 export function queueChannelMessage(
@@ -57,6 +60,15 @@ export function queueChannelMessage(
 ): QueuedChannelMessage {
   const entry = queues.get(threadId) ?? { groupId, items: [] };
   if (entry.groupId !== groupId) throw new Error("queued task belongs to another channel");
+  // One send = one item (see queueSteeredMessage): a duplicate attachment send
+  // that only differs in whitespace joins the waiting one.
+  const same = sameAttachedSend(text);
+  const pending = same && entry.items.find((queued) => same(queued.text)
+    && queued.mode === (options.mode ?? "chat")
+    && queued.replyToId === options.replyToId
+    && queued.via === options.via
+    && queued.sender?.name === options.sender?.name);
+  if (pending) return { id: pending.id, joined: true };
   const item: ChannelQueueItem = {
     id: newId(),
     text,
@@ -81,6 +93,12 @@ export function queuedChannelMessage(
   const entry = queues.get(threadId);
   if (!entry || entry.groupId !== groupId) return null;
   return entry.items.find((item) => item.sendId === sendId) ?? null;
+}
+
+/** Inspect the owned FIFO head before claiming it for a tool-boundary steer. */
+export function channelQueueHead(groupId: string, threadId: string): ChannelQueueItem | undefined {
+  const entry = queues.get(threadId);
+  return entry?.groupId === groupId ? entry.items[0] : undefined;
 }
 
 /** Remove one queued message before it starts. */

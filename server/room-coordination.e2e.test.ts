@@ -12,6 +12,9 @@ async function withRooms(test: (f: any) => Promise<void>) {
   const api = (path: string, body?: unknown, method = "POST") => request(path, body === undefined ? {} : { method, body: JSON.stringify(body) }, session.info.url) as Promise<any>;
   const tool = (name: string, args: Record<string, unknown>) => handleToolCall(name, args, (path, options) => request(path, options, session.info.url)) as Promise<any>;
   try {
+    // These fixtures exercise queueing at a busy teammate, with one slot
+    // per bot. Different bots may still execute concurrently in the room.
+    await api("/api/config", { threads: { maxConcurrentPerBot: 1 } }, "PATCH");
     const sender = (await cli("new-bot", "--name", "Director", "--section", "A")).bot;
     const target = (await cli("new-bot", "--name", "Engineer", "--section", "A")).bot;
     const source = (await tool("create_channel", { name: "Planning", member_ids: [sender.id], bulletin: "SOURCE_ONLY" })).channel;
@@ -171,6 +174,47 @@ it.each(["id", "name"])("coordinates mixed-team room members by %s and resumes t
   expect((await f.messages(f.source.activeTaskId)).some((m: any) => m.text === "Reviewed downstream outcome")).toBe(true);
   expect(await f.messages(f.destination.activeTaskId)).toEqual([]);
 }), 45_000);
+
+it.each([["bos", "dev"], ["dev", "pipe"]])("keeps the rejected %s to %s handoff in its originating conversation", (senderName, targetName) => withRooms(async f => {
+  await f.api(`/api/bots/${f.sender.id}`, {name:senderName}, "PATCH");
+  await f.api(`/api/bots/${f.target.id}`, {name:targetName,section:"Engineering"}, "PATCH");
+  await f.tool("update_channel",{channel_id:f.source.id,member_ids:[f.sender.id,f.target.id]});
+  const message=senderName==="dev"
+    ? `add steer to the plumbing job (same worktree, same rule: root cause before changes). evidence from firaz's screenshot at /Users/firazfhansurie/.bos-bot/attachments/ff91f293-9fe3-4698-a494-4fa8e986ef56.png (geng room composer, 17:55): 1) queued steer messages sit stacked in the composer queue and never get delivered while the bot is mid-tool-call; 2) the same message is queued multiple times (one with "@bos" prefix, one without); 3) queued items show raw "<pasted-text index="1">" placeholders instead of the expanded pasted content, so whatever's delivered may be missing the paste. also: a specialist's "done" in its own thread (pix chat-motion, dev/1.0-pix-chat-motion cbaf4556) never posted back to the room, firaz had to paste it manually — same as item 3 of your original brief. acceptance: root cause for each, then a fix where a steer sent during a tool call is delivered exactly once, with paste content expanded, and the queue clears. nit proves it in isolation; install and live testing stay with firaz. report back to me, 1.3 stays paused.`
+    : "include this exact same-room handoff in pipe's existing fix and regression checks, with results returning here. 1.3 stays paused; installation and live testing stay with firaz.";
+  f.plan[f.sender.id].steps=[{arguments:{bot_ids:[targetName],request_key:"incident-regression",message}}];
+  f.savePlan();
+  await f.cli("send-channel","--channel",f.source.id,"--text",`@${senderName} Start the assignment`);
+  expect((await f.wait()).status).toBe("settled");
+  expect(f.nodes()).toHaveLength(2);
+  expect(f.nodes().every((n:any)=>n.threadId===f.source.activeTaskId&&n.groupId===f.source.id&&n.status==="completed")).toBe(true);
+  const child=f.nodes().find((n:any)=>n.parentId);
+  expect(child.text).toBe(message);
+  const messages=await f.messages(f.source.activeTaskId);
+  expect(messages.filter((m:any)=>m.text==="Built CSV")).toHaveLength(1);
+  expect(messages.filter((m:any)=>m.text==="Reviewed downstream outcome")).toHaveLength(1);
+  const aliases=JSON.parse(readFileSync(join(f.session.info.dataDir,"room-runtime-aliases.json"),"utf8"));
+  expect(aliases.some(([id,owner]:[string,any])=>id!==f.source.activeTaskId&&owner.threadId===f.source.activeTaskId&&owner.botId===f.sender.id)).toBe(true);
+  expect(await f.messages(f.destination.activeTaskId)).toEqual([]);
+}),45000);
+
+it("coordinates five busy room teammates in one request and returns every result once", () => withRooms(async f => {
+  const targets=[f.target];
+  for(let i=2;i<=5;i++) targets.push((await f.cli("new-bot","--name",`Worker${i}`,"--section","A")).bot);
+  await f.tool("update_channel",{channel_id:f.source.id,member_ids:[f.sender.id,...targets.map(t=>t.id)]});
+  const gateFile=join(f.session.info.dataDir,"five-coordination.gate");
+  for(const target of targets) f.plan[target.id]={gateFile,reply:`RESULT ${target.id}`};
+  f.plan[f.sender.id].steps=[{arguments:{bot_ids:targets.map(t=>t.id),request_key:"five-workers",message:"Check your part"}}];
+  await f.start();
+  await expect.poll(()=>f.nodes().filter((n:any)=>n.parentId&&n.status==="running").length,{timeout:15000}).toBe(5);
+  await expect.poll(async()=>new Set((await f.api("/api/bots")).groups.find((g:any)=>g.id===f.source.id).activeBotIds),{timeout:15000}).toEqual(new Set(targets.map(t=>t.id)));
+  writeFileSync(gateFile,"finish workers");
+  expect((await f.wait()).status).toBe("settled");
+  expect(f.nodes().filter((n:any)=>n.parentId)).toHaveLength(5);
+  const messages=await f.messages(f.source.activeTaskId);
+  for(const target of targets) expect(messages.filter((m:any)=>m.text===`RESULT ${target.id}`)).toHaveLength(1);
+  expect(messages.filter((m:any)=>m.text==="Reviewed downstream outcome")).toHaveLength(1);
+}),45000);
 
 it.each(["peer", "membership"])("withholds mixed-team room work after queued %s access is revoked", revoked => withRooms(async f => {
   await f.api(`/api/bots/${f.target.id}`, { section: "Engineering" }, "PATCH");
@@ -342,11 +386,13 @@ it.each(["allow", "deny"])("presents all peer approvals together and dispatches 
 }), 45_000);
 
 it("pins a busy destination's task even when its active task changes", () => withRooms(async f => {
-  f.plan[f.target.id].delayMs = 1500;
+  const gateFile = join(f.session.info.dataDir, "pinned-destination.gate");
+  f.plan[f.target.id].gateFile = gateFile;
   f.savePlan(); await f.cli("send", "--bot", f.target.id, "--text", "Independent work");
   await f.start();
   await expect.poll(() => f.nodes().find((n: any) => n.parentId)?.status, { timeout: 10_000 }).toBe("queued");
   const created = await f.tool("create_task", { target_type: "channel", target_id: f.destination.id, title: "Unrelated conversation" });
+  writeFileSync(gateFile, "release the private turn");
   expect((await f.wait()).status).toBe("settled");
   const nodes = f.nodes(); expect(nodes.find((n: any) => n.parentId).threadId).toBe(f.destination.activeTaskId);
   expect((await f.messages(f.destination.activeTaskId)).some((m: any) => m.text === "Built CSV")).toBe(true);
@@ -361,9 +407,13 @@ it("consults multiple existing members and returns once, with no discussion prer
   f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id, reviewer.id], message: "Give one risk from your role", request_key: "consult" } }];
   f.plan[reviewer.id] = { reply: "Privacy risk" };
   await f.start(); expect((await f.wait()).status).toBe("settled");
-  expect(f.provider().map((turn: any) => turn.botId)).toEqual([f.sender.id, f.target.id, reviewer.id, f.sender.id]);
+  const speakers = f.provider().map((turn: any) => turn.botId);
+  expect(speakers).toHaveLength(4);
+  expect(speakers[0]).toBe(f.sender.id);
+  expect(speakers.at(-1)).toBe(f.sender.id);
+  expect(speakers.slice(1, -1).sort()).toEqual([f.target.id, reviewer.id].sort());
   const source = await f.messages(f.source.activeTaskId);
-  expect(source.filter((m: any) => m.comm).map((m: any) => m.comm.withBotId)).toEqual([f.target.id, reviewer.id]);
+  expect(source.filter((m: any) => m.comm).map((m: any) => m.comm.withBotId).sort()).toEqual([f.target.id, reviewer.id].sort());
   expect(source.filter((m: any) => m.text === "Reviewed downstream outcome")).toHaveLength(1);
   const tools = f.provider()[0].evidence[0].result.tools.map((t: any) => t.name);
   expect(tools).toContain("coordinate_bots");
@@ -394,9 +444,12 @@ it.each([false, true])("retains reports behind compact receipts for later turns,
 }), 45_000);
 
 it("waits for busy peers and then completes without the user relaying messages", () => withRooms(async f => {
-  f.plan[f.target.id].delayMs = 1500;
+  const gateFile = join(f.session.info.dataDir, "busy-peer-return.gate");
+  f.plan[f.target.id].gateFile = gateFile;
   f.savePlan(); await f.cli("send", "--bot", f.target.id, "--text", "Independent work");
   await f.start();
+  await expect.poll(() => f.nodes().find((n: any) => n.parentId)?.status, { timeout: 10_000 }).toBe("queued");
+  writeFileSync(gateFile, "release the busy peer");
   expect((await f.wait()).status).toBe("settled");
   expect(f.nodes().every((n: any) => n.status === "completed")).toBe(true);
   expect((await f.messages(f.source.activeTaskId)).some((m: any) => m.text === "Reviewed downstream outcome")).toBe(true);

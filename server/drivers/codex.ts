@@ -839,6 +839,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       let nextId = 1;
       const sensitiveResponseIds = new Set<number>();
       const rpcPending = new Map<number, {
+        method: string;
         resolve: (v: any) => void;
         reject: (e: Error) => void;
       }>();
@@ -864,6 +865,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           }, timeoutMs);
           if (typeof timer.unref === "function") timer.unref();
           rpcPending.set(id, {
+            method,
             resolve: (v) => {
               clearTimeout(timer);
               if (method === "thread/start" || method === "thread/resume") {
@@ -940,6 +942,27 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (state.settled) return;
         state.settled = true;
         for (const finish of Array.from(asks.values())) finish("deny", "OpenMausBot: the turn ended", "system");
+        // A steer the app-server has not answered yet still gets its answer:
+        // the server replies to every request, and a steer that arrived after
+        // the turn ended comes back as an explicit error — provably not taken,
+        // so the caller can queue it for the next turn instead of recording
+        // "outcome unknown" and losing it. Only a short wait, and never after
+        // Stop (the person withdrew what was in flight) or once the child is
+        // gone; whatever stays unanswered is still indeterminate below.
+        const answering = stopRequested ? [] : [...rpcPending].filter(([, p]) => p.method === "turn/steer");
+        for (const [id, p] of rpcPending) {
+          if (answering.some(([steerId]) => steerId === id)) continue;
+          rpcPending.delete(id);
+          p.reject(new Error("turn settled"));
+        }
+        if (answering.length) {
+          const graceMs = Math.max(1, Number(process.env.FAKE_CODEX_STEER_SETTLE_GRACE_MS ?? 1_000) || 1_000);
+          const deadline = Date.now() + graceMs;
+          while (answering.some(([id]) => rpcPending.has(id)) && Date.now() < deadline &&
+            !stopRequested && child.exitCode === null && child.signalCode === null) {
+            await new Promise((wake) => setTimeout(wake, 15));
+          }
+        }
         for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
         rpcPending.clear();
         const complete = () => {
@@ -978,6 +1001,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           }, steerTimeoutMs);
           return "steered";
         } catch (error) {
+          // An explicit RPC error is the server's own answer — it did not take
+          // the input — even when it arrives just after the turn ended.
+          if (error instanceof CodexRpcError) return "refused";
           const message = error instanceof Error ? error.message : String(error);
           if (state.settled || message.includes("timed out")) return "indeterminate";
           return "refused";
@@ -1318,10 +1344,13 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // multibyte characters that straddle two reads and corrupts the text
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
-        if (abandoned || state.settled) return;
+        // After settle only answers to still-pending requests (a steer that
+        // raced the end of the turn) are read; everything else is ignored.
+        if (abandoned || (state.settled && rpcPending.size === 0)) return;
         buf += chunk;
         let nl;
-        while (!state.settled && (nl = buf.indexOf("\n")) !== -1) {
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          if (state.settled && rpcPending.size === 0) break;
           const line = buf.slice(0, nl);
           buf = buf.slice(nl + 1);
           if (!line.trim()) continue;
@@ -1331,6 +1360,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           } catch {
             continue;
           }
+          const isResponse = msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined);
+          if (state.settled && !(isResponse && rpcPending.has(msg.id))) continue;
           stderrSinceOutput = "";
           const loggedMessage = codexNativeIncomingLogMessage(msg, sensitiveResponseIds);
           appendNative(threadId, { dir: "in", source: "codex.app-server", msg: loggedMessage });

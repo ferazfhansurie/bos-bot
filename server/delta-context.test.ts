@@ -287,6 +287,48 @@ describe("Handoffs", () => {
     expect(unseenIds(order, f.records.get("claude")!)).toEqual(["m2", "m5"]);
   });
 
+  it("never offers an uncertain steer to a later turn, whether its turn is running or already over", () => {
+    const order = ids(7);
+    const f = setup(order, { session: "s", through: "m2", ids: [] });
+    f.start({ resumeCursor: "s", carried: ["m3"], own: ["m3"] });
+    f.event(output);
+    // answer lost while the turn runs
+    f.handoffs.uncertain("t", f.handoffs.current("t"), "claude", "m4");
+    f.event({ type: "turn.completed", ok: true });
+    expect(unseenIds(order, f.records.get("claude")!)).toEqual(["m5", "m6"]);
+
+    // the person stops the turn; the steer's outcome arrives after it settled
+    f.start({ resumeCursor: "s", carried: ["m5"], own: ["m5"] });
+    const target = f.handoffs.current("t");
+    f.event(output);
+    f.handoffs.stoppedByPerson("t");
+    f.event({ type: "turn.completed", ok: false, stopReason: "interrupted" });
+    f.handoffs.uncertain("t", target, "claude", "m6");
+    expect(unseenIds(order, f.records.get("claude")!)).toEqual([]);
+  });
+
+  it("withdraws a steer accepted just after the person's stopped turn settled, but not one into a turn that ended normally", () => {
+    const order = ids(7);
+    const f = setup(order, { session: "s", through: "m2", ids: [] });
+    f.start({ resumeCursor: "s", carried: ["m3"], own: ["m3"] });
+    const stopped = f.handoffs.current("t");
+    f.event(output);
+    f.handoffs.stoppedByPerson("t");
+    f.event({ type: "turn.completed", ok: false, stopReason: "interrupted" });
+    f.handoffs.steered("t", stopped, "claude", "m4");
+    expect(unseenIds(order, f.records.get("claude")!)).toEqual(["m5", "m6"]);
+
+    f.start({ resumeCursor: "s", carried: ["m5"], own: ["m5"] });
+    const finished = f.handoffs.current("t");
+    f.event(output);
+    f.event({ type: "turn.completed", ok: true });
+    // offered again, marked, as any steer into a turn that was not stopped
+    f.handoffs.steered("t", finished, "claude", "m6");
+    // another engine's outcome says nothing about this session
+    f.handoffs.uncertain("t", finished, "codex", "m6");
+    expect(unseenIds(order, f.records.get("claude")!)).toEqual(["m6"]);
+  });
+
   it("ignores a steer aimed at a turn that has since been replaced, and events of other instances or turns", () => {
     const order = ids(5);
     const f = setup(order, { session: "s", through: "m1", ids: [] });

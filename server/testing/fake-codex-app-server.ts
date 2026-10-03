@@ -36,6 +36,8 @@
 //   FAKE_CODEX_STEER_ERROR_FILE  gate file path: reject turn/steer only while the file exists
 //   FAKE_CODEX_STEER_HANG  accept turn/steer and never answer (delivery happened, the
 //                          reply is lost — the driver must report indeterminate)
+//   FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE  complete the turn, then refuse turn/steer
+//                          (provably not taken — the driver must report refused)
 //   FAKE_CODEX_INTERRUPT_SILENT  ignore turn/interrupt entirely (wedged server; driver must escalate)
 //   FAKE_CODEX_INTERRUPT_GRACE_MS  driver-side grace before escalating an interrupt (tests)
 //   FAKE_CODEX_ROOM_PLAN  plan path: each turn runs the scripted room agent
@@ -372,6 +374,13 @@ process.stdin.on("data", (chunk) => {
         }
         if (process.env.FAKE_CODEX_STEER_ERROR_FILE && existsSync(process.env.FAKE_CODEX_STEER_ERROR_FILE)) {
           refused("active turn is not steerable");
+          break;
+        }
+        if (process.env.FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE) {
+          // The turn ends first, then the steer is answered with an explicit
+          // refusal: the server never took it (the end-of-turn race).
+          notify("turn/completed", { turn: { status: "completed" } });
+          refused("no active turn to steer");
           break;
         }
         if (process.env.FAKE_CODEX_STEER_HANG) break; // accepted, never answered

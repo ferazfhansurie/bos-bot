@@ -92,9 +92,20 @@ export function onSteeredQueueChange(listener: () => void): () => void {
 
 export interface QueuedSteer {
   id: string;
+  /** A duplicate send joined this already-waiting item. */
+  joined?: boolean;
 }
 
 /** Hold a mid-turn send off the transcript until drain. */
+/** Matcher for a duplicate attachment-bearing send: same words and tags,
+ * whitespace aside. Null for plain text, where repeats can be deliberate. */
+export function sameAttachedSend(text: string): ((other: string) => boolean) | null {
+  if (!/<attached-(image|file)[\t ]/.test(text)) return null;
+  const fold = (value: string) => value.replace(/\s+/g, " ").trim();
+  const key = fold(text);
+  return (other) => fold(other) === key;
+}
+
 export function queueSteeredMessage(
   botId: string,
   threadId: string,
@@ -106,6 +117,13 @@ export function queueSteeredMessage(
   // A thread cannot legitimately change owners. Refuse to merge unrelated
   // queues even if a corrupt caller reuses a thread id.
   if (entry.botId !== botId) throw new Error("queued task belongs to another bot");
+  // One send = one item: a second send of the same attachment-bearing text
+  // (only the blank lines differ, e.g. re-sent from a one-line chip) while
+  // the first still waits joins it instead of delivering the image twice.
+  const same = sameAttachedSend(text);
+  const pending = same && !options.unattended && !options.peerAsk
+    && entry.items.find((queued) => same(queued.text) && !queued.unattended && !queued.peerAsk && queued.replyToId === options.replyToId);
+  if (pending) return { id: pending.messageId, joined: true };
   const item = {
     messageId: id,
     text,

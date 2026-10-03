@@ -78,6 +78,24 @@ function fakeStore(bots: BotRecord[]): SteerStore & { messages: Message[] } {
 }
 
 describe("steer-queue module", () => {
+  it("keeps one item for one image send even when a re-send collapses its blank lines", () => {
+    // Live rows 21/22: same words and image, second copy's "\n\n" became " ".
+    const tag = '<attached-image path="/tmp/042c.png" name="image.png" />';
+    const first = queueSteeredMessage("bot-dup", "thread-dup", `balance tu 550 lagi?\n\n${tag}`, { sendId: "9a74c727-5bda-4940-b41f-17e32b9e8695" });
+    const again = queueSteeredMessage("bot-dup", "thread-dup", `balance tu 550 lagi? ${tag}`, { sendId: "d7f1469c-2f09-48ce-ae9f-c576dee0dead" });
+    expect(again.id).toBe(first.id);
+    expect(_queuedCount("thread-dup")).toBe(1);
+    // A different image, or plain words said twice, are real separate sends.
+    const other = queueSteeredMessage("bot-dup", "thread-dup", `balance tu 550 lagi?\n\n<attached-image path="/tmp/other.png" />`);
+    const yes1 = queueSteeredMessage("bot-dup", "thread-dup", "yes");
+    const yes2 = queueSteeredMessage("bot-dup", "thread-dup", "yes");
+    // Same image replying to something else, or arriving unattended, keeps its own item.
+    const replied = queueSteeredMessage("bot-dup", "thread-dup", `balance tu 550 lagi? ${tag}`, { replyToId: "msg-other" });
+    const peer = queueSteeredMessage("bot-dup", "thread-dup", `balance tu 550 lagi? ${tag}`, { unattended: true });
+    expect(_queuedCount("thread-dup")).toBe(6);
+    for (const queued of [first, other, yes1, yes2, replied, peer]) cancelSteeredMessage("bot-dup", queued.id, "thread-dup");
+  });
+
   it.each([undefined, "capacity"] as const)("detects an exact owner's queued correction with reason %s", (reason) => {
     const botId = `correction-${reason ?? "busy"}`;
     const threadId = `${botId}-thread`;

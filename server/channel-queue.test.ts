@@ -13,6 +13,20 @@ import {
 } from "./channel-queue.ts";
 
 describe("channel queue", () => {
+  it("keeps one item for one room image send even when a re-send collapses its blank lines", () => {
+    const tag = '<attached-image path="/tmp/042c.png" name="image.png" />';
+    const first = queueChannelMessage("group-dup", "thread-dup", `@Client lagi?\n\n${tag}`, { sendId: "send_dup_a_123456" });
+    const again = queueChannelMessage("group-dup", "thread-dup", `@Client lagi? ${tag}`, { sendId: "send_dup_b_123456" });
+    expect(again.id).toBe(first.id);
+    expect(_queuedChannelCount("thread-dup")).toBe(1);
+    const ok1 = queueChannelMessage("group-dup", "thread-dup", "ok");
+    const ok2 = queueChannelMessage("group-dup", "thread-dup", "ok");
+    const replied = queueChannelMessage("group-dup", "thread-dup", `@Client lagi? ${tag}`, { replyToId: "msg-other" });
+    const api = queueChannelMessage("group-dup", "thread-dup", `@Client lagi? ${tag}`, { via: "api", sender: { name: "script" } });
+    expect(_queuedChannelCount("thread-dup")).toBe(5);
+    for (const id of [first.id, ok1.id, ok2.id, replied.id, api.id]) cancelChannelMessage("group-dup", id);
+  });
+
   it("keeps messages off the running channel and drains one follow-up at a time", () => {
     let working = true;
     const run = vi.fn(() => {

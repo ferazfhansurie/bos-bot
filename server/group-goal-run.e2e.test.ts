@@ -1075,7 +1075,7 @@ describe("goal-driven channel runs", () => {
     if (dm) expect((await api("POST", `/api/groups/${dm.id}/messages`, { text: "goal", mode: "goal" })).status).toBe(400);
   });
 
-  it("automatically dispatches channel messages queued during a running turn", async () => {
+  it("steers a channel message sent during a running turn into that turn, once", async () => {
     const bot = (await api("POST", "/api/bots", {
       name: "Queue worker",
       modelSelection: { instanceId: "slow", model: "claude-sonnet-5" },
@@ -1104,13 +1104,14 @@ describe("goal-driven channel runs", () => {
     const queuedBody = { text: "second request", sendId: secondSendId };
     const queued = await api("POST", `/api/groups/${room.id}/messages`, queuedBody);
     expect(queued.status).toBe(202);
-    expect(queued.body).toMatchObject({ queued: true, threadId: room.threadId });
-    expect(queued.body.queueId).toEqual(expect.any(String));
-    expect(queued.body.message).toBeUndefined();
+    // Always-steer: the busy addressed member takes it mid-turn; no chip.
+    expect(queued.body).toMatchObject({ steered: true, threadId: room.threadId });
+    expect(queued.body.queued).toBeUndefined();
+    expect(queued.body.message).toMatchObject({ role: "user", text: "second request", sendId: secondSendId });
 
-    const retryWhileQueued = await api("POST", `/api/groups/${room.id}/messages`, queuedBody);
-    expect(retryWhileQueued.body).toMatchObject({ queued: true, queueId: queued.body.queueId });
-    writeFileSync(queueFinishGate, "observed the queued message and idempotent retry");
+    const retryWhileRunning = await api("POST", `/api/groups/${room.id}/messages`, queuedBody);
+    expect(retryWhileRunning.body.message?.id).toBe(queued.body.message.id);
+    writeFileSync(queueFinishGate, "observed the steered message and idempotent retry");
 
     await expect.poll(async () => {
       const state = (await api("GET", "/api/bots?messages=30")).body;
@@ -1122,26 +1123,7 @@ describe("goal-driven channel runs", () => {
       };
     }, { timeout: 10_000 }).toEqual({ working: false, sends: [firstSendId, secondSendId] });
 
-    const state = (await api("GET", "/api/bots?messages=30")).body;
-    const current = state.groups.find((candidate: { id: string }) => candidate.id === room.id);
-    const firstUserAt = current.messages.findIndex((message: { sendId?: string }) => message.sendId === firstSendId);
-    const secondUserAt = current.messages.findIndex((message: { sendId?: string }) => message.sendId === secondSendId);
-    const firstReplyAt = current.messages.findIndex(
-      (message: { role?: string }, index: number) => index > firstUserAt && message.role === "bot",
-    );
-    const secondReplyAt = current.messages.findIndex(
-      (message: { role?: string }, index: number) => index > secondUserAt && message.role === "bot",
-    );
-    expect(firstUserAt).toBeGreaterThanOrEqual(0);
-    expect(firstReplyAt).toBeGreaterThan(firstUserAt);
-    expect(secondUserAt).toBeGreaterThan(firstReplyAt);
-    expect(secondReplyAt).toBeGreaterThan(secondUserAt);
-    expect(current.messages[secondUserAt]).toMatchObject({ queueId: queued.body.queueId });
-
-    const retryAfterDrain = await api("POST", `/api/groups/${room.id}/messages`, queuedBody);
-    expect(retryAfterDrain.body.message).toMatchObject({
-      sendId: secondSendId,
-      queueId: queued.body.queueId,
-    });
+    const retryAfterSettle = await api("POST", `/api/groups/${room.id}/messages`, queuedBody);
+    expect(retryAfterSettle.body.message).toMatchObject({ id: queued.body.message.id, sendId: secondSendId });
   });
 });
