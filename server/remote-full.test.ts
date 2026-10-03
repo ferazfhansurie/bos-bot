@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonical } from "../electron/remote-full-protocol.mjs";
 import { DATA_DIR } from "./config.ts";
 import { Store } from "./store.ts";
-import { RemoteFullService, type RemoteFullEnrollment } from "./remote-full.ts";
+import { RemoteFullService, remoteFullAuthorityOrigin, type RemoteFullEnrollment } from "./remote-full.ts";
 import { approvalModeFor } from "../shared/approval-mode.ts";
 
 const serverKeys = generateKeyPairSync("ed25519");
@@ -130,5 +130,35 @@ describe("online enrollment readiness", () => {
     const f = fixture(); const first = await f.service.status("paired"); expect(first.state).toBe("verified");
     f.authority.mockRejectedValue(new Error("offline")); expect((await f.service.status("paired")).enrolled).toBe(false);
     await expect(f.prepare()).rejects.toThrow();
+  });
+});
+
+describe("owner authority configuration", () => {
+  it("has no hosted default and only uses BOS_CONTROL_PLANE_URL / OMB_CONTROL_PLANE_URL", () => {
+    expect(remoteFullAuthorityOrigin({})).toBe("");
+    expect(remoteFullAuthorityOrigin({ BOS_CONTROL_PLANE_URL: "https://accounts.example.com/" })).toBe("https://accounts.example.com");
+    expect(remoteFullAuthorityOrigin({ OMB_CONTROL_PLANE_URL: "https://legacy.example.com" })).toBe("https://legacy.example.com");
+  });
+  it("reports not configured and never fetches when no authority is configured", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const store = new Store(() => ({ instanceId: "codex", model: "fixture-sol" }));
+      const bot = store.createBot({ name: "Sol" }, { seedMessages: false });
+      const service = new RemoteFullService({ store, enrollment: () => enrollment, supported: () => true, providerRevision: () => "r", busy: () => false, sessionValid: id => id === "paired", authorityOrigin: () => "" });
+      expect(service.configured()).toBe(false);
+      expect(await service.status("paired")).toEqual({ enrolled: false, state: "unavailable", error: "remote sign-in not configured" });
+      await expect(service.prepare("paired", [{ botId: bot.id, threadId: bot.threadId, updateBotDefault: true }])).rejects.toThrow(/not configured/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally { fetchSpy.mockRestore(); }
+  });
+  it("sends authority requests to the configured origin", async () => {
+    const urls: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => { urls.push(String(url)); return Response.json({}, { status: 500 }); });
+    try {
+      const store = new Store(() => ({ instanceId: "codex", model: "fixture-sol" }));
+      const service = new RemoteFullService({ store, enrollment: () => enrollment, supported: () => true, providerRevision: () => "r", busy: () => false, sessionValid: () => true, authorityOrigin: () => "https://authority.example" });
+      expect((await service.status("paired")).state).toBe("unavailable");
+      expect(urls).toEqual(["https://authority.example/v1/remote-full/status"]);
+    } finally { fetchSpy.mockRestore(); }
   });
 });

@@ -1,17 +1,24 @@
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
-const ORIGIN = "https://accounts.openmausbot.com";
+import { controlPlaneUnavailableReason, resolveCompanionControlPlaneURL } from "./companion-account-service.mjs";
+/** The owner authority is the configured control plane (BOS_CONTROL_PLANE_URL
+ * or legacy OMB_CONTROL_PLANE_URL). No hosted default: unset disables remote
+ * owner sign-in and nothing is fetched. */
+export function remoteOwnerAuthorityOrigin(environment = process.env) {
+  return resolveCompanionControlPlaneURL({ environment });
+}
 /** Separate ephemeral sign-in: never changes the Mac's existing BOS account,
  * provider logins, installation credential, or remote pairing. */
-export function signInRemoteOwner({ BrowserWindow, ipcMain, parent, environment, createClient = createControlPlaneClient, timers = { setTimeout, clearTimeout } }) {
+export function signInRemoteOwner({ BrowserWindow, ipcMain, parent, environment, createClient = createControlPlaneClient, timers = { setTimeout, clearTimeout }, authorityOrigin = remoteOwnerAuthorityOrigin() }) {
+  if (!authorityOrigin) return Promise.reject(new Error(controlPlaneUnavailableReason()));
   return new Promise((resolve, reject) => {
     const channel = `remote-owner:${randomUUID()}`;
     const url = new URL("./resources/remote-full-owner.html", import.meta.url);
     const win = new BrowserWindow({ width: 500, height: 440, title: "BOS — installation owner sign-in", parent, modal: true, show: false,
       webPreferences: { preload: fileURLToPath(new URL("./remote-full-owner-preload.cjs", import.meta.url)), sandbox: true, contextIsolation: true, nodeIntegration: false,
         partition: `remote-owner-${randomUUID()}`, additionalArguments: [`--owner-channel=${channel}`] } });
-    const client = createClient({ baseURL: ORIGIN });
+    const client = createClient({ baseURL: authorityOrigin });
     const contents = win.webContents;
     let state = "active", generation = 0, pending = false, cleaned = false;
     const alive = () => !win.isDestroyed() && !contents.isDestroyed();
@@ -88,8 +95,9 @@ export function signInRemoteOwner({ BrowserWindow, ipcMain, parent, environment,
     win.loadFile(fileURLToPath(url)).catch(cancel);
   });
 }
-export async function authorizeRemoteFull(accountToken, body) {
-  const response = await fetch(`${ORIGIN}/v1/remote-full/authorize`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(8000),
+export async function authorizeRemoteFull(accountToken, body, { authorityOrigin = remoteOwnerAuthorityOrigin(), fetchImpl = fetch } = {}) {
+  if (!authorityOrigin) throw new Error(controlPlaneUnavailableReason());
+  const response = await fetchImpl(`${authorityOrigin}/v1/remote-full/authorize`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(8000),
     headers: { authorization: `Bearer ${accountToken}`, "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error("This account is not the verified installation owner, or confirmation expired");
 }

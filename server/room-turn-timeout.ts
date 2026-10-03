@@ -9,15 +9,18 @@ export function roomTurnTimeoutMs(minutes: number): number {
  * an approval or question card (request.opened → request.resolved) —
  * waiting on a person is not work, and stopping the turn under an open
  * card manufactures the stranded-approval state the harness otherwise has
- * to repair after the fact. Streaming, tool runs, and provider latency
- * still burn the budget normally; a turn that goes silent entirely is
- * separately caught by the stall watchdog.
+ * to repair after the fact. Streaming and tool activity (noteActivity)
+ * refill the budget, so the ceiling bounds how long a turn may go without
+ * visible progress rather than how long productive work may take; provider
+ * latency between events still burns it. A turn that goes silent entirely
+ * is separately caught by the stall watchdog.
  *
  * Requests pair opened→resolved per thread, but resolves can also arrive
  * for cards this turn never opened (stale cleanup after an interrupt), so
  * the count clamps at zero instead of trusting perfect pairing.
  */
 export class RoomTurnDeadline {
+  private readonly budgetMs: number;
   private remainingMs: number;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private openRequests = 0;
@@ -29,7 +32,8 @@ export class RoomTurnDeadline {
   // plain field assignments, not parameter properties — the server runs
   // under Node's type-stripping, which cannot transform the latter
   constructor(minutes: number, fire: () => void) {
-    this.remainingMs = roomTurnTimeoutMs(minutes);
+    this.budgetMs = roomTurnTimeoutMs(minutes);
+    this.remainingMs = this.budgetMs;
     this.fire = fire;
   }
 
@@ -50,6 +54,15 @@ export class RoomTurnDeadline {
       this.openRequests -= 1;
       if (this.openRequests === 0) this.arm();
     }
+  }
+
+  /** The turn streamed text or ran a tool: refill the budget. Cheap enough
+   * for every delta — it moves the start mark instead of re-creating the
+   * timer, and the timer re-arms for whatever is left when it fires. */
+  noteActivity(): void {
+    if (this.stopped || this.fired || this.openRequests > 0) return;
+    this.remainingMs = this.budgetMs;
+    if (this.timer !== null) this.armedAt = Date.now();
   }
 
   /** The turn settled — cancel whatever remains. Idempotent. */
@@ -80,7 +93,10 @@ export class RoomTurnDeadline {
     this.armedAt = Date.now();
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.expired();
+      // activity may have moved the start mark since this timer was set
+      this.remainingMs -= Date.now() - this.armedAt;
+      if (this.remainingMs > 0) this.arm();
+      else this.expired();
     }, this.remainingMs);
   }
 

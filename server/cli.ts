@@ -17,8 +17,8 @@
 // `serve` starts the server, waits for it, and prints a pairing link with a
 // QR code: scan it with the phone or open it on a laptop. `--tailscale` asks
 // Tailscale to terminate HTTPS for it and uses the MagicDNS name in the link.
-// `--tunnel` (after `login`) serves at a public https://….openmausbot.com
-// address through a Cloudflare tunnel: no domain, no proxy, no open port.
+// `--tunnel` (after `login`) serves at a public HTTPS address issued by the
+// control plane in BOS_CONTROL_PLANE_URL (off when unset), reached through a Cloudflare tunnel: no domain, no proxy, no open port.
 //
 // This module only exports; openmausbot.ts is the entry that runs main(), so
 // bundling this file into other entries (pair-cli.ts) never runs it twice.
@@ -58,6 +58,7 @@ import {
   type ManagedTunnelAccess,
   type RunningTunnel,
 } from "./tunnel.ts";
+import { controlPlaneUnavailableReason } from "../electron/companion-account-service.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -266,8 +267,9 @@ fleet   many client workspaces on one Linux server, each its own account,
 --tailscale  serve over your tailnet: Tailscale terminates HTTPS and the
              link uses this machine's MagicDNS name (needs Tailscale signed in
              and HTTPS certificates enabled for the tailnet)
---tunnel     serve at a public https://….openmausbot.com address through a
-             Cloudflare tunnel: no domain, no proxy, no open port. Run
+--tunnel     serve at a public HTTPS address issued by your control plane
+             (BOS_CONTROL_PLANE_URL; off when unset) through a Cloudflare
+             tunnel: no domain, no proxy, no open port. Run
              \`openmausbot login\` once on this machine first.
 --domain     serve at https://HOST on your own domain: a pinned Caddy is
              downloaded once and run alongside the server, and gets the
@@ -678,7 +680,7 @@ export async function runLogin(options: CliOptions, io: CliIo = defaultIo()): Pr
     return 1;
   }
   if (!account.controlPlane) {
-    io.error("OMB_CONTROL_PLANE_URL is set but is not an https address");
+    io.error(controlPlaneUnavailableReason());
     return 1;
   }
   const existing = describeTunnelAccount(account.credentials.read());

@@ -59,19 +59,30 @@ beforeEach(() => {
   };
   vi.stubGlobal("window", { ogb: { organization: bridge } });
   vi.stubGlobal("fetch", vi.fn());
+  vi.stubEnv("VITE_BOS_PORTAL_ORIGIN", "https://portal.example.test");
   setLocale("en");
 });
-afterEach(() => { vi.unstubAllGlobals(); setLocale("en"); });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); setLocale("en"); });
 async function ready(state: ManagedDesktopState = { status: "signed-out" }) {
   vi.mocked(bridge.state).mockResolvedValueOnce(state);
   render(); const cleanup = fixture.effects[0](); await flush(); return cleanup;
 }
 
 describe("optional desktop Organisation settings", () => {
+  it("has no upstream portal default: without VITE_BOS_PORTAL_ORIGIN only the custom address form is offered", async () => {
+    vi.stubEnv("VITE_BOS_PORTAL_ORIGIN", "");
+    await ready();
+    const view = render();
+    expect(view.html).not.toContain("openmausbot.com");
+    expect(view.nodes.find(node => node.type === "button" && node.props.children === "Sign in with your organisation")).toBeUndefined();
+    expect(view.html).toMatch(/<details[^>]*\bopen/);
+    expect(bridge.begin).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("uses the default portal from one sign-in action and keeps custom setup advanced", async () => {
     await ready();
     let view = render();
-    expect(view.html).toContain("https://admin.openmausbot.com");
+    expect(view.html).toContain("https://portal.example.test");
     expect(view.html).toContain("Sign in with your organisation");
     expect(view.html).toContain("<summary");
     expect(view.html).toContain("Advanced");
@@ -81,7 +92,7 @@ describe("optional desktop Organisation settings", () => {
     expect(bridge.begin).not.toHaveBeenCalled();
     const signIn = () => view.nodes.find(node => node.type === "button" && node.props.children === "Sign in with your organisation")!.props.onClick!();
     signIn(); signIn(); await flush();
-    expect(bridge.begin).toHaveBeenCalledExactlyOnceWith({ portalOrigin: "https://admin.openmausbot.com" });
+    expect(bridge.begin).toHaveBeenCalledExactlyOnceWith({ portalOrigin: "https://portal.example.test" });
     expect(fetch).not.toHaveBeenCalled();
     const progress = render().html;
     expect(progress).toContain("Finish signing in through your browser");

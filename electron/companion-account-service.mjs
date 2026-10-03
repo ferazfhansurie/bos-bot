@@ -9,7 +9,13 @@ import {
   withoutManagedCompanionTunnelAccess,
 } from "./managed-companion-tunnel.mjs";
 
-export const DEFAULT_COMPANION_CONTROL_PLANE_URL = "https://accounts.openmausbot.com";
+/** BOS has no hosted account service by default. Account sign-in, the hosted
+ * companion address, remote sign-in and `login --tunnel` all stay off until an
+ * operator points BOS_CONTROL_PLANE_URL (or legacy OMB_CONTROL_PLANE_URL) at
+ * their own control plane. */
+export const DEFAULT_COMPANION_CONTROL_PLANE_URL = "";
+export const CONTROL_PLANE_URL_ENV = "BOS_CONTROL_PLANE_URL";
+export const LEGACY_CONTROL_PLANE_URL_ENV = "OMB_CONTROL_PLANE_URL";
 
 export const COMPANION_CLIENT_INSTANCE_FIELD = "companionClientInstanceId";
 export const COMPANION_ACCOUNT_TOKEN_FIELD = "companionAccountToken";
@@ -28,18 +34,31 @@ const DEFAULT_HEALTH_CACHE_MS = 30_000;
 const ownString = (document, field) =>
   typeof document?.[field] === "string" ? document[field] : "";
 
-/** Packaged builds have a safe hosted default. Development must opt into an
- * exact HTTPS origin (or HTTP loopback Worker) so a contributor never sends
- * an OTP or bearer to an accidental host. An explicitly invalid override
- * disables the feature instead of silently falling back to production. */
+/** An exact HTTPS origin (or HTTP loopback Worker) must be configured, in
+ * packaged and development builds alike, so an OTP or bearer never goes to a
+ * host the operator did not choose. BOS_CONTROL_PLANE_URL wins over the legacy
+ * OMB_CONTROL_PLANE_URL. Unset, or explicitly invalid, disables the feature;
+ * there is no fallback to any upstream service. `isPackaged` is accepted for
+ * compatibility and no longer changes the answer. */
 export function resolveCompanionControlPlaneURL({
-  isPackaged,
   environment = process.env,
 } = {}) {
-  if (Object.hasOwn(environment, "OMB_CONTROL_PLANE_URL")) {
-    return normalizeControlPlaneURL(environment.OMB_CONTROL_PLANE_URL);
+  for (const key of [CONTROL_PLANE_URL_ENV, LEGACY_CONTROL_PLANE_URL_ENV]) {
+    if (environment && Object.hasOwn(environment, key)) {
+      return normalizeControlPlaneURL(environment[key]);
+    }
   }
-  return isPackaged ? DEFAULT_COMPANION_CONTROL_PLANE_URL : "";
+  return DEFAULT_COMPANION_CONTROL_PLANE_URL;
+}
+
+/** Why resolveCompanionControlPlaneURL returned "", phrased for operators. */
+export function controlPlaneUnavailableReason(environment = process.env) {
+  const configured = [CONTROL_PLANE_URL_ENV, LEGACY_CONTROL_PLANE_URL_ENV].find(
+    (key) => environment && Object.hasOwn(environment, key),
+  );
+  return configured
+    ? `${configured} is set but is not an https address`
+    : `remote sign-in not configured: set ${CONTROL_PLANE_URL_ENV} to your control plane's https origin`;
 }
 
 export function companionAccountCleanupPending(credentials) {

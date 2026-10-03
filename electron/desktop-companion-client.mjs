@@ -11,6 +11,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import path from "node:path";
+import { resolveCompanionControlPlaneURL } from "./companion-account-service.mjs";
 
 export const DESKTOP_COMPANION_FIELD = "desktopCompanionRemote";
 const DEVICE_TOKEN = /^omb_[A-Za-z0-9_-]{43}$/;
@@ -48,11 +49,31 @@ const cleanLabel = (value, fallback) => {
   return label || fallback;
 };
 
-/** Pairing tokens may travel through a verified OpenMausBot HTTPS endpoint or
+/** The domain whose subdomains are trusted as managed HTTPS companion
+ * endpoints. BOS_COMPANION_HOST_SUFFIX wins; otherwise it is the parent domain
+ * of the configured control plane (accounts.example.com -> example.com, which
+ * issues c-<id>.example.com). Nothing configured means no hosted endpoint is
+ * trusted; there is no upstream default. */
+export function managedCompanionHostSuffix(environment = process.env) {
+  const explicit = String(environment?.BOS_COMPANION_HOST_SUFFIX ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^\.+/, "");
+  if (explicit) return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(explicit) ? explicit : "";
+  const controlPlane = resolveCompanionControlPlaneURL({ environment });
+  if (!controlPlane) return "";
+  const host = new URL(controlPlane).hostname.toLowerCase();
+  if (host.startsWith("[") || isIP(host) || !host.includes(".")) return "";
+  const labels = host.split(".");
+  return labels.length > 2 ? labels.slice(1).join(".") : host;
+}
+
+/** Pairing tokens may travel through a verified managed HTTPS endpoint (see
+ * managedCompanionHostSuffix) or
  * an explicit Tailscale MagicDNS name. WireGuard protects cleartext HTTP on
  * the latter; accepting LAN IPs there would silently turn the long-lived
  * bearer into plaintext Wi-Fi traffic. */
-export function normalizeDesktopCompanionEndpoint(value) {
+export function normalizeDesktopCompanionEndpoint(value, environment = process.env) {
   let raw = String(value ?? "").trim();
   if (!raw) return "";
   if (!/^https?:\/\//i.test(raw)) {
@@ -66,8 +87,8 @@ export function normalizeDesktopCompanionEndpoint(value) {
   }
   const hostname = parsed.hostname.toLowerCase();
   const tailscaleHttp = parsed.protocol === "http:" && hostname.endsWith(".ts.net");
-  const managedHttps =
-    parsed.protocol === "https:" && hostname.endsWith(".openmausbot.com");
+  const managedSuffix = parsed.protocol === "https:" ? managedCompanionHostSuffix(environment) : "";
+  const managedHttps = Boolean(managedSuffix) && hostname.endsWith(`.${managedSuffix}`);
   if (
     (!tailscaleHttp && !managedHttps) ||
     parsed.username ||

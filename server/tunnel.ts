@@ -30,6 +30,7 @@ import {
   COMPANION_ACCOUNT_EMAIL_FIELD,
   COMPANION_INSTALLATION_ID_FIELD,
   createCompanionAccountService,
+  controlPlaneUnavailableReason,
   resolveCompanionControlPlaneURL,
   type CompanionAccountService,
   type CredentialDocument,
@@ -139,13 +140,14 @@ export function platformName(platform: NodeJS.Platform = process.platform): "dar
 export interface TunnelAccount {
   service: CompanionAccountService;
   credentials: TunnelCredentials;
-  /** "" when OMB_CONTROL_PLANE_URL is set to something unusable. */
+  /** "" when no control plane is configured (BOS_CONTROL_PLANE_URL /
+   * OMB_CONTROL_PLANE_URL unset) or it is set to something unusable. */
   controlPlane: string;
 }
 
-/** The desktop honours OMB_CONTROL_PLANE_URL only in development builds; a
- * server's operator owns its environment, so it is honoured here always and
- * the caller says so in its output. */
+/** The control plane comes only from BOS_CONTROL_PLANE_URL (or legacy
+ * OMB_CONTROL_PLANE_URL); there is no hosted default, so `login` and
+ * `serve --tunnel` are off until an operator configures one. */
 export function createTunnelAccount(options: {
   dataDir: string;
   version: string;
@@ -155,7 +157,7 @@ export function createTunnelAccount(options: {
 }): TunnelAccount {
   const env = options.env ?? process.env;
   const credentials = openTunnelCredentials(options.dataDir);
-  const controlPlane = resolveCompanionControlPlaneURL({ isPackaged: true, environment: env });
+  const controlPlane = resolveCompanionControlPlaneURL({ environment: env });
   const client = controlPlane ? createControlPlaneClient({ baseURL: controlPlane, fetchImpl: options.fetchImpl }) : null;
   const service = createCompanionAccountService({
     client,
@@ -180,8 +182,8 @@ export function fleetCredential(env: NodeJS.ProcessEnv = process.env): string | 
 
 export async function fleetAccess(options: { credential: string; env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch }): Promise<ManagedTunnelAccess> {
   const env = options.env ?? process.env;
-  const controlPlane = resolveCompanionControlPlaneURL({ isPackaged: true, environment: env });
-  if (!controlPlane) throw new Error("OMB_CONTROL_PLANE_URL is set but is not an https address");
+  const controlPlane = resolveCompanionControlPlaneURL({ environment: env });
+  if (!controlPlane) throw new Error(controlPlaneUnavailableReason(env));
   const client = createControlPlaneClient({ baseURL: controlPlane, fetchImpl: options.fetchImpl });
   try {
     const { endpoint, connectorToken } = await client.ensureEndpoint(options.credential);

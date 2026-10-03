@@ -297,6 +297,23 @@ afterAll(async () => {
 });
 
 describe.sequential("Composio Sessions", () => {
+  it("has no hosted broker by default and honours BOS_COMPOSIO_BROKER_URL", () => {
+    const saved = { bos: process.env.BOS_COMPOSIO_BROKER_URL, omb: process.env.OMB_COMPOSIO_BROKER_URL, token: process.env.OMB_COMPOSIO_BROKER_TOKEN };
+    delete process.env.BOS_COMPOSIO_BROKER_URL;
+    delete process.env.OMB_COMPOSIO_BROKER_URL;
+    delete process.env.OMB_COMPOSIO_BROKER_TOKEN;
+    try {
+      expect(connectionMode({})).toBe("unavailable");
+      process.env.OMB_COMPOSIO_BROKER_TOKEN = "a".repeat(64);
+      expect(connectionMode({})).toBe("unavailable");
+      process.env.BOS_COMPOSIO_BROKER_URL = "http://127.0.0.1:3210";
+      expect(connectionMode({})).toBe("managed");
+    } finally {
+      for (const [key, value] of [["BOS_COMPOSIO_BROKER_URL", saved.bos], ["OMB_COMPOSIO_BROKER_URL", saved.omb], ["OMB_COMPOSIO_BROKER_TOKEN", saved.token]] as const) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  });
   it("rejects broker URL components and invalid tokens from the environment", () => {
     process.env.OMB_COMPOSIO_BROKER_TOKEN = "a".repeat(64);
     try {

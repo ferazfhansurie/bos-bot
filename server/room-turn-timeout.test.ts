@@ -190,3 +190,41 @@ describe("room turn timeout", () => {
     );
   });
 });
+
+describe("room turn deadline activity (B21)", () => {
+  it("refills the budget on streaming or tool activity", async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const deadline = new RoomTurnDeadline(10, onTimeout);
+    deadline.start();
+
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    deadline.noteActivity();
+    await vi.advanceTimersByTimeAsync(9 * 60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+
+    deadline.noteActivity();
+    await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onTimeout).toHaveBeenCalledOnce();
+    deadline.stop();
+  });
+
+  it("does not re-arm a held or finished deadline", async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const deadline = new RoomTurnDeadline(5, onTimeout);
+    deadline.start();
+    deadline.setWaitingOnHuman(true);
+    deadline.noteActivity();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+
+    deadline.stop();
+    deadline.noteActivity();
+    deadline.setWaitingOnHuman(false);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+});

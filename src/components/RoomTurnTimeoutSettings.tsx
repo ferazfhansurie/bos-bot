@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  DEFAULT_ROOM_TURN_TIMEOUT_MINUTES,
   MAX_ROOM_TURN_TIMEOUT_MINUTES,
   MIN_ROOM_TURN_TIMEOUT_MINUTES,
   parseRoomTurnTimeoutMinutes,
@@ -10,7 +11,7 @@ import { t } from "@/lib/i18n";
 
 export function RoomTurnTimeoutSettings() {
   const { state, dispatch } = useStore();
-  const confirmedMinutes = state.config?.rooms.turnTimeoutMinutes ?? 5;
+  const confirmedMinutes = state.config?.rooms.turnTimeoutMinutes ?? DEFAULT_ROOM_TURN_TIMEOUT_MINUTES;
   const [value, setValue] = useState(String(confirmedMinutes));
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");

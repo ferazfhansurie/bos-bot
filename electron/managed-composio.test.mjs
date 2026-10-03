@@ -4,11 +4,26 @@ import {
   managedComposioAccess,
   managedComposioChildEnvironment,
   normalizeManagedComposioBrokerUrl,
+  resolveManagedComposioBrokerUrl,
 } from "./managed-composio.mjs";
 
 const TOKEN = "a".repeat(64);
 
 describe("managed Composio desktop registration", () => {
+  it("has no hosted broker default and prefers BOS_COMPOSIO_BROKER_URL", () => {
+    expect(resolveManagedComposioBrokerUrl({})).toBe("");
+    expect(resolveManagedComposioBrokerUrl({ OMB_COMPOSIO_BROKER_URL: "https://legacy.example/" })).toBe(
+      "https://legacy.example",
+    );
+    expect(
+      resolveManagedComposioBrokerUrl({
+        BOS_COMPOSIO_BROKER_URL: "https://broker.example/root/",
+        OMB_COMPOSIO_BROKER_URL: "https://legacy.example",
+      }),
+    ).toBe("https://broker.example/root");
+    expect(resolveManagedComposioBrokerUrl({ BOS_COMPOSIO_BROKER_URL: "http://broker.example" })).toBe("");
+  });
+
   it("publishes only a complete broker credential", () => {
     expect(managedComposioAccess("https://broker.example/", { composioBrokerToken: TOKEN })).toEqual({
       url: "https://broker.example",
