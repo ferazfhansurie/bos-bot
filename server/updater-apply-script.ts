@@ -19,6 +19,10 @@ STAGED = Path(PLAN["staged"]) if PLAN.get("staged") else None
 BACKUP = Path(PLAN["backup"]) if PLAN.get("backup") else None
 RESULT = Path(PLAN["resultPath"])
 PORTS = [int(p) for p in PLAN["ports"]]
+# Test-only (OMB_UPDATE_SANDBOX): no launchd, "the app" is whoever listens on
+# PORTS[0], relaunch is left to the test's supervisor, and FAULT injects one failure.
+SANDBOX = bool(PLAN.get("sandbox"))
+FAULT = PLAN.get("fault") if SANDBOX else None
 LOG = (HERE / "apply.log").open("a")
 
 def log(msg):
@@ -81,6 +85,8 @@ def belongs(args, app):
     return args == str(app) or args.startswith(prefix) or (" " + prefix) in args or (" " + str(app) + " ") in args
 
 def app_pids(app, rows=None):
+    if SANDBOX:
+        return sorted(pid for pid in listeners(PORTS[0]) if pid != os.getpid())
     rows = snapshot() if rows is None else rows
     return sorted(pid for pid, row in rows.items() if belongs(row["args"], app) and pid != os.getpid())
 
@@ -141,6 +147,8 @@ def drain(app, seconds=30):
 
 def launch(app):
     argv = [a.replace("{app}", str(app)) for a in PLAN["launch"]]
+    if not argv:
+        log("launch skipped: the supervisor relaunches"); return
     log("launch " + " ".join(argv))
     subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -177,6 +185,8 @@ def swap_in():
     require(digests(STAGED) == PLAN["expect"], "staged tree changed since the plan was written")
     if PLAN.get("codesign"):
         run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(STAGED), timeout=120)
+    if FAULT == "kill-mid-swap":
+        log("fault: dying in the swap step, before the rename lands"); LOG.flush(); os._exit(137)
     os.rename(LIVE, BACKUP)
     try:
         os.rename(STAGED, LIVE)
@@ -228,6 +238,7 @@ def main():
             try:
                 progress("relaunching"); launch(LIVE)
                 progress("verifying")
+                require(FAULT != "health-fail", "fault injected: health-fail")
                 require(healthy(LIVE, PLAN["expect"], PLAN["healthSeconds"]), "updated app did not become healthy")
             except Exception as e:
                 rollback(e)

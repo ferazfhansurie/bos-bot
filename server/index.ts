@@ -2,8 +2,9 @@ import { channelControlPatch, roomCompletionNotifies } from "./channel-controls.
 import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
 import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
 import { DesktopUpdateLifecycle, readPreparedUpdateReceipt, assertUpdateCancellationSafe } from "./desktop-update-lifecycle.ts";
-import { UpdateCoordinator, readInstalled, resumePrompt, type BusyTurn } from "./updater.ts";
-import { createDarwinUpdaterHost } from "./updater-host.ts";
+import { UpdateCoordinator, createDarwinExecutor, readInstalled, resumePrompt, type BusyTurn, type UpdateExecutor } from "./updater.ts";
+import { createDarwinUpdaterHost, createSandboxUpdaterHost } from "./updater-host.ts";
+import { createElectronUpdateExecutor } from "./updater-executor-electron.ts";
 import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
 import { groupReplyTargets } from "../shared/group-replies.ts";
 import { SharedTyping } from "./shared-typing.ts";
@@ -12822,12 +12823,33 @@ const desktopUpdateLifecycle = new DesktopUpdateLifecycle(workspaceMaintenance, 
 // ── update / restart button (1.3) ─────────────────────────────────────────
 // The live bundle is three directories above the ui tree the desktop hands us.
 // 8812 is the managed companion gateway (electron/companion-origin-gateway.mjs); it only counts when bound.
+// OMB_UPDATE_SANDBOX=1 is the acceptance suite's seam: a copied bundle, a
+// staged bundle, a plist directory instead of launchd, an optional fault.
+const UPDATE_SANDBOX = process.env.OMB_UPDATE_SANDBOX === "1";
 const LIVE_APP_PATH = (() => {
   const fromStatic = STATIC_DIR ? /^(.*\.app)\/Contents\//.exec(STATIC_DIR)?.[1] : undefined;
   const fromExec = /^(.*\.app)\/Contents\//.exec(process.execPath)?.[1];
-  return process.env.OMB_UPDATER_LIVE_APP || fromStatic || fromExec || "";
+  return (UPDATE_SANDBOX && process.env.OMB_UPDATE_APP_PATH) || process.env.OMB_UPDATER_LIVE_APP || fromStatic || fromExec || "";
 })();
 const UPDATE_OWNER_PREFIX = "update:";
+// win32: Electron main owns the installer and the relaunch; ask it over the
+// private port. Elsewhere: launchd + the detached python job.
+const updateExecutor: UpdateExecutor = process.platform === "win32"
+  ? createElectronUpdateExecutor({ port: utilityParentPort, serverPort: PORT, extraPorts: [8812], log: line => console.log(line) })
+  : createDarwinExecutor(
+    UPDATE_SANDBOX
+      ? createSandboxUpdaterHost({ jobsDir: process.env.OMB_UPDATE_JOBS_DIR || join(DATA_DIR, "updates", "jobs"), port: PORT })
+      : createDarwinUpdaterHost({ dataDir: DATA_DIR, port: PORT, extraPorts: [8812] }),
+    {
+      dataDir: DATA_DIR, liveApp: LIVE_APP_PATH,
+      codesign: !UPDATE_SANDBOX && process.env.OMB_UPDATER_CODESIGN !== "0", requireLaunchd: !UPDATE_SANDBOX,
+      // release/v1.3-build/preflight.py: read-only, prints json. Runs when shipped in the bundle or pointed at.
+      preflight: process.env.OMB_UPDATER_PREFLIGHT || (LIVE_APP_PATH && !UPDATE_SANDBOX ? join(LIVE_APP_PATH, "Contents", "Resources", "updater", "preflight.py") : undefined),
+      ...(UPDATE_SANDBOX ? { sandbox: { ...(process.env.OMB_UPDATE_STAGED_PATH ? { stagedPath: process.env.OMB_UPDATE_STAGED_PATH } : {}), ...(process.env.OMB_UPDATE_FAULT ? { fault: process.env.OMB_UPDATE_FAULT } : {}) } } : {}),
+      log: line => console.log(line),
+    },
+  );
+const UPDATE_ROUTES_READY = process.platform === "win32" ? Boolean(utilityParentPort) : Boolean(LIVE_APP_PATH);
 const listBusyTurns = (): BusyTurn[] => {
   const turns: BusyTurn[] = [];
   for (const bot of store.bots) {
@@ -12841,7 +12863,6 @@ const listBusyTurns = (): BusyTurn[] => {
 };
 const updateCoordinator = new UpdateCoordinator({
   dataDir: DATA_DIR,
-  liveApp: LIVE_APP_PATH,
   current: () => ({ version: serverVersion(), sha: readInstalled(DATA_DIR)?.sha ?? process.env.OMB_APP_SHA ?? "unknown" }),
   listBusyTurns,
   stopAll: async () => {
@@ -12857,16 +12878,16 @@ const updateCoordinator = new UpdateCoordinator({
     delegations: [...pendingDelegationWakes.entries()].map(([id, wake]) => ({ id, botId: wake.botId, targetName: wake.targetName })),
   }),
   quiesce: async () => {
-    const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.status().updateId ?? ""}`;
+    const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.id ?? ""}`;
     workspaceMaintenance.restoreUpdate(owner, workspaceQuietHooks.resume);
     workspaceQuietHooks.pause();
     await workspaceQuietHooks.flush();
   },
   unquiesce: () => {
-    const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.status().updateId ?? ""}`;
+    const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.id ?? ""}`;
     try { workspaceMaintenance.cancelUpdate(owner); } catch { /* never locked */ }
   },
-  host: createDarwinUpdaterHost({ dataDir: DATA_DIR, port: PORT, extraPorts: [8812] }),
+  executor: updateExecutor,
   emit: event => broadcast({ ...event }),
   resumeTurn: async (turn, result) => {
     const bot = store.bot(turn.botId);
@@ -12877,11 +12898,14 @@ const updateCoordinator = new UpdateCoordinator({
       return "noted: room turn not replayed";
     }
     if (!store.taskByThread(turn.botId, turn.threadId)) return "skipped: thread no longer exists";
+    // The continuation prompt itself is not shown (cardContinuation); leave a visible trace of the interruption.
+    store.appendMessage(turn.threadId, { role: "bot", kind: "activity", from: { botId: bot.id, name: bot.name, color: bot.color },
+      tool: { name: `${bot.name}'s turn was interrupted by a BOS ${result.mode} and is resuming. Anything it started that left no visible result is "interrupted, check".`, ok: false } });
     await startTurn(turn.botId, resumePrompt(turn, result), { threadId: turn.threadId, unattended: true, cardContinuation: true });
     return "resumed";
   },
   log: line => console.log(line),
-  codesign: process.env.OMB_UPDATER_CODESIGN !== "0",
+  ...(UPDATE_SANDBOX ? { resultWaitMs: 30_000 } : {}),
 });
 
 const workspaceBackupRoutes = createWorkspaceBackupRoutes({
@@ -13275,9 +13299,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // The owner's desktop or an admin session. Peer/client sessions cannot restart the app.
       if (auth.kind === "session" && !auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
       res.setHeader("cache-control", "no-store");
-      if (method === "GET" && path === "/api/update/status") return json(res, 200, updateCoordinator.status());
+      if (method === "GET" && path === "/api/update/status") return json(res, 200, await updateCoordinator.status());
       if (method === "POST" && (path === "/api/update/apply" || path === "/api/update/restart")) {
-        if (!LIVE_APP_PATH) return json(res, 409, { error: "this server is not running from an app bundle; nothing to swap or relaunch" });
+        if (!UPDATE_ROUTES_READY) return json(res, 409, { error: process.platform === "win32" ? "this server is not running inside the desktop app; nothing to relaunch" : "this server is not running from an app bundle; nothing to swap or relaunch" });
         const body = await readBody(req).catch(() => ({})) as { force?: unknown };
         const options = { force: body?.force === true };
         try {

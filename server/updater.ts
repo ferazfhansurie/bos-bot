@@ -9,6 +9,7 @@
 // the bot to check, not repeat, any external action whose outcome it cannot
 // see. Room turns are only noted; a room re-dispatch needs the room's own
 // scheduler and is not a safe thing to guess at.
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -28,7 +29,8 @@ export interface UpdateStatus {
   current: { version: string; sha: string };
   candidate?: { version: string; sha: string; stagedAt: string };
   busyTurns: Array<{ botId: string; threadId: string }>;
-  lastResult?: { state: UpdateResult["state"]; at: string; detail: string; rollback?: string; version?: string; sha?: string };
+  /** The last finished update. Omitted while another one is in flight: then `state` is the whole story. */
+  lastResult?: { state: UpdateResult["state"]; at: string; detail: string; updateId?: string; rollback?: string; version?: string; sha?: string };
 }
 export interface UpdateEvent { kind: "update.state"; type: "update.state"; state: UpdateState; updateId: string; detail: string }
 export interface ApplyPlan {
@@ -37,10 +39,33 @@ export interface ApplyPlan {
   old: { server: string; ui: string } | null; oldVersion: string; oldSha: string; version: string; sha: string; force: boolean;
   launch: string[]; resultPath: string; installedPath: string; gracefulSeconds: number; healthSeconds: number;
   codesign: boolean; selfBootout: boolean; requireLaunchd: boolean; uid: number | null; scriptSha256: string;
+  /** Test-only (OMB_UPDATE_SANDBOX): "the app" is whoever listens on ports[0]; no launchd; relaunch is left to a supervisor. */
+  sandbox?: boolean; fault?: string | null;
+}
+/** The platform-neutral part of a plan: what any executor needs to swap or
+ * relaunch and to write result.json where boot() will look for it. */
+export type ExecutorPlan = Pick<ApplyPlan, "updateId" | "mode" | "version" | "sha" | "oldVersion" | "oldSha" | "force" | "resultPath" | "installedPath" | "health" | "ports" | "gracefulSeconds" | "healthSeconds">;
+export interface ExecutorCandidate { version: string; sha: string; stagedAt: string }
+/** The platform seam. The coordinator owns admission order, checkpoint,
+ * stop, quiesce, plan.json and result/resume; the executor owns how the
+ * machine swaps and relaunches. `createDarwinExecutor` wraps launchd and
+ * the detached python job; `updater-executor-electron.ts` asks the Electron
+ * main process over the private utility port (win32). */
+export interface UpdateExecutor {
+  /** The staged build, if any. */
+  candidate(): Promise<ExecutorCandidate | null>;
+  /** Refuse (throw with status 409) when the machine cannot take an update now. Returns notes worth logging. */
+  admit(mode: UpdateMode): Promise<string[]>;
+  /** Ports the app must own again after relaunch; health is probed on the first. */
+  ports(): Promise<number[]>;
+  /** Resolves when the handoff is accepted: the executor WILL quit this
+   * process and write plan.resultPath afterwards. Resolving is not "finished".
+   * A rejection carrying `pending: true` means the executor may already own
+   * the handoff; the coordinator then holds its lock and never retries. */
+  execute(plan: ExecutorPlan, dir: string): Promise<void>;
 }
 export interface UpdaterHooks {
   dataDir: string;
-  liveApp: string;
   current: () => { version: string; sha: string };
   listBusyTurns: () => BusyTurn[];
   stopAll: () => Promise<void>;
@@ -48,7 +73,7 @@ export interface UpdaterHooks {
   /** Lock the workspace against new work, pause schedulers, flush to disk. */
   quiesce: () => Promise<void>;
   unquiesce: () => void;
-  host: UpdaterHost;
+  executor: UpdateExecutor;
   emit: (event: UpdateEvent) => void;
   /** Continue one interrupted conversation. Called at most once per turn. */
   resumeTurn: (turn: CheckpointTurn, result: UpdateResult) => Promise<string>;
@@ -56,17 +81,17 @@ export interface UpdaterHooks {
   sleep?: (ms: number) => Promise<void>;
   stopWaitMs?: number;
   resultWaitMs?: number;
-  codesign?: boolean;
-  requireLaunchd?: boolean;
-  uid?: number | null;
   log?: (line: string) => void;
 }
 
-/** What the coordinator needs from the machine. `updater-host.ts` has the
- * darwin implementation; tests pass fakes. */
+export interface LaunchdJobDetails { keepAlive: boolean; runAtLoad: boolean; program?: string | null; plist?: string | null }
+/** What the darwin executor needs from the machine. `updater-host.ts` has
+ * the launchd implementation and a sandbox one; tests pass fakes. */
 export interface UpdaterHost {
   /** Raw `launchctl list` output. */
   launchdList(): Promise<string>;
+  /** KeepAlive/RunAtLoad of a loaded job, or null when launchd will not say. */
+  jobDetails(uid: number | null, label: string): Promise<LaunchdJobDetails | null>;
   /** Start the one-shot job described by the plist (launchctl bootstrap). */
   bootstrap(uid: number | null, plistPath: string): Promise<void>;
   /** Remove a finished job of ours so it cannot block the next update. */
@@ -153,19 +178,45 @@ export function updaterPlist(label: string, dir: string, python = "/usr/bin/pyth
   ].join("\n");
 }
 
-/** `launchctl list` rows → labels that must stop an update from starting.
- * Our own finished one-shots (no pid) are returned separately so the caller
- * can boot them out instead of refusing. */
-export function classifyLaunchdJobs(listing: string): { blocking: string[]; staleOwn: string[] } {
-  const blocking: string[] = []; const staleOwn: string[] = [];
+/** `launchctl list` rows → our own finished one-shots (boot them out), jobs
+ * that are running now (refuse), and loaded foreign install/restart jobs that
+ * are idle (ask launchd whether they would come back: `jobBlocks`). */
+export function classifyLaunchdJobs(listing: string): { running: string[]; idle: string[]; staleOwn: string[] } {
+  const running: string[] = []; const idle: string[] = []; const staleOwn: string[] = [];
   for (const line of listing.split("\n").slice(1)) {
     const [pid, , label] = line.trim().split(/\s+/);
     if (!label) continue;
-    const running = pid !== undefined && pid !== "-";
-    if (label.startsWith(UPDATE_JOB_PREFIX)) { (running ? blocking : staleOwn).push(label); continue; }
-    if (/bos|maus/i.test(label) && /install|updat|restart|keepalive|relaunch|steer/i.test(label)) blocking.push(label);
+    const live = pid !== undefined && pid !== "-";
+    if (label.startsWith(UPDATE_JOB_PREFIX)) { (live ? running : staleOwn).push(label); continue; }
+    // The app's own LaunchServices job (application.<bundle id>.<n>) is the app, not an orphan.
+    if (label.startsWith("application.")) continue;
+    if (/bos|maus/i.test(label) && /install|updat|restart|keepalive|relaunch|steer/i.test(label)) (live ? running : idle).push(label);
   }
-  return { blocking, staleOwn };
+  return { running, idle, staleOwn };
+}
+
+/** An idle loaded job blocks only when launchd would run it again by itself:
+ * KeepAlive, or RunAtLoad on a job whose purpose is to restart/relaunch the
+ * app. A finished one-shot install job just sits there; report it. */
+export function jobBlocks(label: string, details: LaunchdJobDetails | null): string | null {
+  if (!details) return null;
+  if (details.keepAlive) return "KeepAlive";
+  if (details.runAtLoad && /restart|relaunch|keepalive/i.test(`${label} ${details.program ?? ""}`)) return "RunAtLoad restart";
+  return null;
+}
+
+/** Output of release/v1.3-build/preflight.py (read-only, prints json). Only
+ * its live-job finding refuses an update; the rest is reported. */
+export interface PreflightReport { ok?: boolean; checks?: { blocking_jobs?: string[]; idle_jobs?: string[]; health_ok?: boolean; health_pid_is_server?: boolean; single_main_app?: boolean }; launchd?: Array<{ label?: string; reason?: string; state?: string }> }
+export function preflightVerdict(report: PreflightReport): { blocking: string[]; notes: string[] } {
+  const checks = report.checks ?? {};
+  const blocking = Array.isArray(checks.blocking_jobs) ? checks.blocking_jobs.filter((label): label is string => typeof label === "string") : [];
+  const notes: string[] = [];
+  const idle = Array.isArray(checks.idle_jobs) ? checks.idle_jobs.filter(label => typeof label === "string") : [];
+  if (idle.length) notes.push(`preflight: idle install jobs loaded, not blocking: ${idle.join(", ")}`);
+  const failed = (["health_ok", "health_pid_is_server", "single_main_app"] as const).filter(key => checks[key] === false);
+  if (failed.length) notes.push(`preflight: not ok (${failed.join(", ")}); reported, not blocking`);
+  return { blocking, notes };
 }
 
 export function updateDir(dataDir: string, updateId: string): string { return join(updatesDir(dataDir), updateId); }
@@ -192,17 +243,19 @@ export function pendingUpdates(dataDir: string): string[] {
     .sort((a, b) => statSync(join(updatesDir(dataDir), a, "plan.json")).mtimeMs - statSync(join(updatesDir(dataDir), b, "plan.json")).mtimeMs);
 }
 
-export function resumePrompt(turn: CheckpointTurn, result: UpdateResult): string {
+export function resumePrompt(_turn: CheckpointTurn, result: UpdateResult): string {
   const what = result.state === "done"
     ? (result.mode === "update" ? `BOS was updated to ${result.version ?? "a new build"} and restarted` : "BOS was restarted")
     : `BOS tried to update, rolled back (${result.detail}) and restarted`;
-  const where = turn.title ? ` ("${turn.title}")` : "";
-  return `${what} while you were mid-turn in this conversation${where}. Continue from where you stopped. ` +
+  // The interrupted request is not quoted back: the transcript already has it,
+  // and a quoted instruction reads like a fresh one to do again.
+  return `${what} while you were mid-turn in this conversation. Continue from where you stopped. ` +
     "Read the transcript above first. Any external action you started whose outcome is not visible here (a message, a post, a file write, a command, a payment) is " +
     "\"interrupted, check\": verify whether it happened before doing it again, and say so if you cannot tell. Do not redo work that already shows a result.";
 }
 
 const err = (message: string, status: number) => Object.assign(new Error(message), { status });
+const isPending = (error: unknown): boolean => Boolean(error) && typeof error === "object" && (error as { pending?: unknown }).pending === true;
 
 export class UpdateCoordinator {
   private state: UpdateState = "idle";
@@ -225,51 +278,58 @@ export class UpdateCoordinator {
     this.hooks.emit({ kind: "update.state", type: "update.state", state, updateId: this.updateId ?? "", detail });
   }
 
-  status(): UpdateStatus {
-    const candidate = this.candidateSafe();
+  /** The update this process is driving or finishing, if any. */
+  get id(): string | null { return this.running ? this.updateId : null; }
+
+  async status(): Promise<UpdateStatus> {
+    const candidate = await this.candidateSafe();
     const state: UpdateState = this.running ? this.state : candidate ? "ready" : "idle";
     return {
       state, ...(this.updateId ? { updateId: this.updateId } : {}), ...(this.detail ? { detail: this.detail } : {}),
       current: this.hooks.current(),
       ...(candidate ? { candidate: { version: candidate.version, sha: candidate.sha, stagedAt: candidate.stagedAt } } : {}),
       busyTurns: this.hooks.listBusyTurns().map(turn => ({ botId: turn.botId, threadId: turn.threadId })),
-      ...(this.lastResult ? { lastResult: this.lastResult } : {}),
+      ...(this.lastResult && !this.running ? { lastResult: this.lastResult } : {}),
     };
   }
-  private candidateSafe(): Candidate | null {
-    try { return discoverCandidate(this.hooks.dataDir); }
+  private async candidateSafe(): Promise<ExecutorCandidate | null> {
+    try { return await this.hooks.executor.candidate(); }
     catch (error) { this.log(`candidate unreadable: ${error instanceof Error ? error.message : String(error)}`); return null; }
   }
 
-  apply(options: { force?: boolean } = {}): Promise<{ updateId: string }> { return this.start("update", Boolean(options.force)); }
-  restart(options: { force?: boolean } = {}): Promise<{ updateId: string }> { return this.start("restart", Boolean(options.force)); }
+  apply(options: { force?: boolean } = {}): Promise<{ updateId: string; notes?: string[] }> { return this.start("update", Boolean(options.force)); }
+  restart(options: { force?: boolean } = {}): Promise<{ updateId: string; notes?: string[] }> { return this.start("restart", Boolean(options.force)); }
 
-  private async start(mode: UpdateMode, force: boolean): Promise<{ updateId: string }> {
+  private async start(mode: UpdateMode, force: boolean): Promise<{ updateId: string; notes?: string[] }> {
     if (this.running) throw err(`an update is already running (${this.updateId})`, 409);
-    const candidate = mode === "update" ? discoverCandidate(this.hooks.dataDir) : null;
+    const candidate = mode === "update" ? await this.hooks.executor.candidate() : null;
     if (mode === "update" && !candidate) throw err("no staged update to apply", 409);
-    const { blocking, staleOwn } = classifyLaunchdJobs(await this.hooks.host.launchdList());
-    if (blocking.length) throw err(`another installer or restart job is active: ${blocking.join(", ")}`, 409);
-    for (const label of staleOwn) {
-      this.log(`removing finished update job ${label}`);
-      try { await this.hooks.host.bootout(this.uid(), label); } catch (error) { this.log(`bootout ${label} failed: ${error instanceof Error ? error.message : String(error)}`); }
-    }
+    const notes = await this.hooks.executor.admit(mode);
+    for (const note of notes) this.log(note);
     const lockPath = join(updatesDir(this.hooks.dataDir), "apply.lock");
     const updateId = randomUUID();
     // One owner. The in-memory flag guards this process; the file guards
     // against a second server on the same data dir. boot() clears it.
-    if (existsSync(lockPath)) throw err("another update owns the lock; restart BOS if nothing is running", 409);
+    if (this.running || existsSync(lockPath)) throw err("another update owns the lock; restart BOS if nothing is running", 409);
     writeFileAtomic(lockPath, JSON.stringify({ updateId, pid: process.pid, at: this.now().toISOString() }), { mode: 0o600 });
     this.running = true; this.updateId = updateId;
     const dir = updateDir(this.hooks.dataDir, updateId);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     // Everything after admission runs detached from the request: the caller
     // gets 202 + updateId now and follows update.state events.
-    void this.drive(mode, force, candidate, dir).catch(error => {
-      this.set("failed", error instanceof Error ? error.message : String(error));
-      this.finish();
-    });
-    return { updateId };
+    void this.drive(mode, force, candidate, dir).catch(error => this.fail(updateId, mode, error));
+    return { updateId, ...(notes.length ? { notes } : {}) };
+  }
+
+  /** The handoff never happened: say so, and if plan.json already exists make
+   * sure the next boot does not wait for a job that was never started. */
+  private fail(updateId: string, mode: UpdateMode, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (existsSync(join(updateDir(this.hooks.dataDir, updateId), "plan.json")) && !readResult(this.hooks.dataDir, updateId)) {
+      this.consume(updateId, { state: "failed", at: this.now().toISOString(), detail, updateId, mode });
+    }
+    this.set("failed", detail);
+    this.finish();
   }
 
   private finish(): void {
@@ -278,9 +338,7 @@ export class UpdateCoordinator {
     try { unlinkSync(join(updatesDir(this.hooks.dataDir), "apply.lock")); } catch { /* already gone */ }
   }
 
-  private uid(): number | null { return this.hooks.uid === undefined ? (process.getuid?.() ?? null) : this.hooks.uid; }
-
-  private async drive(mode: UpdateMode, force: boolean, candidate: Candidate | null, dir: string): Promise<void> {
+  private async drive(mode: UpdateMode, force: boolean, candidate: ExecutorCandidate | null, dir: string): Promise<void> {
     const updateId = this.updateId!;
     this.set("checkpointing");
     const extras = this.hooks.checkpointExtras();
@@ -302,55 +360,50 @@ export class UpdateCoordinator {
     await this.hooks.quiesce();
 
     this.set("applying", mode === "update" ? `installing ${candidate!.version} (${candidate!.sha.slice(0, 8)})` : "restarting");
-    const live = this.hooks.liveApp;
-    const old = this.safeDigests(live);
-    const ports = await this.hooks.host.listeningPorts();
+    const ports = await this.hooks.executor.ports();
     if (!ports.length) throw err("cannot tell which port the app is listening on", 409);
-    const proc = await this.hooks.host.appProcess();
     const current = this.hooks.current();
-    const script = UPDATER_APPLY_SCRIPT;
-    const plan: ApplyPlan = {
-      updateId, label: `${UPDATE_JOB_PREFIX}${updateId.slice(0, 8)}`, mode, live,
-      staged: candidate?.appPath ?? null,
-      backup: candidate ? join(dirname(live), `${basename(live, ".app")}.previous-${current.sha.slice(0, 8) || "unknown"}-${updateId.slice(0, 8)}.app-disabled`) : null,
-      appPid: proc.pid, appIdentity: proc.identity, ports, health: `http://127.0.0.1:${ports[0]}/api/health`,
-      expect: candidate ? { server: candidate.serverSha256, ui: candidate.uiSha256 } : null, old,
-      oldVersion: current.version, oldSha: current.sha, version: candidate?.version ?? current.version, sha: candidate?.sha ?? current.sha, force,
-      launch: ["/usr/bin/open", "{app}"], resultPath: join(dir, "result.json"), installedPath: join(updatesDir(this.hooks.dataDir), "installed.json"),
-      gracefulSeconds: 45, healthSeconds: 90, codesign: this.hooks.codesign ?? true, selfBootout: true, requireLaunchd: this.hooks.requireLaunchd ?? true,
-      uid: this.uid(), scriptSha256: createHash("sha256").update(script).digest("hex"),
+    const plan: ExecutorPlan = {
+      updateId, mode, version: candidate?.version ?? current.version, sha: candidate?.sha ?? current.sha, oldVersion: current.version, oldSha: current.sha, force,
+      resultPath: join(dir, "result.json"), installedPath: join(updatesDir(this.hooks.dataDir), "installed.json"),
+      health: `http://127.0.0.1:${ports[0]}/api/health`, ports, gracefulSeconds: 45, healthSeconds: 90,
     };
-    if (candidate && appDigests(candidate.appPath).server !== candidate.serverSha256) throw err("staged app changed since it was staged; re-stage it", 409);
-    writeFileAtomic(join(dir, "apply.py"), script, { mode: 0o700 });
+    // plan.json is what marks this update as pending for the next boot. The
+    // darwin executor rewrites it with its own extras before launchd starts.
     writeFileAtomic(join(dir, "plan.json"), JSON.stringify(plan, null, 2), { mode: 0o600 });
-    const plistPath = join(dir, `${plan.label}.plist`);
-    writeFileAtomic(plistPath, updaterPlist(plan.label, dir), { mode: 0o600 });
-    await this.hooks.host.bootstrap(plan.uid, plistPath);
-    // The job quits this process. If instead a result shows up while we are
-    // still alive, the job gave up before the swap: report it and reopen.
-    const watch = async () => {
-      const deadline = Date.now() + (this.hooks.resultWaitMs ?? 180_000);
-      while (Date.now() < deadline) {
-        await this.sleep(1000);
-        const result = readResult(this.hooks.dataDir, updateId);
-        if (result) {
-          this.consume(updateId, result);
-          this.set(result.state, result.detail);
-          this.finish();
-          return;
-        }
-      }
-    };
-    void watch();
+    try { await this.hooks.executor.execute(plan, dir); }
+    catch (error) {
+      if (!isPending(error)) throw error;
+      // The executor may already own the handoff (it recorded intent and
+      // then could not tell us whether it dispatched). Nothing here may run
+      // again: keep the lock and the quiesced workspace, keep watching for a
+      // result, and let a restart (ours or the user's) settle it through boot().
+      this.set("applying", `handoff uncertain: ${error instanceof Error ? error.message : String(error)}. holding the workspace until BOS restarts`);
+      void this.watch(updateId);
+      return;
+    }
+    void this.watch(updateId);
   }
 
-  private safeDigests(app: string): { server: string; ui: string } | null {
-    try { return appDigests(app); } catch { return null; }
+  /** The executor quits this process. If instead a result shows up while we
+   * are still alive, the job gave up before the swap: report it and reopen. */
+  private async watch(updateId: string): Promise<void> {
+    const deadline = Date.now() + (this.hooks.resultWaitMs ?? 180_000);
+    while (Date.now() < deadline) {
+      await this.sleep(1000);
+      const result = readResult(this.hooks.dataDir, updateId);
+      if (result) {
+        this.consume(updateId, result);
+        this.set(result.state, result.detail);
+        this.finish();
+        return;
+      }
+    }
   }
 
   private consume(updateId: string, result: UpdateResult): void {
     const dir = updateDir(this.hooks.dataDir, updateId);
-    this.lastResult = { state: result.state, at: result.at, detail: result.detail, ...(result.rollback ? { rollback: result.rollback } : {}),
+    this.lastResult = { state: result.state, at: result.at, detail: result.detail, updateId, ...(result.rollback ? { rollback: result.rollback } : {}),
       ...(result.version ? { version: result.version } : {}), ...(result.sha ? { sha: result.sha } : {}) };
     writeFileAtomic(join(updatesDir(this.hooks.dataDir), "last-result.json"), JSON.stringify(this.lastResult), { mode: 0o600 });
     writeFileAtomic(join(dir, "consumed.json"), JSON.stringify({ at: this.now().toISOString(), pid: process.pid }), { mode: 0o600 });
@@ -399,4 +452,105 @@ export class UpdateCoordinator {
 
   /** Test seam: wait for the detached watcher. */
   get active(): boolean { return this.running; }
+}
+
+// ── darwin executor: launchd + the detached python job ────────────────────
+
+export interface DarwinExecutorOptions {
+  dataDir: string;
+  liveApp: string;
+  codesign?: boolean;
+  requireLaunchd?: boolean;
+  uid?: number | null;
+  /** release/v1.3-build/preflight.py, when shipped; skipped when absent. */
+  preflight?: string;
+  /** Test-only (OMB_UPDATE_SANDBOX=1): a staged bundle outside updates/candidate and a fault to inject. */
+  sandbox?: { stagedPath?: string; fault?: string };
+  runPreflight?: (path: string) => Promise<string>;
+  log?: (line: string) => void;
+}
+
+/** A bundle at an arbitrary path described like a staged candidate: version
+ * from its Info.plist, sha = its server tree digest. Sandbox only. */
+export function describeStagedApp(appPath: string): Candidate {
+  const digests = appDigests(appPath);
+  let version = "unknown";
+  try {
+    const plist = readFileSync(join(appPath, "Contents", "Info.plist"), "utf8");
+    version = /CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]?.trim() || version;
+  } catch { /* no plist */ }
+  return { version, sha: digests.server, stagedAt: statSync(appPath).mtime.toISOString(), app: basename(appPath), serverSha256: digests.server, uiSha256: digests.ui, dir: dirname(appPath), appPath };
+}
+
+function defaultRunPreflight(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("/usr/bin/python3", [path], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) return reject(new Error(`preflight failed: ${String(stderr).trim().slice(0, 300) || error.message}`));
+      resolve(String(stdout));
+    });
+  });
+}
+
+export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorOptions): UpdateExecutor {
+  const log = options.log ?? (() => {});
+  const uid = options.uid === undefined ? (process.getuid?.() ?? null) : options.uid;
+  const sandbox = options.sandbox;
+  const candidate = async (): Promise<Candidate | null> => sandbox?.stagedPath
+    ? (existsSync(join(sandbox.stagedPath, "Contents")) ? describeStagedApp(sandbox.stagedPath) : null)
+    : discoverCandidate(options.dataDir);
+  return {
+    candidate,
+    async admit() {
+      const notes: string[] = [];
+      const { running, idle, staleOwn } = classifyLaunchdJobs(await host.launchdList());
+      const blocking = running.map(label => `${label} (running)`);
+      for (const label of idle) {
+        const details = await host.jobDetails(uid, label).catch(() => null);
+        const why = jobBlocks(label, details);
+        if (why) blocking.push(`${label} (${why})`);
+        else notes.push(`loaded but idle, not blocking: ${label}${details ? "" : " (launchd gave no details)"}`);
+      }
+      if (blocking.length) throw err(`another installer or restart job is active: ${blocking.join(", ")}`, 409);
+      for (const label of staleOwn) {
+        log(`[update] removing finished update job ${label}`);
+        try { await host.bootout(uid, label); } catch (error) { log(`[update] bootout ${label} failed: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      if (options.preflight && existsSync(options.preflight)) {
+        let report: PreflightReport;
+        try { report = JSON.parse(await (options.runPreflight ?? defaultRunPreflight)(options.preflight)) as PreflightReport; }
+        catch (error) { notes.push(`preflight unreadable, not blocking: ${error instanceof Error ? error.message : String(error)}`); report = {}; }
+        const verdict = preflightVerdict(report);
+        if (verdict.blocking.length) throw err(`preflight found live install jobs: ${verdict.blocking.join(", ")}`, 409);
+        notes.push(...verdict.notes);
+      }
+      return notes;
+    },
+    ports: () => host.listeningPorts(),
+    async execute(plan, dir) {
+      const staged = plan.mode === "update" ? await candidate() : null;
+      if (plan.mode === "update" && (!staged || staged.version !== plan.version || staged.sha !== plan.sha)) throw err("staged app changed since it was admitted; re-stage it", 409);
+      if (staged && appDigests(staged.appPath).server !== staged.serverSha256) throw err("staged app changed since it was staged; re-stage it", 409);
+      const live = options.liveApp;
+      let old: ApplyPlan["old"] = null;
+      try { old = appDigests(live); } catch { old = null; }
+      const proc = await host.appProcess();
+      const script = UPDATER_APPLY_SCRIPT;
+      const full: ApplyPlan = {
+        ...plan, label: `${UPDATE_JOB_PREFIX}${plan.updateId.slice(0, 8)}`, live,
+        staged: staged?.appPath ?? null,
+        backup: staged ? join(dirname(live), `${basename(live, ".app")}.previous-${plan.oldSha.slice(0, 8) || "unknown"}-${plan.updateId.slice(0, 8)}.app-disabled`) : null,
+        appPid: proc.pid, appIdentity: proc.identity,
+        expect: staged ? { server: staged.serverSha256, ui: staged.uiSha256 } : null, old,
+        launch: sandbox ? [] : ["/usr/bin/open", "{app}"],
+        codesign: options.codesign ?? true, selfBootout: !sandbox, requireLaunchd: options.requireLaunchd ?? true,
+        uid, scriptSha256: createHash("sha256").update(script).digest("hex"),
+        ...(sandbox ? { sandbox: true, fault: sandbox.fault ?? null } : {}),
+      };
+      writeFileAtomic(join(dir, "apply.py"), script, { mode: 0o700 });
+      writeFileAtomic(join(dir, "plan.json"), JSON.stringify(full, null, 2), { mode: 0o600 });
+      const plistPath = join(dir, `${full.label}.plist`);
+      writeFileAtomic(plistPath, updaterPlist(full.label, dir), { mode: 0o600 });
+      await host.bootstrap(uid, plistPath);
+    },
+  };
 }
