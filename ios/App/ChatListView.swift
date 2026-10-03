@@ -45,6 +45,9 @@ struct ChatListView: View {
     private static let barClearance: CGFloat = 20
 
     var body: some View {
+#if DEBUG
+        let _ = MainThreadProbe.shared.listBody()
+#endif
         NavigationStack(path: $path) {
             GeometryReader { geo in
             VStack(spacing: 0) {

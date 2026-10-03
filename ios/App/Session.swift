@@ -273,7 +273,8 @@ final class Session: ObservableObject {
                 for (threadID, page) in pages { state.merge(page, intoThread: threadID) }
             }
             status = .live
-            if arguments.contains("-stream-preview") { startStreamPreview() }
+            if arguments.contains("-stream-preview-bots") { startMultiStreamPreview() }
+            else if arguments.contains("-stream-preview") { startStreamPreview() }
             return
         }
 #endif
@@ -947,6 +948,68 @@ final class Session: ObservableObject {
                 ]]) {
                     self.enqueue(step)
                     seq += 1
+                }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+        }
+    }
+
+    /// `-room-preview -stream-preview-bots`: four bots at once, the load that
+    /// lagged the phone. Two answer in the HQ room and two in their own 1:1s,
+    /// each typing at provider speed with tool steps, item events and the
+    /// room's active list changing as they go.
+    private func startMultiStreamPreview() {
+        func frame(_ json: [String: Any]) -> StreamFrame? {
+            guard let data = try? JSONSerialization.data(withJSONObject: json) else { return nil }
+            return try? JSONDecoder().decode(StreamFrame.self, from: data)
+        }
+        let room = "room-thread-hq"
+        // (thread, room member streaming there or nil for a 1:1, bot id)
+        let streams: [(thread: String, roomBot: String?, bot: String)] = [
+            (room, "room-dev", "room-dev"), (room, "room-pix", "room-pix"),
+            ("room-thread-bos", nil, "room-bos"), ("room-thread-oracle", nil, "room-oracle")
+        ]
+        let paragraph = "Checked the **inbox** and grouped what matters: three invoices due this week, a contract redline from `legal@`, and two threads that need a reply today. "
+        let start = Date().timeIntervalSince1970 * 1000
+        for thread in Set(streams.map(\.thread)) {
+            for index in 0..<60 {
+                var message: [String: Any] = [
+                    "id": "\(thread)-history-\(index)", "role": index % 2 == 0 ? "user" : "bot", "kind": "text",
+                    "at": start - Double(60 - index) * 60_000,
+                    "text": index % 2 == 0 ? "check item \(index) and tell me what changed" : String(repeating: paragraph, count: 3) + "\n\n- one\n- two\n- three"
+                ]
+                if thread == room, index % 2 == 1 { message["from"] = ["botId": streams[index / 2 % 2].bot, "name": "dev", "color": "blue"] }
+                if let seeded = frame(["kind": "message", "threadId": thread, "message": message]) { state.apply(seeded.frame) }
+            }
+        }
+        Task { @MainActor [weak self] in
+            MainThreadProbe.shared.start()
+            for stream in streams { if let self, var bot = self.state.bot(stream.bot) { bot.busy = true; self.state.apply(.bot(bot)) } }
+            let reply = String(repeating: paragraph, count: 2) + "\n\n- first thing to check\n- second thing to check\n\n"
+            let words = reply.split(separator: " ", omittingEmptySubsequences: false).map { $0 + " " }
+            var seq = 1, tick = 0
+            let end = ContinuousClock.now + .seconds(180)
+            while ContinuousClock.now < end, let self {
+                tick += 1
+                for (n, stream) in streams.enumerated() {
+                    var event: [String: Any] = ["type": "content.delta", "threadId": stream.thread, "streamKind": "assistant_text",
+                                                "delta": (0..<4).map { words[(tick * 4 + $0 + n * 7) % words.count] }.joined()]
+                    if let bot = stream.roomBot { event["roomBotId"] = bot }
+                    if let token = frame(["kind": "runtime", "seq": seq, "event": event]) { self.enqueue(token) }
+                    seq += 1
+                    // Each bot runs a tool about every 700ms, staggered, and the
+                    // server relays its item events alongside the step.
+                    if (tick + n * 7) % 28 == 0 {
+                        var item: [String: Any] = ["type": "item.started", "threadId": stream.thread]
+                        if let bot = stream.roomBot { item["roomBotId"] = bot }
+                        if let started = frame(["kind": "runtime", "seq": seq, "event": item]) { self.enqueue(started); seq += 1 }
+                        var message: [String: Any] = [
+                            "id": "\(stream.bot)-step-\(tick)", "role": "bot", "kind": "activity", "at": Date().timeIntervalSince1970 * 1000,
+                            "tool": ["name": "Bash", "ok": true, "summary": "grep -rn invoice mail/\(tick)"]
+                        ]
+                        if let bot = stream.roomBot { message["from"] = ["botId": bot, "name": bot, "color": "blue"] }
+                        if let step = frame(["kind": "message", "seq": seq, "threadId": stream.thread, "message": message]) { self.enqueue(step); seq += 1 }
+                    }
                 }
                 try? await Task.sleep(for: .milliseconds(25))
             }

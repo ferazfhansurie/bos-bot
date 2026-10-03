@@ -11,6 +11,10 @@ final class MainThreadProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [Double] = []
     private var chatBodies = 0
+    private var listBodies = 0
+    /// `-probe-always`: measure the whole run, not just while typing, so
+    /// scrolling and switching chats count too.
+    static var always: Bool { ProcessInfo.processInfo.arguments.contains("-probe-always") }
     private var recording = false
     private var started = false
     private var mainThread: thread_act_t = 0
@@ -31,8 +35,15 @@ final class MainThreadProbe: @unchecked Sendable {
     /// Called from the composer: measure only while there is a draft.
     func typing(_ active: Bool) {
         guard Self.enabled else { return }
-        lock.lock(); recording = active; lock.unlock()
-        guard active, !started else { return }
+        lock.lock(); recording = active || Self.always; lock.unlock()
+        guard active else { return }
+        start()
+    }
+
+    /// Begin sampling; called on the main thread.
+    func start() {
+        guard Self.enabled, !started else { return }
+        if Self.always { lock.lock(); recording = true; lock.unlock() }
         started = true
         mainThread = mach_thread_self()  // called on the main thread
         cpuAtStart = mainCPU(); wallAtStart = Date().timeIntervalSince1970
@@ -62,12 +73,17 @@ final class MainThreadProbe: @unchecked Sendable {
         lock.lock(); if recording { chatBodies += 1 }; lock.unlock()
     }
 
+    func listBody() {
+        guard Self.enabled else { return }
+        lock.lock(); if recording { listBodies += 1 }; lock.unlock()
+    }
+
     private var lastWrite = Date.distantPast
     private func write() {
         guard Date().timeIntervalSince(lastWrite) > 0.5 else { return }
         lastWrite = Date()
         lock.lock()
-        let sorted = samples.sorted(), bodies = chatBodies
+        let sorted = samples.sorted(), bodies = chatBodies, lists = listBodies
         lock.unlock()
         guard !sorted.isEmpty else { return }
         func pct(_ p: Double) -> Double { sorted[min(sorted.count - 1, Int(Double(sorted.count) * p))] }
@@ -75,7 +91,8 @@ final class MainThreadProbe: @unchecked Sendable {
         let json: [String: Any] = [
             "samples": sorted.count, "p50_ms": pct(0.5), "p95_ms": pct(0.95), "p99_ms": pct(0.99),
             "max_ms": sorted.last!,
-            "main_cpu_per_s": (mainCPU() - cpuAtStart) / max(0.001, Date().timeIntervalSince1970 - wallAtStart), "over_16ms": over16, "over_50ms": over50, "chat_body_evals": bodies
+            "main_cpu_per_s": (mainCPU() - cpuAtStart) / max(0.001, Date().timeIntervalSince1970 - wallAtStart), "over_16ms": over16, "over_50ms": over50, "chat_body_evals": bodies, "list_body_evals": lists,
+            "seconds": Date().timeIntervalSince1970 - wallAtStart
         ]
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/bos-typing-probe.json"))
