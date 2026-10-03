@@ -175,6 +175,60 @@ posixOnly("mid-turn steering e2e", () => {
     40_000,
   );
 
+  it("delivers queued room messages once at the member's tool boundary without a manual steer", async () => {
+    rmSync(steerFinishGate, { force: true });
+    writeFileSync(toolResultGate, "hold the room member's tool result");
+    const created = (await api("POST", "/api/bots")).body.bot;
+    await api("PATCH", `/api/bots/${created.id}`, {
+      name: "dev", modelSelection: { instanceId: "claudeSteer", model: "claude-fake" },
+    });
+    const room = (await api("POST", "/api/groups", {
+      name: "Room tool boundary", memberIds: [created.id],
+      setup: { bulletin: "", defaultResponder: { kind: "member", botId: created.id } },
+    })).body.group;
+    const getRoom = async () => (await api("GET", "/api/bots")).body.groups.find((g: any) => g.id === room.id);
+    const pasted = '@dev correction\n\n<pasted-text index="1">\nFULL PASTED INPUT\nsecond line\n</pasted-text>';
+    const aside = "also preserve the user's second message";
+    try {
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@dev start" });
+      await waitFor(async () => (await getRoom()).messages.some((m: any) => m.tool?.name === "Bash" && m.tool.ok === undefined), "the held room tool");
+      const body = { text: pasted, sendId: "room-boundary-paste" };
+      const [first, retry] = await Promise.all([
+        api("POST", `/api/groups/${room.id}/messages`, body),
+        api("POST", `/api/groups/${room.id}/messages`, body),
+      ]);
+      expect(first.body.queued).toBe(true);
+      expect(retry.body.queueId).toBe(first.body.queueId);
+      const second = await api("POST", `/api/groups/${room.id}/messages`, { text: aside, sendId: "room-boundary-aside" });
+      expect(second.body.queued).toBe(true);
+      expect((await getRoom()).messages.some((m: any) => m.text === pasted)).toBe(false);
+      rmSync(toolResultGate, { force: true });
+      await waitFor(async () => {
+        const messages = (await getRoom()).messages;
+        return [pasted, aside].every(text => messages.some((m: any) => m.text === text && m.steered));
+      }, "both room messages at the tool boundary", 5_000);
+      expect((await getRoom()).working).toBe(true);
+      for (const queueId of [first.body.queueId, second.body.queueId]) {
+        expect((await api("POST", `/api/groups/${room.id}/queue/${queueId}/steer`, { botId: created.id })).status).toBe(404);
+      }
+      writeFileSync(steerFinishGate, "finish");
+      await waitFor(async () => !(await getRoom()).working, "the corrected room turn to settle");
+      const messages = (await getRoom()).messages;
+      for (const text of [pasted, aside]) {
+        expect(messages.filter((m: any) => m.role === "user" && m.text === text)).toHaveLength(1);
+        expect(messages.find((m: any) => m.text === text).steerDelivery).toBe("transport_written");
+      }
+      const replies = messages.filter((m: any) => m.role === "bot" && m.kind === "text" && m.turnTerminal);
+      expect(replies).toHaveLength(1);
+      expect(replies[0].text).toContain("FULL PASTED INPUT\nsecond line");
+      expect(replies[0].text).toContain(aside);
+    } finally {
+      rmSync(toolResultGate, { force: true });
+      writeFileSync(steerFinishGate, "release fixture");
+      await api("POST", `/api/groups/${room.id}/interrupt`, {});
+    }
+  }, 40_000);
+
   it("keeps two queued attachment messages as two native images in one follow-up turn", async () => {
     const created = (await api("POST", "/api/bots")).body.bot;
     await api("PATCH", `/api/bots/${created.id}`, {

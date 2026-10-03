@@ -61,6 +61,16 @@ every outstanding assignment has settled and the resumed coordination has
 finished. Steering stays the default; Stop keeps its conversation-scoped
 behavior either way.
 
+Messages queued for a room member already running a tool are offered to that
+same member when its next tool result arrives. This uses the same atomic queue
+claim as explicit Steer, preserves FIFO order and complete pasted text, and
+drains consecutive messages addressed to that member. Messages for another
+member, ambiguous recipients and Goal work stay queued. Providers that refuse
+live input retain the queue for the normal follow-up. A successful Claude pipe
+write is recorded as `transport_written`; model consumption remains unconfirmed
+until its response provides evidence. An uncertain delivery is recorded once
+and never automatically replayed.
+
 Stop is scoped to the conversation it was pressed in. It ends that bot's turn
 and stops the conversation awaiting its teammates, so nothing resumes into a
 stopped chat. An assignment that had not started yet is cancelled, since
@@ -80,6 +90,7 @@ conversation.
 
 ```sh
 pnpm exec vitest run server/room-handoffs.test.ts server/room-coordination.e2e.test.ts src/components/GroupView.test.ts src/lib/room-activity.test.ts --maxWorkers=2
+pnpm exec vitest run server/room-parallel-runtime.e2e.test.ts server/steer-e2e.test.ts
 pnpm exec vitest run server/group-goal-run.e2e.test.ts server/group-goal-wait-cap.e2e.test.ts server/drivers/agents-proxy.test.ts --maxWorkers=2
 pnpm exec vitest run server/room-recovery.e2e.test.ts server/testing/room-handoff-agent.test.ts
 pnpm exec vitest run server/direct-coordination.e2e.test.ts --maxWorkers=1

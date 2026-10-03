@@ -265,6 +265,7 @@ import {
 } from "./steer-queue.ts";
 import {
   cancelChannelMessage,
+  channelQueueHead,
   drainChannelMessages,
   holdChannelQueue,
   queuedChannelMessage,
@@ -6249,8 +6250,161 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
   return ({ ok: true, queued: true, threadId: bot.threadId });
 }
 
+// Explicit Steer and automatic tool-boundary delivery share one atomic claim.
+async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: string, botId?: string) {
+  const current = store.group(groupId);
+  if (!current) return { status: 404, body: { error: "no such room" } };
+  // Which engine owns the running room turn on this thread? The same
+  // resolution the room's own Stop uses: the live speaker, else the busy
+  // bot on the channel's main thread.
+  const held = holdChannelQueue(current.id, targetThreadId, queueId);
+  if (!held) return { status: 404, body: { error: "no such queued message" } };
+  const [head] = held.items;
+  const active = roomRuntimeSpeakers(current.id, targetThreadId);
+  const mentioned = head ? roomResponders(head.text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), { kind: "mentions" }) : [];
+  if (botId !== undefined && mentioned.length &&
+    (mentioned.length !== 1 || mentioned[0]?.id !== botId)) {
+    restoreHeldChannelQueue(held);
+    return { status: 409, body: { error: "Steer the addressed room member; the selected member does not match this message." } };
+  }
+  const targeted = typeof botId === "string" ? active.filter(([, speaker]) => speaker.botId === botId)
+    : mentioned.length ? active.filter(([, speaker]) => mentioned.some(member => member.id === speaker.botId)) : active;
+  if (targeted.length > 1 || (botId !== undefined && targeted.length !== 1)) {
+    restoreHeldChannelQueue(held);
+    return { status: 409, body: { error: "Choose exactly one active room member to steer." } };
+  }
+  const runtimeThreadId = targeted[0]?.[0] ?? targetThreadId;
+  const claimedSpeaker = targeted[0]?.[1];
+  const speakerBotId = claimedSpeaker?.botId;
+  const speaker = speakerBotId ? store.bot(speakerBotId) : undefined;
+  const instance = speaker ? runningTurnInstance(speaker, runtimeThreadId) : undefined;
+  const speakerFrom = speaker ? { botId: speaker.id, name: speaker.name, color: speaker.color } : undefined;
+  const imageWaitNote = speaker ? `${speaker.name}'s engine can't take images during a turn — it will get the image after this reply` : "";
+  if (!speaker || !instance?.adapter.capabilities.queueing || !instance.adapter.steer) {
+    restoreHeldChannelQueue(held);
+    if (speaker && head && head.id === queueId && head.text.includes("<attached-image")) {
+      noteSteerImageNotDelivered(targetThreadId, head.id, imageWaitNote, speakerFrom);
+    }
+    return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId } };
+  }
+  if (!head || head.id !== queueId) {
+    restoreHeldChannelQueue(held);
+    return { status: 409, body: { error: "only the first queued message can steer" } };
+  }
+  // A reply target that cannot be resolved restores the held queue
+  // before the request fails — the room's normal drain keeps the head.
+  const replyTo = resolveHeldReplyTarget(held, resolveReplyTarget);
+  let steerInput;
+  try { steerInput = extractTurnImages(head.text); }
+  catch (error) {
+    restoreHeldChannelQueue(held);
+    noteSteerImageNotDelivered(targetThreadId, head.id, error instanceof Error ? error.message : String(error), speakerFrom);
+    throw error;
+  }
+  noteRejectedSteerImages(targetThreadId, head.id, head.text, speakerFrom);
+  if (steerInput.images.length && instance.adapter.capabilities.nativeImageSteer !== true) {
+    restoreHeldChannelQueue(held);
+    noteSteerImageNotDelivered(targetThreadId, head.id, imageWaitNote, speakerFrom);
+    return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId, reason: "This provider will receive the image after its current reply finishes." } };
+  }
+  const steered = await instance.adapter
+    .steer(runtimeThreadId, promptWithReply(steerInput.text, replyTo, cfg.profile?.name?.trim() || "User"), { images: steerInput.images })
+    .catch((): SteerOutcome => "indeterminate");
+  if (steered === "refused" && steerInput.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
+    noteSteerImageNotDelivered(targetThreadId, head.id, "the running turn could not take the image — it will get it after this reply", speakerFrom);
+  }
+  // The steer was awaited adapter work: re-read every ownership
+  // invariant before writing anything, exactly like the 1:1 path. A
+  // speaker change, a channel switch, or a settled room restores the
+  // queue instead of recording words the new turn never saw.
+  const after = store.group(current.id);
+  const afterSpeakerBotId = groupSpeakers.get(runtimeThreadId) === claimedSpeaker ? speakerBotId : undefined;
+  // "indeterminate" (timeout after delivery, lost transport, a settle
+  // race) never restores: the words may already be folded into the turn
+  // that was live when they were sent, and replaying them into a new
+  // turn would run them twice. Record them once — even under a new
+  // speaker — and settle the head.
+  const delivered = steered !== "refused";
+  if (after && delivered && (steered === "indeterminate" || afterSpeakerBotId === speakerBotId)) {
+    const message = store.appendMessage(targetThreadId, {
+      role: "user",
+      kind: "text",
+      text: head.text,
+      replyToId: head.replyToId,
+      sendId: head.sendId,
+      channelMode: head.mode,
+      queueId: head.id,
+      via: head.via,
+      sender: head.sender,
+      steered: steered === "steered",
+      steerDelivery: steered === "indeterminate" ? "outcome_unknown" : instance.adapter.provider === "claudeAgent" ? "transport_written" : "provider_accepted",
+    });
+    const delivery = message.steerDelivery;
+    if (steered === "indeterminate" || delivery === "transport_written") store.appendMessage(targetThreadId, {
+      role: "bot", kind: "activity", from: speakerFrom,
+      tool: { name: steered === "indeterminate"
+        ? "Queued message delivery outcome unknown — review before resending"
+        : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: false },
+    });
+    settleHeldChannelQueueHead(held);
+    return { status: 200, body: {
+      ok: true,
+      steered: steered === "steered",
+      outcomeUnknown: steered === "indeterminate",
+      delivery,
+      consumption: "unconfirmed",
+      threadId: targetThreadId,
+      messages: [message],
+      queueIds: [head.id],
+    } };
+  }
+  if (steered === "indeterminate" && !after) {
+    // The room vanished while the answer was lost: settle the head so a
+    // restart cannot replay words the dead turn may already have run.
+    settleHeldChannelQueueHead(held);
+    return { status: 404, body: { error: "no such room" } };
+  }
+  restoreHeldChannelQueue(held);
+  // The room may have settled while the steer was refused; a queue that
+  // is now drainable must not strand behind a missed settle.
+  if (after && !groupIsWorking(after)) drainQueuedChannelSends();
+  return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId } };
+}
+
+const roomBoundarySteers = new Set<string>();
+async function steerRoomAtToolBoundary(runtimeThreadId: string) {
+  if (roomBoundarySteers.has(runtimeThreadId)) return;
+  const speaker = groupSpeakers.get(runtimeThreadId);
+  const group = store.groupByThread(runtimeThreadId);
+  if (!speaker || !group) return;
+  const threadId = store.canonicalThreadId(runtimeThreadId);
+  roomBoundarySteers.add(runtimeThreadId);
+  try {
+    // Keep FIFO order, and stop at another recipient, Goal work, refusal,
+    // uncertainty or a replaced turn. Never replay an uncertain delivery.
+    while (groupSpeakers.get(runtimeThreadId) === speaker) {
+      const current = store.group(group.id);
+      const head = channelQueueHead(group.id, threadId);
+      if (!current || !current.memberIds.includes(speaker.botId) || !head || head.mode !== "chat" ||
+        [...(groupTurnOperations.get(group.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled)) return;
+      const recipients = roomResponders(head.text, current.memberIds.flatMap(id => {
+        const member = store.bot(id); return member ? [member] : [];
+      }), current.defaultResponder, current.memberReplyModes);
+      if (recipients.length !== 1 || recipients[0]?.id !== speaker.botId) return;
+      const receipt = await steerRoomQueue(group.id, threadId, head.id, speaker.botId);
+      if (receipt.body.steered !== true) return;
+    }
+  } finally { roomBoundarySteers.delete(runtimeThreadId); }
+}
+
 bus.subscribe((event: RuntimeEvent) => {
   if (shouldIgnoreProviderEvent(event) || event.type !== "item.completed" || event.itemType !== "tool") return;
+  if (groupSpeakers.has(event.threadId)) {
+    void steerRoomAtToolBoundary(event.threadId).catch(error => {
+      console.warn("room boundary steer failed", error instanceof Error ? error.message : String(error));
+    });
+    return;
+  }
   const bot = store.botByThread(event.threadId);
   if (!bot || computerSelectionTurns.get(event.threadId)?.selected) return;
   const head = queuedSteerSnapshot((owner, thread) => owner === bot.id && thread === event.threadId)[event.threadId]?.[0];
@@ -16939,123 +17093,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 409, { error: "the channel switched tasks before it could receive the message" });
       }
       noteTurnTrigger(targetThreadId, auth);
-      const current = store.group(group.id);
-      if (!current) return json(res, 404, { error: "no such room" });
-      // Which engine owns the running room turn on this thread? The same
-      // resolution the room's own Stop uses: the live speaker, else the busy
-      // bot on the channel's main thread.
-      const held = holdChannelQueue(current.id, targetThreadId, m[2]);
-      if (!held) return json(res, 404, { error: "no such queued message" });
-      const [head] = held.items;
-      const active = roomRuntimeSpeakers(current.id, targetThreadId);
-      const mentioned = head ? roomResponders(head.text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), { kind: "mentions" }) : [];
-      if (body?.botId !== undefined && mentioned.length &&
-        (mentioned.length !== 1 || mentioned[0]?.id !== body.botId)) {
-        restoreHeldChannelQueue(held);
-        return json(res, 409, { error: "Steer the addressed room member; the selected member does not match this message." });
-      }
-      const targeted = typeof body?.botId === "string" ? active.filter(([, speaker]) => speaker.botId === body.botId)
-        : mentioned.length ? active.filter(([, speaker]) => mentioned.some(member => member.id === speaker.botId)) : active;
-      if (targeted.length > 1 || (body?.botId !== undefined && targeted.length !== 1)) {
-        restoreHeldChannelQueue(held);
-        return json(res, 409, { error: "Choose exactly one active room member to steer." });
-      }
-      const runtimeThreadId = targeted[0]?.[0] ?? targetThreadId;
-      const claimedSpeaker = targeted[0]?.[1];
-      const speakerBotId = claimedSpeaker?.botId;
-      const speaker = speakerBotId ? store.bot(speakerBotId) : undefined;
-      const instance = speaker ? runningTurnInstance(speaker, runtimeThreadId) : undefined;
-      const speakerFrom = speaker ? { botId: speaker.id, name: speaker.name, color: speaker.color } : undefined;
-      const imageWaitNote = speaker ? `${speaker.name}'s engine can't take images during a turn — it will get the image after this reply` : "";
-      if (!speaker || !instance?.adapter.capabilities.queueing || !instance.adapter.steer) {
-        restoreHeldChannelQueue(held);
-        if (speaker && head && head.id === m[2] && head.text.includes("<attached-image")) {
-          noteSteerImageNotDelivered(targetThreadId, head.id, imageWaitNote, speakerFrom);
-        }
-        return json(res, 200, { ok: true, queued: true, threadId: targetThreadId });
-      }
-      if (!head || head.id !== m[2]) {
-        restoreHeldChannelQueue(held);
-        return json(res, 409, { error: "only the first queued message can steer" });
-      }
-      // A reply target that cannot be resolved restores the held queue
-      // before the request fails — the room's normal drain keeps the head.
-      const replyTo = resolveHeldReplyTarget(held, resolveReplyTarget);
-      let steerInput;
-      try { steerInput = extractTurnImages(head.text); }
-      catch (error) {
-        restoreHeldChannelQueue(held);
-        noteSteerImageNotDelivered(targetThreadId, head.id, error instanceof Error ? error.message : String(error), speakerFrom);
-        throw error;
-      }
-      noteRejectedSteerImages(targetThreadId, head.id, head.text, speakerFrom);
-      if (steerInput.images.length && instance.adapter.capabilities.nativeImageSteer !== true) {
-        restoreHeldChannelQueue(held);
-        noteSteerImageNotDelivered(targetThreadId, head.id, imageWaitNote, speakerFrom);
-        return json(res, 200, { ok: true, queued: true, threadId: targetThreadId, reason: "This provider will receive the image after its current reply finishes." });
-      }
-      const steered = await instance.adapter
-        .steer(runtimeThreadId, promptWithReply(steerInput.text, replyTo, cfg.profile?.name?.trim() || "User"), { images: steerInput.images })
-        .catch((): SteerOutcome => "indeterminate");
-      if (steered === "refused" && steerInput.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
-        noteSteerImageNotDelivered(targetThreadId, head.id, "the running turn could not take the image — it will get it after this reply", speakerFrom);
-      }
-      // The steer was awaited adapter work: re-read every ownership
-      // invariant before writing anything, exactly like the 1:1 path. A
-      // speaker change, a channel switch, or a settled room restores the
-      // queue instead of recording words the new turn never saw.
-      const after = store.group(current.id);
-      const afterSpeakerBotId = groupSpeakers.get(runtimeThreadId) === claimedSpeaker ? speakerBotId : undefined;
-      // "indeterminate" (timeout after delivery, lost transport, a settle
-      // race) never restores: the words may already be folded into the turn
-      // that was live when they were sent, and replaying them into a new
-      // turn would run them twice. Record them once — even under a new
-      // speaker — and settle the head.
-      const delivered = steered !== "refused";
-      if (after && delivered && (steered === "indeterminate" || afterSpeakerBotId === speakerBotId)) {
-        const message = store.appendMessage(targetThreadId, {
-          role: "user",
-          kind: "text",
-          text: head.text,
-          replyToId: head.replyToId,
-          sendId: head.sendId,
-          channelMode: head.mode,
-          queueId: head.id,
-          via: head.via,
-          sender: head.sender,
-          steered: steered === "steered",
-          steerDelivery: steered === "indeterminate" ? "outcome_unknown" : instance.adapter.provider === "claudeAgent" ? "transport_written" : "provider_accepted",
-        });
-        const delivery = message.steerDelivery;
-        if (steered === "indeterminate" || delivery === "transport_written") store.appendMessage(targetThreadId, {
-          role: "bot", kind: "activity", from: speakerFrom,
-          tool: { name: steered === "indeterminate"
-            ? "Queued message delivery outcome unknown — review before resending"
-            : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: false },
-        });
-        settleHeldChannelQueueHead(held);
-        return json(res, 200, {
-          ok: true,
-          steered: steered === "steered",
-          outcomeUnknown: steered === "indeterminate",
-          delivery,
-          consumption: "unconfirmed",
-          threadId: targetThreadId,
-          messages: [message],
-          queueIds: [head.id],
-        });
-      }
-      if (steered === "indeterminate" && !after) {
-        // The room vanished while the answer was lost: settle the head so a
-        // restart cannot replay words the dead turn may already have run.
-        settleHeldChannelQueueHead(held);
-        return json(res, 404, { error: "no such room" });
-      }
-      restoreHeldChannelQueue(held);
-      // The room may have settled while the steer was refused; a queue that
-      // is now drainable must not strand behind a missed settle.
-      if (after && !groupIsWorking(after)) drainQueuedChannelSends();
-      return json(res, 200, { ok: true, queued: true, threadId: targetThreadId });
+      const receipt = await steerRoomQueue(group.id, targetThreadId, m[2], body?.botId);
+      return json(res, receipt.status, receipt.body);
     }
     m = path.match(/^\/api\/groups\/([\w-]+)\/interrupt$/);
     if (m && method === "POST") {

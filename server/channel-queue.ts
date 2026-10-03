@@ -83,6 +83,12 @@ export function queuedChannelMessage(
   return entry.items.find((item) => item.sendId === sendId) ?? null;
 }
 
+/** Inspect the owned FIFO head before claiming it for a tool-boundary steer. */
+export function channelQueueHead(groupId: string, threadId: string): ChannelQueueItem | undefined {
+  const entry = queues.get(threadId);
+  return entry?.groupId === groupId ? entry.items[0] : undefined;
+}
+
 /** Remove one queued message before it starts. */
 export function cancelChannelMessage(groupId: string, queueId: string): boolean {
   for (const [threadId, entry] of queues) {
