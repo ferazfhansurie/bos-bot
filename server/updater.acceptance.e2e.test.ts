@@ -429,7 +429,7 @@ describe.skipIf(!posixOnly || !backendPresent)("updater acceptance: contract (ne
 
   it("refuses when another updater/keepalive job exists", async () => {
     await reboot();
-    writeFileSync(join(jobs, "ai.bos.bot.restart-keepalive.plist"), "<plist><dict><key>Label</key><string>ai.bos.bot.restart-keepalive</string></dict></plist>");
+    writeFileSync(join(jobs, "ai.bos.bot.restart-keepalive.plist"), "<plist><dict><key>Label</key><string>ai.bos.bot.restart-keepalive</string><key>KeepAlive</key><true/></dict></plist>");
     try {
       const res = await h.api("POST", "/api/update/apply", {});
       if (res.status === 202) {
