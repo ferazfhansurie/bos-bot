@@ -4,9 +4,16 @@ import { join } from "node:path";
 import { z } from "zod";
 import { canonical, parseChallenge, REMOTE_FULL_PROTOCOL, type RemoteFullChallenge, type RemoteFullOperation } from "../electron/remote-full-protocol.mjs";
 import { approvalModeFor } from "../shared/approval-mode.ts";
+import { resolveCompanionControlPlaneURL } from "../electron/companion-account-service.mjs";
 import type { Store } from "./store.ts";
 
-export const AUTHORITY_ORIGIN = "https://accounts.openmausbot.com";
+/** The owner authority is the configured control plane (BOS_CONTROL_PLANE_URL
+ * or legacy OMB_CONTROL_PLANE_URL). There is no hosted default: unset means
+ * Remote Full is "not configured" and no authority request is ever made. */
+export function remoteFullAuthorityOrigin(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveCompanionControlPlaneURL({ environment: env });
+}
+export const REMOTE_FULL_NOT_CONFIGURED = "remote sign-in not configured";
 const enrollmentSchema = z.object({ environmentId: z.string().uuid(), installationId: z.string().uuid(), audience: z.string().url(), privateKey: z.string().min(32).max(4096), credential: z.string().regex(/^omb_install_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/) }).strict();
 export type RemoteFullEnrollment = z.infer<typeof enrollmentSchema>;
 // Reads only a pending identity candidate. Readiness always requires online CP proof.
@@ -24,7 +31,9 @@ const hash = (v: unknown) => createHash("sha256").update(canonical(v)).digest("h
 type Options = { store: Store; enrollment: () => RemoteFullEnrollment | null;
   supported: (instanceId: string) => boolean; providerRevision: (instanceId: string) => string; busy: (botId: string, threadId: string) => boolean;
   sessionValid: (id: string) => boolean; now?: () => number;
-  authority?: (action: string, body: unknown, credential: string) => Promise<any> };
+  authority?: (action: string, body: unknown, credential: string) => Promise<any>;
+  /** Defaults to remoteFullAuthorityOrigin(); "" disables the authority. */
+  authorityOrigin?: () => string };
 
 /** The ordinary session is transport, never elevation authority. Every commit
  * needs a native signature AND a fresh installation-owner decision from CP. */
@@ -42,13 +51,23 @@ export class RemoteFullService {
   }
   private async authority(action: string, body: unknown, credential: string) {
     if (this.options.authority) return this.options.authority(action, body, credential);
-    const response = await fetch(`${AUTHORITY_ORIGIN}/v1/remote-full/${action}`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(8000),
+    const origin = this.authorityOrigin();
+    if (!origin) throw new Error(REMOTE_FULL_NOT_CONFIGURED);
+    const response = await fetch(`${origin}/v1/remote-full/${action}`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(8000),
       headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error("Verified installation owner confirmation required");
     return response.json();
   }
-  async status(sessionId: string): Promise<{ enrolled: boolean; state: "missing" | "pending" | "verified" | "unavailable" }> {
+  private authorityOrigin(): string {
+    return this.options.authorityOrigin ? this.options.authorityOrigin() : remoteFullAuthorityOrigin();
+  }
+  /** False when no owner authority is configured, so nothing can be verified. */
+  configured(): boolean {
+    return Boolean(this.options.authority) || Boolean(this.authorityOrigin());
+  }
+  async status(sessionId: string): Promise<{ enrolled: boolean; state: "missing" | "pending" | "verified" | "unavailable"; error?: string }> {
     if (!this.options.sessionValid(sessionId)) throw new Error("Paired session required");
+    if (!this.configured()) return { enrolled: false, state: "unavailable", error: REMOTE_FULL_NOT_CONFIGURED };
     const enrollment = this.options.enrollment();
     if (!enrollment) return { enrolled: false, state: "missing" };
     try {
@@ -75,6 +94,7 @@ export class RemoteFullService {
   async prepare(sessionId: string, raw: unknown) {
     const enrollment = this.options.enrollment();
     if (!enrollment || !this.options.sessionValid(sessionId)) throw new Error("Owner enrollment and paired session required");
+    if (!this.configured()) throw new Error(REMOTE_FULL_NOT_CONFIGURED);
     for (const [id, p] of this.pending) if (p.challenge.expiresAt <= this.now()) this.pending.delete(id);
     if (this.pending.size >= 64 || [...this.pending.values()].filter(p => p.sessionId === sessionId).length >= 8) throw new Error("Too many pending confirmations");
     const operations = targets.parse(raw).map(target => this.operation(target));

@@ -3,6 +3,9 @@
 import type { ControlPlaneClient } from "./control-plane-client.mjs";
 
 export declare const DEFAULT_COMPANION_CONTROL_PLANE_URL: string;
+export declare const CONTROL_PLANE_URL_ENV: string;
+export declare const LEGACY_CONTROL_PLANE_URL_ENV: string;
+export declare function controlPlaneUnavailableReason(environment?: NodeJS.ProcessEnv): string;
 export declare const COMPANION_CLIENT_INSTANCE_FIELD: string;
 export declare const COMPANION_ACCOUNT_TOKEN_FIELD: string;
 export declare const COMPANION_ACCOUNT_USER_ID_FIELD: string;

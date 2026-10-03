@@ -32,7 +32,7 @@ it("real HTTP never treats pending owner.json as readiness and rechecks status/p
     const bootstrap = join(data, "fixture.mjs");
     writeFileSync(bootstrap, `import { readFileSync } from 'node:fs';
       globalThis.fetch = async (url, init) => {
-        if (!String(url).startsWith('https://accounts.openmausbot.com/v1/remote-full/')) throw new Error('fixture network denied');
+        if (!String(url).startsWith('https://authority.fixture.invalid/v1/remote-full/')) throw new Error('fixture network denied');
         const mode = JSON.parse(readFileSync(${JSON.stringify(modeFile)}, 'utf8'));
         if (mode === 'offline') throw new Error('synthetic unavailable');
         if (mode === 'revoked') return Response.json({error:'unauthorized'},{status:401});
@@ -42,7 +42,7 @@ it("real HTTP never treats pending owner.json as readiness and rechecks status/p
         return Response.json({error:'owner_enrollment_required'},{status:403});
       };
       await import(${JSON.stringify(pathToFileURL(join(root, "server/index.ts")).href)});`);
-    child = spawn(process.execPath, ["--experimental-strip-types", bootstrap], { cwd: root, env: verificationServerEnvironment({}, data, port), stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(process.execPath, ["--experimental-strip-types", bootstrap], { cwd: root, env: { ...verificationServerEnvironment({}, data, port), BOS_CONTROL_PLANE_URL: "https://authority.fixture.invalid" }, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout?.on("data", b => { output += b; }); child.stderr?.on("data", b => { output += b; });
     let ready = false;
     for (let i = 0; i < 150; i++) {

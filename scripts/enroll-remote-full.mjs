@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { enrollRemoteFullOwner } from "./remote-full-enrollment.mjs";
 import { createControlPlaneClient } from "../electron/control-plane-client.mjs";
+import { controlPlaneUnavailableReason, resolveCompanionControlPlaneURL } from "../electron/companion-account-service.mjs";
 const args = process.argv.slice(2);
 if (!process.stdin.isTTY || !process.stdout.isTTY || args.length !== 2) {
   console.error("Run interactively on the server host: node scripts/enroll-remote-full.mjs <existing-data-dir> <https-origin>"); process.exit(1);
@@ -21,7 +22,10 @@ if (!/^[a-f0-9-]{36}$/i.test(environmentId)) throw new Error("Existing server en
 let muted = false;
 const output = new Writable({ write(chunk, _encoding, done) { if (!muted) process.stdout.write(chunk); done(); } });
 const rl = createInterface({ input: process.stdin, output, terminal: true });
-const client = createControlPlaneClient({ baseURL: "https://accounts.openmausbot.com" });
+// Same authority the server checks (BOS_CONTROL_PLANE_URL); no hosted default.
+const controlPlane = resolveCompanionControlPlaneURL({ environment: process.env });
+if (!controlPlane) { console.error(controlPlaneUnavailableReason(process.env)); process.exit(1); }
+const client = createControlPlaneClient({ baseURL: controlPlane });
 const dir = join(dataDir, ".remote-full"), file = join(dir, "owner.json");
 let ownerSession;
 try {

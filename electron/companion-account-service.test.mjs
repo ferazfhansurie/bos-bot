@@ -10,6 +10,7 @@ import {
   COMPANION_INSTALLATION_CREDENTIAL_FIELD,
   COMPANION_INSTALLATION_ID_FIELD,
   createCompanionAccountService,
+  controlPlaneUnavailableReason,
   resolveCompanionControlPlaneURL,
 } from "./companion-account-service.mjs";
 import {
@@ -104,10 +105,18 @@ function signedCredentials(overrides = {}) {
 }
 
 describe("Companion account service", () => {
-  it("uses the packaged hosted default and only explicit safe development origins", () => {
-    expect(resolveCompanionControlPlaneURL({ isPackaged: true, environment: {} })).toBe(
-      "https://accounts.openmausbot.com",
-    );
+  it("has no hosted default and only uses an explicitly configured safe origin", () => {
+    expect(resolveCompanionControlPlaneURL({ isPackaged: true, environment: {} })).toBe("");
+    expect(controlPlaneUnavailableReason({})).toMatch(/not configured.*BOS_CONTROL_PLANE_URL/);
+    expect(controlPlaneUnavailableReason({ OMB_CONTROL_PLANE_URL: "ftp://x" })).toMatch(/OMB_CONTROL_PLANE_URL is set/);
+    expect(resolveCompanionControlPlaneURL({
+      isPackaged: true,
+      environment: { BOS_CONTROL_PLANE_URL: "https://accounts.example.com/" },
+    })).toBe("https://accounts.example.com");
+    expect(resolveCompanionControlPlaneURL({
+      isPackaged: true,
+      environment: { BOS_CONTROL_PLANE_URL: "https://accounts.example.com", OMB_CONTROL_PLANE_URL: "https://legacy.example.com" },
+    })).toBe("https://accounts.example.com");
     expect(resolveCompanionControlPlaneURL({
       isPackaged: false,
       environment: { OMB_CONTROL_PLANE_URL: "http://127.0.0.1:8787/" },

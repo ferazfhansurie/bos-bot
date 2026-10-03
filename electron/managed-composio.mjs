@@ -14,6 +14,15 @@ export function normalizeManagedComposioBrokerUrl(value) {
   return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
 }
 
+/** BOS_COMPOSIO_BROKER_URL wins over the legacy OMB_COMPOSIO_BROKER_URL.
+ * There is deliberately no hosted default: unset means the managed broker is
+ * off and no request is made to any broker. */
+export function resolveManagedComposioBrokerUrl(environment = process.env) {
+  const configured =
+    environment?.BOS_COMPOSIO_BROKER_URL?.trim() || environment?.OMB_COMPOSIO_BROKER_URL?.trim() || "";
+  return normalizeManagedComposioBrokerUrl(configured);
+}
+
 export function managedComposioAccess(brokerUrl, credentials) {
   const url = normalizeManagedComposioBrokerUrl(brokerUrl);
   const token = credentials?.composioBrokerToken;
@@ -25,6 +34,7 @@ export function managedComposioChildEnvironment(brokerUrl, credentials, environm
   const next = { ...environment };
   delete next.OMB_COMPOSIO_BROKER_URL;
   delete next.OMB_COMPOSIO_BROKER_TOKEN;
+  delete next.BOS_COMPOSIO_BROKER_URL;
   const access = managedComposioAccess(brokerUrl, credentials);
   if (access) {
     next.OMB_COMPOSIO_BROKER_URL = access.url;

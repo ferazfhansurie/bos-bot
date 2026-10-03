@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { confirmRemoteFull } from "./remote-full-client.mjs";
-import { signInRemoteOwner } from "./remote-full-owner-window.mjs";
+import { authorizeRemoteFull, signInRemoteOwner } from "./remote-full-owner-window.mjs";
 
 const account = { accountToken: "secret-test-only", user: { email: "owner@example.invalid" } };
 function deferred() {
@@ -35,6 +35,7 @@ function fixture({ requestOTP = async () => {}, verifyOTP = async () => account,
     ipcMain: { handle: (_id, h) => { handler = h; }, removeHandler: () => { counts.removed++; } },
     timers: { setTimeout: (callback, milliseconds) => { assert.equal(milliseconds, 600_000); timer = callback; return 42; }, clearTimeout: id => { assert.equal(id, 42); counts.cleared++; } },
     environment: { id: "bookmark", environmentId: "fixture", origin: "https://fixture.invalid" },
+    authorityOrigin: "https://authority.invalid",
     createClient: () => ({ requestOTP, verifyOTP, signOut: async token => { assert.equal(token, account.accountToken); counts.signedOut++; await signOut(token); } }),
   });
   // Observe cancellation immediately, even when the outstanding IPC resolves later.
@@ -142,4 +143,18 @@ test("cancelled deferred owner verification cannot reach the native grant contro
   const ipc = f.call("verify", verifyInput); f.tick(); await rejected;
   network.resolve(account); assert.deepEqual(await ipc, { cancelled: true });
   assert.equal(grants, 0); assert.equal(f.counts.signedOut, 1); assertCleaned(f);
+});
+
+test("owner sign-in and authorize are disabled with no configured authority and never fetch", async () => {
+  let opened = 0, fetched = 0;
+  class Window { constructor() { opened++; } }
+  await assert.rejects(signInRemoteOwner({ BrowserWindow: Window, ipcMain: {}, environment: {}, authorityOrigin: "" }), /not configured/);
+  await assert.rejects(authorizeRemoteFull("token", {}, { authorityOrigin: "", fetchImpl: async () => { fetched++; } }), /not configured/);
+  assert.equal(opened, 0); assert.equal(fetched, 0);
+});
+
+test("authorize uses the configured authority origin", async () => {
+  const urls = [];
+  await authorizeRemoteFull("token", { nonce: "n" }, { authorityOrigin: "https://authority.example", fetchImpl: async url => { urls.push(url); return new Response("{}", { status: 200 }); } });
+  assert.deepEqual(urls, ["https://authority.example/v1/remote-full/authorize"]);
 });

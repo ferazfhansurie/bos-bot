@@ -189,7 +189,8 @@ export function setManagedBrokerAccess(access: unknown): void {
 
 function brokerAccess(): { url: string; token: string } | null {
   if (managedBrokerAccess !== undefined) return managedBrokerAccess;
-  const url = process.env.OMB_COMPOSIO_BROKER_URL?.trim();
+  // No hosted default: the broker is used only when an operator configures one.
+  const url = process.env.BOS_COMPOSIO_BROKER_URL?.trim() || process.env.OMB_COMPOSIO_BROKER_URL?.trim();
   const token = process.env.OMB_COMPOSIO_BROKER_TOKEN?.trim();
   if (!url || !token) return null;
   if (!managedBrokerToken.test(token)) throw new Error("The connected-apps service token is invalid");

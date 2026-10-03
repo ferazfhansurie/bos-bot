@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
@@ -16,8 +16,23 @@ import {
   proxyDesktopCompanionUpgrade,
   startDesktopCompanionRelay,
   withDesktopCompanionAccess,
+  managedCompanionHostSuffix,
   withoutDesktopCompanionAccess,
 } from "./desktop-companion-client.mjs";
+
+// Hosted endpoints are trusted only under the operator's configured control
+// plane domain; these tests configure one rather than relying on any default.
+const ENV_KEYS = ["BOS_CONTROL_PLANE_URL", "OMB_CONTROL_PLANE_URL", "BOS_COMPANION_HOST_SUFFIX"];
+const savedEnv = {};
+beforeAll(() => {
+  for (const key of ENV_KEYS) { savedEnv[key] = process.env[key]; delete process.env[key]; }
+  process.env.BOS_CONTROL_PLANE_URL = "https://accounts.bos.example";
+});
+afterAll(() => {
+  for (const key of ENV_KEYS) {
+    if (savedEnv[key] === undefined) delete process.env[key]; else process.env[key] = savedEnv[key];
+  }
+});
 
 const token = `omb_${"a".repeat(43)}`;
 const deviceId = "123e4567-e89b-12d3-a456-426614174000";
@@ -39,6 +54,22 @@ afterEach(async () => {
 });
 
 describe("desktop companion endpoint", () => {
+  it("trusts no hosted endpoint without a configured control plane or suffix", () => {
+    expect(managedCompanionHostSuffix({})).toBe("");
+    expect(normalizeDesktopCompanionEndpoint("https://c-opaque.openmausbot.com", {})).toBe("");
+    expect(normalizeDesktopCompanionEndpoint("https://c-opaque.bos.example", {})).toBe("");
+    expect(normalizeDesktopCompanionEndpoint("host.example-tailnet.ts.net", {})).toBe(
+      "http://host.example-tailnet.ts.net:8810",
+    );
+    expect(managedCompanionHostSuffix({ BOS_CONTROL_PLANE_URL: "https://accounts.example.com" })).toBe("example.com");
+    expect(managedCompanionHostSuffix({ BOS_CONTROL_PLANE_URL: "https://example.com" })).toBe("example.com");
+    expect(managedCompanionHostSuffix({ BOS_CONTROL_PLANE_URL: "http://127.0.0.1:8787" })).toBe("");
+    expect(managedCompanionHostSuffix({ BOS_COMPANION_HOST_SUFFIX: ".tunnels.example.org" })).toBe("tunnels.example.org");
+    const env = { BOS_CONTROL_PLANE_URL: "https://accounts.example.com" };
+    expect(normalizeDesktopCompanionEndpoint("https://c-1.example.com", env)).toBe("https://c-1.example.com");
+    expect(normalizeDesktopCompanionEndpoint("https://c-1.openmausbot.com", env)).toBe("");
+  });
+
   it("preserves the local-origin boundary while marking companion client mode", () => {
     expect(desktopCompanionRendererArguments("http://127.0.0.1:8799", null)).toEqual([
       "--omb-local-origin=http://127.0.0.1:8799",
@@ -56,30 +87,30 @@ describe("desktop companion endpoint", () => {
     expect(normalizeTailscaleCompanionEndpoint("http://HOST.example-tailnet.ts.net:9910/")).toBe(
       "http://host.example-tailnet.ts.net:9910",
     );
-    expect(normalizeDesktopCompanionEndpoint("https://c-opaque.openmausbot.com")).toBe(
-      "https://c-opaque.openmausbot.com",
+    expect(normalizeDesktopCompanionEndpoint("https://c-opaque.bos.example")).toBe(
+      "https://c-opaque.bos.example",
     );
-    expect(normalizeDesktopCompanionEndpoint("c-opaque.openmausbot.com")).toBe(
-      "https://c-opaque.openmausbot.com",
+    expect(normalizeDesktopCompanionEndpoint("c-opaque.bos.example")).toBe(
+      "https://c-opaque.bos.example",
     );
     for (const endpoint of [
       "https://unrelated.example.com",
-      "http://c-opaque.openmausbot.com",
+      "http://c-opaque.bos.example",
       "http://10.0.0.4:8810",
       "http://host.local:8810",
       "https://10.0.0.4",
       "http://host.example-tailnet.ts.net/path",
-      "https://c-opaque.openmausbot.com/path",
+      "https://c-opaque.bos.example/path",
       "http://user@host.example-tailnet.ts.net",
       "http://host.example-tailnet.ts.net.evil.test",
-      "https://c-opaque.openmausbot.com.evil.test",
+      "https://c-opaque.bos.example.evil.test",
     ]) {
       expect(normalizeDesktopCompanionEndpoint(endpoint), endpoint).toBe("");
     }
   });
 
   it("validates, adds, and removes the encrypted credential document field", () => {
-    const hostedAccess = { ...access, endpoint: "https://c-opaque.openmausbot.com" };
+    const hostedAccess = { ...access, endpoint: "https://c-opaque.bos.example" };
     expect(desktopCompanionAccess({ [DESKTOP_COMPANION_FIELD]: hostedAccess })).toEqual(
       hostedAccess,
     );
@@ -132,15 +163,15 @@ describe("desktop companion pairing", () => {
       }),
     );
     const paired = await pairDesktopCompanion({
-      endpoint: "https://c-opaque.openmausbot.com",
+      endpoint: "https://c-opaque.bos.example",
       code: "654321",
       deviceName: "Desktop client",
       requestId: "request-https-01",
       fetchImpl,
     });
-    expect(paired).toEqual({ ...access, endpoint: "https://c-opaque.openmausbot.com" });
+    expect(paired).toEqual({ ...access, endpoint: "https://c-opaque.bos.example" });
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://c-opaque.openmausbot.com/api/pair",
+      "https://c-opaque.bos.example/api/pair",
       expect.objectContaining({ method: "POST" }),
     );
   });

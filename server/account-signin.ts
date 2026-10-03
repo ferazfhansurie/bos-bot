@@ -6,10 +6,11 @@
 //
 // Why through the control plane rather than a mail provider per server: a
 // self-hoster then needs no email credentials at all; the code arrives from
-// accounts.openmausbot.com. The exchange happens server-side, so a browser
+// the control plane named by BOS_CONTROL_PLANE_URL. There is no hosted
+// default: unset, email sign-in stays off and nothing is fetched. The exchange happens server-side, so a browser
 // only ever talks to this server, and a server with an empty allow-list does
 // not expose the routes.
-import { resolveCompanionControlPlaneURL } from "../electron/companion-account-service.mjs";
+import { controlPlaneUnavailableReason, resolveCompanionControlPlaneURL } from "../electron/companion-account-service.mjs";
 import { ControlPlaneError, createControlPlaneClient, normalizeAccountEmail, type ControlPlaneClient } from "../electron/control-plane-client.mjs";
 import type { Scope } from "./sessions.ts";
 
@@ -64,14 +65,17 @@ export function createEmailSignIn(options: {
   let client: ControlPlaneClient | null = options.client ?? null;
   const controlPlane = (): ControlPlaneClient => {
     if (client) return client;
-    const url = resolveCompanionControlPlaneURL({ isPackaged: true, environment: env });
-    if (!url) throw new Error("OMB_CONTROL_PLANE_URL is set but is not an https address");
+    const url = resolveCompanionControlPlaneURL({ environment: env });
+    if (!url) throw new Error(controlPlaneUnavailableReason(env));
     client = createControlPlaneClient({ baseURL: url, fetchImpl: options.fetchImpl });
     return client;
   };
+  const configured = () => Boolean(options.client) || Boolean(resolveCompanionControlPlaneURL({ environment: env }));
+  const notConfigured = (): SignInFailure => ({ ok: false, status: 503, error: controlPlaneUnavailableReason(env) });
   return {
-    enabled: () => signInEnabled(allow()),
+    enabled: () => signInEnabled(allow()) && configured(),
     async start(rawEmail) {
+      if (!configured()) return notConfigured();
       const email = normalizeAccountEmail(rawEmail);
       if (!email) return { ok: false, status: 400, error: "enter a valid email address" };
       if (!allowedScopes(email, allow())) return NOT_WELCOME;
@@ -83,6 +87,7 @@ export function createEmailSignIn(options: {
       return { ok: true };
     },
     async verify(rawEmail, code) {
+      if (!configured()) return notConfigured();
       const email = normalizeAccountEmail(rawEmail);
       if (!email || !allowedScopes(email, allow())) return NOT_WELCOME;
       let verified: { accountToken: string; user: { id: string; email: string } };

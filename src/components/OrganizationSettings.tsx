@@ -4,11 +4,18 @@ import { activeLocale, t } from "@/lib/i18n";
 import { Card } from "./SettingsPrimitives";
 
 const providerNames: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI", openrouter: "OpenRouter" };
-const DEFAULT_PORTAL_ORIGIN = "https://admin.openmausbot.com";
+/** No upstream default: the one-click sign-in appears only when the build sets
+ * VITE_BOS_PORTAL_ORIGIN. Otherwise the user enters their own portal address
+ * under Advanced, and nothing is contacted until they do. */
+function defaultPortalOrigin(): string {
+  const value: unknown = import.meta.env.VITE_BOS_PORTAL_ORIGIN;
+  return typeof value === "string" ? value.trim() : "";
+}
 
 /** Only the trusted desktop bridge can enroll this computer or hold its token. */
 export function OrganizationSettings() {
   const bridge = window.ogb?.remoteClient?.active ? undefined : window.ogb?.organization;
+  const portalDefault = defaultPortalOrigin();
   const [connection, setConnection] = useState<ManagedDesktopState | null>(null);
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
@@ -83,9 +90,9 @@ export function OrganizationSettings() {
       {connection?.message && <p role="status" className="mb-3 text-[13px] text-ink-secondary">{connection.message}</p>}
       {connection?.status === "signed-out" && <div className="flex flex-col gap-3">
         <p className="text-[13px] text-ink-secondary">{t("organization.signInHelp")}</p>
-        <button type="button" disabled={busy} onClick={() => void perform(() => bridge.begin({ portalOrigin: DEFAULT_PORTAL_ORIGIN }))}
-          className="w-fit rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50">{busy ? t("organization.working") : t("organization.signIn")}</button>
-        <details className="text-[12px] text-ink-secondary">
+        {portalDefault && <button type="button" disabled={busy} onClick={() => void perform(() => bridge.begin({ portalOrigin: portalDefault }))}
+          className="w-fit rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50">{busy ? t("organization.working") : t("organization.signIn")}</button>}
+        <details className="text-[12px] text-ink-secondary" open={!portalDefault}>
           <summary className="w-fit cursor-pointer hover:text-ink">{t("organization.advanced")}</summary>
           <form className="mt-2 flex flex-col gap-2" onSubmit={(event) => {
             event.preventDefault();
@@ -94,7 +101,7 @@ export function OrganizationSettings() {
             <p>{t("organization.advancedHelp")}</p>
             <label className="flex flex-col gap-1.5">{t("organization.address")}
               <input type="url" required value={address} disabled={busy} onChange={(event) => setAddress(event.target.value)}
-                placeholder={DEFAULT_PORTAL_ORIGIN} autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} maxLength={2048}
+                placeholder={portalDefault || "https://admin.example.com"} autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} maxLength={2048}
                 className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[14px] text-ink outline-none focus:border-accent/50" />
             </label>
             <button type="submit" disabled={busy || !address.trim()} className="ui-button w-fit">{t("organization.customSignIn")}</button>
