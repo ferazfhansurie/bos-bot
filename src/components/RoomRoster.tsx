@@ -6,8 +6,8 @@ import type { Bot } from "@/state/store";
 
 // Static profile avatars, stacked: working bots first with a ring + dot,
 // the rest folded into a "+n" count so a big room stays one tidy chip.
-export function RoomRoster({ room, members }: { room: RoomViewFields & { busyBotId?: string | null }; members: Bot[] }) {
-  const roster = roomRosterPreview(members, (member) => roomMemberStatus(room, member));
+export function RoomRoster({ room, members, max }: { room: RoomViewFields & { busyBotId?: string | null }; members: Bot[]; max?: number }) {
+  const roster = roomRosterPreview(members, (member) => roomMemberStatus(room, member), max);
   const workingCount = members.filter((member) => roomMemberStatus(room, member) === "working").length;
   return (
     <span className="flex items-center -space-x-1.5">
@@ -23,7 +23,7 @@ export function RoomRoster({ room, members }: { room: RoomViewFields & { busyBot
           +{roster.rest.length}
         </span>
       )}
-      {workingCount > 0 && roster.rest.length > 0 && (
+      {workingCount > 0 && (
         <span className="!ml-2.5 whitespace-nowrap text-[11.5px] text-accent">{workingCount} working</span>
       )}
     </span>

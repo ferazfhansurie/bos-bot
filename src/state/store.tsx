@@ -1,4 +1,5 @@
 import { runtimeStreamKey, roomMemberStreamKey } from "@/lib/runtime-stream";
+import { createStreamStore, roomStreamingMembers, type StreamState, type StreamStore } from "@/lib/stream-store";
 // Server-backed store. The React app holds no transports of its own:
 // it dispatches typed commands over HTTP and folds the one SSE event
 // stream from the harness server into local state. The reducer stays
@@ -11,7 +12,7 @@ import {
   useMemo,
   useReducer,
   useRef,
-  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import type { CloudBackend, EffortLevel, RemoteBotOrigin, ServerFrame } from "../../shared/wire";
@@ -2387,18 +2388,12 @@ export async function loadSnapshotBoundary<Key extends string>(
   return chat.status === "fulfilled";
 }
 
-/** Per-frame stream state lives in its OWN context: token frames update only
- * the components that read this hook (the chat's streaming tail), while every
- * useStore consumer — sidebar, mascots, pickers, the settled transcript —
- * keeps its render tree untouched during a stream. */
-interface StreamState {
-  /** in-flight assistant text per threadId */
-  streaming: Record<string, string>;
-  /** in-flight extended thinking per threadId (ephemeral) */
-  reasoning: Record<string, string>;
-}
-const EMPTY_STREAM: StreamState = { streaming: {}, reasoning: {} };
-const StreamContext = createContext<StreamState>(EMPTY_STREAM);
+/** Per-frame stream state lives OUTSIDE the reducer and outside React state:
+ * token frames notify only the hooks below, and each re-renders only when
+ * its own slice changed — so the sidebar, mascots, pickers, the settled
+ * transcript and even the room view around a streaming bubble keep their
+ * render tree untouched during a stream. */
+const StreamContext = createContext<StreamStore>(createStreamStore());
 
 type PendingDelta = { text: string; reasoning: string };
 
@@ -2461,8 +2456,49 @@ export function createStreamDeltaBuffer(onFlush: (entries: Array<[string, Pendin
   };
 }
 
-export function useStreaming() {
-  return useContext(StreamContext);
+/** The whole stream snapshot: re-renders on every token frame of any thread. */
+export function useStreaming(): StreamState {
+  const store = useContext(StreamContext);
+  return useSyncExternalStore(store.subscribe, store.get, store.get);
+}
+
+/** One thread's (or room member's) in-flight text; re-renders only when it grows. */
+export function useStreamText(key: string, kind: "streaming" | "reasoning" = "streaming"): string | undefined {
+  const store = useContext(StreamContext);
+  const read = () => store.get()[kind][key];
+  return useSyncExternalStore(store.subscribe, read, read);
+}
+
+/** Room members with a live bubble ("a,b"); changes only when one starts or stops. */
+export function useRoomStreamingMembers(threadId: string): string {
+  const store = useContext(StreamContext);
+  const read = () => roomStreamingMembers(store.get(), threadId);
+  return useSyncExternalStore(store.subscribe, read, read);
+}
+
+/** Run `effect` after every stream frame that touches this thread, without a re-render. */
+export function useStreamFrames(threadId: string, effect: () => void) {
+  const store = useContext(StreamContext);
+  const effectRef = useRef(effect);
+  effectRef.current = effect;
+  useEffect(() => {
+    let last = threadSlice(store.get(), threadId);
+    return store.subscribe(() => {
+      const next = threadSlice(store.get(), threadId);
+      if (next === last) return;
+      last = next;
+      // after the bubble commits, so scrollHeight includes the new text
+      requestAnimationFrame(() => effectRef.current());
+    });
+  }, [store, threadId]);
+}
+
+function threadSlice(state: StreamState, threadId: string): number {
+  let length = 0;
+  for (const [key, text] of Object.entries(state.streaming)) {
+    if (key === threadId || key.startsWith(`${threadId}:room:`)) length += text.length + 1;
+  }
+  return length;
 }
 
 const StoreContext = createContext<{
@@ -2488,7 +2524,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // per-frame stream-delta batching (see the "runtime" SSE case); stream
   // state is intentionally OUTSIDE the reducer so token frames re-render
   // only StreamContext consumers
-  const [stream, setStream] = useState<StreamState>(EMPTY_STREAM);
+  const streamStore = useMemo(() => createStreamStore(), []);
+  const setStream = streamStore.set;
   const deltaBuffer = useMemo(() => createStreamDeltaBuffer((entries) => {
     setStream((prev) => {
       const streaming = { ...prev.streaming };
@@ -3688,7 +3725,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
   return (
     <StoreContext.Provider value={value}>
-      <StreamContext.Provider value={stream}>{children}</StreamContext.Provider>
+      <StreamContext.Provider value={streamStore}>{children}</StreamContext.Provider>
     </StoreContext.Provider>
   );
 }

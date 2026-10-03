@@ -9,7 +9,8 @@ import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader
 import {
   api,
   useStore,
-  useStreaming,
+  useStreamFrames,
+  useStreamText,
   formatTime,
   openNotificationTarget,
   type Bot,
@@ -964,14 +965,23 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
     </section>
   );
 }
+// One member's in-flight reply. It subscribes to its own stream key, so a
+// token repaints this bubble alone, not the transcript, header or composer.
+const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member }: { threadId: string; member: Bot }) {
+  const text = useStreamText(roomMemberStreamKey(threadId, member.id));
+  if (!text) return null;
+  return <div className="min-w-0" aria-label={`${member.name} is replying`}>
+    <ClusterLabel bot={member} name={member.name} color={member.color} />
+    <ChatMarkdown text={text} streaming />
+  </div>;
+});
+
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   // Same Windows caption handling as ChatView: drag on the header, shift the
   // right-hand controls below the renderer-drawn caption buttons.
   const { dragStyle: headerDragStyle, noDragStyle: headerNoDragStyle, controlsShiftStyle } = useCaptionChrome();
-  const stream = useStreaming();
-  const streaming = Object.entries(stream.streaming).filter(([key]) => key === group.threadId || key.startsWith(`${group.threadId}:room:`)).map(([, text]) => text).join("\n");
   const scrollRef = useRef<HTMLDivElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerDockRef = useRef<HTMLDivElement>(null);
@@ -1122,7 +1132,15 @@ export function GroupView({ group }: { group: Group }) {
     if (!el || !followRef.current) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
-  }, [group.id, group.messages.length, streaming, group.busyBotId, group.working, composerDock.pad]);
+  }, [group.id, group.messages.length, group.busyBotId, group.working, composerDock.pad]);
+  // Stream tokens repaint only their bubble (RoomStreamBubble); the room
+  // view itself never re-renders for them and just keeps following here.
+  useStreamFrames(group.threadId, () => {
+    const el = scrollRef.current;
+    if (!el || !followRef.current) return;
+    el.scrollTo({ top: el.scrollHeight });
+    previousScrollTop.current = el.scrollTop;
+  });
 
   // Expanding prepends rows: capture the height first, then after the commit
   // shift scrollTop by the growth so the message under the cursor stays put
@@ -1194,7 +1212,7 @@ export function GroupView({ group }: { group: Group }) {
   };
 
   const roomFields = group as Group & RoomViewFields;
-  const memberMauses = <RoomRoster room={roomFields} members={members} />;
+  const memberMauses = <RoomRoster room={roomFields} members={members} max={8} />;
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
@@ -1202,7 +1220,7 @@ export function GroupView({ group }: { group: Group }) {
       {membersOpen && !remoteClient && !group.dm && (
         <ManageMembersPanel group={group} onClose={closeMembers} triggerRef={membersTriggerRef} />
       )}
-      {/* Header: static member avatars; a ring + dot marks the working bot. */}
+      {/* Header: room name, task picker and room controls. */}
       <div
         style={headerDragStyle}
         className={cn(
@@ -1244,11 +1262,17 @@ export function GroupView({ group }: { group: Group }) {
           <GroupCallButton group={group} members={members} />
           {!remoteClient && !setupPending && !group.dm && <RoomWorkingFolderChip group={group} onToggle={() => setFolderOpen((open) => !open)} />}
           {!remoteClient && !setupPending && !group.dm && <DefaultResponderSelect group={group} members={members} />}
+        </div>
+      </div>
+
+      {/* Bot list along the top, under the title like the phone app: working
+          bots first with a ring + pulsing dot, the rest folded into +n. */}
+      <div className="flex justify-center px-5 pb-1.5" style={headerNoDragStyle}>
+        <div className="flex items-center rounded-full border border-hairline/40 bg-panel/80 px-1.5 py-1 shadow-sm">
           {group.dm || remoteClient ? (
             memberMauses
           ) : (
-            // The roster lives where you already look to see who is in the
-            // room; a dashed + says the row is editable without shouting.
+            // Click the row to manage members; the dashed + says it's editable.
             <button
               ref={membersTriggerRef}
               type="button"
@@ -1451,14 +1475,7 @@ export function GroupView({ group }: { group: Group }) {
               </button>
             </div>
           )}
-          {members.map(member => {
-            const text = stream.streaming[roomMemberStreamKey(group.threadId, member.id)];
-            if (!text) return null;
-            return <div key={`stream-${member.id}`} className="min-w-0" aria-label={`${member.name} is replying`}>
-              <ClusterLabel bot={member} name={member.name} color={member.color} />
-              <ChatMarkdown text={text} streaming />
-            </div>;
-          })}
+          {members.map(member => <RoomStreamBubble key={`stream-${member.id}`} threadId={group.threadId} member={member} />)}
           {(speaker || presenceVisible) && (
             <TurnPresence
               avatar={

@@ -29,7 +29,7 @@ import {
   api,
   currentTaskBot,
   useStore,
-  useStreaming,
+  useStreamText,
   formatTime,
   messageVersions,
   openNotificationTarget,
@@ -970,9 +970,9 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   const composerDockRef = useRef<HTMLDivElement>(null);
   const composerDock = useComposerDockPad(composerDockRef);
 
-  const stream = useStreaming();
-  const streaming = stream.streaming[bot.threadId];
-  const reasoning = stream.reasoning[bot.threadId];
+  // only this thread's stream re-renders the chat, not every bot's tokens
+  const streaming = useStreamText(bot.threadId);
+  const reasoning = useStreamText(bot.threadId, "reasoning");
   const provisioning = state.provisioning[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const [findOpen, setFindOpen] = useState(false);
