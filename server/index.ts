@@ -2,6 +2,8 @@ import { channelControlPatch, roomCompletionNotifies } from "./channel-controls.
 import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
 import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
 import { DesktopUpdateLifecycle, readPreparedUpdateReceipt, assertUpdateCancellationSafe } from "./desktop-update-lifecycle.ts";
+import { UpdateCoordinator, readInstalled, resumePrompt, type BusyTurn } from "./updater.ts";
+import { createDarwinUpdaterHost } from "./updater-host.ts";
 import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
 import { groupReplyTargets } from "../shared/group-replies.ts";
 import { SharedTyping } from "./shared-typing.ts";
@@ -12817,6 +12819,71 @@ const desktopUpdateLifecycle = new DesktopUpdateLifecycle(workspaceMaintenance, 
   writeFileAtomic(join(DATA_DIR, "desktop-update-receipt.json"), JSON.stringify(receipt), { mode: 0o600 });
 }, desktopLifecycleGeneration ?? "", startupUpdateReceipt, () => assertUpdateCancellationSafe(DATA_DIR, desktopLifecycleGeneration ?? "", process.pid));
 
+// ── update / restart button (1.3) ─────────────────────────────────────────
+// The live bundle is three directories above the ui tree the desktop hands us.
+// 8812 is the managed companion gateway (electron/companion-origin-gateway.mjs); it only counts when bound.
+const LIVE_APP_PATH = (() => {
+  const fromStatic = STATIC_DIR ? /^(.*\.app)\/Contents\//.exec(STATIC_DIR)?.[1] : undefined;
+  const fromExec = /^(.*\.app)\/Contents\//.exec(process.execPath)?.[1];
+  return process.env.OMB_UPDATER_LIVE_APP || fromStatic || fromExec || "";
+})();
+const UPDATE_OWNER_PREFIX = "update:";
+const listBusyTurns = (): BusyTurn[] => {
+  const turns: BusyTurn[] = [];
+  for (const bot of store.bots) {
+    for (const task of store.tasks(bot.id)) {
+      if (task.busy || directTurnDispatchClaims.has(task.threadId)) turns.push({ botId: bot.id, threadId: task.threadId, kind: "direct", ...(task.title ? { title: task.title } : {}) });
+    }
+    const room = activeGroupTurnForBot(bot.id);
+    if (room) turns.push({ botId: bot.id, threadId: room.threadId, kind: "room", groupId: room.group.id });
+  }
+  return turns;
+};
+const updateCoordinator = new UpdateCoordinator({
+  dataDir: DATA_DIR,
+  liveApp: LIVE_APP_PATH,
+  current: () => ({ version: serverVersion(), sha: readInstalled(DATA_DIR)?.sha ?? process.env.OMB_APP_SHA ?? "unknown" }),
+  listBusyTurns,
+  stopAll: async () => {
+    for (const bot of store.bots) {
+      const run = routines?.activeRunForBot(bot.id);
+      if (run) await routines!.cancelRun(run.id).catch(() => null);
+      await interruptAllDirectThreads(bot.id).catch(() => undefined);
+    }
+    for (const group of store.groups) if (groupIsWorking(group)) await interruptRoom(group).catch(() => 0);
+  },
+  checkpointExtras: () => ({
+    steers: queuedSteerSnapshot(() => true),
+    delegations: [...pendingDelegationWakes.entries()].map(([id, wake]) => ({ id, botId: wake.botId, targetName: wake.targetName })),
+  }),
+  quiesce: async () => {
+    const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.status().updateId ?? ""}`;
+    workspaceMaintenance.restoreUpdate(owner, workspaceQuietHooks.resume);
+    workspaceQuietHooks.pause();
+    await workspaceQuietHooks.flush();
+  },
+  unquiesce: () => {
+    const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.status().updateId ?? ""}`;
+    try { workspaceMaintenance.cancelUpdate(owner); } catch { /* never locked */ }
+  },
+  host: createDarwinUpdaterHost({ dataDir: DATA_DIR, port: PORT, extraPorts: [8812] }),
+  emit: event => broadcast({ ...event }),
+  resumeTurn: async (turn, result) => {
+    const bot = store.bot(turn.botId);
+    if (!bot) return "skipped: bot no longer exists";
+    if (turn.kind === "room") {
+      store.appendMessage(turn.threadId, { role: "bot", kind: "activity", from: { botId: bot.id, name: bot.name, color: bot.color },
+        tool: { name: `${bot.name}'s turn here was interrupted by a BOS ${result.mode}. Room turns are not replayed; mention the bot to continue.`, ok: false } });
+      return "noted: room turn not replayed";
+    }
+    if (!store.taskByThread(turn.botId, turn.threadId)) return "skipped: thread no longer exists";
+    await startTurn(turn.botId, resumePrompt(turn, result), { threadId: turn.threadId, unattended: true, cardContinuation: true });
+    return "resumed";
+  },
+  log: line => console.log(line),
+  codesign: process.env.OMB_UPDATER_CODESIGN !== "0",
+});
+
 const workspaceBackupRoutes = createWorkspaceBackupRoutes({
   dataDir: DATA_DIR,
   appVersion: serverVersion(),
@@ -12867,7 +12934,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       expectedOwner.length > 0 && suppliedOwner.length === expectedOwner.length && timingSafeEqual(suppliedOwner, expectedOwner) &&
       !isProxied(req) && isLoopbackHost(req.headers.host) && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
     const readOnlyProbe = method === "GET" && ["/api/events", "/api/health", "/api/health/hosted"].includes(path);
-    if (path.startsWith("/api/") && !readOnlyProbe && !privateLifecycleControl && !path.startsWith("/api/workspace-backup/") &&
+    if (path.startsWith("/api/") && !readOnlyProbe && !privateLifecycleControl && !path.startsWith("/api/workspace-backup/") && !path.startsWith("/api/update/") &&
         !path.startsWith("/api/shared-computers/") && !isWorkspaceBackupSessionControl(method, path)) {
       releaseWorkspaceRequest = workspaceMaintenance.request();
     }
@@ -13203,6 +13270,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!authorized) return json(res, 403, { error: "Desktop update authority required" });
       const receipt = await desktopUpdateLifecycle.handle(true, await readBody(req));
       return json(res, 200, receipt);
+    }
+    if (path.startsWith("/api/update/")) {
+      // The owner's desktop or an admin session. Peer/client sessions cannot restart the app.
+      if (auth.kind === "session" && !auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+      res.setHeader("cache-control", "no-store");
+      if (method === "GET" && path === "/api/update/status") return json(res, 200, updateCoordinator.status());
+      if (method === "POST" && (path === "/api/update/apply" || path === "/api/update/restart")) {
+        if (!LIVE_APP_PATH) return json(res, 409, { error: "this server is not running from an app bundle; nothing to swap or relaunch" });
+        const body = await readBody(req).catch(() => ({})) as { force?: unknown };
+        const options = { force: body?.force === true };
+        try {
+          const started = path === "/api/update/apply" ? await updateCoordinator.apply(options) : await updateCoordinator.restart(options);
+          return json(res, 202, started);
+        } catch (error) {
+          const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 500;
+          return json(res, status, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return json(res, 404, { error: "Not found" });
     }
     if (path.startsWith("/api/remote-full/")) {
       if (auth.kind !== "session" || !auth.scopes.includes("client") || auth.via === "ticket") return json(res, 403, { error: "Paired desktop session required" });
@@ -21229,6 +21315,9 @@ server.listen(PORT, "127.0.0.1", () => {
   // ordinary chat. Start only once every registry is initialized and the
   // endpoint is listening; earlier dispatch can hit uninitialized bindings.
   routines!.start();
+  // Finish the update that quit the previous process: record its result once
+  // and give each interrupted conversation one continuation turn.
+  void updateCoordinator.boot().catch(error => console.error("[update] boot:", error instanceof Error ? error.message : error));
   const leftover = pendingThreads();
   if (leftover.length) console.log(`delegations: ${leftover.length} thread(s) with queued handoffs from a previous run — draining`);
   for (const threadId of leftover) {
