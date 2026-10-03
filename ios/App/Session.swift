@@ -992,6 +992,17 @@ final class Session: ObservableObject {
     /// lagged the phone. Two answer in the HQ room and two in their own 1:1s,
     /// each typing at provider speed with tool steps, item events and the
     /// room's active list changing as they go.
+    /// A bot message landing in `threadId` now, for the roster reorder test.
+    func debugPostMessage(threadId: String) {
+        let json: [String: Any] = ["kind": "message", "threadId": threadId, "message": [
+            "id": "debug-\(UUID().uuidString)", "role": "bot", "kind": "text",
+            "at": Date().timeIntervalSince1970 * 1000, "text": "moved to the top"
+        ]]
+        guard let data = try? JSONSerialization.data(withJSONObject: json),
+              let frame = try? JSONDecoder().decode(StreamFrame.self, from: data) else { return }
+        state.apply(frame.frame)
+    }
+
     /// `-stream-preview-bot-count 3`: drop the last 1:1 to measure three bots.
     private static var previewBotCount: Int {
         let args = ProcessInfo.processInfo.arguments
