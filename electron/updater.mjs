@@ -156,3 +156,15 @@ export function startUpdater({ prepareInstall = null } = {}) {
   setTimeout(() => void updaterCoordinator?.check(), 15_000).unref?.();
   setInterval(() => void updaterCoordinator?.check(), 60 * 60 * 1000).unref?.();
 }
+
+// Dynamic facade: main registers private RPC before the updater/feed starts.
+// Packaged staging may restart even though it has no release feed.
+export const windowsUpdateCoordinator = {
+  candidate: () => updaterCoordinator?.candidate() ?? null,
+  admit(mode) {
+    if (updaterCoordinator) return updaterCoordinator.admit(mode);
+    if (mode !== "restart") throw Object.assign(new Error("No verified Windows installer is staged"), { status: 409 });
+  },
+  hold: () => updaterCoordinator?.hold(),
+  install: options => updaterCoordinator?.install(options),
+};

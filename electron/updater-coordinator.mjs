@@ -11,6 +11,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   // Set from downloadUpdate's resolution: the paths electron-updater staged.
   // Only the hand-off needs them; quitAndInstall reads its own copy.
   let downloadedFiles = null;
+  let stagedCandidate = null;
   let downloadOperation = null;
   let installOperation = null;
   let nativeStagingStarted = false;
@@ -18,6 +19,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   // Squirrel has no cancellation or attempt ID. After a staging failure a
   // second attempt could consume the first attempt's late ready event.
   let recoveryRequired = false;
+  let contractHeld = false;
   // A staged update, install hand-off, or failed user action remains useful
   // until the user acts again. Hourly checks must not replace its controls.
   let actionOwnsState = false;
@@ -91,7 +93,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
     routeError(manual, error);
   });
   updater.on("download-progress", (progress) => {
-    if (recoveryRequired || installOperation || nativeStagingStarted) return;
+    if (contractHeld || recoveryRequired || installOperation || nativeStagingStarted) return;
     setState({ status: "downloading", percent: Math.round(progress?.percent ?? 0) });
   });
   updater.on("update-downloaded", (info) => {
@@ -119,7 +121,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   });
 
   function check(manual = false) {
-    if (recoveryRequired || installOperation || (nativeStaging && (downloadOperation || nativeStagingStarted)) || (!manual && actionOwnsState)) return Promise.resolve();
+    if (contractHeld || recoveryRequired || installOperation || (nativeStaging && (downloadOperation || nativeStagingStarted)) || (!manual && actionOwnsState)) return Promise.resolve();
     if (checkOperation) {
       // A manual caller upgrades the shared operation; a timer never downgrades it.
       if (manual) checkOperation.manual = true;
@@ -146,10 +148,11 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
   }
 
   function download() {
-    if (recoveryRequired || installOperation || nativeStagingStarted) return Promise.resolve();
+    if (contractHeld || recoveryRequired || installOperation || nativeStagingStarted) return Promise.resolve();
     if (checkOperation) checkOperation.supersededByDownload = true;
     if (downloadOperation) return downloadOperation.promise;
 
+    stagedCandidate = null;
     const operation = { downloadedInfo: null, failed: false, promise: null, timer: null };
     downloadOperation = operation;
     // Own the state before the request goes out: the first "download-progress"
@@ -164,6 +167,13 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
             downloadedFiles = Array.isArray(result) ? result.filter((file) => typeof file === "string") : null;
           }
           if (!operation.failed && operation.downloadedInfo) {
+            const info = operation.downloadedInfo;
+            const exe = info.files?.find(file => /\.exe(?:$|\?)/i.test(file.url ?? ""));
+            const digest = exe?.sha512 ?? info.sha512;
+            if (downloadedFiles?.some(file => /\.exe$/i.test(file)) && typeof digest === "string" &&
+                (/^[a-f0-9]{128}$/i.test(digest) || /^[A-Za-z0-9+/]{86}==$/.test(digest))) {
+              stagedCandidate = { version: info.version, sha: /^[a-f0-9]{128}$/i.test(digest) ? digest.toLowerCase() : Buffer.from(digest, "base64").toString("hex"), stagedAt: new Date().toISOString() };
+            }
             nativeReady = nativeStaging;
             actionOwnsState = true;
             setState({ status: "downloaded", version: operation.downloadedInfo?.version });
@@ -183,8 +193,8 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
     return operation.promise;
   }
 
-  async function install() {
-    if (recoveryRequired || installOperation || downloadOperation || (nativeStaging && !nativeReady)) return;
+  async function install({ prepareInstall: coordinatedPrepare = prepareInstall } = {}) {
+    if ((contractHeld && coordinatedPrepare === prepareInstall) || recoveryRequired || installOperation || downloadOperation || (nativeStaging && !nativeReady)) return { dispatched: false, error: "Update installation is held or in progress" };
     actionOwnsState = true;
     if (handOffInstall) {
       handOff();
@@ -194,19 +204,19 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
     installOperation = operation;
     setState({ status: "installing" });
     try {
-      if (typeof prepareInstall !== "function") throw new Error("Update lifecycle protection is unavailable");
-      await prepareInstall();
-      if (installOperation !== operation || operation.failed) return;
+      if (typeof coordinatedPrepare !== "function") throw new Error("Update lifecycle protection is unavailable");
+      await coordinatedPrepare();
+      if (installOperation !== operation || operation.failed) return { dispatched: false, error: "Update preparation failed" };
     } catch (error) {
       routeError(true, error);
-      return;
+      return { dispatched: false, error: updateErrorMessage(error) };
     }
     try {
       operation.dispatched = true;
       updater.quitAndInstall(true, true);
     } catch (error) {
       routeError(true, error);
-      return;
+      return { dispatched: true, error: updateErrorMessage(error) };
     }
     // quitAndInstall is void and cannot be canceled. A slow handoff must stay
     // busy: exposing Retry here used to arm another native quit callback.
@@ -218,6 +228,7 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
       }, 2 * 60 * 1000);
       operation.timer.unref?.();
     }
+    return { dispatched: true };
   }
 
   // The platform owns the install from here: a terminal opens with the
@@ -240,5 +251,11 @@ export function createUpdaterCoordinator(updater, setState, { handOffInstall = n
       });
   }
 
-  return { check, download, install };
+  function candidate() { return stagedCandidate && !recoveryRequired ? { ...stagedCandidate } : null; }
+  function admit(mode) {
+    if (!["update", "restart"].includes(mode)) throw Object.assign(new Error("Invalid update mode"), { status: 400 });
+    if (contractHeld || recoveryRequired || installOperation || downloadOperation || checkOperation) throw Object.assign(new Error("Update installation is held or in progress"), { status: 409 });
+    if (mode === "update" && !candidate()) throw Object.assign(new Error("No verified Windows installer is staged"), { status: 409 });
+  }
+  return { check, download, install, candidate, admit, hold: () => { contractHeld = true; } };
 }

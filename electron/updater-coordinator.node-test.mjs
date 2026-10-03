@@ -570,3 +570,43 @@ test("uncertain native dispatch retains ownership after an error", async () => {
   assert.equal(installs, 1);
   assert.equal(h.getState().retryable, false);
 });
+
+const digest = Buffer.alloc(64, 7).toString("base64");
+async function stagedWindows(h) {
+  h.updater.downloadUpdate = async () => {
+    h.updater.emit("update-downloaded", { version: "1.3.0", sha512: digest });
+    return ["/synthetic/BOS.exe"];
+  };
+  await h.coordinator.download();
+}
+test("contract candidate exists only after verified download resolves", async () => {
+  const h = harness();
+  assert.equal(h.coordinator.candidate?.(), null);
+  await stagedWindows(h);
+  assert.deepEqual(h.coordinator.candidate(), {version:"1.3.0", sha:Buffer.from(digest,"base64").toString("hex"), stagedAt:h.coordinator.candidate().stagedAt});
+  assert.ok(Number.isFinite(Date.parse(h.coordinator.candidate().stagedAt)));
+});
+test("contract install uses the coordinated lifecycle once and reports dispatch", async () => {
+  const h=harness({prepareInstall:async()=>{throw new Error("legacy gate must not be called");}});
+  await stagedWindows(h); let prepared=0, installed=0;
+  h.updater.quitAndInstall=()=>{installed++;};
+  const result=await h.coordinator.install({prepareInstall:async()=>{prepared++;}});
+  assert.equal(result.dispatched,true); assert.equal(prepared,1); assert.equal(installed,1);
+  assert.throws(()=>h.coordinator.admit("restart"),/held|progress/);
+});
+test("contract admission refuses update without staged metadata", () => {
+  const h=harness(); assert.throws(()=>h.coordinator.admit("update"),/staged/);
+  assert.doesNotThrow(()=>h.coordinator.admit("restart"));
+});
+test("contract install reports preparation refusal without dispatch", async () => {
+  const h=harness(); await stagedWindows(h); let installed=0;
+  h.updater.quitAndInstall=()=>{installed++;};
+  const result=await h.coordinator.install({prepareInstall:async()=>{throw new Error("checkpoint missing");}});
+  assert.equal(result.dispatched,false); assert.match(result.error,/checkpoint missing/); assert.equal(installed,0);
+});
+test("contract hold prevents legacy UI and timers from racing a restart", async () => {
+ const h=harness();await stagedWindows(h);let installs=0,checks=0;
+ h.updater.quitAndInstall=()=>installs++;h.updater.checkForUpdates=()=>{checks++;};
+ h.coordinator.hold();await h.coordinator.install();await h.coordinator.check(true);await h.coordinator.download();
+ assert.equal(installs,0);assert.equal(checks,0);assert.throws(()=>h.coordinator.admit("restart"),/held|progress/);
+});
