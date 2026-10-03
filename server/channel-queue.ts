@@ -17,6 +17,8 @@ interface ChannelQueueItem {
   mode: "chat" | "goal";
   /** kept so the drain appends it with the same provenance it arrived with */
   via?: "api";
+  /** the signed-in person who sent it, so the drained row keeps its author */
+  sender?: { name: string };
 }
 
 interface ChannelQueueEntry {
@@ -50,6 +52,7 @@ export function queueChannelMessage(
     sendId?: string;
     mode?: "chat" | "goal";
     via?: "api";
+    sender?: { name: string };
   } = {},
 ): QueuedChannelMessage {
   const entry = queues.get(threadId) ?? { groupId, items: [] };
@@ -61,6 +64,7 @@ export function queueChannelMessage(
     sendId: options.sendId,
     mode: options.mode ?? "chat",
     via: options.via,
+    ...(options.sender ? { sender: options.sender } : {}),
   };
   saveChatFollowup({ id: item.id, kind: "channel", ownerId: groupId, threadId, payload: item });
   entry.items.push(item);
@@ -190,4 +194,36 @@ export function drainChannelMessages(
 /** Test helper. */
 export function _queuedChannelCount(threadId: string): number {
   return queues.get(threadId)?.items.length ?? 0;
+}
+
+const UNDELIVERED_SNIPPET_CHARS = 80;
+
+/** Transcript text for a queued channel message that reached the head of the
+ * drain after its room or task stopped owning the thread. */
+export function undeliveredChannelMessageNotice(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const snippet = flat.length > UNDELIVERED_SNIPPET_CHARS
+    ? `${flat.slice(0, UNDELIVERED_SNIPPET_CHARS - 1)}…`
+    : flat;
+  return `queued message not delivered — this room no longer owns the task: "${snippet}"`;
+}
+
+/** A queued message whose room or task no longer owns its thread must not
+ * vanish: leave a visible row in the thread, or log when the thread itself
+ * is gone (deleted threads have no rows left to write beside). */
+export function noteUndeliveredChannelMessage(
+  transcript: {
+    messagesFor(threadId: string): readonly unknown[];
+    appendMessage(threadId: string, message: { role: "bot"; kind: "activity"; tool: { name: string; ok: boolean } }): unknown;
+  },
+  input: { groupId: string; threadId: string; id: string; text: string },
+  log: (message: string) => void = (message) => console.warn(message),
+): "noted" | "logged" {
+  const notice = undeliveredChannelMessageNotice(input.text);
+  if (transcript.messagesFor(input.threadId).length === 0) {
+    log(`channel-queue: ${notice} (room ${input.groupId}, queue ${input.id}: thread ${input.threadId} gone)`);
+    return "logged";
+  }
+  transcript.appendMessage(input.threadId, { role: "bot", kind: "activity", tool: { name: notice, ok: false } });
+  return "noted";
 }

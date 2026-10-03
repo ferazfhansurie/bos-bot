@@ -222,6 +222,7 @@ export interface FollowupPayload {
   peerAsk?: Message["peerAsk"];
   mode?: "chat" | "goal";
   via?: "api";
+  sender?: { name: string };
 }
 export type FollowupStatus = "pending" | "dispatching" | "interrupted" | "cancelled";
 export interface ChatFollowup {

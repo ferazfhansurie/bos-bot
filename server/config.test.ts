@@ -438,7 +438,7 @@ describe("configuration boundaries", () => {
       rooms: { turnTimeoutMinutes: 20 },
     });
     expect(roomTurnTimeoutMinutes({ rooms: { turnTimeoutMinutes: 20 } })).toBe(20);
-    expect(roomTurnTimeoutMinutes({})).toBe(5);
+    expect(roomTurnTimeoutMinutes({})).toBe(30);
   });
 
   it.each([0, 1.5, 1441, "20", null])(

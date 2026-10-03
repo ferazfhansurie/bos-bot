@@ -269,6 +269,7 @@ import {
   holdChannelQueue,
   queuedChannelMessage,
   queueChannelMessage,
+  noteUndeliveredChannelMessage,
   restoreChannelMessages,
   restoreHeldChannelQueue,
   resolveHeldReplyTarget,
@@ -10077,6 +10078,8 @@ async function executeGroupMemberTurn(
       // stop the turn underneath the card. Everything else keeps burning it.
       else if (e.type === "request.opened") deadline.setWaitingOnHuman(true);
       else if (e.type === "request.resolved") deadline.setWaitingOnHuman(false);
+      // Streaming and tool runs are progress: they refill the ceiling.
+      if (e.type === "content.delta" || e.type === "item.started" || e.type === "item.completed") deadline.noteActivity();
     });
     deadline.start();
     unregisterStall = roomStallCompletions.register(threadId, () => {
@@ -11018,17 +11021,20 @@ function drainQueuedChannelSends(): void {
       const group = store.group(groupId);
       return group ? groupIsWorking(group) : false;
     },
-    ({ groupId, threadId, text, replyToId, sendId, mode, id, via }) => {
+    ({ groupId, threadId, text, replyToId, sendId, mode, id, via, sender }) => {
       const group = store.group(groupId);
       const ownsThread = group?.dm
         ? group.threadId === threadId
         : Boolean(group && store.groupTaskByThread(group.id, threadId));
-      if (!group || !ownsThread) return;
+      if (!group || !ownsThread) {
+        noteUndeliveredChannelMessage(store, { groupId, threadId, id, text });
+        return;
+      }
       try {
-        startGroupTurn(groupId, text, resolveReplyTarget(threadId, replyToId), sendId, mode, id, { via, threadId });
+        startGroupTurn(groupId, text, resolveReplyTarget(threadId, replyToId), sendId, mode, id, { via, threadId, sender });
       } catch (error) {
         if (!store.messagesFor(threadId).some((message) => message.queueId === id && message.role === "user")) {
-          store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId, sendId, channelMode: mode, queueId: id, via });
+          store.appendMessage(threadId, { role: "user", kind: "text", text, replyToId, sendId, channelMode: mode, queueId: id, via, sender });
         }
         store.appendMessage(threadId, {
           role: "bot",
@@ -16936,6 +16942,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               sendId,
               mode: channelMode,
               via,
+              sender: messageSender(auth),
             });
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
@@ -17058,6 +17065,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           channelMode: head.mode,
           queueId: head.id,
           via: head.via,
+          sender: head.sender,
           steered: true,
         });
         settleHeldChannelQueueHead(held);

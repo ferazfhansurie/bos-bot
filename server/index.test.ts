@@ -6482,7 +6482,7 @@ describe("harness HTTP API", () => {
   it("validates and persists the global room turn timeout", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
-    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 5 });
+    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 30 });
 
     for (const turnTimeoutMinutes of [0, 1.5, 1441, "20", null]) {
       const invalid = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes } });
@@ -6500,7 +6500,7 @@ describe("harness HTTP API", () => {
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(disk.rooms).toEqual({ turnTimeoutMinutes: 20 });
 
-    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
+    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 30 } });
   });
 
   it("cards every ask when Claude's reviewer never started, says so once, and can hand the allow to Claude for the session", async () => {
@@ -7640,7 +7640,7 @@ describe("harness HTTP API", () => {
       }, { timeout: 5_000 }).toEqual({ botBusy: false, roomBusyBotId: null });
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${botId}`);
-      await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 5 } });
+      await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 30 } });
     }
   });
 
