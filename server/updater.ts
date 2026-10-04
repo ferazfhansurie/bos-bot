@@ -67,9 +67,18 @@ export interface ApplyPlan {
   old: { server: string; ui: string } | null; oldVersion: string; oldSha: string; version: string; sha: string; force: boolean;
   launch: string[]; resultPath: string; installedPath: string; gracefulSeconds: number; healthSeconds: number;
   codesign: boolean; selfBootout: boolean; requireLaunchd: boolean; uid: number | null; scriptSha256: string;
+  /** The no-downgrade guard the detached job runs ITSELF before it stops the
+   * app: a copy of the shipped script beside apply.py (sha256 pinned here)
+   * plus the ledger, repo and branches admission judged with. null = not
+   * configured (dev run, sandbox) or a restart. */
+  guard: ApplyGuard | null;
+  /** Packaged build: apply.py refuses an update plan that carries no guard,
+   * so a plan written by hand cannot skip the check. */
+  guardRequired: boolean;
   /** Test-only (OMB_UPDATE_SANDBOX): "the app" is whoever listens on ports[0]; no launchd; relaunch is left to a supervisor. */
   sandbox?: boolean; fault?: string | null;
 }
+export interface ApplyGuard { script: string; scriptSha256: string; ledger: string; repo?: string; releaseBranch?: string; prodBranch?: string }
 /** The platform-neutral part of a plan: what any executor needs to swap or
  * relaunch and to write result.json where boot() will look for it. */
 export type ExecutorPlan = Pick<ApplyPlan, "updateId" | "mode" | "version" | "sha" | "oldVersion" | "oldSha" | "force" | "resultPath" | "installedPath" | "health" | "ports" | "gracefulSeconds" | "healthSeconds">;
@@ -720,6 +729,27 @@ export async function runNoDowngradeGate(options: NoDowngradeOptions | undefined
   return [`no-downgrade: ${reason}`];
 }
 
+/** The guard the detached job runs: a copy of the shipped script written
+ * beside apply.py, its sha256 pinned in the plan. A copy, because the live
+ * bundle's own Contents/Resources/updater is renamed away mid-swap and
+ * because the job must run exactly the script admission ran. Packaged
+ * builds (require) refuse without it; a dev run goes without. */
+export function stageApplyGuard(options: NoDowngradeOptions | undefined, dir: string): ApplyGuard | null {
+  if (!options) return null;
+  if (!existsSync(options.script)) {
+    if (options.require) throw err(`no-downgrade guard missing at ${options.script}; refusing to update`, 409);
+    return null;
+  }
+  const source = readFileSync(options.script, "utf8");
+  const script = join(dir, "no-downgrade.py");
+  writeFileAtomic(script, source, { mode: 0o700 });
+  return {
+    script, scriptSha256: createHash("sha256").update(source).digest("hex"), ledger: options.ledger,
+    ...(options.repo ? { repo: options.repo } : {}), ...(options.releaseBranch ? { releaseBranch: options.releaseBranch } : {}),
+    ...(options.prodBranch !== undefined ? { prodBranch: options.prodBranch } : {}),
+  };
+}
+
 function defaultRunPreflight(path: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("/usr/bin/python3", [path], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -803,6 +833,8 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
       try { old = appDigests(live); } catch { old = null; }
       const proc = await host.appProcess();
       const script = UPDATER_APPLY_SCRIPT;
+      // The job judges the swap again on its own, from its own copy of the guard.
+      const guard = plan.mode === "update" ? stageApplyGuard(options.noDowngrade, dir) : null;
       const full: ApplyPlan = {
         ...plan, label: `${UPDATE_JOB_PREFIX}${plan.updateId.slice(0, 8)}`, live,
         staged: staged?.appPath ?? null,
@@ -812,6 +844,7 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
         launch: sandbox ? [] : ["/usr/bin/open", "{app}"],
         codesign: options.codesign ?? true, selfBootout: !sandbox, requireLaunchd: options.requireLaunchd ?? true,
         uid, scriptSha256: createHash("sha256").update(script).digest("hex"),
+        guard, guardRequired: plan.mode === "update" && Boolean(options.noDowngrade?.require),
         ...(sandbox ? { sandbox: true, fault: sandbox.fault ?? null } : {}),
       };
       writeFileAtomic(join(dir, "apply.py"), script, { mode: 0o700 });

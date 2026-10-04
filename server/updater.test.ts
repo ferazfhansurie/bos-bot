@@ -8,7 +8,7 @@ import { parse as parseYaml } from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   UpdateCoordinator, appDigests, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
-  updaterPlist, writeCandidateManifest, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type NoDowngradeOptions, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
+  updaterPlist, writeCandidateManifest, type ApplyPlan, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type NoDowngradeOptions, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
 } from "./updater.ts";
 
 function fakeApp(root: string, name: string, stamp: string): string {
@@ -254,6 +254,40 @@ describe("updater coordinator", () => {
       await expect(h.make({}, { noDowngrade: guard({ code: 1, stdout: "", stderr: "Traceback: boom" }) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /no-downgrade guard failed \(exit 1\): Traceback: boom/ });
       await expect(h.make({}, { noDowngrade: guard({ code: 0, stdout: "not json" }) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /exited 0 without an ok verdict/ });
       expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    });
+
+    it("hands the detached job its own copy of the guard: plan.json pins the script's sha256 and carries the ledger, repo and branches", async () => {
+      stage(h);
+      const ok = JSON.stringify({ ok: true, reason: "allowed", running: { commit: "2d83ba23" }, candidate: { commit: "1111111" } });
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: ok }, { prodBranch: "prod", require: true }) }).apply({ force: true });
+      await h.settle();
+      expect(h.bootstraps).toHaveLength(1);
+      const dir = dirname(h.bootstraps[0]);
+      const plan = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8")) as ApplyPlan;
+      expect(plan.guardRequired).toBe(true);
+      expect(plan.guard).toEqual({
+        script: join(dir, "no-downgrade.py"), scriptSha256: createHash("sha256").update("# fake\n").digest("hex"),
+        ledger: join(root, "data", "updates", "live-build.json"), repo: "/repo", releaseBranch: "release/bos-1.0", prodBranch: "prod",
+      });
+      expect(readFileSync(join(dir, "no-downgrade.py"), "utf8")).toBe("# fake\n"); // the exact script admission ran, beside apply.py
+      await h.settle();
+      // a restart swaps nothing, so it carries no guard and requires none
+      rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: ok }, { require: true }) }).restart({ force: true });
+      await h.settle();
+      expect(h.bootstraps).toHaveLength(2);
+      const restart = JSON.parse(readFileSync(join(dirname(h.bootstraps[1]), "plan.json"), "utf8")) as ApplyPlan;
+      expect(restart).toMatchObject({ mode: "restart", guard: null, guardRequired: false });
+      await h.settle();
+      // unconfigured (dev run): none, not required
+      rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
+      stage(h);
+      await h.make().apply({ force: true });
+      await h.settle();
+      expect(h.bootstraps).toHaveLength(3);
+      const dev = JSON.parse(readFileSync(join(dirname(h.bootstraps[2]), "plan.json"), "utf8")) as ApplyPlan;
+      expect(dev).toMatchObject({ mode: "update", guard: null, guardRequired: false });
+      await h.settle();
     });
 
     it("never runs for a restart (same bundle), and the preflight still gates the restart", async () => {

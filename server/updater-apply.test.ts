@@ -3,12 +3,13 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appDigests, type ApplyPlan } from "./updater.ts";
 import { UPDATER_APPLY_SCRIPT } from "./updater-apply-script.ts";
+import { GUARD_SCRIPT, guard, makeGuardRepo, recordRunning, type GuardRepo } from "./testing/no-downgrade-fixture.ts";
 
 const PYTHON = "/usr/bin/python3";
 const hasPython = process.platform === "darwin" && existsSync(PYTHON);
@@ -103,7 +104,7 @@ describe.skipIf(!hasPython)("detached updater script (sandboxed swap)", () => {
       expect: staged ? appDigests(staged) : null, old, oldVersion: "0.1.85", oldSha: "2d83ba23", version: staged ? "0.1.86" : "0.1.85", sha: staged ? "feedface" : "2d83ba23",
       force: true, launch: ["{app}/Contents/MacOS/BOS Bot", String(port)], resultPath: join(dir, "result.json"), installedPath: join(root, "data", "updates", "installed.json"),
       gracefulSeconds: 5, healthSeconds: 12, codesign: false, selfBootout: false, requireLaunchd: false, uid: null,
-      scriptSha256: createHash("sha256").update(UPDATER_APPLY_SCRIPT).digest("hex"), ...overrides,
+      scriptSha256: createHash("sha256").update(UPDATER_APPLY_SCRIPT).digest("hex"), guard: null, guardRequired: false, ...overrides,
     };
     writeFileSync(join(dir, "apply.py"), UPDATER_APPLY_SCRIPT, { mode: 0o700 });
     writeFileSync(join(dir, "plan.json"), JSON.stringify(full, null, 2));
@@ -181,5 +182,92 @@ describe.skipIf(!hasPython)("detached updater script (sandboxed swap)", () => {
     expect(code).toBe(1);
     expect(result()).toMatchObject({ state: "failed", detail: expect.stringMatching(/does not match the plan/) });
     expect((await health(port))?.app).toBe("openmausbot");
+  });
+
+  // The job judges the swap on its own, before it stops anything: a plan fed
+  // to apply.py by hand (today's bad install was a manual swap) meets the same
+  // guard the button's admission ran. Real guard script, real git repo.
+  describe("runs the no-downgrade guard itself before stopping the app", () => {
+    let repo: GuardRepo; let ledger: string;
+    const guardPlan = (): NonNullable<ApplyPlan["guard"]> => ({
+      script: join(dir, "no-downgrade.py"), scriptSha256: createHash("sha256").update(readFileSync(GUARD_SCRIPT)).digest("hex"),
+      ledger, repo: repo.dir, releaseBranch: "release/bos-1.0", prodBranch: "prod",
+    });
+    const applyLog = () => readFileSync(join(dir, "apply.log"), "utf8");
+    beforeEach(() => {
+      repo = makeGuardRepo(root);
+      ledger = join(root, "data", "updates", "live-build.json");
+      copyFileSync(GUARD_SCRIPT, join(dir, "no-downgrade.py"));
+      // the live (unstamped, "old") bundle is the build of B
+      recordRunning(live, repo.b, ledger, repo);
+    });
+
+    /** Feed the plan straight to apply.py and insist nothing happened to the machine. */
+    async function refused(p: ApplyPlan, pattern: RegExp) {
+      const before = (await health(port))!.pid;
+      const { code } = await runScript(dir);
+      expect(code).toBe(2);
+      expect(result()).toMatchObject({ state: "failed", appStillRunning: true, refused: true, detail: expect.stringMatching(pattern) });
+      expect(stampOf(live)).toBe("// old");
+      if (p.staged) expect(existsSync(p.staged)).toBe(true);
+      if (p.backup) expect(existsSync(p.backup)).toBe(false);
+      expect(existsSync(p.installedPath)).toBe(false);
+      expect((await health(port))!.pid).toBe(before); // never stopped, never relaunched
+      expect(applyLog()).not.toMatch(/progress (stopping|applying|relaunching)/);
+    }
+
+    it("refuses an unstamped bundle: no stop, no swap, no relaunch, live untouched", async () => {
+      const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "new");
+      await refused(plan({ staged, guard: guardPlan(), guardRequired: true }), /^install refused: candidate refused: .* is unstamped; only a build stamped with its source commit/);
+    }, 60_000);
+
+    it("refuses an older build (stamped with an ancestor of the running commit) and names both commits", async () => {
+      const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "older");
+      expect(guard("stamp", "--app", staged, "--commit", repo.a).code).toBe(0);
+      await refused(plan({ staged, guard: guardPlan(), guardRequired: true }),
+        new RegExp(`^install refused: downgrade refused: running ${repo.b.slice(0, 8)} is not an ancestor of candidate ${repo.a.slice(0, 8)}`));
+    }, 60_000);
+
+    it("refuses a plan with no guard when one is required, a plan that does not say, and a guard whose bytes differ from the plan", async () => {
+      const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "new");
+      expect(guard("stamp", "--app", staged, "--commit", repo.c).code).toBe(0); // would pass: it is the guard that is missing
+      await refused(plan({ staged, guard: null, guardRequired: true }), /^install refused: the plan carries no no-downgrade guard/);
+      rmSync(join(dir, "result.json"));
+      // a hand-written plan without guardRequired fails closed (only the sandbox is exempt)
+      const p = plan({ staged, guard: null });
+      const body = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8")) as Record<string, unknown>;
+      delete body.guardRequired;
+      writeFileSync(join(dir, "plan.json"), JSON.stringify(body, null, 2));
+      await refused(p, /^install refused: the plan carries no no-downgrade guard/);
+      rmSync(join(dir, "result.json"));
+      await refused(plan({ staged, guard: { ...guardPlan(), scriptSha256: "f".repeat(64) }, guardRequired: true }), /^install refused: no-downgrade guard at .* does not match the plan/);
+      rmSync(join(dir, "result.json"));
+      await refused(plan({ staged, guard: { ...guardPlan(), script: join(dir, "nope.py") }, guardRequired: true }), /^install refused: no-downgrade guard missing at/);
+    }, 90_000);
+
+    it("installs the prod head (stamped, descends from the running build) and logs the guard's allow", async () => {
+      const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "new");
+      expect(guard("stamp", "--app", staged, "--commit", repo.c).code).toBe(0);
+      const p = plan({ staged, expect: appDigests(staged), guard: guardPlan(), guardRequired: true });
+      const { code } = await runScript(dir);
+      expect(code).toBe(0);
+      expect(result()).toMatchObject({ state: "done", version: "0.1.86" });
+      expect(stampOf(live)).toBe("// new");
+      expect(stampOf(p.backup!)).toBe("// old");
+      expect(applyLog()).toMatch(new RegExp(`no-downgrade: allowed: candidate ${repo.c.slice(0, 8)} descends from running ${repo.b.slice(0, 8)}, is on release/bos-1.0 and is the prod head`));
+      expect((await waitHealthy(port)).app).toBe("openmausbot");
+    }, 90_000);
+
+    it("rollback to the previously-live bundle is still allowed when the admitted build turns out unhealthy", async () => {
+      const staged = fakeApp(join(root, "staged"), "BOS Bot.app", "broken", BROKEN_BINARY);
+      expect(guard("stamp", "--app", staged, "--commit", repo.c).code).toBe(0);
+      const p = plan({ staged, expect: appDigests(staged), healthSeconds: 4, guard: guardPlan(), guardRequired: true });
+      const { code } = await runScript(dir);
+      expect(code).toBe(1);
+      expect(result()).toMatchObject({ state: "rolled_back", version: "0.1.85", sha: "2d83ba23" });
+      expect(stampOf(live)).toBe("// old");
+      expect(existsSync(p.backup!)).toBe(false);
+      expect((await waitHealthy(port)).app).toBe("openmausbot");
+    }, 90_000);
   });
 });
