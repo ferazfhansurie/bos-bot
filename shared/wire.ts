@@ -512,8 +512,8 @@ export interface WireGroup {
 export type BotQueuedMessages = Record<string, Array<{ queueId: string; text: string; reason?: "capacity" }>>;
 
 export type UpdateRunState =
-  | "idle" | "ready" | "checkpointing" | "stopping" | "applying"
-  | "relaunching" | "verifying" | "done" | "rolled_back" | "failed";
+  | "idle" | "ready" | "building" | "draining" | "checkpointing" | "stopping"
+  | "applying" | "relaunching" | "verifying" | "done" | "rolled_back" | "failed";
 
 export type ServerFrame =
   | { kind: "sections"; sections: string[] }

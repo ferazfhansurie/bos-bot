@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/state/store";
 import {
+  UPDATE_STEPS,
   applyUpdate,
+  checkForUpdate,
   isUpdateRunning,
+  isUpdateSuccess,
   noteUpdateFrame,
   pollUpdateStatus,
   setUpdateTransport,
@@ -22,15 +25,17 @@ vi.mock("react", async (actual) => ({
 const READY: UpdateStatus = {
   state: "ready",
   current: { version: "1.2.0", sha: "2d83ba23aaaa" },
-  candidate: { version: "1.3.0", sha: "abcdef123456", stagedAt: 1_700_000_000_000 },
+  candidate: { version: "1.3.0", sha: "abcdef123456", branch: "prod" },
   busyTurns: [{ botId: "b1", threadId: "t1" }],
 };
 
 function mock(overrides: Partial<UpdateTransport> = {}): UpdateTransport {
   return {
     status: vi.fn(async () => READY),
+    check: vi.fn(async () => ({ current: READY.current, candidate: READY.candidate })),
     apply: vi.fn(async () => ({ updateId: "u1" })),
-    restart: vi.fn(async () => undefined),
+    restart: vi.fn(async () => ({ updateId: "r1" })),
+    progress: vi.fn(async () => ({ state: "building" as const, log: [] })),
     ...overrides,
   };
 }
@@ -55,24 +60,95 @@ describe("bos-update", () => {
     expect(useBosUpdate().status).toBeNull();
   });
 
-  it("apply starts the run; a 409 says another update owns the lock", async () => {
-    const transport = mock({ apply: vi.fn(async () => { throw new ApiError("busy", 409); }) });
+  it("a 409 on apply shows the server's line and the button works again", async () => {
+    const refusal = "install refused: downgrade refused: running 2d83ba23 is not an ancestor of candidate da37ae2a";
+    const transport = mock({ apply: vi.fn(async () => { throw new ApiError(refusal, 409); }) });
     setUpdateTransport(transport);
     await pollUpdateStatus();
     await applyUpdate(false);
     expect(transport.apply).toHaveBeenCalledWith(false);
-    expect(useBosUpdate().error).toBe("Another update is already running.");
+    expect(useBosUpdate().error).toBe(refusal);
     expect(useBosUpdate().pending).toBeNull();
+    expect(useBosUpdate().state).toBe("ready");
+    (transport.apply as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ updateId: "u2" });
+    await applyUpdate(false);
+    expect(transport.apply).toHaveBeenCalledTimes(2);
+    expect(useBosUpdate().error).toBeNull();
+    expect(useBosUpdate().state).toBe("building");
   });
 
-  it("a successful apply moves to checkpointing and ignores a second click", async () => {
+  it("a successful apply starts at building and ignores a second click", async () => {
     const transport = mock();
     setUpdateTransport(transport);
     await pollUpdateStatus();
-    await applyUpdate(true);
-    await applyUpdate(true);
+    await applyUpdate(false);
+    await applyUpdate(false);
     expect(transport.apply).toHaveBeenCalledTimes(1);
-    expect(useBosUpdate().state).toBe("checkpointing");
+    expect(useBosUpdate().state).toBe("building");
+  });
+
+  it("a press another window already started answers 200 inProgress: no second job, the poll owns the step", async () => {
+    const transport = mock({ apply: vi.fn(async () => ({ updateId: "u1", inProgress: true })) });
+    setUpdateTransport(transport);
+    await pollUpdateStatus();
+    await applyUpdate(false);
+    expect(transport.apply).toHaveBeenCalledTimes(1);
+    expect(useBosUpdate().pending).toBeNull();
+    expect(useBosUpdate().error).toBeNull();
+    (transport.status as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...READY, state: "draining" });
+    await pollUpdateStatus();
+    expect(useBosUpdate().state).toBe("draining");
+  });
+
+  it("building reads the build output tail from /progress", async () => {
+    const transport = mock({
+      status: vi.fn(async () => ({ ...READY, state: "building" as const })),
+      progress: vi.fn(async () => ({ state: "building" as const, updateId: "u1", log: ["archiving feedface", "vite built"] })),
+    });
+    setUpdateTransport(transport);
+    await pollUpdateStatus();
+    expect(transport.progress).toHaveBeenCalled();
+    expect(useBosUpdate().log).toEqual(["archiving feedface", "vite built"]);
+  });
+
+  it("a press while a run is going is a no-op and keeps the live step", async () => {
+    const transport = mock({
+      status: vi.fn(async () => ({ ...READY, state: "idle" as const })),
+      apply: vi.fn(async () => ({ updateId: "u1", inProgress: true })),
+    });
+    setUpdateTransport(transport);
+    await pollUpdateStatus();
+    noteUpdateFrame({ kind: "update.state", state: "building", updateId: "u1" });
+    await applyUpdate(false);
+    expect(transport.apply).not.toHaveBeenCalled();
+    expect(useBosUpdate().state).toBe("building");
+  });
+
+  it("check lights the button only when the guard allows a candidate", async () => {
+    const transport = mock({
+      status: vi.fn(async () => ({ state: "idle" as const, current: READY.current, busyTurns: [] })),
+      check: vi.fn(async () => ({ current: READY.current, reason: "already on the newest prod build" })),
+    });
+    setUpdateTransport(transport);
+    await pollUpdateStatus();
+    await checkForUpdate();
+    expect(useBosUpdate().state).toBe("idle");
+    expect(useBosUpdate().status?.candidate).toBeUndefined();
+    expect(useBosUpdate().status?.reason).toBe("already on the newest prod build");
+    // a later poll that does not repeat the reason keeps it
+    await pollUpdateStatus();
+    expect(useBosUpdate().status?.reason).toBe("already on the newest prod build");
+    (transport.check as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ current: READY.current, candidate: READY.candidate });
+    await checkForUpdate();
+    expect(useBosUpdate().state).toBe("ready");
+    expect(useBosUpdate().status?.candidate?.version).toBe("1.3.0");
+  });
+
+  it("walks every step in order", () => {
+    expect(UPDATE_STEPS).toEqual(["building", "draining", "checkpointing", "stopping", "applying", "relaunching", "verifying"]);
+    for (const step of UPDATE_STEPS) expect(isUpdateRunning(step)).toBe(true);
+    for (const settled of ["idle", "ready", "done", "rolled_back", "failed"] as const) expect(isUpdateRunning(settled)).toBe(false);
+    expect(isUpdateSuccess("done")).toBe(true);
   });
 
   it("frames advance the step; losing the server mid-run reads as relaunching", async () => {
@@ -94,12 +170,24 @@ describe("bos-update", () => {
     expect(isUpdateRunning(useBosUpdate().state)).toBe(false);
   });
 
-  it("names the post-relaunch result", () => {
-    const done = updateNotice({ ...READY, state: "idle", candidate: undefined, current: { version: "1.3.0", sha: "abcdef123456" }, lastResult: { state: "done", at: 1 } });
+  it("names the post-restart result", () => {
+    const from = READY.current;
+    const to = { version: "1.3.0", sha: "abcdef123456" };
+    const done = updateNotice({ ...READY, state: "idle", candidate: undefined, current: to, lastResult: { state: "done", at: 1, from, to } });
     expect(done?.title).toBe("Updated to 1.3.0");
-    const back = updateNotice({ ...READY, state: "idle", lastResult: { state: "rolled_back", at: 2, detail: "health check failed on 8799", rollback: true } });
-    expect(back?.title).toBe("Rolled back: health check failed on 8799");
+    expect(done?.detail).toContain("1.2.0 → 1.3.0");
+    expect(updateNotice({ ...READY, state: "idle", current: to, lastResult: { state: "done", at: 1 } })?.title).toBe("Updated to 1.3.0");
+    // pipe's engine: after a rollback or failure to == from, attempted is the build that did not make it
+    const back = updateNotice({ ...READY, state: "idle", lastResult: { state: "rolled_back", at: 2, from, to: from, attempted: to, detail: "health check failed on 8799" } });
+    expect(back?.title).toBe("Update failed, rolled back to 1.2.0");
+    expect(back?.detail).toBe("1.3.0 · health check failed on 8799");
     expect(back?.tone).toBe("warn");
+    // the version comes from lastResult.to, not the live status
+    const elsewhere = updateNotice({ ...READY, state: "idle", current: { version: "9.9.9", sha: "x" }, lastResult: { state: "rolled_back", at: 2, from, to: from, attempted: to } });
+    expect(elsewhere?.title).toBe("Update failed, rolled back to 1.2.0");
+    const failed = updateNotice({ ...READY, state: "idle", lastResult: { state: "failed", at: 3, from, to: from, attempted: to, detail: "build failed" } });
+    expect(failed?.title).toBe("Update failed, still on 1.2.0");
+    expect(failed?.detail).toBe("1.3.0 · build failed");
     expect(updateNotice({ ...READY, lastResult: undefined })).toBeNull();
   });
 });
