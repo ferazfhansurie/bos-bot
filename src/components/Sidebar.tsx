@@ -12,6 +12,7 @@ import {
   Check,
   ChevronRight,
   ClipboardCopy,
+  Columns2,
   Copy,
   Crown,
   FolderMinus,
@@ -38,6 +39,8 @@ import { peerLine } from "@/lib/peer-message";
 import { BotAvatar, InitialsAvatar, PersonPhoto } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
+import { SPLIT_DRAG_TYPE } from "@/lib/split-view";
+import { useSplitView } from "./SplitViewContext";
 import { lastNonReceipt } from "@/lib/receipts";
 import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
@@ -229,6 +232,11 @@ export function GroupListItem({
     <div className="group relative">
     <button
       onClick={() => dispatch({ type: "select", id: group.id })}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "copy";
+        event.dataTransfer.setData(SPLIT_DRAG_TYPE, group.id);
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu({ groupId: group.id, x: e.clientX, y: e.clientY });
@@ -325,6 +333,7 @@ function RoomContextMenu({
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const group = state.groups.find((g) => g.id === menu.groupId);
+  const { openSplit } = useSplitView();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(group?.name ?? "");
 
@@ -433,6 +442,16 @@ function RoomContextMenu({
           {t("sidebar.section.moveToContext")}
         </button>
       )}
+      {group.id !== state.selectedId && <button
+        onClick={() => {
+          openSplit(group.id);
+          onClose();
+        }}
+        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70 max-md:hidden"
+      >
+        <Columns2 size={16} className="text-ink-secondary" />
+        {t("split.open")}
+      </button>}
       <button
         onClick={() => {
           void navigator.clipboard?.writeText(group.threadId);
@@ -742,6 +761,7 @@ export function BotContextMenu({
   const showThreads = useShowThreads();
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const bot = state.bots.find((b) => b.id === menu.botId);
+  const { openSplit } = useSplitView();
   const menuRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = menuRef.current;
@@ -833,6 +853,9 @@ export function BotContextMenu({
         {!bot.remote && item(<FolderPlus size={16} className="text-ink-secondary" />, t("folder.new"), () => onNewFolder(bot.id))}
         {divider("threads")}
       </>}
+      {bot.id !== state.selectedId && <div className="max-md:hidden">
+        {item(<Columns2 size={16} className="text-ink-secondary" />, t("split.open"), () => openSplit(bot.id))}
+      </div>}
       {bot.remote ? [
         // Lives on a linked Mac: only pin and unread travel; the rest is its owner's.
         item(
@@ -1338,6 +1361,11 @@ export function BotListItem({
         }
         aria-busy={deleting || undefined}
         data-sidebar-bot-row={bot.id}
+        draggable={!renaming && !deleting}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData(SPLIT_DRAG_TYPE, bot.id);
+        }}
         onClick={onSelect}
         onKeyDown={(event) => {
           if (renaming) return;

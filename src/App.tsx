@@ -10,6 +10,8 @@ import { emailGateDone, initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { SplitWorkspace } from "@/components/SplitView";
+import { SplitViewProvider } from "@/components/SplitViewContext";
 import { SharedConversationController } from "@/components/SharedConversationController";
 import { BotSettingsDialog } from "@/components/BotSettingsDialog";
 import { RemoteAgentSettingsPanel } from "@/components/RemoteAgentSettingsPanel";
@@ -276,9 +278,9 @@ function Shell() {
       ) : noEngines ? (
         <NoEngines />
       ) : group ? (
-        <GroupView key={group.id} group={group} />
+        <SplitWorkspace><GroupView key={group.id} group={group} /></SplitWorkspace>
       ) : bot ? (
-        <ChatView bot={bot} />
+        <SplitWorkspace><ChatView bot={bot} /></SplitWorkspace>
       ) : (
         <main className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary">
           {!state.rosterLoaded && <Loader2 size={20} className="animate-spin" />}
@@ -373,7 +375,9 @@ function Application() {
     <DesktopCapabilitiesProvider>
       <StoreProvider>
         <ThreadRefsProvider>
-          <Shell />
+          <SplitViewProvider>
+            <Shell />
+          </SplitViewProvider>
         </ThreadRefsProvider>
         <WelcomeGate />
         <GuidedTour />
