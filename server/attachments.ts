@@ -4,6 +4,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   createReadStream,
+  existsSync,
   linkSync,
   mkdirSync,
   readFileSync,
@@ -14,6 +15,7 @@ import {
 } from "node:fs";
 import { link, open, unlink } from "node:fs/promises";
 import { join, extname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { DATA_DIR } from "./config.ts";
 
 export const ATTACHMENTS_DIR = join(DATA_DIR, "attachments");
@@ -26,10 +28,11 @@ export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
  * ceiling. This is a local inbox, not unbounded remote storage. */
 export const FILE_MAX_BYTES = 25 * 1024 * 1024;
 
-/** Attachments are durable because prompts refer to their paths. Never
- * silently evict them: once this ceiling is reached, a new upload gets an
- * explicit 507 and the person can decide what to remove. */
-export const ATTACHMENTS_MAX_BYTES = 512 * 1024 * 1024;
+/** Quota pressure may reclaim old orphan uploads, never retained references. */
+export const ATTACHMENTS_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+/** Uploaded composer drafts have not necessarily reached the server's
+ * transcript yet. Give them a full day before considering them orphans. */
+export const ATTACHMENT_PRUNE_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** Interrupted streamed uploads use private partial files. A crash can leave
  * one behind, so future uploads remove only our stale partials — never a
@@ -262,12 +265,15 @@ class AttachmentReservation {
   }
 
   private reserveAtLeast(required: number, preferred: number): void {
-    const used = committedBytes();
-    const available = ATTACHMENTS_MAX_BYTES - used - reservedAttachmentBytes;
+    let available = ATTACHMENTS_MAX_BYTES - committedBytes() - reservedAttachmentBytes;
+    if (available < required) {
+      reclaimUnreferencedAttachments(required - available);
+      available = ATTACHMENTS_MAX_BYTES - committedBytes() - reservedAttachmentBytes;
+    }
     if (available < required) {
       throw statusError(
         507,
-        `attachments storage is full (limit ${ATTACHMENTS_MAX_BYTES} bytes)`,
+        "Attachments storage is full (2 GiB limit). Remove unneeded conversations or scheduled attachment references, then retry. Referenced files and uploads from the last 24 hours are kept.",
       );
     }
     // Unknown-length HTTP bodies reserve in bounded chunks. Taking whatever
@@ -322,6 +328,77 @@ async function withUploadLock<T>(uploadId: string | undefined, operation: () => 
 const KNOWN_ATTACHMENT_EXTENSIONS = Array.from(
   new Set([...Object.values(IMAGE_MIMES), ...Object.values(FILE_MIMES)]),
 );
+
+/** Scan authoritative persisted references only under quota pressure. Include
+ * every SQLite row, not a history page or active branch; top-level JSON also
+ * covers legacy transcripts, profiles, routine/call snapshots and handoffs.
+ * Conservative filename matches retain extra files rather than risk deleting
+ * one. A missing DB is a fresh workspace; an unreadable store fails closed. */
+function retainedAttachmentNames(): Set<string> {
+  const names = new Set<string>();
+  const collect = (value: string) => {
+    for (const match of value.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[a-z0-9]+/gi)) {
+      names.add(match[0].toLowerCase());
+    }
+  };
+  for (const entry of readdirSync(DATA_DIR, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.json(?:\.imported)?$/.test(entry.name)) continue;
+    const text = readFileSync(join(DATA_DIR, entry.name), "utf8");
+    // Parsing also validates that reference enumeration did not silently
+    // accept a truncated/corrupt persistence file.
+    collect(JSON.stringify(JSON.parse(text)));
+  }
+  const dbPath = join(DATA_DIR, "messages.db");
+  if (existsSync(dbPath)) {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map(row => row.name));
+      if (!tables.has("messages")) throw new Error("Missing transcript table");
+      for (const row of db.prepare("SELECT json FROM messages").iterate()) collect(JSON.stringify(JSON.parse(String(row.json))));
+      if (tables.has("chat_followups")) {
+        for (const row of db.prepare("SELECT payload FROM chat_followups").iterate()) collect(JSON.stringify(JSON.parse(String(row.payload))));
+      }
+    } finally {
+      db.close();
+    }
+  }
+  return names;
+}
+
+function reclaimUnreferencedAttachments(requiredBytes: number): void {
+  const cutoff = Date.now() - ATTACHMENT_PRUNE_MIN_AGE_MS;
+  const candidates: { path: string; name: string; bytes: number; mtimeMs: number }[] = [];
+  for (const entry of readdirSync(ATTACHMENTS_DIR, { withFileTypes: true })) {
+    if (!entry.isFile()) continue; // never follow links or touch unknown files
+    const extension = extname(entry.name);
+    const id = entry.name.slice(0, -extension.length);
+    if (!UPLOAD_ID.test(id) || !KNOWN_ATTACHMENT_EXTENSIONS.includes(extension) || uploadLocks.has(id)) continue;
+    const path = join(ATTACHMENTS_DIR, entry.name);
+    const stat = statSync(path);
+    if (stat.mtimeMs > cutoff) continue;
+    candidates.push({ path, name: entry.name, bytes: stat.size, mtimeMs: stat.mtimeMs });
+  }
+  if (!candidates.length) return;
+  let references: Set<string>;
+  try {
+    references = retainedAttachmentNames();
+  } catch {
+    throw statusError(507, "Attachments storage is full, and cleanup could not verify saved references. No attachments were removed. Repair the workspace storage, then retry.");
+  }
+  candidates.sort((a, b) => a.mtimeMs - b.mtimeMs || a.name.localeCompare(b.name));
+  let reclaimed = 0;
+  for (const candidate of candidates) {
+    if (references.has(candidate.name.toLowerCase())) continue;
+    try {
+      unlinkSync(candidate.path);
+      if (committedAttachmentBytes !== null) committedAttachmentBytes = Math.max(0, committedAttachmentBytes - candidate.bytes);
+      reclaimed += candidate.bytes;
+    } catch {
+      // A locked file is retained; its bytes continue to count toward quota.
+    }
+    if (reclaimed >= requiredBytes) break;
+  }
+}
 
 /** Missing or unreadable candidates count as absent here; the atomic link
  * still detects a collision if a file exists when an upload commits. */
