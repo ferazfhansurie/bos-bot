@@ -20,6 +20,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outfile = join(root, "electron/vendor/electron-updater.cjs");
 const entryPoint = require.resolve("electron-updater");
 
+// Keep metadata parsing independent of the native updater's module setup.
+// Missing output makes native capability unconfigured rather than bypassing it.
+await build({
+  entryPoints: [require.resolve("yaml")],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  outfile: join(root, "electron/vendor/update-yaml.cjs"),
+  logLevel: "info",
+});
+
 await build({
   entryPoints: [entryPoint],
   // Keep source labels reproducible when an isolated worktree reuses the
