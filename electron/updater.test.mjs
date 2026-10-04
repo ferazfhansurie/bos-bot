@@ -1,14 +1,14 @@
-import { afterEach, expect, it, vi } from "vitest";
-import localOriginModule from "./local-origin.cjs";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 // The updater channels answer only the local UI (electron/local-origin.cjs).
-localOriginModule.setLocalOrigin("http://127.0.0.1:8799");
 const localEvent = { senderFrame: { url: "http://127.0.0.1:8799/" } };
 
-const { updater, handlers } = vi.hoisted(() => ({
-  updater: { on: vi.fn(), downloadUpdate: vi.fn() },
-  handlers: new Map(),
-}));
+const { updater, handlers, readCapability, loadVendor } = vi.hoisted(() => {
+  const updater = { on: vi.fn(), downloadUpdate: vi.fn(), setFeedURL: vi.fn() };
+  return { updater, handlers: new Map(), readCapability: vi.fn(), loadVendor: vi.fn(() => ({ autoUpdater: updater })) };
+});
+
+vi.mock("./updater-capability.mjs", () => ({ readUpdaterCapability: readCapability }));
 
 vi.mock("electron", () => ({
   app: { isPackaged: true, getPath: () => "/unused-updater-test-log" },
@@ -16,10 +16,19 @@ vi.mock("electron", () => ({
   ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
 }));
 vi.mock("node:module", () => ({
-  createRequire: () => () => ({ autoUpdater: updater }),
+  createRequire: () => loadVendor,
 }));
 
-const { attachUpdaterWindow, registerUpdaterIpc, startUpdater } = await import("./updater.mjs");
+const metadata = { provider: "generic", url: "https://updates.example.test/bos", updaterCacheDirName: "bos-updater" };
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  handlers.clear();
+  const { default: localOriginModule } = await import("./local-origin.cjs");
+  localOriginModule.setLocalOrigin("http://127.0.0.1:8799");
+  readCapability.mockReturnValue({ available: true, reason: "configured", metadata });
+});
 
 afterEach(() => {
   vi.clearAllTimers();
@@ -27,12 +36,14 @@ afterEach(() => {
 });
 
 it("sends updater progress to a reopened window without restarting the updater", async () => {
+  const { attachUpdaterWindow, registerUpdaterIpc, startUpdater } = await import("./updater.mjs");
   vi.useFakeTimers();
   const first = { webContents: { send: vi.fn() } };
   const reopened = { webContents: { send: vi.fn() } };
   attachUpdaterWindow(first);
   registerUpdaterIpc();
   startUpdater();
+  expect(updater.setFeedURL).toHaveBeenCalledWith(metadata);
   expect(updater.allowPrerelease).toBe(false);
   const listenerCount = updater.on.mock.calls.length;
   const timerCount = vi.getTimerCount();
@@ -59,4 +70,22 @@ it("sends updater progress to a reopened window without restarting the updater",
   expect(handlers.get("update:get-state")(localEvent)).toMatchObject({ status: "downloaded", version: "2.0.0" });
   expect(updater.on.mock.calls).toHaveLength(listenerCount);
   expect(vi.getTimerCount()).toBe(timerCount);
+});
+
+it.each(["offline", "unconfigured"])("%s package never loads the vendor or starts native update actions", async reason => {
+  vi.useFakeTimers();
+  readCapability.mockReturnValue({ available: false, reason, message: "Native updates unavailable." });
+  const { registerUpdaterIpc, startUpdater, windowsUpdateCoordinator } = await import("./updater.mjs");
+  registerUpdaterIpc();
+  startUpdater();
+  for (const action of ["check", "download", "install"]) {
+    expect(await handlers.get(`update:${action}`)(localEvent)).toMatchObject({ available: false, capability: reason, retryable: false });
+  }
+  expect(windowsUpdateCoordinator.candidate()).toBeNull();
+  expect(() => windowsUpdateCoordinator.admit("update")).toThrow("No verified Windows installer is staged");
+  expect(windowsUpdateCoordinator.install({})).toBeUndefined();
+  expect(loadVendor).not.toHaveBeenCalled();
+  expect(updater.on).not.toHaveBeenCalled();
+  expect(updater.setFeedURL).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
 });

@@ -228,9 +228,9 @@ describe.skipIf(!existsSync(CONTRACT_PATH))("electron update executor against ma
     expect(await c.status()).toMatchObject({ state: "ready", candidate: { version: "1.3.0", sha: SHA512 }, busyTurns: [{ botId: "b1", threadId: "t1" }, { botId: "b2", threadId: "g1" }] });
     const { updateId } = await c.apply({ force: true });
     expect(updateId).toMatch(/^[a-f0-9-]{36}$/);
-    await expect(c.apply({ force: true })).rejects.toMatchObject({ status: 409 });
+    await expect(c.apply({ force: true })).resolves.toEqual({ updateId, inProgress: true });
     await h.settle();
-    expect(h.events.map(e => e.state)).toEqual(["checkpointing", "stopping", "applying"]);
+    expect(h.events.map(e => e.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
     expect(h.events.every(e => e.kind === "update.state" && e.type === "update.state")).toBe(true);
     // main saw the stopped checkpoint and the quiesced workspace before it dispatched
     expect(gen1.seen).toEqual([{ stopped: 1, quiesced: 1 }]);
@@ -302,6 +302,6 @@ describe.skipIf(!existsSync(CONTRACT_PATH))("electron update executor against ma
     expect(c.active).toBe(true); expect(h.quiesced).toBe(1); expect(h.unquiesced).toBe(0);
     expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(true);
     expect(gen1.writer.readPending()).toMatchObject({ plan: { updateId } });
-    await expect(c.apply({ force: true })).rejects.toMatchObject({ status: 409 });
+    await expect(c.apply({ force: true })).resolves.toEqual({ updateId, inProgress: true });
   });
 });
