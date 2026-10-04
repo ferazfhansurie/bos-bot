@@ -3631,7 +3631,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ).then((icon) =>
             showNotification(
               frame.notification,
-              (target) => openNotificationTarget(dispatch, target, stateRef.current),
+              (target) => {
+                openNotificationTarget(dispatch, target, stateRef.current);
+                dispatch({ type: "revealThread", threadId: target.threadId });
+              },
               icon,
               visibleNotificationThread(stateRef.current),
             ),

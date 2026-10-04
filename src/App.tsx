@@ -38,7 +38,8 @@ function Shell() {
   const { capabilities } = useDesktopCapabilities();
   const unreadCount =
     state.bots.filter((bot) => !bot.hidden && bot.unread).length +
-    state.groups.filter((group) => group.unread).length;
+    // a muted room keeps its sidebar dot but stays off the Dock badge (B18)
+    state.groups.filter((group) => group.unread && group.notifications !== "muted").length;
   const remoteClient = window.ogb?.remoteClient?.active === true;
   useEffect(() => {
     if (!window.ogb?.environments) return;

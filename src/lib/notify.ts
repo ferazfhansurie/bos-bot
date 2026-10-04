@@ -116,6 +116,7 @@ export function showNotification(
   if (document.hasFocus() && visibleThreadId === frame.threadId) return;
 
   const open = () => {
+    window.ogb?.focusWindow?.();
     window.focus();
     onOpen({ botId: frame.botId, threadId: frame.threadId });
   };

@@ -4,6 +4,7 @@ import {
   useEffect,
   useImperativeHandle,
   useState,
+  type ReactNode,
 } from "react";
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
@@ -294,20 +295,30 @@ function cutout(src: string): Promise<string> {
   return started;
 }
 
-export function PersonPhoto({ src, size, className = "", testId }: { src: string; size: number; className?: string; testId?: string }) {
+export function PersonPhoto({ src, size, className = "", testId, fallback }: { src: string; size: number; className?: string; testId?: string; fallback?: ReactNode }) {
   const [shown, setShown] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     let alive = true;
     setShown(null);
+    setFailed(false);
     void cutout(src).then((next) => { if (alive) setShown(next); });
     return () => { alive = false; };
   }, [src]);
+  // a dead photo url shows a plain circle (or the caller's face), never the
+  // browser's broken-image glyph
+  if (failed) {
+    return fallback ? <>{fallback}</> : (
+      <span data-testid={testId} className={`block shrink-0 rounded-full bg-raised ${className}`} style={{ width: size, height: size }} />
+    );
+  }
   return (
     <img
       src={shown ?? src}
       alt=""
       draggable={false}
       data-testid={testId}
+      onError={() => setFailed(true)}
       className={`block shrink-0 object-contain ${shown ? "" : "rounded-full"} ${className}`}
       style={{ width: size, height: size }}
     />
@@ -321,11 +332,14 @@ export interface GroupMarkMember { id: string; name: string; kind: "person" | "b
  * back-left and one front-right. */
 export function GroupMark({ members, size }: { members: GroupMarkMember[]; size: number }) {
   const shown = members.slice(0, 3);
-  const face = (member: GroupMarkMember, px: number) => member.kind === "person"
-    ? member.avatar ? <PersonPhoto src={member.avatar} size={px} />
-      : <span style={{ width: px, height: px, fontSize: px * 0.42 }} className="flex items-center justify-center rounded-full bg-accent/20 font-semibold text-accent">{member.name.slice(0, 1).toUpperCase()}</span>
-    : <MausAvatar color={Object.hasOwn(MAUS_COLORS, member.color ?? "") ? member.color as MausColor : "green"}
-        bodyId={(member.mascotBody ?? undefined) as MascotBodyId | undefined} size={px} animated={false} label={member.name} />;
+  const face = (member: GroupMarkMember, px: number) => {
+    const initial = <span style={{ width: px, height: px, fontSize: px * 0.42 }} className="flex items-center justify-center rounded-full bg-accent/20 font-semibold text-accent">{member.name.slice(0, 1).toUpperCase()}</span>;
+    if (member.kind === "person") return member.avatar ? <PersonPhoto src={member.avatar} size={px} fallback={initial} /> : initial;
+    const mascot = <MausAvatar color={Object.hasOwn(MAUS_COLORS, member.color ?? "") ? member.color as MausColor : "green"}
+      bodyId={(member.mascotBody ?? undefined) as MascotBodyId | undefined} size={px} animated={false} label={member.name} />;
+    // a bot with a photo wears it here too, matching its face everywhere else
+    return member.avatar ? <PersonPhoto src={member.avatar} size={px} fallback={mascot} /> : mascot;
+  };
   if (shown.length <= 1) {
     return <span className="relative block shrink-0" style={{ width: size, height: size }}>{shown[0] && face(shown[0], size)}</span>;
   }

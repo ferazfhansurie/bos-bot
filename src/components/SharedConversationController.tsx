@@ -1,7 +1,8 @@
 import { sharedRoomUploads } from "@/lib/shared-upload-cache";
 import { sharedMentionLabel, sharedMentionTargets } from "../../shared/shared-mentions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanelRight } from "lucide-react";
+import { PanelRight, Users } from "lucide-react";
+import { cn } from "@/lib/cn";
 import { api, useStore, type Bot, type Message } from "@/state/store";
 import type { MausColor } from "@/lib/mascot";
 import type { MascotBodyId } from "../../shared/mascot-bodies";
@@ -357,7 +358,7 @@ export function SharedConversationController({ roomId }: { roomId: string }) {
       messageMeta: Object.fromEntries(messages.map(message => [message.id, { editedAt: message.editedAt, deletedAt: message.deletedAt, reactions: message.reactions, pinnedBy: message.pinnedBy }])),
       changeRevision: history.changeRevision,
       loadOlder, olderLoading, historyLoading,
-      actions: <button type="button" aria-label="Conversation details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)} className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"><PanelRight size={18} /></button>,
+      actions: <button type="button" aria-label="Conversation details" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)} className={cn("flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] font-medium hover:bg-raised", detailsOpen ? "text-accent" : "text-ink-secondary hover:text-ink")}>{direct ? <PanelRight size={16} /> : <><Users size={16} />{room.memberIds.length} · Members</>}</button>,
     }} />
     {detailsOpen && <SharedConversationDetails eligibleBots={eligibleBots} searchFocus={searchFocus} room={room} selfId={selfId} contacts={contacts} title={projected.name} pending={changing} error={changeError} onClose={() => setDetailsOpen(false)} onChange={changeRoom}
       preferences={preferences} preferencePending={preferencePending} preferenceError={preferenceError} onNotificationsChange={changeNotifications} onRepliesChange={changeReplies} onShowMessage={showFileMessage} />}

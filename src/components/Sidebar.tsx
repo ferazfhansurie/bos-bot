@@ -61,9 +61,11 @@ import { isArchived, orderedSidebarThreads, SidebarThreadRow, visibleSidebarThre
 import {
   loadCollapsedSections,
   loadSectionOrder,
+  loadPinnedRooms,
   loadSidebarAttentionPinned,
   loadSidebarDensity,
   saveCollapsedSections,
+  savePinnedRooms,
   saveSectionOrder,
   saveSidebarAttentionPinned,
   saveSidebarDensity,
@@ -310,10 +312,14 @@ function RoomContextMenu({
   menu,
   onClose,
   onMoveToSection,
+  pinned,
+  onTogglePin,
 }: {
   menu: { groupId: string; x: number; y: number };
   onClose: () => void;
   onMoveToSection: (groupId: string) => void;
+  pinned: boolean;
+  onTogglePin: (groupId: string) => void;
 }) {
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
@@ -404,6 +410,16 @@ function RoomContextMenu({
           {isBotChat ? t("sidebar.room.renameChat") : t("sidebar.room.renameChannel")}
         </button>
       ))}
+      <button
+        onClick={() => {
+          onTogglePin(group.id);
+          onClose();
+        }}
+        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"
+      >
+        {pinned ? <PinOff size={16} className="text-ink-secondary" /> : <Pin size={16} className="text-ink-secondary" />}
+        {pinned ? t("sidebar.bot.unpin") : t("sidebar.bot.pin")}
+      </button>
       {!remoteClient && !isBotChat && (
         <button
           onClick={() => {
@@ -1603,6 +1619,14 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     setAttentionPinnedState(pinned);
     saveSidebarAttentionPinned(pinned);
   };
+  const [pinnedRoomIds, setPinnedRoomIds] = useState(() => loadPinnedRooms());
+  const togglePinnedRoom = (groupId: string) => {
+    setPinnedRoomIds((current) => {
+      const next = current.includes(groupId) ? current.filter((id) => id !== groupId) : [groupId, ...current];
+      savePinnedRooms(next);
+      return next;
+    });
+  };
   const [newRoom, setNewRoom] = useState(false);
   const [newFolderBotId, setNewFolderBotId] = useState<string | null>(null);
   const [teamLibraryOpen, setTeamLibraryOpen] = useState(false);
@@ -1910,7 +1934,13 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     sectionedBots,
     unsectionedBots,
   } = partitionSidebarBots(matchingBots);
-  const { botChats, sectionedRooms, unsectionedRooms } = partitionSidebarGroups(visibleGroups);
+  // pinned rooms leave their usual section for the Pinned one, in pin order
+  const pinnedRooms = pinnedRoomIds
+    .map((id) => visibleGroups.find((group) => group.id === id))
+    .filter((group): group is (typeof visibleGroups)[number] => Boolean(group));
+  const { botChats, sectionedRooms, unsectionedRooms } = partitionSidebarGroups(
+    visibleGroups.filter((group) => !pinnedRoomIds.includes(group.id)),
+  );
   const recentLocalRows = [
     ...matchingBots.map((bot) => ({
       id: `bot:${bot.id}`,
@@ -1920,6 +1950,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     })),
     ...visibleGroups.map((group) => ({
       id: `group:${group.id}`,
+      pinned: pinnedRoomIds.includes(group.id),
       at: lastNonReceipt(group.messages)?.at ?? 0,
       element: <GroupListItem group={group} density={density} onMenu={setRoomMenu} />,
     })),
@@ -1938,7 +1969,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     if (!sectionNames.includes(group.section!)) sectionNames.push(group.section!);
   }
   const naturalSectionIds = [
-    ...(pinnedBots.length > 0 ? [PINNED_SECTION_ID] : []),
+    ...(pinnedBots.length + pinnedRooms.length > 0 ? [PINNED_SECTION_ID] : []),
     ...(unsectionedRooms.length > 0 ? [CHANNELS_SECTION_ID] : []),
     ...(botChats.length > 0 ? [BOT_CHATS_SECTION_ID] : []),
     ...(unsectionedBots.length > 0 ? [BOTS_SECTION_ID] : []),
@@ -2308,7 +2339,9 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
               ? sectionChiefs.filter((bot) => bot.section === sectionName)
               : [];
             const sectionGroupItems =
-              id === CHANNELS_SECTION_ID
+              id === PINNED_SECTION_ID
+                ? pinnedRooms
+                : id === CHANNELS_SECTION_ID
                 ? unsectionedRooms
                 : id === BOT_CHATS_SECTION_ID
                   ? botChats
@@ -2591,6 +2624,8 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           menu={roomMenu}
           onClose={() => setRoomMenu(null)}
           onMoveToSection={(groupId) => setRoomSectionPicker({ groupId, x: roomMenu.x, y: roomMenu.y })}
+          pinned={pinnedRoomIds.includes(roomMenu.groupId)}
+          onTogglePin={togglePinnedRoom}
         />
       )}
       {roomSectionPicker && (

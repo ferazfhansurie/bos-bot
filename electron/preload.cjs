@@ -20,7 +20,7 @@ ipcRenderer.on("package:install", (_event, url) => {
 // helpers here. Main enforces the same rule on the sensitive channels.
 const localOrigin = process.argv.find((arg) => arg.startsWith("--omb-local-origin="))?.slice("--omb-local-origin=".length) ?? null;
 const isLocalPage = !localOrigin || location.origin === localOrigin;
-const REMOTE_SAFE = new Set(["platform", "appChannel", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus", "workspaces", "remoteApprovals"]);
+const REMOTE_SAFE = new Set(["platform", "appChannel", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "focusWindow", "permStatus", "workspaces", "remoteApprovals"]);
 
 // Sandboxed preload cannot import TS or sibling modules. Keep this list in
 // parity with shared/workspace-backup-client.ts (covered by the preload test).
@@ -195,6 +195,9 @@ const bridge = {
   },
   /** Mirrors durable unread state into the native Dock/taskbar badge. */
   setUnreadCount: (count) => ipcRenderer.send("desktop:unread-count", count),
+  /** Brings the app window forward after a notification click. A renderer's
+   * own window.focus() can't restore a minimised or hidden window on macOS. */
+  focusWindow: () => ipcRenderer.send("desktop:focus-window"),
   /** Live VNC/noVNC in a sandboxed window owned by the app window. */
   desktopViewer: {
     open: (url, title, contextId) => ipcRenderer.invoke("desktop-viewer:open", url, title, contextId),

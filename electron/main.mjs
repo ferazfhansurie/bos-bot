@@ -1609,6 +1609,15 @@ ipcMain.on("desktop:unread-count", (event, value) => {
   applyUnreadBadge(sender);
 });
 
+ipcMain.on("desktop:focus-window", (event) => {
+  const sender = BrowserWindow.fromWebContents(event.sender);
+  if (!sender || sender !== mainWindow || sender.isDestroyed()) return;
+  if (sender.isMinimized()) sender.restore();
+  if (!sender.isVisible()) sender.show();
+  sender.focus();
+  if (process.platform === "darwin") app.focus({ steal: true });
+});
+
 // ── environments: this computer's server, or a paired remote one ──────
 // The app switches by loading the chosen server's own UI (electron/menu.mjs).
 // Only {id, name, origin} is stored here; the session credential is the

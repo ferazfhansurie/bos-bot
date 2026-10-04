@@ -6,6 +6,7 @@ export const SIDEBAR_DENSITY_KEY = "openmausbot.sidebarDensity";
 export const SIDEBAR_ATTENTION_PINNED_KEY = "openmausbot.sidebarAttentionPinned.v1";
 export const SIDEBAR_COLLAPSED_SECTIONS_KEY = "openmausbot.sidebarCollapsedSections.v1";
 export const SIDEBAR_SECTION_ORDER_KEY = "openmausbot.sidebarSectionOrder.v1";
+export const SIDEBAR_PINNED_ROOMS_KEY = "openmausbot.sidebarPinnedRooms.v1";
 
 export function parseSidebarDensity(value: string | null): SidebarDensity {
   switch (value) {
@@ -132,4 +133,17 @@ export function saveSectionOrder(
   storage?: Pick<Storage, "setItem"> | null,
 ): void {
   saveStringList(SIDEBAR_SECTION_ORDER_KEY, ids, storage);
+}
+
+/** Room pins are per device, like the iPhone's: pinning on this Mac doesn't
+ * reorder anyone else's sidebar. */
+export function loadPinnedRooms(storage?: Pick<Storage, "getItem"> | null): string[] {
+  return loadStringList(SIDEBAR_PINNED_ROOMS_KEY, storage);
+}
+
+export function savePinnedRooms(
+  ids: string[],
+  storage?: Pick<Storage, "setItem"> | null,
+): void {
+  saveStringList(SIDEBAR_PINNED_ROOMS_KEY, ids, storage);
 }
