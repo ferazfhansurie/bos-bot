@@ -1,7 +1,7 @@
 // One-press update, like codex: a quiet "1.2.0 → 1.3.0" pill in the sidebar
 // header that only shows when the server has a newer build that passes the
 // no-downgrade guard, a Settings > Updates section, one confirm line, live
-// progress (waiting for named bots, building, installing, restarting) while
+// progress (building, waiting for named bots, installing, restarting) while
 // the server runs it, and one toast after the restart saying how it went.
 // State comes from lib/bos-update.
 //
@@ -60,7 +60,7 @@ export function UpdatePill({ view, onOpen, compact = false }: { view: UpdateView
   if (!running && view.state !== "ready") return null;
   const from = view.status?.current.version;
   const to = view.status?.candidate?.version;
-  const label = running ? stepLabel(view.pending && !isUpdateRunning(view.state) ? "draining" : view.state) : to ? `${from} → ${to}` : "Update ready";
+  const label = running ? stepLabel(view.pending && !isUpdateRunning(view.state) ? (view.pending === "restart" ? "draining" : "building") : view.state) : to ? `${from} → ${to}` : "Update ready";
   return (
     <button
       type="button"
@@ -82,12 +82,14 @@ export function UpdatePill({ view, onOpen, compact = false }: { view: UpdateView
 
 // ── progress ─────────────────────────────────────────────────────────
 
-export function UpdateProgress({ view, busy = [] }: { view: UpdateView; busy?: BusyEntry[] }) {
-  const current = view.pending && !isUpdateRunning(view.state) ? "draining" : view.state;
-  const index = (UPDATE_STEPS as readonly string[]).indexOf(current);
+/** `restart` drops the build step: a plain restart has nothing to build. */
+export function UpdateProgress({ view, busy = [], restart = false }: { view: UpdateView; busy?: BusyEntry[]; restart?: boolean }) {
+  const current = view.pending && !isUpdateRunning(view.state) ? (view.pending === "restart" ? "draining" : "building") : view.state;
+  const steps = restart ? UPDATE_STEPS.filter((step) => step !== "building") : UPDATE_STEPS;
+  const index = (steps as readonly string[]).indexOf(current);
   return (
     <ol className="flex flex-col gap-1.5" aria-label="Update progress">
-      {UPDATE_STEPS.map((step, i) => {
+      {steps.map((step, i) => {
         const done = i < index;
         const active = i === index;
         return (
@@ -113,10 +115,23 @@ export function UpdateProgress({ view, busy = [] }: { view: UpdateView; busy?: B
             )}
             {active && step === "relaunching" && view.offline && <span className="text-ink-secondary">· BOS will reopen by itself</span>}
             {active && view.detail && step !== "relaunching" && step !== "draining" && <span className="truncate text-ink-secondary">· {view.detail}</span>}
+            {active && step === "building" && view.log.length > 0 && <BuildLog log={view.log} />}
           </li>
         );
       })}
     </ol>
+  );
+}
+
+/** The build output tail, collapsed to one line until opened. */
+export function BuildLog({ log }: { log: string[] }) {
+  return (
+    <details className="group ml-auto min-w-0 max-w-[60%] text-[12px] text-ink-secondary">
+      <summary className="cursor-pointer list-none truncate font-mono hover:text-ink" title="Show build output">
+        {log[log.length - 1]}
+      </summary>
+      <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-app/60 p-2 font-mono text-[11.5px] leading-relaxed">{log.join("\n")}</pre>
+    </details>
   );
 }
 
@@ -239,7 +254,7 @@ export function UpdatesPanel({
             <div className="mb-2 text-[13px] font-medium text-ink">
               {candidate ? `Updating to ${candidate.version}` : "Restarting"}
             </div>
-            <UpdateProgress view={view} busy={busy} />
+            <UpdateProgress view={view} busy={busy} restart={!candidate} />
           </div>
         )}
 

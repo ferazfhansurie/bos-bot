@@ -13,7 +13,7 @@ const status = {
   candidate: { version: "1.3.0", sha: "abcdef123456", branch: "prod", notes: ["Update & restart button"] },
   busyTurns: [{ botId: "b1", threadId: "t1" }],
 };
-const view = (patch: Partial<UpdateView> = {}): UpdateView => ({ status, state: "ready", offline: false, error: null, pending: null, checking: false, ...patch });
+const view = (patch: Partial<UpdateView> = {}): UpdateView => ({ status, state: "ready", offline: false, error: null, log: [], pending: null, checking: false, ...patch });
 const noop = () => {};
 
 describe("BosUpdate", () => {
@@ -66,6 +66,35 @@ describe("BosUpdate", () => {
     expect(html).toContain("bos bot finishes first");
     const panel = renderToStaticMarkup(createElement(UpdatesPanel, { view: view(), busy, onApply: noop, onRestart: noop, initialConfirm: "apply" }));
     expect(panel).toContain('aria-label="Confirm update"');
+  });
+
+  it("building comes first and shows the build output tail, collapsed", () => {
+    const html = renderToStaticMarkup(createElement(UpdateProgress, { view: view({ state: "building", log: ["archiving feedface", "vite built"] }) }));
+    expect(html.indexOf("Building")).toBeLessThan(html.indexOf("Waiting for bots to finish"));
+    expect(html).toContain("<details");
+    expect(html).not.toContain("<details open");
+    expect(html).toContain(">vite built</summary>");
+    expect(html).toContain("archiving feedface\nvite built");
+  });
+
+  it("a press before the first frame shows building, a restart skips it", () => {
+    const pressed = renderToStaticMarkup(createElement(UpdateProgress, { view: view({ state: "ready", pending: "apply" }) }));
+    expect(pressed).toMatch(/aria-current="step"[^>]*>.*?Building/);
+    const restart = renderToStaticMarkup(createElement(UpdateProgress, { view: view({ state: "ready", pending: "restart" }), restart: true }));
+    expect(restart).not.toContain("Building");
+    expect(restart).toMatch(/aria-current="step"[^>]*>.*?Waiting for bots to finish/);
+  });
+
+  it("draining names come from status busyTurns[].botName", () => {
+    const busy = busyEntries(view({ status: { ...status, busyTurns: [{ botId: "b1", threadId: "t1", botName: "pipe" }] } }), [{ id: "b1", name: "backend bot" } as unknown as Bot]);
+    expect(busy.map((entry) => entry.name)).toEqual(["pipe"]);
+  });
+
+  it("a refusal shows its line and the update button stays pressable", () => {
+    const html = renderToStaticMarkup(createElement(UpdatesPanel, { view: view({ error: "prod moved to 9a1c33e0 since the check found abcdef12; check again" }), busy: [], onApply: noop, onRestart: noop }));
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("prod moved to 9a1c33e0");
+    expect(html).not.toContain('disabled=""');
   });
 
   it("toast says rolled back with the reason", () => {

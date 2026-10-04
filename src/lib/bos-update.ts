@@ -1,5 +1,5 @@
 // The one-press updater: the server finds the newest prod build that passes
-// the no-downgrade guard, then owns drain → checkpoint → stop → build →
+// the no-downgrade guard, then owns build → drain → checkpoint → stop →
 // install → relaunch → verify (rolling back if the new build is unhealthy),
 // and this module is the renderer's one view of it. Separate from lib/updater.ts, which is
 // electron-updater's published-release channel.
@@ -34,7 +34,16 @@ export interface UpdateStatus {
   /** Why there is no candidate, one line (from /check). */
   reason?: string;
   busyTurns: Array<{ botId: string; threadId: string; botName?: string }>;
-  lastResult?: { state: UpdateRunState; at: number | string; from?: UpdateBuild; to?: UpdateBuild; detail?: string };
+  /** `from` ran before, `to` runs now: after a rollback or failure to == from,
+   * and `attempted` is the build that did not make it. */
+  lastResult?: { state: UpdateRunState; at: number | string; from?: UpdateBuild; to?: UpdateBuild; attempted?: UpdateBuild; detail?: string };
+}
+
+/** GET /api/update/progress: the build output tail, newest last. */
+export interface UpdateProgressInfo {
+  state: UpdateRunState;
+  updateId?: string;
+  log: string[];
 }
 
 export interface UpdateCheck {
@@ -55,23 +64,24 @@ export interface UpdateTransport {
   check(): Promise<UpdateCheck>;
   /** A second press answers 200 with the same id and `inProgress: true`. */
   apply(force: boolean): Promise<{ updateId: string; inProgress?: boolean }>;
-  restart(force: boolean): Promise<void>;
+  restart(force: boolean): Promise<{ updateId: string; inProgress?: boolean }>;
+  progress(): Promise<UpdateProgressInfo>;
 }
 
 const httpTransport: UpdateTransport = {
   status: () => api<UpdateStatus>("/api/update/status", { timeoutMs: 5_000 }),
   check: () => api<UpdateCheck>("/api/update/check", { method: "POST", timeoutMs: 30_000 }),
-  apply: (force) => api<{ updateId: string }>("/api/update/apply", { method: "POST", body: JSON.stringify({ force }) }),
-  restart: async (force) => {
-    await api("/api/update/restart", { method: "POST", body: JSON.stringify({ force }) });
-  },
+  apply: (force) => api<{ updateId: string; inProgress?: boolean }>("/api/update/apply", { method: "POST", body: JSON.stringify({ force }) }),
+  restart: (force) => api<{ updateId: string; inProgress?: boolean }>("/api/update/restart", { method: "POST", body: JSON.stringify({ force }) }),
+  progress: () => api<UpdateProgressInfo>("/api/update/progress", { timeoutMs: 5_000 }),
 };
 
-/** The run steps in order; the progress list renders these. */
-export const UPDATE_STEPS = ["draining", "checkpointing", "stopping", "building", "applying", "relaunching", "verifying"] as const;
+/** The run steps in order; the progress list renders these. The build runs
+ * first, while bots keep working; draining only starts once it is staged. */
+export const UPDATE_STEPS = ["building", "draining", "checkpointing", "stopping", "applying", "relaunching", "verifying"] as const;
 
 export function isUpdateSuccess(state: UpdateRunState | undefined): boolean {
-  return state === "updated" || state === "done";
+  return state === "done";
 }
 
 export function isUpdateRunning(state: UpdateRunState | undefined): boolean {
@@ -87,13 +97,16 @@ export interface UpdateView {
   detail?: string;
   /** Server unreachable while a run was in progress. */
   offline: boolean;
-  /** Last apply/restart request failure (409 = another update owns the lock). */
+  /** Last apply/restart refusal, the server's own line (409 = the guard or
+   * the build said no); the button is usable again. */
   error: string | null;
+  /** Tail of the build output while building, newest last. */
+  log: string[];
   pending: "apply" | "restart" | null;
   checking: boolean;
 }
 
-const EMPTY: UpdateView = { status: null, state: "idle", offline: false, error: null, pending: null, checking: false };
+const EMPTY: UpdateView = { status: null, state: "idle", offline: false, error: null, log: [], pending: null, checking: false };
 
 let transport: UpdateTransport = httpTransport;
 let view: UpdateView = EMPTY;
@@ -128,6 +141,7 @@ async function poll() {
       offline: false,
       pending: isUpdateRunning(status.state) ? null : view.pending,
     });
+    if (view.state === "building") await readBuildLog();
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       unsupported = true;
@@ -137,6 +151,15 @@ async function poll() {
     if (isUpdateRunning(view.state) || view.pending) set({ offline: true, state: "relaunching" });
   }
   schedule();
+}
+
+async function readBuildLog() {
+  try {
+    const progress = await transport.progress();
+    set({ log: progress.log ?? [] });
+  } catch {
+    // an older server has no /progress; the step line alone is fine
+  }
 }
 
 function schedule() {
@@ -194,18 +217,15 @@ async function request(kind: "apply" | "restart", force: boolean) {
   if (view.pending || isUpdateRunning(view.state)) return;
   set({ pending: kind, error: null });
   try {
-    if (kind === "apply") await transport.apply(force);
-    else await transport.restart(force);
-    // a second press (another window) joins the run already going
-    if (!isUpdateRunning(view.state)) set({ state: kind === "apply" ? "draining" : "checkpointing", detail: undefined });
+    const started = kind === "apply" ? await transport.apply(force) : await transport.restart(force);
+    // a second press (another window) joins the run already going: 200
+    // inProgress, same id, so the next poll shows its real step
+    if (started?.inProgress) set({ pending: null });
+    else if (!isUpdateRunning(view.state)) set({ state: kind === "apply" ? "building" : "draining", detail: undefined, log: [] });
   } catch (error) {
-    const message =
-      error instanceof ApiError && error.status === 409
-        ? "Another update is already running."
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    set({ pending: null, error: message });
+    // 409 is a refusal with a reason (up to date, downgrade, prod moved);
+    // show it as-is and let the button be pressed again
+    set({ pending: null, error: error instanceof Error ? error.message : String(error) });
   }
   if (timer) {
     clearTimeout(timer);
@@ -233,14 +253,17 @@ export function updateNotice(status: UpdateStatus | null): UpdateNotice | null {
   const result = status?.lastResult;
   if (!result) return null;
   const key = `${result.state}:${result.at}`;
+  // `to` is what runs now: the new build on success, the old one again after
+  // a rollback or failure
   const to = result.to ?? status!.current;
   const from = result.from ?? status!.current;
+  const tried = result.attempted && result.attempted.sha !== to.sha ? `${result.attempted.version} · ` : "";
   if (isUpdateSuccess(result.state))
     return { key, tone: "ok", title: `Updated to ${to.version}`, detail: result.from ? `${from.version} → ${to.version} · ${shortSha(to.sha)}` : shortSha(to.sha) };
   if (result.state === "rolled_back")
-    return { key, tone: "warn", title: `Update failed, rolled back to ${from.version}`, detail: result.detail };
+    return { key, tone: "warn", title: `Update failed, rolled back to ${to.version}`, detail: result.detail ? `${tried}${result.detail}` : undefined };
   if (result.state === "failed")
-    return { key, tone: "error", title: `Update failed, still on ${from.version}`, detail: result.detail };
+    return { key, tone: "error", title: `Update failed, still on ${to.version}`, detail: result.detail ? `${tried}${result.detail}` : undefined };
   return null;
 }
 
@@ -282,7 +305,6 @@ export function stepLabel(state: UpdateRunState): string {
     case "verifying":
       return "Checking the new build";
     case "done":
-    case "updated":
       return "Updated";
     case "rolled_back":
       return "Rolled back";

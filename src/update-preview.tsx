@@ -28,7 +28,7 @@ const busy: BusyEntry[] = [
 ];
 
 const ready: UpdateStatus = { state: "ready", current, candidate, busyTurns };
-const view = (status: UpdateStatus, patch: Partial<UpdateView> = {}): UpdateView => ({ status, state: status.state, offline: false, error: null, pending: null, checking: false, ...patch });
+const view = (status: UpdateStatus, patch: Partial<UpdateView> = {}): UpdateView => ({ status, state: status.state, offline: false, error: null, log: [], pending: null, checking: false, ...patch });
 const run = (state: UpdateStatus["state"], patch: Partial<UpdateView> = {}) => view({ ...ready, state }, patch);
 const settled = (lastResult: UpdateStatus["lastResult"], on = current, reason?: string) => view({ state: "idle", current: on, busyTurns: [], lastResult, reason });
 
@@ -40,14 +40,14 @@ const SCENES: Record<string, { view: UpdateView; busy: BusyEntry[]; confirm?: bo
   draining: { view: run("draining"), busy },
   checkpointing: { view: run("checkpointing"), busy },
   stopping: { view: run("stopping"), busy },
-  building: { view: run("building", { detail: "prod e4c28f14" }), busy },
+  building: { view: run("building", { detail: "prod e4c28f14", log: ["archiving e4c28f14", "pnpm install --frozen-lockfile", "vite build: 2143 modules transformed", "tsc -p tsconfig.server.json"] }), busy },
   applying: { view: run("applying"), busy },
   relaunching: { view: run("relaunching", { offline: true }), busy },
   verifying: { view: run("verifying", { detail: "/health" }), busy },
-  updated: { view: settled({ state: "updated", at: Date.now(), from: current, to: next }, next, "already on the newest prod build"), busy: [], toast: true },
-  "rolled-back": { view: settled({ state: "rolled_back", at: Date.now(), from: current, to: next, detail: "/health did not answer within 60s" }), busy: [], toast: true },
-  failed: { view: settled({ state: "failed", at: Date.now(), from: current, to: next, detail: "build failed, nothing changed" }), busy: [], toast: true },
-  conflict: { view: view(ready, { error: "Another update is already running." }), busy },
+  done: { view: settled({ state: "done", at: Date.now(), from: current, to: next }, next, "already on the newest prod build"), busy: [], toast: true },
+  "rolled-back": { view: settled({ state: "rolled_back", at: Date.now(), from: current, to: current, attempted: next, detail: "health check failed; previous build restored" }), busy: [], toast: true },
+  failed: { view: settled({ state: "failed", at: Date.now(), from: current, to: current, attempted: next, detail: "build failed, nothing changed" }), busy: [], toast: true },
+  conflict: { view: view(ready, { error: "prod moved to 9a1c33e0 since the check found e4c28f14; check again" }), busy },
 };
 
 function Preview() {
