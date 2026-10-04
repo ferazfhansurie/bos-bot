@@ -1379,5 +1379,13 @@
   "engines.icon.formatError": "Lade ein PNG-, JPEG- oder WebP-Bild hoch.",
   "engines.icon.sizeError": "Anbietersymbole dürfen höchstens 128 KB groß sein.",
   "engines.icon.invalidError": "Lade ein vollständiges PNG-, JPEG- oder WebP-Bild mit höchstens 128 KB und {dimension} × {dimension} Pixeln hoch.",
-  "engines.icon.dimensionError": "Anbietersymbole dürfen höchstens {dimension} × {dimension} Pixel groß sein."
+  "engines.icon.dimensionError": "Anbietersymbole dürfen höchstens {dimension} × {dimension} Pixel groß sein.",
+  "composer.queued.steerTo": "{name} einsteuern",
+  "composer.queued.steerToHint": "Jetzt in den laufenden Zug von {name} senden",
+  "composer.queued.steerChoose": "Erwähne einen Bot zum Einsteuern",
+  "composer.queued.waitsFor": "Wartet auf {name}",
+  "composer.queued.waitsForTurn": "Wartet, bis es dran ist",
+  "composer.queued.pasted": "Eingefügt · {lines} Zeilen",
+  "chat.steerUnknown": "Zustellung unklar",
+  "chat.steerUnknownHint": "Während der Bot arbeitete gesendet, aber unklar, ob der laufende Zug es erhalten hat. Prüfe die Antwort, bevor du es erneut sendest."
 }

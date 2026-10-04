@@ -50,7 +50,7 @@ import {
   type PasteAttachment,
 } from "@/lib/composer-attachments";
 import { normalizeState } from "@/lib/mascot";
-import { goalCoordinatorForComposer, groupComposerHint, roomRespondersForComposer } from "@/lib/group-routing";
+import { goalCoordinatorForComposer, groupComposerHint, roomRespondersForComposer, roomSteerTarget } from "@/lib/group-routing";
 import { PendingApprovalActions, PendingApprovalPanel, pendingApprovals } from "./PendingApproval";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { ReplyQuote } from "./ReplyQuote";
@@ -380,14 +380,38 @@ export function Composer({
     else if (bot) dispatch({ type: "interrupt", botId: bot.id, threadId });
   };
   const queueHeadId = queuedMessages[0]?.queueId;
+  // Rooms run several members at once: the head steers into the member the
+  // server will pick for it (its @mention, else the only active speaker),
+  // never whoever happens to be listed busy first.
+  const roomSteer = group && queuedMessages[0]
+    ? roomSteerTarget(
+        queuedMessages[0].text,
+        members ?? [],
+        group.activeBotIds?.length ? group.activeBotIds : group.busyBotId ? [group.busyBotId] : [],
+      )
+    : null;
+  const roomSteerMember = roomSteer?.kind === "member" ? roomSteer.member : undefined;
+  const roomSteerCapable = roomSteerMember
+    ? state.instances.find((i) => i.instanceId === roomSteerMember.modelSelection.instanceId)?.capabilities?.queueing === true
+    : canSteer;
+  const roomSteerUnavailable = roomSteer?.kind === "ambiguous"
+    ? t("composer.queued.steerChoose")
+    : roomSteer?.kind === "waiting"
+      ? roomSteer.members.length === 1
+        ? t("composer.queued.waitsFor", { name: roomSteer.members[0]!.name })
+        : t("composer.queued.waitsForTurn")
+      : undefined;
   const steerQueued = () => {
     if (!queueHeadId) return;
     setSteering(true);
     const settle = () => setSteering(false);
-    if (group && canSteer) {
+    if (group && roomSteerMember && roomSteerCapable) {
       // A steer-capable room folds the queued head into the running turn
-      // through the server; it never interrupts the turn to do it.
-      dispatch({ type: "steerGroupQueued", groupId: group.id, threadId, queueId: queueHeadId, onError: settle, onSettled: settle });
+      // through the server; it never interrupts the turn to do it. Naming
+      // the member makes the server refuse rather than deliver elsewhere.
+      dispatch({ type: "steerGroupQueued", groupId: group.id, threadId, queueId: queueHeadId, botId: roomSteerMember.id, onError: settle, onSettled: settle });
+    } else if (group && roomSteerUnavailable) {
+      settle();
     } else if (group) {
       // A room whose running engine cannot steer keeps the old behavior:
       // Steer ends the running turn so the next queued message starts.
@@ -904,7 +928,9 @@ export function Composer({
         <QueuedComposerMessages
           items={queuedMessages}
           onSteer={canSteerQueued ? steerQueued : undefined}
-          steerInterrupts={!canSteer}
+          steerInterrupts={group ? !roomSteerCapable : !canSteer}
+          steerTargetName={roomSteerMember?.name}
+          steerUnavailable={canSteerQueued ? roomSteerUnavailable : undefined}
           steerMode={group ? "next" : "all"}
           steering={steering}
           onCancel={(queueId) => {

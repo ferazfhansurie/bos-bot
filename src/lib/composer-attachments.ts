@@ -815,3 +815,21 @@ export async function intakeFiles<T extends DroppedFile & { type: string }>(
     notice: pathless && failed ? `${pathless} (${failed})` : (pathless ?? failed),
   };
 }
+
+export type QueuedPreview = TranscriptAttachments & {
+  pastes: Array<{ lines: number; size: number }>;
+};
+
+const QUEUED_PASTE_BLOCK = /(?:^|\n)<pasted-text index="\d+">\n([\s\S]*?)\n<\/pasted-text>(?=\n|$)/g;
+
+/** What a queued chip should read as: the typed words, plus one summary per
+ * pasted block or attachment. The queue holds the composed prompt, so
+ * without this a paste shows up as its raw `<pasted-text>` wrapper. */
+export function splitQueuedPreview(text: string): QueuedPreview {
+  const pastes: QueuedPreview["pastes"] = [];
+  const withoutPastes = text.replace(QUEUED_PASTE_BLOCK, (_, pasted: string) => {
+    pastes.push({ lines: countLines(pasted), size: byteLength(pasted) });
+    return "";
+  });
+  return { ...splitTranscriptAttachments(withoutPastes), pastes };
+}

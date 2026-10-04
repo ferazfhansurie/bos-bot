@@ -118,3 +118,28 @@ function mentionedMembers<T extends { name: string; hidden?: boolean }>(text: st
   }
   return found;
 }
+
+export type RoomSteerTarget<T> =
+  | { kind: "member"; member: T }
+  | { kind: "ambiguous"; members: T[] }
+  | { kind: "waiting"; members: T[] };
+
+/** Which running member a room Steer reaches. Mirrors the server's
+ * `/api/groups/:id/queue/:queueId/steer` selection: the queued message's
+ * explicit mentions narrow the room's active speakers, otherwise every
+ * active speaker is a candidate. One candidate steers; several are refused;
+ * none means the addressed member isn't running and the words wait. */
+export function roomSteerTarget<T extends { id: string; name: string; hidden?: boolean }>(
+  queuedText: string,
+  members: T[],
+  activeBotIds: string[],
+): RoomSteerTarget<T> {
+  const active = activeBotIds.flatMap((id) => members.find((member) => member.id === id) ?? []);
+  const mentioned = roomRespondersForComposer(queuedText, members, { defaultResponder: { kind: "mentions" } });
+  const candidates = mentioned.length
+    ? active.filter((member) => mentioned.some((addressed) => addressed.id === member.id))
+    : active;
+  if (candidates.length === 1) return { kind: "member", member: candidates[0]! };
+  if (candidates.length > 1) return { kind: "ambiguous", members: candidates };
+  return { kind: "waiting", members: mentioned };
+}

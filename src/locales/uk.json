@@ -1969,5 +1969,13 @@
   "engines.icon.formatError": "Завантажте зображення PNG, JPEG чи WebP.",
   "engines.icon.sizeError": "Значки постачальників мають бути розміром не більше 128 КБ.",
   "engines.icon.invalidError": "Завантажте повне зображення PNG, JPEG чи WebP розміром до 128 КБ і {dimension} × {dimension} пікселів.",
-  "engines.icon.dimensionError": "Значки постачальників мають бути не більші за {dimension} × {dimension} пікселів."
+  "engines.icon.dimensionError": "Значки постачальників мають бути не більші за {dimension} × {dimension} пікселів.",
+  "composer.queued.steerTo": "Керувати {name}",
+  "composer.queued.steerToHint": "Надіслати зараз у поточний запит {name}",
+  "composer.queued.steerChoose": "Згадайте одного бота, щоб керувати",
+  "composer.queued.waitsFor": "Чекає на {name}",
+  "composer.queued.waitsForTurn": "Чекає своєї черги",
+  "composer.queued.pasted": "Вставлено · {lines} рядків",
+  "chat.steerUnknown": "доставка невідома",
+  "chat.steerUnknownHint": "Надіслано, поки бот працював, але невідомо, чи отримав це поточний запит. Перевірте відповідь, перш ніж надсилати знову."
 }

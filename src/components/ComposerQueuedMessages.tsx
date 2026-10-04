@@ -1,19 +1,7 @@
-import { CornerDownRight, Trash2 } from "lucide-react";
+import { ClipboardPaste, CornerDownRight, File as FileIcon, Image as ImageIcon, Trash2 } from "lucide-react";
 
-import { splitTranscriptAttachments } from "@/lib/composer-attachments";
+import { splitQueuedPreview } from "@/lib/composer-attachments";
 import { t } from "@/lib/i18n";
-
-/** What a queued chip shows: the words, then how many files ride along. The
- * raw <attached-…> tags stay out of view so the chip text can't be copied
- * and re-sent as a second copy of the same image. */
-export function queuedChipLabel(text: string): string {
-  const { display, images, files } = splitTranscriptAttachments(text);
-  const count = images.length + files.length;
-  if (!count) return text;
-  const words = display.replace(/\s+/g, " ");
-  const attached = t("composer.queued.attached", { count: String(count) });
-  return words ? `${words} · ${attached}` : attached;
-}
 
 export function composerCanSteerQueuedMessages(
   busy: boolean,
@@ -37,6 +25,8 @@ export function QueuedComposerMessages({
   steerMode = "all",
   steering = false,
   steerInterrupts = false,
+  steerTargetName,
+  steerUnavailable,
   onCancel,
 }: {
   items: Array<{ queueId: string; text: string; reason?: "capacity" }>;
@@ -46,6 +36,12 @@ export function QueuedComposerMessages({
   /** True when Steer is backed by an interrupt (engine without live steer):
    * the hint must say what the click really does. */
   steerInterrupts?: boolean;
+  /** Room steer: the one running member the server will deliver the head
+   * to, so the button names who actually receives it. */
+  steerTargetName?: string;
+  /** Room steer the server would refuse or hold: shown in place of the
+   * button so nobody clicks a Steer that lands nowhere. */
+  steerUnavailable?: string;
   onCancel: (queueId: string) => void;
 }) {
   if (!items.length) return null;
@@ -53,12 +49,16 @@ export function QueuedComposerMessages({
   const multiple = items.length > 1;
   const steerLabel = steering
     ? t("composer.queued.steering")
-    : multiple
+    : steerTargetName
+      ? t("composer.queued.steerTo", { name: steerTargetName })
+      : multiple
       ? steerMode === "all"
         ? t("composer.queued.steerAll")
         : t("composer.queued.steerNext")
       : t("composer.queued.steer");
-  const steerDescription = steerInterrupts
+  const steerDescription = steerTargetName && !steerInterrupts
+    ? t("composer.queued.steerToHint", { name: steerTargetName })
+    : steerInterrupts
     ? multiple
       ? steerMode === "all"
         ? t("composer.queued.steerAllInterruptHint", { count: items.length })
@@ -92,10 +92,13 @@ export function QueuedComposerMessages({
               className="shrink-0 text-ink-secondary"
               aria-hidden="true"
             />
-            <span dir="auto" className="min-w-0 flex-1 truncate text-[14px] text-ink" title={queuedChipLabel(item.text)}>
-              {queuedChipLabel(item.text)}
-            </span>
-            {index === 0 && onSteer && (
+            <QueuedPreview text={item.text} />
+            {index === 0 && steerUnavailable && (
+              <span className="max-w-[45%] shrink-0 truncate text-[12px] text-ink-secondary" title={steerUnavailable}>
+                {steerUnavailable}
+              </span>
+            )}
+            {index === 0 && onSteer && !steerUnavailable && (
               <button
                 type="button"
                 onClick={onSteer}
@@ -126,5 +129,39 @@ export function QueuedComposerMessages({
         ))}
       </ul>
     </div>
+  );
+}
+
+/** One queued row: typed words first, then a quiet chip per pasted block or
+ * attachment, so the queue never shows the prompt's raw wrapper tags. */
+function QueuedPreview({ text }: { text: string }) {
+  const preview = splitQueuedPreview(text);
+  const chips = [
+    ...preview.pastes.map((paste, index) => ({
+      key: `paste-${index}`,
+      icon: ClipboardPaste,
+      label: t("composer.queued.pasted", { lines: paste.lines }),
+    })),
+    ...preview.images.map((image, index) => ({ key: `image-${index}`, icon: ImageIcon, label: image.name })),
+    ...preview.files.map((file, index) => ({ key: `file-${index}`, icon: FileIcon, label: file.name })),
+  ];
+  const title = [preview.display, ...chips.map((chip) => chip.label)].filter(Boolean).join(" · ");
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5" title={title}>
+      {preview.display && (
+        <span dir="auto" className="min-w-0 truncate text-[14px] text-ink">
+          {preview.display}
+        </span>
+      )}
+      {chips.map(({ key, icon: Icon, label }) => (
+        <span
+          key={key}
+          className="flex max-w-40 shrink-0 items-center gap-1 rounded-md bg-hairline/25 px-1.5 py-0.5 text-[12px] text-ink-secondary"
+        >
+          <Icon size={12} strokeWidth={1.8} aria-hidden="true" />
+          <span className="truncate">{label}</span>
+        </span>
+      ))}
+    </span>
   );
 }

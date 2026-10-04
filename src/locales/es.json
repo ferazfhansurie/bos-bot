@@ -1379,5 +1379,13 @@
   "engines.icon.formatError": "Sube una imagen PNG, JPEG o WebP.",
   "engines.icon.sizeError": "Los iconos de proveedor deben ocupar como máximo 128 KB.",
   "engines.icon.invalidError": "Sube una imagen PNG, JPEG o WebP completa de hasta 128 KB y {dimension} × {dimension} píxeles.",
-  "engines.icon.dimensionError": "Los iconos de proveedor deben medir como máximo {dimension} × {dimension} píxeles."
+  "engines.icon.dimensionError": "Los iconos de proveedor deben medir como máximo {dimension} × {dimension} píxeles.",
+  "composer.queued.steerTo": "Redirigir a {name}",
+  "composer.queued.steerToHint": "Enviar esto ahora al turno en curso de {name}",
+  "composer.queued.steerChoose": "Menciona un bot para redirigir",
+  "composer.queued.waitsFor": "Espera a {name}",
+  "composer.queued.waitsForTurn": "Espera su turno",
+  "composer.queued.pasted": "Pegado · {lines} líneas",
+  "chat.steerUnknown": "entrega desconocida",
+  "chat.steerUnknownHint": "Enviado mientras el bot trabajaba, pero no está claro si el turno en curso lo recibió. Revisa la respuesta antes de reenviarlo."
 }

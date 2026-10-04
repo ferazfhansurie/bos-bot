@@ -16,7 +16,9 @@ import {
   imageAttachmentFromFile,
   isImageFile,
   optimisticImageAttachment,
+  pasteAttachment,
   releaseAttachmentImagePreview,
+  splitQueuedPreview,
   splitTranscriptAttachments,
   type ImageAttachment,
 } from "./composer-attachments";
@@ -640,5 +642,32 @@ describe("private image intake", () => {
     } finally {
       fetch.mockRestore();
     }
+  });
+});
+
+describe("splitQueuedPreview", () => {
+  it("summarises pasted blocks instead of showing their wrapper", () => {
+    const pasted = "line one\nline two\n\nline four";
+    const text = composeMessage("@scout look at this", [pasteAttachment(pasted)]);
+    const preview = splitQueuedPreview(text);
+    expect(preview.display).toBe("@scout look at this");
+    expect(preview.pastes).toEqual([{ lines: 4, size: pasted.length }]);
+  });
+
+  it("keeps a paste-only message empty and counts every block and file", () => {
+    const text = composeMessage("", [
+      pasteAttachment("a"),
+      pasteAttachment("b\nc"),
+      fileAttachment("notes.md", "/tmp/notes.md", 3),
+    ]);
+    const preview = splitQueuedPreview(text);
+    expect(preview.display).toBe("");
+    expect(preview.pastes.map((p) => p.lines)).toEqual([1, 2]);
+    expect(preview.files.map((f) => f.name)).toEqual(["notes.md"]);
+  });
+
+  it("leaves a typed tag that is not the app's wrapper alone", () => {
+    const text = "explain <pasted-text> please";
+    expect(splitQueuedPreview(text)).toMatchObject({ display: text, pastes: [] });
   });
 });

@@ -164,6 +164,9 @@ export interface Message {
   tool?: { recovery?: { id: string; botId: string; threadId: string; reviewedAt?: number }; name: string; ok?: boolean; spoken?: string; setup?: boolean; summary?: string; input?: string; output?: string ; itemId?: string; outputPath?: string; fullResult?: boolean };
   /** user messages sent into a running turn — the model saw it mid-turn */
   steered?: boolean;
+  /** Admission evidence for a steer; `outcome_unknown` means it may or may
+   * not have reached the running turn. */
+  steerDelivery?: "transport_written" | "provider_accepted" | "outcome_unknown";
   /** a user message that arrived through the server's API, not typed here */
   via?: "api";
   /** Provider turn that produced this message. */
@@ -971,7 +974,7 @@ export type Action =
   | { type: "cancelQueued"; botId: string; queueId: string; threadId?: string }
   | { type: "steerQueued"; botId: string; queueId: string; threadId?: string; onError?: () => void; onSettled?: () => void }
   | { type: "cancelGroupQueued"; groupId: string; threadId: string; queueId: string }
-  | { type: "steerGroupQueued"; groupId: string; queueId: string; threadId?: string; onError?: () => void; onSettled?: () => void }
+  | { type: "steerGroupQueued"; groupId: string; queueId: string; threadId?: string; botId?: string; onError?: () => void; onSettled?: () => void }
   | { type: "editMessage"; botId: string; messageId: string; text: string; threadId?: string }
   | { type: "switchBranch"; botId: string; messageId: string; threadId?: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
@@ -2629,6 +2632,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       rawDispatch({ type: "error", message: e instanceof Error ? e.message : String(e) });
       setTimeout(() => rawDispatch({ type: "error", message: null }), 6000);
     };
+    /** Fold a queue-steer answer. An unknown outcome is folded like a
+     * delivery: the server already recorded the words once and will not
+     * replay them, so the chip must not linger as if still waiting. */
+    const foldSteerResult = (body: {
+      steered?: boolean;
+      outcomeUnknown?: boolean;
+      queued?: boolean;
+      reason?: string;
+      threadId?: unknown;
+      messages?: unknown;
+      queueIds?: string[];
+    } | null | undefined) => {
+      if ((body?.steered === true || body?.outcomeUnknown === true) &&
+        Array.isArray(body.messages) && typeof body.threadId === "string") {
+        for (const message of body.messages as Message[]) {
+          // 1:1 steers report the unknown outcome only in the answer.
+          const marked = body.outcomeUnknown === true && !message.steerDelivery
+            ? { ...message, steerDelivery: "outcome_unknown" as const }
+            : message;
+          rawDispatch({ type: "messageAdded", threadId: body.threadId, message: marked });
+        }
+        for (const queueId of body.queueIds ?? []) {
+          rawDispatch({ type: "consumePendingQueued", threadId: body.threadId, queueId });
+        }
+      }
+      if (body?.queued === true) showError(body.reason || "This message is queued for the next reply; the running turn did not accept it.");
+    };
     /** Where a card action's message lives, and the card on it. A card asked
      * inside a room belongs to the room's list, never to one member's. */
     const cardTarget = (action: { botId: string; messageId: string; groupId?: string }) => {
@@ -2877,15 +2907,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "steerQueued":
           void api(`/api/bots/${action.botId}/queue/${action.queueId}/steer`, { method: "POST", body: JSON.stringify({ threadId: action.threadId }) })
             .then((body) => {
-              if (body?.steered === true && Array.isArray(body.messages) && typeof body.threadId === "string") {
-                for (const message of body.messages) {
-                  rawDispatch({ type: "messageAdded", threadId: body.threadId, message });
-                }
-                for (const queueId of body.queueIds ?? []) {
-                  rawDispatch({ type: "consumePendingQueued", threadId: body.threadId, queueId });
-                }
-              }
-              if (body?.queued === true) showError(body.reason || "This message is queued for the next reply; the running turn did not accept it.");
+              foldSteerResult(body);
               action.onSettled?.();
             })
             .catch((error) => {
@@ -2901,17 +2923,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "steerGroupQueued":
           void api(`/api/groups/${action.groupId}/queue/${action.queueId}/steer`, {
             method: "POST",
-            body: JSON.stringify({ threadId: action.threadId }),
+            body: JSON.stringify({ threadId: action.threadId, botId: action.botId }),
           })
             .then((body) => {
-              if (body?.steered === true && Array.isArray(body.messages) && typeof body.threadId === "string") {
-                for (const message of body.messages) {
-                  rawDispatch({ type: "messageAdded", threadId: body.threadId, message });
-                }
-                for (const queueId of body.queueIds ?? []) {
-                  rawDispatch({ type: "consumePendingQueued", threadId: body.threadId, queueId });
-                }
-              }
+              foldSteerResult(body);
               action.onSettled?.();
             })
             .catch((error) => {

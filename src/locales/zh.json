@@ -1379,5 +1379,13 @@
   "engines.icon.formatError": "请上传 PNG、JPEG 或 WebP 图片。",
   "engines.icon.sizeError": "提供商图标不得超过 128 KB。",
   "engines.icon.invalidError": "请上传完整的 PNG、JPEG 或 WebP 图片，大小不超过 128 KB，尺寸不超过 {dimension} × {dimension} 像素。",
-  "engines.icon.dimensionError": "提供商图标的尺寸不得超过 {dimension} × {dimension} 像素。"
+  "engines.icon.dimensionError": "提供商图标的尺寸不得超过 {dimension} × {dimension} 像素。",
+  "composer.queued.steerTo": "插话给 {name}",
+  "composer.queued.steerToHint": "现在送入 {name} 的当前轮次",
+  "composer.queued.steerChoose": "提及一个机器人来插话",
+  "composer.queued.waitsFor": "等待 {name}",
+  "composer.queued.waitsForTurn": "等待轮到它",
+  "composer.queued.pasted": "已粘贴 · {lines} 行",
+  "chat.steerUnknown": "送达未知",
+  "chat.steerUnknownHint": "在机器人工作时发送，但不确定当前轮次是否收到。重新发送前请先查看回复。"
 }
