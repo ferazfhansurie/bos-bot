@@ -1530,13 +1530,13 @@ final class Session: ObservableObject {
         await perform { _ = try await $0.setThreadSettlement(days: days) }
     }
 
-    func steerQueued(_ send: QueuedSend, threadId: String, in chat: Chat) async {
+    func steerQueued(_ send: QueuedSend, threadId: String, in chat: Chat, botId: String? = nil) async {
         let destination: MessageDestination
         switch chat {
         case let .bot(bot): destination = .bot(id: bot.id, threadId: threadId)
         case let .room(room): destination = .room(id: room.id, threadId: threadId)
         }
-        await perform { try await $0.steerQueued(queueId: send.queueId, to: destination) }
+        await perform { try await $0.steerQueued(queueId: send.queueId, to: destination, botId: botId) }
     }
 
     func cancelQueued(_ send: QueuedSend, threadId: String, in chat: Chat) async {
@@ -2380,6 +2380,13 @@ final class Session: ObservableObject {
     }
 
     func loadProviderUsage() async throws -> [ProviderUsageAccount] {
+#if DEBUG
+        // Screenshot fixture for the roster usage row.
+        if ProcessInfo.processInfo.arguments.contains("-usage-preview") {
+            let json = #"{"accounts":[{"provider":"claude","account":"preview","fiveHour":{"usedPercent":25,"resetsAt":null},"sevenDay":{"usedPercent":56,"resetsAt":null},"status":"ok"},{"provider":"codex","account":"preview","sevenDay":{"usedPercent":60,"resetsAt":null},"status":"ok"}]}"#
+            return try JSONDecoder().decode(ProviderUsageResponse.self, from: Data(json.utf8)).accounts
+        }
+#endif
         guard let client else { return [] }
         return try await client.providerUsage().accounts
     }

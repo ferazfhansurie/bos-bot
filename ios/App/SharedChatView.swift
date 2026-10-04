@@ -361,14 +361,15 @@ struct SharedChatView: View {
     private var header: some View {
         ChatHeaderBar(name: conversationName, unreadElsewhere: 0,
                       canOpenThreads: false, canOpenSettings: true, canWatchComputer: false,
-                      onBack: { dismiss() }, onThreads: {}, onSettings: { showingDetails = true }, onComputer: {}) {
+                      onBack: { dismiss() }, onThreads: {}, onSettings: { showingDetails = true }, onComputer: {},
+                      membersCount: currentRoom.isGroup ? currentRoom.memberIds.count : nil) {
             headerAvatar
         }
     }
 
     @ViewBuilder private var headerAvatar: some View {
         if let peer, peer.kind == "bot" {
-            MausAvatar(color: peer.color ?? "green", size: 30, bodyId: peer.mascotBody, animated: false)
+            SharedBotFace(bot: peer, size: 30)
         } else if let peer, let avatar = peer.avatar, PersonCutout.image(dataURL: avatar) != nil {
             PersonPhotoView(dataURL: avatar, size: 30)
         } else if let peer {

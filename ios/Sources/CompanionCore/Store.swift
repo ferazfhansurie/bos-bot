@@ -212,7 +212,8 @@ public struct CompanionState: Sendable {
             let hasConversation = bot.tasks == nil || !bot.visibleTasks.isEmpty
             return count + (hasConversation && bot.unread ? 1 : 0)
         }
-        return botCount + rooms.filter(\.unread).count
+        // a muted room keeps its unread dot but stays off the app badge
+        return botCount + rooms.filter { $0.unread && $0.notifications != "muted" }.count
     }
 
     // MARK: - Hydrating

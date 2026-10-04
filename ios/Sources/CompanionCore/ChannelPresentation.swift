@@ -78,6 +78,59 @@ public enum ChannelMentionPicker {
     }
 }
 
+/// Which running member a room Steer reaches. Mirrors the server's
+/// `/api/groups/:id/queue/:queueId/steer` pick: the queued message's explicit
+/// @mentions narrow the room's active speakers, otherwise every active
+/// speaker is a candidate. One candidate steers; several are refused; none
+/// means the addressed member isn't running and the words wait.
+public enum RoomSteerTarget: Equatable, Sendable {
+    case member(Bot)
+    case ambiguous([Bot])
+    case waiting([Bot])
+
+    public static func resolve(queuedText: String, members: [Bot], activeBotIds: [String]) -> RoomSteerTarget {
+        let active = activeBotIds.compactMap { id in members.first { $0.id == id } }
+        let mentioned = mentionedMembers(queuedText, members: members)
+        let candidates = mentioned.isEmpty ? active : active.filter { bot in mentioned.contains { $0.id == bot.id } }
+        if candidates.count == 1 { return .member(candidates[0]) }
+        if candidates.count > 1 { return .ambiguous(candidates) }
+        return .waiting(mentioned)
+    }
+
+    /// The room's running speakers: `activeBotIds`, else the legacy single
+    /// `busyBotId`, the same fallback the desktop composer uses.
+    public static func activeBotIds(_ room: Room) -> [String] {
+        if let active = room.activeBotIds, !active.isEmpty { return active }
+        return room.busyBotId.map { [$0] } ?? []
+    }
+
+    /// Explicit addressees only (no default responder), aligned with the
+    /// server's `mentionedBots`: `@everyone` is every visible member, and a
+    /// name matches only as a whole word right after a standalone `@`,
+    /// longest name first so `@pix2` never reads as `@pix`.
+    static func mentionedMembers(_ text: String, members: [Bot]) -> [Bot] {
+        let available = members.filter { $0.hidden != true }
+        if text.range(of: #"(?:^|\s)@everyone\b"#, options: [.regularExpression, .caseInsensitive]) != nil { return available }
+        let candidates = available
+            .filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }
+            .sorted { $0.name.count > $1.name.count }
+        let lower = Array(text.lowercased())
+        var found: [Bot] = []
+        for (at, character) in lower.enumerated() where character == "@" {
+            if at > 0, !lower[at - 1].isWhitespace { continue }
+            let rest = lower[(at + 1)...]
+            let hit = candidates.first { bot in
+                let name = Array(bot.name.lowercased())
+                guard rest.starts(with: name) else { return false }
+                let after = rest.dropFirst(name.count).first
+                return after.map { !($0.isASCII && ($0.isLetter || $0.isNumber)) } ?? true
+            }
+            if let hit, !found.contains(where: { $0.id == hit.id }) { found.append(hit) }
+        }
+        return found
+    }
+}
+
 /// A settings sheet belongs to the pairing generation that opened it. Going
 /// away and back to the same host cannot revive its pending operations.
 public struct RoomSettingsContext: Equatable, Sendable {

@@ -1389,6 +1389,23 @@ public struct ProviderUsageAccount: Decodable, Sendable, Identifiable {
     public let sevenDay: ProviderUsageWindow
     public let status: String
     public var id: String { "\(provider):\(account)" }
+
+    /// "Claude" / "Codex", as the mac sidebar names them.
+    public var providerName: String { provider == "claude" ? "Claude" : "Codex" }
+
+    /// The windows the mac sidebar row shows, 5h first when the plan has one.
+    public var windows: [(label: String, window: ProviderUsageWindow)] {
+        (fiveHour.map { [("5h", $0)] } ?? []) + [("7d", sevenDay)]
+    }
+
+    /// `5h 25% · 7d 56%`, with an en dash for a window the server could not read.
+    public var compactSummary: String {
+        windows.map { "\($0.label) \($0.window.usedPercent.map { "\(Int($0.rounded()))%" } ?? "\u{2013}")" }
+            .joined(separator: " · ")
+    }
+
+    /// The window closest to its cap, which the row draws as a bar.
+    public var peakPercent: Double? { windows.compactMap(\.window.usedPercent).max() }
 }
 
 public struct ProviderUsageWindow: Decodable, Sendable {

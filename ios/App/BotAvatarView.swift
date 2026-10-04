@@ -173,3 +173,97 @@ struct ChannelAvatarView: View {
         }
     }
 }
+
+// Lives beside the bot faces rather than in MausAvatar.swift: that file is
+// also compiled into the widget, which has no session to fetch photos with.
+/// A group's face: up to three members overlapping, bare like the mascots.
+/// Mirrors `GroupMark` in `src/components/Avatar.tsx`.
+struct GroupMarkView: View {
+    let members: [SharedContact]
+    let size: CGFloat
+
+    private struct Slot { let x: CGFloat; let y: CGFloat; let s: CGFloat }
+
+    var body: some View {
+        let shown = Array(members.prefix(3))
+        let slots: [Slot] = shown.count == 2
+            ? [Slot(x: 0, y: 0.06, s: 0.66), Slot(x: 0.36, y: 0.32, s: 0.64)]
+            : [Slot(x: 0.24, y: 0, s: 0.52), Slot(x: 0, y: 0.44, s: 0.54), Slot(x: 0.46, y: 0.44, s: 0.54)]
+        ZStack(alignment: .topLeading) {
+            if shown.count <= 1 {
+                if let only = shown.first { face(only, size) }
+                else { Image(systemName: "person.2.fill").font(.system(size: size * 0.4)).frame(width: size, height: size) }
+            } else {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, member in
+                    face(member, (slots[index].s * size).rounded())
+                        .offset(x: slots[index].x * size, y: slots[index].y * size)
+                        .zIndex(Double(index))
+                }
+            }
+        }
+        .frame(width: size, height: size, alignment: .topLeading)
+    }
+
+    @ViewBuilder private func face(_ member: SharedContact, _ px: CGFloat) -> some View {
+        if member.kind == "bot" {
+            // a bot with a photo wears it here too, matching its face everywhere else
+            SharedBotFace(bot: member, size: px)
+        } else if let avatar = member.avatar, PersonCutout.image(dataURL: avatar) != nil {
+            PersonPhotoView(dataURL: avatar, size: px)
+        } else {
+            ProfileAvatar(name: member.name, size: px)
+        }
+    }
+
+    /// Everyone but me first, so the mark shows who else is here.
+    static func faces(_ room: SharedRoomSummary, contacts: [SharedContact], selfID: String?) -> [SharedContact] {
+        let order = room.memberIds.filter { $0 != selfID } + (selfID.map { [$0] } ?? [])
+        return order.compactMap { id in contacts.first { $0.id == id } }
+    }
+}
+
+/// A shared contact that is a bot: its stored photo in its chosen crop, or
+/// the mascot while the photo loads, when there is none, or when it fails,
+/// so a dead attachment never leaves an empty circle. Same decision as
+/// `BotAvatarView`, for the contact shape shared rooms carry.
+struct SharedBotFace: View {
+    let bot: SharedContact
+    let size: CGFloat
+    @Environment(\.sessionActions) private var sessionActions
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    private var crop: AvatarCrop { bot.avatarCrop ?? .mascot }
+
+    var body: some View {
+        Group {
+            switch resolveBotAvatarOutcome(crop: crop, hasUrl: bot.avatarUrl != nil, imageDecoded: image != nil, failed: failed) {
+            case .flatImage:
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: size, height: size).clipShape(mask)
+                }
+            case .gradientMascot:
+                MausAvatar(color: bot.color ?? "green", size: size, bodyId: bot.mascotBody, animated: false)
+            }
+        }
+        .frame(width: size, height: size)
+        .task(id: "\(bot.avatarUrl ?? "")|\(crop.rawValue)") {
+            image = nil
+            failed = false
+            guard crop != .mascot, let path = bot.avatarUrl else { return }
+            let data = await sessionActions?.avatarData(path: path)
+            guard !Task.isCancelled else { return }
+            guard let data, let decoded = UIImage(data: data) else { failed = true; return }
+            image = decoded
+        }
+    }
+
+    private var mask: AnyShape {
+        switch crop {
+        case .circle: AnyShape(Circle())
+        case .rounded: AnyShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        case .square, .mascot: AnyShape(Rectangle())
+        }
+    }
+}
