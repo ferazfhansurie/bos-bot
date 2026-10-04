@@ -51,3 +51,12 @@ it("rejects invalid priorities on both message routes",async()=>{
   const b=await bot(); const room=(await api("POST","/api/groups",{name:"Validate",memberIds:[b.id],setup:{bulletin:"",defaultResponder:{kind:"member",botId:b.id}}})).body.group;
   for(const route of [`/api/bots/${b.id}/messages`,`/api/groups/${room.id}/messages`]) expect((await api("POST",route,{text:"invalid",priority:"urgent"})).status).toBe(400);
 });
+it("serializes overlapping block sends so each starts ahead of the pending queue", async () => {
+  const b=await bot(), route=`/api/bots/${b.id}/messages`;
+  await api("POST",route,{text:"RUNNING"}); await started();
+  const queued=await api("POST",route,{text:"LATER"}); expect(queued.body.queued).toBe(true);
+  const replies=await Promise.all([api("POST",route,{text:"BLOCK_A",priority:"block"}),api("POST",route,{text:"BLOCK_B",priority:"block"})]);
+  expect(replies.map(r=>r.status)).toEqual([202,202]);
+  expect(replies.some(r=>r.body.queued===true)).toBe(false);
+  expect((await messages(b.threadId)).filter(m=>m.role==="user").map(m=>m.text)).toEqual(["RUNNING","BLOCK_A","BLOCK_B"]);
+},40_000);

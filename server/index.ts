@@ -1,3 +1,4 @@
+import { withMessagePostLock } from "./message-post-lock.ts";
 import { channelControlPatch, roomCompletionNotifies } from "./channel-controls.ts";
 import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
 import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
@@ -17386,7 +17387,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const receipt = await sendSequencer.run(
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id, channelMode),
-        async () => {
+        async () => withMessagePostLock(`group:${group.id}:${threadId}`, async () => {
           assertPrivateRequest();
           if (sendId) {
             if (cancelledChatFollowup("channel", group.id, threadId, sendId)) {
@@ -17455,12 +17456,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               via,
               sender: messageSender(auth),
             });
-            broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() });
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
           const message = startGroupTurn(current.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth) });
           return { ok: true as const, threadId, message };
-        },
+        }),
       );
       return json(res, 202, receipt);
     }
@@ -18775,7 +18775,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
-        async () => {
+        async () => withMessagePostLock(`bot:${bot.id}:${threadId}`, async () => {
+          assertPrivateRequest();
+          if (!peerOwns(bot.id, threadId)) throw Object.assign(new Error("thread is not part of this peer link"), { status: 403 });
           if (sendId) {
             if (cancelledChatFollowup("bot", bot.id, threadId, sendId)) {
               throw Object.assign(new Error("this queued sendId was cancelled; send a new message to try again"), { status: 409 });
@@ -18845,9 +18847,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             priorityDirectPreemptions.add(threadId);
             try {
               if (currentAtStart.busy || threadBusy(bot.id, threadId)) {
+                const priorAdapter = runningTurnInstance(currentAtStart, threadId)?.adapter;
                 await interruptDirectThread(bot.id, threadId);
                 const deadline = Date.now() + 10_000;
-                while (threadBusy(bot.id, threadId)) {
+                while (threadBusy(bot.id, threadId) || priorAdapter?.hasSession(threadId)) {
                   if (Date.now() >= deadline) throw Object.assign(new Error("the current turn is still stopping; try again after it settles"), { status: 409 });
                   await new Promise(resolve => setTimeout(resolve, 20));
                   assertPrivateRequest();
@@ -18871,7 +18874,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
           return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
-        },
+        }),
       );
       assertPrivateRequest();
       return json(res, 202, receipt);
