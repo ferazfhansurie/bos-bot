@@ -45,6 +45,7 @@ import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
 import { noteUpdateFrame } from "@/lib/bos-update";
+import { withSendPriority, type SendPriority } from "@/lib/composer-priority";
 
 const MAX_ROUTINE_RUNS = 2_000;
 const ACTIVE_ROUTINE_RUN_STATUSES = new Set<RoutineRun["status"]>(["queued", "running", "waiting"]);
@@ -944,6 +945,8 @@ export type Action =
       replyToId?: string;
       threadId?: string;
       mode?: "chat" | "goal";
+      /** "block" interrupts the running turn; omitted or "queue" waits. */
+      priority?: SendPriority;
       onError?: () => void;
     }
   | {
@@ -967,6 +970,8 @@ export type Action =
       sendId?: string;
       replyToId?: string;
       threadId?: string;
+      /** "block" interrupts the running turn; omitted or "queue" waits. */
+      priority?: SendPriority;
       onError?: () => void;
     }
   | { type: "pendingQueued"; threadId: string; queueId: string; text: string; reason?: "capacity" }
@@ -2944,7 +2949,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           void waitForExecutionSettings(botBeforeSend ? [botBeforeSend] : [], threadId)
             .then(() => api(`/api/bots/${action.botId}/messages`, {
                 method: "POST",
-                body: JSON.stringify({ text: action.text, replyToId: action.replyToId, threadId, sendId }),
+                body: JSON.stringify(withSendPriority(
+                  { text: action.text, replyToId: action.replyToId, threadId, sendId },
+                  action.priority,
+                )),
               }))
             .then((body) => {
               if (body?.message && typeof body.threadId === "string") {
@@ -3209,13 +3217,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           void waitForExecutionSettings(executionBotsBeforeAction)
             .then(() => api(`/api/groups/${action.groupId}/messages`, {
               method: "POST",
-              body: JSON.stringify({
+              body: JSON.stringify(withSendPriority({
                 text: action.text,
                 replyToId: action.replyToId,
                 threadId,
                 sendId,
                 mode: action.mode ?? "chat",
-              }),
+              }, action.priority)),
             }))
             .then((body) => {
               if (body?.message && typeof body.threadId === "string") {

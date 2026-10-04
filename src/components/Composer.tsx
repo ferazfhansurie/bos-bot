@@ -60,6 +60,7 @@ import {
   composerCanSteerQueuedMessages,
 } from "./ComposerQueuedMessages";
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
+import { composerPriorityVisible, effectiveSendPriority, type SendPriority } from "@/lib/composer-priority";
 import { mentionChoicesForQuery } from "@/lib/mentions";
 import { botControlAvailable, mentionableBots } from "@/lib/remote-bot";
 import { sharedAttachmentError, type SharedComposer } from "./shared-conversation";
@@ -428,6 +429,20 @@ export function Composer({
     }
   };
   useEffect(() => setSteering(false), [threadId, queueHeadId]);
+  // Queue vs block only means something while a turn is running. It is
+  // one-shot: every send, and every end of the busy spell, puts it back on
+  // queue so an interrupt is never left armed for a later message.
+  const [priority, setPriority] = useState<SendPriority>("queue");
+  const priorityVisible = composerPriorityVisible({
+    busy,
+    locked,
+    shared: Boolean(shared),
+    approvalPending: Boolean(approval),
+  });
+  const blockArmed = effectiveSendPriority(priority, priorityVisible) === "block";
+  useEffect(() => {
+    if (!priorityVisible) setPriority("queue");
+  }, [priorityVisible]);
   // Most engines acknowledge interruption quickly, but a lost response must
   // not leave a control claiming to steer forever. Queue drain or turn end
   // clears it immediately; twenty seconds is the final recovery floor.
@@ -549,7 +564,7 @@ export function Composer({
       dispatch({ type: "send", botId: bot.id, ...retry });
     }
   };
-  const send = () => {
+  const send = (override?: SendPriority) => {
     if (locked || attachmentPending) return;
     if (shared) {
       if ((!text.trim() && !sharedFiles.length) || sharedSending) return;
@@ -589,6 +604,8 @@ export function Composer({
       threadId,
       channelMode: group ? effectiveChannelMode : undefined,
     };
+    // An older server ignores "block" and still queues: the chip shows as before.
+    const sendPriority = effectiveSendPriority(override ?? priority, priorityVisible);
     if (group) {
       dispatch({
         type: "sendGroup",
@@ -598,6 +615,7 @@ export function Composer({
         replyToId: replyTo?.id,
         threadId,
         mode: effectiveChannelMode,
+        priority: sendPriority,
         onError: () => restoreDraft(sentDraft),
       });
       track("message_sent", { room: true, mode: effectiveChannelMode, queued: busy });
@@ -609,12 +627,14 @@ export function Composer({
         sendId: sentDraft.sendId,
         replyToId: replyTo?.id,
         threadId,
+        priority: sendPriority,
         onError: () => restoreDraft(sentDraft),
       });
       track("message_sent", { driver: bot.modelSelection?.instanceId, queued: busy && !canSteer });
     }
     setText("");
     setAttachments([]);
+    setPriority("queue");
     onConsumeReply?.();
     if (group) setChannelMode("chat");
   };
@@ -910,7 +930,7 @@ export function Composer({
         {shared && sharedStatus === "sent" && <div role="status" className="mb-2 px-3 text-xs text-ink-secondary">Sent</div>}
         {shared && sharedStatus === "failed" && <div role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">
           Couldn’t confirm this send. Your message and files are kept. {sharedError}
-          <button type="button" className="ml-2 font-medium underline" onClick={send}>Retry send</button>
+          <button type="button" className="ml-2 font-medium underline" onClick={() => send()}>Retry send</button>
         </div>}
         {sharedFiles.length > 0 && <div className="mb-2 flex flex-wrap gap-2">{sharedFiles.map(file => <span key={`${file.name}-${file.lastModified}`} className="flex items-center gap-1 rounded-lg bg-raised px-2 py-1 text-xs">{file.name}<button type="button" aria-label={`Remove ${file.name}`} onClick={() => editSharedFiles(previous => previous.filter(item => item !== file))}><X size={13} /></button></span>)}</div>}
         {!shared && <ComposerAttachments
@@ -1091,10 +1111,11 @@ export function Composer({
               onEditLast();
               return;
             }
-            // Shift+Enter inserts a newline; plain Enter sends
+            // Shift+Enter inserts a newline; plain Enter sends; Option/Alt+Enter
+            // sends as block (interrupt) while a turn is running
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              send();
+              send(e.altKey && priorityVisible ? "block" : undefined);
             }
             if (e.key === "Escape" && recording) setRecording(false);
           }}
@@ -1130,6 +1151,37 @@ export function Composer({
             className="block max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
           />
           <div className="flex items-center gap-1">
+          {priorityVisible && (
+            <div
+              role="group"
+              aria-label={t("composer.priority.aria")}
+              className="flex h-8 shrink-0 items-center rounded-full border border-hairline/20 p-0.5"
+            >
+              {(["queue", "block"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={priority === option}
+                  title={
+                    option === "block"
+                      ? t("composer.priority.blockHint")
+                      : canSteer
+                        ? t("composer.priority.queueSteerHint")
+                        : t("composer.priority.queueHint")
+                  }
+                  onClick={() => setPriority(option)}
+                  className={cn(
+                    "flex h-7 items-center whitespace-nowrap rounded-full px-2.5 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
+                    priority === option
+                      ? "bg-accent/10 text-accent"
+                      : "text-ink-secondary hover:bg-raised hover:text-ink",
+                  )}
+                >
+                  {option === "block" ? t("composer.priority.block") : t("composer.priority.queue")}
+                </button>
+              ))}
+            </div>
+          )}
           {/* Stop stays a stop. Stop-then-steer is named beside the queued
               message above, where its effect is visible before activation. */}
           {busy && !locked && (
@@ -1159,18 +1211,22 @@ export function Composer({
         )}
         {hasContent && !locked && (
           <button
-            onClick={send}
+            onClick={() => send()}
             disabled={attachmentPending || sharedSending}
             aria-busy={sharedSending || undefined}
             aria-label={
-              busy && canSteer
+              blockArmed
+                ? t("composer.send.block")
+                : busy && canSteer
                   ? t("composer.send.steer")
                   : busy
                     ? t("composer.send.queue")
                     : t("composer.send.message")
             }
             title={
-              busy && canSteer
+              blockArmed
+                ? t("composer.send.block")
+                : busy && canSteer
                   ? t("composer.send.steer")
                   : busy
                     ? t("composer.send.queueHint")
@@ -1178,12 +1234,12 @@ export function Composer({
             }
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
-              busy && !canSteer
+              busy && !canSteer && !blockArmed
                   ? "bg-raised text-ink-secondary hover:bg-raised-hover"
                   : "bg-accent hover:brightness-110",
             )}
           >
-            {busy && !canSteer ? <Clock size={15} /> : <ArrowUp size={17} />}
+            {busy && !canSteer && !blockArmed ? <Clock size={15} /> : <ArrowUp size={17} />}
           </button>
           )}
           </div>
