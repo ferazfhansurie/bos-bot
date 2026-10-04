@@ -6,9 +6,8 @@
 // opens on click — the shape every desktop app uses for "this is about the
 // app, not about what you are looking at".
 //
-// Updates used to be an entry in this menu; they now have their own row
-// under Tools (SidebarUpdateRow), so checking never takes two clicks. The
-// update state machine still lives here and that row reuses it.
+// The update entry is the one item that reports progress in place, so it
+// keeps the menu open and re-labels itself as it works.
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
@@ -114,7 +113,7 @@ export function updateBusy(phase: UpdatePhase, pending = false): boolean {
   return pending || phase === "checking" || phase === "downloading" || phase === "preparing" || phase === "installing";
 }
 
-export function UpdateIcon({ phase, pending, size = 18 }: { phase: UpdatePhase; pending: boolean; size?: number }) {
+function UpdateIcon({ phase, pending, size = 18 }: { phase: UpdatePhase; pending: boolean; size?: number }) {
   if (updateBusy(phase, pending)) return <Loader2 size={size} className="animate-spin" />;
   if (phase === "up-to-date") return <Check size={size} />;
   if (phase === "available" || phase === "downloaded") return <ArrowDownToLine size={size} />;
@@ -128,7 +127,7 @@ export function updateNoteworthy(phase: UpdatePhase, pending = false): boolean {
   return pending || (phase !== "idle" && phase !== "up-to-date" && phase !== "checking");
 }
 
-export interface UpdateEntry {
+interface UpdateEntry {
   item: SidebarMenuItem;
   phase: UpdatePhase;
   pending: boolean;
@@ -137,7 +136,7 @@ export interface UpdateEntry {
 
 /** The updater bridge exists only in the packaged app; in dev the entry is
  * absent rather than dead. */
-export function useUpdateItem(): UpdateEntry | null {
+function useUpdateItem(): UpdateEntry | null {
   const state = useUpdaterState();
   const updater = window.ogb?.updater;
   const [pending, setPending] = useState(false);
@@ -192,6 +191,7 @@ export function useUpdateItem(): UpdateEntry | null {
 export function SidebarProfileMenu() {
   const { state, dispatch } = useStore();
   const phone = useSidebarPhoneStatus();
+  const update = useUpdateItem();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const triggerRef = useRef<HTMLSpanElement>(null);
@@ -227,6 +227,7 @@ export function SidebarProfileMenu() {
         dispatch({ type: "toggleShortcuts", open: true });
       },
     },
+    ...(update ? [update.item] : []),
     {
       key: "about",
       label: t("sidebar.menu.about"),
@@ -263,6 +264,20 @@ export function SidebarProfileMenu() {
           >
             {profile?.avatarUrl ? <PersonPhoto src={profile.avatarUrl} size={28} /> : <InitialsAvatar initials={profileInitials(profile)} size={28} />}
             <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{name}</span>
+            {/* an update is the one thing worth interrupting the name for, so
+              * it sits on the row rather than waiting to be found in the menu */}
+            {update && updateNoteworthy(update.phase, update.pending) && (
+              <span
+                title={update.label}
+                aria-label={update.label}
+                className={cn(
+                  "flex size-6 shrink-0 items-center justify-center rounded-full",
+                  update.phase === "error" ? "bg-danger/15 text-danger" : "bg-accent/15 text-accent",
+                )}
+              >
+                <UpdateIcon phase={update.phase} pending={update.pending} size={14} />
+              </span>
+            )}
           </span>
         )}
       />

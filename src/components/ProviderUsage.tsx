@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "@/state/store";
 import { Card } from "./SettingsPrimitives";
 
-type Window = { usedPercent: number | null; resetsAt: number | null };
-type Account = { provider: "claude" | "codex"; account: string; fiveHour?: Window; sevenDay: Window; status: string };
+export type Window = { usedPercent: number | null; resetsAt: number | null };
+export type Account = { provider: "claude" | "codex"; account: string; fiveHour?: Window; sevenDay: Window; status: string };
 
 function Meter({ label, window }: { label: string; window: Window }) {
   const percent = window.usedPercent;
@@ -15,7 +15,9 @@ function Meter({ label, window }: { label: string; window: Window }) {
   </div>;
 }
 
-export function ProviderUsage() {
+// Live Claude/Codex account quotas, refreshed every 30s. Shared by the
+// settings card and the sidebar usage row.
+export function useProviderUsage() {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -25,6 +27,11 @@ export function ProviderUsage() {
     const timer = setInterval(load, 30_000);
     return () => { active = false; clearInterval(timer); };
   }, []);
+  return { accounts, failed };
+}
+
+export function ProviderUsage() {
+  const { accounts, failed } = useProviderUsage();
   return <Card title="Subscription limits" subtitle="Live account quotas. These are separate from bot token usage and spend.">
     {failed ? <div className="text-[13px] text-ink-secondary">Usage unavailable. Retrying automatically.</div> : accounts === null ? <div className="text-[13px] text-ink-secondary">Loading…</div> : accounts.length === 0 ? <div className="text-[13px] text-ink-secondary">No Claude or Codex account configured.</div> :
       <div className="grid gap-4 sm:grid-cols-2">{accounts.map((account, index) => <div key={`${account.provider}-${index}`} className="rounded-xl border border-hairline/40 p-3 space-y-3">
