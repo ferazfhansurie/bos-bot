@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Settings2 } from "lucide-react";
+import { Check, Copy, UserPlus } from "lucide-react";
 import { api, formatTime, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useShowThreads } from "@/lib/thread-preferences";
@@ -148,11 +148,12 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     entries.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.at - a.at || a.id.localeCompare(b.id));
     return <section aria-label="Chats" className="px-1">{!compact && <div className="px-2 pb-1 text-[12px] font-semibold text-ink-secondary">Chats</div>}
       {entries.map(entry => <div key={entry.id}>{entry.element}</div>)}
-      {owner && !compact && <button type="button" title="Connect people and workspaces" aria-label="Connect people and workspaces" onClick={() => setSettingUp(value => !value)} className="ml-2 mt-1 text-ink-secondary"><Settings2 size={16} /></button>}
+      {owner && !compact && <InviteToggle open={settingUp} onToggle={() => setSettingUp(value => !value)} />}
       {settingUp && owner && !compact && <div className="mb-2 space-y-2 rounded-lg bg-raised p-2 text-xs">
         <p className="font-semibold">Connect a team member</p>
+        <p className="text-ink-secondary">Invite once. Both people and their bots then appear in the conversation list.</p>
         <button type="button" disabled={setupBusy} onClick={() => void runSetup(async () => { const result = await api<{ url: string }>("/api/multiplayer/invites", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); setTeamInvite(result.url); })}>Create team invite</button>
-        {teamInvite && <input readOnly aria-label="Team invitation" value={teamInvite} onFocus={event => event.currentTarget.select()} className="w-full rounded bg-app p-1" />}
+        {teamInvite && <InviteLink link={teamInvite} />}
         <input aria-label="Team invitation to join" placeholder="Paste invitation from another bos app" value={pairingUrl} onChange={event => setPairingUrl(event.target.value)} className="w-full rounded bg-app p-1" />
         <button type="button" disabled={!pairingUrl.trim() || setupBusy} onClick={() => void runSetup(async () => { await api("/api/multiplayer/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: pairingUrl.trim() }) }); setPairingUrl(""); window.dispatchEvent(new Event("multiplayer:refresh")); })}>Join team</button>
         {setupError && <p role="alert" className="text-danger">{setupError}</p>}
@@ -161,7 +162,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   }
   return <section aria-label="Connected conversations" className="px-1">
     {placement === "people" && !compact && <div className="flex justify-end gap-2 px-2 pb-1">
-      {owner && <button type="button" title="Connect people and workspaces" aria-label="Connect people and workspaces" onClick={() => setSettingUp(value => !value)}><Settings2 size={16} /></button>}</div>}
+      {owner && <InviteToggle open={settingUp} onToggle={() => setSettingUp(value => !value)} />}</div>}
     {placement === "people" && settingUp && owner && !compact && <div className="mb-2 space-y-2 rounded-lg bg-raised p-2 text-xs">
       <p className="font-semibold">Connect a team member</p>
       <p className="text-ink-secondary">Invite once. Both people and their bots then appear in the conversation list.</p>
@@ -169,7 +170,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
         const result = await api<{ url: string }>("/api/multiplayer/invites", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
         setTeamInvite(result.url);
       })} className="rounded bg-accent px-2 py-1 text-accent-ink disabled:opacity-50">Create team invite</button>
-      {teamInvite && <input readOnly aria-label="Team invitation" value={teamInvite} onFocus={event => event.currentTarget.select()} className="w-full rounded bg-app p-1" />}
+      {teamInvite && <InviteLink link={teamInvite} />}
       <input aria-label="Team invitation to join" placeholder="Paste invitation from another bos app" value={pairingUrl} onChange={event => setPairingUrl(event.target.value)} className="w-full rounded bg-app p-1" />
       <button type="button" disabled={!pairingUrl.trim() || setupBusy} onClick={() => void runSetup(async () => {
         await api("/api/multiplayer/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: pairingUrl.trim() }) });
@@ -191,4 +192,29 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     </button>)}
     {error && !compact && <p role="status" className="px-2 pt-1 text-[11px] text-danger">{error}</p>}
   </section>;
+}
+
+/** Labelled, so inviting a person isn't hidden behind an unlabelled gear (O7). */
+function InviteToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return <button type="button" aria-expanded={open} title="Invite a person and their bots" onClick={onToggle}
+    className={cn("ml-2 mt-1 flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium hover:bg-raised", open ? "text-accent" : "text-ink-secondary hover:text-ink")}>
+    <UserPlus size={14} />Invite people
+  </button>;
+}
+
+/** The invite as a link with a Copy button, not a raw URL in a text box. */
+function InviteLink({ link }: { link: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return <div className="flex items-center gap-2 rounded bg-app p-1.5">
+    <span className="min-w-0 flex-1 truncate text-ink-secondary" title={link}>Invite link ready</span>
+    <button type="button" aria-label="Copy invite link" onClick={() => void navigator.clipboard?.writeText(link).then(() => setCopied(true), () => {})}
+      className="flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-ink hover:bg-control">
+      {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}{copied ? "Copied" : "Copy link"}
+    </button>
+  </div>;
 }

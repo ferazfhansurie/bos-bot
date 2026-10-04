@@ -63,16 +63,17 @@ export function SharedConversationDetails({ room, selfId, contacts, title, pendi
         </div>
         {!direct && <form onSubmit={event => { event.preventDefault(); if (name.trim()) void onChange("PATCH", "", { name: name.trim() }); }}>
           <label htmlFor="shared-room-name" className="mb-2 block text-xs font-medium text-ink-secondary">Group name</label>
-          <div className="flex gap-2"><input id="shared-room-name" value={name} onChange={event => setName(event.target.value)} maxLength={100} disabled={pending} className="min-w-0 flex-1 rounded-lg bg-control px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent" />
-          {<button type="submit" disabled={pending || !name.trim() || name.trim() === room.name} className="rounded-lg bg-accent px-3 text-sm text-white disabled:opacity-40">Save</button>}</div>
-          {!canManage && <p className="mt-2 text-xs text-ink-secondary">Only the owner can change members.</p>}
+          <div className="flex gap-2"><input id="shared-room-name" value={name} onChange={event => setName(event.target.value)} maxLength={100} disabled={pending || !canManage} className="min-w-0 flex-1 rounded-lg bg-control px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent" />
+          {canManage && <button type="submit" disabled={pending || !name.trim() || name.trim() === room.name} className="rounded-lg bg-accent px-3 text-sm text-white disabled:opacity-40">Save</button>}</div>
+          {!canManage && <p className="mt-2 text-xs text-ink-secondary">Only the owner can rename the group or change members.</p>}
         </form>}
         <section aria-label="Conversation members">
           <p className="mb-3 text-xs leading-relaxed text-ink-secondary">New members can see this conversation’s retained history and files. Removing someone stops future access; it cannot erase copies they already saved.</p>
-          <h3 className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-ink"><Users size={16} />Members · {members.length}</h3>
+          <h3 className="mb-1 flex items-center gap-2 text-[13px] font-semibold text-ink"><Users size={16} />Members · {members.length}</h3>
+          {!direct && <p className="mb-3 text-xs text-ink-secondary">Owner: can rename the group, add and remove people. Member: can chat, share files and @mention bots.</p>}
           <div className="space-y-3">{members.map(member => <div key={member.id} className="flex items-center gap-3">
             {member.avatar ? <PersonPhoto src={member.avatar} size={34} /> : <GroupMark members={[member]} size={34} />}
-            <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-ink">{member.name}{member.id === selfId && member.name !== "You" ? " (you)" : ""}</div><div className="text-xs text-ink-secondary">{member.id === ownerId ? "Owner" : "Member"}{member.title ? ` · ${member.title}` : ""}</div></div>
+            <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium text-ink">{member.name}{member.id === selfId && member.name !== "You" ? " (you)" : ""}</div><div className="text-xs text-ink-secondary" title={member.id === ownerId ? "Can rename the group, add and remove people" : "Can chat, share files and @mention bots"}>{member.id === ownerId ? "Owner" : "Member"}{member.title ? ` · ${member.title}` : ""}</div></div>
             {!direct && canManage && member.id !== selfId && member.id !== ownerId && <button type="button" disabled={pending} onClick={() => setConfirm(member.id)} className="rounded-md px-2 py-1 text-xs text-danger hover:bg-danger/10">Remove</button>}
           </div>)}</div>
           {!direct && canManage && available.length > 0 && <div className="mt-4 rounded-xl border border-hairline/40 bg-control/40 p-2">

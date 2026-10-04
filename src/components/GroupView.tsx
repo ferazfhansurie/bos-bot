@@ -1230,6 +1230,10 @@ export function GroupView({ group }: { group: Group }) {
   useStreamFrames(group.threadId, () => {
     const el = scrollRef.current;
     if (!el || !followRef.current) return;
+    // with 3-4 bots streaming most frames don't grow the transcript past the
+    // fold; skip the scroll write (and the scroll event it fires) when the
+    // view is already pinned to the bottom
+    if (el.scrollHeight - el.clientHeight - el.scrollTop < 1) return;
     el.scrollTo({ top: el.scrollHeight });
     previousScrollTop.current = el.scrollTop;
   });
