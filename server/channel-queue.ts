@@ -16,6 +16,7 @@ interface ChannelQueueItem {
   replyToId?: string;
   sendId?: string;
   mode: "chat" | "goal";
+  deferUntilIdle?: boolean;
   /** kept so the drain appends it with the same provenance it arrived with */
   via?: "api";
   /** the signed-in person who sent it, so the drained row keeps its author */
@@ -28,6 +29,16 @@ interface ChannelQueueEntry {
 }
 
 const queues = new Map<string, ChannelQueueEntry>(); // threadId -> waiting sends
+const listeners = new Set<() => void>();
+const changed = () => { for (const listener of listeners) listener(); };
+export function onChannelQueueChange(listener: () => void): () => void {
+  listeners.add(listener); return () => { listeners.delete(listener); };
+}
+export function queuedChannelSnapshot(ownsThread: (groupId: string, threadId: string) => boolean): Record<string, Array<{ queueId: string; text: string }>> {
+  return Object.fromEntries([...queues].filter(([threadId, entry]) => ownsThread(entry.groupId, threadId))
+    .map(([threadId, entry]) => [threadId, entry.items.map(item => ({ queueId: item.id, text: item.text }))]));
+}
+
 
 export function restoreChannelMessages(): void {
   queues.clear();
@@ -54,6 +65,7 @@ export function queueChannelMessage(
     replyToId?: string;
     sendId?: string;
     mode?: "chat" | "goal";
+    deferUntilIdle?: boolean;
     via?: "api";
     sender?: { name: string };
   } = {},
@@ -75,12 +87,14 @@ export function queueChannelMessage(
     replyToId: options.replyToId,
     sendId: options.sendId,
     mode: options.mode ?? "chat",
+    deferUntilIdle: options.deferUntilIdle,
     via: options.via,
     ...(options.sender ? { sender: options.sender } : {}),
   };
   saveChatFollowup({ id: item.id, kind: "channel", ownerId: groupId, threadId, payload: item });
   entry.items.push(item);
   queues.set(threadId, entry);
+  changed();
   return { id: item.id };
 }
 
@@ -110,6 +124,7 @@ export function cancelChannelMessage(groupId: string, queueId: string): boolean 
     settleChatFollowups([queueId], "cancelled");
     if (items.length === 0) queues.delete(threadId);
     else queues.set(threadId, { groupId, items });
+    changed();
     return true;
   }
   return false;
@@ -134,6 +149,7 @@ export function holdChannelQueue(groupId: string, threadId: string, queueId: str
   const entry = queues.get(threadId);
   if (!entry || entry.groupId !== groupId || entry.items[0]?.id !== queueId) return null;
   queues.delete(threadId);
+  changed();
   return { groupId, threadId, items: entry.items };
 }
 
@@ -146,6 +162,7 @@ export function restoreHeldChannelQueue(held: HeldChannelQueue): void {
     groupId: held.groupId,
     items: existing ? [...held.items, ...existing.items] : held.items,
   });
+  changed();
 }
 
 /** Resolve the held head's reply target through a caller-supplied resolver.
@@ -180,6 +197,7 @@ export function settleHeldChannelQueueHead(held: HeldChannelQueue): void {
     groupId: held.groupId,
     items: existing ? [...rest, ...existing.items] : rest,
   });
+  changed();
 }
 
 /**
@@ -201,6 +219,7 @@ export function drainChannelMessages(
     settleChatFollowups([item.id], "dispatching");
     entry.items.shift();
     if (entry.items.length === 0) queues.delete(threadId);
+    changed();
     const running = run({ ...item, groupId: entry.groupId, threadId });
     void Promise.resolve(running).then(
       () => settleChatFollowups([item.id], null),

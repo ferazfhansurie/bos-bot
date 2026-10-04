@@ -39,6 +39,7 @@ interface QueueEntry {
     replyToId?: string;
     sendId?: string;
     reason?: "capacity";
+    deferUntilIdle?: boolean;
     /** The words were queued by a bot already running unattended (a
      * thread it opened on itself). The drained turn must inherit that:
      * a queue is a delay, not a person sitting down at the keyboard. */
@@ -110,7 +111,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; unattended?: boolean; peerAsk?: Message["peerAsk"] } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; deferUntilIdle?: boolean; unattended?: boolean; peerAsk?: Message["peerAsk"] } = {},
 ): QueuedSteer {
   const id = newId();
   const entry = queues.get(threadId) ?? { botId, items: [] };
@@ -131,6 +132,7 @@ export function queueSteeredMessage(
     replyToId: options.replyToId,
     sendId: options.sendId,
     reason: options.reason,
+    deferUntilIdle: options.deferUntilIdle,
     unattended: options.unattended,
     peerAsk: options.peerAsk,
   };
@@ -303,4 +305,10 @@ export function settleHeldSteeredQueue(held: HeldSteerQueue): void {
 /** Test helper: how many messages remain queued for a thread. */
 export function _queuedCount(threadId: string): number {
   return queues.get(threadId)?.items.length ?? 0;
+}
+
+/** Default queued sends never enter a running provider at a tool boundary. */
+export function steerQueueWaitsForTurn(botId: string, threadId: string): boolean {
+  const entry = queues.get(threadId);
+  return entry?.botId === botId && entry.items[0]?.deferUntilIdle === true;
 }

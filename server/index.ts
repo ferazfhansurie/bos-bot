@@ -264,6 +264,7 @@ import {
   queuedSteeredMessage,
   queuedThreadPosition,
   queueSteeredMessage,
+  steerQueueWaitsForTurn,
   restoreHeldSteeredQueue,
   restoreSteeredMessages,
   settleHeldSteeredQueue,
@@ -271,6 +272,8 @@ import {
 import {
   cancelChannelMessage,
   channelQueueHead,
+  queuedChannelSnapshot,
+  onChannelQueueChange,
   drainChannelMessages,
   holdChannelQueue,
   queuedChannelMessage,
@@ -2517,6 +2520,10 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 });
 const publicBotQueuedMessages = () => ({
   ...queuedSteerSnapshot((botId, threadId) => Boolean(store.taskByThread(botId, threadId))),
+  ...queuedChannelSnapshot((groupId, threadId) => {
+    const group = store.group(groupId);
+    return Boolean(group && (group.threadId === threadId || store.groupTaskByThread(groupId, threadId)));
+  }),
   ...remoteBots.queues(),
 });
 
@@ -3629,6 +3636,7 @@ function emitFrame(payload: Record<string, unknown>) {
   }
 }
 onSteeredQueueChange(() => broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() }));
+onChannelQueueChange(() => broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() }));
 
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
@@ -6570,6 +6578,8 @@ async function steerAddressedRoomSend(groupId: string, threadId: string, queueId
   return sendSteerReceipt(threadId, recorded);
 }
 
+const priorityDirectPreemptions = new Set<string>();
+const priorityRoomPreemptions = new Set<string>();
 const roomBoundarySteers = new Set<string>();
 async function steerRoomAtToolBoundary(runtimeThreadId: string) {
   if (roomBoundarySteers.has(runtimeThreadId)) return;
@@ -6584,7 +6594,7 @@ async function steerRoomAtToolBoundary(runtimeThreadId: string) {
     while (groupSpeakers.get(runtimeThreadId) === speaker) {
       const current = store.group(group.id);
       const head = channelQueueHead(group.id, threadId);
-      if (!current || !current.memberIds.includes(speaker.botId) || !head || head.mode !== "chat" ||
+      if (!current || !current.memberIds.includes(speaker.botId) || !head || head.deferUntilIdle || head.mode !== "chat" ||
         [...(groupTurnOperations.get(group.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled)) return;
       const recipients = roomResponders(head.text, current.memberIds.flatMap(id => {
         const member = store.bot(id); return member ? [member] : [];
@@ -6607,7 +6617,7 @@ bus.subscribe((event: RuntimeEvent) => {
   const bot = store.botByThread(event.threadId);
   if (!bot || computerSelectionTurns.get(event.threadId)?.selected) return;
   const head = queuedSteerSnapshot((owner, thread) => owner === bot.id && thread === event.threadId)[event.threadId]?.[0];
-  if (!head || head.reason === "capacity") return;
+  if (!head || head.reason === "capacity" || steerQueueWaitsForTurn(bot.id, event.threadId)) return;
   // holdSteeredQueue owns the delivery claim before the first await.
   void steerInboxQueue(bot.id, event.threadId, head.queueId).catch(error => {
     console.warn("inbox boundary steer failed", error instanceof Error ? error.message : String(error));
@@ -6640,53 +6650,9 @@ function drainQueuedSends() {
     }),
     // Provider completion can precede its dispatch promise: keep the queue
     // intact until that exact handshake releases its runtime-only claim.
-    (botId, threadId) => threadBusy(botId, threadId) || botAtThreadCapacity(botId) || Boolean(activeGroupTurnForBot(botId))
+    (botId, threadId) => priorityDirectPreemptions.has(threadId) || threadBusy(botId, threadId) || botAtThreadCapacity(botId) || Boolean(activeGroupTurnForBot(botId))
       || parksBehindCoordination(botId, threadId),
   );
-}
-
-/** A send-time steer the running turn refused is provably undelivered: it
- * stays one queued chip for the next turn, and the thread says so instead of
- * looking sent. Image refusals carry their own note. */
-function noteSendSteerRefused(threadId: string, text: string, name: string, from?: { botId: string; name: string; color: string }): void {
-  if (text.includes("<attached-image")) return;
-  store.appendMessage(threadId, {
-    role: "bot",
-    kind: "activity",
-    ...(from ? { from } : {}),
-    tool: { name: `not delivered yet: ${name}'s running turn refused the message — it is queued for after this reply`, ok: false },
-  });
-}
-
-/** A send that lands on a running turn steers into it right away instead of
- * waiting for a tool boundary or a second Enter. It goes through the same
- * atomic queue claim as every other steer, so it is delivered once: either
- * folded into the live turn now, or (provably undelivered) left queued for
- * the next turn. */
-async function steerSendNow(botId: string, threadId: string, queueId: string, attended: boolean) {
-  const queuedReceipt = () => {
-    const pending = queuedSteerSnapshot((owner, thread) => owner === botId && thread === threadId)[threadId]
-      ?.find(item => item.queueId === queueId);
-    return pending ? { ok: true as const, queued: true as const, queueId, threadId, ...(pending.reason ? { reason: pending.reason } : {}) } : null;
-  };
-  try {
-    await steerInboxQueue(botId, threadId, queueId, attended);
-  } catch (error) {
-    // A gone bot or task is the answer to this send, not a queued chip.
-    if (typeof (error as { status?: unknown })?.status === "number") throw error;
-    console.warn("send-time steer failed", error instanceof Error ? error.message : String(error));
-  }
-  const delivered = store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
-  if (delivered) return sendSteerReceipt(threadId, delivered);
-  // Another claim (a tool-boundary steer or the settle drain) may hold it
-  // right now; it stays a queued chip until that claim records it.
-  const queued = queuedReceipt();
-  if (queued) {
-    const pending = queuedSteerSnapshot((owner, thread) => owner === botId && thread === threadId)[threadId]?.find(item => item.queueId === queueId);
-    const bot = store.projectBotForTask(botId, threadId);
-    if (pending && bot?.busy) noteSendSteerRefused(threadId, pending.text, bot.name);
-  }
-  return queued ?? { ok: true as const, queued: true as const, queueId, threadId };
 }
 
 /** Keep a person's words off the transcript until a direct-thread slot is
@@ -6700,6 +6666,7 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
       replyToId: replyTo?.id,
       sendId,
       reason,
+      deferUntilIdle: true,
       prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
     });
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId, reason };
@@ -11092,7 +11059,7 @@ type StartGroupTurnOptions = {
  * Returns how many live turns were interrupted. */
 async function interruptRoom(
   group: GroupRecord,
-  opts: { threadId?: string; botId?: string } = {},
+  opts: { threadId?: string; botId?: string; preserveQueued?: boolean } = {},
 ): Promise<number> {
   const activeOperations = [...(groupTurnOperations.get(group.id) ?? [])]
     .filter((operation) => !operation.cancelled);
@@ -11109,7 +11076,7 @@ async function interruptRoom(
   if (!opts.botId) {
     roomStopEpoch.set(group.id, (roomStopEpoch.get(group.id) ?? 0) + 1);
     for (const threadId of targetThreadIds) cancelGroupTurnOperations(group.id, threadId);
-    for (const row of chatFollowups("channel")) if (row.ownerId === group.id && targetThreadIds.includes(row.threadId) && row.status === "pending") cancelChannelMessage(group.id, row.id);
+    for (const row of chatFollowups("channel")) if (!opts.preserveQueued && row.ownerId === group.id && targetThreadIds.includes(row.threadId) && row.status === "pending") cancelChannelMessage(group.id, row.id);
   }
   await Promise.all(scopedRuntime.map(async ([runtimeId, speaker]) => {
     const busy = store.bot(speaker.botId);
@@ -11385,7 +11352,7 @@ function drainQueuedChannelSends(): void {
   drainChannelMessages(
     (groupId) => {
       const group = store.group(groupId);
-      return group ? groupIsWorking(group) : false;
+      return priorityRoomPreemptions.has(groupId) || (group ? groupIsWorking(group) : false);
     },
     ({ groupId, threadId, text, replyToId, sendId, mode, id, via, sender }) => {
       const group = store.group(groupId);
@@ -17364,6 +17331,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
+      if (body.priority !== undefined && body.priority !== "queue" && body.priority !== "block") {
+        return json(res, 400, { error: "priority must be block or queue" });
+      }
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
       const group = store.group(m[1]);
@@ -17462,35 +17432,31 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             });
             return { ok: true as const, threadId, message, stopped };
           }
+          if (body.priority === "block") {
+            priorityRoomPreemptions.add(current.id);
+            try {
+              await interruptRoom(current, { threadId, preserveQueued: true });
+              assertPrivateRequest();
+              const fresh = store.group(current.id);
+              if (!fresh || fresh.threadId !== threadId) throw Object.assign(new Error("the room changed before this message could start"), { status: 409 });
+              const message = startGroupTurn(fresh.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth) });
+              return { ok: true as const, threadId, message };
+            } finally { priorityRoomPreemptions.delete(current.id); drainQueuedChannelSends(); }
+          }
           const activeRecipients = roomRuntimeSpeakers(current.id, threadId).map(([, speaker]) => speaker.botId);
           const recipients = roomResponders(text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), current.defaultResponder, current.memberReplyModes);
           const independentAddress = channelMode === "chat" && recipients.length > 0 && recipients.every(recipient => !activeRecipients.includes(recipient.id)) && ![...(groupTurnOperations.get(current.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled);
           if (groupIsWorking(current) && !independentAddress) {
-            const hadQueue = Boolean(channelQueueHead(current.id, threadId));
             const queued = queueChannelMessage(current.id, threadId, text, {
               replyToId: replyTo?.id,
               sendId,
               mode: channelMode,
+              deferUntilIdle: true,
               via,
               sender: messageSender(auth),
             });
-            // A duplicate that joined a waiting item was already tried and refused.
-            if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
-            // Several addressees, some mid-turn: steer every busy one and
-            // start the idle ones off the same recorded row (see
-            // steerAddressedRoomSend). A single busy addressee, or a send
-            // behind an existing queue, keeps the FIFO path.
-            const busy = recipients.filter(recipient => activeRecipients.includes(recipient.id));
-            const idle = recipients.filter(recipient => !activeRecipients.includes(recipient.id));
-            const goalRunning = [...(groupTurnOperations.get(current.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled);
-            // Several busy recipients only steer when each was @mentioned; an
-            // unaddressed line in an everyone-room is ambiguous and waits.
-            const named = busy.length > 1 ? roomResponders(text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), { kind: "mentions" }) : [];
-            const busyNamed = busy.length === 1 || busy.every(member => named.some(mention => mention.id === member.id));
-            if (channelMode === "chat" && !hadQueue && !goalRunning && busy.length && busyNamed && (busy.length > 1 || idle.length)) {
-              return steerAddressedRoomSend(current.id, threadId, queued.id, busy.map(member => member.id), idle.map(member => member.id), replyTo);
-            }
-            return steerRoomSendNow(current.id, threadId, queued.id);
+            broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() });
+            return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
           const message = startGroupTurn(current.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth) });
           return { ok: true as const, threadId, message };
@@ -18766,6 +18732,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
+      if (body.priority !== undefined && body.priority !== "queue" && body.priority !== "block") {
+        return json(res, 400, { error: "priority must be block or queue" });
+      }
       // External interfaces must opt into a distinct route: an older server
       // returns 404 rather than silently ignoring safety preconditions.
       if (guarded && !z.object({
@@ -18872,16 +18841,34 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return { ok: true as const, threadId, message };
           }
 
+          if (body.priority === "block") {
+            priorityDirectPreemptions.add(threadId);
+            try {
+              if (currentAtStart.busy || threadBusy(bot.id, threadId)) {
+                await interruptDirectThread(bot.id, threadId);
+                const deadline = Date.now() + 10_000;
+                while (threadBusy(bot.id, threadId)) {
+                  if (Date.now() >= deadline) throw Object.assign(new Error("the current turn is still stopping; try again after it settles"), { status: 409 });
+                  await new Promise(resolve => setTimeout(resolve, 20));
+                  assertPrivateRequest();
+                  if (!store.taskByThread(bot.id, threadId)) throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
+                }
+              }
+              assertPrivateRequest();
+              return await startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
+            } finally { priorityDirectPreemptions.delete(threadId); drainQueuedSends(); }
+          }
+
           if (currentAtStart.busy) {
             // New input supersedes a previous done-condition.
             store.patchTask(currentAtStart.id, threadId, { closeWhenDone: undefined });
             const queued = queueSteeredMessage(currentAtStart.id, threadId, text, {
-              replyToId: replyTo?.id, sendId,
+              replyToId: replyTo?.id, sendId, deferUntilIdle: true,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             // A duplicate that joined a waiting item was already tried and refused.
             if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
-            return steerSendNow(currentAtStart.id, threadId, queued.id, auth.kind === "session" || DESKTOP_MANAGED);
+            return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
           return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
         },

@@ -218,6 +218,7 @@ export interface FollowupPayload {
   replyToId?: string;
   sendId?: string;
   reason?: "capacity";
+  deferUntilIdle?: boolean;
   unattended?: boolean;
   peerAsk?: Message["peerAsk"];
   mode?: "chat" | "goal";
