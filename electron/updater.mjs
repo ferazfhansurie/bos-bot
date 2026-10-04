@@ -1,9 +1,11 @@
 import { STAGING } from "./release-channel.mjs";
+import { readUpdaterCapability } from "./updater-capability.mjs";
 // In-app auto-updater (electron-updater). Downloads are user-driven; macOS
 // stages the downloaded ZIP immediately and the explicit restart applies it.
 // One state object is broadcast on every transition.
 //
-// Only runs in packaged live builds (staging has no feed). mac auto-update
+// Only runs in packaged builds with explicit native policy and valid metadata.
+// Staging and local/offline packages never load the vendor. mac auto-update
 // requires the signed+notarized app; the 1.0 Windows build is unsigned, and its
 // app-update.yml carries no publisherName, so electron-updater installs the
 // sha512-verified installer without an Authenticode check (see
@@ -32,6 +34,19 @@ let win = null;
 // status: idle | checking | available | downloading | preparing | downloaded | installing | handed-off | error
 let state = { status: "idle" };
 let updaterCoordinator = null;
+let started = false;
+let capability = { available: false, reason: "not-initialized", message: "Native updates are not initialized." };
+state = { ...state, capability: capability.reason, available: false };
+
+function unavailableState() {
+  setState({ status: "error", available: false, capability: capability.reason, message: capability.message, retryable: false });
+  return { ...state };
+}
+
+function runUpdateAction(action) {
+  if (!capability.available || !updaterCoordinator) return unavailableState();
+  return action(updaterCoordinator);
+}
 
 function updaterLogger() {
   const directory = app.getPath("logs");
@@ -82,9 +97,9 @@ const { localOnly } = localOriginModule;
 
 export function registerUpdaterIpc() {
   ipcMain.handle("update:get-state", localOnly("update:get-state", () => state));
-  ipcMain.handle("update:check", localOnly("update:check", () => updaterCoordinator?.check(true)));
-  ipcMain.handle("update:download", localOnly("update:download", () => updaterCoordinator?.download()));
-  ipcMain.handle("update:install", localOnly("update:install", () => updaterCoordinator?.install()));
+  ipcMain.handle("update:check", localOnly("update:check", () => runUpdateAction((coordinator) => coordinator.check(true))));
+  ipcMain.handle("update:download", localOnly("update:download", () => runUpdateAction((coordinator) => coordinator.download())));
+  ipcMain.handle("update:install", localOnly("update:install", () => runUpdateAction((coordinator) => coordinator.install())));
 }
 
 // macOS keeps the process (and updater) alive after its window closes.
@@ -95,19 +110,25 @@ export function attachUpdaterWindow(mainWindow) {
 }
 
 export function startUpdater({ prepareInstall = null } = {}) {
-  // dev / unsigned builds can't auto-update — leave the banner dormant
-  if (STAGING || !app.isPackaged) {
-    updaterCoordinator = null;
-    setState({ status: "idle" });
+  if (started) return;
+  started = true;
+  capability = readUpdaterCapability({ isPackaged: app.isPackaged, staging: STAGING, resourcesPath: process.resourcesPath });
+  if (!capability.available) {
+    setState({ status: "idle", available: false, capability: capability.reason, message: capability.message, retryable: false });
     return;
   }
   try {
     ({ autoUpdater } = require("./vendor/electron-updater.cjs"));
+    // Pin the parsed, policy-matched configuration; do not defer the first
+    // feed read to a timer or manual action inside the vendor.
+    autoUpdater.setFeedURL(capability.metadata);
   } catch {
-    updaterCoordinator = null;
-    setState({ status: "error", message: "updater unavailable" });
+    autoUpdater = null;
+    capability = { available: false, reason: "unavailable", message: "Native updater is unavailable in this package." };
+    unavailableState();
     return;
   }
+  setState({ available: true, capability: "configured", message: undefined, retryable: undefined });
   autoUpdater.autoDownload = false; // button-driven download
   // Stable line only: a GitHub release marked pre-release (or a beta feed
   // file) is never offered to installed apps.

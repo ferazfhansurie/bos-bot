@@ -17,12 +17,13 @@ const { parse } = require('yaml');
 const { releaseFeed, windowsSigning } = require('./scripts/release-feed.cjs');
 
 const base = parse(readFileSync(join(__dirname, 'electron-builder.yml'), 'utf8'));
+const feed = releaseFeed(process.env);
 const unsignedWindows = windowsSigning(process.env) === 'unsigned';
 
 module.exports = {
   ...base,
-  extraMetadata: { ...base.extraMetadata, bosChannel: 'live', name: 'bos-bot' },
-  publish: [releaseFeed(process.env)],
+  extraMetadata: { ...base.extraMetadata, bosChannel: 'live', name: 'bos-bot', bosUpdatePolicy: { mode: 'native', feed } },
+  publish: [feed],
   forceCodeSigning: !unsignedWindows,
   win: {
     ...base.win,
