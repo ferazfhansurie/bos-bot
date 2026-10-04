@@ -277,7 +277,9 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     const route=`/api/groups/${room.id}/queue/${steered.body.message.queueId}/steer`;
     const messages=(await snapshot(room.id)).messages;
     expect(messages.filter((m:any)=>m.text===text)).toHaveLength(1);
-    expect(messages.some((m:any)=>m.tool?.name?.includes("consumption is unconfirmed"))).toBe(true);
+    const receipt = messages.find((m:any)=>m.tool?.name?.includes("consumption is unconfirmed"));
+    expect(receipt?.tool.ok).toBe(true);
+    expect(messages.some((m:any)=>m.role==="bot"&&m.turnTerminal)).toBe(false);
     expect((await api("POST",route,{botId:slow.id})).status).toBe(404);
     writeFileSync(patientFinishGate,"finish");
     await wait(async()=>!(await snapshot(room.id)).working);

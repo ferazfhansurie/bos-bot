@@ -6402,7 +6402,7 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
       role: "bot", kind: "activity", from: speakerFrom,
       tool: { name: steered === "indeterminate"
         ? "Queued message delivery outcome unknown — review before resending"
-        : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: false },
+        : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: steered !== "indeterminate" },
     });
     if (imagesAsFiles) noteSteerImagesAsFiles(targetThreadId, speakerFrom);
     settleHeldChannelQueueHead(held);
