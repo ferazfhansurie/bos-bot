@@ -91,15 +91,25 @@ final class MultiBotStreamingUITests: XCTestCase {
             // Rows combine their text into one label: "bos avatar, bos, …".
             let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name + " ")).firstMatch
             XCTAssertTrue(row.waitForExistence(timeout: 20))
+            let rowLabel = row.label
+            print("SWITCH_RESOLVED \(name) \(Date().timeIntervalSince1970) \(row.frame.minY)")
             let tapped = Date()
             row.tap()
+            print("SWITCH_TAPPED \(name) \(Date().timeIntervalSince1970)")
             // A chat that has not opened in 30s is reported, not fatal, so
             // the run still measures the rest.
             let opened = input.waitForExistence(timeout: 30)
             print("SWITCH_SECONDS \(name) \(Date().timeIntervalSince(tapped))\(opened ? "" : " TIMEOUT")")
             // Rows reorder as bots post; count taps that opened another chat.
-            if !header.label.hasPrefix(name + ",") { misses += 1 }
+            // The header is read as the input appears and again a second
+            // later, so a header still on its way in is told apart from a
+            // tap that really opened the wrong chat.
+            let first = header.exists ? header.label : "<none>"
             sleep(1)
+            let settled = header.exists ? header.label : "<none>"
+            let depth = app.buttons.matching(identifier: "chat-options").count
+            if !settled.hasPrefix(name + ",") { misses += 1 }
+            print("SWITCH_TAP intended=\(name) row=\"\(rowLabel.prefix(24))\" first=\"\(first)\" settled=\"\(settled)\" headers=\(depth) \(settled.hasPrefix(name + ",") ? "ok" : "MISS")")
         }
         print("SWITCH_MISSES \(misses)")
         keep("switching", started: started)

@@ -2690,7 +2690,7 @@ extension CompanionState {
                 return ChatSummary(
                     chat: chat,
                     preview: rosterPreview(messages, detail: activity),
-                    lastActivity: messages.last?.at ?? 0,
+                    lastActivity: rosterActivityAt(messages),
                     pinned: Self.pinned(chat)
                 )
             }

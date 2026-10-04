@@ -130,6 +130,17 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
     public var senderName: String? { head.from?.name }
 }
 
+/// When a chat last had something worth moving it up the roster for.
+///
+/// Tool-step lines don't count. A working bot posts one every second or so,
+/// and with several bots busy the rows traded places all the time, so a tap
+/// aimed at one chat landed on whichever had just moved under the finger.
+/// A chat that is only working shows "Working…" where it is; a message
+/// still moves it to the top.
+public func rosterActivityAt(_ messages: [Message]) -> Double {
+    messages.last(where: { $0.kind != .activity })?.at ?? messages.last?.at ?? 0
+}
+
 /// The one line a roster row shows under a chat's name.
 ///
 /// Folded by the same rule as the transcript, and for the same reason: a
