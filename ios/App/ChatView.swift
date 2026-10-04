@@ -57,6 +57,9 @@ struct ChatView: View {
     @State private var threadDrafts: [String: ComposerSnapshot] = [:]
     @State private var preparingAttachments = false
     @State private var sendingMessage = false
+    /// Queue or block for the next send while a turn runs. Every send puts
+    /// it back to queue, so block is never sticky.
+    @State private var sendPriority: MessagePriority = .queue
     @State private var attachmentError: String?
     @State private var openingFileName: String?
     @State private var fileOpenError: String?
@@ -749,6 +752,8 @@ struct ChatView: View {
               !preparingAttachments,
               !sendingMessage
         else { return }
+        let priorityAtSend: MessagePriority = chatAtSend.busy ? sendPriority : .queue
+        sendPriority = .queue
         sendingMessage = true
         attachmentError = nil
         showCommandHUD = false
@@ -758,7 +763,8 @@ struct ChatView: View {
                 text: text,
                 attachments: outgoingAttachments,
                 to: chatAtSend,
-                replyToId: replyAtSend?.id
+                replyToId: replyAtSend?.id,
+                priority: priorityAtSend
             )
             sendingMessage = false
             guard sent else {
@@ -1173,6 +1179,11 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            if current.busy, !sendingMessage {
+                SendPriorityToggle(priority: $sendPriority, color: MausPalette.color(current.color))
+                    .transition(.opacity)
+            }
+
             // The binding is made inside DraftBinding: making it here reads
             // the draft, which would redraw this view on every keystroke.
             DraftBinding(composer: composerDraft) { draft in
@@ -1482,6 +1493,42 @@ struct ChatActionSheet: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }.transition(.opacity)
         }
+    }
+}
+
+/// Shown above the composer while a turn runs. Queue holds the message
+/// until the turn settles; block stops the turn and sends this one now.
+struct SendPriorityToggle: View {
+    @Binding var priority: MessagePriority
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 2) {
+            option(.queue, "Queue", "tray.and.arrow.down")
+            option(.block, "Block", "hand.raised")
+        }
+        .padding(3)
+        .glassCapsule()
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("While it's working")
+    }
+
+    private func option(_ value: MessagePriority, _ title: LocalizedStringKey, _ icon: String) -> some View {
+        let selected = priority == value
+        return Button {
+            Haptics.selection()
+            withAnimation(.snappy(duration: 0.2)) { priority = value }
+        } label: {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(selected ? Color.white : Color.secondary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(selected ? (value == .block ? Color.red : color) : Color.clear))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("send-priority-\(value.rawValue)")
     }
 }
 

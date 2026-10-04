@@ -1404,7 +1404,8 @@ final class Session: ObservableObject {
         text: String,
         attachments: [PendingMessageAttachment],
         to chat: Chat,
-        replyToId: String? = nil
+        replyToId: String? = nil,
+        priority: MessagePriority = .queue
     ) async -> Bool {
         guard let client else {
             actionError = "This computer is offline."
@@ -1485,7 +1486,7 @@ final class Session: ObservableObject {
                 urls: [],
                 attachments: uploaded
             )
-            let receipt = try await client.send(text: message, to: destination, sendId: sendID, replyToId: replyToId)
+            let receipt = try await client.send(text: message, to: destination, sendId: sendID, replyToId: replyToId, priority: priority)
             // The send succeeded on the computer it was addressed to, so the
             // draft clears either way. Its queue row belongs to that computer,
             // and must not be drawn on one selected mid-upload.

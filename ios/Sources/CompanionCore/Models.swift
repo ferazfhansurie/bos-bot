@@ -1496,3 +1496,10 @@ public extension Room {
         return "mentions"
     }
 }
+
+/// How a message lands while a turn is running: `queue` waits for the turn
+/// to settle, `block` interrupts it and starts this message instead.
+public enum MessagePriority: String, Sendable {
+    case queue
+    case block
+}

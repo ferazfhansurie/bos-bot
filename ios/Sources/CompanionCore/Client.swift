@@ -1587,7 +1587,8 @@ public struct CompanionClient: Sendable {
         text: String,
         to destination: MessageDestination,
         sendId: String,
-        replyToId: String? = nil
+        replyToId: String? = nil,
+        priority: MessagePriority = .queue
     ) async throws -> SendReceipt {
         let route: String
         let threadId: String
@@ -1605,6 +1606,9 @@ public struct CompanionClient: Sendable {
               replyToId.map(Self.validRouteID) ?? true else { throw APIError.badURL }
         var body = ["text": text, "threadId": threadId, "sendId": sendId]
         if let replyToId { body["replyToId"] = replyToId }
+        // Queue is the server's default, so a queued send stays byte-for-byte
+        // what older computers already accept.
+        if priority == .block { body["priority"] = MessagePriority.block.rawValue }
         return try await sendForReceipt(try makeRequest("POST", route, body: body))
     }
 
