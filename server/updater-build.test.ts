@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appDigests, discoverCandidate } from "./updater.ts";
-import { DEFAULT_PROD_BRANCH, DEFAULT_RELEASE_BRANCH, buildCandidate, buildRoot, previewUpdate, readUpdateSource, resolveUpdateTarget, runCommand, toolchainPath, type RunCommand } from "./updater-build.ts";
+import { DEFAULT_PROD_BRANCH, DEFAULT_RELEASE_BRANCH, buildCandidate, buildRoot, missingPackages, previewUpdate, readUpdateSource, resolveUpdateTarget, runCommand, toolchainPath, type RunCommand } from "./updater-build.ts";
 
 const PYTHON = "/usr/bin/python3";
 const hasPython = existsSync(PYTHON) && spawnSync(PYTHON, ["--version"]).status === 0;
@@ -44,7 +44,7 @@ function makeRepo(root: string): Repo {
   writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   writeFileSync(join(dir, ".gitignore"), "node_modules\n");
   const commit = (version: string, msg: string) => {
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "bos-bot", version }));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "bos-bot", version, dependencies: { "left-pad": "1.0.0" }, devDependencies: { vite: "7.0.0" } }));
     writeFileSync(join(dir, "src.txt"), msg);
     g("add", "-A"); g("commit", "-q", "-m", msg); return g("rev-parse", "HEAD");
   };
@@ -64,7 +64,8 @@ describe.skipIf(!hasPython)("update build", () => {
     live = fakeApp(join(root, "Applications"), "BOS Bot.app", "live");
     dataDir = join(root, "data"); mkdirSync(dataDir);
     // the canonical checkout's node_modules, with the same lockfile beside it
-    nodeModules = join(repo.dir, "node_modules"); mkdirSync(nodeModules); writeFileSync(join(nodeModules, ".modules.yaml"), "x\n");
+    nodeModules = join(repo.dir, "node_modules");
+    for (const name of ["left-pad", "vite"]) { mkdirSync(join(nodeModules, name), { recursive: true }); writeFileSync(join(nodeModules, name, "package.json"), `{"name":"${name}"}`); }
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -75,7 +76,10 @@ describe.skipIf(!hasPython)("update build", () => {
     expect(readUpdateSource(dataDir, {})).toEqual({ repo: "/ledger/repo", releaseBranch: "release/x", prodBranch: "prod-x" });
     writeFileSync(join(dataDir, "updates", "source.json"), JSON.stringify({ repo: "/file/repo", prodBranch: "prod-file" }));
     expect(readUpdateSource(dataDir, {})).toEqual({ repo: "/file/repo", releaseBranch: "release/x", prodBranch: "prod-file" });
-    expect(readUpdateSource(dataDir, { OMB_UPDATE_REPO: "/env/repo", OMB_UPDATE_PROD_BRANCH: "" })).toEqual({ repo: "/env/repo", releaseBranch: "release/x", prodBranch: "" });
+    expect(readUpdateSource(dataDir, { OMB_UPDATE_REPO: "/env/repo", OMB_UPDATE_PROD_BRANCH: "", OMB_UPDATE_NODE_MODULES: "/nm" })).toEqual({ repo: "/env/repo", releaseBranch: "release/x", prodBranch: "", nodeModules: "/nm" });
+    expect(missingPackages(nodeModules, join(repo.dir, "package.json"))).toEqual([]);
+    rmSync(join(nodeModules, "vite"), { recursive: true });
+    expect(missingPackages(nodeModules, join(repo.dir, "package.json"))).toEqual(["vite"]);
     expect(toolchainPath({ OMB_UPDATE_TOOLCHAIN_PATH: "/x/bin", PATH: "/usr/bin" })).toBe("/x/bin:/usr/bin");
     expect(toolchainPath({ PATH: "/usr/bin" }, join(root, "nohome"))).toBe("/opt/homebrew/bin:/usr/local/bin:/usr/bin");
   });
@@ -152,7 +156,8 @@ describe.skipIf(!hasPython)("update build", () => {
   it("installs instead of linking when the lockfile differs, names the failing step and keeps the build dir", async () => {
     const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };
     const target = await resolveUpdateTarget(source);
-    writeFileSync(join(repo.dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n# drifted\n");
+    // same lockfile, stale install: vite is declared but absent, so the link is refused and pnpm installs
+    rmSync(join(nodeModules, "vite"), { recursive: true });
     const calls: string[] = [];
     const run: RunCommand = async (file, args, options) => {
       calls.push([file, ...args].join(" "));
@@ -164,11 +169,12 @@ describe.skipIf(!hasPython)("update build", () => {
     expect(error).toMatchObject({ status: 500, step: expect.stringMatching(/^\/bin\/sh -c mkdir/), buildDir: join(buildRoot(dataDir), repo.b.slice(0, 8)) });
     expect(error.message).toMatch(/^build failed at \/bin\/sh -c.*exited 2: .*TS2304.*build failed/);
     expect(calls.some(call => call.startsWith("pnpm install --frozen-lockfile"))).toBe(true);
+    expect(existsSync(join(buildRoot(dataDir), repo.b.slice(0, 8), "src", "node_modules"))).toBe(false);
     expect(existsSync(join(buildRoot(dataDir), repo.b.slice(0, 8), "src", "package.json"))).toBe(true);
     expect(discoverCandidate(dataDir)).toBeNull();
     // a commit from before the guard existed cannot be stamped, so it cannot be built
     rmSync(join(repo.dir, "electron"), { recursive: true });
-    writeFileSync(join(repo.dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    mkdirSync(join(nodeModules, "vite")); writeFileSync(join(nodeModules, "vite", "package.json"), "{}");
     repo.g("add", "-A"); repo.g("commit", "-q", "-m", "C: drop the guard");
     const c = repo.g("rev-parse", "HEAD");
     await expect(buildCandidate({ dataDir, liveApp: live, source, target: { ...target, sha: c }, codesign: false, commands: FAKE_BUILD })).rejects.toMatchObject({ step: "stamp", message: /predates the install guard/ });

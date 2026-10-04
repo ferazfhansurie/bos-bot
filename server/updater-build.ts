@@ -22,7 +22,11 @@ import { CANDIDATE_DIRNAME, appDigests, updatesDir, writeCandidateManifest, type
  * (the operator's file), then the no-downgrade ledger (seeded by its first
  * `record`), then the defaults. `repo` has no default: without a canonical
  * checkout there is nothing to build from and `check` says so. */
-export interface UpdateSource { repo?: string; releaseBranch: string; prodBranch: string }
+export interface UpdateSource {
+  repo?: string; releaseBranch: string; prodBranch: string;
+  /** A complete node_modules to link into the build when its lockfile matches (default: <repo>/node_modules). */
+  nodeModules?: string;
+}
 
 export const DEFAULT_RELEASE_BRANCH = "release/bos-1.0";
 export const DEFAULT_PROD_BRANCH = "prod";
@@ -41,7 +45,8 @@ export function readUpdateSource(dataDir: string, env: NodeJS.ProcessEnv = proce
   // "" means the prod check is off; only an explicit empty env value may say that.
   const prodBranch = env.OMB_UPDATE_PROD_BRANCH !== undefined ? env.OMB_UPDATE_PROD_BRANCH.trim()
     : str(file.prodBranch) ?? (typeof ledger.prod_branch === "string" ? ledger.prod_branch : undefined) ?? DEFAULT_PROD_BRANCH;
-  return { ...(repo ? { repo } : {}), releaseBranch, prodBranch };
+  const nodeModules = str(env.OMB_UPDATE_NODE_MODULES) ?? str(file.nodeModules);
+  return { ...(repo ? { repo } : {}), releaseBranch, prodBranch, ...(nodeModules ? { nodeModules } : {}) };
 }
 
 export interface CommandResult { code: number; stdout: string; stderr: string }
@@ -184,6 +189,18 @@ const DEFAULT_COMMANDS = [
   { file: "pnpm", args: ["exec", "vite", "build"] },
 ];
 
+/** Declared dependencies (and devDependencies: the build needs them) that are
+ * not present in `nodeModules`. */
+export function missingPackages(nodeModules: string, packageJson: string): string[] {
+  const pkg = readJsonFile(packageJson) ?? {};
+  const names = new Set<string>();
+  for (const key of ["dependencies", "devDependencies"]) {
+    const block = pkg[key];
+    if (block && typeof block === "object") for (const name of Object.keys(block as Record<string, unknown>)) names.add(name);
+  }
+  return [...names].filter(name => !existsSync(join(nodeModules, name, "package.json")));
+}
+
 async function signingIdentity(liveApp: string, run: RunCommand, env: NodeJS.ProcessEnv): Promise<string> {
   const explicit = str(env.OMB_UPDATE_SIGN_IDENTITY);
   if (explicit) return explicit;
@@ -232,12 +249,18 @@ export async function buildCandidate(options: BuildOptions): Promise<BuildOutcom
   // 2. dependencies: link the canonical checkout's node_modules when the
   //    lockfile is the same, install otherwise.
   await step("dependencies", async () => {
-    const nodeModules = options.nodeModules ?? join(source.repo!, "node_modules");
+    const nodeModules = options.nodeModules ?? source.nodeModules ?? join(source.repo!, "node_modules");
     const lockHere = readFileSync(join(src, "pnpm-lock.yaml"), "utf8");
     let lockThere: string | null = null;
     try { lockThere = readFileSync(join(dirname(nodeModules), "pnpm-lock.yaml"), "utf8"); } catch { lockThere = null; }
-    if (existsSync(nodeModules) && lockThere === lockHere) { symlinkSync(nodeModules, join(src, "node_modules")); log(`  node_modules linked from ${nodeModules}`); }
-    else await sh("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], src);
+    // The same lockfile is necessary, not sufficient: a checkout can carry a
+    // stale install. Every declared package has to be present to link.
+    const missing = existsSync(nodeModules) && lockThere === lockHere ? missingPackages(nodeModules, join(src, "package.json")) : null;
+    if (missing && !missing.length) { symlinkSync(nodeModules, join(src, "node_modules")); log(`  node_modules linked from ${nodeModules}`); }
+    else {
+      log(missing ? `  node_modules at ${nodeModules} is missing ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""}; installing` : `  no matching node_modules to link; installing`);
+      await sh("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], src);
+    }
   });
 
   // 3. the build itself.
