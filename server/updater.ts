@@ -63,6 +63,10 @@ export interface UpdateExecutor {
    * A rejection carrying `pending: true` means the executor may already own
    * the handoff; the coordinator then holds its lock and never retries. */
   execute(plan: ExecutorPlan, dir: string): Promise<void>;
+  /** After a finished update: record the now-live bundle as the running
+   * build (the no-downgrade ledger). Returns a note, or null when there is
+   * nothing to record. Never refuses, never touches the app. */
+  recordInstalled?(): Promise<string | null>;
 }
 export interface UpdaterHooks {
   dataDir: string;
@@ -433,6 +437,10 @@ export class UpdateCoordinator {
       while (!result && Date.now() < deadline) { await this.sleep(1000); result = readResult(this.hooks.dataDir, updateId); }
       result ??= { state: "failed", at: this.now().toISOString(), detail: "the updater left no result; the app is running whatever is installed", updateId, mode: "update" };
       this.consume(updateId, result);
+      if (result.state === "done" && result.mode === "update" && this.hooks.executor.recordInstalled) {
+        try { const note = await this.hooks.executor.recordInstalled(); if (note) this.log(note); }
+        catch (error) { this.log(`no-downgrade ledger not updated: ${error instanceof Error ? error.message : String(error)}`); }
+      }
       this.set(result.state, result.detail);
       await this.resumeInterrupted(updateId, result);
     }
@@ -475,6 +483,11 @@ export interface DarwinExecutorOptions {
   requirePreflight?: boolean;
   /** Test-only (OMB_UPDATE_SANDBOX=1): a staged bundle outside updates/candidate and a fault to inject. */
   sandbox?: { stagedPath?: string; fault?: string };
+  /** Contents/Resources/updater/no-downgrade.py: refuses any staged build that
+   * is not stamped, not newer than the running build, not on the release
+   * branch, or not the prod head. Undefined = not configured (dev run,
+   * sandbox): skipped with a note. */
+  noDowngrade?: NoDowngradeOptions;
   runPreflight?: (path: string) => Promise<string>;
   log?: (line: string) => void;
 }
@@ -489,6 +502,66 @@ export function describeStagedApp(appPath: string): Candidate {
     version = /CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]?.trim() || version;
   } catch { /* no plist */ }
   return { version, sha: digests.server, stagedAt: statSync(appPath).mtime.toISOString(), app: basename(appPath), serverSha256: digests.server, uiSha256: digests.ui, dir: dirname(appPath), appPath };
+}
+
+export interface NoDowngradeOptions {
+  /** The shipped script (OMB_UPDATER_NO_DOWNGRADE overrides for dev/test). */
+  script: string;
+  /** <dataDir>/updates/live-build.json: what is running, and what ran before it. */
+  ledger: string;
+  /** Canonical checkout the ancestry is checked in; the ledger's value when omitted. */
+  repo?: string;
+  /** Branch every live build must be reachable from; the ledger's value when omitted. */
+  releaseBranch?: string;
+  /** Branch whose head is the only build allowed to go live; "" turns the prod check off. The script defaults to "prod". */
+  prodBranch?: string;
+  /** Packaged build: a missing script refuses the update instead of skipping the guard. */
+  require?: boolean;
+  /** Test seam: runs the script with its arguments; exit 2 = refused, 0 = allowed. */
+  run?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+}
+
+export interface NoDowngradeVerdict { ok?: boolean; reason?: string; running?: { commit?: string }; candidate?: { commit?: string | null } }
+
+function defaultRunGuard(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile("/usr/bin/python3", args, { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const code = error ? (typeof (error as { code?: unknown }).code === "number" ? (error as { code: number }).code : -1) : 0;
+      if (error && code < 0) return reject(new Error(`${String(stderr).trim().slice(0, 300) || error.message}`));
+      resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+    });
+  });
+}
+
+function guardArgs(options: NoDowngradeOptions, command: "check" | "record", rest: string[]): string[] {
+  const args = [options.script, command, ...rest, "--ledger", options.ledger];
+  if (options.repo) args.push("--repo", options.repo);
+  if (options.releaseBranch) args.push("--release-branch", options.releaseBranch);
+  if (options.prodBranch !== undefined) args.push("--prod-branch", options.prodBranch);
+  return args;
+}
+
+/** The no-downgrade gate, right after the preflight in admission of an
+ * update: the staged bundle is checked against the live one before anything
+ * is locked, planned or swapped. Exit 2 is the script's refusal (its reason
+ * names both commits); any other failure refuses too, since an unverifiable
+ * candidate is never installed. */
+export async function runNoDowngradeGate(options: NoDowngradeOptions | undefined, candidateApp: string, liveApp: string): Promise<string[]> {
+  if (!options) return ["no-downgrade guard not configured; skipped"];
+  if (!existsSync(options.script)) {
+    if (options.require) throw err(`no-downgrade guard missing at ${options.script}; refusing to update`, 409);
+    return [`no-downgrade guard not found at ${options.script}; skipped`];
+  }
+  let result: { code: number; stdout: string; stderr: string };
+  try { result = await (options.run ?? defaultRunGuard)(guardArgs(options, "check", ["--candidate", candidateApp, "--live", liveApp])); }
+  catch (error) { throw err(`no-downgrade guard failed: ${error instanceof Error ? error.message : String(error)}`, 409); }
+  let verdict: NoDowngradeVerdict | null = null;
+  try { verdict = JSON.parse(result.stdout) as NoDowngradeVerdict; } catch { verdict = null; }
+  const reason = verdict?.reason ?? result.stderr.trim().slice(0, 300) ?? "";
+  if (result.code === 2) throw err(`install refused: ${reason || "the no-downgrade guard said no"}`, 409);
+  if (result.code !== 0) throw err(`no-downgrade guard failed (exit ${result.code}): ${reason || "no output"}`, 409);
+  if (!verdict || verdict.ok !== true) throw err(`no-downgrade guard failed: it exited 0 without an ok verdict`, 409);
+  return [`no-downgrade: ${reason}`];
 }
 
 function defaultRunPreflight(path: string): Promise<string> {
@@ -533,8 +606,13 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
     : discoverCandidate(options.dataDir);
   return {
     candidate,
-    async admit() {
+    async admit(mode) {
       const notes: string[] = await runPreflightGate(options);
+      if (mode === "update") {
+        const staged = await candidate();
+        if (!staged) throw err("no staged update to apply", 409);
+        notes.push(...await runNoDowngradeGate(options.noDowngrade, staged.appPath, options.liveApp));
+      }
       const { running, idle, staleOwn } = classifyLaunchdJobs(await host.launchdList());
       const blocking = running.map(label => `${label} (running)`);
       for (const label of idle) {
@@ -551,6 +629,15 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
       return notes;
     },
     ports: () => host.listeningPorts(),
+    async recordInstalled() {
+      const guard = options.noDowngrade;
+      if (!guard || !existsSync(guard.script)) return null;
+      const result = await (guard.run ?? defaultRunGuard)(guardArgs(guard, "record", ["--live", options.liveApp]));
+      let verdict: NoDowngradeVerdict | null = null;
+      try { verdict = JSON.parse(result.stdout) as NoDowngradeVerdict; } catch { verdict = null; }
+      if (result.code !== 0) throw new Error(verdict?.reason ?? result.stderr.trim().slice(0, 300));
+      return `no-downgrade: ${verdict?.reason ?? "recorded the live build"}`;
+    },
     async execute(plan, dir) {
       const staged = plan.mode === "update" ? await candidate() : null;
       if (plan.mode === "update" && (!staged || staged.version !== plan.version || staged.sha !== plan.sha)) throw err("staged app changed since it was admitted; re-stage it", 409);

@@ -8,7 +8,7 @@ import { parse as parseYaml } from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   UpdateCoordinator, appDigests, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
-  updaterPlist, writeCandidateManifest, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
+  updaterPlist, writeCandidateManifest, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type NoDowngradeOptions, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
 } from "./updater.ts";
 
 function fakeApp(root: string, name: string, stamp: string): string {
@@ -217,6 +217,103 @@ describe("updater coordinator", () => {
     const config = parseYaml(readFileSync(join(REPO, "electron-builder.yml"), "utf8")) as { files: string[]; mac: { extraResources: Array<{ from: string; to: string }> } };
     expect(config.mac.extraResources).toContainEqual({ from: "electron/resources/updater/preflight.py", to: "updater/preflight.py" });
     expect(config.files).toContain("!electron/resources/updater/**");
+  });
+
+  describe("no-downgrade gate", () => {
+    type Run = NonNullable<NoDowngradeOptions["run"]>;
+    const calls: string[][] = [];
+    const guard = (reply: { code: number; stdout: string; stderr?: string } | Error, extra: Partial<NoDowngradeOptions> = {}): NoDowngradeOptions => ({
+      script: join(root, "no-downgrade.py"), ledger: join(root, "data", "updates", "live-build.json"), repo: "/repo", releaseBranch: "release/bos-1.0",
+      run: (async args => { calls.push(args); h.calls.push("guard"); if (reply instanceof Error) throw reply; return { stderr: "", ...reply }; }) as Run, ...extra,
+    });
+    beforeEach(() => { calls.length = 0; writeFileSync(join(root, "no-downgrade.py"), "# fake\n"); });
+
+    it("runs right after the preflight on the staged bundle, before launchd, the lock and the plan; its allow note is logged", async () => {
+      const staged = stage(h);
+      const ok = JSON.stringify({ ok: true, reason: `allowed: candidate 1111111 descends from running 2d83ba23, is on release/bos-1.0 and is the prod head`, running: { commit: "2d83ba23" }, candidate: { commit: "1111111" } });
+      const { notes } = await h.make({}, { noDowngrade: guard({ code: 0, stdout: ok }, { prodBranch: "prod" }) }).apply({ force: true });
+      expect(h.calls.slice(0, 3)).toEqual(["preflight", "guard", "launchd"]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual([join(root, "no-downgrade.py"), "check", "--candidate", join(h.dataDir, "updates", "candidate", staged.app), "--live", h.live,
+        "--ledger", join(root, "data", "updates", "live-build.json"), "--repo", "/repo", "--release-branch", "release/bos-1.0", "--prod-branch", "prod"]);
+      expect(notes).toEqual(expect.arrayContaining([expect.stringMatching(/^no-downgrade: allowed: candidate 1111111 descends from running 2d83ba23/)]));
+      await h.settle();
+    });
+
+    it("refuses an older, sibling, unstamped or non-prod build with the script's own reason, touching nothing", async () => {
+      stage(h);
+      const refusal = { code: 2, stdout: JSON.stringify({ ok: false, reason: "downgrade refused: running 2d83ba23 is not an ancestor of candidate da37ae2a (older build, or a sibling branch). only a descendant of the running build may be installed." }) };
+      await expect(h.make({}, { noDowngrade: guard(refusal) }).apply({ force: true }))
+        .rejects.toMatchObject({ status: 409, message: "install refused: downgrade refused: running 2d83ba23 is not an ancestor of candidate da37ae2a (older build, or a sibling branch). only a descendant of the running build may be installed." });
+      expect(h.calls).toEqual(["preflight", "guard"]); // launchd never consulted
+      expect(h.bootstraps).toHaveLength(0); expect(h.stopped).toBe(0); expect(h.quiesced).toBe(0);
+      expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+      expect(h.events).toHaveLength(0);
+      // a crash, garbage, or an exit-0 without a verdict all refuse: an unverifiable candidate is never installed
+      await expect(h.make({}, { noDowngrade: guard(new Error("python exploded")) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /no-downgrade guard failed: python exploded/ });
+      await expect(h.make({}, { noDowngrade: guard({ code: 1, stdout: "", stderr: "Traceback: boom" }) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /no-downgrade guard failed \(exit 1\): Traceback: boom/ });
+      await expect(h.make({}, { noDowngrade: guard({ code: 0, stdout: "not json" }) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /exited 0 without an ok verdict/ });
+      expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    });
+
+    it("never runs for a restart (same bundle), and the preflight still gates the restart", async () => {
+      await h.make({}, { noDowngrade: guard({ code: 2, stdout: JSON.stringify({ ok: false, reason: "would refuse" }) }) }).restart({ force: true });
+      expect(h.calls).toEqual(["preflight", "launchd"]);
+      expect(calls).toHaveLength(0);
+      await h.settle();
+    });
+
+    it("a packaged build without the shipped script refuses; a dev run skips with a note; unconfigured skips", async () => {
+      stage(h);
+      const missing = join(root, "Resources", "updater", "no-downgrade.py");
+      await expect(h.make({}, { noDowngrade: guard({ code: 0, stdout: "{}" }, { script: missing, require: true }) }).apply({ force: true }))
+        .rejects.toMatchObject({ status: 409, message: new RegExp(`no-downgrade guard missing at ${missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; refusing to update`) });
+      expect(calls).toHaveLength(0);
+      expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+      const dev = await h.make({}, { noDowngrade: guard({ code: 0, stdout: "{}" }, { script: missing, require: false }) }).apply({ force: true });
+      expect(dev.notes).toEqual(expect.arrayContaining([expect.stringMatching(/no-downgrade guard not found at .*no-downgrade\.py; skipped/)]));
+      await h.settle();
+      rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
+      const none = await h.make().apply({ force: true });
+      expect(none.notes).toEqual(expect.arrayContaining(["no-downgrade guard not configured; skipped"]));
+      await h.settle();
+    });
+
+    it("after a finished update the next boot records the now-live bundle in the ledger; a record failure is logged, not fatal", async () => {
+      const updateId = "11111111-2222-3333-4444-555555555555";
+      mkdirSync(join(h.dataDir, "updates", updateId), { recursive: true });
+      writeFileSync(join(h.dataDir, "updates", updateId, "plan.json"), JSON.stringify({ updateId, mode: "update" }));
+      writeFileSync(join(h.dataDir, "updates", updateId, "result.json"), JSON.stringify({ state: "done", at: "x", detail: "updated", updateId, mode: "update" }));
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: JSON.stringify({ ok: true, reason: "recorded 1111111 as the running build in ledger" }) }) }).boot();
+      expect(calls).toEqual([[join(root, "no-downgrade.py"), "record", "--live", h.live, "--ledger", join(root, "data", "updates", "live-build.json"), "--repo", "/repo", "--release-branch", "release/bos-1.0"]]);
+      expect(h.logs).toContain("[update] no-downgrade: recorded 1111111 as the running build in ledger");
+      expect(h.events.at(-1)).toMatchObject({ state: "done", updateId });
+      // a rolled-back or restart result leaves the ledger alone
+      calls.length = 0;
+      mkdirSync(join(h.dataDir, "updates", "a" + updateId.slice(1)), { recursive: true });
+      writeFileSync(join(h.dataDir, "updates", "a" + updateId.slice(1), "plan.json"), JSON.stringify({ mode: "update" }));
+      writeFileSync(join(h.dataDir, "updates", "a" + updateId.slice(1), "result.json"), JSON.stringify({ state: "rolled_back", at: "x", detail: "unhealthy", updateId: "a" + updateId.slice(1), mode: "update" }));
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: "{}" }) }).boot();
+      expect(calls).toHaveLength(0);
+      // failure path
+      mkdirSync(join(h.dataDir, "updates", "b" + updateId.slice(1)), { recursive: true });
+      writeFileSync(join(h.dataDir, "updates", "b" + updateId.slice(1), "plan.json"), JSON.stringify({ mode: "update" }));
+      writeFileSync(join(h.dataDir, "updates", "b" + updateId.slice(1), "result.json"), JSON.stringify({ state: "done", at: "x", detail: "updated", updateId: "b" + updateId.slice(1), mode: "update" }));
+      await h.make({}, { noDowngrade: guard({ code: 2, stdout: JSON.stringify({ ok: false, reason: "Live.app is unstamped; pass --commit" }) }) }).boot();
+      expect(h.logs).toContain("[update] no-downgrade ledger not updated: Live.app is unstamped; pass --commit");
+      expect(h.events.at(-1)).toMatchObject({ state: "done" });
+    });
+
+    it("ships the checked-in no-downgrade.py beside preflight.py via electron-builder, outside the asar", () => {
+      const script = join(REPO, "electron", "resources", "updater", "no-downgrade.py");
+      expect(existsSync(script)).toBe(true);
+      const source = readFileSync(script, "utf8");
+      expect(source).toMatch(/Never stops, launches, signs or swaps anything/);
+      expect(source).not.toMatch(/launchctl|shutil\.(move|rmtree|copytree)|os\.(rename|replace)\((?!tmp)/);
+      execFileSync("/usr/bin/python3", ["-c", `import ast,sys; ast.parse(open(sys.argv[1]).read())`, script], { stdio: "pipe" });
+      const config = parseYaml(readFileSync(join(REPO, "electron-builder.yml"), "utf8")) as { files: string[]; mac: { extraResources: Array<{ from: string; to: string }> } };
+      expect(config.mac.extraResources).toContainEqual({ from: "electron/resources/updater/no-downgrade.py", to: "updater/no-downgrade.py" });
+    });
   });
 
   it("classifies launchd rows", () => {

@@ -2,7 +2,7 @@ import { channelControlPatch, roomCompletionNotifies } from "./channel-controls.
 import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
 import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
 import { DesktopUpdateLifecycle, readPreparedUpdateReceipt, assertUpdateCancellationSafe } from "./desktop-update-lifecycle.ts";
-import { UpdateCoordinator, createDarwinExecutor, readInstalled, resumePrompt, type BusyTurn, type UpdateExecutor } from "./updater.ts";
+import { UpdateCoordinator, createDarwinExecutor, readInstalled, resumePrompt, type BusyTurn, type NoDowngradeOptions, type UpdateExecutor } from "./updater.ts";
 import { createDarwinUpdaterHost, createSandboxUpdaterHost } from "./updater-host.ts";
 import { createElectronUpdateExecutor } from "./updater-executor-electron.ts";
 import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
@@ -12833,6 +12833,19 @@ const LIVE_APP_PATH = (() => {
 })();
 const UPDATE_RESOURCES_PATH = process.env.OMB_RESOURCES_PATH || (LIVE_APP_PATH ? join(LIVE_APP_PATH, "Contents", "Resources") : "");
 const UPDATE_PREFLIGHT_PATH = process.env.OMB_UPDATER_PREFLIGHT || (UPDATE_RESOURCES_PATH && !UPDATE_SANDBOX ? join(UPDATE_RESOURCES_PATH, "updater", "preflight.py") : undefined);
+// The no-downgrade guard beside it. Branches come from the environment for
+// now (OMB_UPDATE_RELEASE_BRANCH, OMB_UPDATE_PROD_BRANCH; defaults
+// release/bos-1.0 and prod) or from the ledger seeded by its first `record`;
+// OMB_UPDATE_REPO names the canonical checkout the ancestry is checked in.
+const UPDATE_NO_DOWNGRADE_PATH = process.env.OMB_UPDATER_NO_DOWNGRADE || (UPDATE_RESOURCES_PATH && !UPDATE_SANDBOX ? join(UPDATE_RESOURCES_PATH, "updater", "no-downgrade.py") : undefined);
+const UPDATE_NO_DOWNGRADE: NoDowngradeOptions | undefined = UPDATE_NO_DOWNGRADE_PATH ? {
+  script: UPDATE_NO_DOWNGRADE_PATH,
+  ledger: join(DATA_DIR, "updates", "live-build.json"),
+  ...(process.env.OMB_UPDATE_REPO ? { repo: process.env.OMB_UPDATE_REPO } : {}),
+  releaseBranch: process.env.OMB_UPDATE_RELEASE_BRANCH || "release/bos-1.0",
+  ...(process.env.OMB_UPDATE_PROD_BRANCH !== undefined ? { prodBranch: process.env.OMB_UPDATE_PROD_BRANCH } : {}),
+  require: !UPDATE_SANDBOX,
+} : undefined;
 const UPDATE_OWNER_PREFIX = "update:";
 // win32: Electron main owns the installer and the relaunch; ask it over the
 // private port. Elsewhere: launchd + the detached python job.
@@ -12851,6 +12864,7 @@ const updateExecutor: UpdateExecutor = process.platform === "win32"
       // it says ok. OMB_UPDATER_PREFLIGHT points dev/test runs at a copy.
       preflight: UPDATE_PREFLIGHT_PATH,
       requirePreflight: Boolean(UPDATE_PREFLIGHT_PATH) && !UPDATE_SANDBOX,
+      ...(UPDATE_NO_DOWNGRADE ? { noDowngrade: UPDATE_NO_DOWNGRADE } : {}),
       ...(UPDATE_SANDBOX ? { sandbox: { ...(process.env.OMB_UPDATE_STAGED_PATH ? { stagedPath: process.env.OMB_UPDATE_STAGED_PATH } : {}), ...(process.env.OMB_UPDATE_FAULT ? { fault: process.env.OMB_UPDATE_FAULT } : {}) } } : {}),
       log: line => console.log(line),
     },

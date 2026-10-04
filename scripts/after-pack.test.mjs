@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import afterPack from "./after-pack.mjs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import afterPack, { packagedSourceCommit, stampBuildCommit } from "./after-pack.mjs";
 import { LICENSE_FILES } from "./cua-linux-release.mjs";
 
 const temporaryDirectories = [];
@@ -88,5 +90,52 @@ describe("desktop browser package gate", () => {
     fs.mkdirSync(path.join(resources, "browser-engine"));
     await expect(afterPack({ electronPlatformName: "win32", arch: 0, appOutDir }))
       .rejects.toThrow(/Unsupported desktop browser package architecture/);
+  });
+});
+
+describe("build commit stamp", () => {
+  const sha = "a".repeat(40);
+  function trees(resources) {
+    for (const [tree, file, body] of [["server", "index.js", "// server"], ["server", "nested/a.js", "// a"], ["server", "nested-x.js", "// x"], ["ui", "index.html", "<html/>"]]) {
+      fs.mkdirSync(path.dirname(path.join(resources, tree, file)), { recursive: true });
+      fs.writeFileSync(path.join(resources, tree, file), body);
+    }
+  }
+
+  it("writes Resources/build-commit.json with the commit and the tree digests the python guard computes", async () => {
+    const { resources } = fixture();
+    trees(resources);
+    const stamp = await stampBuildCommit(resources, sha);
+    const written = JSON.parse(fs.readFileSync(path.join(resources, "build-commit.json"), "utf8"));
+    expect(written).toEqual(stamp);
+    expect(written.commit).toBe(sha);
+    expect(written.server_sha256).toMatch(/^[0-9a-f]{64}$/);
+    // the shipped guard must read this stamp as valid for these exact trees
+    const app = path.join(resources, "..", "Stamped.app");
+    fs.mkdirSync(path.join(app, "Contents"), { recursive: true });
+    fs.renameSync(resources, path.join(app, "Contents", "Resources"));
+    const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "electron", "resources", "updater", "no-downgrade.py");
+    const probe = spawnSync("/usr/bin/python3", ["-c", `
+import importlib.util, json, sys
+from pathlib import Path
+spec = importlib.util.spec_from_loader("g", loader=None); g = importlib.util.module_from_spec(spec)
+exec(open(sys.argv[1]).read(), g.__dict__)
+print(json.dumps(g.read_stamp(Path(sys.argv[2]))))`, script, app], { encoding: "utf8" });
+    expect(probe.status, probe.stderr).toBe(0);
+    expect(JSON.parse(probe.stdout)).toEqual([sha, "stamped"]);
+  });
+
+  it("refuses to stamp without a full source commit, and a real package without bosSourceCommit fails instead of shipping unstamped", async () => {
+    const { appOutDir, resources } = fixture();
+    trees(resources);
+    await expect(stampBuildCommit(resources, "abc123")).rejects.toThrow(/full 40-hex source commit/);
+    await expect(stampBuildCommit(resources, undefined)).rejects.toThrow(/got null/);
+    expect(fs.existsSync(path.join(resources, "build-commit.json"))).toBe(false);
+    expect(packagedSourceCommit({ packager: { metadata: { bosSourceCommit: sha } } })).toBe(sha);
+    expect(packagedSourceCommit({ packager: { metadata: {}, config: { extraMetadata: { bosSourceCommit: sha } } } })).toBe(sha);
+    expect(packagedSourceCommit({})).toBeNull();
+    // fixtures without a packager and without a commit stay unstamped (the older hooks' tests)
+    await afterPack({ electronPlatformName: "win32", arch: 1, appOutDir });
+    expect(fs.existsSync(path.join(resources, "build-commit.json"))).toBe(false);
   });
 });

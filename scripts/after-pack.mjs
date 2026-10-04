@@ -1,4 +1,5 @@
-import { chmod, lstat, readFile, readdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { LICENSE_FILES } from "./cua-linux-release.mjs";
 import {
@@ -65,6 +66,52 @@ async function validateCloudflared(resources, platform, required) {
   );
 }
 
+// Same digest as server/updater.ts treeDigest and updater/no-downgrade.py:
+// files under Resources/<name> sorted by relative posix path, each hashed as
+// path then bytes. The three must agree or the stamp is treated as missing.
+async function treeDigest(resources, name) {
+  const root = path.join(resources, name);
+  await requireRealDirectory(root, undefined);
+  const files = [];
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(file);
+      else if (entry.isFile()) files.push(file);
+    }
+  };
+  await walk(root);
+  const hash = createHash("sha256");
+  for (const file of files.sort((a, b) => (path.relative(root, a).split(path.sep).join("/") < path.relative(root, b).split(path.sep).join("/") ? -1 : 1))) {
+    hash.update(path.relative(root, file).split(path.sep).join("/"));
+    hash.update(await readFile(file));
+  }
+  return hash.digest("hex");
+}
+
+/** Resources/build-commit.json: the source commit this bundle was built from
+ * plus the digests of the server and ui trees it describes. The updater's
+ * no-downgrade guard refuses any bundle without a valid stamp, so a real
+ * package with no bosSourceCommit fails here rather than shipping unstampable. */
+export async function stampBuildCommit(resources, commit) {
+  if (!/^[0-9a-f]{40}$/.test(commit ?? "")) throw new Error(`build stamp needs the full 40-hex source commit, got ${JSON.stringify(commit ?? null)}`);
+  const stamp = {
+    commit,
+    server_sha256: await treeDigest(resources, "server"),
+    ui_sha256: await treeDigest(resources, "ui"),
+    stamped_at: new Date().toISOString(),
+  };
+  await writeFile(path.join(resources, "build-commit.json"), `${JSON.stringify(stamp, null, 2)}
+`, { mode: 0o644 });
+  return stamp;
+}
+
+export function packagedSourceCommit(context) {
+  const metadata = context.packager?.metadata ?? {};
+  const extra = context.packager?.config?.extraMetadata ?? {};
+  return metadata.bosSourceCommit ?? extra.bosSourceCommit ?? process.env.BOS_SOURCE_COMMIT ?? null;
+}
+
 // electron-builder normalizes copied resource directories to 0775. That is
 // unsafe for a root-owned executable path after DEB/AppImage installation, so
 // repair and revalidate the exact tree after resources are copied and before
@@ -76,6 +123,10 @@ export default async function afterPack(context) {
       : path.join(context.appOutDir, "resources")
   );
   await validateCloudflared(resources, context.electronPlatformName, Boolean(context.packager));
+  // Stamp every real package. Unit fixtures for the older hooks carry no
+  // server/ui trees and no commit, so they are left unstamped.
+  const sourceCommit = packagedSourceCommit(context);
+  if (context.packager || sourceCommit) await stampBuildCommit(resources, sourceCommit);
   const browserRoot = path.join(resources, "browser-engine");
   const hasBrowser = await lstat(browserRoot).then(() => true, (error) => {
     if (error?.code === "ENOENT") return false;
