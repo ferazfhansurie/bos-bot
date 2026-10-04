@@ -2,7 +2,7 @@
 //
 // unattended.test.ts pins that a webhook turn on an Auto-mode bot keeps
 // asking a human. This pins the door that was left beside it: a message
-// POSTed into that running turn is steered into it, and the harness used to
+// POSTed into that running turn is queued then explicitly steered, and the harness used to
 // treat any steer as "a person is here now" and lift the unattended mark. On
 // a headless server the bot's own shell is a loopback caller, so one
 // `curl -d '{"text":"continue"}'` from inside the turn laundered the rest of
@@ -146,7 +146,7 @@ posixOnly("a steered message does not lift the unattended mark on its own", () =
     await removeTempDir(home);
   });
 
-  it("keeps asking after the turn POSTs into itself with no session", async () => {
+  it("keeps asking after the turn enqueues and explicitly steers into itself with no session", async () => {
     const bot = (await api("GET", "/api/bots?messages=0")).body.bots[0];
     // auto mode ON: an attended turn would sail straight through
     expect((await api("PATCH", `/api/bots/${bot.id}`, {
@@ -184,8 +184,11 @@ posixOnly("a steered message does not lift the unattended mark on its own", () =
     try {
       // the bot's own loopback POST into its running turn — no session, no
       // desktop capability, the way a shell inside the turn would send it
-      const steer = await api("POST", `/api/bots/${bot.id}/messages`, { text: "continue" });
-      expect(steer.status).toBe(202);
+      const queued = await api("POST", `/api/bots/${bot.id}/messages`, { text: "continue", threadId: runThreadId });
+      expect(queued.status).toBe(202);
+      expect(queued.body).toMatchObject({ ok: true, queued: true });
+      const steer = await api("POST", `/api/bots/${bot.id}/queue/${queued.body.queueId}/steer`, { threadId: runThreadId });
+      expect(steer.status).toBe(200);
       expect(steer.body.steered).toBe(true);
 
       // the next ask must still reach a person: a live card, no answer. An
