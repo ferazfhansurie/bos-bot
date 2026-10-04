@@ -1,18 +1,21 @@
-// Update & restart, like codex: a quiet "update ready" pill in the sidebar
-// header, a Settings > Updates section that names the build and what's in
-// it, a confirm sheet that lists the bots that will be paused and resumed,
-// live progress while the server swaps the build, and one toast after the
-// relaunch saying how it went. State comes from lib/bos-update.
+// One-press update, like codex: a quiet "1.2.0 → 1.3.0" pill in the sidebar
+// header that only shows when the server has a newer build that passes the
+// no-downgrade guard, a Settings > Updates section, one confirm line, live
+// progress (waiting for named bots, building, installing, restarting) while
+// the server runs it, and one toast after the restart saying how it went.
+// State comes from lib/bos-update.
 //
 // The pure pieces take a view and callbacks so the preview page and tests
 // can drive every state; the connected wrappers at the bottom read the store.
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowUpCircle, Check, CircleX, Loader2, RefreshCw, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, ArrowUpCircle, Check, CircleX, Loader2, RefreshCw, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   UPDATE_STEPS,
   acknowledgeNotice,
   applyUpdate,
+  checkForUpdate,
+  drainingLabel,
   isUpdateRunning,
   noticeAcknowledged,
   restartApp,
@@ -34,10 +37,10 @@ export interface BusyEntry {
 }
 
 export function busyEntries(view: UpdateView, bots: Bot[]): BusyEntry[] {
-  return (view.status?.busyTurns ?? []).map(({ botId, threadId }) => {
+  return (view.status?.busyTurns ?? []).map(({ botId, threadId, botName }) => {
     const bot = bots.find((candidate) => candidate.id === botId);
     const task = bot?.tasks?.find((candidate) => candidate.threadId === threadId);
-    return { key: `${botId}:${threadId}`, name: bot?.name ?? botId, bot, threadTitle: task?.title };
+    return { key: `${botId}:${threadId}`, name: botName ?? bot?.name ?? botId, bot, threadTitle: task?.title };
   });
 }
 
@@ -50,18 +53,20 @@ function formatStaged(at: number | string | undefined): string {
 
 // ── sidebar pill ─────────────────────────────────────────────────────
 
-/** Nothing when idle; "Update ready" when a candidate is staged; the live
- * step with a spinner while a run is going. Clicking opens Settings > Updates. */
+/** Nothing when idle; "1.2.0 → 1.3.0" when a newer build is allowed; a
+ * spinner while a run is going. Clicking opens Settings > Updates. */
 export function UpdatePill({ view, onOpen, compact = false }: { view: UpdateView; onOpen: () => void; compact?: boolean }) {
   const running = isUpdateRunning(view.state) || view.pending !== null;
   if (!running && view.state !== "ready") return null;
-  const label = running ? stepLabel(view.pending && !isUpdateRunning(view.state) ? "checkpointing" : view.state) : "Update ready";
+  const from = view.status?.current.version;
+  const to = view.status?.candidate?.version;
+  const label = running ? stepLabel(view.pending && !isUpdateRunning(view.state) ? "draining" : view.state) : to ? `${from} → ${to}` : "Update ready";
   return (
     <button
       type="button"
       onClick={onOpen}
       aria-label={label}
-      title={running ? `Updating · ${label}` : `Update to ${view.status?.candidate?.version ?? "the new build"}`}
+      title={running ? `Updating · ${label}` : to ? `Update BOS ${from} → ${to}` : "Update BOS"}
       className={cn(
         "animate-panel-in flex items-center justify-center gap-1.5 rounded-full text-[12px] font-medium transition-colors",
         compact ? "size-10 rounded-md" : "h-7 px-2.5",
@@ -77,8 +82,8 @@ export function UpdatePill({ view, onOpen, compact = false }: { view: UpdateView
 
 // ── progress ─────────────────────────────────────────────────────────
 
-export function UpdateProgress({ view }: { view: UpdateView }) {
-  const current = view.pending && !isUpdateRunning(view.state) ? "checkpointing" : view.state;
+export function UpdateProgress({ view, busy = [] }: { view: UpdateView; busy?: BusyEntry[] }) {
+  const current = view.pending && !isUpdateRunning(view.state) ? "draining" : view.state;
   const index = (UPDATE_STEPS as readonly string[]).indexOf(current);
   return (
     <ol className="flex flex-col gap-1.5" aria-label="Update progress">
@@ -94,9 +99,20 @@ export function UpdateProgress({ view }: { view: UpdateView }) {
             <span className="flex size-4 items-center justify-center">
               {done ? <Check size={13} className="text-success" /> : active ? <Loader2 size={13} className="animate-spin text-accent" /> : <span className="size-1.5 rounded-full bg-current" />}
             </span>
-            {stepLabel(step)}
+            {step === "draining" && active ? drainingLabel(busy.map((entry) => entry.name)) : stepLabel(step)}
+            {step === "draining" && active && busy.some((entry) => entry.bot) && (
+              <span className="flex -space-x-1.5" aria-hidden>
+                {busy.map((entry) =>
+                  entry.bot ? (
+                    <span key={entry.key} className="rounded-full ring-2 ring-inset">
+                      <BotAvatar bot={entry.bot} size={18} state="working" motion="none" motionKey={0} animated={false} />
+                    </span>
+                  ) : null,
+                )}
+              </span>
+            )}
             {active && step === "relaunching" && view.offline && <span className="text-ink-secondary">· BOS will reopen by itself</span>}
-            {active && view.detail && step !== "relaunching" && <span className="truncate text-ink-secondary">· {view.detail}</span>}
+            {active && view.detail && step !== "relaunching" && step !== "draining" && <span className="truncate text-ink-secondary">· {view.detail}</span>}
           </li>
         );
       })}
@@ -104,19 +120,23 @@ export function UpdateProgress({ view }: { view: UpdateView }) {
   );
 }
 
-// ── confirm sheet ────────────────────────────────────────────────────
+// ── confirm line ─────────────────────────────────────────────────────
 
-export function ConfirmUpdateDialog({
+/** One line, inline: what happens, then go or cancel. Bots mid-reply get to
+ * finish (bounded by the server); pressing is the approval to interrupt after. */
+export function ConfirmUpdateLine({
   kind,
-  version,
+  from,
+  to,
   busy,
   onConfirm,
   onCancel,
 }: {
   kind: "apply" | "restart";
-  version?: string;
+  from?: string;
+  to?: string;
   busy: BusyEntry[];
-  onConfirm: (force: boolean) => void;
+  onConfirm: () => void;
   onCancel: () => void;
 }) {
   useEffect(() => {
@@ -126,68 +146,19 @@ export function ConfirmUpdateDialog({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
-  const title = kind === "apply" ? `Update to ${version ?? "the new build"} and restart?` : "Restart BOS?";
+  const what = kind === "apply" ? `Update ${from} → ${to} and restart?` : "Restart BOS?";
+  const bots = busy.length === 0 ? "Chats and drafts are saved first." : busy.length === 1 ? `${busy[0].name} finishes first.` : `${busy.length} bots finish first.`;
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-6"
-      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="bos-update-confirm-title"
-        className="animate-panel-in w-full max-w-[400px] rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl"
-      >
-        <h2 id="bos-update-confirm-title" className="text-[16px] font-semibold text-ink">
-          {title}
-        </h2>
-        <p className="mt-1.5 text-[13px] leading-relaxed text-ink-secondary">
-          {busy.length === 0
-            ? "No bots are working right now. Open chats, drafts and queues are saved first."
-            : "Open chats, drafts and queues are saved first. These bots will be paused and pick up in the same thread after the restart:"}
-        </p>
-        {busy.length > 0 && (
-          <ul className="mt-3 flex max-h-56 flex-col gap-1 overflow-y-auto rounded-xl bg-inset p-1.5" aria-label="Bots that will be paused">
-            {busy.map((entry) => (
-              <li key={entry.key} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-                {entry.bot ? (
-                  <BotAvatar bot={entry.bot} size={24} state="working" motion="none" motionKey={0} animated={false} />
-                ) : (
-                  <span className="size-6 rounded-full bg-control" />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium text-ink">{entry.name}</span>
-                  {entry.threadTitle && <span className="block truncate text-[12px] text-ink-secondary">{entry.threadTitle}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="mt-5 flex flex-col gap-2">
-          <button
-            type="button"
-            autoFocus
-            onClick={() => onConfirm(false)}
-            className="flex items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110"
-          >
-            <RefreshCw size={13} />
-            {kind === "apply" ? "Update & restart" : "Restart"}
-            {busy.length > 0 && <span className="font-normal opacity-80">· waits up to 90s</span>}
-          </button>
-          {busy.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onConfirm(true)}
-              className="rounded-xl bg-control px-4 py-2 text-[13px] text-ink hover:bg-raised-hover"
-            >
-              Pause bots now and {kind === "apply" ? "update" : "restart"}
-            </button>
-          )}
-          <button type="button" onClick={onCancel} className="rounded-xl px-4 py-2 text-[13px] text-ink-secondary hover:bg-control hover:text-ink">
-            Cancel
-          </button>
-        </div>
-      </div>
+    <div role="group" aria-label="Confirm update" className="animate-panel-in mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-3 py-2">
+      <span className="min-w-0 flex-1 truncate text-[13px] text-ink" title={`${what} ${bots}`}>
+        {what} <span className="text-ink-secondary">{bots}</span>
+      </span>
+      <button type="button" autoFocus onClick={onConfirm} className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12.5px] font-medium text-white hover:brightness-110">
+        {kind === "apply" ? "Update" : "Restart"}
+      </button>
+      <button type="button" onClick={onCancel} className="shrink-0 rounded-md px-2 py-1 text-[12.5px] text-ink-secondary hover:bg-control hover:text-ink">
+        Cancel
+      </button>
     </div>
   );
 }
@@ -199,13 +170,18 @@ export function UpdatesPanel({
   busy,
   onApply,
   onRestart,
+  onCheck,
+  initialConfirm,
 }: {
   view: UpdateView;
   busy: BusyEntry[];
   onApply: (force: boolean) => void;
   onRestart: (force: boolean) => void;
+  onCheck?: () => void;
+  /** Preview seam: open with the confirm line showing. */
+  initialConfirm?: "apply" | "restart" | null;
 }) {
-  const [confirm, setConfirm] = useState<"apply" | "restart" | null>(null);
+  const [confirm, setConfirm] = useState<"apply" | "restart" | null>(initialConfirm ?? null);
   const status = view.status;
   const running = isUpdateRunning(view.state) || view.pending !== null;
   const candidate = status?.candidate;
@@ -236,12 +212,15 @@ export function UpdatesPanel({
         {candidate && !running && (
           <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-3">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-[14px] font-medium text-ink">{candidate.version} is ready</span>
+              <span className="flex items-center gap-1.5 text-[14px] font-medium text-ink">
+                {status.current.version} <ArrowRight size={13} className="text-ink-secondary" /> {candidate.version}
+              </span>
               <span className="shrink-0 font-mono text-[11.5px] text-ink-secondary">{shortSha(candidate.sha)}</span>
             </div>
-            {formatStaged(candidate.stagedAt) && (
-              <div className="mt-0.5 text-[12px] text-ink-secondary">Staged {formatStaged(candidate.stagedAt)}</div>
-            )}
+            <div className="mt-0.5 text-[12px] text-ink-secondary">
+              Newer build on {candidate.branch ?? "prod"}
+              {formatStaged(candidate.stagedAt) ? ` · ${formatStaged(candidate.stagedAt)}` : ""}
+            </div>
             {candidate.notes && candidate.notes.length > 0 && (
               <>
                 <div className="mt-3 text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">What's in it</div>
@@ -260,7 +239,7 @@ export function UpdatesPanel({
             <div className="mb-2 text-[13px] font-medium text-ink">
               {candidate ? `Updating to ${candidate.version}` : "Restarting"}
             </div>
-            <UpdateProgress view={view} />
+            <UpdateProgress view={view} busy={busy} />
           </div>
         )}
 
@@ -273,7 +252,7 @@ export function UpdatesPanel({
           >
             {notice.tone === "ok" ? <Check size={14} className="mt-0.5 shrink-0" /> : notice.tone === "warn" ? <RotateCcw size={14} className="mt-0.5 shrink-0" /> : <CircleX size={14} className="mt-0.5 shrink-0" />}
             <span>
-              Last run: {notice.title}
+              {notice.title}
               {notice.detail ? ` · ${notice.detail}` : ""}
             </span>
           </div>
@@ -285,42 +264,50 @@ export function UpdatesPanel({
           </div>
         )}
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          {candidate && (
-            <button
-              type="button"
-              disabled={running}
-              onClick={() => setConfirm("apply")}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-1.5 text-[13px] font-medium text-white hover:brightness-110 disabled:cursor-default disabled:bg-control disabled:text-ink-secondary"
-            >
-              {view.pending === "apply" ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-              Update & restart
+        {confirm && !running ? (
+          <ConfirmUpdateLine
+            kind={confirm}
+            from={status.current.version}
+            to={candidate?.version}
+            busy={busy}
+            onCancel={() => setConfirm(null)}
+            onConfirm={() => {
+              setConfirm(null);
+              (confirm === "apply" ? onApply : onRestart)(false);
+            }}
+          />
+        ) : (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {candidate && (
+              <button
+                type="button"
+                disabled={running}
+                onClick={() => setConfirm("apply")}
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-1.5 text-[13px] font-medium text-white hover:brightness-110 disabled:cursor-default disabled:bg-control disabled:text-ink-secondary"
+              >
+                {view.pending === "apply" || running ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                {running ? "Updating…" : "Update"}
+              </button>
+            )}
+            {!candidate && onCheck && (
+              <button type="button" disabled={running || view.checking} onClick={onCheck} className="ui-button">
+                {view.checking ? <Loader2 size={13} className="animate-spin" /> : null}
+                Check for updates
+              </button>
+            )}
+            <button type="button" disabled={running} onClick={() => setConfirm("restart")} className="ui-button">
+              {view.pending === "restart" ? <Loader2 size={13} className="animate-spin" /> : null}
+              Restart
             </button>
-          )}
-          <button type="button" disabled={running} onClick={() => setConfirm("restart")} className="ui-button">
-            {view.pending === "restart" ? <Loader2 size={13} className="animate-spin" /> : null}
-            Restart
-          </button>
-        </div>
-        {busy.length > 0 && !running && (
+            {!candidate && !running && status.reason && <span className="text-[12px] text-ink-secondary">{status.reason}</span>}
+          </div>
+        )}
+        {busy.length > 0 && !running && !confirm && candidate && (
           <div className="mt-2 text-[12px] text-ink-secondary">
-            {busy.length === 1 ? "1 bot is working" : `${busy.length} bots are working`} — they'll be paused and resumed.
+            {busy.length === 1 ? "1 bot is working" : `${busy.length} bots are working`}; the update waits for {busy.length === 1 ? "it" : "them"} to finish.
           </div>
         )}
       </div>
-
-      {confirm && (
-        <ConfirmUpdateDialog
-          kind={confirm}
-          version={candidate?.version}
-          busy={busy}
-          onCancel={() => setConfirm(null)}
-          onConfirm={(force) => {
-            setConfirm(null);
-            (confirm === "apply" ? onApply : onRestart)(force);
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -374,6 +361,7 @@ export function UpdatesSettings() {
       busy={busyEntries(view, state.bots)}
       onApply={(force) => void applyUpdate(force)}
       onRestart={(force) => void restartApp(force)}
+      onCheck={() => void checkForUpdate()}
     />
   );
 }

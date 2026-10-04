@@ -1,6 +1,7 @@
-// The staged-build updater (1.3): a candidate build sits on this mac, the
-// server owns checkpoint → stop → swap → relaunch → verify, and this module
-// is the renderer's one view of it. Separate from lib/updater.ts, which is
+// The one-press updater: the server finds the newest prod build that passes
+// the no-downgrade guard, then owns drain → checkpoint → stop → build →
+// install → relaunch → verify (rolling back if the new build is unhealthy),
+// and this module is the renderer's one view of it. Separate from lib/updater.ts, which is
 // electron-updater's published-release channel.
 //
 // State arrives two ways: GET /api/update/status (the truth, polled) and
@@ -18,14 +19,28 @@ export interface UpdateBuild {
   sha: string;
 }
 
+/** Only present when it passes the guard: prod head, a newer descendant of
+ * the running build, stamped. `notes` is optional, one line per change. */
+export interface UpdateCandidate extends UpdateBuild {
+  branch?: string;
+  stagedAt?: number | string;
+  notes?: string[];
+}
+
 export interface UpdateStatus {
   state: UpdateRunState;
   current: UpdateBuild;
-  /** `notes` is optional and not in the 1.3 contract yet: one line per
-   * change, shown as "what's in it" when the server sends it. */
-  candidate?: UpdateBuild & { stagedAt: number | string; notes?: string[] };
-  busyTurns: Array<{ botId: string; threadId: string }>;
-  lastResult?: { state: UpdateRunState; at: number | string; detail?: string; rollback?: boolean | string };
+  candidate?: UpdateCandidate;
+  /** Why there is no candidate, one line (from /check). */
+  reason?: string;
+  busyTurns: Array<{ botId: string; threadId: string; botName?: string }>;
+  lastResult?: { state: UpdateRunState; at: number | string; from?: UpdateBuild; to?: UpdateBuild; detail?: string };
+}
+
+export interface UpdateCheck {
+  current: UpdateBuild;
+  candidate?: UpdateCandidate;
+  reason?: string;
 }
 
 export interface UpdateFrame {
@@ -37,12 +52,15 @@ export interface UpdateFrame {
 
 export interface UpdateTransport {
   status(): Promise<UpdateStatus>;
-  apply(force: boolean): Promise<{ updateId: string }>;
+  check(): Promise<UpdateCheck>;
+  /** A second press answers 200 with the same id and `inProgress: true`. */
+  apply(force: boolean): Promise<{ updateId: string; inProgress?: boolean }>;
   restart(force: boolean): Promise<void>;
 }
 
 const httpTransport: UpdateTransport = {
   status: () => api<UpdateStatus>("/api/update/status", { timeoutMs: 5_000 }),
+  check: () => api<UpdateCheck>("/api/update/check", { method: "POST", timeoutMs: 30_000 }),
   apply: (force) => api<{ updateId: string }>("/api/update/apply", { method: "POST", body: JSON.stringify({ force }) }),
   restart: async (force) => {
     await api("/api/update/restart", { method: "POST", body: JSON.stringify({ force }) });
@@ -50,7 +68,11 @@ const httpTransport: UpdateTransport = {
 };
 
 /** The run steps in order; the progress list renders these. */
-export const UPDATE_STEPS = ["checkpointing", "stopping", "applying", "relaunching", "verifying"] as const;
+export const UPDATE_STEPS = ["draining", "checkpointing", "stopping", "building", "applying", "relaunching", "verifying"] as const;
+
+export function isUpdateSuccess(state: UpdateRunState | undefined): boolean {
+  return state === "updated" || state === "done";
+}
 
 export function isUpdateRunning(state: UpdateRunState | undefined): boolean {
   return !!state && (UPDATE_STEPS as readonly string[]).includes(state);
@@ -68,9 +90,10 @@ export interface UpdateView {
   /** Last apply/restart request failure (409 = another update owns the lock). */
   error: string | null;
   pending: "apply" | "restart" | null;
+  checking: boolean;
 }
 
-const EMPTY: UpdateView = { status: null, state: "idle", offline: false, error: null, pending: null };
+const EMPTY: UpdateView = { status: null, state: "idle", offline: false, error: null, pending: null, checking: false };
 
 let transport: UpdateTransport = httpTransport;
 let view: UpdateView = EMPTY;
@@ -96,8 +119,10 @@ async function poll() {
     // A frame newer than the poll can only move forward; once the poll shows
     // a run has settled, it is the truth again.
     const frameAhead = isUpdateRunning(view.state) && isUpdateRunning(status.state) && view.state !== status.state;
+    // status may not repeat /check's one-line reason; keep it until a candidate shows
+    const reason = status.reason ?? (status.candidate ? undefined : view.status?.reason);
     set({
-      status,
+      status: { ...status, reason },
       state: frameAhead ? view.state : status.state,
       detail: frameAhead ? view.detail : status.lastResult?.detail,
       offline: false,
@@ -121,7 +146,7 @@ function schedule() {
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  if (listeners.size === 1 && !timer) void poll();
+  if (listeners.size === 1 && !timer) void poll().then(() => checkForUpdate());
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0 && timer) {
@@ -146,13 +171,33 @@ export function noteUpdateFrame(frame: UpdateFrame) {
   schedule();
 }
 
+/** Ask the server to look for a newer prod build. The guard decides; the
+ * candidate only comes back when it is allowed to install. */
+export async function checkForUpdate() {
+  if (unsupported || view.checking || isUpdateRunning(view.state) || !view.status) return;
+  set({ checking: true });
+  try {
+    const found = await transport.check();
+    const status = view.status ?? { state: "idle" as const, busyTurns: [], current: found.current };
+    set({
+      checking: false,
+      status: { ...status, current: found.current, candidate: found.candidate, reason: found.reason },
+      state: found.candidate && status.state === "idle" ? "ready" : !found.candidate && status.state === "ready" ? "idle" : view.state,
+    });
+  } catch (error) {
+    // an older server without /check still reports a staged candidate in status
+    set({ checking: false, error: error instanceof ApiError && error.status === 404 ? view.error : error instanceof Error ? error.message : String(error) });
+  }
+}
+
 async function request(kind: "apply" | "restart", force: boolean) {
   if (view.pending || isUpdateRunning(view.state)) return;
   set({ pending: kind, error: null });
   try {
     if (kind === "apply") await transport.apply(force);
     else await transport.restart(force);
-    set({ state: "checkpointing", detail: undefined });
+    // a second press (another window) joins the run already going
+    if (!isUpdateRunning(view.state)) set({ state: kind === "apply" ? "draining" : "checkpointing", detail: undefined });
   } catch (error) {
     const message =
       error instanceof ApiError && error.status === 409
@@ -188,12 +233,14 @@ export function updateNotice(status: UpdateStatus | null): UpdateNotice | null {
   const result = status?.lastResult;
   if (!result) return null;
   const key = `${result.state}:${result.at}`;
-  if (result.state === "done")
-    return { key, tone: "ok", title: `Updated to ${status!.current.version}`, detail: shortSha(status!.current.sha) };
+  const to = result.to ?? status!.current;
+  const from = result.from ?? status!.current;
+  if (isUpdateSuccess(result.state))
+    return { key, tone: "ok", title: `Updated to ${to.version}`, detail: result.from ? `${from.version} → ${to.version} · ${shortSha(to.sha)}` : shortSha(to.sha) };
   if (result.state === "rolled_back")
-    return { key, tone: "warn", title: `Rolled back: ${result.detail || "the new build failed its health check"}`, detail: `Still on ${status!.current.version}` };
+    return { key, tone: "warn", title: `Update failed, rolled back to ${from.version}`, detail: result.detail };
   if (result.state === "failed")
-    return { key, tone: "error", title: `Update failed: ${result.detail || "unknown error"}` };
+    return { key, tone: "error", title: `Update failed, still on ${from.version}`, detail: result.detail };
   return null;
 }
 
@@ -220,17 +267,22 @@ export function shortSha(sha: string | undefined): string {
 
 export function stepLabel(state: UpdateRunState): string {
   switch (state) {
+    case "draining":
+      return "Waiting for bots to finish";
     case "checkpointing":
       return "Saving open work";
     case "stopping":
       return "Pausing bots";
+    case "building":
+      return "Building";
     case "applying":
       return "Installing";
     case "relaunching":
-      return "Relaunching";
+      return "Restarting";
     case "verifying":
       return "Checking the new build";
     case "done":
+    case "updated":
       return "Updated";
     case "rolled_back":
       return "Rolled back";
@@ -241,6 +293,13 @@ export function stepLabel(state: UpdateRunState): string {
     default:
       return "Up to date";
   }
+}
+
+/** The draining line: "Waiting for 2 bots to finish (pix, pipe)". */
+export function drainingLabel(names: string[]): string {
+  if (names.length === 0) return "Waiting for bots to finish";
+  const count = names.length === 1 ? "1 bot" : `${names.length} bots`;
+  return `Waiting for ${count} to finish (${names.join(", ")})`;
 }
 
 /** Test/preview seam: swap the HTTP transport for a mock and reset. */
