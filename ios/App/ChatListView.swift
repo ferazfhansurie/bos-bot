@@ -40,6 +40,11 @@ struct ChatListView: View {
     @State private var groupPendingDeletion: SharedRoomSummary?
     @State private var groupDeleteError: String?
     @FocusState private var searchFocused: Bool
+    /// The chat rows' order on screen, held while a finger is on the list.
+    @State private var rowOrder = StableOrder()
+    @State private var settleTask: Task<Void, Never>?
+    @State private var touching = false
+    @State private var scrolling = false
 
 #if DEBUG
     @MainActor private static var debugRouted = false
@@ -110,6 +115,19 @@ struct ChatListView: View {
                     .padding(.bottom, Self.barClearance)
                 }
                 .refreshable { await session.refresh(); await refreshShared() }
+                .modifier(WatchRosterTouches(touching: $touching, scrolling: $scrolling))
+                .onChange(of: orderedConversations.map(\.id), initial: true) { _, ids in settleOrder(ids) }
+                .onChange(of: touching || scrolling) { _, busy in
+                    if busy {
+                        rowOrder.hold(true)
+#if DEBUG
+                        if touching { debugReorderMidTap() }
+#endif
+                    } else {
+                        rowOrder.release()
+                        settleOrder(orderedConversations.map(\.id))
+                    }
+                }
                 .overlay {
                     if rosterIsEmpty {
                         if query.isEmpty && !session.state.rosterLoaded {
@@ -207,6 +225,7 @@ struct ChatListView: View {
                    let match = session.state.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
                     path.append(match.chat)
                 }
+                if Autopilot.scenario == "switch" { Task { await runSwitchAutopilot() } }
             }
 #endif
             .sheet(isPresented: $showingUpdates) {
@@ -499,7 +518,7 @@ struct ChatListView: View {
         if !pinnedConversations.isEmpty { pinnedConversationGrid }
 
         sectionLabel(Text("Chats")).padding(.top, 18).padding(.bottom, 4)
-        ForEach(orderedConversations.filter { !pinnedChats.ids.contains($0.id) }) { entry in
+        ForEach(shownConversations.filter { !pinnedChats.ids.contains($0.id) }) { entry in
             switch entry {
             case .local(let summary): botRows([summary])
             case .contact(let contact): contactRow(contact)
@@ -657,6 +676,49 @@ struct ChatListView: View {
             return left.0.id < right.0.id
         }.map(\.0)
     }
+
+    /// `orderedConversations` as the screen shows it: rows stay where they
+    /// are while touched and move at most every 1.5s, so a tap opens the
+    /// chat that was under the finger.
+    private var shownConversations: [ConversationEntry] {
+        let live = orderedConversations
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-roster-order-live") { return live }
+#endif
+        let byID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return rowOrder.arrange(live.map(\.id)).compactMap { byID[$0] }
+    }
+
+    private func settleOrder(_ ids: [String]) {
+        var order = rowOrder
+        let retry = order.settle(ids)
+        if order != rowOrder {
+            // animated, so a row that moves is seen moving
+            withAnimation(.snappy) { rowOrder = order }
+        }
+        settleTask?.cancel()
+        settleTask = nil
+        guard let retry else { return }
+        settleTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(max(0.05, retry)))
+            guard !Task.isCancelled else { return }
+            settleOrder(orderedConversations.map(\.id))
+        }
+    }
+
+#if DEBUG
+    /// `-reorder-mid-tap`: 100ms after a finger lands, the bottom chat gets a
+    /// message and jumps to the top, moving every row above it down one.
+    private func debugReorderMidTap() {
+        guard ProcessInfo.processInfo.arguments.contains("-reorder-mid-tap") else { return }
+        let rows = shownConversations.filter { !pinnedChats.ids.contains($0.id) }
+        guard case let .local(summary)? = rows.last else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            session.debugPostMessage(threadId: summary.chat.threadId)
+        }
+    }
+#endif
 
     private func contactRow(_ contact: SharedContact) -> some View {
         let room = sharedRooms.first { $0.memberIds.count == 2 && !$0.isGroup && $0.memberIds.contains(sharedMe?.actorId ?? "") && $0.memberIds.contains(contact.id) }
@@ -925,6 +987,43 @@ struct ChatListView: View {
             }
         }
     }
+
+#if DEBUG
+    /// `-autopilot switch`: back to the list, then into bos, oracle and HQ
+    /// twice over, timing each until the screen has appeared.
+    @MainActor private func runSwitchAutopilot() async {
+        try? await Task.sleep(for: .seconds(3))
+        Autopilot.log("START switch")
+        /// Make the change, then wait for the frame after the hook fires.
+        func until(appeared: Bool, after change: () -> Void) async {
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                let hook = { DispatchQueue.main.async { done.resume() } }
+                if appeared {
+                    Autopilot.chatAppeared = { Autopilot.chatAppeared = nil; hook() }
+                } else {
+                    Autopilot.chatDisappeared = { Autopilot.chatDisappeared = nil; hook() }
+                }
+                change()
+            }
+        }
+        for name in ["bos", "oracle", "HQ", "bos", "oracle", "HQ"] {
+            if !path.isEmpty {
+                let back = Date()
+                await until(appeared: false) { path = NavigationPath() }
+                Autopilot.log("SWITCH_SECONDS back \(Date().timeIntervalSince(back))")
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let summary = session.state.chatSummaries(activity: activity).first(where: { $0.chat.name == name }) else {
+                Autopilot.log("MISSING \(name)"); continue
+            }
+            let tapped = Date()
+            await until(appeared: true) { path.append(homeChat(summary.chat)) }
+            Autopilot.log("SWITCH_SECONDS \(name) \(Date().timeIntervalSince(tapped))")
+            try? await Task.sleep(for: .seconds(1))
+        }
+        Autopilot.finish()
+    }
+#endif
 
     // MARK: - Data
 
@@ -1351,5 +1450,70 @@ enum RelativeStamp {
         if calendar.isDateInToday(date) { return "Today \(time)" }
         if calendar.isDateInYesterday(date) { return "Yesterday \(time)" }
         return "\(date.formatted(.dateTime.day().month(.abbreviated))) \(time)"
+    }
+}
+
+/// Reports a finger on the roster and a scroll in motion, without taking
+/// part in either: the recognizer never claims a touch, so taps, scrolls
+/// and context menus behave exactly as before. iOS 18; on 17 the order is
+/// only rate-limited.
+private struct WatchRosterTouches: ViewModifier {
+    @Binding var touching: Bool
+    @Binding var scrolling: Bool
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .gesture(TouchWatcher { touching = $0 })
+                .onScrollPhaseChange { _, phase in scrolling = phase != .idle }
+        } else {
+            content
+        }
+    }
+}
+
+@available(iOS 18.0, *)
+private struct TouchWatcher: UIGestureRecognizerRepresentable {
+    let onTouch: (Bool) -> Void
+
+    final class Recognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+        var onTouch: ((Bool) -> Void)?
+        private var down = false
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesBegan(touches, with: event)
+            if !down { down = true; onTouch?(true) }
+        }
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesEnded(touches, with: event)
+            lift(event)
+        }
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesCancelled(touches, with: event)
+            lift(event)
+        }
+        private func lift(_ event: UIEvent) {
+            let stillDown = event.allTouches?.contains { $0.phase != .ended && $0.phase != .cancelled } ?? false
+            guard !stillDown else { return }
+            down = false
+            onTouch?(false)
+            state = .failed
+        }
+        override func reset() {
+            super.reset()
+            if down { down = false; onTouch?(false) }
+        }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> Recognizer {
+        let recognizer = Recognizer()
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        recognizer.delegate = recognizer
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: Recognizer, context: Context) {
+        recognizer.onTouch = onTouch
     }
 }

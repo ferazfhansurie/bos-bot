@@ -108,4 +108,21 @@ final class RosterPreviewTests: XCTestCase {
             XCTAssertEqual(rosterPreview([], detail: detail), "")
         }
     }
+
+    // MARK: - Roster order
+
+    func testToolStepsDoNotMoveAChatUp() {
+        let messages = [text("a", "hello", at: 10), activity("b", "Bash", at: 20), activity("c", "Read", at: 30)]
+        XCTAssertEqual(rosterActivityAt(messages), 10)
+    }
+
+    func testAMessageAfterToolStepsMovesItUp() {
+        let messages = [text("a", "hello", at: 10), activity("b", "Bash", at: 20), text("c", "done", at: 40)]
+        XCTAssertEqual(rosterActivityAt(messages), 40)
+    }
+
+    func testAChatWithOnlyToolStepsUsesTheLatestStep() {
+        XCTAssertEqual(rosterActivityAt([activity("b", "Bash", at: 20), activity("c", "Read", at: 30)]), 30)
+        XCTAssertEqual(rosterActivityAt([]), 0)
+    }
 }

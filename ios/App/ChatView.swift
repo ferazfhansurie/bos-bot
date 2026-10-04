@@ -228,15 +228,14 @@ struct ChatView: View {
             }
             ScrollViewReader { proxy in
                 ScrollView {
-                    // VStack, not LazyVStack. A lazy stack does not know how
-                    // tall it is until its rows have been built, so
-                    // `.defaultScrollAnchor(.bottom)` anchors against an
-                    // estimate and the chat opens somewhere in the middle of
-                    // the conversation. Building all of it up front makes the
-                    // height exact and the anchor land on the newest message.
-                    // A thread holds 50 messages until you ask for more, so
-                    // there is nothing here worth being lazy about.
-                    VStack(alignment: .leading, spacing: 14) {
+                    // Lazy: only the rows on screen are built and laid out.
+                    // An eager VStack measured every message's text whenever
+                    // anything in the list changed, which with several bots
+                    // streaming was most of each frame. A lazy stack only
+                    // estimates the height of rows it has not built, so the
+                    // anchor alone can open mid-way; the explicit scroll to
+                    // the newest row on appear below settles it.
+                    LazyVStack(alignment: .leading, spacing: 14) {
                         // room for the floating face when scrolled to the top
                         Color.clear.frame(height: 4)
 
@@ -375,10 +374,19 @@ struct ChatView: View {
                 .task {
                     guard let messageId = session.focusedMessageId,
                           messages.contains(where: { $0.id == messageId })
-                    else { return }
+                    else {
+                        // Open on the newest message. The bottom anchor
+                        // aims at an estimate until the rows near it are
+                        // built; scrolling to the row itself is exact.
+                        if let last = transcript.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        return
+                    }
                     proxy.scrollTo(messageId, anchor: .center)
                     session.consumeFocus(messageId)
                 }
+#if DEBUG
+                .task { await runAutopilot(proxy) }
+#endif
             }
             .id(threadId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -418,6 +426,10 @@ struct ChatView: View {
         .onChange(of: selectedThreadWasRemoved) { _, removed in
             if removed { dismiss() }
         }
+#if DEBUG
+        .onAppear { Autopilot.chatAppeared?() }
+        .onDisappear { Autopilot.chatDisappeared?() }
+#endif
         .onChange(of: session.state.hasLoadedPage(forThread: threadId)) { _, loaded in
             let requestedThread = threadId
             if !loaded { Task { await session.loadThreadIfNeeded(requestedThread) } }
@@ -1195,6 +1207,40 @@ extension ChatView {
 
 /// A new bubble pops up from its own side: a small lift and scale with a
 /// little overshoot, then it settles. Runs once, when the row is inserted.
+#if DEBUG
+extension ChatView {
+    /// `-autopilot scroll|typing`: the UI test's gestures without the UI
+    /// test. Sixteen long scrolls, or six sentences typed a key at a time.
+    @MainActor fileprivate func runAutopilot(_ proxy: ScrollViewProxy) async {
+        guard let scenario = Autopilot.scenario, scenario == "scroll" || scenario == "typing" else { return }
+        try? await Task.sleep(for: .seconds(3))
+        Autopilot.log("START \(scenario)")
+        if scenario == "scroll" {
+            for swipe in 0..<16 {
+                let transcript = rows(memberSteps: memberSteps)
+                // the test's pattern: down, down, up, up
+                if swipe % 4 < 2, let first = transcript.first {
+                    withAnimation(.easeOut(duration: 0.4)) { proxy.scrollTo(first.id, anchor: .top) }
+                } else if let last = transcript.last {
+                    withAnimation(.easeOut(duration: 0.4)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+        } else {
+            composerFocused = true
+            try? await Task.sleep(for: .seconds(1))
+            for _ in 0..<6 {
+                for character in "the quick brown fox jumps over the lazy dog " {
+                    draft.append(character)
+                    try? await Task.sleep(for: .milliseconds(40))
+                }
+            }
+        }
+        Autopilot.finish()
+    }
+}
+#endif
+
 private struct ArrivalSpring: ViewModifier {
     let active: Bool
     let fromTrailing: Bool

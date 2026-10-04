@@ -10,6 +10,8 @@ final class MainThreadProbe: @unchecked Sendable {
 
     private let lock = NSLock()
     private var samples: [Double] = []
+    /// Every sample as [epoch seconds, wait ms], kept for the raw log.
+    private var raw: [[Double]] = []
     private var chatBodies = 0
     private var listBodies = 0
     /// `-probe-always`: measure the whole run, not just while typing, so
@@ -58,7 +60,10 @@ final class MainThreadProbe: @unchecked Sendable {
                 }
                 done.wait()
                 lock.lock()
-                if recording { samples.append(waited) }
+                if recording {
+                    samples.append(waited)
+                    raw.append([Date().timeIntervalSince1970, waited])
+                }
                 lock.unlock()
                 write()
                 Thread.sleep(forTimeInterval: 0.008)
@@ -83,7 +88,7 @@ final class MainThreadProbe: @unchecked Sendable {
         guard Date().timeIntervalSince(lastWrite) > 0.5 else { return }
         lastWrite = Date()
         lock.lock()
-        let sorted = samples.sorted(), bodies = chatBodies, lists = listBodies
+        let sorted = samples.sorted(), bodies = chatBodies, lists = listBodies, rawCopy = raw
         lock.unlock()
         guard !sorted.isEmpty else { return }
         func pct(_ p: Double) -> Double { sorted[min(sorted.count - 1, Int(Double(sorted.count) * p))] }
@@ -96,6 +101,9 @@ final class MainThreadProbe: @unchecked Sendable {
         ]
         if let data = try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/bos-typing-probe.json"))
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: rawCopy) {
+            try? data.write(to: URL(fileURLWithPath: "/tmp/bos-typing-probe-raw.json"))
         }
     }
 }

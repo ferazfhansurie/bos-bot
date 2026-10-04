@@ -992,6 +992,24 @@ final class Session: ObservableObject {
     /// lagged the phone. Two answer in the HQ room and two in their own 1:1s,
     /// each typing at provider speed with tool steps, item events and the
     /// room's active list changing as they go.
+    /// A bot message landing in `threadId` now, for the roster reorder test.
+    func debugPostMessage(threadId: String) {
+        let json: [String: Any] = ["kind": "message", "threadId": threadId, "message": [
+            "id": "debug-\(UUID().uuidString)", "role": "bot", "kind": "text",
+            "at": Date().timeIntervalSince1970 * 1000, "text": "moved to the top"
+        ]]
+        guard let data = try? JSONSerialization.data(withJSONObject: json),
+              let frame = try? JSONDecoder().decode(StreamFrame.self, from: data) else { return }
+        state.apply(frame.frame)
+    }
+
+    /// `-stream-preview-bot-count 3`: drop the last 1:1 to measure three bots.
+    private static var previewBotCount: Int {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-stream-preview-bot-count"), i + 1 < args.count else { return 4 }
+        return Int(args[i + 1]) ?? 4
+    }
+
     private func startMultiStreamPreview() {
         func frame(_ json: [String: Any]) -> StreamFrame? {
             guard let data = try? JSONSerialization.data(withJSONObject: json) else { return nil }
@@ -1002,10 +1020,12 @@ final class Session: ObservableObject {
         let streams: [(thread: String, roomBot: String?, bot: String)] = [
             (room, "room-dev", "room-dev"), (room, "room-pix", "room-pix"),
             ("room-thread-bos", nil, "room-bos"), ("room-thread-oracle", nil, "room-oracle")
-        ]
+        ].prefix(Self.previewBotCount).map { $0 }
         let paragraph = "Checked the **inbox** and grouped what matters: three invoices due this week, a contract redline from `legal@`, and two threads that need a reply today. "
         let start = Date().timeIntervalSince1970 * 1000
-        for thread in Set(streams.map(\.thread)) {
+        // Every thread gets the same history whatever the bot count, so three
+        // and four bots open the same transcripts.
+        for thread in [room, "room-thread-bos", "room-thread-oracle"] {
             for index in 0..<60 {
                 var message: [String: Any] = [
                     "id": "\(thread)-history-\(index)", "role": index % 2 == 0 ? "user" : "bot", "kind": "text",
@@ -2675,7 +2695,7 @@ extension CompanionState {
                 return ChatSummary(
                     chat: chat,
                     preview: rosterPreview(messages, detail: activity),
-                    lastActivity: messages.last?.at ?? 0,
+                    lastActivity: rosterActivityAt(messages),
                     pinned: Self.pinned(chat)
                 )
             }
