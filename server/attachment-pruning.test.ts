@@ -43,9 +43,9 @@ it("preserves all sqlite transcript branches, queued sends and persisted avatars
   const garbage = file(4, 8, 5);
   const db = new DatabaseSync(join(root, "messages.db"));
   db.exec("CREATE TABLE messages (thread_id TEXT, json TEXT); CREATE TABLE chat_followups (payload TEXT)");
-  db.prepare("INSERT INTO messages VALUES (?, ?)").run("archived-off-branch", JSON.stringify({ text: `<attached-image path=\"${referenced[0]}\"/>` }));
+  db.prepare("INSERT INTO messages VALUES (?, ?)").run("archived-off-branch", JSON.stringify({ text: `<attached-image path="${referenced[0]}"/>` }));
   db.prepare("INSERT INTO messages VALUES (?, ?)").run("old-retained-thread", JSON.stringify({ attachments: [{ path: referenced[1] }] }));
-  db.prepare("INSERT INTO chat_followups VALUES (?)").run(JSON.stringify({ text: `<attached-image path=\"${referenced[2]}\"/>` }));
+  db.prepare("INSERT INTO chat_followups VALUES (?)").run(JSON.stringify({ text: `<attached-image path="${referenced[2]}"/>` }));
   db.close();
   writeFileSync(join(root, "bots.json"), JSON.stringify([{ avatarUrl: `/api/attachments/${names[3]}` }]));
   const saved = await saveFile((async function* () { yield Buffer.from("new"); })(), "new.txt", "text/plain", { expectedBytes: 3 });

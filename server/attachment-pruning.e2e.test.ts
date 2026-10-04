@@ -24,7 +24,7 @@ vi.mock("node:child_process", async (importOriginal) => {
       const old = new Date(Date.now() - 3 * 86400_000);
       utimesSync(retained, old, old);
       utimesSync(orphan, old, old);
-      writeFileSync(join(dataDir, "messages-retained-fixture.json"), JSON.stringify([{ text: `<attached-image path=\"${retained}\"/>` }]));
+      writeFileSync(join(dataDir, "messages-retained-fixture.json"), JSON.stringify([{ text: `<attached-image path="${retained}"/>` }]));
       return childProcess.spawn(command, args, options);
     },
   };
