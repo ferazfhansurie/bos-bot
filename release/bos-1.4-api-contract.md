@@ -6,15 +6,15 @@ Base: prod `44031e67`. API integration branch: `v14/api-server`.
 
 `POST /api/bots/:botId/messages` and `POST /api/groups/:groupId/messages` accept `priority: "block" | "queue"`; omitted means `queue`. Invalid values return 400. Existing threadId, sendId, replyToId and room mode fields retain their meaning. Guarded and exclusive routes retain their admission guarantees.
 
-Queue waits until the current turn settles; it does not steer automatically at tool boundaries. Block interrupts the targeted direct thread or current room task, closes provider-owned asks, then starts the new message. Previously queued messages remain pending. Existing explicit queue steer endpoints remain available.
+Queue waits until the current turn settles; it does not steer automatically at tool boundaries. Block interrupts the targeted direct thread or current room task, closes provider-owned asks, waits for provider teardown, then starts the new message. Concurrent receipts are serialized per conversation; previously queued messages remain pending. Existing explicit queue steer endpoints remain available.
 
 Queued response: `{ok: true, queued: true, queueId, threadId}`. Pending chips use the existing SSE `bot.queued {queues}` and GET `/api/bots` `botQueuedMessages`; both now include room threads. Each queue entry is `{queueId, text}` (direct capacity waits may also carry `reason: "capacity"`). Cancellation and dispatch remove chips. Retry sendId deduplication remains in force.
 
 ## Fallback
 
-Profile: `fallbackModel?: string | null`, an exact discovered model ID, optional/clearable. Only compatible current approvals can transfer. No automatic grant escalation or substitution of an unknown model.
+Normal `POST /api/bots` and `PATCH /api/bots/:botId` accept `fallbackModel?: string | null`, an exact discovered model ID, optional/clearable. Native profile proposals and paired cosmetic profile edits do not configure this field. Only compatible current approvals can transfer. No automatic grant escalation or substitution of an unknown model.
 
-Event: `model.switched {botId, threadId, from, to, reason}`, reasons `provider_limit` and `provider_reset`. The server also records one compact thread line. Provider authentication failures are distinct from exhausted usage.
+SSE envelope: `{kind: "runtime", event: {type: "model.switched", botId, threadId, from, to, reason, ...}}`; `from` and `to` are model ID strings, reasons `provider_limit` and `provider_reset`. The server also records one compact thread line. Provider authentication failures are distinct from exhausted usage. Switching is scoped to the task or room; reset recovery waits for a known reset and available primary. An unknown reset stays on the configured backup. Only clean direct quota failures before tools/output may retry once; room fallback uses usage preflight and does not replay failed turns.
 
 ## Busy rooms
 
