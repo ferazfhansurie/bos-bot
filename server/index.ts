@@ -2689,14 +2689,19 @@ function updateChannel(groupId: string, value: unknown): GroupRecord {
 
   const existing = store.group(groupId);
   if (!existing) throw Object.assign(new Error("no such room"), { status: 404 });
-  if (body.memberIds !== undefined && phoneSecretSubmissions.hasGroup(existing.id)) {
+  if ((body.memberIds !== undefined || body.bulletin !== undefined) && phoneSecretSubmissions.hasGroup(existing.id)) {
     throw Object.assign(new Error("this channel is securely saving a credential — try again when it finishes"), { status: 409 });
   }
   if (
     channelTaskBlocked(existing) &&
-    (body.memberIds !== undefined || body.defaultResponder !== undefined || body.memberReplyModes !== undefined)
+    (body.defaultResponder !== undefined || body.memberReplyModes !== undefined)
   ) {
     throw Object.assign(new Error("this channel is working or waiting on you — finish that turn first"), { status: 409 });
+  }
+  // Roster edits affect future dispatch only; a running member keeps its turn.
+  // Open cards retain their current readers until the user answers them.
+  if (body.memberIds !== undefined && channelAwaitsUser(existing)) {
+    throw Object.assign(new Error("this channel is waiting on you — answer the open card first"), { status: 409 });
   }
   // The bulletin is read when each turn starts, so a running turn keeps the
   // text it began with; only an open approval card holds it back.
@@ -3192,6 +3197,8 @@ type GroupMemberBotWaitResult = Exclude<GroupMemberBotAvailability, "busy">;
 
 function groupMemberBotAvailability(botId: string, operation: GroupTurnOperation): GroupMemberBotAvailability {
   if (operation.cancelled || operation.cancellation.signal.aborted) return "cancelled";
+  const group = store.groupByThread(operation.threadId);
+  if (!group || !group.memberIds.includes(botId)) return "unavailable";
   const bot = store.bot(botId);
   if (!bot || bot.hidden) return "unavailable";
   return botAtThreadCapacity(botId) ? "busy" : "ready";
@@ -3214,6 +3221,7 @@ async function waitForGroupMemberBot(
   operation.botIds.delete(bot.id);
   const initial = groupMemberBotAvailability(bot.id, operation);
   if (initial !== "busy") return initial;
+  const groupId = store.groupByThread(operation.threadId)?.id;
   onWaiting(`${bot.name} is finishing another conversation.`);
 
   return await new Promise((resolve) => {
@@ -3238,7 +3246,8 @@ async function waitForGroupMemberBot(
     unsubscribe = store.onChange((change) => {
       if (
         (change.type === "bot" && change.botId === bot.id) ||
-        (change.type === "bot.deleted" && change.botId === bot.id)
+        (change.type === "bot.deleted" && change.botId === bot.id) ||
+        ((change.type === "group" || change.type === "group.deleted") && change.groupId === groupId)
       ) {
         check();
       }
@@ -6407,11 +6416,9 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
       steerDelivery: steered === "indeterminate" ? "outcome_unknown" : instance.adapter.provider === "claudeAgent" ? "transport_written" : "provider_accepted",
     });
     const delivery = message.steerDelivery;
-    if (steered === "indeterminate" || delivery === "transport_written") store.appendMessage(targetThreadId, {
+    if (steered === "indeterminate") store.appendMessage(targetThreadId, {
       role: "bot", kind: "activity", from: speakerFrom,
-      tool: { name: steered === "indeterminate"
-        ? "Queued message delivery outcome unknown — review before resending"
-        : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: steered !== "indeterminate" },
+      tool: { name: "Queued message delivery outcome unknown — review before resending", ok: false },
     });
     if (imagesAsFiles) noteSteerImagesAsFiles(targetThreadId, speakerFrom);
     settleHeldChannelQueueHead(held);
@@ -6437,146 +6444,6 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
   // is now drainable must not strand behind a missed settle.
   if (after && !groupIsWorking(after)) drainQueuedChannelSends();
   return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId } };
-}
-
-/** Receipt for a send that was folded into a running turn. A recorded but
- * unsteered row is an uncertain delivery: shown once, never replayed. */
-function sendSteerReceipt(threadId: string, message: Message) {
-  return message.steered
-    ? { ok: true as const, threadId, message, steered: true as const }
-    : { ok: true as const, threadId, message, steered: false as const, outcomeUnknown: true as const };
-}
-
-/** A room message addressed to a member that is mid-turn steers into that
- * turn as it is sent, through the same FIFO claim the tool-boundary delivery
- * uses: earlier queued lines go first and nothing is delivered twice. */
-async function steerRoomSendNow(groupId: string, threadId: string, queueId: string) {
-  const deliveredMessage = () => store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
-  for (const [runtimeThreadId] of roomRuntimeSpeakers(groupId, threadId)) {
-    try { await steerRoomAtToolBoundary(runtimeThreadId); }
-    catch (error) { console.warn("room send-time steer failed", error instanceof Error ? error.message : String(error)); }
-    if (deliveredMessage()) break;
-  }
-  const delivered = deliveredMessage();
-  if (delivered) return sendSteerReceipt(threadId, delivered);
-  // Still waiting: say so in the room rather than leaving a silent chip.
-  const head = channelQueueHead(groupId, threadId);
-  if (head?.id === queueId && !head.text.includes("<attached-image")) store.appendMessage(threadId, {
-    role: "bot",
-    kind: "activity",
-    tool: { name: "not delivered yet: no addressed bot could take this into its running turn — it is queued for after the current reply", ok: false },
-  });
-  return { ok: true as const, queued: true as const, queueId, threadId };
-}
-
-/** Steer an already-recorded room row into one more busy addressee's live
- * turn. Nothing is written to the transcript here: the row exists once. */
-async function steerRecordedIntoMember(groupId: string, threadId: string, botId: string, recorded: Message, replyTo?: Message): Promise<SteerOutcome> {
-  const live = roomRuntimeSpeakers(groupId, threadId).find(([, speaker]) => speaker.botId === botId);
-  const member = store.bot(botId);
-  if (!live || !member) return "refused";
-  const [runtimeThreadId, claimedSpeaker] = live;
-  const instance = runningTurnInstance(member, runtimeThreadId);
-  if (!instance?.adapter.capabilities.queueing || !instance.adapter.steer) return "refused";
-  const from = { botId: member.id, name: member.name, color: member.color };
-  let input;
-  try { input = extractTurnImages(recorded.text ?? ""); }
-  catch { return "refused"; }
-  const replyAuthor = cfg.profile?.name?.trim() || "User";
-  let steered: SteerOutcome = "refused";
-  if (!input.images.length || instance.adapter.capabilities.nativeImageSteer === true) {
-    steered = await instance.adapter.steer(runtimeThreadId, promptWithReply(input.text, replyTo, replyAuthor), { images: input.images })
-      .catch((): SteerOutcome => "indeterminate");
-  }
-  if (steered === "refused" && input.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
-    steered = await instance.adapter.steer(runtimeThreadId, promptWithReply(imageFileSteerText(input), replyTo, replyAuthor))
-      .catch((): SteerOutcome => "indeterminate");
-    if (steered !== "refused") noteSteerImagesAsFiles(threadId, from);
-  }
-  if (steered === "indeterminate") store.appendMessage(threadId, {
-    role: "bot", kind: "activity", from,
-    tool: { name: `delivery to ${member.name} outcome unknown — review before resending`, ok: false },
-  });
-  return steered;
-}
-
-/** One busy room addressee refused the recorded row mid-turn; it gets the
- * row after its current reply. Nothing to say when it is no longer busy. */
-function noteRoomMemberSteerRefused(groupId: string, threadId: string, botId: string, recorded: Message): void {
-  const member = store.bot(botId);
-  if (!member || !roomRuntimeSpeakers(groupId, threadId).some(([, speaker]) => speaker.botId === botId)) return;
-  const from = { botId: member.id, name: member.name, color: member.color };
-  if ((recorded.text ?? "").includes("<attached-image")) {
-    noteSteerImageNotDelivered(threadId, recorded.queueId ?? recorded.id, "the running turn could not take the image — it will get it after this reply", from);
-    return;
-  }
-  store.appendMessage(threadId, {
-    role: "bot",
-    kind: "activity",
-    from,
-    tool: { name: `not delivered yet: ${member.name}'s running turn refused the message — it will get it after this reply`, ok: false },
-  });
-}
-
-/** A room send naming several members while some are mid-turn: steer the
- * row into every busy addressee, then start the idle ones (and any busy one
- * that refused, behind its own lane) off the same recorded row, so each
- * addressee gets the words once and no unaddressed member is touched. */
-async function steerAddressedRoomSend(groupId: string, threadId: string, queueId: string, busyBotIds: string[], idleBotIds: string[], replyTo?: Message) {
-  const stopEpoch = roomStopEpoch.get(groupId) ?? 0;
-  const recordedRow = () => store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
-  // The first busy addressee that takes it records the row once (the queue
-  // claim); a refusal restores the head, so the next one can try.
-  let primary: string | undefined;
-  for (const botId of busyBotIds) {
-    try { await steerRoomQueue(groupId, threadId, queueId, botId, true); }
-    catch (error) { console.warn("addressed room steer failed", error instanceof Error ? error.message : String(error)); }
-    if (recordedRow()) { primary = botId; break; }
-    if (channelQueueHead(groupId, threadId)?.id !== queueId) break;
-  }
-  const recorded = recordedRow();
-  if (!primary || !recorded) {
-    // Refused everywhere (or the head moved): the one queued item still
-    // reaches every addressee exactly once on the next turn. Say so.
-    const head = channelQueueHead(groupId, threadId);
-    if (head?.id === queueId && !head.text.includes("<attached-image")) store.appendMessage(threadId, {
-      role: "bot",
-      kind: "activity",
-      tool: { name: "not delivered yet: no busy addressee could take this mid-turn — it is queued for everyone addressed after the current reply", ok: false },
-    });
-    return { ok: true as const, queued: true as const, queueId, threadId };
-  }
-  // Steered or uncertain: the row is recorded once and never replayed.
-  const later = [...idleBotIds];
-  const refusedBusy: string[] = [];
-  for (const botId of busyBotIds) {
-    if (botId === primary || (roomStopEpoch.get(groupId) ?? 0) !== stopEpoch) continue;
-    // Uncertain counts as delivered (never replayed); a refusal answers after its current reply.
-    if (await steerRecordedIntoMember(groupId, threadId, botId, recorded, replyTo) === "refused") {
-      later.push(botId);
-      refusedBusy.push(botId);
-    }
-  }
-  // Stopped while a steer was in flight: start nobody else.
-  if ((roomStopEpoch.get(groupId) ?? 0) !== stopEpoch || !later.length) return sendSteerReceipt(threadId, recorded);
-  // A busy addressee that refused waits for its current reply: say so for
-  // its copy, whichever order the addressees were tried in.
-  for (const botId of refusedBusy) noteRoomMemberSteerRefused(groupId, threadId, botId, recorded);
-  try {
-    startGroupTurn(groupId, recorded.text ?? "", replyTo, recorded.sendId, "chat", queueId, {
-      threadId, via: recorded.via, sender: recorded.sender, recordedMessage: recorded, responderIds: later,
-    });
-  } catch (error) {
-    // The row is already recorded, so a retry would only match it. Say who missed it.
-    const reason = error instanceof Error ? error.message : String(error);
-    console.warn("addressed room start failed", reason);
-    store.appendMessage(threadId, {
-      role: "bot",
-      kind: "activity",
-      tool: { name: `delivered to the busy addressees only — the others couldn't start: ${reason}`, ok: false },
-    });
-  }
-  return sendSteerReceipt(threadId, recorded);
 }
 
 const priorityDirectPreemptions = new Set<string>();

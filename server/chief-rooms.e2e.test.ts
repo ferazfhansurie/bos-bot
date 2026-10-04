@@ -29,6 +29,7 @@ it("creates and manages an own-section room through the mounted Chief MCP proxy"
     return await response.json() as T;
   };
   try {
+    await api("PATCH", "/api/config", { threads: { maxConcurrentPerBot: 1 } });
     const bots: Bot[] = [];
     for (const name of ["Fixture Chief", "Fixture Peer", "Fixture Second", "Foreign Peer"]) {
       const { bot } = await control(["new-bot", "--name", name]) as { bot: Bot };
@@ -83,6 +84,40 @@ it("creates and manages an own-section room through the mounted Chief MCP proxy"
     await tool("manage_room", { room_id: room.id, action: "add_members", member_bot_ids: [foreign.id] }, true);
     expect((await rooms()).find((candidate) => candidate.id === room.id)).toEqual(saved);
     expect((await rooms()).some((candidate) => candidate.name === "Forbidden room")).toBe(false);
+    // Metadata and roster management remain available while a teammate works.
+    await control(["send-channel", "--channel", room.id, "--text", "@Fixture Second keep working."]);
+    await expect.poll(async () => (await rooms()).find((candidate) => candidate.id === room.id)?.working).toBe(true);
+    const modelSwitch = await fetch(`${fixture.info.url}/api/bots/${second.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelSelection: { instanceId: "claude", model: "busy-room-switch" } }) });
+    expect(modelSwitch.status).toBe(409);
+    await tool("manage_room", { room_id: room.id, action: "add_members", member_bot_ids: [peer.id] });
+    await tool("manage_room", { room_id: room.id, action: "set_bulletin", bulletin: "New turns use this brief." });
+    await tool("manage_room", { room_id: room.id, action: "remove_members", member_bot_ids: [second.id] });
+    expect((await rooms()).find((candidate) => candidate.id === room.id)).toMatchObject({ memberIds: [chief.id, peer.id], bulletin: "New turns use this brief.", working: true });
+    await tool("manage_room", { room_id: room.id, action: "remove_members", member_bot_ids: [chief.id] }, true);
+    await tool("manage_room", { room_id: room.id, action: "add_members", member_bot_ids: [foreign.id] }, true);
+    for (const [path, body] of [
+      [`/api/groups/${room.id}/tasks`, {}],
+      [`/api/groups/${room.id}`, { defaultResponder: { kind: "everyone" } }],
+      [`/api/groups/${room.id}`, { memberReplyModes: { [peer.id]: "always" } }],
+    ] as const) {
+      const response = await fetch(`${fixture.info.url}${path}`, { method: path.endsWith("/tasks") ? "POST" : "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      expect(response.status).toBe(409);
+    }
+    await control(["interrupt", "--channel", room.id]);
+
+    // Removing a member waiting on a private conversation releases only its
+    // pending room dispatch, without cancelling the private provider turn.
+    await control(["send", "--bot", peer.id, "--text", "Private work stays running."]);
+    await expect.poll(async () => (await api<{ bots: Array<{ id: string; busy: boolean }> }>("GET", "/api/bots?messages=0")).bots.find((candidate) => candidate.id === peer.id)?.busy).toBe(true);
+    await tool("create_room", { name: "Pending room", member_bot_ids: [peer.id] });
+    const pendingRoom = (await rooms()).find((candidate) => candidate.name === "Pending room")!;
+    await control(["send-channel", "--channel", pendingRoom.id, "--text", "@Fixture Peer wait for your private work."]);
+    await expect.poll(async () => (await rooms()).find((candidate) => candidate.id === pendingRoom.id)?.working).toBe(true);
+    await tool("manage_room", { room_id: pendingRoom.id, action: "remove_members", member_bot_ids: [peer.id] });
+    await expect.poll(async () => (await rooms()).find((candidate) => candidate.id === pendingRoom.id)?.working).toBe(false);
+    const roster = await api<{ bots: Array<{ id: string; busy: boolean }> }>("GET", "/api/bots?messages=0");
+    expect(roster.bots.find((candidate) => candidate.id === peer.id)?.busy).toBe(true);
+    await control(["interrupt", "--bot", peer.id]);
     await control(["messages", "--channel", room.id, "--limit", "10"]);
     await control(["interrupt", "--bot", chief.id]);
     await tool("manage_room", { room_id: room.id, action: "rename", name: "Expired turn" }, true);

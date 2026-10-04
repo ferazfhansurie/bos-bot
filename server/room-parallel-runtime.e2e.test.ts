@@ -99,7 +99,10 @@ await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE).href)});
       ...Object.fromEntries(Array.from({length:5}, (_,i)=>[`worker${i+1}`, fixture(`Worker ${i+1}`, { FAKE_CLAUDE_REPLIES: JSON.stringify([`@Lead RESULT ${i+1}`]), FAKE_CLAUDE_TOOL_RESULT_GATE: join(home, "workers-tool.gate") })])),
       questionA: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1" } },
       questionB: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1" } },
+      refuse: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1", FAKE_CODEX_STEER_ERROR: JSON.stringify({ code: -32000, message: "active turn is not steerable" }) } },
+      unknown: { driver: "codex", config: { cli: join(SERVER_DIR,"testing","fake-codex-app-server.ts") }, environment: { FAKE_CODEX_MODE:"question", FAKE_CODEX_ASK_HOLD:"1", FAKE_CODEX_STEER_HANG:"1", FAKE_CODEX_STEER_TIMEOUT_MS:"1000" } },
       patient: fixture("Patient fixture", { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: patientFinishGate }),
+      held: fixture("Held fixture", { FAKE_CLAUDE_MODE: "stream", FAKE_CLAUDE_TOOL_RESULT_GATE: patientFinishGate }),
       quick: fixture("Quick fixture", { FAKE_CLAUDE_MODE: "stream" }),
       lead: fixture("Lead fixture", { FAKE_CLAUDE_REPLIES: JSON.stringify(["handing off @Slow", "LEAD ANSWERED ASIDE"]), FAKE_CLAUDE_REPLY_STATE: join(home,"lead-replies.txt") }),
 
@@ -162,6 +165,48 @@ const snapshot = async (id: string) => (await api("GET", "/api/bots?messages=100
 const wait = async (predicate: ()=>Promise<boolean>, phase="condition") => { const end=Date.now()+15000; while(!await predicate()) { if(Date.now()>end) throw new Error(`${phase} not reached: ${stderr.slice(-1500)} `); await new Promise(r=>setTimeout(r,100)); } };
 
 describe("room runtime concurrency", { timeout: 45000 }, () => {
+  it("keeps refused room text visible in bot.queued without delivery activity spam", async () => {
+    const slow = await createBot("Refuser", "refuse");
+    const other = await createBot("Other", "quick");
+    const room = (await api("POST", "/api/groups", { name: "Quiet queue", memberIds: [slow.id, other.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    await api("POST", `/api/groups/${room.id}/messages`, { text: "@Refuser START" });
+    await wait(async () => (await snapshot(room.id)).messages.some((message:any) => message.card?.requestId && !message.card.answered));
+    for (const patch of [{ bulletin: "Changed while card open" }, { memberIds: [other.id] }]) {
+      expect((await api("PATCH", `/api/groups/${room.id}`, patch)).status).toBe(409);
+    }
+    const events = await openSse(`${base}/api/events`);
+    try {
+      const text = "@Refuser PENDING TEXT";
+      const sent = await api("POST", `/api/groups/${room.id}/messages`, { text });
+      expect(sent.body.queued).toBe(true);
+      const queued = await events.until(frame => frame.kind === "bot.queued" && frame.queues?.[room.threadId]?.some((item:any) => item.queueId === sent.body.queueId));
+      expect(queued.queues[room.threadId].find((item:any) => item.queueId === sent.body.queueId).text).toBe(text);
+      const refused = await api("POST", `/api/groups/${room.id}/queue/${sent.body.queueId}/steer`, { botId: slow.id });
+      expect(refused.body.queued).toBe(true);
+      const messages = (await snapshot(room.id)).messages;
+      expect(messages.some((message:any) => /not delivered yet:|consumption is unconfirmed/.test(message.tool?.name ?? ""))).toBe(false);
+      expect(messages.some((message:any) => message.text === text)).toBe(false);
+      expect((await api("DELETE", `/api/groups/${room.id}/queue/${sent.body.queueId}`)).status).toBe(200);
+    } finally { events.close(); }
+  });
+
+  it("retains one outcome_unknown warning for an explicit room steer without replaying it", async () => {
+    const slow = await createBot("Unknown", "unknown");
+    const room = (await api("POST", "/api/groups", { name: "Unknown queue", memberIds: [slow.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    await api("POST", `/api/groups/${room.id}/messages`, { text: "@Unknown START" });
+    await wait(async () => (await snapshot(room.id)).messages.some((message:any) => message.card?.requestId && !message.card.answered));
+    const text = "@Unknown UNCERTAIN TEXT";
+    const queued = await api("POST", `/api/groups/${room.id}/messages`, { text });
+    expect(queued.body.queued).toBe(true);
+    const steered = await api("POST", `/api/groups/${room.id}/queue/${queued.body.queueId}/steer`, { botId: slow.id });
+    expect(steered.body).toMatchObject({ outcomeUnknown: true, delivery: "outcome_unknown", consumption: "unconfirmed" });
+    const messages = (await snapshot(room.id)).messages;
+    expect(messages.filter((message:any) => message.text === text)).toHaveLength(1);
+    expect(messages.filter((message:any) => /delivery outcome unknown/.test(message.tool?.name ?? ""))).toHaveLength(1);
+    expect(messages.find((message:any) => message.text === text).steerDelivery).toBe("outcome_unknown");
+    expect((await api("DELETE", `/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(404);
+  });
+
   it("answers an unaddressed message through the default responder while another member is mid-turn", async () => {
     const slow = await createBot("Slow", "patient"); const quick = await createBot("Quick", "quick");
     const room = (await api("POST", "/api/groups", { name:"Lead", memberIds:[quick.id,slow.id], setup:{ bulletin:"",defaultResponder:{kind:"member",botId:quick.id} } })).body.group;
@@ -235,10 +280,10 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(next.status).toBe(202); expect(next.body.queued).not.toBe(true);
     await wait(async()=>Boolean((await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id)));
     expect((await snapshot(room.id)).activeBotIds).toContain(slow.id);
-    // The same busy addressed member gets the send steered straight into its running turn.
+    // A default send queues; the explicit action folds it into the running turn.
     const correction=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow CORRECTION"});
-    expect(correction.body).toMatchObject({ok:true,steered:true});
-    expect(correction.body.queued).toBeUndefined();
+    expect(correction.body.queued).toBe(true);
+    expect((await api("POST",`/api/groups/${room.id}/queue/${correction.body.queueId}/steer`,{botId:slow.id})).body.steered).toBe(true);
     writeFileSync(patientFinishGate,"finish the steered room turn");
     await wait(async()=>!(await snapshot(room.id)).working);
     const replies=(await snapshot(room.id)).messages.filter((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===slow.id&&m.turnTerminal);
@@ -250,9 +295,10 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect((await api("POST",`/api/bots/${slow.id}/messages`,{text:"PRIVATE SIBLING"})).status).toBe(202);
     await wait(async()=>Boolean((await api("GET","/api/bots?messages=0")).body.bots.find((b:any)=>b.id===slow.id)?.tasks?.some((t:any)=>t.busy)));
     const pending=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow STEERED BEFORE STOP"});
-    expect(pending.body.steered).toBe(true);
+    expect(pending.body.queued).toBe(true);
+    expect((await api("POST",`/api/groups/${room.id}/queue/${pending.body.queueId}/steer`,{botId:slow.id})).body.steered).toBe(true);
     expect((await api("POST",`/api/groups/${room.id}/interrupt`,{})).status).toBe(200);
-    expect((await api("DELETE",`/api/groups/${room.id}/queue/${pending.body.message.queueId}`)).status).toBe(404);
+    expect((await api("DELETE",`/api/groups/${room.id}/queue/${pending.body.queueId}`)).status).toBe(404);
     await wait(async()=>!(await snapshot(room.id)).working);
     expect((await api("GET","/api/bots?messages=0")).body.bots.find((b:any)=>b.id===slow.id).busy).toBe(true);
     writeFileSync(patientFinishGate,"release private sibling");
@@ -270,15 +316,16 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.from?.botId===slow.id&&m.tool?.name==="Bash"));
     const text='@Slow correction\n\n<pasted-text index="1">\nFULL PASTED INPUT\nsecond line\n</pasted-text>';
     const body={text,sendId:"paste-steer-once"};
-    const [steered,retry]=await Promise.all([api("POST",`/api/groups/${room.id}/messages`,body),api("POST",`/api/groups/${room.id}/messages`,body)]);
+    const [queued,retry]=await Promise.all([api("POST",`/api/groups/${room.id}/messages`,body),api("POST",`/api/groups/${room.id}/messages`,body)]);
+    expect(queued.body.queued).toBe(true);
+    expect(retry.body.queueId).toBe(queued.body.queueId);
+    const route=`/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
+    const steered=await api("POST",route,{botId:slow.id});
     expect(steered.body).toMatchObject({steered:true});
-    expect(retry.body.message?.id).toBe(steered.body.message.id);
-    expect(steered.body.message.steerDelivery).toBe("transport_written");
-    const route=`/api/groups/${room.id}/queue/${steered.body.message.queueId}/steer`;
+    expect(steered.body.messages[0].steerDelivery).toBe("transport_written");
     const messages=(await snapshot(room.id)).messages;
     expect(messages.filter((m:any)=>m.text===text)).toHaveLength(1);
-    const receipt = messages.find((m:any)=>m.tool?.name?.includes("consumption is unconfirmed"));
-    expect(receipt?.tool.ok).toBe(true);
+    expect(messages.some((m:any)=>m.tool?.name?.includes("consumption is unconfirmed"))).toBe(false);
     expect(messages.some((m:any)=>m.role==="bot"&&m.turnTerminal)).toBe(false);
     expect((await api("POST",route,{botId:slow.id})).status).toBe(404);
     writeFileSync(patientFinishGate,"finish");
@@ -296,7 +343,8 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow @Other start"});
     await wait(async()=>(await snapshot(room.id)).activeBotIds?.length===2);
     const sent=await api("POST",`/api/groups/${room.id}/messages`,{text:"@Other private correction"});
-    expect(sent.body).toMatchObject({steered:true});
+    expect(sent.body.queued).toBe(true);
+    expect((await api("POST",`/api/groups/${room.id}/queue/${sent.body.queueId}/steer`,{botId:other.id})).body.steered).toBe(true);
     // Slow was never offered it: only Other's runtime received the words.
     const aliases=JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));
     const runtimeFor=(botId:string)=>aliases.find(([,owner]:[string,{threadId:string;botId:string}])=>owner.threadId===room.threadId&&owner.botId===botId)?.[0];
@@ -307,77 +355,61 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     await api("POST",`/api/groups/${room.id}/interrupt`,{});
   });
 
-  it("steers a mixed send into the busy addressee while the idle addressee starts in parallel, once each", async () => {
-    const slow=await createBot("Slow","patient");
+  it("queues a mixed send until the active round ends, then dispatches each addressee once", async () => {
+    const slow=await createBot("Slow","held");
     const quick=await createBot("Quick","quick");
-    const bystander=await createBot("Bystander","patient");
-    const room=(await api("POST","/api/groups",{name:"Mixed steer",memberIds:[slow.id,quick.id,bystander.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
-    rmSync(patientFinishGate,{force:true});
+    const bystander=await createBot("Bystander","held");
+    const room=(await api("POST","/api/groups",{name:"Mixed queue",memberIds:[slow.id,quick.id,bystander.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    writeFileSync(patientFinishGate,"hold active members");
     await api("POST",`/api/groups/${room.id}/messages`,{text:"@Slow @Bystander start"});
     await wait(async()=>(await snapshot(room.id)).activeBotIds?.length===2);
     const text="@Slow @Quick MIXEDTOKEN";
     const [sent,retry]=await Promise.all([api("POST",`/api/groups/${room.id}/messages`,{text,sendId:"mixed-send-once-0001"}),api("POST",`/api/groups/${room.id}/messages`,{text,sendId:"mixed-send-once-0001"})]);
-    expect(sent.body).toMatchObject({ok:true,steered:true});
-    expect(sent.body.queued).toBeUndefined();
-    expect(retry.body.message?.id).toBe(sent.body.message.id);
-    // Quick answers while Slow's turn is still running: parallel, not queued behind it.
-    await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id));
-    expect((await snapshot(room.id)).activeBotIds).toContain(slow.id);
-    const aliases=JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));
-    const runtimesFor=(botId:string)=>aliases.filter(([,owner]:[string,{threadId:string;botId:string}])=>owner.threadId===room.threadId&&owner.botId===botId).map(([id]:[string])=>id);
-    const native=(botId:string)=>runtimesFor(botId).map((id:string)=>{ try { return readFileSync(join(home,".openmausbot","native",`${id}.ndjson`),"utf8"); } catch { return ""; } }).join("\n");
-    const count=(haystack:string)=>haystack.split("MIXEDTOKEN").length-1;
-    expect(count(native(slow.id))).toBe(1);
-    expect(count(native(bystander.id))).toBe(0);
-    expect(count(native(quick.id))).toBe(1);
-    expect((await snapshot(room.id)).messages.filter((m:any)=>m.role==="user"&&m.text===text)).toHaveLength(1);
-    expect((await api("DELETE",`/api/groups/${room.id}/queue/${sent.body.message.queueId}`)).status).toBe(404);
-    writeFileSync(patientFinishGate,"finish");
+    expect(sent.body).toMatchObject({ok:true,queued:true});
+    expect(retry.body.queueId).toBe(sent.body.queueId);
+    const held=await snapshot(room.id);
+    expect(held.messages.some((m:any)=>m.role==="user"&&m.text===text)).toBe(false);
+    expect(held.activeBotIds).toEqual(expect.arrayContaining([slow.id,bystander.id]));
+    expect(held.activeBotIds).not.toContain(quick.id);
+    rmSync(patientFinishGate,{force:true});
     await wait(async()=>!(await snapshot(room.id)).working);
-    // Nothing replays after the turns settle: still one user row. (The fake
-    // engine echoes @mentions, so later bot-to-bot chains are fixture noise.)
     const done=(await snapshot(room.id)).messages;
-    expect(done.filter((m:any)=>m.role==="user"&&m.text===text)).toHaveLength(1);
-    expect(done.filter((m:any)=>m.role==="user"&&m.queueId===sent.body.message.queueId)).toHaveLength(1);
+    expect(done.filter((m:any)=>m.role==="user"&&m.text===text&&m.queueId===sent.body.queueId)).toHaveLength(1);
+    const replies=(id:string)=>done.filter((m:any)=>m.role==="bot"&&m.kind==="text"&&m.turnTerminal&&m.from?.botId===id);
+    expect(replies(slow.id)).toHaveLength(2);
+    expect(replies(quick.id)).toHaveLength(1);
+    expect(replies(bystander.id)).toHaveLength(1);
+    expect((await api("DELETE",`/api/groups/${room.id}/queue/${sent.body.queueId}`)).status).toBe(404);
   });
 
-  it("steers one send into every busy addressee at once, starts the idle one, and leaves the busy bystander alone", async () => {
-    const slow=await createBot("SlowA","patient");
-    const slow2=await createBot("SlowB","patient");
+  it("queues multiple busy and mixed addressees in order without dispatching a bystander", async () => {
+    const slow=await createBot("SlowA","held");
+    const slow2=await createBot("SlowB","held");
     const quick=await createBot("QuickC","quick");
-    const bystander=await createBot("BystanderD","patient");
-    const room=(await api("POST","/api/groups",{name:"Multi busy steer",memberIds:[slow.id,slow2.id,quick.id,bystander.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
-    rmSync(patientFinishGate,{force:true});
+    const bystander=await createBot("BystanderD","held");
+    const room=(await api("POST","/api/groups",{name:"Multi busy queue",memberIds:[slow.id,slow2.id,quick.id,bystander.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    writeFileSync(patientFinishGate,"hold active members");
     await api("POST",`/api/groups/${room.id}/messages`,{text:"@SlowA @SlowB @BystanderD start"});
     await wait(async()=>(await snapshot(room.id)).activeBotIds?.length===3);
-    const aliases=()=>JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));
-    const native=(botId:string)=>aliases().filter(([,owner]:[string,{threadId:string;botId:string}])=>owner.threadId===room.threadId&&owner.botId===botId)
-      .map(([id]:[string])=>{ try { return readFileSync(join(home,".openmausbot","native",`${id}.ndjson`),"utf8"); } catch { return ""; } }).join("\n");
-    const count=(haystack:string,token:string)=>haystack.split(token).length-1;
-    // All addressees busy: both get it now, nobody queues.
     const allBusy=await api("POST",`/api/groups/${room.id}/messages`,{text:"@SlowA @SlowB BOTHBUSY",sendId:"multi-busy-send-0001"});
-    expect(allBusy.body).toMatchObject({ok:true,steered:true});
-    expect(allBusy.body.queued).toBeUndefined();
-    expect(count(native(slow.id),"BOTHBUSY")).toBe(1);
-    expect(count(native(slow2.id),"BOTHBUSY")).toBe(1);
-    expect(count(native(bystander.id),"BOTHBUSY")).toBe(0);
-    // Two busy plus one idle: both steered, the idle one starts while they still run.
     const mixed=await api("POST",`/api/groups/${room.id}/messages`,{text:"@SlowA @SlowB @QuickC MULTIMIX",sendId:"multi-busy-send-0002"});
-    expect(mixed.body).toMatchObject({ok:true,steered:true});
-    await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.role==="bot"&&m.kind==="text"&&m.from?.botId===quick.id));
-    expect((await snapshot(room.id)).activeBotIds).toEqual(expect.arrayContaining([slow.id,slow2.id,bystander.id]));
-    expect(count(native(slow.id),"MULTIMIX")).toBe(1);
-    expect(count(native(slow2.id),"MULTIMIX")).toBe(1);
-    expect(count(native(quick.id),"MULTIMIX")).toBe(1);
-    expect(count(native(bystander.id),"MULTIMIX")).toBe(0);
-    const rows=(await snapshot(room.id)).messages.filter((m:any)=>m.role==="user");
-    expect(rows.filter((m:any)=>m.text==="@SlowA @SlowB BOTHBUSY")).toHaveLength(1);
-    expect(rows.filter((m:any)=>m.text==="@SlowA @SlowB @QuickC MULTIMIX")).toHaveLength(1);
-    // Nothing is left queued to replay later.
-    expect((await api("DELETE",`/api/groups/${room.id}/queue/${allBusy.body.message.queueId}`)).status).toBe(404);
-    expect((await api("DELETE",`/api/groups/${room.id}/queue/${mixed.body.message.queueId}`)).status).toBe(404);
-    writeFileSync(patientFinishGate,"finish");
-    await api("POST",`/api/groups/${room.id}/interrupt`,{});
+    expect(allBusy.body).toMatchObject({ok:true,queued:true});
+    expect(mixed.body).toMatchObject({ok:true,queued:true});
+    const held=await snapshot(room.id);
+    expect(held.messages.filter((m:any)=>m.role==="user")).toHaveLength(1);
+    expect(held.activeBotIds).not.toContain(quick.id);
+    const chips=(await api("GET","/api/bots?messages=0")).body.botQueuedMessages[room.threadId];
+    expect(chips.map((item:any)=>item.queueId)).toEqual([allBusy.body.queueId,mixed.body.queueId]);
+    rmSync(patientFinishGate,{force:true});
+    await wait(async()=>!(await snapshot(room.id)).working);
+    const done=(await snapshot(room.id)).messages;
+    expect(done.filter((m:any)=>m.role==="user").map((m:any)=>m.text)).toEqual(["@SlowA @SlowB @BystanderD start","@SlowA @SlowB BOTHBUSY","@SlowA @SlowB @QuickC MULTIMIX"]);
+    const replies=(id:string)=>done.filter((m:any)=>m.role==="bot"&&m.kind==="text"&&m.turnTerminal&&m.from?.botId===id);
+    expect(replies(slow.id)).toHaveLength(3);
+    expect(replies(slow2.id)).toHaveLength(3);
+    expect(replies(quick.id)).toHaveLength(1);
+    expect(replies(bystander.id)).toHaveLength(1);
+    for(const queued of [allBusy,mixed]) expect((await api("DELETE",`/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(404);
   });
 
   it("keeps duplicate provider approval ids in exact lanes and rejects a stale token on the next turn", async () => {
