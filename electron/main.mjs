@@ -16,7 +16,7 @@ import { createAndroidDeviceController } from "./android-device.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { pasteMenuItem } from "./paste-menu-item.mjs";
-import { attachUpdaterWindow, startUpdater, registerUpdaterIpc } from "./updater.mjs";
+import { attachUpdaterWindow, startUpdater, registerUpdaterIpc, windowsUpdateCoordinator } from "./updater.mjs";
 import {
   buildDiagnosticsReport,
   diagnosticsFileName,
@@ -81,6 +81,7 @@ import { createComputerSharing, validateSharedFolders } from "./computer-sharing
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
 import { createHostLifecycle } from "./host-lifecycle.mjs";
 import { createUpdateLifecycleClient } from "./update-lifecycle.mjs";
+import { createWindowsUpdateContract, createWindowsUpdateResultWriter, createCheckpointUpdateLifecycle, createWindowsUpdateHealthVerifier } from "./windows-update-contract.mjs";
 import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore } from "./managed-desktop.mjs";
 import { createCompanyBackups } from "./company-backups.mjs";
 import { createCompanyBackupSchedule } from "./company-backup-schedule.mjs";
@@ -273,6 +274,7 @@ let secureCredentials = {};
 let secureCredentialState = null;
 let desktopDataDirLease = null;
 let desktopHostLifecycle = null;
+let windowsUpdateContract = null;
 let managedDesktop = null;
 let companyBackupController = null;
 let companyBackupState = { busy: false };
@@ -297,6 +299,7 @@ const serverSupervisor = createServerSupervisor({
     try { desktopHostLifecycle?.ready(proc.pid); }
     catch (error) { slog(`host recovery readiness held: ${error?.message ?? error}`); }
     slog(`server ready pid=${proc.pid} port=${SERVER_PORT}`);
+    void windowsUpdateContract?.onServerHealthy().catch(error => slog(`Windows update verification held: ${error?.message ?? error}`));
     // Re-read the latest account credentials; registration may have completed
     // while the replacement child's health probe was pending.
     syncManagedComposioCredentials();
@@ -1257,6 +1260,7 @@ async function startServerOn(port) {
     try {
       if (trustedApprovalMode.receive(proc, message)) return;
       if (managedDesktopRelay.receive(proc, message)) return;
+      if (windowsUpdateContract?.receive(proc, message)) return;
       if (receivePhoneSecretSave(proc, message)) return;
     } catch (error) {
       slog(`desktop private sync rejected: ${error?.message ?? error}`);
@@ -2770,6 +2774,24 @@ app.whenReady().then(async () => {
           ? { generation: process.env.OMB_RECOVERY_GENERATION, token: process.env.OMB_RECOVERY_TOKEN }
           : null,
       });
+      if (process.platform === "win32") {
+        const getConnection = () => serverReady && serverProc && !desktopShutdownStarted
+          ? { url: `http://127.0.0.1:${SERVER_PORT}`, pid: serverProc.pid, token: desktopMutationToken } : null;
+        windowsUpdateContract = createWindowsUpdateContract({
+          coordinator: windowsUpdateCoordinator,
+          lifecycleClient: createCheckpointUpdateLifecycle({
+            dataDir: desktopDataDir(),
+            isOwned: () => Boolean(getConnection() && !preparedCompanyRestore && !companyRestoreCommitting),
+            recordIntent: plan => desktopHostLifecycle.maintenance(`update:${plan.updateId}`),
+          }),
+          relaunch: () => { app.relaunch(); app.quit(); },
+          resultWriter: createWindowsUpdateResultWriter({
+            dataDir: desktopDataDir(), currentVersion: () => app.getVersion(), hostId: desktopHostLifecycle.generation,
+            verifyHealth: createWindowsUpdateHealthVerifier({ getConnection }),
+          }),
+          log: slog,
+        });
+      }
       // The launch capability belongs to main; never pass it to providers.
       delete process.env.OMB_RECOVERY_GENERATION;
       delete process.env.OMB_RECOVERY_TOKEN;
