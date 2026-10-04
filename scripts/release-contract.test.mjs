@@ -83,7 +83,7 @@ test('live builder config: one feed, signed by default, unsigned windows skips u
  assert.equal(signed.forceCodeSigning,true);
  assert.equal(signed.win.verifyUpdateCodeSignature,true);
  assert.deepEqual(signed.win.target,base.win.target);
- assert.deepEqual(signed.extraMetadata,{bosChannel:'live',name:'bos-bot'});
+ assert.deepEqual(signed.extraMetadata,{bosChannel:'live',name:'bos-bot',bosUpdatePolicy:{mode:'native',feed:{provider:'github',owner:'firazfhansurie',repo:'bos-bot'}}});
  const unsigned=liveConfig({BOS_WINDOWS_SIGNING:'unsigned'});
  validateConfig(unsigned,'live');
  assert.equal(unsigned.forceCodeSigning,false);
