@@ -58,7 +58,7 @@ import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
 import {
   approvalModeFor,
   supportsApprovalMode,
-  modelSwitchNeedsAsk,
+  approvalCarriesAcrossModelSwitch,
   isEmergencyApprovalDowngrade,
   isApprovalMode,
   type ApprovalMode,
@@ -1722,11 +1722,9 @@ function checkedTaskModelSwitch(current: BotRecord, raw: unknown, updateBotDefau
     if (resetApprovalToAsk && mode === "custom" && !trusted) {
       return { ok: false as const, status: 403, error: "Leaving Custom approval requires confirmation in the packaged desktop app" };
     }
-    const destination = registry.cliTarget(checked.selection.instanceId)?.driverKind;
-    const carryOver = keepApprovalAcrossModelSwitch(cfg) && supportsApprovalMode(destination, mode);
-    if (!resetApprovalToAsk && !carryOver && modelSwitchNeedsAsk(mode,
+    if (!resetApprovalToAsk && !approvalCarriesAcrossModelSwitch(mode,
       registry.cliTarget(target.modelSelection.instanceId)?.driverKind,
-      destination)) {
+      registry.cliTarget(checked.selection.instanceId)?.driverKind, keepApprovalAcrossModelSwitch(cfg))) {
       return { ok: false as const, status: 400, error: "Confirm switching this model with Ask permissions first (resetApprovalToAsk)" };
     }
   }
@@ -9283,8 +9281,10 @@ const teamSetupOptions: TeamSetupOptions = {
     if (current?.approvalGrant) return "Wait for the approval-level confirmation before changing this bot's model";
     if (current) {
       const mode = approvalModeFor(current);
-      const driver = registry.cliTarget(selection.instanceId)?.driverKind;
-      if (!supportsApprovalMode(driver, mode) || ((mode === "full" || mode === "custom") && driver !== registry.cliTarget(current.modelSelection.instanceId)?.driverKind)) {
+      // Same rule as a direct switch: honor the person's keep-across setting,
+      // never carry a level the destination engine does not implement.
+      if (!approvalCarriesAcrossModelSwitch(mode, registry.cliTarget(current.modelSelection.instanceId)?.driverKind,
+        registry.cliTarget(selection.instanceId)?.driverKind, keepApprovalAcrossModelSwitch(cfg))) {
         return `@${current.name}'s existing permissions are incompatible with that provider. Change its permissions in bot settings, then propose the model change again.`;
       }
     }
