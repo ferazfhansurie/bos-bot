@@ -80,7 +80,7 @@ describe("electron update executor (win32 seam, fake main)", () => {
     expect(status.candidate!.sha).toHaveLength(128);
     const { updateId } = await c.apply({ force: true });
     await h.settle();
-    expect(h.events.map(e => e.state)).toEqual(["checkpointing", "stopping", "applying"]);
+    expect(h.events.map(e => e.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
     expect(h.events.every(e => e.kind === "update.state" && e.type === "update.state" && e.updateId === updateId)).toBe(true);
     expect(h.stopped).toBe(1); expect(h.quiesced).toBe(1);
     expect(sent.map(m => m.type)).toEqual(["openmausbot:update-candidate", "openmausbot:update-candidate", "openmausbot:update-admit", "openmausbot:update-execute"]);
@@ -135,7 +135,7 @@ describe("electron update executor (win32 seam, fake main)", () => {
     expect(h.events.at(-1)).toMatchObject({ state: "applying", detail: /handoff uncertain: Windows install was not dispatched/ });
     expect(c.active).toBe(true); expect(h.quiesced).toBe(1); expect(h.unquiesced).toBe(0);
     expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(true);
-    await expect(c.restart({ force: true })).rejects.toMatchObject({ status: 409 });
+    expect(await c.restart({ force: true })).toEqual({ updateId, inProgress: true });
     await new Promise(resolve => setTimeout(resolve, 100));
     expect(executes).toBe(1);
     expect((await c.status()).state).toBe("applying");

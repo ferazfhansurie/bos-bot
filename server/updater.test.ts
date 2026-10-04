@@ -339,7 +339,7 @@ describe("updater coordinator", () => {
     expect(h.quiesced).toBe(1); expect(h.unquiesced).toBe(0);
     expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(true);
     expect(pendingUpdates(h.dataDir)).toEqual([updateId]);
-    await expect(c.apply({ force: true })).rejects.toMatchObject({ status: 409, message: /already running/ });
+    expect(await c.apply({ force: true })).toEqual({ updateId, inProgress: true });
     await h.settle();
     expect(executes).toBe(1);
     expect((await c.status()).state).toBe("applying");
@@ -375,10 +375,15 @@ describe("updater coordinator", () => {
     const c = h.make();
     const { updateId } = await c.apply({ force: true });
     expect((await c.status()).updateId).toBe(updateId);
-    expect(["checkpointing", "stopping", "applying"]).toContain((await c.status()).state);
-    await expect(c.apply({ force: true })).rejects.toMatchObject({ status: 409 });
+    expect(["draining", "checkpointing", "stopping", "applying"]).toContain((await c.status()).state);
+    // The second press is the same update, not a 409 and not a second job.
+    expect(await c.apply({ force: true })).toEqual({ updateId, inProgress: true });
+    expect(await c.restart()).toEqual({ updateId, inProgress: true });
     await h.settle();
-    expect(h.events.map(e => e.state)).toEqual(["checkpointing", "stopping", "applying"]);
+    expect(h.events.map(e => e.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(c.progress()).toMatchObject({ updateId, mode: "update", state: "applying", log: [] });
+    expect(c.progress().steps.map(s => s.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(JSON.parse(readFileSync(join(h.dataDir, "updates", updateId, "timeline.json"), "utf8")).steps).toHaveLength(4);
     expect(h.events.every(e => e.kind === "update.state" && e.type === "update.state" && e.updateId === updateId)).toBe(true);
     expect(h.stopped).toBe(1); expect(h.quiesced).toBe(1);
     const dir = join(h.dataDir, "updates", updateId);
@@ -409,8 +414,10 @@ describe("updater coordinator", () => {
     const c = h.make({ listBusyTurns: () => { polls++; if (polls > 4) h.turns = []; return [...h.turns]; } });
     const { updateId } = await c.restart();
     await h.settle();
-    expect(h.events.map(e => e.state)).toEqual(["checkpointing", "stopping", "applying"]);
-    expect(h.events[1].detail).toMatch(/waiting up to 5s/);
+    // The drain countdown refines the same state (one event per tick for the ui, one step).
+    expect([...new Set(h.events.map(e => e.state))]).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(c.progress().steps.map(s => s.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(h.events[0].detail).toMatch(/waiting for 1 bot: b1 \(up to 5s\)/);
     expect(readCheckpoint(h.dataDir, updateId)!.turns).toEqual([]);
     const plan = JSON.parse(readFileSync(join(h.dataDir, "updates", updateId, "plan.json"), "utf8"));
     expect(plan).toMatchObject({ mode: "restart", staged: null, backup: null, expect: null, force: false });
@@ -428,6 +435,109 @@ describe("updater coordinator", () => {
       expect(h.stopped).toBe(1);
       expect(readCheckpoint(h.dataDir, updateId)!.turns).toEqual([{ botId: "b1", threadId: "t1", kind: "direct" }]);
     } finally { Date.now = realNow; }
+  });
+
+  it("names the busy bots while draining and lifts the drain before anything else when the wait is forced", async () => {
+    stage(h);
+    h.turns = [{ botId: "b1", botName: "pipe", threadId: "t1", kind: "direct" }, { botId: "b2", botName: "pix", threadId: "g1", kind: "room", groupId: "geng" }];
+    let drained = 0;
+    const c = h.make({ drain: () => { drained++; } });
+    expect((await c.status()).busyTurns).toEqual([{ botId: "b1", botName: "pipe", threadId: "t1" }, { botId: "b2", botName: "pix", threadId: "g1" }]);
+    const { updateId } = await c.restart({ force: true });
+    await h.settle();
+    expect(drained).toBe(1);
+    expect(h.events.map(e => [e.state, e.detail])).toEqual([
+      ["draining", "stopping turns now"], ["checkpointing", "saving 2 interrupted turns"], ["stopping", "interrupting 2 turns"], ["applying", expect.any(String)],
+    ]);
+    expect(readCheckpoint(h.dataDir, updateId)!.turns.map(turn => turn.botName)).toEqual(["pipe", "pix"]);
+  });
+
+  it("builds first, then admits the staged build, then drains: bots keep working through the build", async () => {
+    let built = 0; let drainedAtBuild: number | null = null; let drained = 0;
+    h.turns = [{ botId: "b1", botName: "pipe", threadId: "t1", kind: "direct" }];
+    const target = { version: "0.1.86+feedface", sha: "feedface00000000", branch: "prod", subject: "ship it" };
+    const c = h.make({
+      drain: () => { drained++; },
+      builder: {
+        check: async () => ({ at: "2026-10-04T10:00:00Z", current: { version: "0.1.85", sha: "2d83ba23aaaaaaaa" }, candidate: target }),
+        build: async (t, log) => { built++; drainedAtBuild = drained; expect(t).toEqual(target); log("archiving feedface"); log("vite built"); stage(h); },
+      },
+    });
+    expect((await c.status()).state).toBe("idle");
+    expect(await c.check()).toMatchObject({ candidate: target });
+    expect(await c.status()).toMatchObject({ state: "ready", candidate: { version: "0.1.86+feedface", sha: "feedface00000000", branch: "prod" }, lastCheck: { at: "2026-10-04T10:00:00Z" } });
+    expect(JSON.parse(readFileSync(join(h.dataDir, "updates", "last-check.json"), "utf8")).candidate.sha).toBe("feedface00000000");
+    const { updateId } = await c.apply({ force: true });
+    expect(await c.apply()).toEqual({ updateId, inProgress: true });
+    await h.settle();
+    expect(built).toBe(1); expect(drainedAtBuild).toBe(0); expect(drained).toBe(1);
+    expect(h.events.map(e => e.state)).toEqual(["building", "draining", "checkpointing", "stopping", "applying"]);
+    expect(h.events[0].detail).toBe("building 0.1.86+feedface from prod");
+    expect(h.calls.filter(call => call === "preflight")).toHaveLength(1);
+    expect(c.progress().log).toEqual(["archiving feedface", "vite built"]);
+    expect(readFileSync(join(h.dataDir, "updates", updateId, "build.log"), "utf8")).toBe("archiving feedface\nvite built\n");
+    const plan = JSON.parse(readFileSync(join(h.dataDir, "updates", updateId, "plan.json"), "utf8"));
+    expect(plan).toMatchObject({ mode: "update", version: "0.1.86", sha: "feedface00000000", oldSha: "2d83ba23aaaaaaaa" });
+    // The staged candidate still shows, now with the branch the check found.
+    expect((await c.status()).candidate).toMatchObject({ sha: "feedface00000000", branch: "prod", stagedAt: expect.any(String) });
+  });
+
+  it("with a builder, apply refuses when the check finds nothing and fails cleanly when the build or its admission fails", async () => {
+    let check = { at: "2026-10-04T10:00:00Z", current: { version: "0.1.85", sha: "2d83ba23aaaaaaaa" }, reason: "up to date: running 2d83ba23 is the prod head" } as Awaited<ReturnType<UpdateCoordinator["check"]>>;
+    let buildError: Error | null = new Error("build failed at build:server: tsc exited 2");
+    const c = h.make({ builder: { check: async () => check, build: async () => { if (buildError) throw buildError; stage(h); } } });
+    await expect(c.apply()).rejects.toMatchObject({ status: 409, message: /up to date/ });
+    expect(h.events).toEqual([]);
+    check = { ...check, reason: undefined, candidate: { version: "0.1.86+feedface", sha: "feedface00000000", branch: "prod" } };
+    const first = await c.apply();
+    await h.settle();
+    expect(c.active).toBe(false);
+    expect(h.events.map(e => e.state)).toEqual(["building", "failed"]);
+    expect(h.events.at(-1)).toMatchObject({ updateId: first.updateId, detail: /build failed at build:server/ });
+    expect(h.stopped).toBe(0); expect(h.quiesced).toBe(0); expect(h.unquiesced).toBe(1);
+    expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    expect(pendingUpdates(h.dataDir)).toEqual([]);
+    expect((await c.status()).lastResult).toMatchObject({ state: "failed", updateId: first.updateId, from: { sha: "2d83ba23aaaaaaaa" }, to: { sha: "2d83ba23aaaaaaaa" } });
+    // The build succeeds but admission (preflight / guard / launchd) says no: same clean failure, nothing drained.
+    buildError = null; h.events = []; h.preflight = JSON.stringify({ ok: false, checks: { health_ok: false } });
+    const second = await c.apply();
+    await h.settle();
+    expect(second.updateId).not.toBe(first.updateId);
+    expect(h.events.map(e => e.state)).toEqual(["building", "failed"]);
+    expect(h.events.at(-1)!.detail).toMatch(/preflight not ok/);
+    expect(h.stopped).toBe(0); expect(h.quiesced).toBe(0);
+    expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+  });
+
+  it("check without a builder answers from the staged candidate, and a check that throws is a reason, not an error", async () => {
+    const c = h.make();
+    expect(await c.check()).toMatchObject({ reason: /no staged update and no build source/ });
+    stage(h);
+    expect(await c.check()).toMatchObject({ candidate: { version: "0.1.86", sha: "feedface00000000", branch: "staged" } });
+    const broken = h.make({ builder: { check: async () => { throw new Error("branch prod not found in /repo"); }, build: async () => {} } });
+    expect(await broken.check()).toMatchObject({ reason: "check failed: branch prod not found in /repo" });
+    expect((await broken.status()).lastCheck).toMatchObject({ reason: /branch prod not found/ });
+  });
+
+  it("the last result says what was running before and after: done moves to the new build, a rollback stays on the old one", async () => {
+    stage(h);
+    const c = h.make();
+    const { updateId } = await c.apply({ force: true });
+    await h.settle();
+    writeFileSync(join(h.dataDir, "updates", updateId, "result.json"), JSON.stringify({ state: "done", at: "x", detail: "updated to 0.1.86 (feedface)", updateId, mode: "update", version: "0.1.86", sha: "feedface00000000" }));
+    const booted = h.make();
+    await booted.boot();
+    expect((await booted.status()).lastResult).toMatchObject({ state: "done", from: { version: "0.1.85", sha: "2d83ba23aaaaaaaa" }, to: { version: "0.1.86", sha: "feedface00000000" }, attempted: { sha: "feedface00000000" } });
+    expect(booted.progress().steps.map(s => s.state)).toEqual(["draining", "checkpointing", "stopping", "applying", "verifying", "done"]);
+
+    // A second update whose health check failed: apply.py restored the backup and said so.
+    stage(h, "newer");
+    const second = await h.make().apply({ force: true });
+    await h.settle();
+    writeFileSync(join(h.dataDir, "updates", second.updateId, "result.json"), JSON.stringify({ state: "rolled_back", at: "y", detail: "health check failed; previous build restored", updateId: second.updateId, mode: "update", rollback: "health", version: "0.1.85", sha: "2d83ba23aaaaaaaa" }));
+    const again = h.make();
+    await again.boot();
+    expect((await again.status()).lastResult).toMatchObject({ state: "rolled_back", rollback: "health", updateId: second.updateId, from: { sha: "2d83ba23aaaaaaaa" }, to: { sha: "2d83ba23aaaaaaaa" }, attempted: { version: "0.1.86", sha: "feedface00000000" } });
   });
 
   it("reports a failure the detached job records while the app is still alive, and reopens the workspace", async () => {

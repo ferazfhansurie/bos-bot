@@ -2,7 +2,7 @@
 // release/v1.3-build/handout-2026-10-03.md, before the backend lands:
 //
 //   GET  /api/update/status  -> { state, current:{version,sha}, candidate?, busyTurns, lastResult? }
-//   POST /api/update/apply   {force?} -> 202 {updateId} | 409 when already running
+//   POST /api/update/apply   {force?} -> 202 {updateId} | 200 {updateId, inProgress: true} when already running | 409 when refused
 //   POST /api/update/restart {force?} -> 202
 //   runtime stream event      {type:"update.state", state, updateId, detail}
 //
@@ -252,7 +252,7 @@ describe.skipIf(!posixOnly)("updater acceptance: relaunch delivery (runnable now
 // ---------------------------------------------------------------------------
 // Needs backend (dev/pipe-updater). Skips cleanly until the route exists.
 // ---------------------------------------------------------------------------
-const STATES = ["idle", "ready", "checkpointing", "stopping", "applying", "relaunching", "verifying", "done", "rolled_back", "failed"];
+const STATES = ["idle", "ready", "building", "draining", "checkpointing", "stopping", "applying", "relaunching", "verifying", "done", "rolled_back", "failed"];
 
 const makeBundle = (root: string, name: string, version: string, payload: string) => {
   const app = join(root, name);

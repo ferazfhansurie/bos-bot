@@ -31,6 +31,14 @@ only ever moves forward from what is running.
       candidate must be byte-identical (server + ui digests) to the ledger's
       previously-live entry, so only a backup of what was live can come back.
 
+  no-downgrade.py preview --live APP [--commit SHA] [--ledger PATH] [--repo PATH]
+                          [--release-branch NAME] [--prod-branch NAME]
+      The "is there an update" answer, before anything is built: judge a
+      commit (default: the prod branch head) by rules 2-5 above against the
+      running build. ok=true means a build of that commit would pass `check`
+      once stamped; up_to_date=true means it IS the running commit. Exit 2 on
+      a refusal with the same reasons `check` gives. Read-only.
+
   no-downgrade.py record --live APP [--commit SHA] [--repo PATH] [--release-branch NAME]
                          [--prod-branch NAME] [--ledger PATH]
       Record the live bundle as the running build in the ledger (the previous
@@ -230,23 +238,63 @@ def cmd_check(a) -> dict:
     out["candidate"].update(commit=commit, source="stamp")
     if not commit_exists(repo, commit):
         raise Refuse(f"candidate refused: stamped commit {commit[:8]} is not in {repo} (fetch it first). running is {running['commit'][:8]}")
-    if not is_ancestor(repo, running["commit"], commit):
+    out.update(judge(repo, branch, prod, running["commit"], commit))
+    return out
+
+
+def judge(repo: Path, branch: str, prod: str, running: str, commit: str) -> dict:
+    """Rules 3-5 for a commit against the running one: ancestor, on release,
+    prod head. Shared by `check` (a stamped bundle) and `preview` (a commit
+    that may not be built yet) so both say no for the same reasons."""
+    if not is_ancestor(repo, running, commit):
         raise Refuse(
-            f"downgrade refused: running {running['commit'][:8]} is not an ancestor of candidate {commit[:8]} "
+            f"downgrade refused: running {running[:8]} is not an ancestor of candidate {commit[:8]} "
             f"(older build, or a sibling branch). only a descendant of the running build may be installed."
         )
     if not is_ancestor(repo, commit, f"refs/heads/{branch}"):
-        raise Refuse(f"candidate refused: {commit[:8]} is not reachable from {branch} (running {running['commit'][:8]}). only release builds go live.")
+        raise Refuse(f"candidate refused: {commit[:8]} is not reachable from {branch} (running {running[:8]}). only release builds go live.")
     if prod:
         head = branch_head(repo, prod)
         if head is None:
             raise Refuse(f"candidate refused: prod branch {prod} not found in {repo}; nothing is accepted for install")
         if head != commit:
-            raise Refuse(f"candidate refused: {commit[:8]} is not what {prod} points at ({head[:8]}); only the accepted prod build goes live (running {running['commit'][:8]})")
-    same = commit == running["commit"]
-    out.update(ok=True, reason=(f"allowed: candidate {commit[:8]} is the running commit rebuilt" if same
-                                else f"allowed: candidate {commit[:8]} descends from running {running['commit'][:8]}, is on {branch}"
-                                     + (f" and is the {prod} head" if prod else "")))
+            raise Refuse(f"candidate refused: {commit[:8]} is not what {prod} points at ({head[:8]}); only the accepted prod build goes live (running {running[:8]})")
+    same = commit == running
+    return {"ok": True, "up_to_date": same,
+            "reason": (f"allowed: candidate {commit[:8]} is the running commit rebuilt" if same
+                       else f"allowed: candidate {commit[:8]} descends from running {running[:8]}, is on {branch}"
+                            + (f" and is the {prod} head" if prod else ""))}
+
+
+def cmd_preview(a) -> dict:
+    live = require_app(a.live)
+    ledger_path = Path(a.ledger).expanduser()
+    ledger = load_ledger(ledger_path)
+    repo = resolve_repo(a, ledger, ledger_path, seeding=False)
+    branch = resolve_branch(a, ledger, ledger_path, seeding=False)
+    prod = resolve_prod(a, ledger)
+    if branch_head(repo, branch) is None:
+        raise Refuse(f"release branch {branch} not found in {repo}")
+    running = running_build(live, ledger)
+    commit = a.commit
+    if not commit:
+        if not prod:
+            raise Refuse("preview needs --commit when the prod check is off (--prod-branch \"\")")
+        commit = branch_head(repo, prod)
+        if commit is None:
+            raise Refuse(f"prod branch {prod} not found in {repo}; nothing is accepted for install")
+    if not SHA.match(commit):
+        r = git(repo, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", check=False)
+        if r.returncode or not SHA.match(r.stdout.strip()):
+            raise Refuse(f"candidate refused: {commit} is not a commit in {repo}")
+        commit = r.stdout.strip()
+    if not commit_exists(repo, commit):
+        raise Refuse(f"candidate refused: {commit[:8]} is not in {repo} (fetch it first). running is {running['commit'][:8]}")
+    out = {"mode": "preview", "repo": str(repo), "release_branch": branch, "prod_branch": prod or None,
+           "running": running, "candidate": {"commit": commit, "source": "commit"}, "ledger": str(ledger_path)}
+    out.update(judge(repo, branch, prod, running["commit"], commit))
+    if out["up_to_date"]:
+        out["reason"] = f"up to date: running {running['commit'][:8]} is the {prod or branch} head"
     return out
 
 
@@ -286,9 +334,11 @@ def main(argv=None) -> int:
     c.add_argument("--repo"); c.add_argument("--release-branch"); c.add_argument("--prod-branch", default=None)
     r = sub.add_parser("record"); r.add_argument("--live", required=True); r.add_argument("--commit")
     r.add_argument("--ledger", default=str(DEFAULT_LEDGER)); r.add_argument("--repo"); r.add_argument("--release-branch"); r.add_argument("--prod-branch", default=None)
+    v = sub.add_parser("preview"); v.add_argument("--live", required=True); v.add_argument("--commit")
+    v.add_argument("--ledger", default=str(DEFAULT_LEDGER)); v.add_argument("--repo"); v.add_argument("--release-branch"); v.add_argument("--prod-branch", default=None)
     a = p.parse_args(argv)
     try:
-        out = {"stamp": cmd_stamp, "check": cmd_check, "record": cmd_record}[a.cmd](a)
+        out = {"stamp": cmd_stamp, "check": cmd_check, "record": cmd_record, "preview": cmd_preview}[a.cmd](a)
         code = 0
     except Refuse as e:
         out, code = {"ok": False, "reason": str(e)}, 2

@@ -195,6 +195,38 @@ describe.skipIf(!hasPython)("no-downgrade guard", () => {
     });
   });
 
+  it("preview answers the update check without a bundle: up to date, newer prod head allowed, older / sibling / non-prod refused", () => {
+    const preview = (...extra: string[]) => run("preview", "--live", live, ...common(), ...extra);
+    // Nothing recorded yet: the running build is unknown, so nothing is accepted.
+    expect(preview("--commit", repo.c)).toMatchObject({ code: 2, out: { ok: false, reason: expect.stringMatching(/running build|record/i) } });
+    expect(run("record", "--live", live, "--commit", repo.b, ...common()).code).toBe(0);
+    // Running B, prod C: C is the candidate.
+    const ahead = preview();
+    expect(ahead.code).toBe(0);
+    expect(ahead.out).toMatchObject({ ok: true, mode: "preview", up_to_date: false, running: { commit: repo.b, source: "ledger" }, candidate: { commit: repo.c, source: "commit" } });
+    expect(preview("--commit", "prod").out).toMatchObject({ ok: true, candidate: { commit: repo.c } });
+    // Older (A), sibling (S), the branch head when prod is behind it: refused like check would.
+    expect(preview("--commit", repo.a)).toMatchObject({ code: 2, out: { ok: false, reason: expect.stringMatching(/older|ancestor|behind/i) } });
+    expect(preview("--commit", repo.s)).toMatchObject({ code: 2, out: { ok: false } });
+    expect(preview("--commit", repo.t)).toMatchObject({ code: 2, out: { ok: false } });
+    expect(preview("--commit", "no-such-ref")).toMatchObject({ code: 2, out: { ok: false, reason: /not a commit/ } });
+    // Running C (= prod head): up to date, still ok.
+    expect(run("record", "--live", live, "--commit", repo.c, ...common()).code).toBe(0);
+    const same = preview();
+    expect(same.code).toBe(0);
+    expect(same.out).toMatchObject({ ok: true, up_to_date: true, reason: expect.stringMatching(/up to date/) });
+    // Prod check off: a commit must be named; the release head then counts.
+    expect(preview("--prod-branch", "")).toMatchObject({ code: 2, out: { ok: false, reason: /needs --commit/ } });
+    expect(preview("--prod-branch", "", "--commit", repo.c).out).toMatchObject({ ok: true, up_to_date: true });
+    // A prod branch that does not exist accepts nothing.
+    expect(preview("--prod-branch", "nope")).toMatchObject({ code: 2, out: { ok: false, reason: /prod branch nope not found/ } });
+    // read-only: the live bundle and ledger are untouched by preview
+    const ledgerBefore = readFileSync(ledger, "utf8");
+    preview("--commit", repo.a);
+    expect(readFileSync(ledger, "utf8")).toBe(ledgerBefore);
+    expect(existsSync(join(live, "Contents", "Resources", "build-commit.json"))).toBe(false);
+  });
+
   it("never touches the bundles it checks: check is read-only, exit 1 on a bad invocation", () => {
     const before = appDigests(live);
     const r = spawnSync(PYTHON, [SCRIPT, "check", "--candidate", join(root, "nope.app"), "--live", live, ...common()], { encoding: "utf8" });

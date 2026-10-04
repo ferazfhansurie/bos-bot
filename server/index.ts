@@ -3,6 +3,7 @@ import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
 import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
 import { DesktopUpdateLifecycle, readPreparedUpdateReceipt, assertUpdateCancellationSafe } from "./desktop-update-lifecycle.ts";
 import { UpdateCoordinator, createDarwinExecutor, readInstalled, resumePrompt, type BusyTurn, type NoDowngradeOptions, type UpdateExecutor } from "./updater.ts";
+import { buildCandidate, previewUpdate, readUpdateSource, resolveUpdateTarget } from "./updater-build.ts";
 import { createDarwinUpdaterHost, createSandboxUpdaterHost } from "./updater-host.ts";
 import { createElectronUpdateExecutor } from "./updater-executor-electron.ts";
 import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
@@ -548,6 +549,13 @@ if (existsSync(join(DATA_DIR, ".backups"))) {
   }
 }
 const workspaceMaintenance = new WorkspaceBackupMaintenance();
+// The update drain (1.3): once firaz presses update and the build is staged,
+// no new turns are admitted while the live ones finish. Lifted when the
+// update is cancelled or fails; after a successful restart it is a new process.
+let updateDraining = false;
+function assertNotDraining(): void {
+  if (updateDraining) throw Object.assign(new Error("BOS is updating. New work starts again after the restart."), { status: 503 });
+}
 const desktopLifecycleGeneration = process.env.OMB_DESKTOP_LIFECYCLE_GENERATION;
 const startupUpdateReceipt = process.env.OMB_DESKTOP_PARENT === "1" ? readPreparedUpdateReceipt(DATA_DIR, desktopLifecycleGeneration) : null;
 if (startupUpdateReceipt) workspaceMaintenance.restoreUpdate(startupUpdateReceipt.nonce);
@@ -6874,6 +6882,7 @@ interface SharedBotChain { requesterId: string; hop: number; started: Set<string
 
 async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, chain?: SharedBotChain): Promise<void> {
   workspaceMaintenance.assertAvailable();
+  assertNotDraining();
   if (source.kind === "activity" || source.editedAt || source.deletedAt) return;
   const fromBot = Boolean(chain);
   if (fromBot ? source.actor.kind !== "bot" || chain!.hop > MAX_SHARED_ROOM_HOPS : source.actor.kind !== "person") return;
@@ -7431,6 +7440,7 @@ async function startTurn(
   },
 ) {
   workspaceMaintenance.assertAvailable();
+  if (!opts?.cardContinuation) assertNotDraining();
   opts?.dispatchGuard?.();
   opts?.requestGuard?.();
   const profile = store.bot(botId);
@@ -9384,7 +9394,7 @@ function delegatedReceiptView(job: DelegatedJob) {
 }
 let delegatedDrainRunning = false;
 async function drainDelegatedJobs() {
-  if (delegatedDrainRunning || workspaceMaintenance.active) return;
+  if (delegatedDrainRunning || workspaceMaintenance.active || updateDraining) return;
   delegatedDrainRunning = true;
   try {
     for (const job of delegatedJobs.pending()) {
@@ -9856,8 +9866,8 @@ async function executeGroupMemberTurn(
   // fresh bot rather than mixing a stale adapter with fresh permissions.
   setupRetry = 0,
 ): Promise<boolean> {
-  if (workspaceMaintenance.active) {
-    onDispatchError?.("A workspace backup or restore is in progress.");
+  if (workspaceMaintenance.active || updateDraining) {
+    onDispatchError?.(updateDraining ? "BOS is updating; this turn starts again after the restart." : "A workspace backup or restore is in progress.");
     return false;
   }
   if (isCancelled?.()) return false;
@@ -11126,6 +11136,7 @@ function startGroupTurn(
   options: StartGroupTurnOptions = {},
 ) {
   workspaceMaintenance.assertAvailable();
+  assertNotDraining();
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
   if (roomSetupPending(group)) {
@@ -12874,10 +12885,10 @@ const listBusyTurns = (): BusyTurn[] => {
   const turns: BusyTurn[] = [];
   for (const bot of store.bots) {
     for (const task of store.tasks(bot.id)) {
-      if (task.busy || directTurnDispatchClaims.has(task.threadId)) turns.push({ botId: bot.id, threadId: task.threadId, kind: "direct", ...(task.title ? { title: task.title } : {}) });
+      if (task.busy || directTurnDispatchClaims.has(task.threadId)) turns.push({ botId: bot.id, botName: bot.name, threadId: task.threadId, kind: "direct", ...(task.title ? { title: task.title } : {}) });
     }
     const room = activeGroupTurnForBot(bot.id);
-    if (room) turns.push({ botId: bot.id, threadId: room.threadId, kind: "room", groupId: room.group.id });
+    if (room) turns.push({ botId: bot.id, botName: bot.name, threadId: room.threadId, kind: "room", groupId: room.group.id, title: room.group.name });
   }
   return turns;
 };
@@ -12897,6 +12908,7 @@ const updateCoordinator = new UpdateCoordinator({
     steers: queuedSteerSnapshot(() => true),
     delegations: [...pendingDelegationWakes.entries()].map(([id, wake]) => ({ id, botId: wake.botId, targetName: wake.targetName })),
   }),
+  drain: () => { updateDraining = true; workspaceQuietHooks.pause(); },
   quiesce: async () => {
     const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.id ?? ""}`;
     workspaceMaintenance.restoreUpdate(owner, workspaceQuietHooks.resume);
@@ -12905,8 +12917,32 @@ const updateCoordinator = new UpdateCoordinator({
   },
   unquiesce: () => {
     const owner = `${UPDATE_OWNER_PREFIX}${updateCoordinator.id ?? ""}`;
-    try { workspaceMaintenance.cancelUpdate(owner); } catch { /* never locked */ }
+    const wasDraining = updateDraining;
+    updateDraining = false;
+    if (workspaceMaintenance.active) { try { workspaceMaintenance.cancelUpdate(owner); return; } catch { /* not ours */ } }
+    // Drained but never quiesced (build refused, cancelled while waiting): the schedulers were paused by drain().
+    if (wasDraining) workspaceQuietHooks.resume();
+    void drainDelegatedJobs();
   },
+  // The build side of the button (darwin only): check asks git + the guard
+  // whether prod moved past the running build; build makes that commit the
+  // staged candidate. Both need the canonical repo (OMB_UPDATE_REPO,
+  // <data>/updates/source.json or the ledger) and the no-downgrade script.
+  ...(process.platform !== "win32" && !UPDATE_SANDBOX && UPDATE_NO_DOWNGRADE && LIVE_APP_PATH ? {
+    builder: {
+      check: async () => {
+        const source = readUpdateSource(DATA_DIR);
+        const target = await resolveUpdateTarget(source);
+        return previewUpdate({ script: UPDATE_NO_DOWNGRADE.script, ledger: UPDATE_NO_DOWNGRADE.ledger, liveApp: LIVE_APP_PATH, source, target, current: { version: serverVersion(), sha: readInstalled(DATA_DIR)?.sha ?? process.env.OMB_APP_SHA ?? "unknown" } });
+      },
+      build: async (target, log) => {
+        const source = readUpdateSource(DATA_DIR);
+        const resolved = await resolveUpdateTarget(source);
+        if (resolved.sha !== target.sha) throw Object.assign(new Error(`${source.prodBranch || source.releaseBranch} moved to ${resolved.sha.slice(0, 8)} since the check found ${target.sha.slice(0, 8)}; check again`), { status: 409 });
+        await buildCandidate({ dataDir: DATA_DIR, liveApp: LIVE_APP_PATH, source, target: resolved, log });
+      },
+    },
+  } : {}),
   executor: updateExecutor,
   emit: event => broadcast({ ...event }),
   resumeTurn: async (turn, result) => {
@@ -13320,13 +13356,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (auth.kind === "session" && !auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
       res.setHeader("cache-control", "no-store");
       if (method === "GET" && path === "/api/update/status") return json(res, 200, await updateCoordinator.status());
+      if (method === "GET" && path === "/api/update/progress") return json(res, 200, updateCoordinator.progress());
+      if (method === "POST" && path === "/api/update/check") {
+        try { return json(res, 200, await updateCoordinator.check()); }
+        catch (error) {
+          const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 500;
+          return json(res, status, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       if (method === "POST" && (path === "/api/update/apply" || path === "/api/update/restart")) {
         if (!UPDATE_ROUTES_READY) return json(res, 409, { error: process.platform === "win32" ? "this server is not running inside the desktop app; nothing to relaunch" : "this server is not running from an app bundle; nothing to swap or relaunch" });
         const body = await readBody(req).catch(() => ({})) as { force?: unknown };
         const options = { force: body?.force === true };
         try {
           const started = path === "/api/update/apply" ? await updateCoordinator.apply(options) : await updateCoordinator.restart(options);
-          return json(res, 202, started);
+          // A second press while one runs is the same update: 200, not a new job.
+          return json(res, started.inProgress ? 200 : 202, started);
         } catch (error) {
           const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 500;
           return json(res, status, { error: error instanceof Error ? error.message : String(error) });
