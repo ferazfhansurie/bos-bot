@@ -78,6 +78,7 @@ import { approvalHeldNote, approvalHeldReason, approvalModeForOrigin, autoVerdic
 import { updateClaudeCli } from "./claude-update.ts";
 import { configuredAccountDirectory, assertSeparateClaudeAccount, claudeAccountInfo, createClaudeAccountSchema, instanceSettingsSchema, newClaudeAccount } from "./claude-accounts.ts";
 import { providerUsage } from "./provider-usage.ts";
+import { ModelFallbackService, fallbackSelection, isProviderLimit } from "./model-fallback.ts";
 import { providerIconPatchSchema, withInstanceIcon } from "./provider-icon.ts";
 import { providerIconError } from "../shared/provider-icon.ts";
 import {
@@ -1218,6 +1219,8 @@ function requestedTaskBot(botId: string, rawThreadId: unknown): BotRecord {
 }
 
 async function interruptDirectThread(botId: string, threadId: string): Promise<void> {
+  const quotaRetry = quotaRetryTurns.get(threadId);
+  if (quotaRetry) quotaRetry.cancelled = true;
   // Stop belongs to the conversation it was pressed in. This bot's turn ends
   // and this conversation stops awaiting its teammates, so nothing resumes
   // into a stopped chat; assignments that never started are dropped. A
@@ -1826,6 +1829,21 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const modelFallback = new ModelFallbackService({ store, instances: () => registry.instances(),
+  usage: () => providerUsage(persistableInstanceConfigs(cfg)), keepPermissions: () => keepApprovalAcrossModelSwitch(cfg),
+  changing: id => providerFleetReloading || providerInstancesChanging.has(id), roomBusy: threadId => groupSpeakers.has(threadId), publish: event => bus.publish(event) });
+type QuotaRetryTurn = { generation: string; effects: boolean; cancelled: boolean; failure: string; retry: (failure: string) => Promise<void> };
+const quotaRetryTurns = new Map<string, QuotaRetryTurn>();
+const fallbackRestoreTimer = setInterval(() => { void modelFallback.restore().catch(error => console.error("model fallback restore failed", error)); }, 30_000);
+fallbackRestoreTimer.unref();
+
+function checkedFallbackModel(value: unknown, preferred?: string): { ok: true; model: string | undefined } | { ok: false; error: string } {
+  if (value === null || value === "") return { ok: true, model: undefined };
+  if (typeof value !== "string" || value.length > 200 || !fallbackSelection(value, registry.instances(), preferred)) {
+    return { ok: false, error: "fallbackModel must be an unambiguous available model ID, or null" };
+  }
+  return { ok: true, model: value };
+}
 const remoteFullProviderRevisions = new WeakMap<object, string>();
 const remoteFull = new RemoteFullService({ store,
   enrollment: () => readRemoteFullEnrollment(DATA_DIR, ENVIRONMENT_ID),
@@ -1895,7 +1913,7 @@ const wireTask = (task: TaskRecord): WireTask => {
 };
 
 const wireBot = (bot: BotRecord): WireBot => {
-  const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, ...rest } = bot;
+  const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, roomModelFallbacks: _roomModelFallbacks, ...rest } = bot;
   // An elevated selection is inert until the desktop confirms its exact
   // private reply. Every ordinary client sees the effective Ask state during
   // that two-phase window, never a grant that may still roll back.
@@ -4889,6 +4907,17 @@ async function localVmInventoryPayload() {
 
 bus.subscribe((event: RuntimeEvent) => {
   if (shouldIgnoreProviderEvent(event)) return;
+  const quotaRetry = quotaRetryTurns.get(event.threadId);
+  if (quotaRetry && quotaRetry.generation === directTurnGenerationByThread.get(event.threadId)) {
+    if ((event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") && event.itemType === "tool" || event.type === "request.opened" ||
+        event.type === "item.completed" && event.itemType === "assistant_image" ||
+        event.type === "content.delta" && event.streamKind === "assistant_text" && !event.synthetic) quotaRetry.effects = true;
+    if (event.type === "runtime.error") quotaRetry.failure = event.message;
+    if (event.type === "item.completed" && event.itemType === "assistant_text") {
+      if (event.synthetic) quotaRetry.failure = event.text;
+      else quotaRetry.effects = true;
+    }
+  }
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
     localVmLeaseFor(localVmTarget).touch(event.threadId);
@@ -4971,6 +5000,13 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.turnId) liveTurnByThread.set(event.threadId, event.turnId);
   const liveTurnId = event.turnId ?? liveTurnByThread.get(event.threadId);
   switch (event.type) {
+    case "model.switched": {
+      const changedBot = store.bot(event.botId);
+      store.appendMessage(event.threadId, { role: "bot", kind: "activity",
+        ...(group && changedBot ? { from: { botId: changedBot.id, name: changedBot.name, color: changedBot.color } } : {}),
+        tool: { name: `${event.reason === "provider_reset" ? "Provider quota reset; restored" : "Provider limit; switched to"} ${event.to}`, ok: true } });
+      break;
+    }
     case "turn.started":
       turnStartedAt.set(event.threadId, Date.now());
       break;
@@ -5336,6 +5372,18 @@ bus.subscribe((event: RuntimeEvent) => {
             store.setTaskActivity(bot.id, event.threadId, "idle");
           }
           directTurnBots.delete(event.threadId);
+          const retry = quotaRetryTurns.get(event.threadId);
+          if (retry && retry.generation === generation) {
+            const failure = retry.failure || event.stopReason || "";
+            if (!event.ok && !retry.effects && !retry.cancelled && event.stopReason !== "interrupted" && isProviderLimit(failure)) {
+              void retry.retry(failure).catch(error => console.error("model fallback retry failed", error)).finally(() => {
+                if (quotaRetryTurns.get(event.threadId) === retry) quotaRetryTurns.delete(event.threadId);
+                retryDelegationsWaitingOn(bot.id); drainQueuedSends(); drainConnectorResumes(); drainSecretResumes(); drainTeamSetupResumes(); drainDelegationWakes();
+              });
+              return;
+            }
+            quotaRetryTurns.delete(event.threadId);
+          }
           if (continueComputerSelection(event.threadId, generation, event.ok)) return;
           // Ordinary completion still drains from the existing bus subscribers.
           // An asynchronous screenshot finishes after those subscribers ran.
@@ -7263,10 +7311,14 @@ async function startTurn(
     /** Recheck a remote caller after asynchronous provider setup. */
     requestGuard?: () => void;
     onDispatchError?: (message: string) => void;
+    /** Recheck transcript/permission admission after an awaited quota lookup. */
+    admissionGuard?: () => void;
     /** Recheck external access after asynchronous provider setup. */
     dispatchGuard?: () => void;
     /** Summarize this conversation without asking the agent to do more work. */
     compactOnly?: boolean;
+    /** Quota fallback may retry a cleanly refused direct turn once. */
+    quotaFallbackRetry?: boolean;
     /** Queue receipts outlive the dispatch acknowledgment until this exact turn settles. */
     onTurnSettled?: () => void;
     coordination?: { id: string; resumed: boolean; settle: (outcome: { ok: boolean; text: string }) => void };
@@ -7292,6 +7344,13 @@ async function startTurn(
       },
     };
   }
+  if (profile.fallbackModel && !opts?.quotaFallbackRetry && opts?.runOn !== "cloud" && !threadBusy(botId, threadId)) {
+    assertWithinBudget(cfg, DATA_DIR);
+    await modelFallback.beforeTurn(botId, threadId);
+    opts?.dispatchGuard?.();
+    opts?.requestGuard?.();
+  }
+  opts?.admissionGuard?.();
   const projectedBot = store.projectBotForTask(botId, threadId);
   if (!projectedBot) throw Object.assign(new Error("no such task"), { status: 404 });
   // Shared conversations never inherit the owner's private memory, recent work,
@@ -7474,6 +7533,19 @@ async function startTurn(
       !opts?.commsDepth && !opts?.coordination && !inheritedTeamComputer(bot) && !sharedWork && bot.computer !== "off" && agentsMounted) {
     const source = store.activePath(threadId).findLast(message => message.id === userMessage?.id && message.role === "user" && !message.peerAsk);
     if (source) computerSelectionTurns.set(threadId, { generation: dispatchClaimId, botId: bot.id, source, text });
+  }
+  if (bot.fallbackModel && !opts?.quotaFallbackRetry && !opts?.automationSource && !opts?.coordination && !opts?.commsDepth && opts?.runOn !== "cloud") {
+    const quotaRetry: QuotaRetryTurn = { generation: dispatchClaimId, effects: false, cancelled: false, failure: "", retry: async failure => {
+      const source = userMessage;
+      // A new human message, stop, deletion or replacement dispatch revokes this retry.
+      if (!source || quotaRetry.cancelled || directTurnGenerationByThread.get(threadId) !== dispatchClaimId ||
+          store.activePath(threadId).findLast(message => message.role === "user")?.id !== source.id) return;
+      if (!await modelFallback.afterFailure(bot.id, threadId, failure, false, () => !quotaRetry.cancelled && directTurnGenerationByThread.get(threadId) === dispatchClaimId)) return;
+      if (quotaRetry.cancelled || directTurnGenerationByThread.get(threadId) !== dispatchClaimId || threadBusy(bot.id, threadId) ||
+          store.activePath(threadId).findLast(message => message.role === "user")?.id !== source.id) return;
+      await startTurn(bot.id, text, { ...opts, threadId, userMessage: source, quotaFallbackRetry: true, admissionGuard: undefined });
+    } };
+    quotaRetryTurns.set(threadId, quotaRetry);
   }
   store.setTaskActivity(bot.id, threadId, "working");
   // A closed thread that gets a new turn is open again: the person (or the
@@ -8404,6 +8476,7 @@ async function startTurn(
         return;
       }
       if (!ownsLatestGeneration) return;
+      if (quotaRetryTurns.get(threadId)?.generation === dispatchClaimId) quotaRetryTurns.delete(threadId);
       const message = e instanceof Error ? e.message : String(e);
       store.appendMessage(threadId, {
         role: "bot",
@@ -9711,7 +9784,7 @@ async function executeGroupMemberTurn(
     return false;
   }
   const group = store.group(groupId);
-  const bot = store.bot(botId);
+  let bot = store.bot(botId);
   const ownsThread = group?.dm
     ? group.threadId === store.canonicalThreadId(threadId)
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
@@ -9723,6 +9796,17 @@ async function executeGroupMemberTurn(
   if (bot.approvalGrant) {
     onDispatchError?.(`${bot.name}'s approval level is still being confirmed — skipped this round`);
     return true;
+  }
+  if (bot.fallbackModel) {
+    assertWithinBudget(cfg, DATA_DIR);
+    const selection = await modelFallback.beforeRoomTurn(bot.id, threadId, roomTurnApprovalMode(bot, orchestration), () => !isCancelled?.());
+    const fresh = store.bot(bot.id);
+    if (!fresh || !selection || isCancelled?.()) return false;
+    if (fresh.approvalGrant || fresh.sharedWorkComputer) {
+      onDispatchError?.("The bot's permissions or work computer changed during provider setup; skipped this round.");
+      return false;
+    }
+    bot = { ...fresh, modelSelection: selection };
   }
   revokeInternalCapabilitiesForThread(threadId);
   spoken.add(botId);
@@ -9890,8 +9974,9 @@ async function executeGroupMemberTurn(
   // A 1:1 or another room turn may have claimed this bot while connected-app
   // setup was in flight. Re-check immediately before the synchronous claim so
   // each execution owner respects its lane and the configured bot capacity.
-  const readyBot = store.bot(bot.id);
-  if (!readyBot) return false;
+  const readyProfile = store.bot(bot.id);
+  if (!readyProfile) return false;
+  const readyBot = { ...readyProfile, modelSelection: modelFallback.roomSelection(bot.id, threadId) ?? readyProfile.modelSelection };
   const readyGroup = store.group(group.id);
   const stillOwnsThread = readyGroup?.dm
     ? readyGroup.threadId === store.canonicalThreadId(threadId)
@@ -17490,6 +17575,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
         selection = checked.selection;
       }
+      const fallback = body.fallbackModel === undefined ? { ok: true as const, model: undefined } : checkedFallbackModel(body.fallbackModel, selection.instanceId);
+      if (!fallback.ok) return json(res, 400, { error: fallback.error });
       // Keep the capacity check immediately beside the synchronous write.
       // Awaiting provider discovery before this point cannot race the cap.
       if (store.bots.length >= MAX_WORKSPACE_BOTS) {
@@ -17499,6 +17586,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ...profile.patch,
         section,
         modelSelection: selection,
+        fallbackModel: fallback.model,
       });
       return json(res, 201, {
         bot: {
@@ -17710,6 +17798,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const patch: Record<string, unknown> = {};
       Object.assign(patch, profile.patch);
+      if (body.fallbackModel !== undefined) {
+        const fallback = checkedFallbackModel(body.fallbackModel, (normalizedSelection ?? existingBot?.modelSelection)?.instanceId);
+        if (!fallback.ok) return json(res, 400, { error: fallback.error });
+        patch.fallbackModel = fallback.model;
+      }
       if (body.visibility !== undefined) {
         if (body.visibility !== "shared" && body.visibility !== "private") return json(res, 400, { error: "visibility must be shared or private" });
         patch.visibility = body.visibility;
@@ -18682,20 +18775,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
 
           if (guarded) {
-            // There is no await between these checks and startTurn's
-            // synchronous transcript append / runtime reservation. In
-            // particular, never steer or enqueue under stale permissions.
-            if (approvalModeFor(currentAtStart) !== "ask" || currentAtStart.autoApprove === true || currentAtStart.alwaysAllow?.length) {
-              throw Object.assign(new Error("guarded sends require Ask mode without remembered permissions"), { status: 409, code: "guarded_permissions" });
-            }
-            if (store.activeLeaf(threadId) !== body.expectedActiveLeafId) {
-              throw Object.assign(new Error("the conversation changed before this message could start"), { status: 409, code: "guarded_branch" });
-            }
-            if (currentAtStart.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
-              throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
-            }
+            // Quota lookup may await. Repeat exact admission immediately
+            // before the synchronous transcript append / runtime reservation;
+            // never steer or enqueue under stale permissions.
+            const admissionGuard = () => {
+              assertPrivateRequest();
+              const current = store.projectBotForTask(bot.id, threadId);
+              if (!current || approvalModeFor(current) !== "ask" || current.autoApprove === true || current.alwaysAllow?.length) {
+                throw Object.assign(new Error("guarded sends require Ask mode without remembered permissions"), { status: 409, code: "guarded_permissions" });
+              }
+              if (store.activeLeaf(threadId) !== body.expectedActiveLeafId) {
+                throw Object.assign(new Error("the conversation changed before this message could start"), { status: 409, code: "guarded_branch" });
+              }
+              if (current.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
+                throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
+              }
+            };
+            admissionGuard();
             noteTurnTrigger(threadId, auth);
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest });
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest, admissionGuard });
             return { ok: true as const, threadId, message };
           }
 
@@ -18703,10 +18801,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             // A room turn owns its whole provider turn: never steered into a
             // running turn or batched in the queue with other lines, so the
             // answer it waits for is the answer to exactly this message.
-            if (currentAtStart.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
-              throw Object.assign(new Error("this thread is busy; retry when it is free"), { status: 409, code: "exclusive_busy" });
-            }
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest });
+            const admissionGuard = () => {
+              assertPrivateRequest();
+              const current = store.projectBotForTask(bot.id, threadId);
+              if (!current || current.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
+                throw Object.assign(new Error("this thread is busy; retry when it is free"), { status: 409, code: "exclusive_busy" });
+              }
+            };
+            admissionGuard();
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest, admissionGuard });
             return { ok: true as const, threadId, message };
           }
 

@@ -211,6 +211,8 @@ export interface WireBot {
   unread: boolean;
   /** Default for new tasks; navigating tasks never changes this value. */
   modelSelection: ModelSelection;
+  /** Explicit available backup model ID for provider quota fallback. */
+  fallbackModel?: string;
   /** where the bot works ("Works on"). Unset = auto. */
   computer?: Surface | "off";
   /** Explicit shared worker identity. Overrides local surface selection; never falls back. */
