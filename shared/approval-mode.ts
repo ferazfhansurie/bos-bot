@@ -36,6 +36,21 @@ export function modelSwitchNeedsAsk(
     ((mode === "full" || mode === "custom") && fromDriver !== toDriver);
 }
 
+/** Whether a bot keeps its current level across a model switch. The person's
+ * "keep permissions across model switch" setting carries a level to any
+ * engine that implements it; otherwise a Full/Custom grant stays with its own
+ * provider. A level the destination lacks never carries, so this can only
+ * preserve a level, never raise it. */
+export function approvalCarriesAcrossModelSwitch(
+  mode: ApprovalMode,
+  fromDriver: string | undefined,
+  toDriver: string | undefined,
+  keepAcrossModelSwitch: boolean,
+): boolean {
+  if (keepAcrossModelSwitch && supportsApprovalMode(toDriver, mode)) return true;
+  return !modelSwitchNeedsAsk(mode, fromDriver, toDriver);
+}
+
 export function hasNativeAutoReview(driverKind: string | undefined): boolean {
   // Qwen Code's `--approval-mode auto` is an LLM classifier that approves
   // safe actions and blocks risky ones — a reviewer, not a rubber stamp.

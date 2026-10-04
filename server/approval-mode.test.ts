@@ -5,6 +5,7 @@ import {
   approvalModeFor,
   supportsApprovalMode,
   modelSwitchNeedsAsk,
+  approvalCarriesAcrossModelSwitch,
   hasNativeAutoReview,
   isEmergencyApprovalDowngrade,
   isApprovalMode,
@@ -106,5 +107,22 @@ describe("approval modes", () => {
     expect(approvalModeFor({ approvalMode: "full", approvalGrant, threadId: "target" })).toBe("ask");
     expect(approvalModeFor({ approvalMode: "full", approvalGrant, threadId: "other" })).toBe("full");
     expect(approvalModeFor({ approvalMode: "full", approvalGrant })).toBe("ask");
+  });
+});
+
+describe("approval carry across model switch", () => {
+  it("keeps Full both ways between Claude and Codex when the person chose keep-across", () => {
+    expect(approvalCarriesAcrossModelSwitch("full", "claudeAgent", "codex", true)).toBe(true);
+    expect(approvalCarriesAcrossModelSwitch("full", "codex", "claudeAgent", true)).toBe(true);
+  });
+  it("still requires Ask without the keep-across setting", () => {
+    expect(approvalCarriesAcrossModelSwitch("full", "claudeAgent", "codex", false)).toBe(false);
+    expect(approvalCarriesAcrossModelSwitch("full", "claudeAgent", "claudeAgent", false)).toBe(true);
+  });
+  it("never carries a level the destination does not implement", () => {
+    expect(approvalCarriesAcrossModelSwitch("custom", "codex", "claudeAgent", true)).toBe(false);
+    expect(approvalCarriesAcrossModelSwitch("edits", "claudeAgent", "codex", true)).toBe(false);
+    expect(approvalCarriesAcrossModelSwitch("full", "claudeAgent", "pi", true)).toBe(false);
+    expect(approvalCarriesAcrossModelSwitch("full", "claudeAgent", undefined, true)).toBe(false);
   });
 });
