@@ -8,7 +8,7 @@ import { parse as parseYaml } from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   UpdateCoordinator, appDigests, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
-  updaterPlist, writeCandidateManifest, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
+  updaterPlist, writeCandidateManifest, type ApplyPlan, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type NoDowngradeOptions, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
 } from "./updater.ts";
 
 function fakeApp(root: string, name: string, stamp: string): string {
@@ -219,6 +219,137 @@ describe("updater coordinator", () => {
     expect(config.files).toContain("!electron/resources/updater/**");
   });
 
+  describe("no-downgrade gate", () => {
+    type Run = NonNullable<NoDowngradeOptions["run"]>;
+    const calls: string[][] = [];
+    const guard = (reply: { code: number; stdout: string; stderr?: string } | Error, extra: Partial<NoDowngradeOptions> = {}): NoDowngradeOptions => ({
+      script: join(root, "no-downgrade.py"), ledger: join(root, "data", "updates", "live-build.json"), repo: "/repo", releaseBranch: "release/bos-1.0",
+      run: (async args => { calls.push(args); h.calls.push("guard"); if (reply instanceof Error) throw reply; return { stderr: "", ...reply }; }) as Run, ...extra,
+    });
+    beforeEach(() => { calls.length = 0; writeFileSync(join(root, "no-downgrade.py"), "# fake\n"); });
+
+    it("runs right after the preflight on the staged bundle, before launchd, the lock and the plan; its allow note is logged", async () => {
+      const staged = stage(h);
+      const ok = JSON.stringify({ ok: true, reason: `allowed: candidate 1111111 descends from running 2d83ba23, is on release/bos-1.0 and is the prod head`, running: { commit: "2d83ba23" }, candidate: { commit: "1111111" } });
+      const { notes } = await h.make({}, { noDowngrade: guard({ code: 0, stdout: ok }, { prodBranch: "prod" }) }).apply({ force: true });
+      expect(h.calls.slice(0, 3)).toEqual(["preflight", "guard", "launchd"]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual([join(root, "no-downgrade.py"), "check", "--candidate", join(h.dataDir, "updates", "candidate", staged.app), "--live", h.live,
+        "--ledger", join(root, "data", "updates", "live-build.json"), "--repo", "/repo", "--release-branch", "release/bos-1.0", "--prod-branch", "prod"]);
+      expect(notes).toEqual(expect.arrayContaining([expect.stringMatching(/^no-downgrade: allowed: candidate 1111111 descends from running 2d83ba23/)]));
+      await h.settle();
+    });
+
+    it("refuses an older, sibling, unstamped or non-prod build with the script's own reason, touching nothing", async () => {
+      stage(h);
+      const refusal = { code: 2, stdout: JSON.stringify({ ok: false, reason: "downgrade refused: running 2d83ba23 is not an ancestor of candidate da37ae2a (older build, or a sibling branch). only a descendant of the running build may be installed." }) };
+      await expect(h.make({}, { noDowngrade: guard(refusal) }).apply({ force: true }))
+        .rejects.toMatchObject({ status: 409, message: "install refused: downgrade refused: running 2d83ba23 is not an ancestor of candidate da37ae2a (older build, or a sibling branch). only a descendant of the running build may be installed." });
+      expect(h.calls).toEqual(["preflight", "guard"]); // launchd never consulted
+      expect(h.bootstraps).toHaveLength(0); expect(h.stopped).toBe(0); expect(h.quiesced).toBe(0);
+      expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+      expect(h.events).toHaveLength(0);
+      // a crash, garbage, or an exit-0 without a verdict all refuse: an unverifiable candidate is never installed
+      await expect(h.make({}, { noDowngrade: guard(new Error("python exploded")) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /no-downgrade guard failed: python exploded/ });
+      await expect(h.make({}, { noDowngrade: guard({ code: 1, stdout: "", stderr: "Traceback: boom" }) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /no-downgrade guard failed \(exit 1\): Traceback: boom/ });
+      await expect(h.make({}, { noDowngrade: guard({ code: 0, stdout: "not json" }) }).apply({ force: true })).rejects.toMatchObject({ status: 409, message: /exited 0 without an ok verdict/ });
+      expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    });
+
+    it("hands the detached job its own copy of the guard: plan.json pins the script's sha256 and carries the ledger, repo and branches", async () => {
+      stage(h);
+      const ok = JSON.stringify({ ok: true, reason: "allowed", running: { commit: "2d83ba23" }, candidate: { commit: "1111111" } });
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: ok }, { prodBranch: "prod", require: true }) }).apply({ force: true });
+      await h.settle();
+      expect(h.bootstraps).toHaveLength(1);
+      const dir = dirname(h.bootstraps[0]);
+      const plan = JSON.parse(readFileSync(join(dir, "plan.json"), "utf8")) as ApplyPlan;
+      expect(plan.guardRequired).toBe(true);
+      expect(plan.guard).toEqual({
+        script: join(dir, "no-downgrade.py"), scriptSha256: createHash("sha256").update("# fake\n").digest("hex"),
+        ledger: join(root, "data", "updates", "live-build.json"), repo: "/repo", releaseBranch: "release/bos-1.0", prodBranch: "prod",
+      });
+      expect(readFileSync(join(dir, "no-downgrade.py"), "utf8")).toBe("# fake\n"); // the exact script admission ran, beside apply.py
+      await h.settle();
+      // a restart swaps nothing, so it carries no guard and requires none
+      rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: ok }, { require: true }) }).restart({ force: true });
+      await h.settle();
+      expect(h.bootstraps).toHaveLength(2);
+      const restart = JSON.parse(readFileSync(join(dirname(h.bootstraps[1]), "plan.json"), "utf8")) as ApplyPlan;
+      expect(restart).toMatchObject({ mode: "restart", guard: null, guardRequired: false });
+      await h.settle();
+      // unconfigured (dev run): none, not required
+      rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
+      stage(h);
+      await h.make().apply({ force: true });
+      await h.settle();
+      expect(h.bootstraps).toHaveLength(3);
+      const dev = JSON.parse(readFileSync(join(dirname(h.bootstraps[2]), "plan.json"), "utf8")) as ApplyPlan;
+      expect(dev).toMatchObject({ mode: "update", guard: null, guardRequired: false });
+      await h.settle();
+    });
+
+    it("never runs for a restart (same bundle), and the preflight still gates the restart", async () => {
+      await h.make({}, { noDowngrade: guard({ code: 2, stdout: JSON.stringify({ ok: false, reason: "would refuse" }) }) }).restart({ force: true });
+      expect(h.calls).toEqual(["preflight", "launchd"]);
+      expect(calls).toHaveLength(0);
+      await h.settle();
+    });
+
+    it("a packaged build without the shipped script refuses; a dev run skips with a note; unconfigured skips", async () => {
+      stage(h);
+      const missing = join(root, "Resources", "updater", "no-downgrade.py");
+      await expect(h.make({}, { noDowngrade: guard({ code: 0, stdout: "{}" }, { script: missing, require: true }) }).apply({ force: true }))
+        .rejects.toMatchObject({ status: 409, message: new RegExp(`no-downgrade guard missing at ${missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; refusing to update`) });
+      expect(calls).toHaveLength(0);
+      expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+      const dev = await h.make({}, { noDowngrade: guard({ code: 0, stdout: "{}" }, { script: missing, require: false }) }).apply({ force: true });
+      expect(dev.notes).toEqual(expect.arrayContaining([expect.stringMatching(/no-downgrade guard not found at .*no-downgrade\.py; skipped/)]));
+      await h.settle();
+      rmSync(join(h.dataDir, "updates", "apply.lock"), { force: true });
+      const none = await h.make().apply({ force: true });
+      expect(none.notes).toEqual(expect.arrayContaining(["no-downgrade guard not configured; skipped"]));
+      await h.settle();
+    });
+
+    it("after a finished update the next boot records the now-live bundle in the ledger; a record failure is logged, not fatal", async () => {
+      const updateId = "11111111-2222-3333-4444-555555555555";
+      mkdirSync(join(h.dataDir, "updates", updateId), { recursive: true });
+      writeFileSync(join(h.dataDir, "updates", updateId, "plan.json"), JSON.stringify({ updateId, mode: "update" }));
+      writeFileSync(join(h.dataDir, "updates", updateId, "result.json"), JSON.stringify({ state: "done", at: "x", detail: "updated", updateId, mode: "update" }));
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: JSON.stringify({ ok: true, reason: "recorded 1111111 as the running build in ledger" }) }) }).boot();
+      expect(calls).toEqual([[join(root, "no-downgrade.py"), "record", "--live", h.live, "--ledger", join(root, "data", "updates", "live-build.json"), "--repo", "/repo", "--release-branch", "release/bos-1.0"]]);
+      expect(h.logs).toContain("[update] no-downgrade: recorded 1111111 as the running build in ledger");
+      expect(h.events.at(-1)).toMatchObject({ state: "done", updateId });
+      // a rolled-back or restart result leaves the ledger alone
+      calls.length = 0;
+      mkdirSync(join(h.dataDir, "updates", "a" + updateId.slice(1)), { recursive: true });
+      writeFileSync(join(h.dataDir, "updates", "a" + updateId.slice(1), "plan.json"), JSON.stringify({ mode: "update" }));
+      writeFileSync(join(h.dataDir, "updates", "a" + updateId.slice(1), "result.json"), JSON.stringify({ state: "rolled_back", at: "x", detail: "unhealthy", updateId: "a" + updateId.slice(1), mode: "update" }));
+      await h.make({}, { noDowngrade: guard({ code: 0, stdout: "{}" }) }).boot();
+      expect(calls).toHaveLength(0);
+      // failure path
+      mkdirSync(join(h.dataDir, "updates", "b" + updateId.slice(1)), { recursive: true });
+      writeFileSync(join(h.dataDir, "updates", "b" + updateId.slice(1), "plan.json"), JSON.stringify({ mode: "update" }));
+      writeFileSync(join(h.dataDir, "updates", "b" + updateId.slice(1), "result.json"), JSON.stringify({ state: "done", at: "x", detail: "updated", updateId: "b" + updateId.slice(1), mode: "update" }));
+      await h.make({}, { noDowngrade: guard({ code: 2, stdout: JSON.stringify({ ok: false, reason: "Live.app is unstamped; pass --commit" }) }) }).boot();
+      expect(h.logs).toContain("[update] no-downgrade ledger not updated: Live.app is unstamped; pass --commit");
+      expect(h.events.at(-1)).toMatchObject({ state: "done" });
+    });
+
+    it("ships the checked-in no-downgrade.py beside preflight.py via electron-builder, outside the asar", () => {
+      const script = join(REPO, "electron", "resources", "updater", "no-downgrade.py");
+      expect(existsSync(script)).toBe(true);
+      const source = readFileSync(script, "utf8");
+      expect(source).toMatch(/Never stops, launches, signs or swaps anything/);
+      expect(source).not.toMatch(/launchctl|shutil\.(move|rmtree|copytree)|os\.(rename|replace)\((?!tmp)/);
+      execFileSync("/usr/bin/python3", ["-c", `import ast,sys; ast.parse(open(sys.argv[1]).read())`, script], { stdio: "pipe" });
+      const config = parseYaml(readFileSync(join(REPO, "electron-builder.yml"), "utf8")) as { files: string[]; mac: { extraResources: Array<{ from: string; to: string }> } };
+      expect(config.mac.extraResources).toContainEqual({ from: "electron/resources/updater/no-downgrade.py", to: "updater/no-downgrade.py" });
+    });
+  });
+
   it("classifies launchd rows", () => {
     expect(classifyLaunchdJobs("PID\tStatus\tLabel\n-\t0\tcom.apple.Finder\n99\t0\tai.bos.bot.update.11111111\n-\t0\tai.bos.bot.update.22222222\n7\t0\tai.bos.steer.keepalive\n-\t0\tcom.openmausbot.installer\n-\t0\tapplication.ai.bos.bot.123.456\n"))
       .toEqual({ running: ["ai.bos.bot.update.11111111", "ai.bos.steer.keepalive"], idle: ["com.openmausbot.installer"], staleOwn: ["ai.bos.bot.update.22222222"] });
@@ -242,7 +373,7 @@ describe("updater coordinator", () => {
     expect(h.quiesced).toBe(1); expect(h.unquiesced).toBe(0);
     expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(true);
     expect(pendingUpdates(h.dataDir)).toEqual([updateId]);
-    await expect(c.apply({ force: true })).rejects.toMatchObject({ status: 409, message: /already running/ });
+    expect(await c.apply({ force: true })).toEqual({ updateId, inProgress: true });
     await h.settle();
     expect(executes).toBe(1);
     expect((await c.status()).state).toBe("applying");
@@ -278,10 +409,15 @@ describe("updater coordinator", () => {
     const c = h.make();
     const { updateId } = await c.apply({ force: true });
     expect((await c.status()).updateId).toBe(updateId);
-    expect(["checkpointing", "stopping", "applying"]).toContain((await c.status()).state);
-    await expect(c.apply({ force: true })).rejects.toMatchObject({ status: 409 });
+    expect(["draining", "checkpointing", "stopping", "applying"]).toContain((await c.status()).state);
+    // The second press is the same update, not a 409 and not a second job.
+    expect(await c.apply({ force: true })).toEqual({ updateId, inProgress: true });
+    expect(await c.restart()).toEqual({ updateId, inProgress: true });
     await h.settle();
-    expect(h.events.map(e => e.state)).toEqual(["checkpointing", "stopping", "applying"]);
+    expect(h.events.map(e => e.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(c.progress()).toMatchObject({ updateId, mode: "update", state: "applying", log: [] });
+    expect(c.progress().steps.map(s => s.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(JSON.parse(readFileSync(join(h.dataDir, "updates", updateId, "timeline.json"), "utf8")).steps).toHaveLength(4);
     expect(h.events.every(e => e.kind === "update.state" && e.type === "update.state" && e.updateId === updateId)).toBe(true);
     expect(h.stopped).toBe(1); expect(h.quiesced).toBe(1);
     const dir = join(h.dataDir, "updates", updateId);
@@ -312,8 +448,10 @@ describe("updater coordinator", () => {
     const c = h.make({ listBusyTurns: () => { polls++; if (polls > 4) h.turns = []; return [...h.turns]; } });
     const { updateId } = await c.restart();
     await h.settle();
-    expect(h.events.map(e => e.state)).toEqual(["checkpointing", "stopping", "applying"]);
-    expect(h.events[1].detail).toMatch(/waiting up to 5s/);
+    // The drain countdown refines the same state (one event per tick for the ui, one step).
+    expect([...new Set(h.events.map(e => e.state))]).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(c.progress().steps.map(s => s.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(h.events[0].detail).toMatch(/waiting for 1 bot: b1 \(up to 5s\)/);
     expect(readCheckpoint(h.dataDir, updateId)!.turns).toEqual([]);
     const plan = JSON.parse(readFileSync(join(h.dataDir, "updates", updateId, "plan.json"), "utf8"));
     expect(plan).toMatchObject({ mode: "restart", staged: null, backup: null, expect: null, force: false });
@@ -331,6 +469,109 @@ describe("updater coordinator", () => {
       expect(h.stopped).toBe(1);
       expect(readCheckpoint(h.dataDir, updateId)!.turns).toEqual([{ botId: "b1", threadId: "t1", kind: "direct" }]);
     } finally { Date.now = realNow; }
+  });
+
+  it("names the busy bots while draining and lifts the drain before anything else when the wait is forced", async () => {
+    stage(h);
+    h.turns = [{ botId: "b1", botName: "pipe", threadId: "t1", kind: "direct" }, { botId: "b2", botName: "pix", threadId: "g1", kind: "room", groupId: "geng" }];
+    let drained = 0;
+    const c = h.make({ drain: () => { drained++; } });
+    expect((await c.status()).busyTurns).toEqual([{ botId: "b1", botName: "pipe", threadId: "t1" }, { botId: "b2", botName: "pix", threadId: "g1" }]);
+    const { updateId } = await c.restart({ force: true });
+    await h.settle();
+    expect(drained).toBe(1);
+    expect(h.events.map(e => [e.state, e.detail])).toEqual([
+      ["draining", "stopping turns now"], ["checkpointing", "saving 2 interrupted turns"], ["stopping", "interrupting 2 turns"], ["applying", expect.any(String)],
+    ]);
+    expect(readCheckpoint(h.dataDir, updateId)!.turns.map(turn => turn.botName)).toEqual(["pipe", "pix"]);
+  });
+
+  it("builds first, then admits the staged build, then drains: bots keep working through the build", async () => {
+    let built = 0; let drainedAtBuild: number | null = null; let drained = 0;
+    h.turns = [{ botId: "b1", botName: "pipe", threadId: "t1", kind: "direct" }];
+    const target = { version: "0.1.86+feedface", sha: "feedface00000000", branch: "prod", subject: "ship it" };
+    const c = h.make({
+      drain: () => { drained++; },
+      builder: {
+        check: async () => ({ at: "2026-10-04T10:00:00Z", current: { version: "0.1.85", sha: "2d83ba23aaaaaaaa" }, candidate: target }),
+        build: async (t, log) => { built++; drainedAtBuild = drained; expect(t).toEqual(target); log("archiving feedface"); log("vite built"); stage(h); },
+      },
+    });
+    expect((await c.status()).state).toBe("idle");
+    expect(await c.check()).toMatchObject({ candidate: target });
+    expect(await c.status()).toMatchObject({ state: "ready", candidate: { version: "0.1.86+feedface", sha: "feedface00000000", branch: "prod" }, lastCheck: { at: "2026-10-04T10:00:00Z" } });
+    expect(JSON.parse(readFileSync(join(h.dataDir, "updates", "last-check.json"), "utf8")).candidate.sha).toBe("feedface00000000");
+    const { updateId } = await c.apply({ force: true });
+    expect(await c.apply()).toEqual({ updateId, inProgress: true });
+    await h.settle();
+    expect(built).toBe(1); expect(drainedAtBuild).toBe(0); expect(drained).toBe(1);
+    expect(h.events.map(e => e.state)).toEqual(["building", "draining", "checkpointing", "stopping", "applying"]);
+    expect(h.events[0].detail).toBe("building 0.1.86+feedface from prod");
+    expect(h.calls.filter(call => call === "preflight")).toHaveLength(1);
+    expect(c.progress().log).toEqual(["archiving feedface", "vite built"]);
+    expect(readFileSync(join(h.dataDir, "updates", updateId, "build.log"), "utf8")).toBe("archiving feedface\nvite built\n");
+    const plan = JSON.parse(readFileSync(join(h.dataDir, "updates", updateId, "plan.json"), "utf8"));
+    expect(plan).toMatchObject({ mode: "update", version: "0.1.86", sha: "feedface00000000", oldSha: "2d83ba23aaaaaaaa" });
+    // The staged candidate still shows, now with the branch the check found.
+    expect((await c.status()).candidate).toMatchObject({ sha: "feedface00000000", branch: "prod", stagedAt: expect.any(String) });
+  });
+
+  it("with a builder, apply refuses when the check finds nothing and fails cleanly when the build or its admission fails", async () => {
+    let check = { at: "2026-10-04T10:00:00Z", current: { version: "0.1.85", sha: "2d83ba23aaaaaaaa" }, reason: "up to date: running 2d83ba23 is the prod head" } as Awaited<ReturnType<UpdateCoordinator["check"]>>;
+    let buildError: Error | null = new Error("build failed at build:server: tsc exited 2");
+    const c = h.make({ builder: { check: async () => check, build: async () => { if (buildError) throw buildError; stage(h); } } });
+    await expect(c.apply()).rejects.toMatchObject({ status: 409, message: /up to date/ });
+    expect(h.events).toEqual([]);
+    check = { ...check, reason: undefined, candidate: { version: "0.1.86+feedface", sha: "feedface00000000", branch: "prod" } };
+    const first = await c.apply();
+    await h.settle();
+    expect(c.active).toBe(false);
+    expect(h.events.map(e => e.state)).toEqual(["building", "failed"]);
+    expect(h.events.at(-1)).toMatchObject({ updateId: first.updateId, detail: /build failed at build:server/ });
+    expect(h.stopped).toBe(0); expect(h.quiesced).toBe(0); expect(h.unquiesced).toBe(1);
+    expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+    expect(pendingUpdates(h.dataDir)).toEqual([]);
+    expect((await c.status()).lastResult).toMatchObject({ state: "failed", updateId: first.updateId, from: { sha: "2d83ba23aaaaaaaa" }, to: { sha: "2d83ba23aaaaaaaa" } });
+    // The build succeeds but admission (preflight / guard / launchd) says no: same clean failure, nothing drained.
+    buildError = null; h.events = []; h.preflight = JSON.stringify({ ok: false, checks: { health_ok: false } });
+    const second = await c.apply();
+    await h.settle();
+    expect(second.updateId).not.toBe(first.updateId);
+    expect(h.events.map(e => e.state)).toEqual(["building", "failed"]);
+    expect(h.events.at(-1)!.detail).toMatch(/preflight not ok/);
+    expect(h.stopped).toBe(0); expect(h.quiesced).toBe(0);
+    expect(existsSync(join(h.dataDir, "updates", "apply.lock"))).toBe(false);
+  });
+
+  it("check without a builder answers from the staged candidate, and a check that throws is a reason, not an error", async () => {
+    const c = h.make();
+    expect(await c.check()).toMatchObject({ reason: /no staged update and no build source/ });
+    stage(h);
+    expect(await c.check()).toMatchObject({ candidate: { version: "0.1.86", sha: "feedface00000000", branch: "staged" } });
+    const broken = h.make({ builder: { check: async () => { throw new Error("branch prod not found in /repo"); }, build: async () => {} } });
+    expect(await broken.check()).toMatchObject({ reason: "check failed: branch prod not found in /repo" });
+    expect((await broken.status()).lastCheck).toMatchObject({ reason: /branch prod not found/ });
+  });
+
+  it("the last result says what was running before and after: done moves to the new build, a rollback stays on the old one", async () => {
+    stage(h);
+    const c = h.make();
+    const { updateId } = await c.apply({ force: true });
+    await h.settle();
+    writeFileSync(join(h.dataDir, "updates", updateId, "result.json"), JSON.stringify({ state: "done", at: "x", detail: "updated to 0.1.86 (feedface)", updateId, mode: "update", version: "0.1.86", sha: "feedface00000000" }));
+    const booted = h.make();
+    await booted.boot();
+    expect((await booted.status()).lastResult).toMatchObject({ state: "done", from: { version: "0.1.85", sha: "2d83ba23aaaaaaaa" }, to: { version: "0.1.86", sha: "feedface00000000" }, attempted: { sha: "feedface00000000" } });
+    expect(booted.progress().steps.map(s => s.state)).toEqual(["draining", "checkpointing", "stopping", "applying", "verifying", "done"]);
+
+    // A second update whose health check failed: apply.py restored the backup and said so.
+    stage(h, "newer");
+    const second = await h.make().apply({ force: true });
+    await h.settle();
+    writeFileSync(join(h.dataDir, "updates", second.updateId, "result.json"), JSON.stringify({ state: "rolled_back", at: "y", detail: "health check failed; previous build restored", updateId: second.updateId, mode: "update", rollback: "health", version: "0.1.85", sha: "2d83ba23aaaaaaaa" }));
+    const again = h.make();
+    await again.boot();
+    expect((await again.status()).lastResult).toMatchObject({ state: "rolled_back", rollback: "health", updateId: second.updateId, from: { sha: "2d83ba23aaaaaaaa" }, to: { sha: "2d83ba23aaaaaaaa" }, attempted: { version: "0.1.86", sha: "feedface00000000" } });
   });
 
   it("reports a failure the detached job records while the app is still alive, and reopens the workspace", async () => {

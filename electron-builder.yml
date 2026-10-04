@@ -119,6 +119,11 @@ mac:
     # update when it is missing.
     - from: electron/resources/updater/preflight.py
       to: updater/preflight.py
+    # no-downgrade guard the updater runs on the staged bundle right after the
+    # preflight: stamped, newer than the running build, on release, the prod
+    # head. after-pack.mjs writes the stamp it reads (Resources/build-commit.json).
+    - from: electron/resources/updater/no-downgrade.py
+      to: updater/no-downgrade.py
   extendInfo:
     NSMicrophoneUsageDescription: BOS Bot uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: BOS Bot transcribes your voice on-device to type messages for you.

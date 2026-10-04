@@ -1,8 +1,10 @@
 // Update & restart behind one button (1.3). The server side of the
-// /api/update contract: discover a staged candidate, checkpoint what is
-// running, stop turns, hand the swap to a detached launchd job that outlives
-// the app, and on the next boot read that job's result exactly once and
-// resume the interrupted conversations exactly once.
+// /api/update contract: find out whether prod has moved (check), build and
+// stage that commit (updater-build.ts), stop taking new turns and let live
+// ones finish (drain), checkpoint what is still running, stop it, hand the
+// swap to a detached launchd job that outlives the app, and on the next boot
+// read that job's result exactly once and resume the interrupted
+// conversations exactly once.
 //
 // Nothing here replays a prompt. A turn interrupted by the update gets ONE
 // new continuation turn in its own thread that says what happened and tells
@@ -11,26 +13,52 @@
 // scheduler and is not a safe thing to guess at.
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { UPDATER_APPLY_SCRIPT } from "./updater-apply-script.ts";
 
-export type UpdateState = "idle" | "ready" | "checkpointing" | "stopping" | "applying" | "relaunching" | "verifying" | "done" | "rolled_back" | "failed";
+export type UpdateState = "idle" | "ready" | "building" | "draining" | "checkpointing" | "stopping" | "applying" | "relaunching" | "verifying" | "done" | "rolled_back" | "failed";
 export type UpdateMode = "update" | "restart";
-export interface BusyTurn { botId: string; threadId: string; kind: "direct" | "room"; groupId?: string; title?: string }
+export interface BusyTurn { botId: string; botName?: string; threadId: string; kind: "direct" | "room"; groupId?: string; title?: string }
 export interface CandidateManifest { version: string; sha: string; stagedAt: string; app: string; serverSha256: string; uiSha256: string }
 export interface Candidate extends CandidateManifest { dir: string; appPath: string }
 export interface UpdateResult { state: "done" | "rolled_back" | "failed"; at: string; detail: string; updateId: string; mode: UpdateMode; rollback?: string; version?: string; sha?: string; manualRecoveryRequired?: boolean; appStillRunning?: boolean }
 export interface CheckpointTurn extends BusyTurn { resumedAt?: string; resumeOutcome?: string }
 export interface Checkpoint { version: 1; updateId: string; mode: UpdateMode; at: string; stoppedAt?: string; turns: CheckpointTurn[]; steers: unknown; delegations: unknown }
+export interface BuildRef { version: string; sha: string }
+/** What `check` found: the commit the update would install, or why there is
+ * nothing to install. `candidate` is present only when a build of that
+ * commit would pass the no-downgrade guard. */
+export interface UpdateCheck {
+  at: string;
+  current: BuildRef;
+  candidate?: BuildRef & { branch: string; subject?: string; stagedAt?: string };
+  reason?: string;
+}
+export interface UpdateLastResult {
+  state: UpdateResult["state"]; at: string; detail: string; updateId?: string; mode?: UpdateMode; rollback?: string; version?: string; sha?: string;
+  /** The build that was running when the update started, and the one running after it. */
+  from?: BuildRef; to?: BuildRef;
+  /** The build the update tried to install (differs from `to` after a rollback or failure). */
+  attempted?: BuildRef;
+}
 export interface UpdateStatus {
   state: UpdateState; updateId?: string; detail?: string;
-  current: { version: string; sha: string };
-  candidate?: { version: string; sha: string; stagedAt: string };
-  busyTurns: Array<{ botId: string; threadId: string }>;
+  current: BuildRef;
+  /** The staged build, or the one `check` found; `branch` is set when it came from a check. */
+  candidate?: BuildRef & { stagedAt?: string; branch?: string };
+  busyTurns: Array<{ botId: string; botName?: string; threadId: string }>;
+  /** The last `check`, so the ui can show "checked 2 minutes ago: up to date". */
+  lastCheck?: { at: string; reason?: string };
   /** The last finished update. Omitted while another one is in flight: then `state` is the whole story. */
-  lastResult?: { state: UpdateResult["state"]; at: string; detail: string; updateId?: string; rollback?: string; version?: string; sha?: string };
+  lastResult?: UpdateLastResult;
+}
+export interface UpdateProgress {
+  state: UpdateState; updateId?: string; detail?: string; startedAt?: string; mode?: UpdateMode;
+  steps: Array<{ state: UpdateState; at: string; detail: string }>;
+  /** The tail of the build output, newest last. */
+  log: string[];
 }
 export interface UpdateEvent { kind: "update.state"; type: "update.state"; state: UpdateState; updateId: string; detail: string }
 export interface ApplyPlan {
@@ -39,13 +67,23 @@ export interface ApplyPlan {
   old: { server: string; ui: string } | null; oldVersion: string; oldSha: string; version: string; sha: string; force: boolean;
   launch: string[]; resultPath: string; installedPath: string; gracefulSeconds: number; healthSeconds: number;
   codesign: boolean; selfBootout: boolean; requireLaunchd: boolean; uid: number | null; scriptSha256: string;
+  /** The no-downgrade guard the detached job runs ITSELF before it stops the
+   * app: a copy of the shipped script beside apply.py (sha256 pinned here)
+   * plus the ledger, repo and branches admission judged with. null = not
+   * configured (dev run, sandbox) or a restart. */
+  guard: ApplyGuard | null;
+  /** Packaged build: apply.py refuses an update plan that carries no guard,
+   * so a plan written by hand cannot skip the check. */
+  guardRequired: boolean;
   /** Test-only (OMB_UPDATE_SANDBOX): "the app" is whoever listens on ports[0]; no launchd; relaunch is left to a supervisor. */
   sandbox?: boolean; fault?: string | null;
 }
+export interface ApplyGuard { script: string; scriptSha256: string; ledger: string; repo?: string; releaseBranch?: string; prodBranch?: string }
 /** The platform-neutral part of a plan: what any executor needs to swap or
  * relaunch and to write result.json where boot() will look for it. */
 export type ExecutorPlan = Pick<ApplyPlan, "updateId" | "mode" | "version" | "sha" | "oldVersion" | "oldSha" | "force" | "resultPath" | "installedPath" | "health" | "ports" | "gracefulSeconds" | "healthSeconds">;
 export interface ExecutorCandidate { version: string; sha: string; stagedAt: string }
+type ExecutionCandidate = ExecutorCandidate | null;
 /** The platform seam. The coordinator owns admission order, checkpoint,
  * stop, quiesce, plan.json and result/resume; the executor owns how the
  * machine swaps and relaunches. `createDarwinExecutor` wraps launchd and
@@ -63,6 +101,16 @@ export interface UpdateExecutor {
    * A rejection carrying `pending: true` means the executor may already own
    * the handoff; the coordinator then holds its lock and never retries. */
   execute(plan: ExecutorPlan, dir: string): Promise<void>;
+  /** After a finished update: record the now-live bundle as the running
+   * build (the no-downgrade ledger). Returns a note, or null when there is
+   * nothing to record. Never refuses, never touches the app. */
+  recordInstalled?(): Promise<string | null>;
+}
+export interface UpdateBuilder {
+  /** Is there something to install? Never builds; answers from git and the ledger. */
+  check(): Promise<UpdateCheck>;
+  /** Build and stage `target` as the candidate; `log` receives build output. */
+  build(target: BuildRef & { branch: string }, log: (line: string) => void): Promise<void>;
 }
 export interface UpdaterHooks {
   dataDir: string;
@@ -70,9 +118,14 @@ export interface UpdaterHooks {
   listBusyTurns: () => BusyTurn[];
   stopAll: () => Promise<void>;
   checkpointExtras: () => { steers: unknown; delegations: unknown };
+  /** Stop admitting new turns while the live ones finish (the drain). Lifted by `unquiesce`. */
+  drain?: () => void;
   /** Lock the workspace against new work, pause schedulers, flush to disk. */
   quiesce: () => Promise<void>;
+  /** Reopen the workspace: lifts the drain and the quiesce, whichever happened. */
   unquiesce: () => void;
+  /** When set, `apply` builds the commit `check` found instead of needing a pre-staged candidate. */
+  builder?: UpdateBuilder;
   executor: UpdateExecutor;
   emit: (event: UpdateEvent) => void;
   /** Continue one interrupted conversation. Called at most once per turn. */
@@ -262,17 +315,26 @@ export function resumePrompt(_turn: CheckpointTurn, result: UpdateResult): strin
 const err = (message: string, status: number) => Object.assign(new Error(message), { status });
 const isPending = (error: unknown): boolean => Boolean(error) && typeof error === "object" && (error as { pending?: unknown }).pending === true;
 
+const BUILD_LOG_TAIL = 200;
+
 export class UpdateCoordinator {
   private state: UpdateState = "idle";
   private updateId: string | null = null;
   private detail = "";
-  private lastResult: UpdateStatus["lastResult"] | undefined;
+  private mode: UpdateMode | null = null;
+  private startedAt: string | null = null;
+  private steps: UpdateProgress["steps"] = [];
+  private buildLog: string[] = [];
+  private lastCheck: UpdateCheck | null = null;
+  private checking: Promise<UpdateCheck> | null = null;
+  private lastResult: UpdateLastResult | undefined;
   private running = false;
   private readonly hooks: UpdaterHooks;
   constructor(hooks: UpdaterHooks) {
     this.hooks = hooks;
     mkdirSync(updatesDir(hooks.dataDir), { recursive: true });
-    this.lastResult = readJson<UpdateStatus["lastResult"]>(join(updatesDir(hooks.dataDir), "last-result.json")) ?? undefined;
+    this.lastResult = readJson<UpdateLastResult>(join(updatesDir(hooks.dataDir), "last-result.json")) ?? undefined;
+    this.lastCheck = readJson<UpdateCheck>(join(updatesDir(hooks.dataDir), "last-check.json"));
   }
   private now(): Date { return (this.hooks.now ?? (() => new Date()))(); }
   private sleep(ms: number): Promise<void> { return (this.hooks.sleep ?? (m => new Promise(resolve => setTimeout(resolve, m))))(ms); }
@@ -280,21 +342,51 @@ export class UpdateCoordinator {
   private set(state: UpdateState, detail = ""): void {
     this.state = state; this.detail = detail;
     this.log(`${state}${detail ? `: ${detail}` : ""}`);
+    this.steps.push({ state, at: this.now().toISOString(), detail });
+    if (this.updateId) {
+      try { writeFileAtomic(join(updateDir(this.hooks.dataDir, this.updateId), "timeline.json"), JSON.stringify({ mode: this.mode, startedAt: this.startedAt, steps: this.steps }), { mode: 0o600 }); }
+      catch { /* the directory is gone or not ours; the event still goes out */ }
+    }
     this.hooks.emit({ kind: "update.state", type: "update.state", state, updateId: this.updateId ?? "", detail });
+  }
+  /** Replace the detail of the current state without a new step (the drain countdown). */
+  private refine(detail: string): void {
+    if (detail === this.detail) return;
+    this.detail = detail;
+    const last = this.steps.at(-1);
+    if (last && last.state === this.state) last.detail = detail;
+    this.hooks.emit({ kind: "update.state", type: "update.state", state: this.state, updateId: this.updateId ?? "", detail });
   }
 
   /** The update this process is driving or finishing, if any. */
   get id(): string | null { return this.running ? this.updateId : null; }
 
+  private busySummary(turns: BusyTurn[]): string {
+    const names = [...new Set(turns.map(turn => turn.botName ?? turn.botId))];
+    return names.length ? `waiting for ${names.length} bot${names.length === 1 ? "" : "s"}: ${names.slice(0, 6).join(", ")}${names.length > 6 ? ", …" : ""}` : "no bots busy";
+  }
+
   async status(): Promise<UpdateStatus> {
-    const candidate = await this.candidateSafe();
+    const staged = await this.candidateSafe();
+    const found = this.lastCheck?.candidate;
+    const candidate: UpdateStatus["candidate"] | undefined = staged
+      ? { version: staged.version, sha: staged.sha, stagedAt: staged.stagedAt, ...(found && found.sha === staged.sha ? { branch: found.branch } : {}) }
+      : found ? { version: found.version, sha: found.sha, branch: found.branch } : undefined;
     const state: UpdateState = this.running ? this.state : candidate ? "ready" : "idle";
     return {
       state, ...(this.updateId ? { updateId: this.updateId } : {}), ...(this.detail ? { detail: this.detail } : {}),
       current: this.hooks.current(),
-      ...(candidate ? { candidate: { version: candidate.version, sha: candidate.sha, stagedAt: candidate.stagedAt } } : {}),
-      busyTurns: this.hooks.listBusyTurns().map(turn => ({ botId: turn.botId, threadId: turn.threadId })),
+      ...(candidate ? { candidate } : {}),
+      busyTurns: this.hooks.listBusyTurns().map(turn => ({ botId: turn.botId, ...(turn.botName ? { botName: turn.botName } : {}), threadId: turn.threadId })),
+      ...(this.lastCheck ? { lastCheck: { at: this.lastCheck.at, ...(this.lastCheck.reason ? { reason: this.lastCheck.reason } : {}) } } : {}),
       ...(this.lastResult && !this.running ? { lastResult: this.lastResult } : {}),
+    };
+  }
+  progress(): UpdateProgress {
+    return {
+      state: this.running ? this.state : (this.steps.at(-1)?.state ?? "idle"), ...(this.updateId ? { updateId: this.updateId } : {}), ...(this.detail ? { detail: this.detail } : {}),
+      ...(this.startedAt ? { startedAt: this.startedAt } : {}), ...(this.mode ? { mode: this.mode } : {}),
+      steps: [...this.steps], log: this.buildLog.slice(-BUILD_LOG_TAIL),
     };
   }
   private async candidateSafe(): Promise<ExecutorCandidate | null> {
@@ -302,27 +394,65 @@ export class UpdateCoordinator {
     catch (error) { this.log(`candidate unreadable: ${error instanceof Error ? error.message : String(error)}`); return null; }
   }
 
-  apply(options: { force?: boolean } = {}): Promise<{ updateId: string; notes?: string[] }> { return this.start("update", Boolean(options.force)); }
-  restart(options: { force?: boolean } = {}): Promise<{ updateId: string; notes?: string[] }> { return this.start("restart", Boolean(options.force)); }
+  /** Ask the builder whether prod has moved past the running build. Cheap
+   * (git + the ledger), never builds. Concurrent calls share one run. The
+   * answer is kept so `status` can show it. Without a builder, the staged
+   * candidate (if any) is the answer. */
+  check(): Promise<UpdateCheck> {
+    if (this.checking) return this.checking;
+    this.checking = (async () => {
+      let result: UpdateCheck;
+      if (this.hooks.builder) {
+        try { result = await this.hooks.builder.check(); }
+        catch (error) { result = { at: this.now().toISOString(), current: this.hooks.current(), reason: `check failed: ${error instanceof Error ? error.message : String(error)}` }; }
+      } else {
+        const staged = await this.candidateSafe();
+        result = { at: this.now().toISOString(), current: this.hooks.current(), ...(staged ? { candidate: { version: staged.version, sha: staged.sha, branch: "staged", stagedAt: staged.stagedAt } } : { reason: "no staged update and no build source configured" }) };
+      }
+      this.lastCheck = result;
+      this.log(`check: ${result.candidate ? `candidate ${result.candidate.version} (${result.candidate.sha.slice(0, 8)}) on ${result.candidate.branch}` : result.reason ?? "nothing"}`);
+      try { writeFileAtomic(join(updatesDir(this.hooks.dataDir), "last-check.json"), JSON.stringify(result), { mode: 0o600 }); } catch { /* informational */ }
+      return result;
+    })().finally(() => { this.checking = null; });
+    return this.checking;
+  }
 
-  private async start(mode: UpdateMode, force: boolean): Promise<{ updateId: string; notes?: string[] }> {
-    if (this.running) throw err(`an update is already running (${this.updateId})`, 409);
-    const candidate = mode === "update" ? await this.hooks.executor.candidate() : null;
-    if (mode === "update" && !candidate) throw err("no staged update to apply", 409);
-    const notes = await this.hooks.executor.admit(mode);
-    for (const note of notes) this.log(note);
+  apply(options: { force?: boolean } = {}): Promise<{ updateId: string; notes?: string[]; inProgress?: boolean }> { return this.start("update", Boolean(options.force)); }
+  restart(options: { force?: boolean } = {}): Promise<{ updateId: string; notes?: string[]; inProgress?: boolean }> { return this.start("restart", Boolean(options.force)); }
+
+  private async start(mode: UpdateMode, force: boolean): Promise<{ updateId: string; notes?: string[]; inProgress?: boolean }> {
+    // Idempotent: a second press while one is running is the same update.
+    if (this.running && this.updateId) return { updateId: this.updateId, inProgress: true };
+    const builds = mode === "update" && Boolean(this.hooks.builder);
+    let candidate: ExecutorCandidate | null = null;
+    let target: UpdateCheck["candidate"] | undefined;
+    let notes: string[] = [];
+    if (builds) {
+      // The build comes first (bots keep working through it), so admission of
+      // the staged bundle (preflight, guard, launchd) happens in drive() once
+      // there is something to admit. The check is the cheap pre-answer.
+      const check = await this.check();
+      if (!check.candidate) throw err(check.reason ?? "nothing to update", 409);
+      target = check.candidate;
+    } else {
+      candidate = mode === "update" ? await this.hooks.executor.candidate() : null;
+      if (mode === "update" && !candidate) throw err("no staged update to apply", 409);
+      notes = await this.hooks.executor.admit(mode);
+      for (const note of notes) this.log(note);
+    }
     const lockPath = join(updatesDir(this.hooks.dataDir), "apply.lock");
     const updateId = randomUUID();
     // One owner. The in-memory flag guards this process; the file guards
     // against a second server on the same data dir. boot() clears it.
-    if (this.running || existsSync(lockPath)) throw err("another update owns the lock; restart BOS if nothing is running", 409);
+    if (this.running && this.updateId) return { updateId: this.updateId, inProgress: true };
+    if (existsSync(lockPath)) throw err("another update owns the lock; restart BOS if nothing is running", 409);
     writeFileAtomic(lockPath, JSON.stringify({ updateId, pid: process.pid, at: this.now().toISOString() }), { mode: 0o600 });
-    this.running = true; this.updateId = updateId;
+    this.running = true; this.updateId = updateId; this.mode = mode; this.startedAt = this.now().toISOString(); this.steps = []; this.buildLog = []; this.detail = "";
     const dir = updateDir(this.hooks.dataDir, updateId);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    // Everything after admission runs detached from the request: the caller
-    // gets 202 + updateId now and follows update.state events.
-    void this.drive(mode, force, candidate, dir).catch(error => this.fail(updateId, mode, error));
+    // Everything after this runs detached from the request: the caller gets
+    // 202 + updateId now and follows update.state events.
+    void this.drive(mode, force, candidate, target, dir).catch(error => this.fail(updateId, mode, error));
     return { updateId, ...(notes.length ? { notes } : {}) };
   }
 
@@ -330,8 +460,14 @@ export class UpdateCoordinator {
    * sure the next boot does not wait for a job that was never started. */
   private fail(updateId: string, mode: UpdateMode, error: unknown): void {
     const detail = error instanceof Error ? error.message : String(error);
-    if (existsSync(join(updateDir(this.hooks.dataDir, updateId), "plan.json")) && !readResult(this.hooks.dataDir, updateId)) {
-      this.consume(updateId, { state: "failed", at: this.now().toISOString(), detail, updateId, mode });
+    if (existsSync(join(updateDir(this.hooks.dataDir, updateId), "plan.json"))) {
+      if (!readResult(this.hooks.dataDir, updateId)) this.consume(updateId, { state: "failed", at: this.now().toISOString(), detail, updateId, mode });
+    } else {
+      // Nothing was planned, so nothing changed: the running build is still
+      // the live one. Still the last thing that happened, so the ui shows it.
+      const current = this.hooks.current();
+      this.lastResult = { state: "failed", at: this.now().toISOString(), detail, updateId, mode, from: current, to: current };
+      try { writeFileAtomic(join(updatesDir(this.hooks.dataDir), "last-result.json"), JSON.stringify(this.lastResult), { mode: 0o600 }); } catch { /* informational */ }
     }
     this.set("failed", detail);
     this.finish();
@@ -343,22 +479,47 @@ export class UpdateCoordinator {
     try { unlinkSync(join(updatesDir(this.hooks.dataDir), "apply.lock")); } catch { /* already gone */ }
   }
 
-  private async drive(mode: UpdateMode, force: boolean, candidate: ExecutorCandidate | null, dir: string): Promise<void> {
+  private async drive(mode: UpdateMode, force: boolean, candidate: ExecutionCandidate, target: UpdateCheck["candidate"] | undefined, dir: string): Promise<void> {
     const updateId = this.updateId!;
-    this.set("checkpointing");
+    if (target && this.hooks.builder) {
+      this.set("building", `building ${target.version} from ${target.branch}`);
+      const logPath = join(dir, "build.log");
+      await this.hooks.builder.build(target, line => {
+        this.buildLog.push(line); if (this.buildLog.length > BUILD_LOG_TAIL * 2) this.buildLog.splice(0, this.buildLog.length - BUILD_LOG_TAIL);
+        try { appendFileSync(logPath, `${line}\n`); } catch { /* log only */ }
+      });
+      // Now there is a staged bundle: preflight, the no-downgrade guard and
+      // launchd judge it exactly as a pre-staged one. A refusal here fails
+      // the update with nothing touched (no drain happened yet).
+      const notes = await this.hooks.executor.admit("update");
+      for (const note of notes) this.log(note);
+      candidate = await this.hooks.executor.candidate();
+      if (!candidate) throw err("the build left no staged candidate", 500);
+      if (candidate.sha !== target.sha) throw err(`staged candidate is ${candidate.sha.slice(0, 8)}, not the ${target.sha.slice(0, 8)} that was checked`, 409);
+    }
+
+    // Drain: no new turns; live ones get a bounded chance to finish. The
+    // press is the approval to interrupt whatever is left when time is up.
+    const waitMs = this.hooks.stopWaitMs ?? 90_000;
+    let busy = this.hooks.listBusyTurns();
+    this.hooks.drain?.();
+    this.set("draining", force ? "stopping turns now" : busy.length ? `${this.busySummary(busy)} (up to ${Math.round(waitMs / 1000)}s)` : "no bots busy");
+    if (!force) {
+      const deadline = Date.now() + waitMs;
+      while (Date.now() < deadline && busy.length) {
+        await this.sleep(500);
+        busy = this.hooks.listBusyTurns();
+        if (busy.length) this.refine(`${this.busySummary(busy)} (${Math.max(0, Math.round((deadline - Date.now()) / 1000))}s left)`);
+      }
+    }
+    // Whatever is still running now is what the update interrupts: save it first.
+    this.set("checkpointing", busy.length ? `saving ${busy.length} interrupted turn${busy.length === 1 ? "" : "s"}` : "");
     const extras = this.hooks.checkpointExtras();
     const checkpoint: Checkpoint = { version: 1, updateId, mode, at: this.now().toISOString(), turns: this.hooks.listBusyTurns(), ...extras };
-    writeFileAtomic(join(dir, "checkpoint.json"), JSON.stringify(checkpoint, null, 2), { mode: 0o600 });
-
-    this.set("stopping", force ? "stopping turns now" : `waiting up to ${Math.round((this.hooks.stopWaitMs ?? 90_000) / 1000)}s for turns to finish`);
-    if (!force) {
-      const deadline = Date.now() + (this.hooks.stopWaitMs ?? 90_000);
-      while (Date.now() < deadline && this.hooks.listBusyTurns().length) await this.sleep(500);
-    }
-    // Whatever is still running now is what the update interrupts.
-    checkpoint.turns = this.hooks.listBusyTurns();
     checkpoint.stoppedAt = this.now().toISOString();
     writeFileAtomic(join(dir, "checkpoint.json"), JSON.stringify(checkpoint, null, 2), { mode: 0o600 });
+
+    this.set("stopping", checkpoint.turns.length ? `interrupting ${checkpoint.turns.length} turn${checkpoint.turns.length === 1 ? "" : "s"}` : "");
     await this.hooks.stopAll();
     const settle = Date.now() + 15_000;
     while (Date.now() < settle && this.hooks.listBusyTurns().length) await this.sleep(250);
@@ -408,8 +569,14 @@ export class UpdateCoordinator {
 
   private consume(updateId: string, result: UpdateResult): void {
     const dir = updateDir(this.hooks.dataDir, updateId);
-    this.lastResult = { state: result.state, at: result.at, detail: result.detail, updateId, ...(result.rollback ? { rollback: result.rollback } : {}),
-      ...(result.version ? { version: result.version } : {}), ...(result.sha ? { sha: result.sha } : {}) };
+    const plan = readJson<Partial<ExecutorPlan>>(join(dir, "plan.json"));
+    const from: BuildRef | undefined = plan?.oldVersion && plan.oldSha ? { version: plan.oldVersion, sha: plan.oldSha } : undefined;
+    const attempted: BuildRef | undefined = plan?.mode === "update" && plan.version && plan.sha ? { version: plan.version, sha: plan.sha } : undefined;
+    // After a rollback or a failure the old build is still the live one.
+    const to: BuildRef | undefined = result.state === "done" && result.version && result.sha ? { version: result.version, sha: result.sha } : from;
+    this.lastResult = { state: result.state, at: result.at, detail: result.detail, updateId, mode: result.mode, ...(result.rollback ? { rollback: result.rollback } : {}),
+      ...(result.version ? { version: result.version } : {}), ...(result.sha ? { sha: result.sha } : {}),
+      ...(from ? { from } : {}), ...(to ? { to } : {}), ...(attempted ? { attempted } : {}) };
     writeFileAtomic(join(updatesDir(this.hooks.dataDir), "last-result.json"), JSON.stringify(this.lastResult), { mode: 0o600 });
     writeFileAtomic(join(dir, "consumed.json"), JSON.stringify({ at: this.now().toISOString(), pid: process.pid }), { mode: 0o600 });
   }
@@ -427,12 +594,18 @@ export class UpdateCoordinator {
     this.running = true;
     for (const updateId of pending) {
       this.updateId = updateId;
+      const timeline = readJson<{ mode?: UpdateMode; startedAt?: string; steps?: UpdateProgress["steps"] }>(join(updateDir(this.hooks.dataDir, updateId), "timeline.json"));
+      this.mode = timeline?.mode ?? null; this.startedAt = timeline?.startedAt ?? null; this.steps = timeline?.steps ?? [];
       this.set("verifying", "finishing the previous update");
       const deadline = Date.now() + (this.hooks.resultWaitMs ?? 180_000);
       let result = readResult(this.hooks.dataDir, updateId);
       while (!result && Date.now() < deadline) { await this.sleep(1000); result = readResult(this.hooks.dataDir, updateId); }
       result ??= { state: "failed", at: this.now().toISOString(), detail: "the updater left no result; the app is running whatever is installed", updateId, mode: "update" };
       this.consume(updateId, result);
+      if (result.state === "done" && result.mode === "update" && this.hooks.executor.recordInstalled) {
+        try { const note = await this.hooks.executor.recordInstalled(); if (note) this.log(note); }
+        catch (error) { this.log(`no-downgrade ledger not updated: ${error instanceof Error ? error.message : String(error)}`); }
+      }
       this.set(result.state, result.detail);
       await this.resumeInterrupted(updateId, result);
     }
@@ -475,6 +648,11 @@ export interface DarwinExecutorOptions {
   requirePreflight?: boolean;
   /** Test-only (OMB_UPDATE_SANDBOX=1): a staged bundle outside updates/candidate and a fault to inject. */
   sandbox?: { stagedPath?: string; fault?: string };
+  /** Contents/Resources/updater/no-downgrade.py: refuses any staged build that
+   * is not stamped, not newer than the running build, not on the release
+   * branch, or not the prod head. Undefined = not configured (dev run,
+   * sandbox): skipped with a note. */
+  noDowngrade?: NoDowngradeOptions;
   runPreflight?: (path: string) => Promise<string>;
   log?: (line: string) => void;
 }
@@ -489,6 +667,87 @@ export function describeStagedApp(appPath: string): Candidate {
     version = /CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]?.trim() || version;
   } catch { /* no plist */ }
   return { version, sha: digests.server, stagedAt: statSync(appPath).mtime.toISOString(), app: basename(appPath), serverSha256: digests.server, uiSha256: digests.ui, dir: dirname(appPath), appPath };
+}
+
+export interface NoDowngradeOptions {
+  /** The shipped script (OMB_UPDATER_NO_DOWNGRADE overrides for dev/test). */
+  script: string;
+  /** <dataDir>/updates/live-build.json: what is running, and what ran before it. */
+  ledger: string;
+  /** Canonical checkout the ancestry is checked in; the ledger's value when omitted. */
+  repo?: string;
+  /** Branch every live build must be reachable from; the ledger's value when omitted. */
+  releaseBranch?: string;
+  /** Branch whose head is the only build allowed to go live; "" turns the prod check off. The script defaults to "prod". */
+  prodBranch?: string;
+  /** Packaged build: a missing script refuses the update instead of skipping the guard. */
+  require?: boolean;
+  /** Test seam: runs the script with its arguments; exit 2 = refused, 0 = allowed. */
+  run?: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
+}
+
+export interface NoDowngradeVerdict { ok?: boolean; reason?: string; running?: { commit?: string }; candidate?: { commit?: string | null } }
+
+function defaultRunGuard(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile("/usr/bin/python3", args, { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const code = error ? (typeof (error as { code?: unknown }).code === "number" ? (error as { code: number }).code : -1) : 0;
+      if (error && code < 0) return reject(new Error(`${String(stderr).trim().slice(0, 300) || error.message}`));
+      resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+    });
+  });
+}
+
+function guardArgs(options: NoDowngradeOptions, command: "check" | "record", rest: string[]): string[] {
+  const args = [options.script, command, ...rest, "--ledger", options.ledger];
+  if (options.repo) args.push("--repo", options.repo);
+  if (options.releaseBranch) args.push("--release-branch", options.releaseBranch);
+  if (options.prodBranch !== undefined) args.push("--prod-branch", options.prodBranch);
+  return args;
+}
+
+/** The no-downgrade gate, right after the preflight in admission of an
+ * update: the staged bundle is checked against the live one before anything
+ * is locked, planned or swapped. Exit 2 is the script's refusal (its reason
+ * names both commits); any other failure refuses too, since an unverifiable
+ * candidate is never installed. */
+export async function runNoDowngradeGate(options: NoDowngradeOptions | undefined, candidateApp: string, liveApp: string): Promise<string[]> {
+  if (!options) return ["no-downgrade guard not configured; skipped"];
+  if (!existsSync(options.script)) {
+    if (options.require) throw err(`no-downgrade guard missing at ${options.script}; refusing to update`, 409);
+    return [`no-downgrade guard not found at ${options.script}; skipped`];
+  }
+  let result: { code: number; stdout: string; stderr: string };
+  try { result = await (options.run ?? defaultRunGuard)(guardArgs(options, "check", ["--candidate", candidateApp, "--live", liveApp])); }
+  catch (error) { throw err(`no-downgrade guard failed: ${error instanceof Error ? error.message : String(error)}`, 409); }
+  let verdict: NoDowngradeVerdict | null = null;
+  try { verdict = JSON.parse(result.stdout) as NoDowngradeVerdict; } catch { verdict = null; }
+  const reason = verdict?.reason ?? result.stderr.trim().slice(0, 300) ?? "";
+  if (result.code === 2) throw err(`install refused: ${reason || "the no-downgrade guard said no"}`, 409);
+  if (result.code !== 0) throw err(`no-downgrade guard failed (exit ${result.code}): ${reason || "no output"}`, 409);
+  if (!verdict || verdict.ok !== true) throw err(`no-downgrade guard failed: it exited 0 without an ok verdict`, 409);
+  return [`no-downgrade: ${reason}`];
+}
+
+/** The guard the detached job runs: a copy of the shipped script written
+ * beside apply.py, its sha256 pinned in the plan. A copy, because the live
+ * bundle's own Contents/Resources/updater is renamed away mid-swap and
+ * because the job must run exactly the script admission ran. Packaged
+ * builds (require) refuse without it; a dev run goes without. */
+export function stageApplyGuard(options: NoDowngradeOptions | undefined, dir: string): ApplyGuard | null {
+  if (!options) return null;
+  if (!existsSync(options.script)) {
+    if (options.require) throw err(`no-downgrade guard missing at ${options.script}; refusing to update`, 409);
+    return null;
+  }
+  const source = readFileSync(options.script, "utf8");
+  const script = join(dir, "no-downgrade.py");
+  writeFileAtomic(script, source, { mode: 0o700 });
+  return {
+    script, scriptSha256: createHash("sha256").update(source).digest("hex"), ledger: options.ledger,
+    ...(options.repo ? { repo: options.repo } : {}), ...(options.releaseBranch ? { releaseBranch: options.releaseBranch } : {}),
+    ...(options.prodBranch !== undefined ? { prodBranch: options.prodBranch } : {}),
+  };
 }
 
 function defaultRunPreflight(path: string): Promise<string> {
@@ -533,8 +792,13 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
     : discoverCandidate(options.dataDir);
   return {
     candidate,
-    async admit() {
+    async admit(mode) {
       const notes: string[] = await runPreflightGate(options);
+      if (mode === "update") {
+        const staged = await candidate();
+        if (!staged) throw err("no staged update to apply", 409);
+        notes.push(...await runNoDowngradeGate(options.noDowngrade, staged.appPath, options.liveApp));
+      }
       const { running, idle, staleOwn } = classifyLaunchdJobs(await host.launchdList());
       const blocking = running.map(label => `${label} (running)`);
       for (const label of idle) {
@@ -551,6 +815,15 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
       return notes;
     },
     ports: () => host.listeningPorts(),
+    async recordInstalled() {
+      const guard = options.noDowngrade;
+      if (!guard || !existsSync(guard.script)) return null;
+      const result = await (guard.run ?? defaultRunGuard)(guardArgs(guard, "record", ["--live", options.liveApp]));
+      let verdict: NoDowngradeVerdict | null = null;
+      try { verdict = JSON.parse(result.stdout) as NoDowngradeVerdict; } catch { verdict = null; }
+      if (result.code !== 0) throw new Error(verdict?.reason ?? result.stderr.trim().slice(0, 300));
+      return `no-downgrade: ${verdict?.reason ?? "recorded the live build"}`;
+    },
     async execute(plan, dir) {
       const staged = plan.mode === "update" ? await candidate() : null;
       if (plan.mode === "update" && (!staged || staged.version !== plan.version || staged.sha !== plan.sha)) throw err("staged app changed since it was admitted; re-stage it", 409);
@@ -560,6 +833,8 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
       try { old = appDigests(live); } catch { old = null; }
       const proc = await host.appProcess();
       const script = UPDATER_APPLY_SCRIPT;
+      // The job judges the swap again on its own, from its own copy of the guard.
+      const guard = plan.mode === "update" ? stageApplyGuard(options.noDowngrade, dir) : null;
       const full: ApplyPlan = {
         ...plan, label: `${UPDATE_JOB_PREFIX}${plan.updateId.slice(0, 8)}`, live,
         staged: staged?.appPath ?? null,
@@ -569,6 +844,7 @@ export function createDarwinExecutor(host: UpdaterHost, options: DarwinExecutorO
         launch: sandbox ? [] : ["/usr/bin/open", "{app}"],
         codesign: options.codesign ?? true, selfBootout: !sandbox, requireLaunchd: options.requireLaunchd ?? true,
         uid, scriptSha256: createHash("sha256").update(script).digest("hex"),
+        guard, guardRequired: plan.mode === "update" && Boolean(options.noDowngrade?.require),
         ...(sandbox ? { sandbox: true, fault: sandbox.fault ?? null } : {}),
       };
       writeFileAtomic(join(dir, "apply.py"), script, { mode: 0o700 });

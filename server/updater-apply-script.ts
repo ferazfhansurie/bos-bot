@@ -23,6 +23,13 @@ PORTS = [int(p) for p in PLAN["ports"]]
 # PORTS[0], relaunch is left to the test's supervisor, and FAULT injects one failure.
 SANDBOX = bool(PLAN.get("sandbox"))
 FAULT = PLAN.get("fault") if SANDBOX else None
+# The no-downgrade guard admission ran, copied beside this script with its
+# sha256 pinned in the plan. This job runs it again ITSELF, before it stops
+# anything, so a plan fed to it by hand is judged exactly like the button's.
+# A packaged build (guardRequired) refuses an update plan with no guard in it;
+# a plan that does not even say is treated as packaged.
+GUARD = PLAN.get("guard")
+GUARD_REQUIRED = bool(PLAN.get("guardRequired", not SANDBOX))
 LOG = (HERE / "apply.log").open("a")
 
 def log(msg):
@@ -40,6 +47,52 @@ def run(*args, timeout=20):
 def require(ok, msg):
     if not ok:
         raise RuntimeError(msg)
+
+class Refused(Exception):
+    """The guard said no, or could not say: nothing is stopped, swapped or relaunched."""
+
+def guard_check():
+    """Run no-downgrade.py check on the staged bundle against the live one.
+    Exit 2 is its refusal (the reason names both commits); any other failure
+    refuses too, since an unverifiable candidate is never installed."""
+    if PLAN["mode"] != "update":
+        return "no-downgrade: restart, nothing to judge"
+    if not GUARD:
+        if GUARD_REQUIRED:
+            raise Refused("install refused: the plan carries no no-downgrade guard; only the updater's own plan may install")
+        return "no-downgrade guard not configured; skipped"
+    if not STAGED:
+        raise Refused("install refused: the plan names no staged bundle")
+    script = Path(GUARD["script"])
+    if not script.is_file():
+        raise Refused(f"install refused: no-downgrade guard missing at {script}")
+    if hashlib.sha256(script.read_bytes()).hexdigest() != GUARD.get("scriptSha256"):
+        raise Refused(f"install refused: no-downgrade guard at {script} does not match the plan")
+    args = [sys.executable, str(script), "check", "--candidate", str(STAGED), "--live", str(LIVE), "--ledger", GUARD["ledger"]]
+    if GUARD.get("repo"):
+        args += ["--repo", GUARD["repo"]]
+    if GUARD.get("releaseBranch"):
+        args += ["--release-branch", GUARD["releaseBranch"]]
+    if GUARD.get("prodBranch") is not None:
+        args += ["--prod-branch", GUARD["prodBranch"]]
+    try:
+        r = command(*args, timeout=180)
+    except Exception as e:
+        raise Refused(f"no-downgrade guard failed: {e}")
+    try:
+        verdict = json.loads(r.stdout)
+    except Exception:
+        verdict = None
+    if not isinstance(verdict, dict):
+        verdict = {}
+    reason = verdict.get("reason") or r.stderr.strip()[:300] or "no output"
+    if r.returncode == 2:
+        raise Refused(f"install refused: {reason}")
+    if r.returncode != 0:
+        raise Refused(f"no-downgrade guard failed (exit {r.returncode}): {reason}")
+    if verdict.get("ok") is not True:
+        raise Refused("no-downgrade guard failed: it exited 0 without an ok verdict")
+    return f"no-downgrade: {reason}"
 
 def tree_digest(app, name):
     h = hashlib.sha256(); root = Path(app) / "Contents/Resources" / name
@@ -220,6 +273,15 @@ def main():
             return 3
         if RESULT.exists():
             return 4
+        # Judged before anything is stopped: a refusal leaves the app running
+        # and untouched, with nothing to relaunch. rollback() below is the only
+        # path that moves a bundle in without this check, and it only restores
+        # the bundle that was live when this job started (digests == PLAN["old"]).
+        try:
+            log(guard_check())
+        except Exception as e:
+            record("failed", detail=str(e), appStillRunning=True, refused=True)
+            return 2
         try:
             progress("stopping")
             stop_app(LIVE, PLAN["gracefulSeconds"], PLAN["force"])
