@@ -56,16 +56,16 @@ const authority = 'Apple Development: Firaz Fhansurie (KL78M575FW)';
 const identities = [];
 for (const [candidate, installed] of [[app, '/Applications/BOS Bot.app'], [join(resources, 'OpenMausBot Speech.app'), '/Applications/BOS Bot.app/Contents/Resources/OpenMausBot Speech.app']]) {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', candidate]);
-  // codesign writes descriptions and designated requirements to stderr.
+  // codesign may write the designated requirement to either output stream.
   const details = spawnSync('/usr/bin/codesign', ['-d', '-r-', '--verbose=4', candidate], { encoding: 'utf8' });
   assert.equal(details.status, 0);
   assert.ok(details.stderr.includes(`Authority=${authority}`));
   assert.ok(details.stderr.includes('TeamIdentifier=6LH87G88CQ'));
   const old = spawnSync('/usr/bin/codesign', ['-d', '-r-', installed], { encoding: 'utf8' });
   assert.equal(old.status, 0);
-  const requirement = old.stderr.match(/^designated => (.+)$/m)?.[1];
+  const requirement = `${old.stdout}\n${old.stderr}`.match(/^designated => (.+)$/m)?.[1];
   assert.ok(requirement, 'installed designated requirement unavailable');
-  run('/usr/bin/codesign', ['--verify', '--strict', '-R', requirement, candidate]);
+  run('/usr/bin/codesign', ['--verify', '--strict', '-R', `=${requirement}`, candidate]);
   identities.push({ candidate, matchesInstalledRequirement: true });
 }
 assert.equal(run('/usr/libexec/PlistBuddy', ['-c', 'Print CFBundleIdentifier', join(app, 'Contents/Info.plist')]).trim(), 'ai.bos.bot');

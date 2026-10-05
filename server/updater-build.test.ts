@@ -173,6 +173,51 @@ describe.skipIf(!hasPython)("update build", () => {
     await expect(stageFullCandidate({ ...options, dataDir, appPath: full })).rejects.toThrow(/update owns/);
   });
 
+  it.each(["stdout", "stderr"] as const)("validates app and speech requirements from %s with literal inline argv", async stream => {
+    const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };
+    const target = await resolveUpdateTarget(source);
+    const full = fakeApp(root, "Full.app", "full");
+    writeFileSync(join(full, "Contents", "Resources", "app.asar"), "complete shell");
+    stampNativeContract(join(full, "Contents", "Resources"), repo.dir, repo.b);
+    expect(spawnSync(PYTHON, [SCRIPT, "stamp", "--app", full, "--commit", repo.b]).status).toBe(0);
+    const verified: string[][] = [];
+    let failure: "missing" | "rejected" | null = null;
+    let failSpeech = false;
+    const run: RunCommand = async (file, args, opts) => {
+      if (file === "/usr/bin/codesign") {
+        const speech = args.at(-1)!.endsWith("OpenMausBot Speech.app");
+        const requirement = `identifier "${speech ? "ai.bos.speech" : "ai.bos.bot"}" and anchor trusted`;
+        // Exercise the production child-process runner's separate stdout/stderr
+        // capture, while replacing only the platform executable in this fixture.
+        const script = args[0] === "-d"
+          ? `process.${stream}.write(${JSON.stringify(failure === "missing" && speech === failSpeech ? "no requirement" : `designated => ${requirement}\n`)});`
+          : args.includes("-R")
+            ? `const args = JSON.parse(process.argv[1]); if (JSON.stringify(args.slice(0, 4)) !== JSON.stringify(["--verify", "--strict", "-R", ${JSON.stringify(`=${requirement}`)}])) { process.stderr.write("wrong inline requirement argv"); process.exit(1); } ${failure === "rejected" && speech === failSpeech ? 'process.stderr.write("requirement rejected"); process.exit(1);' : ""}`
+            : "";
+        if (args.includes("-R")) verified.push(args);
+        return runCommand(process.execPath, ["-e", script, JSON.stringify(args)], opts);
+      }
+      if (file === "/usr/libexec/PlistBuddy") return { code: 0, stdout: args[1].includes("Identifier") ? "ai.bos.bot" : "1.3.1", stderr: "" };
+      return runCommand(file, args, opts);
+    };
+    const options = { script: SCRIPT, ledger: join(dataDir, "updates", "live-build.json"), liveApp: live, source, target, current: { version: "1.3.0", sha: repo.a }, run };
+    expect(spawnSync(PYTHON, [SCRIPT, "record", "--live", live, "--commit", repo.a, "--ledger", options.ledger, "--repo", repo.dir, "--release-branch", DEFAULT_RELEASE_BRANCH]).status).toBe(0);
+    await stageFullCandidate({ ...options, dataDir, appPath: full });
+    expect(verified).toHaveLength(2);
+    expect(verified.map(args => args[3])).toEqual(['=identifier "ai.bos.bot" and anchor trusted', '=identifier "ai.bos.speech" and anchor trusted']);
+    const manifest = join(dataDir, "updates", "candidate", "manifest.json");
+    const before = readFileSync(manifest, "utf8");
+    for (const mode of ["missing", "rejected"] as const) {
+      failure = mode;
+      for (const speech of [false, true]) {
+        failSpeech = speech;
+        await expect(stageFullCandidate({ ...options, dataDir, appPath: full })).rejects.toThrow(mode === "missing" ? /installed signing requirement unavailable/ : /requirement rejected/);
+        expect(readFileSync(manifest, "utf8")).toBe(before);
+        expect(existsSync(join(dataDir, "updates", "apply.lock"))).toBe(false);
+      }
+    }
+  });
+
   it("refuses an unknown legacy shell before dependencies or building", async () => {
     rmSync(join(live, "Contents", "Resources", "native-contract.json"));
     const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };

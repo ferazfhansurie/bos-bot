@@ -172,9 +172,9 @@ export async function validateFullCandidate(options: PreviewOptions, candidate: 
     const staged = suffix ? join(candidate.appPath, suffix) : candidate.appPath;
     await checked("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged]);
     const description = await checked("/usr/bin/codesign", ["-d", "-r-", live]);
-    const requirement = /^designated => (.+)$/m.exec(description.stderr)?.[1];
+    const requirement = /^designated => (.+)$/m.exec(`${description.stdout}\n${description.stderr}`)?.[1];
     if (!requirement) refuse("installed signing requirement unavailable");
-    await checked("/usr/bin/codesign", ["--verify", "--strict", "-R", requirement!, staged]);
+    await checked("/usr/bin/codesign", ["--verify", "--strict", "-R", `=${requirement!}`, staged]);
   }
   const plist = join(candidate.appPath, "Contents", "Info.plist");
   const identifier = await checked("/usr/libexec/PlistBuddy", ["-c", "Print CFBundleIdentifier", plist]);
