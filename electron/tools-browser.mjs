@@ -1,0 +1,157 @@
+// Hardening for the in-app "Browser" tool: a <webview> embedded in the main
+// window's side panel. Everything here is dependency-injected (no electron
+// import) so it can be exercised under plain node:test.
+//
+// Security model:
+// - The guest runs in its own persistent partition. main.mjs injects a
+//   privileged desktop-mutation header only on session.defaultSession requests
+//   to the local server, so a separate partition keeps that header (and the
+//   app's cookies/storage) away from arbitrary web pages.
+// - Only http:, https: and about:blank may load. The app's own loopback
+//   server/relay origins are refused (navigation and every subresource), so a
+//   web page can never frame, navigate to, or call the BOS UI/API.
+// - No preload, no Node, sandboxed, no nested webviews, no permissions.
+
+export const TOOLS_BROWSER_PARTITION = "persist:bos-tools-browser";
+
+const LOOPBACK_V4 = /^127(?:\.\d{1,3}){3}$/;
+
+function isLoopbackHost(hostname) {
+  const host = hostname.toLowerCase();
+  return host === "localhost" || host.endsWith(".localhost") || LOOPBACK_V4.test(host) ||
+    host === "0.0.0.0" || host === "[::1]" || host === "[::]" ||
+    /^\[::ffff:(?:127\.|7f[0-9a-f]{2}:)/.test(host) || host === "[::ffff:0.0.0.0]" || host === "[::ffff:0:0]";
+}
+
+function defaultPort(protocol) {
+  return protocol === "https:" || protocol === "wss:" ? "443" : protocol === "http:" || protocol === "ws:" ? "80" : "";
+}
+
+function resolveOrigins(appOrigins) {
+  const list = typeof appOrigins === "function" ? appOrigins() : appOrigins;
+  const parsed = [];
+  for (const origin of list ?? []) {
+    try {
+      const url = new URL(origin);
+      parsed.push({ origin: url.origin, hostname: url.hostname, port: url.port || defaultPort(url.protocol) });
+    } catch {}
+  }
+  return parsed;
+}
+
+/** True when `url` targets one of the app's own origins. Loopback aliases
+ * (localhost, 127.x, [::1], 0.0.0.0) on the same port count as the same
+ * server, whatever the scheme (http/ws), so aliases cannot bypass the deny. */
+export function isAppOrigin(url, { appOrigins } = {}) {
+  let target;
+  try {
+    target = url instanceof URL ? url : new URL(url);
+  } catch {
+    return false;
+  }
+  const port = target.port || defaultPort(target.protocol);
+  for (const app of resolveOrigins(appOrigins)) {
+    if (target.origin === app.origin) return true;
+    if (isLoopbackHost(app.hostname) && isLoopbackHost(target.hostname) && port === app.port) return true;
+  }
+  return false;
+}
+
+/** May the embedded browser load this top-level/frame URL? */
+export function toolsBrowserUrlAllowed(url, { appOrigins } = {}) {
+  if (typeof url !== "string" || url.length === 0) return false;
+  let target;
+  try {
+    target = new URL(url);
+  } catch {
+    return false;
+  }
+  if (target.protocol === "about:") return target.href === "about:blank";
+  if (target.protocol !== "http:" && target.protocol !== "https:") return false;
+  if (!target.hostname) return false;
+  return !isAppOrigin(target, { appOrigins });
+}
+
+/**
+ * Mutates `will-attach-webview` arguments into the locked-down shape. Returns
+ * false when the initial src is not allowed; the caller must then
+ * event.preventDefault(). An empty src is treated as about:blank.
+ */
+export function hardenWebviewAttach(webPreferences, params, { appOrigins } = {}) {
+  delete webPreferences.preload;
+  delete webPreferences.preloadURL;
+  Object.assign(webPreferences, {
+    nodeIntegration: false,
+    nodeIntegrationInSubFrames: false,
+    nodeIntegrationInWorker: false,
+    contextIsolation: true,
+    sandbox: true,
+    webSecurity: true,
+    allowRunningInsecureContent: false,
+    javascript: true,
+    plugins: false,
+    experimentalFeatures: false,
+    webviewTag: false,
+    partition: TOOLS_BROWSER_PARTITION,
+  });
+  if (params) {
+    delete params.preload;
+    for (const key of ["nodeintegration", "nodeintegrationinsubframes", "plugins", "disablewebsecurity", "allowpopups", "webpreferences"]) delete params[key];
+    params.partition = TOOLS_BROWSER_PARTITION;
+  }
+  const src = params?.src;
+  if (src === undefined || src === null || src === "") return true;
+  return toolsBrowserUrlAllowed(src, { appOrigins });
+}
+
+/**
+ * Guards a live guest webContents (from `did-attach-webview`). Popups are
+ * always denied natively; allowed ones are handed to `onPopup(url)` so the
+ * renderer can open them as a new tab.
+ */
+export function attachToolsBrowserGuest(guestContents, { appOrigins, onPopup } = {}) {
+  const allowed = (url) => toolsBrowserUrlAllowed(url, { appOrigins });
+  guestContents.setWindowOpenHandler(({ url }) => {
+    if (allowed(url) && url !== "about:blank") {
+      try {
+        onPopup?.(url);
+      } catch {}
+    }
+    return { action: "deny" };
+  });
+  const guard = (event, url) => {
+    if (!allowed(url)) event.preventDefault();
+  };
+  guestContents.on("will-navigate", guard);
+  guestContents.on("will-redirect", guard);
+  // Covers subframes too (Electron >= 25). The details object carries url.
+  guestContents.on("will-frame-navigate", (details) => {
+    if (!allowed(details?.url)) details.preventDefault();
+  });
+  // will-navigate is not emitted for programmatic loads (webview.src /
+  // loadURL). Abort those after the fact; the session request filter below
+  // already cancels app-origin traffic before it leaves.
+  guestContents.on("did-start-navigation", (details, legacyUrl, _inPlace, legacyIsMainFrame) => {
+    const url = typeof details === "object" && details && "url" in details ? details.url : legacyUrl;
+    const isMainFrame = typeof details === "object" && details && "isMainFrame" in details ? details.isMainFrame : legacyIsMainFrame;
+    if (!isMainFrame || allowed(url)) return;
+    try {
+      guestContents.stop();
+      void Promise.resolve(guestContents.loadURL("about:blank")).catch(() => {});
+    } catch {}
+  });
+  // Nested webviews are disabled by webPreferences; refuse them regardless.
+  guestContents.on("will-attach-webview", (event) => event.preventDefault());
+}
+
+/** Deny every permission in the tools-browser partition and cancel any
+ * request (navigation, fetch, image, websocket) aimed at the app itself.
+ * Only ever called with the partition session, never defaultSession. */
+export function configureToolsBrowserSession(ses, { appOrigins } = {}) {
+  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  ses.setPermissionCheckHandler(() => false);
+  ses.setDevicePermissionHandler?.(() => false);
+  ses.webRequest?.onBeforeRequest?.((details, callback) => {
+    callback({ cancel: isAppOrigin(details.url, { appOrigins }) });
+  });
+}

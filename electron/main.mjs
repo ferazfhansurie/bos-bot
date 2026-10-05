@@ -4,6 +4,7 @@ import "./staging-bootstrap.mjs";
 import { stagingServerEnvironment } from "./staging-environment.mjs";
 import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEME } from "./release-channel.mjs";
 import { attachLaunchSplash } from "./launch-splash.mjs";
+import { TOOLS_BROWSER_PARTITION, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach } from "./tools-browser.mjs";
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -1202,6 +1203,50 @@ function syncDesktopMutationToken(proc) {
   }
 }
 
+// The in-app Browser tool (<webview>) must never reach the app's own loopback
+// server or relay. Computed lazily: SERVER_PORT is chosen at boot.
+function toolsBrowserAppOrigins() {
+  const ports = new Set([SERVER_PORT, ...SERVER_PORTS, ...RELAY_PORTS]);
+  const origins = [...ports].map((port) => `http://127.0.0.1:${port}`);
+  try {
+    origins.push(rendererOrigin());
+  } catch {}
+  return origins;
+}
+
+function mainWindowShowsLocalUi() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  try {
+    return new URL(mainWindow.webContents.getURL()).origin === rendererOrigin();
+  } catch {
+    return false;
+  }
+}
+
+// Webviews may attach only to the main window while it shows the local UI
+// (a remote server's page could otherwise script the guest). Guests run in
+// TOOLS_BROWSER_PARTITION, never session.defaultSession, so the privileged
+// header installDesktopMutationHeader() adds there cannot reach web pages.
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("will-attach-webview", (event, webPreferences, params) => {
+    if (!mainWindow || contents !== mainWindow.webContents || !mainWindowShowsLocalUi() ||
+      !hardenWebviewAttach(webPreferences, params, { appOrigins: toolsBrowserAppOrigins })) {
+      event.preventDefault();
+    }
+  });
+  contents.on("did-attach-webview", (_attachEvent, guest) => {
+    if (!mainWindow || contents !== mainWindow.webContents) return;
+    const owner = mainWindow;
+    attachToolsBrowserGuest(guest, {
+      appOrigins: toolsBrowserAppOrigins,
+      onPopup: (url) => {
+        if (owner.isDestroyed() || !mainWindowShowsLocalUi()) return;
+        owner.webContents.send("tools-browser:popup", url);
+      },
+    });
+  });
+});
+
 function installDesktopMutationHeader() {
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     let ownsTarget = false;
@@ -1957,6 +2002,9 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
+      // Only for the side-panel Browser tool. Every attach is hardened and
+      // forced into its own partition by the will-attach-webview guard.
+      webviewTag: true,
       // The preload exposes the full bridge only to this origin (see preload.cjs).
       // Companion client mode still serves the bundled UI from its own
       // loopback relay, so it is a trusted local page while also needing the
@@ -2792,6 +2840,7 @@ setCuaStateListener((connection) => {
 });
 
 app.whenReady().then(async () => {
+  configureToolsBrowserSession(session.fromPartition(TOOLS_BROWSER_PARTITION), { appOrigins: toolsBrowserAppOrigins });
   session.defaultSession.on("will-download", (_event, item) => {
     item.setSavePath(collisionFreeDownloadPath(app.getPath("downloads"), item.getFilename()));
   });
