@@ -117,6 +117,8 @@ import { DesktopWorkspaceSwitcher } from "./DesktopWorkspaceSwitcher";
 import { profileInitials, SidebarProfileMenu } from "./SidebarProfileMenu";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { useShowThreads } from "@/lib/thread-preferences";
+import { SidebarActivityAvatar, useBotActivity } from "./SidebarActivityAvatar";
+import { useActivityFeed, withLiveActivity } from "@/lib/activity-feed";
 import { AttentionThreadRows, crossBotAttentionThreads, SidebarBotActivity, sidebarBotActivityTasks } from "./SidebarBotActivity";
 import { SidebarAttentionPanel } from "./SidebarAttentionPanel";
 import { ShortcutHint } from "./ShortcutHint";
@@ -1005,9 +1007,10 @@ export function BotDeleteMenuItem({ deleting, onClick }: { deleting: boolean; on
  * the person never hunts for a working thread below newer idle ones. */
 export function BotThreadList({ bot, selected, density = "comfortable", query = "", hidden = false }: { bot: Bot; selected: boolean; density?: SidebarDensity; query?: string; hidden?: boolean }) {
   const { state, dispatch } = useStore();
+  useActivityFeed();
   const tasks = (bot.tasks ?? [{ threadId: bot.threadId, title: t("task.newShort"), createdAt: 0 }])
     .filter((task) => !task.routineRunId)
-    .map((task) => ({ ...task, queued: Boolean(state.pendingQueued[task.threadId]?.length) }));
+    .map((task) => ({ ...withLiveActivity(bot.id, task), queued: Boolean(state.pendingQueued[task.threadId]?.length) }));
   const projects = bot.projects ?? [];
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [editingProject, setEditingProject] = useState<string | null>(null);
@@ -1042,7 +1045,7 @@ export function BotThreadList({ bot, selected, density = "comfortable", query = 
   const orderedProjects = query ? projects : [...projects].sort((a, b) => visibleProjectIndex(b.id) - visibleProjectIndex(a.id));
   useRevealedThreadRow(state.revealThread, selected ? bot.threadId : null);
   const renderThread = (task: (typeof tasks)[number]) => {
-    const thread = currentTaskBot(bot, task.threadId);
+    const thread = withLiveActivity(bot.id, currentTaskBot(bot, task.threadId));
     return <SidebarThreadRow key={task.threadId} task={{ ...task, busy: thread.busy, activity: thread.activity }} ownerId={bot.id} current={selected && task.threadId === bot.threadId} compact={density === "compact"} folders={bot.remote ? [] : projects}
       onSelect={() => { if (task.threadId !== bot.threadId) dispatch({ type: "switchTask", botId: bot.id, threadId: task.threadId }); else dispatch({ type: "select", id: bot.id }); }}
       onRename={(title) => dispatch({ type: "renameTask", botId: bot.id, threadId: task.threadId, title })}
@@ -1198,6 +1201,7 @@ export function BotListItem({
   useEffect(() => { if (revealHere && showThreads) setThreadsOpen(true); }, [reveal, revealHere, showThreads]);
   const deleting = state.deletingBots[bot.id] === true;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
+  const live = useBotActivity(bot);
   const iconOnly = density === "icons";
   const expanded = showThreads && !iconOnly && threadsOpen;
   useEffect(() => {
@@ -1224,8 +1228,9 @@ export function BotListItem({
     selected ? "bg-raised/70" : "hover:bg-raised/40",
   );
   const activityTasks = sidebarBotActivityTasks(bot, state.pendingQueued);
-  const waiting = bot.activity === "waiting-on-you" || activityTasks.some((task) => task.activity === "waiting-on-you");
-  const working = !waiting && (Boolean(bot.busy) || activityTasks.some((task) => task.busy || task.activity === "working"));
+  const waiting = live.state === "waiting" || bot.activity === "waiting-on-you" || activityTasks.some((task) => task.activity === "waiting-on-you");
+  const working = !waiting && (live.gesture !== "idle" && live.gesture !== "finished" || Boolean(bot.busy) || activityTasks.some((task) => task.busy || task.activity === "working"));
+  const failed = live.state === "failed";
   const queued = activityTasks.some((task) => task.queued);
   const unread = bot.unread || activityTasks.some((task) => task.unread);
   const body = (
@@ -1233,6 +1238,7 @@ export function BotListItem({
       {/* flex, not inline: an inline wrapper adds a baseline gap under the
           avatar and makes the row taller than before the presence dot */}
       <span className="relative flex shrink-0">
+        <SidebarActivityAvatar bot={bot} gesture={live.gesture} size={avatarSize}>
         <span className={cn("flex", working && "bot-morph")}>
         <BotAvatar
           bot={bot}
@@ -1247,6 +1253,7 @@ export function BotListItem({
           animated={Boolean(bot.busy) || Boolean(bot.unread) || (mascotMotion?.kind ?? "none") !== "none"}
         />
         </span>
+        </SidebarActivityAvatar>
         {working && (
           // presence dot: green while the bot is working, ringed in the row's
           // ground so it reads on both a photo and the mascot. Also the only
@@ -1263,6 +1270,8 @@ export function BotListItem({
           className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-warning", iconOnly ? "size-3" : "size-2.5")} />}
         {!waiting && !working && queued && <span data-testid="queued-dot" role="status" aria-label={t("task.queued")} title={t("task.queued")}
           className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-ink-secondary", iconOnly ? "size-3" : "size-2.5")} />}
+        {!waiting && !working && !queued && failed && <span data-testid="failed-dot" role="status" aria-label={t("inspector.run.failed")} title={t("inspector.run.failed")}
+          className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-danger", iconOnly ? "size-3" : "size-2.5")} />}
       </span>
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
         {(title || bot.remote) && !renaming && (

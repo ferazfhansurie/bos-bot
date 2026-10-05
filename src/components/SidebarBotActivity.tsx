@@ -3,6 +3,7 @@ import { useStore, type Bot, type Task } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { orderedSidebarThreads } from "./SidebarThreadRow";
+import { useActivityFeed, withLiveActivity } from "@/lib/activity-feed";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
 
 /** Attention is not history browsing: idle conversations never enter this list.
@@ -12,7 +13,7 @@ export function sidebarBotActivityTasks(bot: Bot, queued: Record<string, unknown
     threadId: bot.threadId, title: t("task.newShort"), createdAt: 0,
     busy: bot.busy, activity: bot.activity, unread: bot.unread,
   }];
-  return tasks.map((task) => ({ ...task, queued: Boolean(queued[task.threadId]?.length) }))
+  return tasks.map((task) => ({ ...withLiveActivity(bot.id, task), queued: Boolean(queued[task.threadId]?.length) }))
     // Routine runs are reachable through their run receipt, never a menu.
     .filter((task) => !task.routineRunId)
     .filter((task) => task.activity === "waiting-on-you" || task.activity === "working" || task.busy || task.queued || task.unread);
@@ -66,6 +67,7 @@ export function AttentionThreadRows({ entries, onJump }: { entries: AttentionThr
  * These are selection-only buttons: no create, rename, move, or delete menu. */
 export function SidebarBotActivity({ bot, density }: { bot: Bot; density: SidebarDensity }) {
   const { state, dispatch } = useStore();
+  useActivityFeed();
   const tasks = orderedSidebarThreads(sidebarBotActivityTasks(bot, state.pendingQueued).filter((task) => task.threadId !== bot.threadId), bot.threadId);
   if (!tasks.length) return null;
   const iconOnly = density === "icons";
