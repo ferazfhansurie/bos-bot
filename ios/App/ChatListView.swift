@@ -710,7 +710,12 @@ struct ChatListView: View {
                     VStack(spacing: 7) {
                         ZStack(alignment: .topTrailing) {
                             pinnedAvatar(entry).frame(width: 82, height: 82)
-                            if conversationBusy(entry) {
+                            if let worker = pinnedWorker(entry) {
+                                // a room's photo can't move, so the member
+                                // working in it wears the live face instead
+                                BotAvatarView(bot: worker.bot, size: 30, state: worker.face, animated: true)
+                                    .padding(2).background(.background, in: Circle())
+                            } else if conversationBusy(entry), !pinnedAnimates(entry) {
                                 ProgressView().controlSize(.small)
                                     .padding(5).background(.background, in: Circle())
                             } else if conversationUnread(entry) {
@@ -746,10 +751,24 @@ struct ChatListView: View {
         switch entry {
         case .local(let summary):
             ChatAvatarView(chat: summary.chat, size: 82,
-                           state: MausState.forChat(summary.chat, in: session.state), animated: false)
+                           state: MausState.forChat(summary.chat, in: session.state), animated: pinnedAnimates(entry))
         case .contact(let contact): contactAvatar(contact, size: 82)
         case .room(let room): GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 82)
         }
+    }
+
+    /// A pinned bot's own face moves while it works, like its row below.
+    private func pinnedAnimates(_ entry: ConversationEntry) -> Bool {
+        guard case .local(let summary) = entry, case .bot = summary.chat else { return false }
+        return MausState.forChat(summary.chat, in: session.state).showsActivity
+    }
+    /// The busiest member working in a pinned room, with its live face.
+    private func pinnedWorker(_ entry: ConversationEntry) -> (bot: Bot, face: MausState)? {
+        guard case .local(let summary) = entry, case let .room(room) = summary.chat,
+              let live = session.state.activityFeed.busiest(room: room.id, thread: room.threadId),
+              let bot = session.state.bot(live.botId) else { return nil }
+        let face = MausState.forFeed(live)
+        return face.showsActivity ? (bot, face) : nil
     }
 
     private func conversationName(_ entry: ConversationEntry) -> String {

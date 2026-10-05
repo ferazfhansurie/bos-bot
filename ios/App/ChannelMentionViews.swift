@@ -6,6 +6,9 @@ import CompanionCore
 struct ChannelRosterChip: View {
     let roster: ChannelRoster
     let notifications: String?
+    /// The activity feed's face per member id; a member missing here keeps
+    /// the still face.
+    var faces: [String: MausState] = [:]
     let onOpen: () -> Void
 
     var body: some View {
@@ -14,7 +17,8 @@ struct ChannelRosterChip: View {
                 HStack(spacing: -8) {
                     ForEach(Array(roster.shown.enumerated()), id: \.element.id) { index, bot in
                         let working = roster.working.contains(bot.id)
-                        BotAvatarView(bot: bot, size: 26)
+                        let face = faces[bot.id]
+                        BotAvatarView(bot: bot, size: 26, state: face ?? .idle, animated: face?.showsActivity == true)
                             .padding(2)
                             .background(Circle().fill(Color(uiColor: .systemBackground)))
                             .overlay(Circle().strokeBorder(working ? Color.green : .clear, lineWidth: 1.5))

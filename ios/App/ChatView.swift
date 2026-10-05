@@ -336,6 +336,8 @@ struct ChatView: View {
                             ForEach(channelMembers) { bot in
                                 RoomMemberLiveReply(live: session.liveText.entry(RuntimeEvent.roomStreamKey(threadId: threadId, botId: bot.id)), bot: bot,
                                     busy: hostLive && room.activeBotIds?.contains(bot.id) == true,
+                                    face: memberFace(bot, in: room),
+                                    named: transcript.last?.senderName != bot.name,
                                     steps: steps[bot.id] ?? [],
                                     startedAt: memberStartedAt(steps[bot.id]),
                                     onContent: { hasContent in
@@ -708,8 +710,18 @@ struct ChatView: View {
         guard case let .room(room) = current else { return nil }
         return AnyView(ChannelRosterChip(
             roster: ChannelRoster(room: room, members: channelMembers, hostLive: hostLive),
-            notifications: room.notifications
+            notifications: room.notifications,
+            faces: Dictionary(uniqueKeysWithValues: channelMembers.compactMap { bot in memberFace(bot, in: room).map { (bot.id, $0) } })
         ) { showingProfile = true })
+    }
+
+    /// The activity feed's face for one member working in this room, or nil
+    /// for the still face. Scoped to the room, so the same bot busy in
+    /// another chat never moves here.
+    private func memberFace(_ bot: Bot, in room: Room) -> MausState? {
+        let feed = session.state.activityFeed
+        guard let live = feed.busiest(bot: bot.id, room: room.id) ?? feed.entry(bot: bot.id, thread: room.threadId) else { return nil }
+        return MausState.forFeed(live)
     }
 
     // MARK: - Mentions
@@ -3080,6 +3092,11 @@ private struct RoomMemberLiveReply: View {
     @ObservedObject var live: LiveText
     let bot: Bot
     let busy: Bool
+    /// The feed's face while this member works here; nil keeps it still.
+    let face: MausState?
+    /// False when the bubble just above is already this member's, so the
+    /// name is not said twice in a row.
+    var named = true
     let steps: [Message]
     let startedAt: Date
     /// Something in the row grew; true while it has anything to show.
@@ -3088,7 +3105,7 @@ private struct RoomMemberLiveReply: View {
     var body: some View {
         if !live.text.isEmpty || !live.reasoning.isEmpty || busy {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) { BotAvatarView(bot: bot, size: 24); Text(bot.name).font(.caption.weight(.semibold)) }
+                HStack(spacing: 6) { BotAvatarView(bot: bot, size: 24, state: face ?? .idle, animated: face?.showsActivity == true); if named { Text(bot.name).font(.caption.weight(.semibold)) } }
                 if !live.text.isEmpty || !live.reasoning.isEmpty {
                     StreamingBubble(text: live.text, reasoning: live.reasoning, color: bot.color)
                 } else { WorkingSteps(items: steps, startedAt: startedAt) }
