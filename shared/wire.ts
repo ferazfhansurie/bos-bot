@@ -512,6 +512,48 @@ export interface WireGroup {
   working: boolean;
 }
 
+// ── needs-me inbox + daily digest ──────────────────────────────────────
+// GET /api/inbox and GET /api/digest?since=<ms>. `question` is an
+// unanswered card; the list is newest first.
+
+export type InboxKind = "waiting-on-you" | "question" | "failed" | "unread";
+
+export interface InboxItem {
+  id: string;
+  kind: InboxKind;
+  botId: string;
+  /** set when the thread belongs to a room */
+  groupId?: string;
+  threadId: string;
+  title: string;
+  preview: string;
+  at: number;
+}
+
+export interface InboxResponse {
+  items: InboxItem[];
+  count: number;
+}
+
+export type DigestChange = "done" | "started" | "closed" | "failed";
+
+export interface DigestMove {
+  botId: string;
+  groupId?: string;
+  threadId: string;
+  title: string;
+  change: DigestChange;
+  summary: string;
+  at: number;
+}
+
+export interface DigestResponse {
+  since: number;
+  until: number;
+  counts: { done: number; started: number; closed: number; failed: number; waiting: number };
+  moved: DigestMove[];
+}
+
 // ── live wire frames ───────────────────────────────────────────────────
 // Derived from the client's frame switch (src/state/store.tsx handleFrame)
 // cross-checked against every server broadcast site: one member per kind
@@ -547,6 +589,8 @@ export type ServerFrame =
   | { kind: "computer"; botId: string; state: "provisioning" | "waking" }
   | { kind: "computer-control"; botId: string; held: boolean; helpReason: string | null }
   | { kind: "bot.deleted"; botId: string }
+  /** The needs-me count changed; clients refetch /api/inbox. */
+  | { kind: "inbox"; count: number }
   /** Staged-build updater progress (1.3 /api/update contract). */
   | { kind: "update.state"; state: UpdateRunState; updateId?: string; detail?: string }
   /** The config status object spread flat into the frame; its full typing
