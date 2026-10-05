@@ -19296,7 +19296,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (body.projectId !== undefined && (typeof body.projectId !== "string" || !store.project(bot.id, body.projectId))) {
         return json(res, 400, { error: "projectId must belong to this bot" });
       }
-      const task = store.createTask(bot.id, typeof body.title === "string" ? body.title : undefined, true, body.projectId);
+      if (body.activate !== undefined && typeof body.activate !== "boolean") return json(res, 400, { error: "activate must be a boolean" });
+      // activate:false opens a side thread (the tools panel's side chat)
+      // without switching the conversation on screen. Peers always switch.
+      const activate = body.activate !== false || Boolean(peerSessionId);
+      const task = store.createTask(bot.id, typeof body.title === "string" ? body.title : undefined, activate, body.projectId);
       if (!task) return json(res, 500, { error: "couldn't create that task" });
       if (peerSessionId) {
         store.patchTask(bot.id, task.threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [] });

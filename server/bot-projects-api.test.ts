@@ -162,4 +162,16 @@ describe("organizational folders through an isolated HTTP fixture", () => {
     expect((await api("PATCH", `/api/bots/${sibling.id}/projects/${project.id}`, { name: "Wrong owner" })).status).toBe(404);
     expect((await getBot(owner.id)).projects).toEqual([project]);
   });
+
+  it("opens a side thread without switching the conversation on screen", async () => {
+    const bot = (await api("POST", "/api/bots", { name: "Side chat fixture", modelSelection: selection(models[0]) })).body.bot;
+    const side = await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Side chat", activate: false });
+    expect(side.status).toBe(201);
+    expect(side.body.bot.threadId).toBe(bot.threadId);
+    expect(side.body.bot.tasks.some((task: any) => task.threadId === side.body.task.threadId)).toBe(true);
+    expect((await getBot(bot.id)).threadId).toBe(bot.threadId);
+    expect((await api("POST", `/api/bots/${bot.id}/tasks`, { activate: "no" })).status).toBe(400);
+    const switched = await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Switches" });
+    expect(switched.body.bot.threadId).toBe(switched.body.task.threadId);
+  });
 });
