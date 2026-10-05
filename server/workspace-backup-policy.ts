@@ -4,7 +4,7 @@ import { parseStoredConfig } from "./config.ts";
 // restored URL must never redirect an API key retained from that device.
 // Allowlisting ordinary settings also keeps future/unknown auth fields out.
 const PORTABLE_CONFIG_KEYS = [
-  "profile", "language", "budgets", "billing", "rooms", "threads",
+  "profile", "language", "budgets", "billing", "rooms", "threads", "digest",
   "localVm", "features", "browserProfiles",
 ] as const;
 

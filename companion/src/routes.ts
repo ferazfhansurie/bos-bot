@@ -82,6 +82,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
   { method: "GET", path: /^\/api\/team-map$/ },
+  // Read-only needs-me list and daily digest, derived from fleet reads.
+  { method: "GET", path: /^\/api\/inbox$/ },
+  { method: "GET", path: /^\/api\/digest$/ },
   // Paired-device subscription meters; no credentials or write operations.
   { method: "GET", path: /^\/api\/provider-usage$/ },
   // Sidecar-owned, authenticated endpoint metadata. The proxy terminates it

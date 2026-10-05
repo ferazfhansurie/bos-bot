@@ -231,9 +231,11 @@ function safeBot(raw: Record<string, any>, previous?: SafeBot): SafeBot {
 
 const TASK_FIELDS = ["title", "createdAt", "lastActivityAt", "titleFromFirstMessage", "archivedAt", "modelSelection", "approvalMode", "autoApprove",
   "unread", "rewound", "pinnedMessageId", "activity", "busy", "turnStartedAt", "usage"] as const;
+const THREAD_STATES: ReadonlySet<unknown> = new Set(["running", "waiting-on-you", "queued", "idle", "closed"]);
 function safeTask(raw: Record<string, any>): WireTask {
   const task: Record<string, unknown> = { threadId: String(raw.threadId) };
   for (const field of TASK_FIELDS) if (raw[field] !== undefined) task[field] = raw[field];
+  if (THREAD_STATES.has(raw.state)) task.state = raw.state;
   if (typeof task.title !== "string") task.title = "Linked chat";
   if (typeof task.createdAt !== "number") task.createdAt = Date.now();
   return task as unknown as WireTask;

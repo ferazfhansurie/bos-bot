@@ -261,6 +261,10 @@ export class RoomHandoffs {
   activeDirect(threadId: string) {
     return [...this.nodes.values()].some(n => !n.groupId && n.threadId === threadId && !terminal(n));
   }
+  /** The room-thread twin of activeDirect. */
+  activeRoom(groupId: string, threadId: string) {
+    return [...this.nodes.values()].some(n => n.groupId === groupId && n.threadId === threadId && !terminal(n));
+  }
   /** Work this conversation handed out that has not settled yet. The
    * conversation's own node is not outstanding — only what it waits on. */
   outstandingDirect(threadId: string): RoomHandoff[] {

@@ -104,6 +104,7 @@ describe("scopes", () => {
       ["GET", "/api/multiplayer/rooms/r/files"], ["GET", "/api/multiplayer/rooms/r/search"],
       ["GET", "/api/multiplayer/rooms/r/requests"], ["POST", "/api/multiplayer/rooms/r/requests/q/cancel"],
       ["GET", "/api/auth/session"], ["POST", "/api/auth/stream-ticket"], ["POST", "/api/auth/logout"],
+      ["GET", "/api/inbox"], ["GET", "/api/digest"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
       ["POST", "/api/cli-test"], ["GET", "/api/cli-candidates"], ["GET", "/api/instances"], ["PATCH", "/api/instances/claude"],
@@ -115,6 +116,7 @@ describe("scopes", () => {
       ["POST", "/api/bots/x/checkpoints/restore"], ["GET", "/api/mcp/servers"], ["POST", "/api/mcp/servers"], ["POST", "/api/connectors/slack/authorize"],
       ["PUT", "/api/config"], ["POST", "/api/auth/pairing"], ["GET", "/api/auth/sessions"], ["DELETE", "/api/auth/sessions/abc"],
       ["POST", "/api/auth/pair"], // handled before the gate; the gate itself never grants it
+      ["POST", "/api/inbox"], ["GET", "/api/digest/x"], // the needs-me reads are GET-only
       ["GET", "/api/something-new"], // anything unlisted is admin until listed
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("admin");
   });

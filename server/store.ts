@@ -517,6 +517,18 @@ export class Store {
     this.roomRuntimeAliases = next;
     return runtimeThreadId;
   }
+  /** What the members working a room thread are doing: waiting-on-you
+   * beats any other activity, undefined when nobody holds it. */
+  roomThreadActivity(threadId: string): BotActivity | undefined {
+    threadId = this.canonicalThreadId(threadId);
+    let found: BotActivity | undefined;
+    for (const [runtimeId, entry] of this.roomActivities) {
+      if (this.roomRuntimeAliases.get(runtimeId)?.threadId !== threadId) continue;
+      if (entry.activity === "waiting-on-you") return entry.activity;
+      found ??= entry.activity;
+    }
+    return found;
+  }
   setRoomActivity(runtimeThreadId: string, botId: string, activity: BotActivity): BotRecord | null {
     if (this.roomRuntimeAliases.get(runtimeThreadId)?.botId !== botId) throw new Error("Room activity owner mismatch");
     const bot = this.bot(botId);
@@ -1119,6 +1131,22 @@ export class Store {
     return this.renameGroupTask(groupId, threadId, threadTitleFrom(title));
   }
 
+  /** Stamp or clear a room thread's closer record, like setTaskClosedBy.
+   * `null` reopens; appendMessage does that for any new message. */
+  setGroupTaskClosedBy(groupId: string, threadId: string, closedBy: TaskClosedBy | null): GroupTaskRecord | null {
+    const task = this.groupTaskByThread(groupId, threadId);
+    if (!task) return null;
+    if (closedBy) task.closedBy = structuredClone(closedBy);
+    else if (!task.closedBy) return task;
+    else {
+      delete task.closedBy;
+      task.lastActivityAt = Date.now();
+    }
+    this.saveGroups();
+    this.emit({ type: "group", groupId });
+    return task;
+  }
+
   deleteGroupTask(groupId: string, threadId: string): GroupRecord | null {
     const group = this.group(groupId);
     if (!group || group.dm || !group.tasks || group.tasks.length < 2) return null;
@@ -1317,6 +1345,11 @@ export class Store {
       }
     }
     this.emit({ type: "message", threadId, message: full });
+    // Any new message reopens a settled room thread, whoever wrote it.
+    const room = this.groupByThread(threadId);
+    if (room && !room.dm && room.tasks?.some((task) => task.threadId === threadId && task.closedBy)) {
+      this.setGroupTaskClosedBy(room.id, threadId, null);
+    }
     // The first-run quiz is not a live ask. Talking past it hides it so the
     // transcript is just the greeting plus what they said. Cards with a
     // requestId are permission/question prompts and stay until answered.
@@ -2210,7 +2243,12 @@ export class Store {
     if (!bot || !task) return null;
     if (closedBy) task.closedBy = structuredClone(closedBy);
     else if (!task.closedBy) return task;
-    else delete task.closedBy;
+    else {
+      delete task.closedBy;
+      // A reopened thread starts a fresh idle window, or the next settle
+      // sweep would fold it straight back away.
+      task.lastActivityAt = Date.now();
+    }
     this.saveBots();
     this.emit({ type: "bot", botId });
     return task;

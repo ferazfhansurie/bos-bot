@@ -133,7 +133,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { TeamComputers, teamComputerAssignment, teamComputerCreate, teamComputerOwner, type TeamComputerRecord } from "./team-computers.ts";
-import { isEffortLevel, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
+import { isEffortLevel, type GroupTask, type ThreadState, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
 import type { TeamComputersPayload } from "../shared/team-computer.ts";
 import { boxCreateRecoverySnapshot, retireDeletedBoxCreate } from "./box-create-idempotency.ts";
 import { boxDeletionSnapshot } from "./box-delete-journal.ts";
@@ -198,7 +198,8 @@ import {
   customMcpServers,
   roomHandoffLimits,
 } from "./config.ts";
-import { inboxCanClose, inboxShouldSettle, type InboxCandidate } from "./thread-inbox.ts";
+import { inboxCanClose, inboxShouldSettle, threadState, type InboxCandidate } from "./thread-inbox.ts";
+import { buildDigest, buildInbox, digestDue, digestNotificationBody, localDateKey, type NeedsMeThread } from "./needs-me.ts";
 import { sweepThreadEventLogs, type ThreadLogRetentionCandidate } from "./thread-retention.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
@@ -287,6 +288,7 @@ import {
   restoreHeldChannelQueue,
   resolveHeldReplyTarget,
   settleHeldChannelQueueHead,
+  queuedChannelCount,
 } from "./channel-queue.ts";
 import {
   acceptedSendMatch,
@@ -1180,6 +1182,17 @@ function threadBusy(botId: string, threadId: string): boolean {
   return store.taskByThread(botId, threadId)?.busy === true || directTurnDispatchClaims.has(threadId);
 }
 
+/** A bot thread's state, read the way the sidebar reads it. The one source
+ * for list_threads and the wire (WireTask.state). */
+function botThreadState(botId: string, task: TaskRecord): ThreadState {
+  return threadState({
+    waiting: task.activity === "waiting-on-you",
+    running: threadBusy(botId, task.threadId),
+    queued: queuedThreadPosition(botId, task.threadId) !== null || roomHandoffs.activeDirect(task.threadId),
+    closed: Boolean(task.closedBy),
+  });
+}
+
 /** Opt-in direct-chat parking (#1194): when this bot's person chose to queue
  * messages behind running work, a message that arrives while delegated
  * assignments are still out waits in the steer queue — room-style parking —
@@ -1908,10 +1921,10 @@ if (browserCleanupReferencesReconciled) browserCleanup.startPending();
  * than the desktop window did. Stripped here rather than at each call site
  * so a new broadcast cannot forget. */
 let activeCoordinationForThread = (_threadId: string): boolean => false;
-const wireTask = (task: TaskRecord): WireTask => {
+const wireTask = (task: TaskRecord, botId: string): WireTask => {
   const view = toWireTask(task);
-  const lastActivityAt = store.messagesTail(task.threadId, 1).messages.at(-1)?.at ?? task.createdAt;
-  return { ...view, lastActivityAt, ...(activeCoordinationForThread(task.threadId) && !task.busy ? { busy: true, activity: "working" as const } : {}) };
+  const lastActivityAt = Math.max(task.lastActivityAt ?? 0, store.messagesTail(task.threadId, 1).messages.at(-1)?.at ?? task.createdAt);
+  return { ...view, lastActivityAt, state: botThreadState(botId, task), ...(activeCoordinationForThread(task.threadId) && !task.busy ? { busy: true, activity: "working" as const } : {}) };
 };
 
 const wireBot = (bot: BotRecord): WireBot => {
@@ -1923,7 +1936,7 @@ const wireBot = (bot: BotRecord): WireBot => {
     ? { ...rest, approvalMode: "ask" as const, autoApprove: false }
     : rest;
   return { ...visible, ...(activeCoordinationForThread(bot.threadId) && !visible.busy ? { busy: true, activity: "working" as const } : {}),
-    avatarUrl: visible.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
+    avatarUrl: visible.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(task => wireTask(task, bot.id)) } : {}) };
 };
 
 function peerBotView(bot: BotRecord, sessionId: string) {
@@ -1947,7 +1960,7 @@ function peerBotView(bot: BotRecord, sessionId: string) {
  * can validate it before sending the confirmation that makes it effective. */
 const wireTrustedApprovalBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
   const { resumeCursors: _resumeCursors, tasks, approvalGrant: _approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, ...rest } = bot;
-  return { ...rest, approvalMode: approvalModeFor(rest), avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(wireTask) } : {}) };
+  return { ...rest, approvalMode: approvalModeFor(rest), avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.map(task => wireTask(task, bot.id)) } : {}) };
 };
 
 /** A settings-based preview, not a receipt of a dispatched turn. No
@@ -2540,7 +2553,7 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
   ...wireBot(bot),
   messages: store.messagesFor(bot.threadId),
   activeLeafId: store.activeLeaf(bot.threadId),
-  tasks: store.tasks(bot.id).map(wireTask),
+  tasks: store.tasks(bot.id).map(task => wireTask(task, bot.id)),
 });
 const publicBotQueuedMessages = () => ({
   ...queuedSteerSnapshot((botId, threadId) => Boolean(store.taskByThread(botId, threadId))),
@@ -3068,8 +3081,28 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
   },
 }, Date.now, roomHandoffLimits(cfg));
 activeCoordinationForThread = threadId => roomHandoffs.activeDirect(threadId);
+/** A room thread's state, on the same precedence as botThreadState. */
+function groupThreadState(group: GroupRecord, task: GroupTask): ThreadState {
+  return threadState({
+    waiting: store.roomThreadActivity(task.threadId) === "waiting-on-you",
+    running: roomRuntimeSpeakers(group.id, task.threadId).length > 0
+      || [...(groupTurnOperations.get(group.id) ?? [])].some(operation => operation.threadId === task.threadId),
+    queued: queuedChannelCount(task.threadId) > 0 || roomHandoffs.activeRoom(group.id, task.threadId),
+    closed: Boolean(task.closedBy),
+  });
+}
+function groupThreadLastActivityAt(task: GroupTask): number {
+  return Math.max(task.lastActivityAt ?? 0, store.messagesTail(task.threadId, 1).messages.at(-1)?.at ?? task.createdAt);
+}
+/** A room task as a client sees it: the record plus computed state. */
+function wireGroupTask(group: GroupRecord, task: GroupTask): GroupTask {
+  return { ...task, lastActivityAt: groupThreadLastActivityAt(task), state: groupThreadState(group, task) };
+}
+function wireGroupTasks(group: GroupRecord): GroupTask[] {
+  return store.groupTasks(group.id).map(task => wireGroupTask(group, task));
+}
 function publicGroupState(group: GroupRecord): WireGroup {
-  return { ...group, activeBotIds: [...new Set(roomRuntimeSpeakers(group.id).map(([, speaker]) => speaker.botId))], working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
+  return { ...group, ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set(roomRuntimeSpeakers(group.id).map(([, speaker]) => speaker.botId))], working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
 }
 
 function beginGroupTurnOperation(
@@ -3393,7 +3426,7 @@ const groupWithThread = (group: GroupRecord) => ({
   ...publicGroupState(group),
   messages: store.messagesFor(group.threadId),
   activeLeafId: store.activeLeaf(group.threadId),
-  ...(group.dm ? {} : { tasks: store.groupTasks(group.id) }),
+  ...(group.dm ? {} : { tasks: wireGroupTasks(group) }),
 });
 
 // The store tells us what it wrote; this is the ONE place that turns those
@@ -3818,8 +3851,10 @@ function notify(notification: Notification | null) {
     const room = notification.threadId ? store.groupByThread(notification.threadId) : null;
     if (room && notification.kind === "done" && !roomCompletionNotifies(room.notifications, notification.body, cfg.profile?.name ?? "")) return;
     broadcast({ kind: "notify", notification });
+    // The digest is from no bot: no sender, so no communication-style push.
     void apnsPush.send(multiplayerActors.ownerId, notification.title, notification.body,
-      { botId: notification.botId, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(error =>
+      notification.kind === "digest" ? { kind: "digest" }
+        : { botId: notification.botId, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(error =>
       console.warn(`bot push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
   }
 }
@@ -12363,6 +12398,7 @@ function configStatus() {
     language: cfg.language ?? "",
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
     threads: { maxConcurrentPerBot: maxConcurrentBotThreads(cfg), parallelProjectFolder: parallelProjectFolderThreads(cfg), autoSettleDays: cfg.threads?.autoSettleDays ?? 3 },
+    digest: { hour: cfg.digest?.hour ?? 9 },
     approvals: {
       defaultMode: defaultApprovalMode(cfg),
       keepAcrossModelSwitch: keepApprovalAcrossModelSwitch(cfg),
@@ -14448,14 +14484,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           state: "running" | "waiting-on-you" | "queued" | "idle" | "closed";
           unread: boolean; openedAt: number; delegationId?: string; own: boolean;
         }> = [];
-        const stateOf = (bot: BotRecord, task: TaskRecord) => {
-          if (task.activity === "waiting-on-you") return "waiting-on-you" as const;
-          if (threadBusy(bot.id, task.threadId)) return "running" as const;
-          if (queuedThreadPosition(bot.id, task.threadId) !== null) return "queued" as const;
-          if (roomHandoffs.activeDirect(task.threadId)) return "queued" as const;
-          if (task.closedBy) return "closed" as const;
-          return "idle" as const;
-        };
+        const stateOf = (bot: BotRecord, task: TaskRecord) => botThreadState(bot.id, task);
         for (const task of store.tasks(from.id)) {
           rows.push({
             threadId: task.threadId, botId: from.id, botName: from.name, title: task.title,
@@ -16326,6 +16355,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         throw Object.assign(new Error("This bot has more than one thread. Update the OpenMausBot app on this device, then choose a thread and try again."), { status: 409 });
       }
     };
+    // Needs-me: every open conversation waiting on the person, newest first.
+    if (method === "GET" && path === "/api/inbox") {
+      if (peerSessionId) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, currentInbox(needsMeScope(auth)));
+    }
+    // What moved since `since` (epoch ms; default the last 24 hours).
+    if (method === "GET" && path === "/api/digest") {
+      if (peerSessionId) return json(res, 403, { error: "forbidden" });
+      const until = Date.now();
+      const raw = url.searchParams.get("since");
+      const since = raw === null || raw === "" ? until - DIGEST_WINDOW_MS : Number(raw);
+      if (!Number.isSafeInteger(since) || since < 0 || since > until) return json(res, 400, { error: "since must be epoch milliseconds, not in the future" });
+      return json(res, 200, currentDigest(since, until, needsMeScope(auth)));
+    }
     if (method === "GET" && path === "/api/bots") {
       if (peerSessionId) {
         const bots = store.bots.filter(bot => !bot.hidden && bot.visibility !== "private").map(bot => peerBotView(bot, peerSessionId));
@@ -16351,7 +16394,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, {
         bots: [...visibleBots.map((bot) => ({
           ...wireBot(bot),
-          tasks: store.tasks(bot.id).map(wireTask),
+          tasks: store.tasks(bot.id).map(task => wireTask(task, bot.id)),
           ...messagePage(bot.threadId, limit),
         })), ...remoteListed],
         botQueuedMessages: foreignNow ? Object.fromEntries(Object.entries(publicBotQueuedMessages()).filter(([id]) => visibleBotIds.has(id))) : publicBotQueuedMessages(),
@@ -17176,7 +17219,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!task) return json(res, 500, { error: "couldn't create that task" });
       const fresh = groupWithThread(store.group(group.id)!);
       broadcast({ kind: "group", group: fresh });
-      return json(res, 201, { group: fresh, task });
+      return json(res, 201, { group: fresh, task: wireGroupTask(store.group(group.id)!, task) });
     }
 
     m = path.match(/^\/api\/groups\/([\w-]+)\/tasks\/([\w-]+)$/);
@@ -17197,7 +17240,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (switchLimit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
       const switched = store.switchGroupTask(group.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such channel task" });
-      const switchedSettings = { ...publicGroupState(switched), tasks: store.groupTasks(switched.id) };
+      const switchedSettings = { ...publicGroupState(switched), tasks: wireGroupTasks(switched) };
       // The frame says the channel moved; it is not a transcript delivery.
       // A long room's whole history over SSE is the payload `?messages=`
       // exists to avoid, and it would also overwrite a bounded snapshot on
@@ -17224,15 +17267,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const group = store.group(m[1]);
       if (!group) return json(res, 404, { error: "no such channel" });
       if (group.dm) return json(res, 400, { error: "bot-to-bot channels keep one canonical conversation" });
-      if (channelTaskBlocked(group)) {
-        return json(res, 409, { error: "this channel is working or waiting on you — finish that turn first" });
-      }
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
-      const task = store.renameGroupTask(m[1], m[2], String(body.title ?? ""));
+      if (body.closed !== undefined && body.closed !== false) return json(res, 400, { error: "closed can only be set to false, to reopen the thread" });
+      if (!store.groupTaskByThread(group.id, m[2])) return json(res, 404, { error: "no such channel task" });
+      // Reopening only clears the settled stamp; it never touches a turn, so
+      // it is not held behind one the way a rename is.
+      if (body.closed === false) store.setGroupTaskClosedBy(group.id, m[2], null);
+      if (body.title !== undefined || body.closed === undefined) {
+        if (channelTaskBlocked(group)) {
+          return json(res, 409, { error: "this channel is working or waiting on you — finish that turn first" });
+        }
+        store.renameGroupTask(m[1], m[2], String(body.title ?? ""));
+      }
+      const task = store.groupTaskByThread(group.id, m[2]);
       if (!task) return json(res, 404, { error: "no such channel task" });
-      return json(res, 200, { task });
+      return json(res, 200, { task: wireGroupTask(store.group(group.id)!, task) });
     }
     if (m && method === "DELETE") {
       const group = store.group(m[1]);
@@ -19169,7 +19220,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       ...wireBot(bot),
       messages: store.messagesFor(bot.threadId),
       activeLeafId: store.activeLeaf(bot.threadId),
-      tasks: store.tasks(bot.id).map(wireTask),
+      tasks: store.tasks(bot.id).map(task => wireTask(task, bot.id)),
     });
 
     // Folders organize one bot's threads; they never own settings,
@@ -19242,8 +19293,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const fresh = botWithThread(store.bot(bot.id)!);
       broadcast({ kind: "bot", bot: fresh });
-      if (peerSessionId) return json(res, 201, { bot: peerBotView(store.bot(bot.id)!, peerSessionId), task: wireTask(store.taskByThread(bot.id, task.threadId)!) });
-      return json(res, 201, { bot: fresh, task: wireTask(task) });
+      if (peerSessionId) return json(res, 201, { bot: peerBotView(store.bot(bot.id)!, peerSessionId), task: wireTask(store.taskByThread(bot.id, task.threadId)!, bot.id) });
+      return json(res, 201, { bot: fresh, task: wireTask(task, bot.id) });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/tasks\/([\w-]+)$/);
     if (m && method === "POST") {
@@ -19264,7 +19315,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       } });
       const switched = store.switchTask(bot.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such task" });
-      const switchedSettings = { ...wireBot(switched), tasks: store.tasks(switched.id).map(wireTask) };
+      const switchedSettings = { ...wireBot(switched), tasks: store.tasks(switched.id).map(task => wireTask(task, switched.id)) };
       // Bounded for the same reason as the channel switch above.
       broadcast({
         kind: "bot",
@@ -19284,11 +19335,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body || typeof body !== "object" || Array.isArray(body)) return json(res, 400, { error: "body must be a JSON object" });
       const current = store.projectBotForTask(m[1], m[2]);
       if (!current) return json(res, 404, { error: "no such task" });
-      const allowed = new Set(["title", "projectId", "modelSelection", "updateBotDefault", "resetApprovalToAsk", "approvalMode", "autoApprove", "requireAvailableModel", "pinnedMessageId", "acknowledgeLocalAuto", "archivedAt", "surface"]);
+      const allowed = new Set(["title", "projectId", "modelSelection", "updateBotDefault", "resetApprovalToAsk", "approvalMode", "autoApprove", "requireAvailableModel", "pinnedMessageId", "acknowledgeLocalAuto", "archivedAt", "surface", "closed"]);
       if (Object.keys(body).some((key) => !allowed.has(key))) return json(res, 400, { error: "unsupported thread setting" });
       for (const key of ["requireAvailableModel", "acknowledgeLocalAuto", "updateBotDefault", "resetApprovalToAsk"] as const) {
         if (body[key] !== undefined && typeof body[key] !== "boolean") return json(res, 400, { error: `${key} must be a boolean` });
       }
+      // Reopen only: closing is close_thread's and the inbox's, never a PATCH.
+      if (body.closed !== undefined && body.closed !== false) return json(res, 400, { error: "closed can only be set to false, to reopen the thread" });
       if (body.requireAvailableModel === true && body.modelSelection === undefined) return json(res, 400, { error: "requireAvailableModel requires modelSelection" });
       if (body.updateBotDefault === true && body.modelSelection === undefined) return json(res, 400, { error: "updateBotDefault requires modelSelection" });
       if (body.resetApprovalToAsk === true && (body.modelSelection === undefined ||
@@ -19356,12 +19409,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }, patch.modelSelection, body.updateBotDefault === true, body.resetApprovalToAsk === true, body.requireAvailableModel === true);
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
       }
+      if (body.closed === false) {
+        store.setTaskClosedBy(m[1], m[2], null);
+        store.patchTask(m[1], m[2], { closeWhenDone: undefined });
+      }
       const task = patch.modelSelection
         ? store.switchTaskModel(m[1], m[2], patch.modelSelection, body.updateBotDefault === true, body.resetApprovalToAsk === true, patch)!
         : store.patchTask(m[1], m[2], patch)!;
       const fresh = botWithThread(store.bot(m[1])!);
       broadcast({ kind: "bot", bot: fresh });
-      return json(res, 200, { task: wireTask(task), bot: fresh });
+      return json(res, 200, { task: wireTask(task, m[1]), bot: fresh });
     }
     if (m && method === "DELETE") {
       const bot = store.bot(m[1]);
@@ -21259,6 +21316,24 @@ function threadInboxCandidate(botId: string, threadId: string): InboxCandidate |
   }
   return candidate;
 }
+/** The room-thread twin of threadInboxCandidate. Room unread is one flag
+ * for the whole room, so an unread room protects every thread in it. */
+function groupThreadInboxCandidate(group: GroupRecord, task: GroupTask): InboxCandidate {
+  const state = groupThreadState(group, task);
+  const candidate: InboxCandidate = {
+    lastActivityAt: groupThreadLastActivityAt(task),
+    closed: Boolean(task.closedBy), archived: false,
+    unread: group.unread === true,
+    busy: state === "running",
+    queued: queuedChannelCount(task.threadId) > 0,
+    needsInput: state === "waiting-on-you",
+    pendingWork: roomHandoffs.activeRoom(group.id, task.threadId) || phoneSecretSubmissions.hasThread(task.threadId),
+  };
+  if (inboxShouldSettle(candidate, cfg.threads?.autoSettleDays ?? 3)) {
+    candidate.needsInput = store.messagesFor(task.threadId).some(m => m.card && !m.card.answered && !m.card.dismissed);
+  }
+  return candidate;
+}
 function settleInboxThreads(now = Date.now()): void {
   const days = cfg.threads?.autoSettleDays ?? 3;
   for (const bot of store.bots) for (const task of bot.tasks ?? []) {
@@ -21268,11 +21343,143 @@ function settleInboxThreads(now = Date.now()): void {
     store.setTaskClosedBy(bot.id, task.threadId, task.closeWhenDone ?? { botId: bot.id, name: "Inbox", at: now });
     if (task.closeWhenDone) store.patchTask(bot.id, task.threadId, { closeWhenDone: undefined });
   }
+  // Room threads settle on the same rule. Nobody closes one by hand, so the
+  // stamp names the inbox; botId is empty because no bot closed it.
+  for (const group of store.groups) for (const task of store.groupTasks(group.id)) {
+    if (!inboxShouldSettle(groupThreadInboxCandidate(group, task), days, now)) continue;
+    store.setGroupTaskClosedBy(group.id, task.threadId, { botId: "", name: "Inbox", at: now });
+  }
 }
 // Do not sweep at startup before dispatch recovery has marked uncertain work.
 setInterval(() => {
   try { settleInboxThreads(); } catch (error) { console.warn("inbox settlement failed", error instanceof Error ? error.message : String(error)); }
+  // Some state (dispatch claims, steer queues) moves without a store write.
+  scheduleInboxCount();
+  try { maybeSendDailyDigest(); } catch (error) { console.warn("daily digest failed", error instanceof Error ? error.message : String(error)); }
 }, 60_000).unref();
+
+// ── needs-me + daily digest ──────────────────────────────────────────────
+// A pending card is nearly always recent; a bounded tail keeps the inbox
+// from hydrating every old transcript on each recount.
+const INBOX_TAIL = 40;
+const DIGEST_TAIL = 200;
+const DIGEST_WINDOW_MS = 24 * 60 * 60_000;
+
+/** Every open conversation the person could be waiting on, with its live
+ * signals. `tailFor` returns how many newest messages to read, 0 for none.
+ * Hidden bots and bot-to-bot channels are not the person's conversations. */
+function needsMeThreads(tailFor: (lastActivityAt: number, createdAt: number, closedBy?: { at: number }) => number,
+  options: { includeGroups: boolean; bots: readonly BotRecord[] }): NeedsMeThread[] {
+  const threads: NeedsMeThread[] = [];
+  const tail = (threadId: string, size: number) => size > 0 ? store.messagesTail(threadId, size).messages : [];
+  for (const bot of options.bots) {
+    if (bot.hidden) continue;
+    for (const task of store.tasks(bot.id)) {
+      const lastActivityAt = Math.max(task.lastActivityAt ?? 0, store.messagesTail(task.threadId, 1).messages.at(-1)?.at ?? task.createdAt);
+      const state = botThreadState(bot.id, task);
+      threads.push({
+        botId: bot.id, threadId: task.threadId, title: task.title, createdAt: task.openedBy?.at ?? task.createdAt, lastActivityAt,
+        ...(task.closedBy ? { closedBy: task.closedBy } : {}), archived: Boolean(task.archivedAt), unread: task.unread === true,
+        waiting: state === "waiting-on-you", working: state === "running" || state === "queued",
+        messages: tail(task.threadId, tailFor(lastActivityAt, task.createdAt, task.closedBy)),
+      });
+    }
+  }
+  if (!options.includeGroups) return threads;
+  for (const group of store.groups) {
+    if (group.dm) continue;
+    const rows: NeedsMeThread[] = [];
+    for (const task of store.groupTasks(group.id)) {
+      const lastActivityAt = groupThreadLastActivityAt(task);
+      const state = groupThreadState(group, task);
+      const messages = tail(task.threadId, tailFor(lastActivityAt, task.createdAt, task.closedBy));
+      // A room row needs a bot: whoever last spoke there, else a member.
+      const botId = messages.findLast(message => message.from?.botId)?.from?.botId ?? group.memberIds[0] ?? "";
+      rows.push({
+        botId, groupId: group.id, threadId: task.threadId, title: task.title, createdAt: task.createdAt, lastActivityAt,
+        ...(task.closedBy ? { closedBy: task.closedBy } : {}), archived: false, unread: false,
+        waiting: state === "waiting-on-you", working: state === "running" || state === "queued", messages,
+      });
+    }
+    // Room unread is one flag for the whole room: it belongs to the open
+    // thread that moved last, not to every thread in the room.
+    if (group.unread) {
+      const newest = rows.filter(row => !row.closedBy).sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
+      if (newest) newest.unread = true;
+    }
+    threads.push(...rows);
+  }
+  return threads;
+}
+
+/** What a viewer may see: a foreign signed-in person gets shared bots and
+ * no rooms, the same scope GET /api/bots gives them. */
+function needsMeScope(auth: RequestAuth): { includeGroups: boolean; bots: readonly BotRecord[] } {
+  const viewerActor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : null;
+  const foreign = auth.kind === "session" && viewerActor != null && viewerActor !== multiplayerActors.ownerId;
+  return foreign ? { includeGroups: false, bots: store.bots.filter(bot => bot.visibility !== "private") } : { includeGroups: true, bots: store.bots };
+}
+
+function currentInbox(scope: { includeGroups: boolean; bots: readonly BotRecord[] } = { includeGroups: true, bots: store.bots }) {
+  return buildInbox(needsMeThreads((_at, _created, closedBy) => closedBy ? 0 : INBOX_TAIL, scope));
+}
+
+function currentDigest(since: number, until: number, scope: { includeGroups: boolean; bots: readonly BotRecord[] } = { includeGroups: true, bots: store.bots }) {
+  const threads = needsMeThreads((lastActivityAt, createdAt, closedBy) =>
+    lastActivityAt >= since || createdAt >= since || (closedBy?.at ?? 0) >= since ? DIGEST_TAIL : 0, scope);
+  const waiting = buildInbox(threads.map(thread => ({ ...thread, messages: thread.messages.slice(-INBOX_TAIL) })))
+    .items.filter(item => item.kind === "waiting-on-you" || item.kind === "question").length;
+  return buildDigest(threads, since, until, waiting);
+}
+
+// The count frame is a refetch hint: debounced, and only sent when the
+// number actually moved.
+let inboxCountSent: number | null = null;
+let inboxCountTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleInboxCount(): void {
+  if (inboxCountTimer) return;
+  inboxCountTimer = setTimeout(() => {
+    inboxCountTimer = null;
+    try {
+      const { count } = currentInbox();
+      if (count === inboxCountSent) return;
+      inboxCountSent = count;
+      broadcast({ kind: "inbox", count });
+    } catch (error) {
+      console.warn("inbox count failed", error instanceof Error ? error.message : String(error));
+    }
+  }, 1_000);
+  inboxCountTimer.unref?.();
+}
+try { inboxCountSent = currentInbox().count; } catch { /* first recount sends it */ }
+store.onChange(() => scheduleInboxCount());
+onChannelQueueChange(() => scheduleInboxCount());
+
+// Once per local day at digest.hour, through the same notify path as every
+// other banner and push. The last-sent day is written before the push goes
+// out, so a crash or restart can miss a digest but never send two.
+const DIGEST_STATE_FILE = join(DATA_DIR, "digest-push.json");
+function readDigestLastSent(): string | null | undefined {
+  try {
+    const value = JSON.parse(readFileSync(DIGEST_STATE_FILE, "utf8")) as { lastSentDate?: unknown };
+    return typeof value.lastSentDate === "string" ? value.lastSentDate : null;
+  } catch { return undefined; }
+}
+function writeDigestLastSent(date: string): void {
+  writeFileAtomic(DIGEST_STATE_FILE, JSON.stringify({ lastSentDate: date }));
+}
+function maybeSendDailyDigest(now = new Date()): void {
+  const hour = cfg.digest?.hour ?? 9;
+  const lastSent = readDigestLastSent();
+  // First run on this install: a digest at whatever hour it was installed is
+  // noise. Start counting from tomorrow if today's hour has already passed.
+  if (lastSent === undefined && now.getHours() >= hour) { writeDigestLastSent(localDateKey(now)); return; }
+  if (!digestDue(now, hour, lastSent ?? null)) return;
+  writeDigestLastSent(localDateKey(now));
+  const until = now.getTime();
+  const digest = currentDigest(until - DIGEST_WINDOW_MS, until);
+  notify({ kind: "digest", botId: "", botName: "", threadId: "", title: "Your daily digest", body: digestNotificationBody(digest) });
+}
 
 // #1280: retention for per-thread event logs. Off unless configured, and
 // even then it only removes log files — transcripts, thread records, and

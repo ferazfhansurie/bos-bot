@@ -12,7 +12,10 @@ export type NotifyKind =
   /** A run failed, stalled or could not start and no Chief of Staff was
    * there to take it: the person is the one who has to look. */
   | "incident"
-  | "takeover";
+  | "takeover"
+  /** The daily summary (digest.hour). Not from one bot: botId, botName and
+   * threadId are empty; clients open needs-me. */
+  | "digest";
 
 export interface Notification {
   kind: NotifyKind;

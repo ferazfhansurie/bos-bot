@@ -56,6 +56,8 @@ describe("what the app may do", () => {
     ["GET", "/api/events"],
     ["GET", "/api/instances"],
     ["GET", "/api/team-map"],
+    ["GET", "/api/inbox"],
+    ["GET", "/api/digest"],
     ["GET", "/api/provider-usage"],
     ["GET", "/api/companion/endpoints"],
     ["GET", "/api/companion/status"],
