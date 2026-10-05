@@ -22,6 +22,7 @@ import {
   type CompanionEndpoint,
 } from "./endpoints.ts";
 import { denyReason, isCloudDesktopAccess, isMessageFileDownload } from "./routes.ts";
+import { companionStatusSnapshot, type CompanionStatus } from "./status.ts";
 import { CompanionViewerRelay } from "./viewer-relay.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
 
@@ -52,6 +53,10 @@ export interface ProxyOptions {
   /** Complete connection URLs for current mobile clients. `hosts` remains
    * alongside this field for builds that predate typed endpoints. */
   endpoints?: () => CompanionEndpoint[];
+  /** Hosted-route state and the keep-awake setting for
+   * `GET /api/companion/status`. Absent on a standalone sidecar, which then
+   * answers "off" with no hosted URL. */
+  status?: () => CompanionStatus;
   /** Register one authenticated, live event stream. The tracker can terminate
    * it synchronously when that device is revoked; the returned disposer is
    * called exactly once when either side closes it. */
@@ -337,6 +342,11 @@ export function createProxyHandler(options: ProxyOptions) {
     // default-deny checks above and never send it to the harness.
     if (method === "GET" && path === "/api/companion/endpoints") {
       return sendJson(res, 200, endpointSnapshot(options));
+    }
+    // Same ownership and the same checks as the endpoint list: answered here,
+    // read-only, never forwarded.
+    if (method === "GET" && path === "/api/companion/status") {
+      return sendJson(res, 200, options.status?.() ?? companionStatusSnapshot(null));
     }
 
     const mutationToken = device ? options.mutationToken?.() : undefined;

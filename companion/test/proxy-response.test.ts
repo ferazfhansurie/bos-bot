@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createProxyHandler, proxyHeadersTimeoutMs } from "../src/proxy.ts";
 import type { CompanionEndpoint } from "../src/endpoints.ts";
+import { companionStatusSnapshot, type ReportedCompanionStatus } from "../src/status.ts";
 import { scrub } from "../src/wire.ts";
 
 const TOKEN = "omb_test_token";
@@ -28,6 +29,9 @@ let cloudDesktopAccess = true;
 let companionMarker = "";
 let companionDevice = "";
 let endpointCandidates: CompanionEndpoint[] = [];
+let hostedUrl: string | null = null;
+let reportedStatus: ReportedCompanionStatus = { hosted: "off", keepAwake: false };
+let harnessHits = 0;
 /** What the stub harness answers with next. Set per test. */
 let respond: (res: ServerResponse) => void = (res) => res.end();
 
@@ -56,6 +60,7 @@ const device = async (
 
 beforeAll(async () => {
   harness = createServer((req, res) => {
+    harnessHits += 1;
     companionMarker = String(req.headers["x-openmausbot-companion"] ?? "");
     companionDevice = String(req.headers["x-openmausbot-companion-device"] ?? "");
     respond(res);
@@ -69,6 +74,7 @@ beforeAll(async () => {
       redeem: () => ({ error: "not used here" }),
       serverName: () => "Test computer",
       endpoints: () => endpointCandidates,
+      status: () => companionStatusSnapshot(hostedUrl, reportedStatus),
     }),
   );
   sidecarPort = await listen(sidecar);
@@ -97,6 +103,34 @@ describe("preparing a harness response for a device", () => {
     } finally {
       endpointCandidates = [];
     }
+  });
+
+  it("answers companion status locally, without touching the harness", async () => {
+    const before = harnessHits;
+    try {
+      reportedStatus = { hosted: "provisioning", keepAwake: true };
+      let { status, text } = await device("/api/companion/status");
+      expect(status).toBe(200);
+      expect(JSON.parse(text)).toEqual({ hosted: { status: "provisioning" }, keepAwake: true });
+
+      hostedUrl = "https://c-1.openmausbot.test";
+      reportedStatus = { hosted: "ready", keepAwake: true };
+      ({ status, text } = await device("/api/companion/status"));
+      expect(status).toBe(200);
+      expect(JSON.parse(text)).toEqual({
+        hosted: { status: "ready", url: "https://c-1.openmausbot.test" },
+        keepAwake: true,
+      });
+      expect(harnessHits).toBe(before);
+    } finally {
+      hostedUrl = null;
+      reportedStatus = { hosted: "off", keepAwake: false };
+    }
+  });
+
+  it("refuses companion status to an unpaired caller", async () => {
+    const res = await fetch(`http://127.0.0.1:${sidecarPort}/api/companion/status`);
+    expect(res.status).toBe(401);
   });
 
   it("requires the host to enable cloud desktop for viewer and preview requests", async () => {

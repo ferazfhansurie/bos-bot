@@ -58,6 +58,7 @@ describe("what the app may do", () => {
     ["GET", "/api/team-map"],
     ["GET", "/api/provider-usage"],
     ["GET", "/api/companion/endpoints"],
+    ["GET", "/api/companion/status"],
     ["GET", "/api/bots"],
     ["POST", "/api/bots"],
     ["POST", "/api/sidebar-sections"],
@@ -174,6 +175,15 @@ describe("what it may not", () => {
     expect(ask("GET", "/api/companion/endpoints")).toBeNull();
     expect(ask("POST", "/api/companion/endpoints")?.status).toBe(403);
     expect(ask("GET", "/api/companion/endpoints/extra")?.status).toBe(403);
+  });
+
+  it("keeps the companion status authenticated and read-only", () => {
+    expect(ask("GET", "/api/companion/status", false)?.status).toBe(401);
+    expect(ask("GET", "/api/companion/status")).toBeNull();
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      expect(ask(method, "/api/companion/status")?.status, method).toBe(403);
+    }
+    expect(ask("GET", "/api/companion/status/extra")?.status).toBe(403);
   });
 
   it("describes only refused routine operations as computer-only", () => {

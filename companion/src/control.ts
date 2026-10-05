@@ -18,6 +18,7 @@ import type { DeviceRegistry } from "./devices.ts";
 import { companionEndpointCandidates, hostedCompanionUrl } from "./endpoints.ts";
 import { lanAddresses, tailnetName, tailscaleAddress } from "./listener.ts";
 import { defaultHostName } from "./mdns.ts";
+import { isReportedCompanionStatus, type ReportedCompanionStatus } from "./status.ts";
 
 /** What the pairing page needs to render itself and act on what you click. */
 export interface ControlOptions {
@@ -33,6 +34,9 @@ export interface ControlOptions {
   /** Electron alone uses this to publish a route after its connector health
    * check succeeds, and to withdraw it immediately on connector loss. */
   setHostedUrl?: (url: string | null) => void;
+  /** Electron alone reports connector state and the keep-awake setting, so a
+   * paired phone can read them from `GET /api/companion/status`. */
+  setStatus?: (status: ReportedCompanionStatus) => void;
   /** Whether Bonjour came up, and under what name. */
   discovery: () => { advertising: boolean; name: string };
   /** Device ids with at least one live authenticated event stream. */
@@ -115,9 +119,11 @@ const isHostedEndpointPayload = (value: unknown): value is HostedEndpointPayload
   return url === null || typeof url === "string";
 };
 
-const readHostedEndpoint = (
+/** A small exact-shape JSON body off the control socket. */
+const readControlBody = <T>(
   req: import("node:http").IncomingMessage,
-): Promise<HostedEndpointPayload> =>
+  isValid: (value: unknown) => value is T,
+): Promise<T> =>
   new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
@@ -134,7 +140,7 @@ const readHostedEndpoint = (
     req.on("end", () => {
       try {
         const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        if (!isHostedEndpointPayload(parsed)) throw new Error("invalid shape");
+        if (!isValid(parsed)) throw new Error("invalid shape");
         resolve(parsed);
       } catch {
         reject(new Error("invalid JSON body"));
@@ -294,7 +300,7 @@ export function createControlServer(options: ControlOptions): Server {
     }
     const updateHostedUrl = options.setHostedUrl;
     if (method === "PUT" && path === "/hosted-endpoint" && updateHostedUrl) {
-      readHostedEndpoint(req).then(
+      readControlBody(req, isHostedEndpointPayload).then(
         (body) => {
           try {
             const requested = body.url == null || body.url === "" ? null : hostedCompanionUrl(body.url);
@@ -303,6 +309,17 @@ export function createControlServer(options: ControlOptions): Server {
           } catch {
             return json(res, 400, { error: "invalid hosted endpoint" });
           }
+        },
+        (error: Error) => json(res, 400, { error: error.message }),
+      );
+      return;
+    }
+    const updateStatus = options.setStatus;
+    if (method === "PUT" && path === "/status" && updateStatus) {
+      readControlBody(req, isReportedCompanionStatus).then(
+        (body) => {
+          updateStatus({ hosted: body.hosted, keepAwake: body.keepAwake });
+          return json(res, 200, companionState(options));
         },
         (error: Error) => json(res, 400, { error: error.message }),
       );

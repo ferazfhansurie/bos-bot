@@ -5,7 +5,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupStaleManagedCompanionTokens,
+  companionKeepAwakeWanted,
   createManagedCompanionTunnel,
+  hostedCompanionStatus,
   MANAGED_COMPANION_ORIGIN_VERSION,
   MANAGED_COMPANION_ORIGIN_VERSION_FIELD,
   managedCompanionTunnelAccess,
@@ -393,5 +395,48 @@ describe("managed connector lifecycle", () => {
     expect(fs.existsSync(stale)).toBe(false);
     expect(fs.existsSync(live)).toBe(true);
     expect(fs.existsSync(unrelated)).toBe(true);
+  });
+});
+
+describe("phone-facing hosted status", () => {
+  const ready = { status: "ready", ready: true, configured: true, endpoint: ENDPOINT };
+
+  it("is ready only once that exact endpoint is advertised", () => {
+    expect(hostedCompanionStatus(ready, ENDPOINT)).toBe("ready");
+    expect(hostedCompanionStatus(ready, null)).toBe("provisioning");
+    expect(hostedCompanionStatus(ready, "https://c-other.openmausbot.com")).toBe("provisioning");
+    expect(hostedCompanionStatus({ ...ready, ready: false }, ENDPOINT)).toBe("provisioning");
+  });
+
+  it("maps every connector state to off, provisioning, or error", () => {
+    expect(hostedCompanionStatus(undefined)).toBe("off");
+    expect(hostedCompanionStatus(null, ENDPOINT)).toBe("off");
+    expect(hostedCompanionStatus({ status: "stopped", ready: false })).toBe("off");
+    expect(hostedCompanionStatus({ status: "unconfigured", ready: false })).toBe("off");
+    expect(hostedCompanionStatus({ status: "starting", ready: false })).toBe("provisioning");
+    expect(hostedCompanionStatus({ status: "retrying", ready: false, retryInMs: 1000 })).toBe("error");
+    expect(hostedCompanionStatus({ status: "unavailable", ready: false })).toBe("error");
+  });
+});
+
+describe("companion keep-awake decision", () => {
+  it("is off unless Remote access is on and the setting is on", () => {
+    expect(companionKeepAwakeWanted()).toBe(false);
+    expect(companionKeepAwakeWanted({ companionEnabled: true, keepAwake: false, hostedConfigured: true, hostedStatus: "ready" })).toBe(false);
+    expect(companionKeepAwakeWanted({ companionEnabled: false, keepAwake: true, hostedConfigured: true, hostedStatus: "ready" })).toBe(false);
+  });
+
+  it("holds with a hosted route only while it is ready", () => {
+    expect(companionKeepAwakeWanted({ companionEnabled: true, keepAwake: true, hostedConfigured: true, hostedStatus: "ready" })).toBe(true);
+    for (const hostedStatus of ["off", "provisioning", "error"]) {
+      expect(
+        companionKeepAwakeWanted({ companionEnabled: true, keepAwake: true, hostedConfigured: true, hostedStatus }),
+        hostedStatus,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps its original meaning when no hosted route is configured", () => {
+    expect(companionKeepAwakeWanted({ companionEnabled: true, keepAwake: true, hostedConfigured: false, hostedStatus: "off" })).toBe(true);
   });
 });

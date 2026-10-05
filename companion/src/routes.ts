@@ -87,6 +87,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // Sidecar-owned, authenticated endpoint metadata. The proxy terminates it
   // locally; it never becomes a newly exposed harness route.
   { method: "GET", path: /^\/api\/companion\/endpoints$/ },
+  // Same terms: hosted-route state and the keep-awake setting, answered by
+  // the sidecar from what the desktop reported. Read-only; no write exists.
+  { method: "GET", path: /^\/api\/companion\/status$/ },
 
   // the fleet, and making a bot
   { method: "GET", path: /^\/api\/bots$/ },
