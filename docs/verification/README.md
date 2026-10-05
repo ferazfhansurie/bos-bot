@@ -64,6 +64,7 @@ Use only mapped, tested commands:
 - [Fleet: many workspaces on one server](fleet.md)
 - [Workspaces screen and the fleet agent](workspaces.md)
 - [Hosted workspace sign-in and revocation](hosted-workspaces.md)
+- [Provider quota fallback and reset](model-fallback.md)
 - [Usage ledger](usage-ledger.md)
 - [Bounded built-in tool results](tool-results.md)
 - [Spend cap and sell prices](spend-cap.md)

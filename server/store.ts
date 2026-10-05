@@ -63,6 +63,8 @@ export function isProjectEmoji(value: unknown): value is string {
  * wire shape; the extras below are server-private bookkeeping the wire
  * projection (toWireTask) strips. */
 export interface TaskRecord extends WireTask {
+  /** Durable quota recovery marker; never sent to clients. */
+  modelFallback?: { from: ModelSelection; to: ModelSelection; switchedAt: number; resetAt: number | null };
   /** provider-native continuation per instance, for THIS task only */
   resumeCursors: Record<string, unknown>;
   /** which instance dispatched the most recent turn. A cursor alone can't
@@ -81,7 +83,7 @@ export interface TaskRecord extends WireTask {
 /** TaskRecord fields no client may see. Everything else must be on WireTask:
  * the exactness assertion below fails to compile when either side drifts,
  * so a new server field forces a decision — wire-visible or private here. */
-export type TaskWirePrivateKeys = "resumeCursors" | "lastInstanceId" | "handedMessages" | "appliedCompactionId" | "contextFloor" | "lastContextModel";
+export type TaskWirePrivateKeys = "resumeCursors" | "lastInstanceId" | "handedMessages" | "appliedCompactionId" | "contextFloor" | "lastContextModel" | "modelFallback";
 export type TaskWireProjection = Pick<TaskRecord, Exclude<keyof TaskRecord, TaskWirePrivateKeys>>;
 type AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 type AssertSameKeys<A, B> = [keyof A] extends [keyof B] ? ([keyof B] extends [keyof A] ? true : never) : never;
@@ -94,14 +96,14 @@ export const taskWireProjectionIsExact: TaskWireProjectionIsExact = true;
  * returning WireTask means an undeclared server field cannot ride silently. */
 export function toWireTask(task: TaskRecord): WireTask {
   const { resumeCursors: _resumeCursors, lastInstanceId: _lastInstanceId, handedMessages: _handedMessages,
-    appliedCompactionId: _appliedCompactionId, contextFloor: _contextFloor, lastContextModel: _lastContextModel, ...wire } = task;
+    appliedCompactionId: _appliedCompactionId, contextFloor: _contextFloor, lastContextModel: _lastContextModel, modelFallback: _modelFallback, ...wire } = task;
   return wire;
 }
 
 const TASK_PATCH_FIELDS = [
   "title", "projectId", "modelSelection", "approvalMode", "autoApprove", "alwaysAllow",
   "unread", "rewound", "archivedAt", "pinnedMessageId", "resumeCursors", "lastInstanceId", "cwd",
-  "closeWhenDone", "routineRunId", "surface", "appliedCompactionId", "contextFloor", "lastContextModel",
+  "closeWhenDone", "routineRunId", "surface", "appliedCompactionId", "contextFloor", "lastContextModel", "modelFallback",
 ] as const satisfies readonly (keyof TaskRecord)[];
 export type TaskPatch = Partial<Pick<TaskRecord, typeof TASK_PATCH_FIELDS[number]>>;
 
@@ -329,6 +331,8 @@ export function titleFromLlm(raw: string): string | null {
  * server-private (stripped by wireBot). avatarUrl is optional in the record
  * but always present (string | null) on the wire, so the record widens it. */
 export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
+  /** Per-room member quota recovery, separate from defaults and private tasks. */
+  roomModelFallbacks?: Record<string, NonNullable<TaskRecord["modelFallback"]> & { mode: ApprovalMode }>;
   /** every task this bot has, newest first */
   tasks?: TaskRecord[];
   /** App-owned attachment served as this bot's custom profile image. */
@@ -360,7 +364,7 @@ export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
  * WireTask[], avatarUrl is coerced to always-present). The exactness
  * assertion fails to compile when either side drifts, so a new server
  * field forces a decision — wire-visible or private here. */
-export type BotWirePrivateKeys = "resumeCursors" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt" | "lastRemoteFullReceipt";
+export type BotWirePrivateKeys = "resumeCursors" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt" | "lastRemoteFullReceipt" | "roomModelFallbacks";
 export type BotWireProjection = Pick<BotRecord, Exclude<keyof BotRecord, BotWirePrivateKeys>>;
 export type BotWireProjectionIsExact = AssertExact<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection> & AssertSameKeys<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection>;
 export const botWireProjectionIsExact: BotWireProjectionIsExact = true;
@@ -1458,7 +1462,7 @@ export class Store {
     profile: Partial<
       Pick<
         BotRecord,
-        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "modelSelection" | "section"
+        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "modelSelection" | "fallbackModel" | "section"
       >
     > = {},
     opts: {
@@ -1488,6 +1492,7 @@ export class Store {
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
+      ...(profile.fallbackModel ? { fallbackModel: profile.fallbackModel } : {}),
       resumeCursors: {},
       createdAt: Date.now(),
       // Only a non-default level is written: an Ask bot keeps the historical
@@ -2050,6 +2055,7 @@ export class Store {
     const task = this.taskByThread(botId, threadId);
     if (!bot || !task) return null;
     if (patch.projectId !== undefined && !this.project(botId, patch.projectId)) return null;
+    if (Object.hasOwn(patch, "modelSelection") && !Object.hasOwn(patch, "modelFallback")) task.modelFallback = undefined;
     for (const key of TASK_PATCH_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         Object.assign(task, { [key]: structuredClone(patch[key]) });
@@ -2073,7 +2079,7 @@ export class Store {
     if (!bot || !task) return null;
     const patch = { modelSelection: structuredClone(selection),
       ...(resetApprovalToAsk ? { approvalMode: "ask" as const, autoApprove: false, alwaysAllow: [] } : {}) };
-    const nextTask = { ...task, ...taskPatch, ...patch,
+    const nextTask = { ...task, modelFallback: undefined, ...taskPatch, ...patch,
       ...(typeof taskPatch.title === "string" ? { title: taskPatch.title.trim().slice(0, 80) || UNTITLED_THREAD } : {}) };
     // Older threads may still inherit settings. Freeze their effective
     // values before updating the default so "other threads unchanged" also

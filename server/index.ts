@@ -1,3 +1,4 @@
+import { withMessagePostLock } from "./message-post-lock.ts";
 import { channelControlPatch, roomCompletionNotifies } from "./channel-controls.ts";
 import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
 import { PrivateTurnDispatches } from "./private-turn-dispatches.ts";
@@ -18,6 +19,8 @@ import { appendFileSync, existsSync, readFileSync, rmSync, mkdirSync } from "nod
 import { writeFileAtomic } from "./atomic.ts";
 import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { TerminalService } from "./terminal.ts";
+import { resolveTerminalTarget } from "./terminal-target.ts";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
 import { basename, extname, join } from "node:path";
 
@@ -77,6 +80,7 @@ import { approvalHeldNote, approvalHeldReason, approvalModeForOrigin, autoVerdic
 import { updateClaudeCli } from "./claude-update.ts";
 import { configuredAccountDirectory, assertSeparateClaudeAccount, claudeAccountInfo, createClaudeAccountSchema, instanceSettingsSchema, newClaudeAccount } from "./claude-accounts.ts";
 import { providerUsage } from "./provider-usage.ts";
+import { ModelFallbackService, fallbackSelection, isProviderLimit } from "./model-fallback.ts";
 import { providerIconPatchSchema, withInstanceIcon } from "./provider-icon.ts";
 import { providerIconError } from "../shared/provider-icon.ts";
 import {
@@ -264,6 +268,7 @@ import {
   queuedSteeredMessage,
   queuedThreadPosition,
   queueSteeredMessage,
+  steerQueueWaitsForTurn,
   restoreHeldSteeredQueue,
   restoreSteeredMessages,
   settleHeldSteeredQueue,
@@ -271,6 +276,8 @@ import {
 import {
   cancelChannelMessage,
   channelQueueHead,
+  queuedChannelSnapshot,
+  onChannelQueueChange,
   drainChannelMessages,
   holdChannelQueue,
   queuedChannelMessage,
@@ -1214,6 +1221,8 @@ function requestedTaskBot(botId: string, rawThreadId: unknown): BotRecord {
 }
 
 async function interruptDirectThread(botId: string, threadId: string): Promise<void> {
+  const quotaRetry = quotaRetryTurns.get(threadId);
+  if (quotaRetry) quotaRetry.cancelled = true;
   // Stop belongs to the conversation it was pressed in. This bot's turn ends
   // and this conversation stops awaiting its teammates, so nothing resumes
   // into a stopped chat; assignments that never started are dropped. A
@@ -1822,6 +1831,21 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const modelFallback = new ModelFallbackService({ store, instances: () => registry.instances(),
+  usage: () => providerUsage(persistableInstanceConfigs(cfg)), keepPermissions: () => keepApprovalAcrossModelSwitch(cfg),
+  changing: id => providerFleetReloading || providerInstancesChanging.has(id), roomBusy: threadId => groupSpeakers.has(threadId), publish: event => bus.publish(event) });
+type QuotaRetryTurn = { generation: string; effects: boolean; cancelled: boolean; failure: string; retry: (failure: string) => Promise<void> };
+const quotaRetryTurns = new Map<string, QuotaRetryTurn>();
+const fallbackRestoreTimer = setInterval(() => { void modelFallback.restore().catch(error => console.error("model fallback restore failed", error)); }, 30_000);
+fallbackRestoreTimer.unref();
+
+function checkedFallbackModel(value: unknown, preferred?: string): { ok: true; model: string | undefined } | { ok: false; error: string } {
+  if (value === null || value === "") return { ok: true, model: undefined };
+  if (typeof value !== "string" || value.length > 200 || !fallbackSelection(value, registry.instances(), preferred)) {
+    return { ok: false, error: "fallbackModel must be an unambiguous available model ID, or null" };
+  }
+  return { ok: true, model: value };
+}
 const remoteFullProviderRevisions = new WeakMap<object, string>();
 const remoteFull = new RemoteFullService({ store,
   enrollment: () => readRemoteFullEnrollment(DATA_DIR, ENVIRONMENT_ID),
@@ -1891,7 +1915,7 @@ const wireTask = (task: TaskRecord): WireTask => {
 };
 
 const wireBot = (bot: BotRecord): WireBot => {
-  const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, ...rest } = bot;
+  const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, roomModelFallbacks: _roomModelFallbacks, ...rest } = bot;
   // An elevated selection is inert until the desktop confirms its exact
   // private reply. Every ordinary client sees the effective Ask state during
   // that two-phase window, never a grant that may still roll back.
@@ -2517,6 +2541,10 @@ const publicBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => ({
 });
 const publicBotQueuedMessages = () => ({
   ...queuedSteerSnapshot((botId, threadId) => Boolean(store.taskByThread(botId, threadId))),
+  ...queuedChannelSnapshot((groupId, threadId) => {
+    const group = store.group(groupId);
+    return Boolean(group && (group.threadId === threadId || store.groupTaskByThread(groupId, threadId)));
+  }),
   ...remoteBots.queues(),
 });
 
@@ -2681,14 +2709,19 @@ function updateChannel(groupId: string, value: unknown): GroupRecord {
 
   const existing = store.group(groupId);
   if (!existing) throw Object.assign(new Error("no such room"), { status: 404 });
-  if (body.memberIds !== undefined && phoneSecretSubmissions.hasGroup(existing.id)) {
+  if ((body.memberIds !== undefined || body.bulletin !== undefined) && phoneSecretSubmissions.hasGroup(existing.id)) {
     throw Object.assign(new Error("this channel is securely saving a credential — try again when it finishes"), { status: 409 });
   }
   if (
     channelTaskBlocked(existing) &&
-    (body.memberIds !== undefined || body.defaultResponder !== undefined || body.memberReplyModes !== undefined)
+    (body.defaultResponder !== undefined || body.memberReplyModes !== undefined)
   ) {
     throw Object.assign(new Error("this channel is working or waiting on you — finish that turn first"), { status: 409 });
+  }
+  // Roster edits affect future dispatch only; a running member keeps its turn.
+  // Open cards retain their current readers until the user answers them.
+  if (body.memberIds !== undefined && channelAwaitsUser(existing)) {
+    throw Object.assign(new Error("this channel is waiting on you — answer the open card first"), { status: 409 });
   }
   // The bulletin is read when each turn starts, so a running turn keeps the
   // text it began with; only an open approval card holds it back.
@@ -3184,6 +3217,8 @@ type GroupMemberBotWaitResult = Exclude<GroupMemberBotAvailability, "busy">;
 
 function groupMemberBotAvailability(botId: string, operation: GroupTurnOperation): GroupMemberBotAvailability {
   if (operation.cancelled || operation.cancellation.signal.aborted) return "cancelled";
+  const group = store.groupByThread(operation.threadId);
+  if (!group || !group.memberIds.includes(botId)) return "unavailable";
   const bot = store.bot(botId);
   if (!bot || bot.hidden) return "unavailable";
   return botAtThreadCapacity(botId) ? "busy" : "ready";
@@ -3206,6 +3241,7 @@ async function waitForGroupMemberBot(
   operation.botIds.delete(bot.id);
   const initial = groupMemberBotAvailability(bot.id, operation);
   if (initial !== "busy") return initial;
+  const groupId = store.groupByThread(operation.threadId)?.id;
   onWaiting(`${bot.name} is finishing another conversation.`);
 
   return await new Promise((resolve) => {
@@ -3230,7 +3266,8 @@ async function waitForGroupMemberBot(
     unsubscribe = store.onChange((change) => {
       if (
         (change.type === "bot" && change.botId === bot.id) ||
-        (change.type === "bot.deleted" && change.botId === bot.id)
+        (change.type === "bot.deleted" && change.botId === bot.id) ||
+        ((change.type === "group" || change.type === "group.deleted") && change.groupId === groupId)
       ) {
         check();
       }
@@ -3629,6 +3666,7 @@ function emitFrame(payload: Record<string, unknown>) {
   }
 }
 onSteeredQueueChange(() => broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() }));
+onChannelQueueChange(() => broadcast({ kind: "bot.queued", queues: publicBotQueuedMessages() }));
 
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
@@ -4871,6 +4909,17 @@ async function localVmInventoryPayload() {
 
 bus.subscribe((event: RuntimeEvent) => {
   if (shouldIgnoreProviderEvent(event)) return;
+  const quotaRetry = quotaRetryTurns.get(event.threadId);
+  if (quotaRetry && quotaRetry.generation === directTurnGenerationByThread.get(event.threadId)) {
+    if ((event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") && event.itemType === "tool" || event.type === "request.opened" ||
+        event.type === "item.completed" && event.itemType === "assistant_image" ||
+        event.type === "content.delta" && event.streamKind === "assistant_text" && !event.synthetic) quotaRetry.effects = true;
+    if (event.type === "runtime.error") quotaRetry.failure = event.message;
+    if (event.type === "item.completed" && event.itemType === "assistant_text") {
+      if (event.synthetic) quotaRetry.failure = event.text;
+      else quotaRetry.effects = true;
+    }
+  }
   const localVmTarget = localVmThreadTargets.get(event.threadId);
   if (localVmTarget) {
     localVmLeaseFor(localVmTarget).touch(event.threadId);
@@ -4953,6 +5002,13 @@ bus.subscribe((event: RuntimeEvent) => {
   if (event.turnId) liveTurnByThread.set(event.threadId, event.turnId);
   const liveTurnId = event.turnId ?? liveTurnByThread.get(event.threadId);
   switch (event.type) {
+    case "model.switched": {
+      const changedBot = store.bot(event.botId);
+      store.appendMessage(event.threadId, { role: "bot", kind: "activity",
+        ...(group && changedBot ? { from: { botId: changedBot.id, name: changedBot.name, color: changedBot.color } } : {}),
+        tool: { name: `${event.reason === "provider_reset" ? "Provider quota reset; restored" : "Provider limit; switched to"} ${event.to}`, ok: true } });
+      break;
+    }
     case "turn.started":
       turnStartedAt.set(event.threadId, Date.now());
       break;
@@ -5318,6 +5374,18 @@ bus.subscribe((event: RuntimeEvent) => {
             store.setTaskActivity(bot.id, event.threadId, "idle");
           }
           directTurnBots.delete(event.threadId);
+          const retry = quotaRetryTurns.get(event.threadId);
+          if (retry && retry.generation === generation) {
+            const failure = retry.failure || event.stopReason || "";
+            if (!event.ok && !retry.effects && !retry.cancelled && event.stopReason !== "interrupted" && isProviderLimit(failure)) {
+              void retry.retry(failure).catch(error => console.error("model fallback retry failed", error)).finally(() => {
+                if (quotaRetryTurns.get(event.threadId) === retry) quotaRetryTurns.delete(event.threadId);
+                retryDelegationsWaitingOn(bot.id); drainQueuedSends(); drainConnectorResumes(); drainSecretResumes(); drainTeamSetupResumes(); drainDelegationWakes();
+              });
+              return;
+            }
+            quotaRetryTurns.delete(event.threadId);
+          }
           if (continueComputerSelection(event.threadId, generation, event.ok)) return;
           // Ordinary completion still drains from the existing bus subscribers.
           // An asynchronous screenshot finishes after those subscribers ran.
@@ -6398,11 +6466,9 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
       steerDelivery: steered === "indeterminate" ? "outcome_unknown" : instance.adapter.provider === "claudeAgent" ? "transport_written" : "provider_accepted",
     });
     const delivery = message.steerDelivery;
-    if (steered === "indeterminate" || delivery === "transport_written") store.appendMessage(targetThreadId, {
+    if (steered === "indeterminate") store.appendMessage(targetThreadId, {
       role: "bot", kind: "activity", from: speakerFrom,
-      tool: { name: steered === "indeterminate"
-        ? "Queued message delivery outcome unknown — review before resending"
-        : "Queued message written to the running provider; consumption is unconfirmed until it responds", ok: steered !== "indeterminate" },
+      tool: { name: "Queued message delivery outcome unknown — review before resending", ok: false },
     });
     if (imagesAsFiles) noteSteerImagesAsFiles(targetThreadId, speakerFrom);
     settleHeldChannelQueueHead(held);
@@ -6430,146 +6496,8 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
   return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId } };
 }
 
-/** Receipt for a send that was folded into a running turn. A recorded but
- * unsteered row is an uncertain delivery: shown once, never replayed. */
-function sendSteerReceipt(threadId: string, message: Message) {
-  return message.steered
-    ? { ok: true as const, threadId, message, steered: true as const }
-    : { ok: true as const, threadId, message, steered: false as const, outcomeUnknown: true as const };
-}
-
-/** A room message addressed to a member that is mid-turn steers into that
- * turn as it is sent, through the same FIFO claim the tool-boundary delivery
- * uses: earlier queued lines go first and nothing is delivered twice. */
-async function steerRoomSendNow(groupId: string, threadId: string, queueId: string) {
-  const deliveredMessage = () => store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
-  for (const [runtimeThreadId] of roomRuntimeSpeakers(groupId, threadId)) {
-    try { await steerRoomAtToolBoundary(runtimeThreadId); }
-    catch (error) { console.warn("room send-time steer failed", error instanceof Error ? error.message : String(error)); }
-    if (deliveredMessage()) break;
-  }
-  const delivered = deliveredMessage();
-  if (delivered) return sendSteerReceipt(threadId, delivered);
-  // Still waiting: say so in the room rather than leaving a silent chip.
-  const head = channelQueueHead(groupId, threadId);
-  if (head?.id === queueId && !head.text.includes("<attached-image")) store.appendMessage(threadId, {
-    role: "bot",
-    kind: "activity",
-    tool: { name: "not delivered yet: no addressed bot could take this into its running turn — it is queued for after the current reply", ok: false },
-  });
-  return { ok: true as const, queued: true as const, queueId, threadId };
-}
-
-/** Steer an already-recorded room row into one more busy addressee's live
- * turn. Nothing is written to the transcript here: the row exists once. */
-async function steerRecordedIntoMember(groupId: string, threadId: string, botId: string, recorded: Message, replyTo?: Message): Promise<SteerOutcome> {
-  const live = roomRuntimeSpeakers(groupId, threadId).find(([, speaker]) => speaker.botId === botId);
-  const member = store.bot(botId);
-  if (!live || !member) return "refused";
-  const [runtimeThreadId, claimedSpeaker] = live;
-  const instance = runningTurnInstance(member, runtimeThreadId);
-  if (!instance?.adapter.capabilities.queueing || !instance.adapter.steer) return "refused";
-  const from = { botId: member.id, name: member.name, color: member.color };
-  let input;
-  try { input = extractTurnImages(recorded.text ?? ""); }
-  catch { return "refused"; }
-  const replyAuthor = cfg.profile?.name?.trim() || "User";
-  let steered: SteerOutcome = "refused";
-  if (!input.images.length || instance.adapter.capabilities.nativeImageSteer === true) {
-    steered = await instance.adapter.steer(runtimeThreadId, promptWithReply(input.text, replyTo, replyAuthor), { images: input.images })
-      .catch((): SteerOutcome => "indeterminate");
-  }
-  if (steered === "refused" && input.images.length && groupSpeakers.get(runtimeThreadId) === claimedSpeaker) {
-    steered = await instance.adapter.steer(runtimeThreadId, promptWithReply(imageFileSteerText(input), replyTo, replyAuthor))
-      .catch((): SteerOutcome => "indeterminate");
-    if (steered !== "refused") noteSteerImagesAsFiles(threadId, from);
-  }
-  if (steered === "indeterminate") store.appendMessage(threadId, {
-    role: "bot", kind: "activity", from,
-    tool: { name: `delivery to ${member.name} outcome unknown — review before resending`, ok: false },
-  });
-  return steered;
-}
-
-/** One busy room addressee refused the recorded row mid-turn; it gets the
- * row after its current reply. Nothing to say when it is no longer busy. */
-function noteRoomMemberSteerRefused(groupId: string, threadId: string, botId: string, recorded: Message): void {
-  const member = store.bot(botId);
-  if (!member || !roomRuntimeSpeakers(groupId, threadId).some(([, speaker]) => speaker.botId === botId)) return;
-  const from = { botId: member.id, name: member.name, color: member.color };
-  if ((recorded.text ?? "").includes("<attached-image")) {
-    noteSteerImageNotDelivered(threadId, recorded.queueId ?? recorded.id, "the running turn could not take the image — it will get it after this reply", from);
-    return;
-  }
-  store.appendMessage(threadId, {
-    role: "bot",
-    kind: "activity",
-    from,
-    tool: { name: `not delivered yet: ${member.name}'s running turn refused the message — it will get it after this reply`, ok: false },
-  });
-}
-
-/** A room send naming several members while some are mid-turn: steer the
- * row into every busy addressee, then start the idle ones (and any busy one
- * that refused, behind its own lane) off the same recorded row, so each
- * addressee gets the words once and no unaddressed member is touched. */
-async function steerAddressedRoomSend(groupId: string, threadId: string, queueId: string, busyBotIds: string[], idleBotIds: string[], replyTo?: Message) {
-  const stopEpoch = roomStopEpoch.get(groupId) ?? 0;
-  const recordedRow = () => store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
-  // The first busy addressee that takes it records the row once (the queue
-  // claim); a refusal restores the head, so the next one can try.
-  let primary: string | undefined;
-  for (const botId of busyBotIds) {
-    try { await steerRoomQueue(groupId, threadId, queueId, botId, true); }
-    catch (error) { console.warn("addressed room steer failed", error instanceof Error ? error.message : String(error)); }
-    if (recordedRow()) { primary = botId; break; }
-    if (channelQueueHead(groupId, threadId)?.id !== queueId) break;
-  }
-  const recorded = recordedRow();
-  if (!primary || !recorded) {
-    // Refused everywhere (or the head moved): the one queued item still
-    // reaches every addressee exactly once on the next turn. Say so.
-    const head = channelQueueHead(groupId, threadId);
-    if (head?.id === queueId && !head.text.includes("<attached-image")) store.appendMessage(threadId, {
-      role: "bot",
-      kind: "activity",
-      tool: { name: "not delivered yet: no busy addressee could take this mid-turn — it is queued for everyone addressed after the current reply", ok: false },
-    });
-    return { ok: true as const, queued: true as const, queueId, threadId };
-  }
-  // Steered or uncertain: the row is recorded once and never replayed.
-  const later = [...idleBotIds];
-  const refusedBusy: string[] = [];
-  for (const botId of busyBotIds) {
-    if (botId === primary || (roomStopEpoch.get(groupId) ?? 0) !== stopEpoch) continue;
-    // Uncertain counts as delivered (never replayed); a refusal answers after its current reply.
-    if (await steerRecordedIntoMember(groupId, threadId, botId, recorded, replyTo) === "refused") {
-      later.push(botId);
-      refusedBusy.push(botId);
-    }
-  }
-  // Stopped while a steer was in flight: start nobody else.
-  if ((roomStopEpoch.get(groupId) ?? 0) !== stopEpoch || !later.length) return sendSteerReceipt(threadId, recorded);
-  // A busy addressee that refused waits for its current reply: say so for
-  // its copy, whichever order the addressees were tried in.
-  for (const botId of refusedBusy) noteRoomMemberSteerRefused(groupId, threadId, botId, recorded);
-  try {
-    startGroupTurn(groupId, recorded.text ?? "", replyTo, recorded.sendId, "chat", queueId, {
-      threadId, via: recorded.via, sender: recorded.sender, recordedMessage: recorded, responderIds: later,
-    });
-  } catch (error) {
-    // The row is already recorded, so a retry would only match it. Say who missed it.
-    const reason = error instanceof Error ? error.message : String(error);
-    console.warn("addressed room start failed", reason);
-    store.appendMessage(threadId, {
-      role: "bot",
-      kind: "activity",
-      tool: { name: `delivered to the busy addressees only — the others couldn't start: ${reason}`, ok: false },
-    });
-  }
-  return sendSteerReceipt(threadId, recorded);
-}
-
+const priorityDirectPreemptions = new Set<string>();
+const priorityRoomPreemptions = new Set<string>();
 const roomBoundarySteers = new Set<string>();
 async function steerRoomAtToolBoundary(runtimeThreadId: string) {
   if (roomBoundarySteers.has(runtimeThreadId)) return;
@@ -6584,7 +6512,7 @@ async function steerRoomAtToolBoundary(runtimeThreadId: string) {
     while (groupSpeakers.get(runtimeThreadId) === speaker) {
       const current = store.group(group.id);
       const head = channelQueueHead(group.id, threadId);
-      if (!current || !current.memberIds.includes(speaker.botId) || !head || head.mode !== "chat" ||
+      if (!current || !current.memberIds.includes(speaker.botId) || !head || head.deferUntilIdle || head.mode !== "chat" ||
         [...(groupTurnOperations.get(group.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled)) return;
       const recipients = roomResponders(head.text, current.memberIds.flatMap(id => {
         const member = store.bot(id); return member ? [member] : [];
@@ -6607,7 +6535,7 @@ bus.subscribe((event: RuntimeEvent) => {
   const bot = store.botByThread(event.threadId);
   if (!bot || computerSelectionTurns.get(event.threadId)?.selected) return;
   const head = queuedSteerSnapshot((owner, thread) => owner === bot.id && thread === event.threadId)[event.threadId]?.[0];
-  if (!head || head.reason === "capacity") return;
+  if (!head || head.reason === "capacity" || steerQueueWaitsForTurn(bot.id, event.threadId)) return;
   // holdSteeredQueue owns the delivery claim before the first await.
   void steerInboxQueue(bot.id, event.threadId, head.queueId).catch(error => {
     console.warn("inbox boundary steer failed", error instanceof Error ? error.message : String(error));
@@ -6640,53 +6568,9 @@ function drainQueuedSends() {
     }),
     // Provider completion can precede its dispatch promise: keep the queue
     // intact until that exact handshake releases its runtime-only claim.
-    (botId, threadId) => threadBusy(botId, threadId) || botAtThreadCapacity(botId) || Boolean(activeGroupTurnForBot(botId))
+    (botId, threadId) => priorityDirectPreemptions.has(threadId) || threadBusy(botId, threadId) || botAtThreadCapacity(botId) || Boolean(activeGroupTurnForBot(botId))
       || parksBehindCoordination(botId, threadId),
   );
-}
-
-/** A send-time steer the running turn refused is provably undelivered: it
- * stays one queued chip for the next turn, and the thread says so instead of
- * looking sent. Image refusals carry their own note. */
-function noteSendSteerRefused(threadId: string, text: string, name: string, from?: { botId: string; name: string; color: string }): void {
-  if (text.includes("<attached-image")) return;
-  store.appendMessage(threadId, {
-    role: "bot",
-    kind: "activity",
-    ...(from ? { from } : {}),
-    tool: { name: `not delivered yet: ${name}'s running turn refused the message — it is queued for after this reply`, ok: false },
-  });
-}
-
-/** A send that lands on a running turn steers into it right away instead of
- * waiting for a tool boundary or a second Enter. It goes through the same
- * atomic queue claim as every other steer, so it is delivered once: either
- * folded into the live turn now, or (provably undelivered) left queued for
- * the next turn. */
-async function steerSendNow(botId: string, threadId: string, queueId: string, attended: boolean) {
-  const queuedReceipt = () => {
-    const pending = queuedSteerSnapshot((owner, thread) => owner === botId && thread === threadId)[threadId]
-      ?.find(item => item.queueId === queueId);
-    return pending ? { ok: true as const, queued: true as const, queueId, threadId, ...(pending.reason ? { reason: pending.reason } : {}) } : null;
-  };
-  try {
-    await steerInboxQueue(botId, threadId, queueId, attended);
-  } catch (error) {
-    // A gone bot or task is the answer to this send, not a queued chip.
-    if (typeof (error as { status?: unknown })?.status === "number") throw error;
-    console.warn("send-time steer failed", error instanceof Error ? error.message : String(error));
-  }
-  const delivered = store.messagesFor(threadId).find(message => message.role === "user" && message.queueId === queueId);
-  if (delivered) return sendSteerReceipt(threadId, delivered);
-  // Another claim (a tool-boundary steer or the settle drain) may hold it
-  // right now; it stays a queued chip until that claim records it.
-  const queued = queuedReceipt();
-  if (queued) {
-    const pending = queuedSteerSnapshot((owner, thread) => owner === botId && thread === threadId)[threadId]?.find(item => item.queueId === queueId);
-    const bot = store.projectBotForTask(botId, threadId);
-    if (pending && bot?.busy) noteSendSteerRefused(threadId, pending.text, bot.name);
-  }
-  return queued ?? { ok: true as const, queued: true as const, queueId, threadId };
 }
 
 /** Keep a person's words off the transcript until a direct-thread slot is
@@ -6700,6 +6584,7 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
       replyToId: replyTo?.id,
       sendId,
       reason,
+      deferUntilIdle: true,
       prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
     });
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId, reason };
@@ -7428,10 +7313,14 @@ async function startTurn(
     /** Recheck a remote caller after asynchronous provider setup. */
     requestGuard?: () => void;
     onDispatchError?: (message: string) => void;
+    /** Recheck transcript/permission admission after an awaited quota lookup. */
+    admissionGuard?: () => void;
     /** Recheck external access after asynchronous provider setup. */
     dispatchGuard?: () => void;
     /** Summarize this conversation without asking the agent to do more work. */
     compactOnly?: boolean;
+    /** Quota fallback may retry a cleanly refused direct turn once. */
+    quotaFallbackRetry?: boolean;
     /** Queue receipts outlive the dispatch acknowledgment until this exact turn settles. */
     onTurnSettled?: () => void;
     coordination?: { id: string; resumed: boolean; settle: (outcome: { ok: boolean; text: string }) => void };
@@ -7457,6 +7346,13 @@ async function startTurn(
       },
     };
   }
+  if (profile.fallbackModel && !opts?.quotaFallbackRetry && opts?.runOn !== "cloud" && !threadBusy(botId, threadId)) {
+    assertWithinBudget(cfg, DATA_DIR);
+    await modelFallback.beforeTurn(botId, threadId);
+    opts?.dispatchGuard?.();
+    opts?.requestGuard?.();
+  }
+  opts?.admissionGuard?.();
   const projectedBot = store.projectBotForTask(botId, threadId);
   if (!projectedBot) throw Object.assign(new Error("no such task"), { status: 404 });
   // Shared conversations never inherit the owner's private memory, recent work,
@@ -7639,6 +7535,19 @@ async function startTurn(
       !opts?.commsDepth && !opts?.coordination && !inheritedTeamComputer(bot) && !sharedWork && bot.computer !== "off" && agentsMounted) {
     const source = store.activePath(threadId).findLast(message => message.id === userMessage?.id && message.role === "user" && !message.peerAsk);
     if (source) computerSelectionTurns.set(threadId, { generation: dispatchClaimId, botId: bot.id, source, text });
+  }
+  if (bot.fallbackModel && !opts?.quotaFallbackRetry && !opts?.automationSource && !opts?.coordination && !opts?.commsDepth && opts?.runOn !== "cloud") {
+    const quotaRetry: QuotaRetryTurn = { generation: dispatchClaimId, effects: false, cancelled: false, failure: "", retry: async failure => {
+      const source = userMessage;
+      // A new human message, stop, deletion or replacement dispatch revokes this retry.
+      if (!source || quotaRetry.cancelled || directTurnGenerationByThread.get(threadId) !== dispatchClaimId ||
+          store.activePath(threadId).findLast(message => message.role === "user")?.id !== source.id) return;
+      if (!await modelFallback.afterFailure(bot.id, threadId, failure, false, () => !quotaRetry.cancelled && directTurnGenerationByThread.get(threadId) === dispatchClaimId)) return;
+      if (quotaRetry.cancelled || directTurnGenerationByThread.get(threadId) !== dispatchClaimId || threadBusy(bot.id, threadId) ||
+          store.activePath(threadId).findLast(message => message.role === "user")?.id !== source.id) return;
+      await startTurn(bot.id, text, { ...opts, threadId, userMessage: source, quotaFallbackRetry: true, admissionGuard: undefined });
+    } };
+    quotaRetryTurns.set(threadId, quotaRetry);
   }
   store.setTaskActivity(bot.id, threadId, "working");
   // A closed thread that gets a new turn is open again: the person (or the
@@ -8569,6 +8478,7 @@ async function startTurn(
         return;
       }
       if (!ownsLatestGeneration) return;
+      if (quotaRetryTurns.get(threadId)?.generation === dispatchClaimId) quotaRetryTurns.delete(threadId);
       const message = e instanceof Error ? e.message : String(e);
       store.appendMessage(threadId, {
         role: "bot",
@@ -9876,7 +9786,7 @@ async function executeGroupMemberTurn(
     return false;
   }
   const group = store.group(groupId);
-  const bot = store.bot(botId);
+  let bot = store.bot(botId);
   const ownsThread = group?.dm
     ? group.threadId === store.canonicalThreadId(threadId)
     : Boolean(group && store.groupTaskByThread(group.id, threadId));
@@ -9888,6 +9798,17 @@ async function executeGroupMemberTurn(
   if (bot.approvalGrant) {
     onDispatchError?.(`${bot.name}'s approval level is still being confirmed — skipped this round`);
     return true;
+  }
+  if (bot.fallbackModel) {
+    assertWithinBudget(cfg, DATA_DIR);
+    const selection = await modelFallback.beforeRoomTurn(bot.id, threadId, roomTurnApprovalMode(bot, orchestration), () => !isCancelled?.());
+    const fresh = store.bot(bot.id);
+    if (!fresh || !selection || isCancelled?.()) return false;
+    if (fresh.approvalGrant || fresh.sharedWorkComputer) {
+      onDispatchError?.("The bot's permissions or work computer changed during provider setup; skipped this round.");
+      return false;
+    }
+    bot = { ...fresh, modelSelection: selection };
   }
   revokeInternalCapabilitiesForThread(threadId);
   spoken.add(botId);
@@ -10055,8 +9976,9 @@ async function executeGroupMemberTurn(
   // A 1:1 or another room turn may have claimed this bot while connected-app
   // setup was in flight. Re-check immediately before the synchronous claim so
   // each execution owner respects its lane and the configured bot capacity.
-  const readyBot = store.bot(bot.id);
-  if (!readyBot) return false;
+  const readyProfile = store.bot(bot.id);
+  if (!readyProfile) return false;
+  const readyBot = { ...readyProfile, modelSelection: modelFallback.roomSelection(bot.id, threadId) ?? readyProfile.modelSelection };
   const readyGroup = store.group(group.id);
   const stillOwnsThread = readyGroup?.dm
     ? readyGroup.threadId === store.canonicalThreadId(threadId)
@@ -11092,7 +11014,7 @@ type StartGroupTurnOptions = {
  * Returns how many live turns were interrupted. */
 async function interruptRoom(
   group: GroupRecord,
-  opts: { threadId?: string; botId?: string } = {},
+  opts: { threadId?: string; botId?: string; preserveQueued?: boolean } = {},
 ): Promise<number> {
   const activeOperations = [...(groupTurnOperations.get(group.id) ?? [])]
     .filter((operation) => !operation.cancelled);
@@ -11109,7 +11031,7 @@ async function interruptRoom(
   if (!opts.botId) {
     roomStopEpoch.set(group.id, (roomStopEpoch.get(group.id) ?? 0) + 1);
     for (const threadId of targetThreadIds) cancelGroupTurnOperations(group.id, threadId);
-    for (const row of chatFollowups("channel")) if (row.ownerId === group.id && targetThreadIds.includes(row.threadId) && row.status === "pending") cancelChannelMessage(group.id, row.id);
+    for (const row of chatFollowups("channel")) if (!opts.preserveQueued && row.ownerId === group.id && targetThreadIds.includes(row.threadId) && row.status === "pending") cancelChannelMessage(group.id, row.id);
   }
   await Promise.all(scopedRuntime.map(async ([runtimeId, speaker]) => {
     const busy = store.bot(speaker.botId);
@@ -11385,7 +11307,7 @@ function drainQueuedChannelSends(): void {
   drainChannelMessages(
     (groupId) => {
       const group = store.group(groupId);
-      return group ? groupIsWorking(group) : false;
+      return priorityRoomPreemptions.has(groupId) || (group ? groupIsWorking(group) : false);
     },
     ({ groupId, threadId, text, replyToId, sendId, mode, id, via, sender }) => {
       const group = store.group(groupId);
@@ -12810,7 +12732,7 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<any> {
 const workspaceQuietHooks = {
     idle: () => !privateTurnDispatches.pending().length && !runningSharedRequests.size && !sharedRoomLocks.size && !sharedBotLocks.size && !settlingResourceOwners.size &&
       !pendingDelegationWakes.size && !pendingConnectorResumes.size && !pendingSecretResumes.size && !pendingTeamSetupResumes.size &&
-      !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall &&
+      !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall && !terminals.count &&
       !routines?.isTicking && !calendarCalls?.isTicking &&
       !localVmImageBusy && !localVmProvisionBusy && !localVmModeChangeBusy &&
       !localVmLifecycleBusy.size && !boxLifecycleBusyBots.size && !vpsPreviewRequests.size && !orphanBoxLifecycleBusyIds.size &&
@@ -12990,6 +12912,16 @@ const workspaceBackupRoutes = createWorkspaceBackupRoutes({
 });
 
 const toolResults = new ToolResults();
+const terminals = new TerminalService({
+  ownerToken: () => DESKTOP_MANAGED ? desktopMutationToken : undefined,
+  authenticate: req => resolveRequestAuth(req, {
+    sessions, cookieName: SESSION_COOKIE, streamPath: "/api/events",
+    url: new URL(req.url ?? "/", `http://localhost:${PORT}`),
+    loopbackMutationToken: desktopMutationToken, companionMutationToken,
+  }).auth?.kind === "loopback",
+  resolveTarget: (botId, threadId) => resolveTerminalTarget(store, botId, threadId, bot => Boolean(inheritedTeamComputer(bot))),
+  claim: () => workspaceMaintenance.request(),
+});
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   let url: URL;
   try {
@@ -13194,6 +13126,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
+    if (await terminals.handle(req, res)) return;
     if (auth.kind === "session" && !workspaceMaintenance.active) {
       const replaced = peerHandoffs.confirm(auth.session.id);
       if (replaced) sessions.revoke(replaced);
@@ -17364,6 +17297,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
+      if (body.priority !== undefined && body.priority !== "queue" && body.priority !== "block") {
+        return json(res, 400, { error: "priority must be block or queue" });
+      }
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
       const group = store.group(m[1]);
@@ -17416,7 +17352,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const receipt = await sendSequencer.run(
         sendId ? `group:${group.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id, channelMode),
-        async () => {
+        async () => withMessagePostLock(`group:${group.id}:${threadId}`, async () => {
           assertPrivateRequest();
           if (sendId) {
             if (cancelledChatFollowup("channel", group.id, threadId, sendId)) {
@@ -17462,39 +17398,34 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             });
             return { ok: true as const, threadId, message, stopped };
           }
+          if (body.priority === "block") {
+            priorityRoomPreemptions.add(current.id);
+            try {
+              await interruptRoom(current, { threadId, preserveQueued: true });
+              assertPrivateRequest();
+              const fresh = store.group(current.id);
+              if (!fresh || fresh.threadId !== threadId) throw Object.assign(new Error("the room changed before this message could start"), { status: 409 });
+              const message = startGroupTurn(fresh.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth) });
+              return { ok: true as const, threadId, message };
+            } finally { priorityRoomPreemptions.delete(current.id); drainQueuedChannelSends(); }
+          }
           const activeRecipients = roomRuntimeSpeakers(current.id, threadId).map(([, speaker]) => speaker.botId);
           const recipients = roomResponders(text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), current.defaultResponder, current.memberReplyModes);
           const independentAddress = channelMode === "chat" && recipients.length > 0 && recipients.every(recipient => !activeRecipients.includes(recipient.id)) && ![...(groupTurnOperations.get(current.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled);
           if (groupIsWorking(current) && !independentAddress) {
-            const hadQueue = Boolean(channelQueueHead(current.id, threadId));
             const queued = queueChannelMessage(current.id, threadId, text, {
               replyToId: replyTo?.id,
               sendId,
               mode: channelMode,
+              deferUntilIdle: true,
               via,
               sender: messageSender(auth),
             });
-            // A duplicate that joined a waiting item was already tried and refused.
-            if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
-            // Several addressees, some mid-turn: steer every busy one and
-            // start the idle ones off the same recorded row (see
-            // steerAddressedRoomSend). A single busy addressee, or a send
-            // behind an existing queue, keeps the FIFO path.
-            const busy = recipients.filter(recipient => activeRecipients.includes(recipient.id));
-            const idle = recipients.filter(recipient => !activeRecipients.includes(recipient.id));
-            const goalRunning = [...(groupTurnOperations.get(current.id) ?? [])].some(operation => operation.goalRun && !operation.cancelled);
-            // Several busy recipients only steer when each was @mentioned; an
-            // unaddressed line in an everyone-room is ambiguous and waits.
-            const named = busy.length > 1 ? roomResponders(text, current.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member] : []; }), { kind: "mentions" }) : [];
-            const busyNamed = busy.length === 1 || busy.every(member => named.some(mention => mention.id === member.id));
-            if (channelMode === "chat" && !hadQueue && !goalRunning && busy.length && busyNamed && (busy.length > 1 || idle.length)) {
-              return steerAddressedRoomSend(current.id, threadId, queued.id, busy.map(member => member.id), idle.map(member => member.id), replyTo);
-            }
-            return steerRoomSendNow(current.id, threadId, queued.id);
+            return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
           const message = startGroupTurn(current.id, text, replyTo, sendId, channelMode, undefined, { via, sender: messageSender(auth) });
           return { ok: true as const, threadId, message };
-        },
+        }),
       );
       return json(res, 202, receipt);
     }
@@ -17657,6 +17588,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
         selection = checked.selection;
       }
+      const fallback = body.fallbackModel === undefined ? { ok: true as const, model: undefined } : checkedFallbackModel(body.fallbackModel, selection.instanceId);
+      if (!fallback.ok) return json(res, 400, { error: fallback.error });
       // Keep the capacity check immediately beside the synchronous write.
       // Awaiting provider discovery before this point cannot race the cap.
       if (store.bots.length >= MAX_WORKSPACE_BOTS) {
@@ -17666,6 +17599,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ...profile.patch,
         section,
         modelSelection: selection,
+        fallbackModel: fallback.model,
       });
       return json(res, 201, {
         bot: {
@@ -17877,6 +17811,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const patch: Record<string, unknown> = {};
       Object.assign(patch, profile.patch);
+      if (body.fallbackModel !== undefined) {
+        const fallback = checkedFallbackModel(body.fallbackModel, (normalizedSelection ?? existingBot?.modelSelection)?.instanceId);
+        if (!fallback.ok) return json(res, 400, { error: fallback.error });
+        patch.fallbackModel = fallback.model;
+      }
       if (body.visibility !== undefined) {
         if (body.visibility !== "shared" && body.visibility !== "private") return json(res, 400, { error: "visibility must be shared or private" });
         patch.visibility = body.visibility;
@@ -18766,6 +18705,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
       }
+      if (body.priority !== undefined && body.priority !== "queue" && body.priority !== "block") {
+        return json(res, 400, { error: "priority must be block or queue" });
+      }
       // External interfaces must opt into a distinct route: an older server
       // returns 404 rather than silently ignoring safety preconditions.
       if (guarded && !z.object({
@@ -18806,7 +18748,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const receipt = await sendSequencer.run(
         sendId ? `bot:${bot.id}:${threadId}:${sendId}` : undefined,
         sendFingerprint(text, replyTo?.id),
-        async () => {
+        async () => withMessagePostLock(`bot:${bot.id}:${threadId}`, async () => {
+          assertPrivateRequest();
+          if (!peerOwns(bot.id, threadId)) throw Object.assign(new Error("thread is not part of this peer link"), { status: 403 });
           if (sendId) {
             if (cancelledChatFollowup("bot", bot.id, threadId, sendId)) {
               throw Object.assign(new Error("this queued sendId was cancelled; send a new message to try again"), { status: 409 });
@@ -18844,20 +18788,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
 
           if (guarded) {
-            // There is no await between these checks and startTurn's
-            // synchronous transcript append / runtime reservation. In
-            // particular, never steer or enqueue under stale permissions.
-            if (approvalModeFor(currentAtStart) !== "ask" || currentAtStart.autoApprove === true || currentAtStart.alwaysAllow?.length) {
-              throw Object.assign(new Error("guarded sends require Ask mode without remembered permissions"), { status: 409, code: "guarded_permissions" });
-            }
-            if (store.activeLeaf(threadId) !== body.expectedActiveLeafId) {
-              throw Object.assign(new Error("the conversation changed before this message could start"), { status: 409, code: "guarded_branch" });
-            }
-            if (currentAtStart.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
-              throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
-            }
+            // Quota lookup may await. Repeat exact admission immediately
+            // before the synchronous transcript append / runtime reservation;
+            // never steer or enqueue under stale permissions.
+            const admissionGuard = () => {
+              assertPrivateRequest();
+              const current = store.projectBotForTask(bot.id, threadId);
+              if (!current || approvalModeFor(current) !== "ask" || current.autoApprove === true || current.alwaysAllow?.length) {
+                throw Object.assign(new Error("guarded sends require Ask mode without remembered permissions"), { status: 409, code: "guarded_permissions" });
+              }
+              if (store.activeLeaf(threadId) !== body.expectedActiveLeafId) {
+                throw Object.assign(new Error("the conversation changed before this message could start"), { status: 409, code: "guarded_branch" });
+              }
+              if (current.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
+                throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
+              }
+            };
+            admissionGuard();
             noteTurnTrigger(threadId, auth);
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest });
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest, admissionGuard });
             return { ok: true as const, threadId, message };
           }
 
@@ -18865,26 +18814,50 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             // A room turn owns its whole provider turn: never steered into a
             // running turn or batched in the queue with other lines, so the
             // answer it waits for is the answer to exactly this message.
-            if (currentAtStart.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
-              throw Object.assign(new Error("this thread is busy; retry when it is free"), { status: 409, code: "exclusive_busy" });
-            }
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest });
+            const admissionGuard = () => {
+              assertPrivateRequest();
+              const current = store.projectBotForTask(bot.id, threadId);
+              if (!current || current.busy || threadBusy(bot.id, threadId) || botAtThreadCapacity(bot.id) || parksBehindCoordination(bot.id, threadId) || activeGroupTurnForBot(bot.id)) {
+                throw Object.assign(new Error("this thread is busy; retry when it is free"), { status: 409, code: "exclusive_busy" });
+              }
+            };
+            admissionGuard();
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: messageSender(auth), requestGuard: assertPrivateRequest, admissionGuard });
             return { ok: true as const, threadId, message };
+          }
+
+          if (body.priority === "block") {
+            priorityDirectPreemptions.add(threadId);
+            try {
+              if (currentAtStart.busy || threadBusy(bot.id, threadId)) {
+                const priorAdapter = runningTurnInstance(currentAtStart, threadId)?.adapter;
+                await interruptDirectThread(bot.id, threadId);
+                const deadline = Date.now() + 10_000;
+                while (threadBusy(bot.id, threadId) || priorAdapter?.hasSession(threadId)) {
+                  if (Date.now() >= deadline) throw Object.assign(new Error("the current turn is still stopping; try again after it settles"), { status: 409 });
+                  await new Promise(resolve => setTimeout(resolve, 20));
+                  assertPrivateRequest();
+                  if (!store.taskByThread(bot.id, threadId)) throw Object.assign(new Error("the target task no longer exists"), { status: 409 });
+                }
+              }
+              assertPrivateRequest();
+              return await startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
+            } finally { priorityDirectPreemptions.delete(threadId); drainQueuedSends(); }
           }
 
           if (currentAtStart.busy) {
             // New input supersedes a previous done-condition.
             store.patchTask(currentAtStart.id, threadId, { closeWhenDone: undefined });
             const queued = queueSteeredMessage(currentAtStart.id, threadId, text, {
-              replyToId: replyTo?.id, sendId,
+              replyToId: replyTo?.id, sendId, deferUntilIdle: true,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
             });
             // A duplicate that joined a waiting item was already tried and refused.
             if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
-            return steerSendNow(currentAtStart.id, threadId, queued.id, auth.kind === "session" || DESKTOP_MANAGED);
+            return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
           return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
-        },
+        }),
       );
       assertPrivateRequest();
       return json(res, 202, receipt);
@@ -21233,6 +21206,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 };
 
 const server = createServer(handleRequest);
+// Deliberately absent from the public/IPC tunnel listener and companion relay.
+server.on("upgrade", (req, socket, head) => terminals.upgrade(req, socket, head));
 
 calendarCalls.start();
 
@@ -21448,6 +21423,7 @@ if (TUNNEL_SOCKET) {
 
 const gracefulShutdown = createGracefulShutdown({
   cleanup: [
+    () => terminals.close(),
     () => {
       followupsReady = false;
       companyShutdown = true;

@@ -1,4 +1,4 @@
-// Busy-send steer refusal (1:1 and multi-busy room) and Stop while a steer is
+// Explicit queued-send steer refusal, multi-busy room targeting, and Stop while a steer is
 // in flight. Real server, fake codex app-server. Started as the QA repro for
 // d02f037f: a refusal racing the end of the turn was recorded "outcome
 // unknown" and lost; a stopped in-flight steer was replayed to the next turn;
@@ -40,6 +40,19 @@ posixOnly("steer refusal and stop mid-steer", () => {
     let parsed: any = text;
     try { parsed = JSON.parse(text); } catch { /* not json */ }
     return { status: res.status, body: parsed };
+  };
+  /** Tests opting into live delivery enqueue first, then call the explicit
+   * steer endpoint. Keep its HTTP status and messages[]; expose the first
+   * message and original queueId as test-only conveniences for replay checks. */
+  const enqueueThenSteer = async (path: string, body: { text: string; threadId?: string; sendId?: string }) => {
+    const queued = await api("POST", path, body);
+    expect(queued.status).toBe(202);
+    expect(queued.body).toMatchObject({ ok: true, queued: true });
+    expect(queued.body.steered).not.toBe(true);
+    const result = await api("POST", path.replace(/\/messages$/, `/queue/${queued.body.queueId}/steer`), {
+      threadId: body.threadId ?? queued.body.threadId,
+    });
+    return { ...result, body: { ...result.body, queueId: queued.body.queueId, message: result.body.messages?.[0] } };
   };
   const getBot = async (id: string) => (await api("GET", "/api/bots")).body.bots.find((b: any) => b.id === id);
   const getGroup = async (id: string) => (await api("GET", "/api/bots?messages=200")).body.groups.find((g: any) => g.id === id);
@@ -145,15 +158,15 @@ ${steerNeedle}`);
   });
 
   // (c) 1:1, every steer refused (native image AND file fallback).
-  it("c: a refused busy image send is noted, stays one queued item, and reaches the next turn exactly once", async () => {
+  it("c: a refused explicit queued image steer is noted, stays one queued item, and reaches the next turn exactly once", async () => {
     const bot = await createBot("qaRefuse");
     expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "start c" })).status).toBe(202);
     await waitFor(async () => openCards((await getBot(bot.id)).messages).length > 0, "c: held turn");
     const marker = "MARKC-image";
     const text = `${marker} what is this?\n\n${image("123e4567-e89b-42d3-a456-426614174c01.png")}`;
-    const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text, sendId: "qa-d02-c-send-0001" });
+    const sent = await enqueueThenSteer(`/api/bots/${bot.id}/messages`, { text, sendId: "qa-d02-c-send-0001" });
     console.log("[c] send receipt", sent.status, JSON.stringify(sent.body));
-    expect(sent.status).toBe(202);
+    expect(sent.status).toBe(200);
     expect(sent.body).toMatchObject({ ok: true, queued: true });
     let messages = (await getBot(bot.id)).messages;
     const notes = messages.filter((m: any) => /not delivered/.test(m.tool?.name ?? "")).map((m: any) => m.tool.name);
@@ -196,12 +209,12 @@ ${steerNeedle}`);
   }, 60_000);
 
   // (c, text variant) same as (c) without an image, to see whether the end-of-turn race is image specific.
-  it("c-text: a refused busy text send reaches the next turn exactly once after the turn ends", async () => {
+  it("c-text: a refused explicit queued text steer reaches the next turn exactly once after the turn ends", async () => {
     const bot = await createBot("qaRefuse");
     await api("POST", `/api/bots/${bot.id}/messages`, { text: "start ct" });
     await waitFor(async () => openCards((await getBot(bot.id)).messages).length > 0, "ct: held turn");
     const marker = "MARKCT-text";
-    const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: `${marker} plain words`, sendId: "qa-d02-ct-send-0001" });
+    const sent = await enqueueThenSteer(`/api/bots/${bot.id}/messages`, { text: `${marker} plain words`, sendId: "qa-d02-ct-send-0001" });
     console.log("[ct] send receipt", sent.status, JSON.stringify(sent.body));
     expect(sent.body).toMatchObject({ ok: true, queued: true });
     let messages = (await getBot(bot.id)).messages;
@@ -221,13 +234,13 @@ ${steerNeedle}`);
   }, 60_000);
 
   // (c, fallback) native image refused, the same words with file paths accepted.
-  it("c-fallback: a refused native image steer is retried as text with the file path, recorded once, never replayed", async () => {
+  it("c-fallback: a refused explicit native image steer is retried as text with the file path, recorded once, never replayed", async () => {
     const bot = await createBot("qaImgRefuse");
     await api("POST", `/api/bots/${bot.id}/messages`, { text: "start c2" });
     await waitFor(async () => openCards((await getBot(bot.id)).messages).length > 0, "c2: held turn");
     const marker = "MARKC2-image";
     const file = "123e4567-e89b-42d3-a456-426614174c02.png";
-    const sent = await api("POST", `/api/bots/${bot.id}/messages`, { text: `${marker} see\n\n${image(file)}`, sendId: "qa-d02-c2-send-0001" });
+    const sent = await enqueueThenSteer(`/api/bots/${bot.id}/messages`, { text: `${marker} see\n\n${image(file)}`, sendId: "qa-d02-c2-send-0001" });
     console.log("[c2] send receipt", sent.status, JSON.stringify(sent.body));
     const steers = calls(readNative(bot.threadId), "turn/steer", marker);
     console.log("[c2] steers", steers.map((row) => JSON.stringify(row.msg.params.input)));
@@ -249,83 +262,64 @@ ${steerNeedle}`);
     expect(calls(readNative(bot.threadId), "turn/steer", marker)).toHaveLength(2);
   }, 60_000);
 
-  // (d) multi-busy room: one busy addressee refuses, one accepts, one idle.
+  // Explicit Steer cannot ambiguously select among several busy addressees.
+  // The refused and accepting single-target cases above pin provider behavior;
+  // this pins that the mixed queued send stays intact and never starts an idle
+  // member before the room's current work settles, regardless of member order.
   for (const order of ["refuser-first", "accepter-first"] as const) {
-    it(`d (${order}): refusing busy addressee gets the image once after its reply, accepting one now, idle starts once`, async () => {
+    it(`d (${order}): ambiguous explicit room steer preserves the mixed queued image and delivers once after settle`, async () => {
       const tag = order === "refuser-first" ? "R" : "A";
       const acc = await createBot("qaAccept", `Acc${tag}`);
       const ref = await createBot("qaRefuse", `Ref${tag}`);
       const quick = await createBot("qaQuick", `Quick${tag}`);
-      const by = await createBot("qaAccept", `By${tag}`);
-      const members = order === "refuser-first" ? [ref.id, acc.id, quick.id, by.id] : [acc.id, ref.id, quick.id, by.id];
-      const room = (await api("POST", "/api/groups", { name: `QA multi busy ${tag}`, memberIds: members, setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
-      await api("POST", `/api/groups/${room.id}/messages`, { text: `@Acc${tag} @Ref${tag} @By${tag} start` });
+      const members = order === "refuser-first" ? [ref.id, acc.id, quick.id] : [acc.id, ref.id, quick.id];
+      const room = (await api("POST", "/api/groups", { name: `QA explicit mixed ${tag}`, memberIds: members, setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+      await api("POST", `/api/groups/${room.id}/messages`, { text: `@Acc${tag} @Ref${tag} start` });
       await waitFor(async () => {
         const g = await getGroup(room.id);
-        return [acc.id, ref.id, by.id].every((id) => g.activeBotIds?.includes(id)) && [acc.id, ref.id, by.id].every((id) => openCards(g.messages.filter((m: any) => m.from?.botId === id)).length > 0);
-      }, "d: three members parked");
+        return [acc.id, ref.id].every(id => openCards(g.messages.filter((m: any) => m.from?.botId === id)).length > 0);
+      }, "d: two members parked");
       const marker = `MARKD${tag}-image`;
-      const mention = order === "refuser-first" ? `@Ref${tag} @Acc${tag} @Quick${tag}` : `@Acc${tag} @Ref${tag} @Quick${tag}`;
-      const text = `${mention} ${marker}\n\n${image(`123e4567-e89b-42d3-a456-4266141740d${tag === "R" ? "1" : "2"}.png`)}`;
-      const sent = await api("POST", `/api/groups/${room.id}/messages`, { text, sendId: `qa-d02-d-send-${tag}-0001` });
-      console.log(`[d ${order}] send receipt`, sent.status, JSON.stringify(sent.body));
-      expect(sent.status).toBe(202);
-      await waitFor(async () => calls(roomNative(room.threadId, quick.id), "turn/start", marker).length > 0, "d: idle addressee start");
-      await sleep(1000);
-      const snap = () => ({
-        acc: { steer: calls(roomNative(room.threadId, acc.id), "turn/steer", marker).length, start: calls(roomNative(room.threadId, acc.id), "turn/start", marker).length },
-        ref: { steer: calls(roomNative(room.threadId, ref.id), "turn/steer", marker).length, start: calls(roomNative(room.threadId, ref.id), "turn/start", marker).length },
-        quick: { steer: calls(roomNative(room.threadId, quick.id), "turn/steer", marker).length, start: calls(roomNative(room.threadId, quick.id), "turn/start", marker).length },
-        by: { steer: calls(roomNative(room.threadId, by.id), "turn/steer", marker).length, start: calls(roomNative(room.threadId, by.id), "turn/start", marker).length },
-      });
-      let g = await getGroup(room.id);
-      const notes = () => g.messages.filter((m: any) => m.kind === "activity" && /deliver|image|queued/.test(m.tool?.name ?? "")).map((m: any) => `${m.from?.name ?? "-"}: ${m.tool.name}`);
-      console.log(`[d ${order}] before refuser reply`, JSON.stringify(snap()), "notes", JSON.stringify(notes()));
-      const accSteers = calls(roomNative(room.threadId, acc.id), "turn/steer", marker);
-      expect(accSteers.filter((row) => hasImage(row))).toHaveLength(1);
-      expect(snap().acc.start).toBe(0);
-      expect(snap().quick.start).toBe(1);
-      expect(snap().by).toEqual({ steer: 0, start: 0 });
-      expect(snap().ref.start).toBe(0);
-      expect(g.messages.filter((m: any) => m.role === "user" && m.text?.includes(marker))).toHaveLength(1);
-      // the refusing addressee should be told about (visibly)
-      const refNote = notes().some((n: string) => n.startsWith(`Ref${tag}:`) || n.includes(`Ref${tag}`));
-      console.log(`[d ${order}] visible note naming the refusing member:`, refNote);
-      expect(refNote).toBe(true);
-      // one note for the refusing member's copy, whichever order it was tried in
-      expect(notes().filter((n: string) => n.startsWith(`Ref${tag}:`))).toHaveLength(1);
-
-      // End the refusing member's turn: it should get the send exactly once.
-      const card = openCards(g.messages.filter((m: any) => m.from?.botId === ref.id))[0];
-      const answered = await api("POST", `/api/threads/${room.threadId}/respond`, { requestId: card.card.requestId, behavior: "deny" });
-      console.log(`[d ${order}] answer`, answered.status, JSON.stringify(answered.body));
-      let reached = true;
-      try { await waitFor(async () => calls(roomNative(room.threadId, ref.id), "turn/start", marker).length > 0, "d: refuser follow-up", 15_000); }
-      catch { reached = false; }
-      await sleep(1500);
-      g = await getGroup(room.id);
-      console.log(`[d ${order}] after refuser reply (reached=${reached})`, JSON.stringify(snap()), "notes", JSON.stringify(notes()), "active", JSON.stringify(g.activeBotIds));
-      expect(snap().ref.start).toBe(1);
-      expect(snap().acc.start).toBe(0);
-      expect(snap().quick.start).toBe(1);
-      expect(snap().by).toEqual({ steer: 0, start: 0 });
-      expect(g.messages.filter((m: any) => m.role === "user" && m.text?.includes(marker))).toHaveLength(1);
+      const text = `@Acc${tag} @Ref${tag} @Quick${tag} ${marker}\n\n${image(`123e4567-e89b-42d3-a456-4266141740d${tag === "R" ? "1" : "2"}.png`)}`;
+      const queued = await api("POST", `/api/groups/${room.id}/messages`, { text, sendId: `qa-d02-d-send-${tag}-0001` });
+      expect(queued.status).toBe(202);
+      expect(queued.body).toMatchObject({ ok: true, queued: true });
+      const route = `/api/groups/${room.id}/queue/${queued.body.queueId}/steer`;
+      expect((await api("POST", route, { threadId: room.threadId })).status).toBe(409);
+      expect((await api("POST", route, { threadId: room.threadId, botId: acc.id })).status).toBe(409);
+      for (const member of [acc, ref, quick]) {
+        expect(calls(roomNative(room.threadId, member.id), "turn/steer", marker)).toHaveLength(0);
+        expect(calls(roomNative(room.threadId, member.id), "turn/start", marker)).toHaveLength(0);
+      }
+      const held = await getGroup(room.id);
+      expect(held.messages.filter((m: any) => m.role === "user" && m.text?.includes(marker))).toHaveLength(0);
+      for (const member of [acc, ref]) {
+        const card = openCards(held.messages.filter((m: any) => m.from?.botId === member.id))[0];
+        await api("POST", `/api/threads/${room.threadId}/respond`, { requestId: card.card.requestId, behavior: "deny" });
+      }
+      await waitFor(async () => [acc, ref, quick].every(member => calls(roomNative(room.threadId, member.id), "turn/start", marker).length === 1), "d: mixed queued image drains once");
+      const messages = (await getGroup(room.id)).messages;
+      expect(messages.filter((m: any) => m.role === "user" && m.text?.includes(marker))).toHaveLength(1);
+      for (const member of [acc, ref, quick]) {
+        const starts = calls(roomNative(room.threadId, member.id), "turn/start", marker);
+        expect(starts).toHaveLength(1);
+        expect(hasImage(starts[0])).toBe(true);
+      }
+      expect((await api("DELETE", `/api/groups/${room.id}/queue/${queued.body.queueId}`)).status).toBe(404);
       await api("POST", `/api/groups/${room.id}/interrupt`, {});
       await waitFor(async () => (await getGroup(room.id)).working === false, "d: settle");
       await sleep(1000);
-      console.log(`[d ${order}] after stop`, JSON.stringify(snap()));
-      expect(snap().ref.start).toBe(1);
-      expect(snap().acc.start).toBe(0);
+      for (const member of [acc, ref, quick]) expect(calls(roomNative(room.threadId, member.id), "turn/start", marker)).toHaveLength(1);
     }, 90_000);
   }
 
   // (e) Stop while a 1:1 steer is in flight.
-  it("e: Stop during a pending steer records unknown at most once, never replays, and the next send works", async () => {
+  it("e: Stop during a pending explicit steer records unknown at most once, never replays, and the next send works", async () => {
     const bot = await createBot("qaHang");
     await api("POST", `/api/bots/${bot.id}/messages`, { text: "start e" });
     await waitFor(async () => openCards((await getBot(bot.id)).messages).length > 0, "e: held turn");
     const marker = "MARKE-pending";
-    const pending = api("POST", `/api/bots/${bot.id}/messages`, { text: `${marker} words`, sendId: "qa-d02-e-send-0001" });
+    const pending = enqueueThenSteer(`/api/bots/${bot.id}/messages`, { text: `${marker} words`, sendId: "qa-d02-e-send-0001" });
     await waitFor(async () => calls(readNative(bot.threadId), "turn/steer", marker).length > 0, "e: steer in flight", 5_000);
     const t0 = Date.now();
     const stop = await api("POST", `/api/bots/${bot.id}/interrupt`);
@@ -362,7 +356,7 @@ ${steerNeedle}`);
   }, 60_000);
 
   // (e, room) Stop while a mixed multi-busy room steer is in flight.
-  it("e-room: Stop during a pending multi-busy room steer starts no idle addressee and replays nothing", async () => {
+  it("e-room: Stop during a pending explicit room steer with other busy members starts no idle addressee and replays nothing", async () => {
     const h1 = await createBot("qaHang", "HangOne");
     const h2 = await createBot("qaHang", "HangTwo");
     const idle = await createBot("qaQuick", "IdleThree");
@@ -373,7 +367,7 @@ ${steerNeedle}`);
       return [h1.id, h2.id].every((id) => openCards(g.messages.filter((m: any) => m.from?.botId === id)).length > 0);
     }, "e-room: two parked");
     const marker = "MARKER-room";
-    const pending = api("POST", `/api/groups/${room.id}/messages`, { text: `@HangOne @HangTwo @IdleThree ${marker}`, sendId: "qa-d02-er-send-0001" });
+    const pending = enqueueThenSteer(`/api/groups/${room.id}/messages`, { text: `@HangOne ${marker}`, sendId: "qa-d02-er-send-0001" });
     await waitFor(async () => calls(roomNative(room.threadId, h1.id), "turn/steer", marker).length + calls(roomNative(room.threadId, h2.id), "turn/steer", marker).length > 0, "e-room: steer in flight", 5_000);
     const stop = await api("POST", `/api/groups/${room.id}/interrupt`, {});
     const sent = await pending;

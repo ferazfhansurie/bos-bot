@@ -11,6 +11,7 @@ import { parseBotProfilePatch } from "./bot-profile.ts";
 describe("parseBotProfilePatch (strict — the paired boundary)", () => {
   it("refuses every privilege-bearing bot field by name", () => {
     for (const field of [
+      "fallbackModel",
       "autoApprove",
       "approvalMode",
       "autoReview",

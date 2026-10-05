@@ -11,6 +11,8 @@ type Window = { usedPercent: number | null; resetsAt: number | null };
 export type ProviderUsage = {
   provider: "claude" | "codex";
   account: string;
+  /** Stable provider routing identity; account remains a display label. */
+  instanceId?: string;
   fiveHour?: Window;
   sevenDay: Window;
   status: "available" | "unavailable";
@@ -89,7 +91,7 @@ export async function providerUsage(instances: InstanceConfigMap): Promise<Provi
       const data = token ? await requestJson("https://api.anthropic.com/api/oauth/usage", {
         Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.0.32",
       }) : null;
-      return mapClaudeUsage(entry.displayName ?? id, data);
+      return { ...mapClaudeUsage(entry.displayName ?? id, data), instanceId: id };
     }
     const codexHome = entry.environment?.CODEX_HOME ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
     const auth = await readJson(join(codexHome, "auth.json"));
@@ -98,7 +100,7 @@ export async function providerUsage(instances: InstanceConfigMap): Promise<Provi
     const data = token && account ? await requestJson("https://chatgpt.com/backend-api/wham/usage", {
       Authorization: `Bearer ${token}`, "ChatGPT-Account-ID": account,
     }) : null;
-    return mapCodexUsage(entry.displayName ?? id, data);
+    return { ...mapCodexUsage(entry.displayName ?? id, data), instanceId: id };
   }));
   cache = { at: Date.now(), key, rows };
   return rows;
