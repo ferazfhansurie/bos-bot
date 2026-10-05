@@ -50,6 +50,7 @@ import { nextRename } from "@/lib/rename";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { SharedContactsSidebar } from "./SharedContactsSidebar";
 import { NeedsMeNavRow } from "./NeedsMe";
+import { JobInboxNavRow } from "./JobInbox";
 import { remoteBotHint } from "@/lib/remote-bot";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel } from "./TeamLibraryPanel";
@@ -2355,6 +2356,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       )}
       <NeedsMeNavRow density={density} />
+      <JobInboxNavRow density={density} />
 
       {attentionPinned && density !== "icons" && (
         <SidebarAttentionPanel

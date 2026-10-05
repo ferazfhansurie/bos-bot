@@ -759,7 +759,7 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "team-map" | "routines" | "shared" | "needs-me";
+  activeView: "chat" | "team-map" | "routines" | "shared" | "needs-me" | "jobs";
   selectedSharedRoomId: string | null;
   /** threads waiting on the person: the needs-me badge */
   inboxCount: number;
@@ -929,6 +929,7 @@ export type Action =
   | { type: "showTeamMap" }
   | { type: "showChat" }
   | { type: "showNeedsMe" }
+  | { type: "showJobs" }
   | { type: "inboxCount"; count: number }
   | { type: "selectSharedRoom"; roomId: string }
   | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
@@ -1349,6 +1350,9 @@ export function reducer(state: AppState, action: Action): AppState {
       return state.activeView === "chat" ? state : { ...state, activeView: "chat" };
     case "showNeedsMe":
       return { ...state, activeView: "needs-me",
+        settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
+    case "showJobs":
+      return { ...state, activeView: "jobs",
         settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
     case "inboxCount": {
       const count = inboxCountOf(action.count);
