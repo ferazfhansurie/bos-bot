@@ -24,6 +24,8 @@ import { ThreadChip } from "./ThreadChip";
 import { ToolActivity } from "./ToolActivity";
 import { ThreadRefText } from "./ThreadRefs";
 import { TurnPresence } from "./TurnPresence";
+import { ActivityMascot } from "./ActivityMascot";
+import { turnGesture } from "../../shared/mascot-choreography";
 import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { useToolCallsToggle } from "@/hooks/use-tool-calls-toggle";
 import { CompactionChip, DigestChip } from "./DigestChip";
@@ -1573,13 +1575,9 @@ export function GroupView({ group }: { group: Group }) {
             <TurnPresence
               avatar={
                 // the speaker's real profile image when it has one, as in ChatView
-                <BotAvatar
+                <ActivityMascot
                   bot={presenceSpeaker ?? { color: "green" }}
-                  state={toolInFlight && !awaited ? "working" : "thinking"}
-                  size={36}
-                  forward={false}
-                  lookAround={1}
-                  trackPointer={false}
+                  gesture={turnGesture({ waiting: !speaker && awaited !== undefined, toolInFlight, toolName: lastGroupMessage?.tool?.name })}
                 />
               }
               visible={presenceVisible}

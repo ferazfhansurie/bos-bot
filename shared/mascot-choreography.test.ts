@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { FLAT_MASCOT_BODIES } from "./flat-mascot-bodies";
-import { gesturePose, IDLE_POSE, morphBodyPath, resolveGesture, mixPose } from "./mascot-choreography";
+import { gesturePose, IDLE_POSE, morphBodyPath, resolveGesture, mixPose, turnGesture } from "./mascot-choreography";
 
-describe("review-only mascot choreography", () => {
+describe("mascot choreography", () => {
   it("returns original outline after each short gesture and never loops completion", () => {
     expect(gesturePose("thinking", 2000)).toEqual(IDLE_POSE);
     expect(gesturePose("searching", 2000)).toEqual(IDLE_POSE);
@@ -34,5 +34,15 @@ describe("review-only mascot choreography", () => {
     expect(mixPose(from, to, 0)).toEqual(from);
     expect(mixPose(from, to, 1)).toEqual(to);
     expect(gesturePose("working", 900).split).toBeGreaterThan(.5);
+  });
+});
+
+describe("live turn gesture", () => {
+  it("reads only real turn signals, with a wait on someone winning", () => {
+    expect(turnGesture({})).toBe("thinking");
+    expect(turnGesture({ toolInFlight: true, toolName: "Bash" })).toBe("working");
+    expect(turnGesture({ toolInFlight: true, toolName: "WEB_SEARCH" })).toBe("searching");
+    expect(turnGesture({ toolInFlight: false, toolName: "web_search" })).toBe("thinking");
+    expect(turnGesture({ waiting: true, toolInFlight: true, toolName: "Bash" })).toBe("waiting");
   });
 });

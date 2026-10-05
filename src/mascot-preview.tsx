@@ -32,7 +32,7 @@ function Mascot({gesture,bodyId,color,size,replay,still}:Props){
   return <span ref={host} className="mascot-frame" data-motion={still?"still":visible&&active?"active":"suspended"}>
     <CursorAvatar state={faces[gesture]} size={size} title={body.name+" "+gesture+" mascot"} silhouette={silhouette} gradient={[color,color,color]} eyeColor="#151515"
       showMouth={false} effects={false} glyphs={false} motion={0} lookAround={0} autoBlink={!still&&visible&&active} autoExpression={false}
-      paused={still||!visible||!active} previewChoreography={choreography}/>
+      paused={still||!visible||!active} choreography={choreography}/>
   </span>;
 }
 function Preview(){

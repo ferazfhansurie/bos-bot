@@ -42,6 +42,8 @@ import { EngineSetup } from "./EngineSetup";
 import { isProviderSafetyBlock, PROVIDER_SAFETY_GUIDANCE, PROVIDER_SAFETY_HELP_URL } from "../../shared/provider-safety";
 import { BotAvatar, GroupMark, PersonPhoto, type GroupMarkMember } from "./Avatar";
 import { TurnPresence } from "./TurnPresence";
+import { ActivityMascot } from "./ActivityMascot";
+import { turnGesture } from "../../shared/mascot-choreography";
 import { showToolCallsEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
 import { normalizeState, stateForBot } from "@/lib/mascot";
 import { peerLine, type PeerLine } from "@/lib/peer-message";
@@ -1617,15 +1619,11 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           {presenceBots.map(speaker => <TurnPresence
             key={speaker.id}
             avatar={
-              // BotAvatar, not a bare MausAvatar: an uploaded profile image
-              // (and a chosen mascot body) must match the sidebar row.
-              <BotAvatar
+              // an uploaded profile image (and a chosen mascot body) must
+              // match the sidebar row
+              <ActivityMascot
                 bot={speaker}
-                state={toolInFlight ? "working" : "thinking"}
-                size={36}
-                forward={false}
-                lookAround={1}
-                trackPointer={false}
+                gesture={turnGesture({ toolInFlight, toolName: lastMessage?.tool?.name })}
               />
             }
             visible={presenceVisible}

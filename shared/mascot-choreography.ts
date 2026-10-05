@@ -1,8 +1,9 @@
-/** Review-only choreography adapted from Firaz's supplied full-body study:
+/** Choreography adapted from Firaz's supplied full-body study:
  * /Users/firazfhansurie/.codex/worktrees/bos-mascot-polish/src/full-body-mascot-preview.ts
  * Keyframes and outline→circle approach retained. The retained CursorAvatar
  * engine supplies the frame loop, expressive face, clipping and interruption.
- * No production activity wiring is enabled by this module. */
+ * The desktop live turn reads turnGesture; iOS mirrors it in
+ * MascotActivityChoreography.activity. */
 export type MascotGesture = "idle" | "thinking" | "searching" | "working" | "waiting" | "finished";
 export type GesturePose = { m: number; sx: number; sy: number; dx: number; dy: number; rotate: number; split: number; gx: number; gy: number; eye: number; face: number };
 export const IDLE_POSE: GesturePose = { m: 0, sx: 1, sy: 1, dx: 0, dy: 0, rotate: 0, split: 0, gx: 0, gy: 0, eye: 1, face: 1 };
@@ -54,6 +55,15 @@ export function resolveGesture(activity: GestureActivity, previous: GestureRecei
   const terminalTurnId = activity.terminalTurnId ?? previous.terminalTurnId;
   const finished = !!activity.terminalTurnId && activity.terminalTurnId !== previous.terminalTurnId && !activity.reconnect;
   return { gesture: activity.waiting ? "waiting" : activity.working ? "working" : activity.searching ? "searching" : activity.thinking ? "thinking" : finished ? "finished" : "idle", terminalTurnId };
+}
+
+const SEARCH_TOOLS = new Set(["web_search", "search_query", "browser_search", "search"]);
+/** A live turn's gesture from real runtime signals only: a wait on the human
+ * or a teammate wins, then a running tool (search tools peek), then thought. */
+export function turnGesture(turn: { waiting?: boolean; toolInFlight?: boolean; toolName?: string | null }): Exclude<MascotGesture, "idle" | "finished"> {
+  if (turn.waiting) return "waiting";
+  if (!turn.toolInFlight) return "thinking";
+  return SEARCH_TOOLS.has(turn.toolName?.toLowerCase() ?? "") ? "searching" : "working";
 }
 
 // The canonical catalog is absolute M/C/Z. Sample its cubic outline once,

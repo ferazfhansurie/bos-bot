@@ -1161,9 +1161,9 @@ export interface CursorAvatarProps {
   title?: string | null
   className?: string
   style?: React.CSSProperties
-  /** Isolated review page only. Production Avatar does not pass this prop.
-   * Runs supplied full-body study through this retained face/frame engine. */
-  previewChoreography?: { gesture: MascotGesture; key: number; path: string; faceX: number; faceY: number; reduced?: boolean }
+  /** Firaz's full-body study run through this retained face/frame engine.
+   * Set by the review page and by ActivityMascot on a live turn. */
+  choreography?: { gesture: MascotGesture; key: number; path: string; faceX: number; faceY: number; reduced?: boolean }
 }
 
 export interface CursorAvatarHandle {
@@ -1198,7 +1198,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       title,
       className,
       style,
-      previewChoreography,
+      choreography,
     },
     ref
   ) {
@@ -1260,7 +1260,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         motionStrength,
         effects,
         glyphs,
-        previewChoreography,
+        choreography,
       },
     })
     engine.current.props = {
@@ -1275,7 +1275,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       motionStrength,
       effects,
       glyphs,
-      previewChoreography,
+      choreography,
     }
 
     const selectExpression = (index: number) => {
@@ -1353,7 +1353,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
 
       const draw = (e: typeof engine.current, now: number, spinTurn: number) => {
         const p = e.props
-        const choreography = p.previewChoreography
+        const choreography = p.choreography
         const gestureKey = choreography ? `${choreography.gesture}:${choreography.key}:${choreography.path}` : ''
         if (gestureKey !== e.gestureKey) {
           e.gestureFrom = { ...e.gesturePose }; e.gestureChangedAt = now
@@ -1483,12 +1483,12 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         // One draw per change of what the still face shows, then park.
         if (p.paused) {
           e.last = now
-          const still = `${p.state}|${p.expression ?? ''}|${paintRef.current}|${p.previewChoreography?.key ?? ''}|${p.previewChoreography?.gesture ?? ''}`
+          const still = `${p.state}|${p.expression ?? ''}|${paintRef.current}|${p.choreography?.key ?? ''}|${p.choreography?.gesture ?? ''}`
           if (e.pausedPaint !== still) {
             e.pausedPaint = still
             draw(e, now, 0)
           }
-          if (p.previewChoreography) return // Preview fully suspends offscreen/inactive.
+          if (p.choreography) return // Choreography fully suspends offscreen/inactive.
           wake = setTimeout(() => {
             frame = requestAnimationFrame(step)
           }, 250)
@@ -1522,7 +1522,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         cancelAnimationFrame(frame)
         if (wake !== undefined) clearTimeout(wake)
       }
-    }, [previewChoreography ? paused : false])
+    }, [choreography ? paused : false])
 
     const paint = `url(#${uid}-grad)`
     const paintRef = useRef(paint)
@@ -1551,7 +1551,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
           </linearGradient>
           {/* The fit goes on the clipPath itself: a <g> inside one is ignored by browsers,
               which is also why silhouette.clip is pre-flattened to bare shapes. */}
-          {previewChoreography ? <clipPath id={`${uid}-clip`} transform={silhouette.fit || undefined}><path ref={previewClip} d={previewChoreography.path} /></clipPath> : <clipPath
+          {choreography ? <clipPath id={`${uid}-clip`} transform={silhouette.fit || undefined}><path ref={previewClip} d={choreography.path} /></clipPath> : <clipPath
             id={`${uid}-clip`} transform={silhouette.fit || undefined}
             dangerouslySetInnerHTML={{ __html: silhouette.clip }} /> }
         </defs>
@@ -1561,10 +1561,10 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
           {/* Body and face move together — the face is painted on the body, not floating
               in front of it, so a squash or a tilt has to carry both. The glyph rides the
               same motion but is not faded with them, since it replaces them. */}
-          {previewChoreography && <g ref={previewSides} fill={gradient[0]}><path opacity="0"/><path opacity="0"/></g>}
+          {choreography && <g ref={previewSides} fill={gradient[0]}><path opacity="0"/><path opacity="0"/></g>}
           <g ref={bodyGroup}>
           <g ref={bodyContent}>
-          {previewChoreography ? <g transform={silhouette.fit || undefined}><path ref={previewPath} d={previewChoreography.path} fill={gradient[0]} /></g> : <g transform={silhouette.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} /> }
+          {choreography ? <g transform={silhouette.fit || undefined}><path ref={previewPath} d={choreography.path} fill={gradient[0]} /></g> : <g transform={silhouette.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} /> }
           <g clipPath={`url(#${uid}-clip)`}>
             <g ref={previewFace} transform={anchorTransform(silhouette.anchor)}>
               <path ref={eye0} fill={eyeColor} />

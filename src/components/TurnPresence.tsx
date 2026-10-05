@@ -53,8 +53,8 @@ export function TurnPresence({
           phase === "out" && "turn-mascot-out",
         )}
       >
-        {/* the bot's own avatar is the indicator: it shifts shape while it works */}
-        <span className={cn("flex", showWorking && "bot-morph")}>{avatar}</span>
+        {/* the bot's own avatar is the indicator; ActivityMascot moves it */}
+        <span className="flex">{avatar}</span>
         {showWorking ? (
           <span className="flex items-baseline gap-2 leading-none">
             {/* keyed so a new step crossfades in instead of the text snapping */}
