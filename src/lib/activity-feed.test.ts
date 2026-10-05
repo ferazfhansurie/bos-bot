@@ -67,7 +67,7 @@ describe("activity feed", () => {
     expect(withLiveActivity("scout", { threadId: "t1" }, feed)).toMatchObject({ busy: true, activity: "working" });
     expect(withLiveActivity("scout", { threadId: "t2" }, feed)).toMatchObject({ activity: "waiting-on-you" });
     expect(withLiveActivity("scout", { threadId: "t3", busy: true }, feed)).toMatchObject({ busy: true });
-    expect(withLiveActivity("other", { threadId: "t1" }, feed).busy).toBeUndefined();
+    expect(withLiveActivity("other", { threadId: "t1" }, feed)).not.toHaveProperty("busy");
   });
 });
 
