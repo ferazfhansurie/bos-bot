@@ -87,6 +87,16 @@ struct ChatView: View {
     @State private var follow = ScrollFollow()
     /// The reader has scrolled up off the newest line: show the jump-down
     /// button. Changes only when that flips, not on every scroll.
+    @State private var readingStore: ReadingPositionStore?
+    @State private var savedReading: ReadingPosition?
+    @State private var visibleReadingID: String?
+    @State private var lastReadingID: String?
+    @State private var newestObservedID: String?
+    @State private var readingTarget: String?
+    @State private var restoringReading = true
+    @State private var readingOpenedUnread = false
+    @State private var newMessagesBoundary: String?
+    @State private var readingError: String?
     @State private var scrolledAway = false
     /// Something landed while the reader was scrolled away.
     @State private var unseenBelow = false
@@ -279,6 +289,11 @@ struct ChatView: View {
 
                         ForEach(Array(transcript.enumerated()), id: \.element.id) { index, row in
                             VStack(alignment: .leading, spacing: 6) {
+                                if row.id == newMessagesBoundary {
+                                    Text("New messages · since last seen on this phone")
+                                        .font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                                }
                                 // a gap in time is worth marking; a timestamp
                                 // on every message is just noise
                                 if startsANewStretch(at: index, in: transcript) {
@@ -323,7 +338,7 @@ struct ChatView: View {
                                     startedAt: memberStartedAt(steps[bot.id]),
                                     onContent: { hasContent in
                                         let id = Self.liveBubbleId + ":" + bot.id
-                                        if follow.shouldScroll(id, hasContent: hasContent) { proxy.scrollTo(id, anchor: .bottom) }
+                                        if !restoringReading, follow.shouldScroll(id, hasContent: hasContent) { proxy.scrollTo(id, anchor: .bottom) }
                                     })
                             }
                             if room.activeBotIds == nil {
@@ -344,9 +359,10 @@ struct ChatView: View {
                                 // The geometry callback can miss its last
                                 // change while the header settles on open;
                                 // the end itself in view is unambiguous.
-                                if visible, !follow.pinned { follow.pinned = true; pinnedChanged(true) }
+                                if visible, !restoringReading, !follow.pinned { follow.pinned = true; pinnedChanged(true) }
                             })
                     }
+                    .scrollTargetLayout()
                     .environment(\.mentionContext, mentionContext)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -366,6 +382,18 @@ struct ChatView: View {
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
                 .defaultScrollAnchor(.bottom)
+                .scrollPosition(id: $visibleReadingID, anchor: .top)
+                .onChange(of: visibleReadingID) { _, id in
+                    if let id, messages.contains(where: { $0.id == id }) { lastReadingID = id }
+                }
+                .onChange(of: readingTarget) { _, id in
+                    if let id { proxy.scrollTo(id, anchor: .top) }
+                }
+                .onChange(of: restoringReading) { _, restoring in
+                    if !restoring, readingTarget == nil, session.focusedMessageId == nil {
+                        proxy.scrollTo(Self.bottomId, anchor: .bottom)
+                    }
+                }
                 .modifier(TrackPinnedToBottom(follow: follow, onChange: pinnedChanged))
                 .overlay(alignment: .bottomTrailing) {
                     if scrolledAway {
@@ -392,7 +420,8 @@ struct ChatView: View {
                 // it does in Mail and Messages.
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: transcript.last?.id) { _, _ in
-                    guard transcript.last != nil else { return }
+                    guard !restoringReading, transcript.last != nil else { return }
+                    if follow.pinned { newestObservedID = transcript.last?.id }
                     // Your own message always brings you down to it; a reply
                     // arriving while you read further up waits behind the
                     // jump button instead of yanking the page.
@@ -409,7 +438,7 @@ struct ChatView: View {
                 .onReceive(session.liveText.entry(threadId).$text.map(\.count).removeDuplicates()) { length in
                     // Only while the reader is at the newest line; someone
                     // who scrolled up to read is left where they are.
-                    guard length > 0, follow.pinned else { return }
+                    guard !restoringReading, length > 0, follow.pinned else { return }
                     proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
                 }
                 .onChange(of: session.focusedMessageId) { _, messageId in
@@ -426,7 +455,7 @@ struct ChatView: View {
                         // Open on the newest message. The bottom anchor
                         // aims at an estimate until the rows near it are
                         // built; scrolling to the row itself is exact.
-                        if transcript.last != nil { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
+                        if !restoringReading, readingTarget == nil, transcript.last != nil { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
                         return
                     }
                     proxy.scrollTo(messageId, anchor: .center)
@@ -439,6 +468,7 @@ struct ChatView: View {
             .id(threadId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            if let readingError { Text(readingError).font(.caption).foregroundStyle(.secondary) }
             if let uploadStatus { Text(uploadStatus).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("composer-upload-progress") }
             composer
         }
@@ -450,12 +480,17 @@ struct ChatView: View {
         .navigationDestination(isPresented: $showingComputer) {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
         }
-        .task(id: threadId) {
+        .task(id: "\(session.connection?.id ?? "unpaired"):\(session.credentialEntryResetGeneration):\(threadId)") {
             if selectedThreadWasRemoved { leave(); return }
             if activeArchive == nil { restoreDraft() }
             session.setNotificationVisible(threadId: threadId, visible: true)
             let openedChat = current
+            let unreadAtOpen = openedChat.unread
+            saveReadingPosition()
+            readingOpenedUnread = unreadAtOpen
+            beginReadingPosition()
             await session.loadThreadIfNeeded(openedChat.threadId)
+            await restoreReadingPosition(thread: openedChat.threadId, unread: unreadAtOpen)
             // opening a chat is what marks it read, exactly as on the desktop
             if openedChat.unread { await session.markRead(openedChat) }
 #if DEBUG
@@ -485,6 +520,7 @@ struct ChatView: View {
         .onChange(of: session.state.hasLoadedPage(forThread: threadId)) { _, loaded in
             let requestedThread = threadId
             if !loaded { Task { await session.loadThreadIfNeeded(requestedThread) } }
+            else if restoringReading { Task { await restoreReadingPosition(thread: requestedThread, unread: readingOpenedUnread) } }
         }
         .onChange(of: current.unread) { _, unread in
             // A message can arrive while this chat is already on screen. The
@@ -496,6 +532,7 @@ struct ChatView: View {
         .onChange(of: threadId) { previous, next in
             session.setNotificationVisible(threadId: previous, visible: false)
             session.setNotificationVisible(threadId: next, visible: true)
+            saveReadingPosition()
             checkpointDraft()
             dictation.stop()
             restoreDraft()
@@ -510,6 +547,7 @@ struct ChatView: View {
             cancelThreadOpen()
         }
         .onChange(of: session.connection?.id) { _, _ in
+            saveReadingPosition()
             checkpointDraft()
             restoreDraft()
             cancelThreadOpen()
@@ -523,6 +561,7 @@ struct ChatView: View {
         .onChange(of: attachments) { _, _ in checkpointDraft() }
         .onChange(of: replyTarget) { _, _ in checkpointDraft() }
         .onDisappear {
+            saveReadingPosition()
             checkpointDraft()
             session.setNotificationVisible(threadId: threadId, visible: false)
             session.liveText.setComposing(false, by: composerID)
@@ -531,7 +570,7 @@ struct ChatView: View {
             cancelThreadOpen()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { checkpointDraft(); dictation.stop() }
+            if phase != .active { saveReadingPosition(); checkpointDraft(); dictation.stop() }
         }
         .onChange(of: showingComputer) { _, shown in
             if shown { dictation.stop() }
@@ -606,6 +645,8 @@ struct ChatView: View {
 
     /// The reader reached the newest line or left it.
     private func pinnedChanged(_ pinned: Bool) {
+        guard !restoringReading else { follow.pinned = false; return }
+        if pinned { newestObservedID = messages.last?.id }
         if scrolledAway == pinned { withAnimation(.snappy(duration: 0.2)) { scrolledAway = !pinned } }
         if pinned { unseenBelow = false }
     }
@@ -820,6 +861,58 @@ struct ChatView: View {
 
     private var hasPendingApproval: Bool {
         messages.contains { $0.card?.isPending == true }
+    }
+
+    private func beginReadingPosition() {
+        restoringReading = true; readingTarget = nil; visibleReadingID = nil
+        lastReadingID = nil; newestObservedID = nil; newMessagesBoundary = nil
+        readingStore = nil; savedReading = nil; readingError = nil
+        do {
+            guard let connection = session.connection,
+                  let token = try OpenMausSharedKeychain.token(for: connection.id) else { return }
+            let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let store = ReadingPositionStore(root: root.appendingPathComponent("ReadingPositions"), connectionID: connection.id,
+                accountIdentity: token, conversationID: current.id, threadID: threadId)
+            readingStore = store; savedReading = try store.load()
+            newestObservedID = savedReading?.newestObservedID
+            follow.pinned = savedReading?.anchorID == nil
+        } catch { readingError = "Couldn’t restore this phone’s reading position." }
+    }
+
+    private func restoreReadingPosition(thread: String, unread: Bool) async {
+        guard session.state.hasLoadedPage(forThread: thread) else {
+            readingError = "Reading position will return when this chat reconnects."
+            return
+        }
+        // Bounded history recovery; a removed/very old anchor falls back to
+        // latest rather than inventing an unread boundary in a partial page.
+        for _ in 0..<8 {
+            guard threadId == thread, !Task.isCancelled else { return }
+            let ids = messages.map(\.id)
+            let needsAnchor = savedReading?.anchorID.map { !ids.contains($0) } ?? false
+            let needsBoundary = unread && (savedReading?.newestObservedID.map { !ids.contains($0) } ?? false)
+            guard needsAnchor || needsBoundary, session.state.hasMore[thread] == true else { break }
+            let oldest = ids.first
+            await session.loadOlder(threadId: thread)
+            if oldest == messages.first?.id { break }
+        }
+        guard threadId == thread, !Task.isCancelled else { return }
+        let ids = messages.map(\.id)
+        newMessagesBoundary = savedReading?.firstNewMessage(in: ids, unread: unread)
+        let anchor = savedReading?.retainedAnchor(in: ids)
+        readingTarget = session.focusedMessageId == nil ? anchor : nil
+        lastReadingID = anchor
+        follow.pinned = anchor == nil
+        scrolledAway = anchor != nil
+        if anchor == nil { newestObservedID = ids.last }
+        readingError = nil
+        restoringReading = false
+    }
+
+    private func saveReadingPosition() {
+        guard !restoringReading, let readingStore else { return }
+        do { try readingStore.save(.init(anchorID: lastReadingID, newestObservedID: newestObservedID)) }
+        catch { readingError = "Couldn’t save this phone’s reading position." }
     }
 
     private func checkpointDraft() {

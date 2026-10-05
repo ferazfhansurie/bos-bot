@@ -43,6 +43,15 @@ struct SharedChatView: View {
     @State private var loadingOlder = false
     @State private var atBottom = true
     @State private var followingBottom = true
+    @State private var readingStore: ReadingPositionStore?
+    @State private var savedReading: ReadingPosition?
+    @State private var visibleReadingID: String?
+    @State private var lastReadingID: String?
+    @State private var newestObservedID: String?
+    @State private var readingTarget: String?
+    @State private var restoringReading = true
+    @State private var newMessagesBoundary: String?
+    @State private var readingError: String?
     @State private var scrollHeight: CGFloat = 0
     @State private var readSequence = 0
     @State private var replyPreferences: SharedConversationPreferences?
@@ -74,6 +83,11 @@ struct SharedChatView: View {
                         Color.clear.frame(height: 8).id("shared-top")
                         ForEach(SharedChatMessage.visible(messages)) { message in
                             let mine = message.actor.id == selfID
+                            if message.id == newMessagesBoundary {
+                                Text("New messages · since last seen on this phone")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 6)
+                            }
                             if message.isActivity {
                                 // A bot's tool/progress line: a compact step,
                                 // never a name label over an empty bubble.
@@ -158,6 +172,7 @@ struct SharedChatView: View {
                                 Color.clear.preference(key: SharedChatBottomKey.self, value: geometry.frame(in: .named("shared-scroll")).maxY)
                             })
                     }
+                    .scrollTargetLayout()
                     .padding(.horizontal, 16).padding(.vertical, 12)
                     .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
                     .frame(maxWidth: .infinity)
@@ -170,13 +185,13 @@ struct SharedChatView: View {
                     Color.clear.onChange(of: geometry.size.height, initial: true) { _, height in scrollHeight = height }
                 })
                 .onChange(of: scrollHeight) { _, _ in
-                    if followingBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
+                    if !restoringReading, followingBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
                 }
                 .onPreferenceChange(SharedChatBottomKey.self) { bottom in
-                    guard !loadingOlder && pendingFileMessage == nil else { return }
+                    guard !restoringReading, !loadingOlder && pendingFileMessage == nil else { return }
                     atBottom = bottom > 0 && bottom <= scrollHeight + 24
                     if followingBottom && !atBottom { proxy.scrollTo("shared-bottom", anchor: .bottom) }
-                    if atBottom { Task { await markRead() } }
+                    if atBottom { newestObservedID = SharedChatMessage.visible(messages).last?.id; Task { await markRead() } }
                 }
                 .safeAreaInset(edge: .top, spacing: 0) { header }
                 .overlay(alignment: .bottomTrailing) {
@@ -201,11 +216,22 @@ struct SharedChatView: View {
                     }
                 }
                 .defaultScrollAnchor(.bottom)
+                .scrollPosition(id: $visibleReadingID, anchor: .top)
+                .onChange(of: visibleReadingID) { _, id in
+                    if let id, messages.contains(where: { $0.id == id }) { lastReadingID = id }
+                }
+                .onChange(of: readingTarget) { _, id in
+                    if let id { proxy.scrollTo(id, anchor: .top) }
+                }
+                .onChange(of: restoringReading) { _, restoring in
+                    if !restoring, readingTarget == nil { proxy.scrollTo("shared-bottom", anchor: .bottom) }
+                }
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: messages.count) { _, _ in
-                    if followingBottom, let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }; Task { await markRead() } }
+                    if !restoringReading, followingBottom, let last = messages.last { newestObservedID = last.id; withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }; Task { await markRead() } }
                 }
             }
+            if let readingError { Text(readingError).font(.caption).foregroundStyle(.secondary) }
             if connectionError != nil {
                 HStack {
                     Label("Can’t refresh this chat. Your draft is saved.", systemImage: "wifi.slash")
@@ -323,8 +349,12 @@ struct SharedChatView: View {
         .onChange(of: dictation.transcript) { _, spoken in
             draft = Dictation.draft(base: dictation.base, transcript: spoken)
         }
-        .onDisappear { dictation.stop() }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await refresh(); if atBottom { await markRead() } } } }
+        .onAppear { session.setSharedNotificationVisible(roomId: room.id, visible: true) }
+        .onDisappear { dictation.stop(); session.setSharedNotificationVisible(roomId: room.id, visible: false) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await refresh(); if atBottom { await markRead() } } }
+            else { saveReadingPosition() }
+        }
         .alert("Edit message", isPresented: Binding(get: { editingMessage != nil }, set: { if !$0 { editingMessage = nil } })) {
             TextField("Message", text: $editText)
             Button("Cancel", role: .cancel) { editingMessage = nil }
@@ -349,13 +379,19 @@ struct SharedChatView: View {
             SharedConversationDetails(room: currentRoom, selfID: selfID, contacts: contacts,
                 changed: { updatedRoom = $0 }, exited: { showingDetails = false; dismiss() }, showMessage: { try await showMessage(id: $0.messageId, sequence: $0.sequence) }, showRequestMessage: showMessage, bots: availableBots)
         }
-        .task(id: room.id) {
+        .task(id: "\(session.connection?.id ?? "unpaired"):\(session.credentialEntryResetGeneration):\(room.id)") {
+            saveReadingPosition()
+            let unreadAtOpen = (currentRoom.unreadCount ?? 0) > 0
+            beginReadingPosition()
             messages = []
             sequence = 0
             version = 0
+            await refresh()
+            await restoreReadingPosition(unread: unreadAtOpen)
             while !Task.isCancelled {
                 await refreshBots()
                 await refresh()
+                if restoringReading, connectionError == nil { await restoreReadingPosition(unread: unreadAtOpen) }
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -414,6 +450,57 @@ struct SharedChatView: View {
         guard !active || Date().timeIntervalSince(typingAt) >= 2 else { return }
         typingAt = Date()
         Task { if let client = try? session.sharedMessageTransport() { try? await client.sharedTyping(roomId: room.id, active: active) } }
+    }
+
+    private func beginReadingPosition() {
+        restoringReading = true; readingTarget = nil; visibleReadingID = nil
+        lastReadingID = nil; newestObservedID = nil; newMessagesBoundary = nil
+        savedReading = nil; readingStore = nil; readingError = nil
+        do {
+            guard let connection = session.connection,
+                  let token = try OpenMausSharedKeychain.token(for: connection.id) else { return }
+            let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let store = ReadingPositionStore(root: root.appendingPathComponent("ReadingPositions"), connectionID: connection.id,
+                accountIdentity: token, conversationID: "shared:" + room.id + ":" + selfID, threadID: room.id)
+            readingStore = store; savedReading = try store.load()
+            newestObservedID = savedReading?.newestObservedID
+            followingBottom = savedReading?.anchorID == nil
+        } catch { readingError = "Couldn’t restore this phone’s reading position." }
+    }
+
+    private func restoreReadingPosition(unread: Bool) async {
+        guard connectionError == nil else {
+            readingError = "Reading position will return when this chat reconnects."
+            return
+        }
+        for _ in 0..<8 {
+            guard !Task.isCancelled else { return }
+            let ids = SharedChatMessage.visible(messages).map(\.id)
+            let needsAnchor = savedReading?.anchorID.map { !ids.contains($0) } ?? false
+            let needsBoundary = unread && (savedReading?.newestObservedID.map { !ids.contains($0) } ?? false)
+            guard needsAnchor || needsBoundary, hasMore else { break }
+            let oldest = messages.first?.id
+            await loadOlder()
+            if oldest == messages.first?.id { break }
+        }
+        guard !Task.isCancelled else { return }
+        let ids = SharedChatMessage.visible(messages).map(\.id)
+        newMessagesBoundary = savedReading?.firstNewMessage(in: ids, unread: unread)
+        readingTarget = savedReading?.retainedAnchor(in: ids)
+        lastReadingID = readingTarget
+        followingBottom = readingTarget == nil
+        atBottom = followingBottom
+        if followingBottom { newestObservedID = ids.last }
+        readingError = nil
+        restoringReading = false
+    }
+
+    private func saveReadingPosition() {
+        guard !restoringReading, let readingStore else { return }
+        do {
+            try readingStore.save(.init(anchorID: lastReadingID, newestObservedID: newestObservedID,
+                anchorSequence: messages.first { $0.id == lastReadingID }?.sequence))
+        } catch { readingError = "Couldn’t save this phone’s reading position." }
     }
 
     private func refreshBots() async {
@@ -492,7 +579,7 @@ struct SharedChatView: View {
     }
 
     private func markRead() async {
-        guard scenePhase == .active, !loadingOlder, pendingFileMessage == nil, atBottom, sequence > readSequence else { return }
+        guard scenePhase == .active, !restoringReading, !loadingOlder, pendingFileMessage == nil, atBottom, sequence > readSequence else { return }
         let seen = sequence
         do { readSequence = try await session.sharedPreferences(roomId: room.id, readSequence: seen).readSequence }
         catch { /* retry when the visible conversation refreshes */ }
