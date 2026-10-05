@@ -293,6 +293,18 @@ export function saveChatFollowup(followup: Omit<ChatFollowup, "status">): void {
   ).run(followup.id, followup.kind, followup.ownerId, followup.threadId, followup.payload.sendId ?? null, JSON.stringify(followup.payload)));
 }
 
+/** Compare the full durable payload and pending state before changing words.
+ * Never upsert: a drained/cancelled receipt cannot become a new send. */
+export function editChatFollowup(kind: ChatFollowup["kind"], ownerId: string, threadId: string,
+  id: string, expected: FollowupPayload, replacement: FollowupPayload): boolean {
+  let edited = false;
+  writeFollowups(connection => {
+    edited = connection.prepare("UPDATE chat_followups SET payload = ? WHERE id = ? AND kind = ? AND owner_id = ? AND thread_id = ? AND status = 'pending' AND payload = ?")
+      .run(JSON.stringify(replacement), id, kind, ownerId, threadId, JSON.stringify(expected)).changes === 1;
+  });
+  return edited;
+}
+
 /** Null retires a dispatch whose canonical transcript is already durable.
  * Cancellation tombstones remain so a retried sendId cannot resurrect it. */
 export function settleChatFollowups(ids: string[], status: FollowupStatus | null): void {

@@ -1631,6 +1631,33 @@ public struct CompanionClient: Sendable {
         return try await sendForReceipt(try makeRequest("POST", route, body: body))
     }
 
+    /// Saves only an existing pending item. Errors never fall back to a new send.
+    public func editQueued(queueId: String, to destination: MessageDestination, expectedText: String, text: String) async throws {
+        let route: String
+        let threadId: String
+        switch destination {
+        case let .bot(id, pinnedThread):
+            guard Self.validRouteID(id) else { throw APIError.badURL }
+            route = "/api/bots/\(id)/queue/\(queueId)"
+            threadId = pinnedThread
+        case let .room(id, pinnedThread):
+            guard Self.validRouteID(id) else { throw APIError.badURL }
+            route = "/api/groups/\(id)/queue/\(queueId)"
+            threadId = pinnedThread
+        }
+        guard Self.validRouteID(queueId), Self.validRouteID(threadId) else { throw APIError.badURL }
+        struct Receipt: Decodable { let ok: Bool; let queueId: String; let threadId: String; let text: String }
+        let request = try makeRequest("PATCH", route, body: ["threadId": threadId, "expectedText": expectedText, "text": text])
+        do {
+            let receipt: Receipt = try await send(request, as: Receipt.self)
+            guard receipt.ok, receipt.queueId == queueId, receipt.threadId == threadId, receipt.text == text else {
+                throw APIError.status(code: 409, message: "The queued edit receipt did not match. Your edits are still here.")
+            }
+        } catch let APIError.status(code, _) where code == 404 || code == 405 {
+            throw APIError.status(code: code, message: "This computer cannot edit this queued message. Update BOS or refresh its queue. Your edits are still here.")
+        }
+    }
+
     /// Take back a message the harness is holding.
     ///
     /// An entry that drained a moment ago is not an error worth showing —

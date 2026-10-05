@@ -73,6 +73,29 @@ final class QueuedSendClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testEditPinsQueueThreadAndExpectedTextAndValidatesReceipt() async throws {
+        QueuedCancelStub.responseBody = Data("{\"ok\":true,\"queueId\":\"q1\",\"threadId\":\"thread-9\",\"text\":\"new\"}".utf8)
+        try await client.editQueued(queueId: "q1", to: .bot(id: "bot-1", threadId: "thread-9"), expectedText: "old", text: "new")
+        let request = try XCTUnwrap(QueuedCancelStub.capturedRequest)
+        XCTAssertEqual(request.httpMethod, "PATCH")
+        XCTAssertEqual(request.url?.path, "/api/bots/bot-1/queue/q1")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(QueuedCancelStub.capturedBody)) as? [String: String])
+        XCTAssertEqual(json, ["threadId": "thread-9", "expectedText": "old", "text": "new"])
+    }
+
+    func testEditKeepsUnsupportedConflictAndBadReceiptAsErrors() async throws {
+        for (status, response) in [(404, "{\"error\":\"route missing\"}"), (409, "{\"error\":\"queue changed\"}"), (200, "{\"ok\":true,\"queueId\":\"wrong\",\"threadId\":\"thread-9\",\"text\":\"new\"}")] {
+            QueuedCancelStub.statusCode = status
+            QueuedCancelStub.responseBody = Data(response.utf8)
+            do {
+                try await client.editQueued(queueId: "q1", to: .room(id: "room-1", threadId: "thread-9"), expectedText: "old", text: "new")
+                XCTFail("must preserve edits on refusal")
+            } catch { }
+            XCTAssertEqual(QueuedCancelStub.capturedRequest?.httpMethod, "PATCH")
+            XCTAssertEqual(QueuedCancelStub.capturedRequest?.url?.path, "/api/groups/room-1/queue/q1")
+        }
+    }
+
     func testCancelDeletesTheBotQueueEntryWithTheThreadPinned() async throws {
         try await client.cancelQueued(queueId: "q1", to: .bot(id: "bot-1", threadId: "thread-9"))
 

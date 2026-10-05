@@ -262,6 +262,7 @@ const SESSION_READ_MAX_CHARS = 8_000;
 import { promptWithReply, transcriptText } from "./replies.ts";
 import { _loadPending, buildDelegationFailurePrompt, buildDelegationRevivalPrompt, DELEGATION_TTL_MS, DelegationWakeBudget, discardDelegations, drainDelegations, expireStaleDelegations, findDelegationReceipt, pendingDelegationInfo, pendingDelegationSnapshot, pendingThreads, queueDelegation, recordDelegationReceipt, releaseDelegationsWaitingOn, summarizeDelegatedActivity, type DelegationReceipt, type QueueResult } from "./delegations.ts";
 import {
+  editSteeredMessage,
   cancelSteeredMessage,
   drainSteeredMessages,
   hasQueuedSteeredMessages,
@@ -277,6 +278,7 @@ import {
   settleHeldSteeredQueue,
 } from "./steer-queue.ts";
 import {
+  editChannelMessage,
   cancelChannelMessage,
   channelQueueHead,
   queuedChannelSnapshot,
@@ -17622,6 +17624,37 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       );
       return json(res, 202, receipt);
     }
+    // Text-only edits retain queue identity and never dispatch a turn.
+    m = path.match(/^\/api\/(bots|groups)\/([\w-]+)\/queue\/([\w-]+)$/);
+    if (m && method === "PATCH") {
+      const body = await readBody(req);
+      assertPrivateRequest(); // recheck revocation after the asynchronous body read
+      if (foreignClient || peerSessionId) return json(res, 403, { error: "only the workspace owner can edit queued messages" });
+      if (!body || typeof body !== "object" || Array.isArray(body)
+        || Object.keys(body).some(key => !["threadId", "expectedText", "text"].includes(key))
+        || typeof body.threadId !== "string" || !/^[\w-]+$/.test(body.threadId)
+        || typeof body.expectedText !== "string" || typeof body.text !== "string" || !body.text.trim()) {
+        return json(res, 400, { error: "threadId, expectedText and nonempty text required" });
+      }
+      const [, kind, ownerId, queueId] = m;
+      let edited: boolean;
+      if (kind === "bots") {
+        requirePinnedClientThread(ownerId, body.threadId);
+        if (!peerOwns(ownerId, body.threadId)) return json(res, 403, { error: "thread is not part of this peer link" });
+        const bot = requestedTaskBot(ownerId, body.threadId);
+        edited = editSteeredMessage(bot.id, bot.threadId, queueId, body.expectedText, body.text,
+          replyId => promptWithReply(body.text, replyId ? resolveReplyTarget(bot.threadId, replyId) : undefined, cfg.profile?.name?.trim() || "User"));
+      } else {
+        const group = store.group(ownerId);
+        if (!group) return json(res, 404, { error: "no such room" });
+        const owns = group.dm ? group.threadId === body.threadId : Boolean(store.groupTaskByThread(group.id, body.threadId));
+        if (!owns) return json(res, 409, { error: "room no longer owns this queued thread", code: "queue_edit_conflict" });
+        edited = editChannelMessage(group.id, body.threadId, queueId, body.expectedText, body.text);
+      }
+      if (!edited) return json(res, 409, { error: "queued message changed or is no longer waiting; edits were not saved", code: "queue_edit_conflict" });
+      return json(res, 200, { ok: true, queueId, threadId: body.threadId, text: body.text });
+    }
+
     m = path.match(/^\/api\/groups\/([\w-]+)\/queue\/([\w-]+)$/);
     if (m && method === "DELETE") {
       const group = store.group(m[1]);

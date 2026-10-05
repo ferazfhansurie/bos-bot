@@ -1,3 +1,4 @@
+import { assertQueueAttachmentsUnchanged } from "./queue-edit.ts";
 // Queue-and-steer for busy 1:1 bots.
 //
 // A message sent to a bot mid-turn used to bounce with a 409. Now it waits
@@ -18,7 +19,7 @@
 // the feature.
 
 import { newId } from "./contracts.ts";
-import { chatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
+import { chatFollowups, editChatFollowup, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
 import type { BotRecord, Message } from "./store.ts";
 
 /** The slice of Store this module needs — narrow so tests can fake it. */
@@ -141,6 +142,20 @@ export function queueSteeredMessage(
   queues.set(threadId, entry);
   changed();
   return { id };
+}
+
+/** Synchronous map + disk compare; held queues are deliberately unavailable. */
+export function editSteeredMessage(botId: string, threadId: string, queueId: string,
+  expectedText: string, text: string, makePrompt?: (replyToId?: string) => string): boolean {
+  const entry = queues.get(threadId);
+  const item = entry?.botId === botId ? entry.items.find(item => item.messageId === queueId) : undefined;
+  if (!item || item.unattended || item.peerAsk || (item.text !== expectedText && item.text !== text)) return false;
+  assertQueueAttachmentsUnchanged(item.text, text);
+  const next = { ...item, text, prompt: item.text === text ? item.prompt : makePrompt ? makePrompt(item.replyToId) : text };
+  if (!editChatFollowup("bot", botId, threadId, queueId, item, next)) return false;
+  Object.assign(item, next);
+  changed();
+  return true;
 }
 
 /** Where a thread stands among this bot's threads waiting for a free slot:

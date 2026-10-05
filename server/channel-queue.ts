@@ -1,3 +1,4 @@
+import { assertQueueAttachmentsUnchanged } from "./queue-edit.ts";
 // Follow-up messages sent while a channel is working.
 //
 // The renderer must hand these to the harness immediately. Keeping them in a
@@ -7,7 +8,7 @@
 // never saw.
 
 import { newId } from "./contracts.ts";
-import { chatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
+import { chatFollowups, editChatFollowup, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
 import { sameAttachedSend } from "./steer-queue.ts";
 
 interface ChannelQueueItem {
@@ -96,6 +97,20 @@ export function queueChannelMessage(
   queues.set(threadId, entry);
   changed();
   return { id: item.id };
+}
+
+/** Edit one pending send without lifting/reordering the room queue. */
+export function editChannelMessage(groupId: string, threadId: string, queueId: string,
+  expectedText: string, text: string): boolean {
+  const entry = queues.get(threadId);
+  const item = entry?.groupId === groupId ? entry.items.find(item => item.id === queueId) : undefined;
+  if (!item || (item.text !== expectedText && item.text !== text)) return false;
+  assertQueueAttachmentsUnchanged(item.text, text);
+  const next = { ...item, text };
+  if (!editChatFollowup("channel", groupId, threadId, queueId, item, next)) return false;
+  Object.assign(item, next);
+  changed();
+  return true;
 }
 
 /** Find the stable receipt for an HTTP retry that is still waiting. */
