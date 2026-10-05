@@ -80,7 +80,7 @@ struct PairingView: View {
             .fullScreenCover(isPresented: $showingScanner) {
                 PairingScannerSheet { payload in
                     guard let url = URL(string: payload), let invite = PairingInvite.parse(url) else {
-                        return "That isn't an BOS pairing QR code."
+                        return "That isn't a BOS pairing QR code."
                     }
                     accept(invite)
                     return nil
@@ -148,8 +148,17 @@ struct PairingView: View {
                         manualEntry
                             .padding(.top, 12)
                     } label: {
-                        Label("Enter address and code", systemImage: "keyboard")
-                            .font(.subheadline.weight(.semibold))
+                        HStack(spacing: 12) {
+                            Image(systemName: "keyboard")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 30, height: 30)
+                                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .accessibilityHidden(true)
+                            Text("Enter address and code")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.primary)
+                        }
                     }
                 }
                 .padding(.top, 18)
@@ -167,8 +176,11 @@ struct PairingView: View {
     private var discoveredComputers: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Nearby computers", systemImage: "desktopcomputer")
-                    .font(.subheadline.weight(.semibold))
+                Text("Nearby computers")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 if discovery.browsing && discovery.found.isEmpty {
                     ProgressView()
@@ -194,11 +206,15 @@ struct PairingView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "laptopcomputer")
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(MausPalette.color("blue"))
                                 .frame(width: 30, height: 30)
+                                .background(MausPalette.color("blue").opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .accessibilityHidden(true)
                             Text(service.name)
                                 .font(.body.weight(.medium))
                                 .foregroundStyle(.primary)
+                                .lineLimit(2)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.footnote.weight(.semibold))
@@ -223,12 +239,13 @@ struct PairingView: View {
                 .padding(12)
                 .background(Color(uiColor: .tertiarySystemGroupedBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .submitLabel(.continue)
 
             Text("Use the address shown in Phone settings on your computer.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
-            Button("Continue") {
+            Button {
                 Haptics.selection()
                 failure = nil
                 // The whole link a server printed (https://host/pair#code=…) is
@@ -246,8 +263,12 @@ struct PairingView: View {
                 scannedCredential = nil
                 pairRequestId = nil
                 chosen = connection
+            } label: {
+                Text("Continue")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .controlSize(.large)
             .disabled(manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
@@ -328,6 +349,7 @@ struct PairingView: View {
                         .textContentType(.oneTimeCode)
                         .font(.system(size: 28, weight: .bold, design: .rounded))
                         .multilineTextAlignment(.center)
+                        .accessibilityLabel("Pairing code")
                         .padding(.vertical, 12)
                         .background(Color(uiColor: .tertiarySystemGroupedBackground))
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

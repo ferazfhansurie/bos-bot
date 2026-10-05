@@ -1,6 +1,16 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld active": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ativas"
+          }
+        }
+      }
+    },
     "%lld saved": {
       "localizations": {
         "pt-BR": {
@@ -194,16 +204,6 @@
         }
       }
     },
-    "Agent notifications": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Notificações do agente"
-          }
-        }
-      }
-    },
     "Agent tasks": {
       "localizations": {
         "pt-BR": {
@@ -324,6 +324,19 @@
         }
       }
     },
+    "BOS": {
+      "shouldTranslate": false
+    },
+    "BOS is trying the saved connection automatically.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O BOS está tentando a conexão salva automaticamente."
+          }
+        }
+      }
+    },
     "Back": {
       "localizations": {
         "pt-BR": {
@@ -350,16 +363,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Conversas com bots"
-          }
-        }
-      }
-    },
-    "Bot intro animation": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Animação de entrada do bot"
           }
         }
       }
@@ -630,6 +633,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Limpar"
+          }
+        }
+      }
+    },
+    "Clear search": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limpar busca"
           }
         }
       }
@@ -1226,6 +1239,16 @@
         }
       }
     },
+    "Description": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descrição"
+          }
+        }
+      }
+    },
     "Dictation isn't available for this language.": {
       "localizations": {
         "pt-BR": {
@@ -1252,6 +1275,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "O ditado precisa de acesso ao Reconhecimento de Fala. Ative em Ajustes → BOS."
+          }
+        }
+      }
+    },
+    "Discard changes": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descartar alterações"
           }
         }
       }
@@ -1376,32 +1409,22 @@
         }
       }
     },
+    "Edits this routine": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edita esta rotina"
+          }
+        }
+      }
+    },
     "ElevenLabs is not configured": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "O ElevenLabs não está configurado"
-          }
-        }
-      }
-    },
-    "Fish Audio": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fish Audio"
-          }
-        }
-      }
-    },
-    "Fish Audio is not configured": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Fish Audio não está configurado"
           }
         }
       }
@@ -1559,6 +1582,26 @@
         }
       }
     },
+    "Fish Audio": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fish Audio"
+          }
+        }
+      }
+    },
+    "Fish Audio is not configured": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Fish Audio não está configurado"
+          }
+        }
+      }
+    },
     "Follow the system": {
       "localizations": {
         "pt-BR": {
@@ -1625,6 +1668,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Receba alertas enquanto o BOS está aberto ou esteve em segundo plano há pouco. Os alertas param depois que o iOS suspende ou fecha o app por completo."
+          }
+        }
+      }
+    },
+    "Go back": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voltar"
           }
         }
       }
@@ -1759,12 +1812,32 @@
         }
       }
     },
+    "Intro animation": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Animação de entrada"
+          }
+        }
+      }
+    },
     "It will appear on both this device and your computer.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Ela vai aparecer neste dispositivo e no seu computador."
+          }
+        }
+      }
+    },
+    "Keep editing": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar editando"
           }
         }
       }
@@ -2119,6 +2192,16 @@
         }
       }
     },
+    "No messages yet": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhuma mensagem ainda"
+          }
+        }
+      }
+    },
     "No model providers are available": {
       "localizations": {
         "pt-BR": {
@@ -2339,16 +2422,6 @@
         }
       }
     },
-    "On your computer, open BOS → Settings → Phone.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No seu computador, abra BOS → Ajustes → Telefone."
-          }
-        }
-      }
-    },
     "On your computer, open Settings → Phone → Set up a phone.": {
       "localizations": {
         "pt-BR": {
@@ -2479,19 +2552,6 @@
         }
       }
     },
-    "BOS": {
-      "shouldTranslate": false
-    },
-    "BOS is trying the saved connection automatically.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O BOS está tentando a conexão salva automaticamente."
-          }
-        }
-      }
-    },
     "Opening…": {
       "localizations": {
         "pt-BR": {
@@ -2608,6 +2668,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pareie este dispositivo com o BOS para ver suas conversas e responder aos seus bots."
+          }
+        }
+      }
+    },
+    "Pairing code": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de pareamento"
           }
         }
       }
@@ -3185,12 +3255,32 @@
         }
       }
     },
+    "Save changes": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar alterações"
+          }
+        }
+      }
+    },
     "Save profile changes": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Salvar alterações do perfil"
+          }
+        }
+      }
+    },
+    "Save your changes?": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar as alterações?"
           }
         }
       }
@@ -3785,7 +3875,7 @@
         }
       }
     },
-    "That isn't an BOS pairing QR code.": {
+    "That isn't a BOS pairing QR code.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
@@ -4175,6 +4265,16 @@
         }
       }
     },
+    "Try again": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentar novamente"
+          }
+        }
+      }
+    },
     "Try again.": {
       "localizations": {
         "pt-BR": {
@@ -4211,6 +4311,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Desconhecido"
+          }
+        }
+      }
+    },
+    "Unread": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não lida"
           }
         }
       }
@@ -4295,12 +4405,12 @@
         }
       }
     },
-    "Use the Camera app to scan the QR code, or enter the address and code manually.": {
+    "Use the Camera app to scan the QR code, or go back and choose Other ways to connect.": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Use o app Câmera para escanear o QR code, ou digite o endereço e o código manualmente."
+            "value": "Use o app Câmera para escanear o QR code, ou volte e escolha Outras formas de conectar."
           }
         }
       }
@@ -4435,16 +4545,6 @@
         }
       }
     },
-    "What this agent does": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O que este agente faz"
-          }
-        }
-      }
-    },
     "What this bot does": {
       "localizations": {
         "pt-BR": {
@@ -4545,6 +4645,16 @@
         }
       }
     },
+    "Working…": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trabalhando…"
+          }
+        }
+      }
+    },
     "Workspace": {
       "localizations": {
         "pt-BR": {
@@ -4571,6 +4681,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ontem"
+          }
+        }
+      }
+    },
+    "You changed this agent's profile but haven't saved it.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você alterou o perfil deste agente, mas ainda não salvou."
           }
         }
       }

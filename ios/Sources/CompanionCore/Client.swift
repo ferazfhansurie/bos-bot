@@ -1012,6 +1012,20 @@ public struct CompanionClient: Sendable {
         )
     }
 
+    /// The Mac's remote-access summary. `nil` means a desktop too old to
+    /// have the route (404): unknown, not a failure worth showing. Other
+    /// errors throw so the caller can keep its last known value.
+    public func companionStatus() async throws -> CompanionStatus? {
+        do {
+            return try await send(
+                try makeRequest("GET", "/api/companion/status"),
+                as: CompanionStatus.self
+            )
+        } catch let APIError.status(code, _) where code == 404 {
+            return nil
+        }
+    }
+
     /// Hydrate. `messages` opts into the paged shape — the newest n per
     /// thread, with screen captures reduced to a flag.
     public func fleet(messages: Int? = 50) async throws -> Fleet {

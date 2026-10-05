@@ -21,9 +21,14 @@ import AVFoundation
 
 struct ChatView: View {
     let chat: Chat
+    /// Set when this chat is the side pane of a wide window: there is no
+    /// stack to pop, so leaving closes the pane instead.
+    var onClose: (() -> Void)?
     @State private var selectedThreadId: String
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    /// Present only on a wide window's primary pane with room for a second.
+    @Environment(\.openBeside) private var openBeside
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     /// The draft lives in its own object so a keystroke redraws the
@@ -34,9 +39,9 @@ struct ChatView: View {
         nonmutating set { composerDraft.text = newValue }
     }
     @State private var replyTarget: Message?
-    /// Bots picked in the @ drawer. Sent as `@name` text, so they route the
+    /// Names picked in the @ drawer. Sent as `@name` text, so they route the
     /// same as typed mentions.
-    @State private var mentionPicks: [Bot] = []
+    @State private var mentionPicks: [MentionTarget] = []
     @State private var showingTasks = false
     @State private var showingWalkie = false
     @State private var showingComputer = false
@@ -82,20 +87,36 @@ struct ChatView: View {
     /// changes on every scroll and every token, and none of that should
     /// re-evaluate this view.
     @State private var follow = ScrollFollow()
+    /// The reader has scrolled up off the newest line: show the jump-down
+    /// button. Changes only when that flips, not on every scroll.
+    @State private var scrolledAway = false
+    /// Something landed while the reader was scrolled away.
+    @State private var unseenBelow = false
+    /// The chat's height above the keyboard, so the @ drawer can leave the
+    /// conversation some room on a small phone with the keyboard up.
+    @State private var chatHeight: CGFloat = 0
 
     @AppStorage(PrefKey.islandIntro) private var islandIntro = IslandIntro.oncePerBot.rawValue
     @AppStorage(PrefKey.islandSeen) private var islandSeen = ""
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.quickReplies) private var quickReplies = ""
 
-    init(chat: Chat) {
+    /// This composer's own claim on `LiveTextStore.composing`; two panes can
+    /// each have a draft open.
+    @State private var composerID = UUID()
+
+    init(chat: Chat, onClose: (() -> Void)? = nil) {
         self.chat = chat
+        self.onClose = onClose
         _selectedThreadId = State(initialValue: chat.threadId)
     }
 
     /// The live bubble's scroll target. A constant because there is at most
     /// one per chat and it has no message id to borrow.
     static let liveBubbleId = "companion.live"
+    /// The very end of the transcript, below any live rows, so "newest"
+    /// includes a reply still being typed or a member still working.
+    static let bottomId = "companion.bottom"
 
     /// The live chat record, so busy/unread stay current as frames land.
     private var current: Chat {
@@ -320,7 +341,15 @@ struct ChatView: View {
                                 )
                             }
                         }
+                        Color.clear.frame(height: 1).id(Self.bottomId)
+                            .modifier(ReportsVisible { visible in
+                                // The geometry callback can miss its last
+                                // change while the header settles on open;
+                                // the end itself in view is unambiguous.
+                                if visible, !follow.pinned { follow.pinned = true; pinnedChanged(true) }
+                            })
                     }
+                    .environment(\.mentionContext, mentionContext)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
@@ -339,7 +368,18 @@ struct ChatView: View {
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
                 .defaultScrollAnchor(.bottom)
-                .modifier(TrackPinnedToBottom(follow: follow))
+                .modifier(TrackPinnedToBottom(follow: follow, onChange: pinnedChanged))
+                .overlay(alignment: .bottomTrailing) {
+                    if scrolledAway {
+                        JumpToLatestButton(unseen: unseenBelow) {
+                            Haptics.selection()
+                            unseenBelow = false
+                            withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
+                        }
+                        .padding(.trailing, 16).padding(.bottom, 10)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                }
                 // Tapping the transcript puts the keyboard away. The composer
                 // is a sibling of this scroll view rather than inside it, so
                 // nothing else here drops its focus — until this, the only way
@@ -354,8 +394,13 @@ struct ChatView: View {
                 // it does in Mail and Messages.
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: transcript.last?.id) { _, _ in
-                    guard let last = transcript.last else { return }
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    guard transcript.last != nil else { return }
+                    // Your own message always brings you down to it; a reply
+                    // arriving while you read further up waits behind the
+                    // jump button instead of yanking the page.
+                    let mine = transcript.last?.head.role == .user
+                    guard mine || follow.pinned else { unseenBelow = true; return }
+                    withAnimation { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
                 }
                 // Follow the text as it arrives. Keyed on length rather than
                 // the string so this fires once per delta batch, and without
@@ -364,7 +409,9 @@ struct ChatView: View {
                 // Subscribed directly, so a token scrolls without asking this
                 // whole view to re-evaluate.
                 .onReceive(session.liveText.entry(threadId).$text.map(\.count).removeDuplicates()) { length in
-                    guard length > 0 else { return }
+                    // Only while the reader is at the newest line; someone
+                    // who scrolled up to read is left where they are.
+                    guard length > 0, follow.pinned else { return }
                     proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
                 }
                 .onChange(of: session.focusedMessageId) { _, messageId in
@@ -381,7 +428,7 @@ struct ChatView: View {
                         // Open on the newest message. The bottom anchor
                         // aims at an estimate until the rows near it are
                         // built; scrolling to the row itself is exact.
-                        if let last = transcript.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        if transcript.last != nil { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
                         return
                     }
                     proxy.scrollTo(messageId, anchor: .center)
@@ -397,6 +444,7 @@ struct ChatView: View {
             composer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { chatHeight = $0 }
         .overlay(alignment: .bottom) { plusSheet }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
@@ -404,7 +452,7 @@ struct ChatView: View {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
         }
         .task(id: threadId) {
-            if selectedThreadWasRemoved { dismiss(); return }
+            if selectedThreadWasRemoved { leave(); return }
             let openedChat = current
             await session.loadThreadIfNeeded(openedChat.threadId)
             // opening a chat is what marks it read, exactly as on the desktop
@@ -419,7 +467,7 @@ struct ChatView: View {
             let args = ProcessInfo.processInfo.arguments
             if let i = args.firstIndex(of: "-mention-picks"), i + 1 < args.count {
                 let names = args[i + 1].split(separator: ",").map(String.init)
-                mentionPicks = names.compactMap { name in channelMembers.first { $0.name == name } }
+                mentionPicks = names.compactMap { name in mentionPool.first { $0.name == name } }
             }
             if let i = args.firstIndex(of: "-mention-draft"), i + 1 < args.count {
                 draft = args[i + 1]; composerFocused = true
@@ -427,7 +475,7 @@ struct ChatView: View {
 #endif
         }
         .onChange(of: selectedThreadWasRemoved) { _, removed in
-            if removed { dismiss() }
+            if removed { leave() }
         }
 #if DEBUG
         .onAppear { Autopilot.chatAppeared?() }
@@ -466,7 +514,7 @@ struct ChatView: View {
             cancelThreadOpen()
         }
         .onDisappear {
-            session.liveText.composing = false
+            session.liveText.setComposing(false, by: composerID)
             dictation.stop()
             resetFilePreview()
             cancelThreadOpen()
@@ -545,21 +593,34 @@ struct ChatView: View {
         }
     }
 
+    /// The reader reached the newest line or left it.
+    private func pinnedChanged(_ pinned: Bool) {
+        if scrolledAway == pinned { withAnimation(.snappy(duration: 0.2)) { scrolledAway = !pinned } }
+        if pinned { unseenBelow = false }
+    }
+
     // MARK: - Header
 
     /// Back on the left with the rest-of-app unread count, threads and the
     /// bot's computer on the right — a blurred strip to the top edge.
     private var headerBar: some View {
-        ChatHeaderBar(name: current.name, unreadElsewhere: unreadElsewhere,
+        ChatHeaderBar(name: current.name, unreadElsewhere: onClose == nil ? unreadElsewhere : 0,
                       canOpenThreads: current.supportsTasks,
                       // A bot on another Mac has no settings or computer the
                       // server will open for this phone.
                       canOpenSettings: !current.isRemoteBot,
-                      canWatchComputer: current.isBot && !current.isRemoteBot, onBack: { dismiss() },
+                      canWatchComputer: current.isBot && !current.isRemoteBot, onBack: leave,
                       onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
-                      onComputer: { showingComputer = true }, accessory: rosterAccessory) {
+                      onComputer: { showingComputer = true }, accessory: rosterAccessory,
+                      closesPane: onClose != nil,
+                      beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) }) {
             ChatAvatarView(chat: current, size: 30, state: .idle, animated: false)
         }
+    }
+
+    /// Back on a phone or a primary pane; close on a side pane.
+    private func leave() {
+        if let onClose { onClose() } else { dismiss() }
     }
 
     private var channelMembers: [Bot] {
@@ -582,12 +643,24 @@ struct ChatView: View {
         return Set(channelMembers.filter { ChannelMemberStatus.resolve(room: room, bot: $0, hostLive: hostLive) == .working }.map(\.id))
     }
 
+    /// Who the @ drawer offers here: @everyone and the members in a room,
+    /// the other local bots in a bot's chat — the desktop composer's pool.
+    private var mentionPool: [MentionTarget] {
+        MentionPool.targets(for: current, bots: session.state.bots)
+    }
+
+    /// The names messages here can mention, so they draw as tokens.
+    private var mentionContext: MentionContext {
+        let found = MentionPool.peers(for: current, bots: session.state.bots)
+        return MentionContext(peers: found.peers, everyone: found.everyone)
+    }
+
     /// A pick keeps the drawer open on a fresh @ so the next one is one tap.
-    private func toggleMention(_ bot: Bot) {
+    private func toggleMention(_ target: MentionTarget) {
         Haptics.selection()
         withAnimation(.snappy(duration: 0.22)) {
-            if let index = mentionPicks.firstIndex(where: { $0.id == bot.id }) { mentionPicks.remove(at: index) }
-            else { mentionPicks.append(bot) }
+            if let index = mentionPicks.firstIndex(where: { $0.id == target.id }) { mentionPicks.remove(at: index) }
+            else { mentionPicks.append(target) }
         }
         draft = ChannelMentionPicker.removingQuery(from: draft) + "@"
         composerFocused = true
@@ -744,7 +817,7 @@ struct ChatView: View {
         dictation.stop()
         let draftAtSend = draft
         let picksAtSend = explicitText == nil ? mentionPicks : []
-        let text = (explicitText ?? ChannelMentionPicker.outgoing(draftAtSend, picks: picksAtSend)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = (explicitText ?? ChannelMentionPicker.outgoing(draftAtSend, targets: picksAtSend)).trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoingAttachments = attachments
         let replyAtSend = replyTarget
         let chatAtSend = current
@@ -772,6 +845,7 @@ struct ChatView: View {
                 if threadId == chatAtSend.threadId { attachmentError = failure }
                 else { threadDrafts[chatAtSend.threadId]?.error = failure }
                 session.actionError = nil
+                Haptics.notification(.error)
                 return
             }
             if threadId != chatAtSend.threadId {
@@ -1161,20 +1235,31 @@ struct ChatView: View {
             if let replyTarget {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Replying to " + (replyTarget.from?.name ?? (replyTarget.role == .user ? "you" : "bot"))).font(.caption.weight(.semibold))
-                        Text(replyTarget.text ?? "").font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                        Label("Replying to " + (replyTarget.from?.name ?? (replyTarget.role == .user ? "you" : current.name)), systemImage: "arrowshape.turn.up.left.fill")
+                            .font(.caption.weight(.semibold))
+                        Text(MessageRow.quotePreview(replyTarget)).font(.caption).lineLimit(2).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button { self.replyTarget = nil } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("Cancel reply")
-                }.padding(10).background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                    Button { withAnimation(.snappy(duration: 0.2)) { self.replyTarget = nil } } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel reply")
+                }.padding(.leading, 10).background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if !sendingMessage, !channelMembers.isEmpty {
-                ChannelMentionDrawerHost(composer: composerDraft, members: channelMembers, working: workingMembers,
-                                         picked: mentionPicks, onToggle: toggleMention, onDone: closeMentionDrawer)
+            let pool = mentionPool
+            if !sendingMessage, !pool.isEmpty {
+                ChannelMentionDrawerHost(composer: composerDraft, pool: pool, working: workingMembers,
+                                         picked: mentionPicks, inRoom: !current.isBot,
+                                         maxListHeight: chatHeight > 0 ? chatHeight * 0.32 : nil,
+                                         onToggle: toggleMention, onDone: closeMentionDrawer)
             }
             if !mentionPicks.isEmpty {
-                ChannelMentionChips(picked: mentionPicks) { bot in
-                    withAnimation(.snappy(duration: 0.22)) { mentionPicks.removeAll { $0.id == bot.id } }
+                ChannelMentionChips(picked: mentionPicks) { target in
+                    Haptics.selection()
+                    withAnimation(.snappy(duration: 0.22)) { mentionPicks.removeAll { $0.id == target.id } }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -1196,9 +1281,7 @@ struct ChatView: View {
 #if DEBUG
                         MainThreadProbe.shared.typing(!value.isEmpty)
 #endif
-                        if session.liveText.composing == value.isEmpty {
-                            session.liveText.composing = !value.isEmpty
-                        }
+                        session.liveText.setComposing(!value.isEmpty, by: composerID)
                         let wantsHUD = value.hasPrefix("/")
                         if showCommandHUD != wantsHUD {
                             withAnimation(.easeInOut(duration: 0.15)) { showCommandHUD = wantsHUD }
@@ -1321,15 +1404,17 @@ private struct DraftBinding<Content: View>: View {
 /// than in ChatView keeps keystrokes from redrawing the transcript.
 private struct ChannelMentionDrawerHost: View {
     let composer: ComposerDraft
-    let members: [Bot]
+    let pool: [MentionTarget]
     let working: Set<String>
-    let picked: [Bot]
-    let onToggle: (Bot) -> Void
+    let picked: [MentionTarget]
+    let inRoom: Bool
+    let maxListHeight: CGFloat?
+    let onToggle: (MentionTarget) -> Void
     let onDone: () -> Void
 
-    private var matches: [Bot]? {
+    private var matches: [MentionMatch]? {
         guard let query = ChannelTextPresentation.mentionQuery(composer.text) else { return nil }
-        let matches = ChannelMentionPicker.matching(members, query: query)
+        let matches = MentionRanking.rank(pool, query: query)
         return matches.isEmpty ? nil : matches
     }
 
@@ -1337,8 +1422,8 @@ private struct ChannelMentionDrawerHost: View {
         let matches = matches
         VStack(spacing: 0) {
             if let matches {
-                ChannelMentionDrawer(bots: matches, working: working, picked: picked,
-                                     onToggle: onToggle, onDone: onDone)
+                ChannelMentionDrawer(matches: matches, working: working, picked: picked, inRoom: inRoom,
+                                     maxListHeight: maxListHeight, onToggle: onToggle, onDone: onDone)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -1363,6 +1448,10 @@ struct ChatHeaderBar<Avatar: View>: View {
     /// trailing slot so the people in the room aren't hidden behind the
     /// title; it opens the same details sheet.
     var membersCount: Int? = nil
+    /// A side pane closes rather than goes back, and says so.
+    var closesPane = false
+    /// On a wide window, the menu that opens a second chat beside this one.
+    var beside: AnyView? = nil
     @ViewBuilder let avatar: () -> Avatar
 
     var body: some View {
@@ -1370,7 +1459,7 @@ struct ChatHeaderBar<Avatar: View>: View {
         HStack(alignment: .top) {
             Button(action: onBack) {
                 HStack(spacing: 4) {
-                    Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
+                    Image(systemName: closesPane ? "xmark" : "chevron.left").font(.system(size: 17, weight: .semibold))
                     if unreadElsewhere > 0 {
                         Text("\(unreadElsewhere)").font(.system(size: 13, weight: .semibold))
                             .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22)
@@ -1381,7 +1470,7 @@ struct ChatHeaderBar<Avatar: View>: View {
                 .padding(.leading, 12).padding(.trailing, unreadElsewhere > 0 ? 8 : 12)
                 .frame(height: 44).contentShape(Capsule())
             }
-            .buttonStyle(.plain).glassCapsule().accessibilityLabel("Back")
+            .buttonStyle(.plain).glassCapsule().accessibilityLabel(closesPane ? "Close" : "Back")
             Spacer(minLength: 4)
             if !canOpenThreads && canOpenSettings {
                 Button(action: onSettings) {
@@ -1409,6 +1498,7 @@ struct ChatHeaderBar<Avatar: View>: View {
             .accessibilityIdentifier("chat-options")
             }
             Spacer(minLength: 4)
+            if let beside { beside }
             if canWatchComputer {
                 GlassButton(systemImage: "display", size: 44, weight: .medium, action: onComputer)
                     .accessibilityLabel("Watch \(name)'s computer")
@@ -1647,8 +1737,13 @@ struct MessageRow: View {
             if let reference = message.replyToId {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Replying to " + (replyTarget?.from?.name ?? (replyTarget?.role == .user ? "you" : "an earlier message"))).font(.caption.weight(.semibold))
-                    Text(replyTarget?.text ?? "Earlier message").font(.caption).lineLimit(2)
-                }.foregroundStyle(.secondary).padding(8).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    Text(replyTarget.map { Self.quotePreview($0) } ?? String(localized: "Earlier message")).font(.caption).lineLimit(2)
+                }.foregroundStyle(.secondary).padding(8)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 1.5).fill(Color.secondary.opacity(0.45)).frame(width: 3).padding(.vertical, 6)
+                }
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("reply-quote-" + reference)
             }
             content
@@ -1694,6 +1789,11 @@ struct MessageRow: View {
             }
         }
         .contextMenu {
+            // When it was said: the transcript only marks gaps, so this is
+            // where an exact time lives.
+            if message.at > 0 {
+                Text(Date(timeIntervalSince1970: message.at / 1000).formatted(date: .abbreviated, time: .shortened))
+            }
             if message.kind == .text, !(message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let onReply {
                 Button("Reply", systemImage: "arrowshape.turn.up.left") { onReply(message) }
             }
@@ -1708,6 +1808,7 @@ struct MessageRow: View {
                 Divider()
                 Button("Copy", systemImage: "doc.on.doc") {
                     PlatformBridge.copyToPasteboard(visibleText)
+                    Haptics.success()
                 }
             }
             // Copy above takes the whole reply. Selection happens in a sheet
@@ -1789,6 +1890,15 @@ struct MessageRow: View {
         }
     }
 
+    /// A quoted message as one readable line: attachment transport tags
+    /// (paths on the computer) dropped, a file-only message named as such.
+    static func quotePreview(_ message: Message) -> String {
+        let content = AttachedMessageContent.parse(message.text ?? "")
+        let text = content.text.split(whereSeparator: \.isNewline).joined(separator: " ")
+        if !text.isEmpty { return text }
+        return content.attachments.isEmpty ? String(localized: "Earlier message") : String(localized: "Attachment")
+    }
+
     private func reactionGroups(_ reactions: [Reaction]) -> [(emoji: String, count: Int, mine: Bool)] {
         Dictionary(grouping: reactions, by: \.emoji)
             .map { (emoji: $0.key, count: $0.value.count, mine: $0.value.contains { $0.by == "user" }) }
@@ -1861,6 +1971,15 @@ struct TextBubble: View {
     let chat: Chat
     var tailed = true
     let openLink: (URL, Message) -> OpenURLAction.Result
+    @Environment(\.mentionContext) private var mentions
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 18
+
+    /// What you typed, as typed, with the names you tagged drawn as tokens.
+    static func styledMine(_ text: String, mentions: MentionContext) -> AttributedString {
+        var out = AttributedString(text)
+        out.styleMentions(mentions, mine: true)
+        return out
+    }
 
     private var attachedContent: AttachedMessageContent {
         AttachedMessageContent.parse(message.text ?? "")
@@ -1977,8 +2096,8 @@ struct TextBubble: View {
                         )
                     }
                     if !shared.text.isEmpty {
-                        Text(shared.text)
-                            .font(.system(size: 18))
+                        Text(Self.styledMine(shared.text, mentions: mentions))
+                            .font(.system(size: bodySize))
                             .foregroundStyle(BubbleColor.mineText)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -2772,18 +2891,67 @@ final class ScrollFollow {
 /// on 17 the reader counts as pinned, which is how it behaved before.
 private struct TrackPinnedToBottom: ViewModifier {
     let follow: ScrollFollow
+    /// Told only when pinned flips, for the jump-down button.
+    var onChange: (Bool) -> Void = { _ in }
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
-            content.onScrollGeometryChange(for: Bool.self) { geometry in
+            // The distance to the end rather than a Bool: with a Bool, a
+            // quick false-then-true while the lazy rows settled on open
+            // could deliver only the false, leaving a reader who was at the
+            // bottom marked as scrolled away (no follow, a stray jump
+            // button). A distance keeps arriving, so the last one is true.
+            content.onScrollGeometryChange(for: CGFloat.self) { geometry in
+                max(0, (geometry.contentSize.height - geometry.visibleRect.maxY).rounded())
+            } action: { _, distance in
                 // a generous margin: a streaming row grows between frames,
                 // and the reader resting on the last line counts as at it
-                geometry.visibleRect.maxY >= geometry.contentSize.height - 80
-            } action: { _, pinned in
+                let pinned = distance <= 80
+                guard pinned != follow.pinned else { return }
                 follow.pinned = pinned
+                onChange(pinned)
             }
         } else {
             content
         }
+    }
+}
+
+/// Whether a view is on screen in its scroll view. iOS 18; a no-op before.
+private struct ReportsVisible: ViewModifier {
+    let action: (Bool) -> Void
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollVisibilityChange(threshold: 0.01, action)
+        } else {
+            content
+        }
+    }
+}
+
+/// The round button that takes a reader who scrolled up back to the newest
+/// line, with a dot when something arrived meanwhile.
+private struct JumpToLatestButton: View {
+    let unseen: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassCapsule()
+        .overlay(alignment: .topTrailing) {
+            if unseen {
+                Circle().fill(Color.accentColor).frame(width: 10, height: 10)
+                    .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 1.5))
+                    .offset(x: 1, y: -1)
+            }
+        }
+        .accessibilityLabel(unseen ? "New messages. Jump to latest" : "Jump to latest")
+        .accessibilityIdentifier("jump-to-latest")
     }
 }
 

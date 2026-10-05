@@ -55,6 +55,7 @@ struct NewGroupSheet: View {
                         } label: {
                             HStack(spacing: 12) {
                                 BotAvatarView(bot: bot, size: 36, state: .idle, animated: false)
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(bot.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.primary)
                                     if !bot.title.isEmpty {
@@ -65,9 +66,13 @@ struct NewGroupSheet: View {
                                 Image(systemName: members.contains(bot.id) ? "checkmark.circle.fill" : "circle")
                                     .font(.system(size: 22))
                                     .foregroundStyle(members.contains(bot.id) ? MausPalette.color(bot.color) : Color.secondary.opacity(0.4))
+                                    .accessibilityHidden(true)
                             }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(members.contains(bot.id) ? .isSelected : [])
                     }
                     ForEach(sharedPicks) { contact in
                         Button {
@@ -76,6 +81,7 @@ struct NewGroupSheet: View {
                         } label: {
                             HStack(spacing: 12) {
                                 sharedAvatar(contact)
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(contact.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.primary)
                                     if contact.kind == "bot" {
@@ -88,12 +94,18 @@ struct NewGroupSheet: View {
                                     .font(.system(size: 22))
                                     .foregroundStyle(members.contains(contact.id)
                                                      ? MausPalette.color(contact.color ?? "green") : Color.secondary.opacity(0.4))
+                                    .accessibilityHidden(true)
                             }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(members.contains(contact.id) ? .isSelected : [])
                     }
                 }
-                if let error { Text(error).foregroundStyle(.red) }
+                if let error {
+                    Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.red)
+                }
             }
             .navigationTitle("New group")
             .navigationBarTitleDisplayMode(.inline)
@@ -102,29 +114,34 @@ struct NewGroupSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        creating = true
-                        Task {
-                            // members in roster order, so the room's name (if
-                            // it defaults) follows the first bot you picked
-                            let ordered = bots.map(\.id).filter(members.contains)
-                            let remote = sharedContacts.filter { members.contains($0.id) }
-                            if !remote.isEmpty, let me = sharedMe, let actorID = me.actorId {
-                                do {
-                                    let localIDs = ordered.map { "\(me.homeId):bot:\($0)" }
-                                    let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    let room = try await session.createSharedRoom(name: title.isEmpty ? remote[0].name : title, memberIds: [actorID] + localIDs + remote.map(\.id))
+                    if creating {
+                        ProgressView()
+                    } else {
+                        Button("Create") {
+                            creating = true
+                            error = nil
+                            Task {
+                                // members in roster order, so the room's name (if
+                                // it defaults) follows the first bot you picked
+                                let ordered = bots.map(\.id).filter(members.contains)
+                                let remote = sharedContacts.filter { members.contains($0.id) }
+                                if !remote.isEmpty, let me = sharedMe, let actorID = me.actorId {
+                                    do {
+                                        let localIDs = ordered.map { "\(me.homeId):bot:\($0)" }
+                                        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        let room = try await session.createSharedRoom(name: title.isEmpty ? remote[0].name : title, memberIds: [actorID] + localIDs + remote.map(\.id))
+                                        Haptics.success()
+                                        createdShared(room)
+                                    } catch { self.error = error.localizedDescription }
+                                } else if let room = await session.createRoom(name: name, memberIds: ordered) {
                                     Haptics.success()
-                                    createdShared(room)
-                                } catch { self.error = error.localizedDescription }
-                            } else if let room = await session.createRoom(name: name, memberIds: ordered) {
-                                Haptics.success()
-                                created(room)
+                                    created(room)
+                                }
+                                creating = false
                             }
-                            creating = false
                         }
+                        .disabled(members.isEmpty || creating)
                     }
-                    .disabled(members.isEmpty || creating)
                 }
             }
         }

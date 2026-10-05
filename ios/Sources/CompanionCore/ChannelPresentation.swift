@@ -67,14 +67,7 @@ public enum ChannelMentionPicker {
     /// What goes to the server: each pick as `@name`, ahead of the message,
     /// skipping any name the draft already mentions.
     public static func outgoing(_ draft: String, picks: [Bot]) -> String {
-        var body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // a bare @ left open from the drawer is not part of the message
-        if body == "@" || body.hasSuffix(" @") { body = String(body.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines) }
-        let lower = body.lowercased()
-        let tags = picks.map { "@" + $0.name }.filter { tag in
-            !lower.contains(tag.lowercased() + " ") && !lower.hasSuffix(tag.lowercased())
-        }
-        return (tags + (body.isEmpty ? [] : [body])).joined(separator: " ")
+        outgoing(draft, targets: picks.map(MentionTarget.init(bot:)))
     }
 }
 

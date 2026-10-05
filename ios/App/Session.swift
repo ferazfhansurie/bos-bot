@@ -9,6 +9,7 @@
 // server is asked what was missed rather than being asked for everything.
 import Combine
 import Foundation
+import Network
 import OSLog
 import SwiftUI
 import CompanionCore
@@ -175,6 +176,22 @@ final class Session: ObservableObject {
     /// Best-effort authenticated route refresh started by the latest live SSE
     /// hello. Kept separate so endpoint discovery never stalls event delivery.
     private var endpointRefreshTask: Task<Void, Never>?
+    /// The Mac's remote-access summary from the latest live connection.
+    /// `nil` is unknown: not fetched yet, or a desktop too old to say.
+    @Published private(set) var companionStatus: CompanionStatus?
+    /// Set beside an `.offline` status: the Mac was last reachable from
+    /// anywhere, so a failure now more likely means it is asleep than that
+    /// this phone is on the wrong network.
+    @Published private(set) var macMayBeAsleep = false
+    /// Dials that failed since the stream was last live. A full lap of the
+    /// rotation means every known route failed.
+    private var failedDialsSinceLive = 0
+    /// Watches wifi/cellular handoffs so a stream stranded on a local route
+    /// moves to a protected one at once instead of after backoff.
+    private let pathMonitor = NWPathMonitor()
+    private var pathSignature: String?
+    /// Unknown until the first path report; assume the saved order holds.
+    private var onLocalNetwork = true
     /// Identifies the task currently stored in `streamTask`. A cancelled task
     /// can finish after its replacement starts; its cleanup must not clear
     /// the replacement's handle.
@@ -311,6 +328,7 @@ final class Session: ObservableObject {
         }
 #endif
         restore()
+        startWatchingNetworkPath()
         Task { await refreshNotificationAuthorization() }
     }
 
@@ -589,6 +607,7 @@ final class Session: ObservableObject {
         if wasActive { stopActiveRuntime() }
         preparedPhoneCredentials = preparedPhoneCredentials.filter { $0.value.connectionID != id }
         Keychain.remove(id)
+        RosterCache.remove(for: id)
         registry.remove(id: id)
         persistRegistry()
         connections = registry.connections
@@ -625,6 +644,9 @@ final class Session: ObservableObject {
         stopStream()
         endpointRefreshTask?.cancel()
         endpointRefreshTask = nil
+        companionStatus = nil
+        macMayBeAsleep = false
+        failedDialsSinceLive = 0
         restorePending = false
         pendingNotification = nil
         pairingInvite = CompanionPairingInvitePolicy.nextInvite(
@@ -650,9 +672,14 @@ final class Session: ObservableObject {
         // New connections honor the desktop's transport policy. Automatic
         // walking is credential-safe: protected routes stay protected, while
         // a legacy/local route is only tried when it was the exact saved route.
-        rotation = CandidateRotation(endpoints: saved.orderedEndpoints)
+        rotation = CandidateRotation(endpoints: saved.orderedEndpoints, onLocalNetwork: onLocalNetwork)
         let first = rotation.currentEndpoint.map(saved.dialing) ?? saved
         client = CompanionClient(connection: first, token: stored)
+        // Draw the last roster now; the first hello carries no cursor, so
+        // the server answers `resumed: false` and hydrate replaces it.
+        if !state.rosterLoaded, let cached = RosterCache.load(for: saved.id) {
+            state.hydrate(cached.fleet)
+        }
         status = .connecting
     }
 
@@ -660,8 +687,12 @@ final class Session: ObservableObject {
         resetCredentialEntry()
         streamGeneration += 1
         stopStream()
+        saveRosterCache()
         endpointRefreshTask?.cancel()
         endpointRefreshTask = nil
+        companionStatus = nil
+        macMayBeAsleep = false
+        failedDialsSinceLive = 0
         restorePending = false
         endLinger()
         pendingNotification = nil
@@ -703,6 +734,12 @@ final class Session: ObservableObject {
         }
         // back before the grace period ran out: keep the stream, drop the task
         endLinger()
+        // A stream waiting out backoff would leave the person who just
+        // opened the app looking at an old failure for up to 15 seconds.
+        // Dial now; the cursor survives, so this is a gap, not a reset.
+        if streamTask != nil, case .offline = status {
+            stopStream()
+        }
         guard client != nil, streamTask == nil else { return }
         reconnectDelay = 0
         streamGeneration += 1
@@ -874,9 +911,18 @@ final class Session: ObservableObject {
     func disconnect() {
         resetCredentialEntry()
         stopStream()
+        saveRosterCache()
         endpointRefreshTask?.cancel()
         endpointRefreshTask = nil
         endLinger()
+    }
+
+    /// Written when the stream is put down on purpose — leaving the screen
+    /// or switching computers — which is also when the folded state is at a
+    /// known point. Forgetting a computer removes it after any such write.
+    private func saveRosterCache() {
+        guard let id = connection?.id, state.rosterLoaded else { return }
+        RosterCache.save(CachedRoster(state: state), for: id)
     }
 
     private func resetCredentialEntry() {
@@ -1197,6 +1243,7 @@ final class Session: ObservableObject {
                             state.resetCursor(cursor)
                         }
                         status = .live
+                        failedDialsSinceLive = 0
                         // A push may have moved the badge while the stream
                         // was down; set it once from the live count.
                         appliedBadge = nil
@@ -1274,11 +1321,21 @@ final class Session: ObservableObject {
         guard let connection else { return error.localizedDescription }
         let failed = rotation.currentEndpoint ?? connection.activeEndpoint ??
             CompanionEndpoint.direct(host: connection.host, port: connection.port, priority: 10_000)
+        macMayBeAsleep = hostedLastKnownReady && Self.couldMeanMacAsleep(error)
         var next: String?
         if let candidate = rotation.advanceEndpoint(after: error), let token {
             client = CompanionClient(connection: connection.dialing(candidate), token: token)
             next = candidate.displayAddress
             log.info("advancing to companion route \(candidate.url, privacy: .public)")
+        }
+        // Every known route has now failed once. A hosted route the Mac
+        // brought up since the last refresh is only learned by asking, so
+        // ask through whichever route the walk is on — a route which answers
+        // plain requests while its stream fails can still teach a better one.
+        failedDialsSinceLive += 1
+        if failedDialsSinceLive >= max(rotation.count, 1), let client {
+            failedDialsSinceLive = 0
+            refreshConnectionMetadata(using: client)
         }
         if let urlError = error as? URLError {
             return ConnectionAdvice.message(
@@ -1309,11 +1366,33 @@ final class Session: ObservableObject {
         persistActiveConnection(updated)
     }
 
+    /// Whether the Mac was last known reachable from anywhere. The hosted
+    /// route is advertised only after the tunnel passes its public health
+    /// check, so a saved hosted endpoint stands in for a status not yet
+    /// fetched this launch.
+    private var hostedLastKnownReady: Bool {
+        if let state = companionStatus?.hosted?.state, state != .unknown { return state == .ready }
+        return connection?.orderedEndpoints.contains { $0.kind == .hosted } == true
+    }
+
+    /// Route-shaped failures: nothing answered, or a gateway answered for a
+    /// Mac behind it that did not. A phone with no network at all, or a Mac
+    /// that answered with an application error, is not a sleeping Mac.
+    private static func couldMeanMacAsleep(_ error: Error) -> Bool {
+        if let urlError = error as? URLError { return urlError.code != .notConnectedToInternet }
+        return ConnectionAdvice.shouldTryAnotherRoute(after: error)
+    }
+
     /// Learn routes enabled after this phone originally paired. The endpoint
     /// response is authenticated with the existing device token and is a
     /// replacement snapshot, but failure is deliberately non-fatal: older
     /// sidecars return 404 and a transient refresh error must not tear down a
     /// perfectly healthy event stream.
+    ///
+    /// The remote-access status rides along. While the Mac says its hosted
+    /// route is coming up (or up) but no hosted endpoint has been advertised
+    /// yet, keep asking at a slow pace: the phone paired on the home wifi
+    /// must learn the hosted route before it leaves, not after.
     private func refreshConnectionMetadata(using sourceClient: CompanionClient) {
         // A server has no companion routes to advertise (`/api/companion/*`
         // is the sidecar's); its one address is the one that was paired.
@@ -1321,33 +1400,109 @@ final class Session: ObservableObject {
         let workingEndpoint = rotation.currentEndpoint ?? sourceClient.connection.activeEndpoint
         endpointRefreshTask?.cancel()
         endpointRefreshTask = Task { [weak self] in
-            do {
-                let metadata = try await sourceClient.connectionMetadata()
-                try Task.checkCancellation()
-                guard let self,
+            for attempt in 0..<Self.hostedRoutePollLimit {
+                if attempt > 0 {
+                    try? await Task.sleep(for: Self.hostedRoutePollInterval)
+                }
+                guard !Task.isCancelled else { return }
+                var metadata: CompanionConnectionMetadata?
+                do {
+                    metadata = try await sourceClient.connectionMetadata()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    log.debug("endpoint refresh unavailable: \(error.localizedDescription, privacy: .public)")
+                }
+                var fetchedStatus: CompanionStatus??
+                do {
+                    fetchedStatus = .some(try await sourceClient.companionStatus())
+                } catch {
+                    log.debug("companion status unavailable: \(error.localizedDescription, privacy: .public)")
+                }
+                guard !Task.isCancelled,
+                      let self,
                       self.connection?.id == connectionID,
                       self.client?.connection.baseURL == sourceClient.connection.baseURL,
                       var updated = self.connection
                 else { return }
 
-                updated.reconcile(metadata)
-                self.persistActiveConnection(updated)
+                // A 404 is a known "unknown"; a transient error keeps the
+                // last value rather than blanking the Settings row.
+                if let fetchedStatus { self.companionStatus = fetchedStatus }
+                if let metadata {
+                    updated.reconcile(metadata)
+                    self.persistActiveConnection(updated)
 
-                // Keep the currently live route first until this stream ends.
-                // CandidateRotation applies the same no-downgrade policy used
-                // by pairing, while the saved connection uses advertised
-                // security priorities on the next launch.
-                let liveRoutes = workingEndpoint.map { route in
-                    [route] + updated.orderedEndpoints.filter { $0.url != route.url }
-                } ?? updated.orderedEndpoints
-                self.rotation = CandidateRotation(endpoints: liveRoutes)
-                log.info("refreshed \(metadata.endpoints.count, privacy: .public) companion routes")
-            } catch is CancellationError {
-                return
-            } catch {
-                log.debug("endpoint refresh unavailable: \(error.localizedDescription, privacy: .public)")
+                    // Keep the currently live route first until this stream ends.
+                    // CandidateRotation applies the same no-downgrade policy used
+                    // by pairing, while the saved connection uses advertised
+                    // security priorities on the next launch.
+                    let liveRoutes = workingEndpoint.map { route in
+                        [route] + updated.orderedEndpoints.filter { $0.url != route.url }
+                    } ?? updated.orderedEndpoints
+                    self.rotation = CandidateRotation(endpoints: liveRoutes)
+                    log.info("refreshed \(metadata.endpoints.count, privacy: .public) companion routes")
+                }
+
+                let knowsHosted = updated.orderedEndpoints.contains { $0.kind == .hosted }
+                let hostedState = self.companionStatus?.hosted?.state
+                let hostedComing = hostedState == .provisioning || hostedState == .ready
+                guard !knowsHosted, hostedComing, self.status == .live else { return }
             }
         }
+    }
+
+    private static let hostedRoutePollLimit = 10
+    private static let hostedRoutePollInterval: Duration = .seconds(30)
+
+    // MARK: - Network path
+
+    private func startWatchingNetworkPath() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            let local = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            let signature = [
+                satisfied, local, path.usesInterfaceType(.cellular), path.usesInterfaceType(.other),
+            ].map(String.init).joined(separator: ",")
+            Task { @MainActor [weak self] in
+                self?.networkPathChanged(satisfied: satisfied, onLocalNetwork: local, signature: signature)
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "com.openmausbot.companion.path"))
+    }
+
+    /// Wifi to cellular, leaving the house, or the network coming back.
+    ///
+    /// A stream on a LAN, Bonjour or tailnet route may be dead without
+    /// knowing it yet, and one waiting out backoff would wait for nothing:
+    /// rebuild the walk for the new path and dial now. A live hosted stream
+    /// is left alone — it is the route that survives a handoff, and the
+    /// stream's own failure path covers the rare case it does not. The first
+    /// report is not a change, except that a launch off the local network
+    /// must not sit on a cleartext route that cannot answer.
+    private func networkPathChanged(satisfied: Bool, onLocalNetwork local: Bool, signature: String) {
+        let previous = pathSignature
+        pathSignature = signature
+        onLocalNetwork = local
+        guard satisfied, let connection, let token, client != nil else { return }
+        let current = client?.connection.activeEndpoint
+        let changed = previous != nil && previous != signature
+        let stranded = !local && current?.protectsCredentials == false
+        guard stranded || (changed && (status != .live || current?.kind != .hosted)) else { return }
+
+        let walk = CandidateRotation(endpoints: connection.orderedEndpoints, onLocalNetwork: local)
+        guard let first = walk.currentEndpoint,
+              changed || first.url != current?.url
+        else { return }
+        log.info("network path changed; dialing \(first.url, privacy: .public)")
+        rotation = walk
+        failedDialsSinceLive = 0
+        client = CompanionClient(connection: connection.dialing(first), token: token)
+        // Off screen there is no stream to move; the next `connect()` dials
+        // the new walk.
+        guard streamTask != nil else { return }
+        stopStream()
+        connect()
     }
 
     /// Replace the stored address by hand, keeping the pairing and its token.

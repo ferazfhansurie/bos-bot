@@ -180,10 +180,11 @@ public func activityStatus(_ steps: [ToolStep]) -> ToolStep.Status {
     return .ok
 }
 
-/// "12s", "1m 04s" — a working turn's elapsed time, never a bare count of
-/// seconds past a minute.
+/// "12s", "1m 04s", "2h 05m" — a working turn's elapsed time, never a bare
+/// count of seconds past a minute or of minutes past an hour.
 public func elapsedLabel(_ seconds: Int) -> String {
     let seconds = max(0, seconds)
     if seconds < 60 { return "\(seconds)s" }
-    return "\(seconds / 60)m \(String(format: "%02d", seconds % 60))s"
+    if seconds < 3_600 { return "\(seconds / 60)m \(String(format: "%02d", seconds % 60))s" }
+    return "\(seconds / 3_600)h \(String(format: "%02d", seconds % 3_600 / 60))m"
 }

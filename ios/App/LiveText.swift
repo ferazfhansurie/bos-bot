@@ -42,8 +42,16 @@ final class LiveTextStore {
     /// and at the frame rate that crowds out keystrokes. While a draft is
     /// open the bubble steps a few times a second instead; the text it shows
     /// is the same, only coarser.
-    var composing = false {
+    private(set) var composing = false {
         didSet { if !composing, oldValue { publish() } }
+    }
+    /// Who has a draft open. A wide window shows two chats, each with its own
+    /// composer, and one emptying its draft must not end the other's typing.
+    private var composers = Set<UUID>()
+
+    func setComposing(_ typing: Bool, by composer: UUID) {
+        if typing { composers.insert(composer) } else { composers.remove(composer) }
+        if composing == composers.isEmpty { composing = !composers.isEmpty }
     }
     private static let composingInterval: Duration = .milliseconds(250)
     /// With more than one reply streaming, every bubble's step re-measures

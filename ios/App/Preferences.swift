@@ -17,6 +17,8 @@ enum PrefKey {
     static let appearance = "companion.prefs.appearance"
     static let theme = "companion.prefs.theme"
     static let themeApplied = "companion.prefs.themeApplied"
+    /// A wide window's split: the primary chat's share of the width.
+    static let splitFraction = "companion.prefs.splitFraction"
 }
 
 enum AppTheme: String, CaseIterable {
