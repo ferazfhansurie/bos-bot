@@ -3,6 +3,12 @@ import type { WireGroup } from "../shared/wire.ts";
 export function roomPeople(group: Pick<WireGroup, "peopleIds">, ownerId: string): string[] {
   return [...new Set([ownerId, ...(group.peopleIds ?? [])])];
 }
+/** Room messages and completed replies may push; owner-only workflow
+ * notifications must never be forwarded to room guests. */
+export function roomPushPeople(group: Pick<WireGroup, "peopleIds" | "notifications">, ownerId: string, canRead: (personId: string) => boolean, excludeId: string, notificationKind?: string): string[] {
+  if (group.notifications === "muted" || notificationKind !== undefined && notificationKind !== "done") return [];
+  return roomPeople(group, ownerId).filter(personId => personId !== excludeId && canRead(personId));
+}
 export function personCanReadRoom(group: Pick<WireGroup, "peopleIds" | "dm"> | undefined, actorId: string | null, ownerId: string): boolean {
   return !!group && !!actorId && (actorId === ownerId || !group.dm && roomPeople(group, ownerId).includes(actorId));
 }
