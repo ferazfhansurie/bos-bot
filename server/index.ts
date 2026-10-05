@@ -27,6 +27,7 @@ import { resolveTerminalTarget } from "./terminal-target.ts";
 import { WorkspaceFilesService } from "./workspace-files.ts";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
 import { basename, extname, join } from "node:path";
+import { homedir } from "node:os";
 
 import { z } from "zod";
 import { selectReplay, DEFAULT_REBUILD_BYTES, MAX_SUMMARY_BYTES } from "./context-rebuild.ts";
@@ -607,7 +608,27 @@ function workspaceActor(auth: RequestAuth): string | null {
 }
 const peerThreads = new PeerThreads(join(DATA_DIR, "peer-threads.json"));
 const peerHandoffs = new PeerHandoffs(join(DATA_DIR, "peer-handoffs.json"));
+// A phone paired through the companion sidecar has no harness session; its
+// push registration is bound to the sidecar's device id instead, and lives
+// exactly as long as that device stays paired in the sidecar's registry.
+const COMPANION_PUSH_PREFIX = "companion-";
+const COMPANION_DEVICES_FILE = join(process.env.OMB_COMPANION_DIR ?? join(homedir(), ".openmausbot-companion"), "devices.json");
+function companionDevicePaired(deviceId: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(COMPANION_DEVICES_FILE, "utf8")) as { devices?: Array<{ id?: unknown }> } | Array<{ id?: unknown }>;
+    const devices = Array.isArray(parsed) ? parsed : parsed.devices;
+    return Array.isArray(devices) && devices.some(device => device?.id === deviceId);
+  } catch { return false; }
+}
+function pushSessionFor(auth: RequestAuth): string | null {
+  if (auth.kind === "session") return sessions.isLive(auth.session.id) ? auth.session.id : null;
+  const device = auth.companionDevice;
+  return device && /^[\w-]{1,100}$/.test(device) && companionDevicePaired(device) ? COMPANION_PUSH_PREFIX + device : null;
+}
 const apnsPush = new ApnsPush(undefined, (sessionId, actorId) => {
+  if (sessionId.startsWith(COMPANION_PUSH_PREFIX)) {
+    return actorId === multiplayerActors.ownerId && companionDevicePaired(sessionId.slice(COMPANION_PUSH_PREFIX.length));
+  }
   if (!sessions.isLive(sessionId)) return false;
   const bound = multiplayerActors.actorFor(sessionId);
   return bound === actorId || (actorId === multiplayerActors.ownerId && bound !== null && bound === multiplayerLinks.primaryActorId());
@@ -14160,9 +14181,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 403, { error: "a bot on another Mac is not a room member; open it from the bot list instead" });
         }
         if (method === "POST" && path === "/api/multiplayer/push-token") {
-          if (auth.kind !== "session" || !sessions.isLive(auth.session.id)) return json(res, 403, { error: "Push registration requires this device's live paired session" });
+          const pushSession = pushSessionFor(auth);
+          if (!pushSession) return json(res, 403, { error: "Push registration requires this device's live paired session" });
           if (typeof body?.token !== "string" || !["development", "production"].includes(body.environment) || typeof body.connectionId !== "string" || body.connectionId.length > 128) return json(res, 400, { error: "APNs token, environment and connection id required" });
-          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId, auth.session.id); }
+          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId, pushSession); }
           catch { return json(res, 400, { error: "invalid or unowned APNs registration" }); }
           // The shared home's bridge session outlives this device's session.
           // Forwarding would keep delivering after device revocation here.
@@ -14267,11 +14289,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!actorId) return json(res, 403, { error: "this device has not been assigned to a person" });
       if (method === "POST" && path === "/api/multiplayer/push-token") {
         const body = await readBody(req, 1024);
-        if (auth.kind !== "session" || !sessions.isLive(auth.session.id)) return json(res, 403, { error: "Push registration requires this device's live paired session" });
+        const pushSession = pushSessionFor(auth);
+        if (!pushSession) return json(res, 403, { error: "Push registration requires this device's live paired session" });
         if (typeof body?.token !== "string" || (body.environment !== "development" && body.environment !== "production") || typeof body.connectionId !== "string" || body.connectionId.length > 128) {
           return json(res, 400, { error: "APNs token, environment and connection id required" });
         }
-        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId, auth.session.id); }
+        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId, pushSession); }
         catch { return json(res, 400, { error: "invalid APNs token" }); }
         return json(res, 200, { registered: true, deliveryConfigured: apnsPush.configured() });
       }

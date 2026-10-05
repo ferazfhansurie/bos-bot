@@ -16,7 +16,7 @@ import type { Scope, SessionRecord, SessionRegistry } from "./sessions.ts";
 import { denyReason as companionDenial } from "../companion/src/routes.ts";
 
 export type RequestAuth =
-  | { kind: "loopback"; scopes: readonly Scope[] }
+  | { kind: "loopback"; scopes: readonly Scope[]; companionDevice?: string }
   | { kind: "session"; session: SessionRecord; via: "bearer" | "cookie" | "ticket"; scopes: readonly Scope[] };
 
 export interface RequestAuthResult {
@@ -476,7 +476,9 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
         !/^[\w-]{1,128}$/.test(headerValue(req.headers["x-openmausbot-companion-device"]) ?? "") ||
         companionDenial({ path, method, authenticated: true })
       ) return deny(403, "forbidden: invalid companion request");
-      return { auth: { kind: "loopback", scopes: LOOPBACK_SCOPES }, status: 401, error: "" };
+      // The sidecar authenticated this phone's bearer and named its device;
+      // carried so device-bound state (push) can follow the device's pairing.
+      return { auth: { kind: "loopback", scopes: LOOPBACK_SCOPES, companionDevice: headerValue(req.headers["x-openmausbot-companion-device"]) }, status: 401, error: "" };
     }
     if (
       options.loopbackMutationToken !== undefined &&
