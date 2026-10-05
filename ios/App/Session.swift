@@ -131,6 +131,17 @@ final class Session: ObservableObject {
     /// disconnect clears the field even when the selected connection itself
     /// has not changed.
     @Published private(set) var credentialEntryResetGeneration = 0
+    /// Which person this pairing speaks as, per connection, so room lines
+    /// from other people can be told apart from yours.
+    @Published private var roomSelf: (connectionID: String, me: SharedMe)?
+    var roomActorId: String? {
+        guard let roomSelf, roomSelf.connectionID == client?.connection.id else { return nil }
+        return roomSelf.me.actorId
+    }
+    var roomHomeId: String? {
+        guard let roomSelf, roomSelf.connectionID == client?.connection.id else { return nil }
+        return roomSelf.me.homeId
+    }
 
     /// A notification response that should be pushed by the roster's
     /// NavigationStack after the exact detached task has been activated.
@@ -1397,6 +1408,7 @@ final class Session: ObservableObject {
                                 ifCursorMatches: expectedCursor) else { continue }
             log.info("hydrated \(snapshot.fleet.bots.count, privacy: .public) bots, \(snapshot.fleet.groups.count, privacy: .public) rooms")
             applyBadge(state.unreadCount)
+            if roomActorId == nil { Task { await loadRoomSelf(using: client) } }
             return
         }
         throw APIError.status(code: 409, message: "Conversations changed while loading. Please try opening this notification again.")
@@ -2572,6 +2584,49 @@ final class Session: ObservableObject {
     var roomSettingsContext: RoomSettingsContext? {
         guard let client else { return nil }
         return RoomSettingsContext(connectionID: client.connection.id, generation: avatarCacheGeneration)
+    }
+
+    /// Older computers answer 404 here; their rooms have no people, so every
+    /// line stays yours.
+    private func loadRoomSelf(using client: CompanionClient) async {
+        guard let me = try? await client.sharedMe(), self.client?.connection.id == client.connection.id else { return }
+        roomSelf = (client.connection.id, me)
+    }
+
+    func addRoomPerson(_ room: Room, personId: String, context: RoomSettingsContext) async throws -> Room {
+        guard context.permits(roomSettingsContext), let capturedClient = client else { throw CancellationError() }
+        let updated = try await capturedClient.addRoomPerson(roomId: room.id, personId: personId)
+        guard !Task.isCancelled, context.permits(roomSettingsContext) else { throw CancellationError() }
+        state.apply(.room(updated))
+        return updated
+    }
+
+    func removeRoomPerson(_ room: Room, personId: String, context: RoomSettingsContext) async throws -> Room {
+        guard context.permits(roomSettingsContext), let capturedClient = client else { throw CancellationError() }
+        let updated = try await capturedClient.removeRoomPerson(roomId: room.id, personId: personId)
+        guard !Task.isCancelled, context.permits(roomSettingsContext) else { throw CancellationError() }
+        state.apply(.room(updated))
+        return updated
+    }
+
+    func createRoomInvite(_ room: Room, context: RoomSettingsContext) async throws -> RoomInvite {
+        guard context.permits(roomSettingsContext), let capturedClient = client else { throw CancellationError() }
+        return try await capturedClient.createRoomInvite(roomIds: [room.id])
+    }
+
+    func roomBotGrants(_ room: Room, context: RoomSettingsContext) async throws -> [String] {
+        guard context.permits(roomSettingsContext), let capturedClient = client else { throw CancellationError() }
+        return try await capturedClient.roomBotGrants(roomId: room.id)
+    }
+
+    func setRoomBotGrants(_ room: Room, botIds: [String], context: RoomSettingsContext) async throws -> [String] {
+        guard context.permits(roomSettingsContext), let capturedClient = client else { throw CancellationError() }
+        return try await capturedClient.setRoomBotGrants(roomId: room.id, botIds: botIds)
+    }
+
+    func roomContacts() async throws -> [SharedContact] {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.sharedContacts().filter { $0.kind == "person" }
     }
 
     func updateRoom(_ room: Room, patch: RoomSettingsPatch, context: RoomSettingsContext) async throws -> Room {

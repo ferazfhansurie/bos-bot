@@ -129,6 +129,13 @@ struct ChatView: View {
     static let bottomId = "companion.bottom"
 
     /// The live chat record, so busy/unread stay current as frames land.
+    /// The person this phone speaks as in a room, so other people's lines
+    /// sit on their side with their name.
+    private var roomSelfID: String? {
+        guard case let .room(room) = current else { return nil }
+        return session.roomActorId ?? room.ownerPersonId
+    }
+
     private var current: Chat {
         switch chat {
         case let .bot(bot):
@@ -311,6 +318,7 @@ struct ChatView: View {
                                     MessageRow(
                                         chat: current,
                                         message: message,
+                                        selfID: roomSelfID,
                                         endsRun: endsRun(at: index, in: transcript),
                                         openLink: openLink,
                                         openThread: openThread,
@@ -319,7 +327,7 @@ struct ChatView: View {
                                         versions: Self.versions(of: message, in: versions)
                                     )
                                     .equatable()
-                                    .arrivalSpring(arrives(message), fromTrailing: message.role == .user, reduceMotion: reduceMotion)
+                                    .arrivalSpring(arrives(message), fromTrailing: message.role == .user && !message.isFromAnotherPerson(selfID: roomSelfID), reduceMotion: reduceMotion)
                                 case let .activityRun(items):
                                     ActivityRunChip(items: items, openThread: openThread)
                                 }
@@ -1434,7 +1442,7 @@ struct ChatView: View {
             if let replyTarget {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Label("Replying to " + (replyTarget.from?.name ?? (replyTarget.role == .user ? "you" : current.name)), systemImage: "arrowshape.turn.up.left.fill")
+                        Label("Replying to " + (replyTarget.from?.name ?? (replyTarget.isFromAnotherPerson(selfID: roomSelfID) ? replyTarget.sender?.name : nil) ?? (replyTarget.role == .user ? "you" : current.name)), systemImage: "arrowshape.turn.up.left.fill")
                             .font(.caption.weight(.semibold))
                         Text(MessageRow.quotePreview(replyTarget)).font(.caption).lineLimit(2).foregroundStyle(.secondary)
                     }
@@ -1918,6 +1926,8 @@ struct ChatComposerBar: View {
 struct MessageRow: View {
     let chat: Chat
     let message: Message
+    /// The person this phone speaks as; set in rooms that have people.
+    var selfID: String? = nil
     /// Last bubble of a run from the same side: the one that gets the tail.
     var endsRun = true
     let openLink: (URL, Message) -> OpenURLAction.Result
@@ -1944,10 +1954,10 @@ struct MessageRow: View {
     }
 
     var body: some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+        VStack(alignment: message.role == .user && !message.isFromAnotherPerson(selfID: selfID) ? .trailing : .leading, spacing: 6) {
             if let reference = message.replyToId {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Replying to " + (replyTarget?.from?.name ?? (replyTarget?.role == .user ? "you" : "an earlier message"))).font(.caption.weight(.semibold))
+                    Text("Replying to " + (replyTarget?.from?.name ?? (replyTarget?.isFromAnotherPerson(selfID: selfID) == true ? replyTarget?.sender?.name : nil) ?? (replyTarget?.role == .user ? "you" : "an earlier message"))).font(.caption.weight(.semibold))
                     Text(replyTarget.map { Self.quotePreview($0) } ?? String(localized: "Earlier message")).font(.caption).lineLimit(2)
                 }.foregroundStyle(.secondary).padding(8)
                 .overlay(alignment: .leading) {
@@ -2070,7 +2080,7 @@ struct MessageRow: View {
     private var content: some View {
         switch message.kind {
         case .text:
-            TextBubble(message: message, chat: chat, tailed: endsRun, openLink: openLink)
+            TextBubble(message: message, chat: chat, selfID: selfID, tailed: endsRun, openLink: openLink)
         case .options:
             // A structured ask draws its own card: its answers are the
             // model's questions, not an allow/deny a tap could stand for.
@@ -2087,7 +2097,7 @@ struct MessageRow: View {
             } else if let secret = message.secret {
                 CredentialRequestCardView(chat: chat, message: message, secret: secret)
             } else if let text = message.text, !text.isEmpty {
-                TextBubble(message: message, chat: chat, tailed: endsRun, openLink: openLink)
+                TextBubble(message: message, chat: chat, selfID: selfID, tailed: endsRun, openLink: openLink)
             }
         case .activity:
             ActivityChip(message: message, threadRef: message.threadRef, openThread: openThread)
@@ -2102,7 +2112,7 @@ struct MessageRow: View {
             // When there is nothing to show, show nothing — a placeholder
             // saying "unsupported" is a worse gap than the gap.
             if let text = message.text, !text.isEmpty {
-                TextBubble(message: message, chat: chat, tailed: endsRun, openLink: openLink)
+                TextBubble(message: message, chat: chat, selfID: selfID, tailed: endsRun, openLink: openLink)
             }
         }
     }
@@ -2128,7 +2138,7 @@ extension MessageRow: Equatable {
     /// render and do the same thing each time, so they are not compared;
     /// without this every row redrew whenever anything in the app changed.
     static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
-        lhs.message == rhs.message && lhs.endsRun == rhs.endsRun
+        lhs.message == rhs.message && lhs.endsRun == rhs.endsRun && lhs.selfID == rhs.selfID
             && lhs.replyTarget == rhs.replyTarget && lhs.versions == rhs.versions
             && (lhs.openThread == nil) == (rhs.openThread == nil)
             && (lhs.onReply == nil) == (rhs.onReply == nil)
@@ -2186,15 +2196,16 @@ private struct ActivityShareSheet: UIViewControllerRepresentable {
 struct TextBubble: View {
     let message: Message
     let chat: Chat
+    var selfID: String? = nil
     var tailed = true
     let openLink: (URL, Message) -> OpenURLAction.Result
     @Environment(\.mentionContext) private var mentions
     @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 18
 
     /// What you typed, as typed, with the names you tagged drawn as tokens.
-    static func styledMine(_ text: String, mentions: MentionContext) -> AttributedString {
+    static func styledMine(_ text: String, mentions: MentionContext, mine: Bool = true) -> AttributedString {
         var out = AttributedString(text)
-        out.styleMentions(mentions, mine: true)
+        out.styleMentions(mentions, mine: mine)
         return out
     }
 
@@ -2275,7 +2286,10 @@ struct TextBubble: View {
     }
 
     var body: some View {
-        let mine = message.role == .user
+        // A person's line is plain text whoever wrote it; only yours sits on
+        // the trailing side.
+        let fromPerson = message.role == .user
+        let mine = fromPerson && !message.isFromAnotherPerson(selfID: selfID)
         let customCard = parsedDiff != nil || parsedTable != nil
         // rooms attribute each line to the member who said it
         let speaker = message.from
@@ -2289,6 +2303,11 @@ struct TextBubble: View {
                     Text(speaker.name)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(MausPalette.color(speaker.color))
+                } else if fromPerson, !mine, let person = message.sender {
+                    Text(person.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("room-sender-" + message.id)
                 }
                 ForEach(message.generatedImages, id: \.path) { attachment in
                     TranscriptAttachmentView(
@@ -2303,7 +2322,7 @@ struct TextBubble: View {
                     GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
                 } else if let table = parsedTable {
                     SQLResultTableView(columns: table.headers, rows: table.rows)
-                } else if mine {
+                } else if fromPerson {
                     let shared = attachedContent
                     ForEach(Array(shared.attachments.enumerated()), id: \.offset) { _, attachment in
                         TranscriptAttachmentView(
@@ -2313,9 +2332,9 @@ struct TextBubble: View {
                         )
                     }
                     if !shared.text.isEmpty {
-                        Text(Self.styledMine(shared.text, mentions: mentions))
+                        Text(Self.styledMine(shared.text, mentions: mentions, mine: mine))
                             .font(.system(size: bodySize))
-                            .foregroundStyle(BubbleColor.mineText)
+                            .foregroundStyle(mine ? BubbleColor.mineText : Color.primary)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }

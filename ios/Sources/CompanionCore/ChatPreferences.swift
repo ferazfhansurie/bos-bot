@@ -127,7 +127,7 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
     }
     public var role: Message.Role { head.role }
     public var kind: Message.Kind { head.kind }
-    public var senderName: String? { head.from?.name }
+    public var senderName: String? { head.from?.name ?? head.sender?.name }
 }
 
 /// When a chat last had something worth moving it up the roster for.

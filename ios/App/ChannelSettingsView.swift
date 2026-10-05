@@ -3,7 +3,8 @@ import PhotosUI
 import UIKit
 import CompanionCore
 
-/// Settings for local bot channels, separate from people-first shared rooms.
+/// Settings for local bot channels: bots, the people sharing the room, and
+/// which bots answer those people.
 struct ChannelSettingsView: View {
     let room: Room
     @EnvironmentObject private var session: Session
@@ -14,9 +15,26 @@ struct ChannelSettingsView: View {
     @State private var photo: PhotosPickerItem?
     @State private var removing: Bot?
     @State private var openingContext: RoomSettingsContext?
+    @State private var contacts: [SharedContact] = []
+    @State private var removingPerson: RoomPerson?
+    @State private var invite: RoomInvite?
+    /// Room bots that answer guests; nil until read, or on older computers.
+    @State private var grants: Set<String>?
     private var contextIsCurrent: Bool { openingContext?.permits(session.roomSettingsContext) == true }
     private var current: Room { contextIsCurrent ? session.state.rooms.first { $0.id == room.id } ?? room : room }
     private var members: [Bot] { current.memberIds.compactMap { session.state.bot($0) } }
+    private var selfID: String? { session.roomActorId ?? current.ownerPersonId }
+    private var people: [RoomPerson] {
+        current.people ?? (current.peopleIds ?? []).map { RoomPerson(id: $0, name: $0, homeId: $0.components(separatedBy: ":").first ?? "") }
+    }
+    /// People known to this computer who are not in the room yet.
+    private var addable: [SharedContact] {
+        let present = Set(current.peopleIds ?? people.map(\.id))
+        return contacts.filter { !present.contains($0.id) && $0.id != selfID }
+    }
+    /// Older computers send no people list; the section stays hidden there.
+    private var supportsPeople: Bool { current.peopleIds != nil || current.people != nil }
+    private func grantId(_ bot: Bot) -> String? { session.roomHomeId.map { "\($0):bot:\(bot.id)" } }
 
     var body: some View {
         NavigationStack {
@@ -62,6 +80,58 @@ struct ChannelSettingsView: View {
                         Text("Removing a bot stops future participation. The conversation history stays here.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                if supportsPeople, current.dm != true {
+                    Section("People") {
+                        ForEach(people) { person in
+                            HStack {
+                                Image(systemName: "person.crop.circle.fill").font(.title2).foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(person.id == selfID ? "\(person.name) (you)" : person.name)
+                                    if let home = person.homeName, !home.isEmpty {
+                                        Text(home).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                if session.canAdminister, person.id != current.ownerPersonId, person.id != selfID {
+                                    Button(role: .destructive) { removingPerson = person } label: { Image(systemName: "minus.circle") }
+                                        .accessibilityLabel("Remove \(person.name)")
+                                }
+                            }
+                            .accessibilityIdentifier("room-person-" + person.id)
+                        }
+                        if session.canAdminister {
+                            if !addable.isEmpty {
+                                Menu {
+                                    ForEach(addable) { contact in
+                                        Button(contact.name) { Task { await addPerson(contact.id) } }
+                                    }
+                                } label: { Label("Add person", systemImage: "person.badge.plus") }
+                            }
+                            if let invite, let url = URL(string: invite.url) {
+                                ShareLink(item: url, subject: Text(current.name), message: Text("Join \(current.name) on BOS")) {
+                                    Label("Share invite link", systemImage: "square.and.arrow.up")
+                                }
+                            } else {
+                                Button { Task { await makeInvite() } } label: { Label("Create invite link", systemImage: "link.badge.plus") }
+                            }
+                        }
+                        Text("People see this room's conversation. Bots only answer them where allowed below.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if session.canAdminister, current.hasGuests, let grants {
+                        Section("Bots that answer people") {
+                            ForEach(members) { bot in
+                                if let id = grantId(bot) {
+                                    Toggle(isOn: Binding(
+                                        get: { grants.contains(id) },
+                                        set: { on in Task { await setGrant(id, on: on) } }
+                                    )) {
+                                        HStack { BotAvatarView(bot: bot, size: 28); Text(bot.name) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if session.canAdminister {
                     Section("Notifications") {
                         Picker("Notify me", selection: Binding(
@@ -83,6 +153,16 @@ struct ChannelSettingsView: View {
             .onAppear { if openingContext == nil { openingContext = session.roomSettingsContext }; name = current.name }
             .onChange(of: session.roomSettingsContext) { _, _ in if !contextIsCurrent { dismiss() } }
             .onChange(of: photo) { _, item in if let item { Task { await upload(item) } } }
+            .task { await loadPeopleControls() }
+            .confirmationDialog("Remove \(removingPerson?.name ?? "person") from \(current.name)?", isPresented: Binding(
+                get: { removingPerson != nil }, set: { if !$0 { removingPerson = nil } }), titleVisibility: .visible) {
+                    if let person = removingPerson {
+                        Button("Remove person", role: .destructive) { Task {
+                            await removePerson(person.id)
+                            removingPerson = nil
+                        } }
+                    }
+                } message: { Text("They stop seeing new messages here.") }
             .confirmationDialog("Remove \(removing?.name ?? "bot") from \(current.name)?", isPresented: Binding(
                 get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
                     if let bot = removing {
@@ -102,6 +182,45 @@ struct ChannelSettingsView: View {
             let updated = try await session.updateRoom(current, patch: patch, context: context)
             name = updated.name; error = nil
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+
+    private func loadPeopleControls() async {
+        guard supportsPeople, session.canAdminister, let context = openingContext ?? session.roomSettingsContext else { return }
+        async let known = try? session.roomContacts()
+        async let allowed = try? session.roomBotGrants(current, context: context)
+        let (people, granted) = await (known, allowed)
+        guard context.permits(session.roomSettingsContext) else { return }
+        contacts = people ?? []
+        grants = granted.map(Set.init)
+    }
+
+    private func addPerson(_ id: String) async {
+        guard !saving, let context = openingContext, context.permits(session.roomSettingsContext) else { return }
+        saving = true; defer { saving = false }
+        do { _ = try await session.addRoomPerson(current, personId: id, context: context); error = nil }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+
+    private func removePerson(_ id: String) async {
+        guard !saving, let context = openingContext, context.permits(session.roomSettingsContext) else { return }
+        saving = true; defer { saving = false }
+        do { _ = try await session.removeRoomPerson(current, personId: id, context: context); error = nil }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+
+    private func makeInvite() async {
+        guard !saving, let context = openingContext, context.permits(session.roomSettingsContext) else { return }
+        saving = true; defer { saving = false }
+        do { invite = try await session.createRoomInvite(current, context: context); error = nil }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+
+    private func setGrant(_ id: String, on: Bool) async {
+        guard !saving, var next = grants, let context = openingContext, context.permits(session.roomSettingsContext) else { return }
+        if on { next.insert(id) } else { next.remove(id) }
+        saving = true; defer { saving = false }
+        do { grants = Set(try await session.setRoomBotGrants(current, botIds: next.sorted(), context: context)); error = nil }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 
     private func upload(_ item: PhotosPickerItem) async {
