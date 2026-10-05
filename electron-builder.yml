@@ -83,6 +83,8 @@ extraResources:
     to: android-platform-tools
 
 mac:
+  # Refresh the digest after nested native signing, before sealing the app.
+  sign: ./scripts/mac-sign.mjs
   # Two single-arch artifacts rather than one universal binary: the app is
   # architecture-specific, and universal would make users download both halves.
   # electron-updater picks by filename (arm64-marked files on Apple silicon,
