@@ -4,7 +4,8 @@ import { Columns2, X } from "lucide-react";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
 import { PanelResizeHandle, PanelResizeShield, useResizablePanel } from "@/components/PanelResizeHandle";
-import { TERMINAL_PANEL_SIZE, TerminalPanel } from "@/components/TerminalPanel";
+import { TERMINAL_PANEL_SIZE } from "@/components/TerminalPanel";
+import { ToolsPanel } from "@/components/ToolsPanel";
 import { t } from "@/lib/i18n";
 import { SPLIT_DRAG_TYPE, clampPaneShare, loadPaneShare, savePaneShare, shareFromPointer, visibleSplitPanes } from "@/lib/split-view";
 import { useSplitView } from "@/components/SplitViewContext";
@@ -103,7 +104,7 @@ export function SplitWorkspace({ children }: { children: ReactNode }) {
       {terminal && (
         <div className="relative flex h-full min-w-0 shrink-0 max-md:hidden" style={{ width: terminalPanel.size }} data-testid="terminal-dock">
           <PanelResizeHandle panel={terminalPanel} dock="right" label={t("terminal.resize")} testId="terminal-resize-handle" />
-          <TerminalPanel target={terminal} onClose={closeTerminal} />
+          <ToolsPanel key={`${terminal.botId}:${terminal.threadId}`} target={terminal} onClose={closeTerminal} />
           <PanelResizeShield active={terminalPanel.resizing} dock="right" />
         </div>
       )}

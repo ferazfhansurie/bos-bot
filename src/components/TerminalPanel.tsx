@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RotateCw, SquareTerminal, X } from "lucide-react";
+import { LayoutGrid, RotateCw, SquareTerminal, X } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -153,9 +153,9 @@ export function TerminalButton({ target, className }: { target: TerminalTarget; 
   if (!terminalAvailable()) return null;
   const open = sameTerminalTarget(terminal, target);
   return (
-    <button type="button" onClick={() => toggleTerminal(target)} aria-label={t("terminal.toggle")} aria-pressed={open} title={t("terminal.toggle")} data-testid="terminal-toggle"
+    <button type="button" onClick={() => toggleTerminal(target)} aria-label="Open tools" aria-pressed={open} title="Open tools" data-testid="terminal-toggle"
       className={cn("p-1.5 hover:bg-raised max-md:hidden", open ? "text-accent" : "text-ink-secondary hover:text-ink", className)}>
-      <SquareTerminal size={18} />
+      <LayoutGrid size={18} />
     </button>
   );
 }
