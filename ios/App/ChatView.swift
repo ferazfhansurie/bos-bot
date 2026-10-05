@@ -63,6 +63,8 @@ struct ChatView: View {
     /// Queue or block for the next send while a turn runs. Every send puts
     /// it back to queue, so block is never sticky.
     @State private var sendPriority: MessagePriority = .queue
+    /// The held send open in the queued-message editor.
+    @State private var editingQueued: QueuedSend?
     @State private var attachmentError: String?
     @State private var openingFileName: String?
     @State private var fileOpenError: String?
@@ -623,6 +625,20 @@ struct ChatView: View {
         .sheet(item: $shareFile) { file in
             ActivityShareSheet(items: [file.url])
         }
+        .sheet(item: $editingQueued) { send in
+            // Pinned to the thread and chat it was opened from, so a switch
+            // underneath can never retarget the save.
+            let editThreadId = threadId
+            let editChat = current
+            QueuedSendEditor(
+                send: send,
+                recipient: queuedRecipientName,
+                threadTitle: queuedThreadTitle,
+                live: (session.state.pendingQueued[editThreadId] ?? []).first { $0.queueId == send.queueId }
+            ) { text in
+                await session.editQueued(send, threadId: editThreadId, in: editChat, text: text)
+            }
+        }
         .photosPicker(
             isPresented: $showingPhotoPicker,
             selection: $selectedPhotos,
@@ -846,6 +862,22 @@ struct ChatView: View {
     /// words have not been said yet.
     private var heldSends: [QueuedSend] {
         session.state.pendingQueued[threadId] ?? []
+    }
+
+    private var queuedRecipientName: String {
+        switch current {
+        case let .bot(bot): return bot.name
+        case let .room(room): return "#\(room.name)"
+        }
+    }
+
+    private var queuedThreadTitle: String? {
+        let tasks: [BotTask]?
+        switch current {
+        case let .bot(bot): tasks = bot.tasks
+        case let .room(room): tasks = room.tasks
+        }
+        return tasks?.first { $0.threadId == threadId }?.title
     }
 
     /// Rooms run several members at once: the queued head steers into the
@@ -1270,7 +1302,7 @@ struct ChatView: View {
                 QueuedSendList(sends: heldSends, steerTargetName: roomSteer?.target?.name,
                                steerUnavailable: roomSteer?.unavailable, steer: { send in
                     await session.steerQueued(send, threadId: threadId, in: current, botId: roomSteer?.target?.id)
-                }) { send in
+                }, edit: { editingQueued = $0 }) { send in
                     Task { await session.cancelQueued(send, threadId: threadId, in: current) }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -3206,6 +3238,8 @@ private struct QueuedSendList: View {
     var steerUnavailable: String? = nil
     let steer: (QueuedSend) async -> Void
     @State private var steering = false
+    /// Opens the text editor for one entry; nil hides the button.
+    var edit: ((QueuedSend) -> Void)? = nil
     let cancel: (QueuedSend) -> Void
 
     private var showsCapacityNote: Bool {
@@ -3242,6 +3276,19 @@ private struct QueuedSendList: View {
                         .disabled(steering)
                         .onChange(of: sends) { _, _ in steering = false }
                         .accessibilityLabel(steerTargetName.map { String(localized: "Send this into \($0)'s running turn now") } ?? String(localized: "Steer queued message now"))
+                    }
+                    if let edit {
+                        Button {
+                            edit(send)
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color.secondary)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Edit queued message \(index + 1) of \(sends.count)")
                     }
                     Button {
                         cancel(send)

@@ -103,6 +103,9 @@ final class Session: ObservableObject {
     let stateChanges = CurrentValueSubject<CompanionState, Never>(CompanionState())
     /// The reply being typed, per thread, observable one thread at a time.
     let liveText = LiveTextStore()
+    @Published private(set) var mascotCompletionIDs: [String: String] = [:]
+    private var mascotLedgers: [String: MascotCompletionLedger] = [:]
+    private var mascotReplayCutoff: Int?
     private var foldingQuietly = false
     @Published private(set) var connection: Connection?
     @Published private(set) var connections: [Connection] = []
@@ -1003,6 +1006,9 @@ final class Session: ObservableObject {
         deferredPublish?.cancel()
         deferredPublish = nil
         state = CompanionState()
+        mascotCompletionIDs.removeAll()
+        mascotLedgers.removeAll()
+        mascotReplayCutoff = nil
     }
 
 #if DEBUG
@@ -1167,6 +1173,17 @@ final class Session: ObservableObject {
         pendingFrames.removeAll(keepingCapacity: true)
         var next = state
         for frame in batch {
+            if case let .runtime(event) = frame.frame,
+               let cutoff = mascotReplayCutoff, let seq = frame.seq, seq > cutoff {
+                let key = event.streamKey
+                let active = event.type == "turn.started" || event.type == "content.delta"
+                let completed = event.type == "turn.completed" && event.ok == true
+                if mascotLedgers[key, default: MascotCompletionLedger()].observe(
+                    turnID: event.turnId, active: active, completed: completed, hydration: false),
+                   let turnID = event.turnId {
+                    mascotCompletionIDs[key] = turnID
+                }
+            }
             next.apply(frame)
             next.advance(to: frame.seq)
         }
@@ -1259,6 +1276,10 @@ final class Session: ObservableObject {
                     reconnectDelay = 0
 
                     if case let .hello(cursor, resumed) = frame.frame {
+                        // Hello names the current head: replayed events cannot celebrate.
+                        mascotLedgers.removeAll()
+                        mascotCompletionIDs.removeAll()
+                        mascotReplayCutoff = cursor.split(separator: ":").last.flatMap { Int($0) }
                         log.info("stream live, resumed=\(resumed, privacy: .public)")
                         // false means the server could not replay the gap —
                         // the one case that costs a full hydrate. Commit the
@@ -1743,6 +1764,35 @@ final class Session: ObservableObject {
         // to retire.
         if agreed, client?.connection.id == connectionID {
             state.cancelQueued(queueId: send.queueId, threadId: threadId)
+        }
+    }
+
+    /// Replaces one held send's text in place. Errors come back to the
+    /// editor rather than the global banner, so the edit stays on screen and
+    /// nothing is ever re-sent as a new message.
+    func editQueued(_ send: QueuedSend, threadId: String, in chat: Chat, text: String) async -> Result<QueuedSend, QueuedSendEditError> {
+        guard let client else { return .failure(.failed(String(localized: "Not connected to the computer."))) }
+        let connectionID = client.connection.id
+        let destination: MessageDestination
+        switch chat {
+        case let .bot(bot): destination = .bot(id: bot.id, threadId: threadId)
+        case let .room(room): destination = .room(id: room.id, threadId: threadId)
+        }
+        do {
+            try await client.editQueued(queueId: send.queueId, to: destination, expectedText: send.text, text: text)
+            var updated = send
+            updated.text = text
+            // A computer selected mid-request has already reset state; this
+            // edit belongs to the row it came from only.
+            if self.client?.connection.id == connectionID {
+                state.applyQueuedEdit(updated, threadId: threadId)
+            }
+            return .success(updated)
+        } catch let error as APIError where error.isUnauthorized {
+            status = .unauthorized
+            return .failure(.unauthorized)
+        } catch {
+            return .failure(.from(error))
         }
     }
 

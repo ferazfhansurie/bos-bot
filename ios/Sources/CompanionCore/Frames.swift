@@ -29,6 +29,8 @@ public struct NotificationFrame: Codable, Hashable, Sendable {
 /// messages, so a client only needs them for token-by-token streaming.
 public struct RuntimeEvent: Codable, Hashable, Sendable {
     public var type: String
+    public var turnId: String? = nil
+    public var ok: Bool? = nil
     public var threadId: String
     /// content.delta only
     public var delta: String?

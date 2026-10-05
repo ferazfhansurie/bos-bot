@@ -29,7 +29,7 @@ extension MausState {
     }
 
     static func forBot(_ bot: Bot, last: Message?) -> MausState {
-        let activity = MascotActivityChoreography.activity(runtime: bot.activity, busy: bot.busy == true,
+        let activity = MascotActivityChoreography.activity(runtime: bot.tasks?.first { $0.threadId == bot.threadId }?.activity, busy: bot.currentTaskBusy == true,
             waitingOnTeammate: bot.waitingOnTeammate == true,
             pendingRequest: last?.card?.isPending == true || last?.secret?.isPending == true,
             toolName: last?.tool?.name)

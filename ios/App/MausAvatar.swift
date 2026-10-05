@@ -90,12 +90,17 @@ struct MausAvatar: View {
 
     var body: some View {
         Group {
+#if WIDGET_EXTENSION
+            FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+#else
             if animated || completedTurnID != nil {
                 MascotActivityMark(color: color, bodyID: FlatMascotBodies.body(bodyId).id,
                     activity: state.activityChoreography, size: size, eyeStyle: eyeStyle, completedTurnID: completedTurnID)
             } else {
                 FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
             }
+
+#endif
         }.frame(width: size, height: size).accessibilityHidden(true)
     }
 }

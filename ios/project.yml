@@ -267,6 +267,7 @@ targets:
         MARKETING_VERSION: "1.7.0"
         CURRENT_PROJECT_VERSION: "61"
         SWIFT_VERSION: "5.9"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
         TARGETED_DEVICE_FAMILY: "1,2"
         SKIP_INSTALL: true
     info:
