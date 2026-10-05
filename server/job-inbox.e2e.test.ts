@@ -109,8 +109,48 @@ it("a real running fixture turn projects moving without reading another thread",
   expect((await items()).find(item => item.outcome === "Human hold").state).toBe("needs-you");
   expect((await api("POST", `/api/bots/${other.id}/interrupt`, {})).status).toBe(200);
 });
+it("activity snapshots exclude private, orphan and nonmember lanes", async () => {
+  const owner = await api("GET", "/api/activity");
+  expect(owner.status).toBe(200);
+  const expected = [[lead.id, lead.threadId], [lead.id, second], [other.id, other.threadId], [lead.id, room.threadId]];
+  expect(owner.body.items.filter((item: any) => [lead.id, other.id].includes(item.botId)).map((item: any) => [item.botId, item.threadId]).sort()).toEqual(expected.sort());
+  expect(owner.body.items.find((item: any) => item.threadId === room.threadId).roomId).toBe(room.id);
+  const guest = await pair();
+  await api("POST", "/api/multiplayer/actor-bindings", { sessionId: guest.session.id, personId: "activity-home:person:guest", name: "Activity guest" });
+  const foreign = await api("GET", "/api/activity", undefined, guest.token);
+  expect(foreign.status).toBe(200);
+  expect(foreign.body.items.filter((item: any) => [lead.id, other.id].includes(item.botId)).map((item: any) => [item.botId, item.threadId])).toEqual([[other.id, other.threadId]]);
+  const peer = await pair("peer");
+  expect((await api("GET", "/api/activity", undefined, peer.token)).status).toBe(403);
+  await api("DELETE", `/api/auth/sessions/${guest.session.id}`);
+  expect((await api("GET", "/api/activity", undefined, guest.token)).status).toBe(401);
+});
+it("activity pushes full replacements while another thread is viewed", async () => {
+  const abort = new AbortController();
+  const response = await fetch(base + "/api/events?screens=off", { signal: abort.signal });
+  const reader = response.body!.getReader();
+  let buffered = "";
+  const frames: any[] = [];
+  const reading = (async () => {
+    try { for (;;) {
+      const part = await reader.read(); if (part.done) break;
+      buffered += new TextDecoder().decode(part.value);
+      const lines = buffered.split("\n"); buffered = lines.pop()!;
+      for (const line of lines) if (line.startsWith("data: ")) frames.push(JSON.parse(line.slice(6)));
+    } } catch { /* fixture closes its stream */ }
+  })();
+  try {
+    expect((await api("POST", `/api/bots/${other.id}/messages`, { text: "Synthetic activity turn", threadId: other.threadId })).status).toBe(202);
+    await expect.poll(() => frames.some(frame => frame.kind === "activity" && frame.items.some((item: any) => item.botId === other.id && item.state !== "idle")), { timeout: 15000 }).toBe(true);
+    const active = (await api("GET", "/api/activity")).body.items;
+    expect(active.find((item: any) => item.botId === lead.id && item.threadId === lead.threadId).state).toBe("stopped");
+    expect((await api("POST", `/api/bots/${other.id}/interrupt`, {})).status).toBe(200);
+    await expect.poll(() => frames.filter(frame => frame.kind === "activity").at(-1)?.items.find((item: any) => item.botId === other.id)?.state, { timeout: 15000 }).toBe("stopped");
+  } finally { abort.abort(); await reading; }
+});
 it("unreadable runtime storage fails closed without a partial response", async () => {
   await waitForExit(child, { signal: "SIGTERM" });
   writeFileSync(join(data, "work-runtime.json"), "invalid-json"); await start();
   const result = await api("GET", "/api/jobs"); expect(result.status).toBe(503); expect(result.body.items).toBeUndefined();
+  const activity = await api("GET", "/api/activity"); expect(activity.status).toBe(503); expect(activity.body.items).toBeUndefined();
 }, 30000);

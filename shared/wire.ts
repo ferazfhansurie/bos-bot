@@ -614,6 +614,7 @@ export type UpdateRunState =
   | "applying" | "relaunching" | "verifying" | "done" | "rolled_back" | "failed";
 
 export type ServerFrame =
+  | ({ kind: "activity" } & import("./activity.ts").ActivityResponse)
   | { kind: "sections"; sections: string[] }
   | { kind: "bot.queued"; queues: BotQueuedMessages }
   | { kind: "message"; threadId: string; message: WireMessage }

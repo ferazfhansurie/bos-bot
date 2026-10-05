@@ -204,6 +204,8 @@ import {
   roomHandoffLimits,
 } from "./config.ts";
 import { inboxCanClose, inboxShouldSettle, threadState, type InboxCandidate } from "./thread-inbox.ts";
+import { ActivityFeed } from "./activity.ts";
+import type { ActivityResponse } from "../shared/activity.ts";
 import { jobInboxItem } from "./job-inbox.ts";
 import type { JobInboxResponse } from "../shared/job-inbox.ts";
 import { buildDigest, buildInbox, digestDue, digestNotificationBody, localDateKey, partitionInboxClear, type NeedsMeThread } from "./needs-me.ts";
@@ -1251,6 +1253,8 @@ function requestedTaskBot(botId: string, rawThreadId: unknown): BotRecord {
 
 async function interruptDirectThread(botId: string, threadId: string): Promise<void> {
   holdWork(botId, threadId);
+  activityFeed.stop(botId, store.canonicalThreadId(threadId));
+  scheduleActivityPush();
   const quotaRetry = quotaRetryTurns.get(threadId);
   if (quotaRetry) quotaRetry.cancelled = true;
   // Stop belongs to the conversation it was pressed in. This bot's turn ends
@@ -3742,7 +3746,28 @@ function cursorSeq(raw: string | string[] | undefined): number | null {
 /** Tokens wait up to ~50ms to be merged per thread and item; anything else
  * first sends what is waiting, so it is never numbered ahead of the text
  * that came before it. See ./delta-coalesce.ts. */
+const activityFeed = new ActivityFeed();
+let activityPushScheduled = false;
+let lastActivitySnapshot = "";
+function scheduleActivityPush() {
+  if (activityPushScheduled) return;
+  activityPushScheduled = true;
+  queueMicrotask(() => {
+    activityPushScheduled = false;
+    try {
+      const snapshot = activitySnapshot({ includeGroups: true, bots: store.bots });
+      const encoded = JSON.stringify(snapshot);
+      if (encoded !== lastActivitySnapshot) { lastActivitySnapshot = encoded; broadcast({ kind: "activity", ...snapshot }); }
+    } catch { /* unavailable storage never publishes a partial list */ }
+  });
+}
 function broadcast(payload: Record<string, unknown>) {
+  if (payload.kind === "runtime") {
+    const event = payload.event as RuntimeEvent;
+    const botId = event.roomBotId ?? store.botByThread(event.threadId)?.id;
+    if (botId) activityFeed.observe(botId, event.threadId, event);
+  }
+  if (["runtime", "bot", "group", "bot.deleted", "group.deleted", "message", "message.patch", "inbox"].includes(String(payload.kind))) scheduleActivityPush();
   if (deltaCoalescer.offer(payload)) return;
   deltaCoalescer.flush();
   emitFrame(payload);
@@ -11286,7 +11311,10 @@ async function interruptRoom(
     const alias = store.roomRuntimeThread(runtimeId);
     if (alias?.groupId === group.id && targetThreadIds.includes(alias.threadId) && (!opts.botId || alias.botId === opts.botId)) roomMemberCancelEpoch.set(runtimeId, (roomMemberCancelEpoch.get(runtimeId) ?? 0) + 1);
   }
-  for (const threadId of targetThreadIds) for (const botId of group.memberIds) if (!opts.botId || opts.botId === botId) holdWork(botId, threadId);
+  for (const threadId of targetThreadIds) for (const botId of group.memberIds) if (!opts.botId || opts.botId === botId) {
+    holdWork(botId, threadId); activityFeed.stop(botId, threadId);
+  }
+  scheduleActivityPush();
   if (opts.botId) {
     for (const threadId of targetThreadIds) roomHandoffs.stopAwaitingRoomMember(group.id, threadId, opts.botId);
   }
@@ -16726,6 +16754,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     // Enumerate authorized conversations, never the unrestricted work ledger.
     // Peer-only sessions have no workspace inbox authority (as for /api/inbox).
+    if (method === "GET" && path === "/api/activity") {
+      if (peerSessionId) return json(res, 403, { error: "forbidden" });
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session revoked" });
+      try { return json(res, 200, activitySnapshot(needsMeScope(auth))); }
+      catch { return json(res, 503, { error: "Activity state is unavailable" }); }
+    }
     if (method === "GET" && path === "/api/jobs") {
       if (peerSessionId) return json(res, 403, { error: "forbidden" });
       if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session revoked" });
@@ -21872,6 +21906,31 @@ function needsMeScope(auth: RequestAuth): { includeGroups: boolean; bots: readon
   const viewerActor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : null;
   const foreign = auth.kind === "session" && viewerActor != null && viewerActor !== multiplayerActors.ownerId;
   return foreign ? { includeGroups: false, bots: store.bots.filter(bot => bot.visibility !== "private") } : { includeGroups: true, bots: store.bots };
+}
+
+/** Scope matches the jobs inbox; runtime lane ids never enter this projection. */
+function activitySnapshot(scope: { includeGroups: boolean; bots: readonly BotRecord[] }): ActivityResponse {
+  const items: ActivityResponse["items"] = [];
+  const allowed = new Set(scope.bots.filter(bot => !bot.hidden).map(bot => bot.id));
+  for (const bot of scope.bots) {
+    if (!allowed.has(bot.id)) continue;
+    for (const task of store.tasks(bot.id)) items.push(activityFeed.project({
+      botId: bot.id, threadId: task.threadId, roomId: null,
+      running: threadBusy(bot.id, task.threadId), waiting: task.activity === "waiting-on-you",
+      held: workRuntime.isHeld(bot.id, task.threadId),
+    }));
+  }
+  if (scope.includeGroups) for (const group of store.groups) {
+    if (group.dm) continue;
+    for (const task of store.groupTasks(group.id)) for (const botId of group.memberIds) {
+      if (!allowed.has(botId)) continue;
+      const running = roomRuntimeSpeakers(group.id, task.threadId).some(([, speaker]) => speaker.botId === botId) ||
+        [...(groupTurnOperations.get(group.id) ?? [])].some(operation => operation.threadId === task.threadId && operation.botIds.has(botId));
+      items.push(activityFeed.project({ botId, threadId: task.threadId, roomId: group.id, running,
+        waiting: store.messagesFor(task.threadId).some(message => message.from?.botId === botId && message.card?.requestId && !message.card.answered && !message.card.dismissed), held: workRuntime.isHeld(botId, task.threadId) }));
+    }
+  }
+  return { items };
 }
 
 function visibleLeadActions(scope: { includeGroups: boolean; bots: readonly BotRecord[] }): LeadAction[] {
