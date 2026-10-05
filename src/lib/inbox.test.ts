@@ -197,3 +197,10 @@ describe("inbox state", () => {
     expect(next.pluginsOpen).toBe(false);
   });
 });
+
+it("preserves persistent lead report metadata and keeps it non-clearable", () => {
+  const leadAction = { id: "report", leadBotId: "bos", kind: "blocker" as const, status: "blocked" as const, requiredAction: "fix fixture", updatedAt: 20 };
+  const normalized = normalizeInbox({ items: [item({ kind: "waiting-on-you", leadAction })] });
+  expect(normalized.items[0].leadAction).toEqual(leadAction);
+  expect(inboxItemClearable(normalized.items[0])).toBe(false);
+});

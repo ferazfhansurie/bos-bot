@@ -54,6 +54,7 @@ import { SharedAttachmentStore } from "./shared-attachment-store.ts";
 import { ApnsPush } from "./apns-push.ts";
 import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
 import { SharedComputerControl } from "./shared-computer-control.ts";
+import { LeadActions, taggedLeadReport, leadResolutionSchema, type LeadAction } from "./lead-actions.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
 import { deferMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
@@ -2914,6 +2915,16 @@ function outstandingAssignmentsPrompt(threadId: string): string {
   return ` Assignments you already sent are still outstanding, and nothing in this conversation cancelled them: ${JSON.stringify(listed)}. Do not send them again, do not poll or wait for them, and do not tell the user they were lost. Each result returns to this conversation on its own and resumes you then. Answer the message above with that work still in flight.`;
 }
 
+const leadActions = new LeadActions(join(DATA_DIR, "lead-actions.json"));
+function publishLeadAction(action: LeadAction) {
+  const { id, leadBotId, kind, status, requiredAction, updatedAt, resolution } = action;
+  store.patchMessage(action.threadId, action.messageId, { leadAction: { id, leadBotId, kind, status, requiredAction, updatedAt, ...(resolution ? { resolution } : {}) } });
+  scheduleInboxCount();
+}
+function leadActionMember(action: LeadAction): boolean {
+  const group = store.group(action.groupId);
+  return Boolean(group && !group.dm && group.memberIds.includes(action.leadBotId) && group.memberIds.includes(action.reporterBotId) && store.groupTaskByThread(group.id, action.threadId));
+}
 const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoffs.json"), {
   validate: (node, parent) => roomHandoffProblem(node, parent) ??
     (parent && store.bot(parent.botId)?.approvePeerComms && !fullAccessForSource(parent.botId, parent.threadId) && !node.approvalGranted ? "Sender now requires peer approval; submit a new approved request" : undefined),
@@ -3441,9 +3452,20 @@ store.onChange((change) => {
     case "sections":
       broadcast({ kind: "sections", sections: store.sections });
       break;
-    case "message":
+    case "message": {
       broadcast({ kind: "message", threadId: change.threadId, message: change.message });
+      const message = change.message;
+      const group = store.groupByThread(change.threadId);
+      if (group && !group.dm && message.role === "bot" && message.kind === "text" && message.from?.botId && message.turnId && !message.leadAction) {
+        const members = group.memberIds.flatMap(id => { const bot = store.bot(id); return bot ? [{ id, name: bot.name }] : []; });
+        const tagged = taggedLeadReport(message.text ?? "", members);
+        if (tagged && group.memberIds.includes(message.from.botId)) {
+          try { publishLeadAction(leadActions.report({ ...tagged, groupId: group.id, threadId: change.threadId, messageId: message.id, runId: message.turnId, reporterBotId: message.from.botId, report: message.text ?? "" })); }
+          catch (error) { console.warn("Lead report capture failed", error instanceof Error ? error.message : String(error)); }
+        }
+      }
       break;
+    }
     case "message.patch":
       broadcast({ kind: "message.patch", threadId: change.threadId, message: change.message });
       break;
@@ -3855,7 +3877,8 @@ function notify(notification: Notification | null) {
     // The digest is from no bot: no sender, so no communication-style push.
     void apnsPush.send(multiplayerActors.ownerId, notification.title, notification.body,
       notification.kind === "digest" ? { kind: "digest" }
-        : { botId: notification.botId, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(error =>
+        : { kind: notification.kind, botId: notification.botId, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title,
+            ...(notification.requestId ? { requestId: notification.requestId } : {}), ...(notification.messageId ? { messageId: notification.messageId } : {}) }).catch(error =>
       console.warn(`bot push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
   }
 }
@@ -5280,12 +5303,13 @@ bus.subscribe((event: RuntimeEvent) => {
           // the bot is not working now — it is waiting on a person
           if (bot) store.setTaskActivity(bot.id, event.threadId, "waiting-on-you");
           else if (asker.busy) setRuntimeActivity(asker.id, event.threadId, "waiting-on-you");
-          const notificationBot = (routineRun && routineSourceOwner(routineRun)?.bot) || asker;
+          const notificationBot = asker;
           notify(buildNotification(
             permission ? "approval" : "question",
             notificationBot,
-            (routineRun && routineSourceThread(routineRun)) || event.threadId,
+            event.threadId,
             event.summary,
+            { requestId: card.requestId, messageId: message.id },
           ));
         }
       }
@@ -13699,7 +13723,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }
         if (method === "POST" && path === "/api/multiplayer/push-token" && actorId &&
             typeof body?.token === "string" && (body.environment === "development" || body.environment === "production")) {
-          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment); }
+          if (body.connectionId !== undefined && (typeof body.connectionId !== "string" || body.connectionId.length > 128)) return json(res, 400, { error: "invalid connection id" });
+          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId); }
           catch { return json(res, 400, { error: "invalid APNs token" }); }
         }
         try {
@@ -13797,7 +13822,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (typeof body?.token !== "string" || (body.environment !== "development" && body.environment !== "production")) {
           return json(res, 400, { error: "APNs token and environment required" });
         }
-        try { apnsPush.register(actorId, body.token, body.environment); }
+        if (body.connectionId !== undefined && (typeof body.connectionId !== "string" || body.connectionId.length > 128)) return json(res, 400, { error: "invalid connection id" });
+        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId); }
         catch { return json(res, 400, { error: "invalid APNs token" }); }
         return json(res, 200, { registered: true, deliveryConfigured: apnsPush.configured() });
       }
@@ -14335,6 +14361,44 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           throw Object.assign(new Error("the internal turn capability has expired"), { status: 401 });
         }
       };
+      if (path.startsWith("/api/internal/lead-actions")) {
+        const room = store.groupByThread(internalCapability.threadId);
+        if (!room || room.dm || !room.memberIds.includes(internalSender.id)) return json(res, 403, { error: "Lead actions require current room membership" });
+        const threadId = store.canonicalThreadId(internalCapability.threadId);
+        if (method === "GET" && path === "/api/internal/lead-actions") {
+          return json(res, 200, { actions: leadActions.list().filter(a => a.groupId === room.id && a.threadId === threadId && leadActionMember(a)) });
+        }
+        if (method === "POST" && path === "/api/internal/lead-actions/report") {
+          const body = await readInternalBody();
+          const parsed = z.object({ lead_bot_id: z.string(), kind: z.enum(["completion", "blocker", "correction"]),
+            required_action: z.string().trim().min(1).max(12000), report: z.string().trim().min(1).max(12000), request_key: z.string().trim().min(1).max(100) }).strict().safeParse(body);
+          if (!parsed.success) return json(res, 400, { error: "Invalid lead report" });
+          const input = parsed.data;
+          if (!store.group(room.id)?.memberIds.includes(input.lead_bot_id) || !store.bot(input.lead_bot_id) || !store.group(room.id)?.memberIds.includes(internalSender.id)) return json(res, 403, { error: "Reporter and lead must still be room members" });
+          const prior = leadActions.list().find(a => a.runId === internalCapability.generation && a.reporterBotId === internalSender.id && a.requestKey === input.request_key);
+          if (prior) {
+            if (prior.leadBotId !== input.lead_bot_id || prior.kind !== input.kind || prior.requiredAction !== input.required_action || prior.report !== input.report) return json(res, 409, { error: "request_key already names a different report" });
+            return json(res, 200, { action: prior, duplicate: true });
+          }
+          const message = store.appendMessage(threadId, { role: "bot", kind: "activity", from: { botId: internalSender.id, name: internalSender.name, color: internalSender.color },
+            turnId: internalCapability.generation, tool: { name: `${input.kind}: ${input.required_action}` }, text: input.report });
+          const action = leadActions.report({ groupId: room.id, threadId, messageId: message.id, runId: internalCapability.generation,
+            reporterBotId: internalSender.id, leadBotId: input.lead_bot_id, kind: input.kind, requiredAction: input.required_action, report: input.report, requestKey: input.request_key });
+          publishLeadAction(action);
+          return json(res, 200, { action, duplicate: false });
+        }
+        if (method === "POST" && path === "/api/internal/lead-actions/resolve") {
+          const body = await readInternalBody();
+          const parsed = z.object({ id: z.string(), decision: z.string(), evidence: z.string(), expected_updated_at: z.number() }).strict().safeParse(body);
+          if (!parsed.success) return json(res, 400, { error: "Invalid lead resolution" });
+          const action = leadActions.list().find(a => a.id === parsed.data.id && a.groupId === room.id && a.threadId === threadId && leadActionMember(a));
+          if (!action) return json(res, 403, { error: "Report is outside your current room scope" });
+          const resolution = leadResolutionSchema.safeParse({ decision: parsed.data.decision, evidence: parsed.data.evidence, expectedUpdatedAt: parsed.data.expected_updated_at });
+          if (!resolution.success) return json(res, 400, { error: "Decision and concrete evidence are required" });
+          const updated = leadActions.resolve(action.id, resolution.data, internalSender.id); publishLeadAction(updated);
+          return json(res, 200, { action: updated });
+        }
+      }
       // Where an entry came from, as the person will read it in MEMORY.md:
       // the room or the thread title, never a bare id unless nothing else
       // names the conversation.
@@ -16366,6 +16430,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         throw Object.assign(new Error("This bot has more than one thread. Update the OpenMausBot app on this device, then choose a thread and try again."), { status: 409 });
       }
     };
+    if (method === "GET" && path === "/api/lead-actions") {
+      if (peerSessionId) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, { actions: visibleLeadActions(needsMeScope(auth)) });
+    }
+    const leadResolve = method === "POST" ? path.match(/^\/api\/lead-actions\/([\w-]+)\/resolve$/) : null;
+    if (leadResolve) {
+      if (peerSessionId) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req, 32_000);
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session revoked" });
+      const parsed = leadResolutionSchema.safeParse(body);
+      if (!parsed.success) return json(res, 400, { error: "decision, evidence and expectedUpdatedAt are required" });
+      const action = visibleLeadActions(needsMeScope(auth)).find(a => a.id === leadResolve[1]);
+      if (!action) return json(res, 403, { error: "Report is outside your current room scope" });
+      const resolved = leadActions.resolve(action.id, parsed.data, action.leadBotId);
+      publishLeadAction(resolved);
+      return json(res, 200, { action: resolved });
+    }
     // Needs-me: every open conversation waiting on the person, newest first.
     if (method === "GET" && path === "/api/inbox") {
       if (peerSessionId) return json(res, 403, { error: "forbidden" });
@@ -21445,8 +21526,22 @@ function needsMeScope(auth: RequestAuth): { includeGroups: boolean; bots: readon
   return foreign ? { includeGroups: false, bots: store.bots.filter(bot => bot.visibility !== "private") } : { includeGroups: true, bots: store.bots };
 }
 
+function visibleLeadActions(scope: { includeGroups: boolean; bots: readonly BotRecord[] }): LeadAction[] {
+  if (!scope.includeGroups) return [];
+  const botIds = new Set(scope.bots.filter(b => !b.hidden).map(b => b.id));
+  return leadActions.list().filter(a => botIds.has(a.leadBotId) && botIds.has(a.reporterBotId) && leadActionMember(a));
+}
+
 function currentInbox(scope: { includeGroups: boolean; bots: readonly BotRecord[] } = { includeGroups: true, bots: store.bots }) {
-  return buildInbox(needsMeThreads((_at, _created, closedBy) => closedBy ? 0 : INBOX_TAIL, scope));
+  const inbox = buildInbox(needsMeThreads((_at, _created, closedBy) => closedBy ? 0 : INBOX_TAIL, scope));
+  for (const action of visibleLeadActions(scope).filter(a => a.status !== "resolved")) {
+    const { id, leadBotId, kind, status, requiredAction, updatedAt } = action;
+    inbox.items.push({ id: `lead-action:${id}`, kind: "waiting-on-you", botId: leadBotId, groupId: action.groupId, threadId: action.threadId, messageId: action.messageId,
+      title: store.group(action.groupId)?.name ?? "Lead action", preview: `${status} · ${store.bot(leadBotId)?.name ?? "Lead"}: ${requiredAction}`, at: action.updatedAt,
+      leadAction: { id, leadBotId, kind, status, requiredAction, updatedAt } });
+  }
+  inbox.items.sort((a, b) => b.at - a.at); inbox.count = inbox.items.length;
+  return inbox;
 }
 
 function currentDigest(since: number, until: number, scope: { includeGroups: boolean; bots: readonly BotRecord[] } = { includeGroups: true, bots: store.bots }) {

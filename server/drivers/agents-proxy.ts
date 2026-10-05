@@ -417,6 +417,26 @@ const TOOLS = [
     }, required: ["computer_id", "action"] },
   },
   {
+    name: "list_lead_actions",
+    description: "Read persistent completion, blocker and correction reports in this room. Replies do not resolve them. Read the current updatedAt before resolving a report you own.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "report_lead_action",
+    description: "Record a room report requiring one accountable lead's action. Does not send a new assignment or resolve prior reports. Preserve real evidence in report; use request_key for an identical retry.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      lead_bot_id: { type: "string" }, kind: { type: "string", enum: ["completion", "blocker", "correction"] },
+      required_action: { type: "string", minLength: 1, maxLength: 12000 }, report: { type: "string", minLength: 1, maxLength: 12000 }, request_key: { type: "string", minLength: 1, maxLength: 100 },
+    }, required: ["lead_bot_id", "kind", "required_action", "report", "request_key"] },
+  },
+  {
+    name: "resolve_lead_action",
+    description: "Resolve a report only when you are its accountable lead and have taken the required action or made the decision. Must record a decision and concrete changed evidence. Replying, acknowledging or a helper claiming done is not resolution; no invented evidence.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      id: { type: "string" }, decision: { type: "string", minLength: 1, maxLength: 12000 }, evidence: { type: "string", minLength: 1, maxLength: 12000 }, expected_updated_at: { type: "number" },
+    }, required: ["id", "decision", "evidence", "expected_updated_at"] },
+  },
+  {
     name: "list_room_targets",
     description: "Discover actual OpenMausBot teammates and rooms in your allowed teams. Works in a normal bot conversation too; no room is required. Returns bot and room IDs, roles and working folders, never other conversations' history. Use these bots, not native coding helpers with similar names, when the user asks their team to work together.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -894,7 +914,7 @@ const SHAREABLE_TOOLS = SHARED_COMPUTERS_ENABLED
 // One teamwork path in room turns; keep all unrelated integrations available.
 // Ordinary direct chats use this same bounded coordinator. Goal-owned turns
 // retain their independent loop and cannot start a second coordinator.
-const ROOM_ONLY_TOOLS = new Set(["list_room_targets", "coordinate_bots"]);
+const ROOM_ONLY_TOOLS = new Set(["list_room_targets", "coordinate_bots", "list_lead_actions", "report_lead_action", "resolve_lead_action"]);
 const ROOM_REPLACED_TOOLS = new Set(["ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "start_thread", "send_to_thread", "wait_thread"]);
 const COORDINATING = process.env.OMB_ROOM_TURN === "1";
 const OWN_THREAD_CREATION = process.env.OMB_OWN_THREAD_CREATION === "1";
@@ -1052,6 +1072,13 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     return { text: `${text}\n\n[${Number(r.nextOffset) < Number(r.length)
       ? `Read more with tool_result_read id "${args.id}" and offset ${r.nextOffset}.`
       : `End of retained result.${r.truncated ? " The original tail exceeded the storage limit and was omitted." : ""}`}]` };
+  }
+  if (["list_lead_actions", "report_lead_action", "resolve_lead_action"].includes(name)) {
+    const r = name === "list_lead_actions" ? await api("/api/internal/lead-actions")
+      : await api(`/api/internal/lead-actions/${name === "report_lead_action" ? "report" : "resolve"}`, {
+        method: "POST", body: JSON.stringify(args),
+      });
+    return { text: JSON.stringify(r), ...(r.error ? { isError: true } : {}) };
   }
   if (name === "list_room_targets") {
     const r = await api("/api/internal/room-targets");

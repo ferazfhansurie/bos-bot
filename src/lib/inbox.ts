@@ -53,6 +53,13 @@ function inboxItemOf(raw: unknown): InboxItem | null {
     preview: text(raw.preview),
     at: time(raw.at),
   };
+  if (isRecord(raw.leadAction) && text(raw.leadAction.id) && text(raw.leadAction.leadBotId)
+    && ["completion", "blocker", "correction"].includes(text(raw.leadAction.kind))
+    && ["pending", "blocked", "resolved"].includes(text(raw.leadAction.status))) {
+    item.leadAction = { id: text(raw.leadAction.id), leadBotId: text(raw.leadAction.leadBotId),
+      kind: raw.leadAction.kind as NonNullable<InboxItem["leadAction"]>["kind"], status: raw.leadAction.status as NonNullable<InboxItem["leadAction"]>["status"],
+      requiredAction: text(raw.leadAction.requiredAction), updatedAt: time(raw.leadAction.updatedAt) };
+  }
   if (text(raw.groupId)) item.groupId = text(raw.groupId);
   if (text(raw.messageId)) item.messageId = text(raw.messageId);
   if (text(raw.requestId)) item.requestId = text(raw.requestId);
@@ -132,7 +139,7 @@ export async function fetchDigest(since?: number, request: Request = api): Promi
 type Send = (path: string, init?: RequestInit) => Promise<unknown>;
 
 /** Same rule as the server's: a live ask is settled only by answering it. */
-export const inboxItemClearable = (item: InboxItem): boolean => item.kind !== "waiting-on-you" && !item.requestId;
+export const inboxItemClearable = (item: InboxItem): boolean => !item.leadAction && item.kind !== "waiting-on-you" && !item.requestId;
 
 /** Whether a row can be answered in place (needs its card's message too). */
 export const inboxItemAnswerable = (item: InboxItem): boolean =>

@@ -203,6 +203,8 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/search$/ },
   // needs-me and the digest: derived from the same reads as /api/bots
   { methods: ["GET"], path: /^\/api\/inbox$/ },
+  { methods: ["GET"], path: /^\/api\/lead-actions$/ },
+  { methods: ["POST"], path: /^\/api\/lead-actions\/[\w-]+\/resolve$/ },
   // clearing is the same read-a-reply and dismiss-a-card a client already may do
   { methods: ["POST"], path: /^\/api\/inbox\/clear$/ },
   { methods: ["GET"], path: /^\/api\/digest$/ },

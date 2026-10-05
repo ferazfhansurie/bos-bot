@@ -212,7 +212,24 @@ public struct CommChip: Codable, Hashable, Sendable {
     public var withColor: String
 }
 
+public struct LeadActionSummary: Codable, Hashable, Sendable {
+    public var id: String
+    public var leadBotId: String
+    public var kind: String
+    public var status: String
+    public var requiredAction: String
+    public var updatedAt: Double
+    public var resolution: Resolution?
+    public struct Resolution: Codable, Hashable, Sendable {
+        public var decision: String
+        public var evidence: String
+        public var by: String
+        public var at: Double
+    }
+}
+
 public struct Message: Codable, Hashable, Identifiable, Sendable {
+    public var leadAction: LeadActionSummary?
     public enum Kind: String, Codable, Sendable {
         case text, options, activity, screen, secret, digest
         /// A kind this build has never heard of.
@@ -1216,18 +1233,37 @@ public extension Routine {
 public struct NotificationTarget: Equatable, Sendable {
     public let botId: String
     public let threadId: String
+    public let connectionId: String?
+    public let requestId: String?
+    public let messageId: String?
+    public let kind: String?
+    public var isBlocking: Bool { kind == "approval" || kind == "question" }
 
-    public init?(botId: String?, threadId: String?) {
+    public init?(botId: String?, threadId: String?, connectionId: String? = nil,
+                 requestId: String? = nil, messageId: String? = nil, kind: String? = nil) {
         guard let botId, let threadId,
               !botId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !threadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         self.botId = botId
         self.threadId = threadId
+        self.connectionId = connectionId
+        self.requestId = requestId
+        self.messageId = messageId
+        self.kind = kind
     }
 
     public init?(payload: [String: String]) {
-        self.init(botId: payload["botId"], threadId: payload["threadId"])
+        self.init(botId: payload["botId"], threadId: payload["threadId"],
+                  connectionId: payload["connectionId"], requestId: payload["requestId"],
+                  messageId: payload["messageId"], kind: payload["kind"])
+    }
+
+    /// An old unscoped alert must never route against whichever account is
+    /// selected now. The person can open the retained conversation manually.
+    public func belongs(to connectionID: String?) -> Bool {
+        guard let connectionId, !connectionId.isEmpty, let connectionID else { return false }
+        return connectionId == connectionID
     }
 
     public func requiresTaskSwitch(activeThreadId: String) -> Bool {

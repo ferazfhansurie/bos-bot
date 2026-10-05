@@ -401,6 +401,11 @@ function Bubble({
 
   return (
     <div className={cn("group flex w-full flex-col", user ? "animate-msg-in items-end" : "items-start")}>
+      {message.leadAction && <div role="status" className="mb-1 rounded-lg border border-line bg-card px-3 py-2 text-xs text-ink-secondary">
+        <span className="font-medium">{message.leadAction.status} · {state.bots.find(b => b.id === message.leadAction?.leadBotId)?.name ?? "Lead"}</span>
+        <div>{message.leadAction.requiredAction}</div>
+        {message.leadAction.resolution && <div>{message.leadAction.resolution.decision} · {message.leadAction.resolution.evidence}</div>}
+      </div>}
       {peer && <PeerLabel peer={peer} />}
       {shared && !user && message.from && <div className="mb-1 flex items-center gap-1.5 pl-0.5 text-[11px] font-medium text-ink-secondary">
         {sharedSpeaker && <BotAvatar

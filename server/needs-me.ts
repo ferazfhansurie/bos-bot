@@ -131,7 +131,7 @@ export function buildInbox(threads: Iterable<NeedsMeThread>): { items: InboxItem
  * nobody is blocked on. A live ask is only settled by answering it —
  * clearing must never allow, deny or answer on the person's behalf. */
 export function inboxItemClearable(item: InboxItem): boolean {
-  return item.kind !== "waiting-on-you" && !item.requestId;
+  return !item.leadAction && item.kind !== "waiting-on-you" && !item.requestId;
 }
 
 /** The rows a clear names (every row when `ids` is absent), split into what

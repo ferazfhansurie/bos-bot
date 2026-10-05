@@ -139,6 +139,7 @@ export interface SecretRequestCardData {
 }
 
 export interface Message {
+  leadAction?: import("../../shared/wire").LeadActionSummary;
   id: string;
   role: "bot" | "user";
   kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "routine.run" | "goal.run" | "digest" | "compaction";

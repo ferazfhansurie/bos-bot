@@ -298,7 +298,18 @@ export const REMOTE_BOT_UNAVAILABLE = "not available for a bot on another Mac";
 
 /** One transcript line. Serialized as stored — the durable delivery
  * identity (roomRequest) rides the wire unchanged. */
+export interface LeadActionSummary {
+  id: string;
+  leadBotId: string;
+  kind: "completion" | "blocker" | "correction";
+  status: "pending" | "blocked" | "resolved";
+  requiredAction: string;
+  updatedAt: number;
+  resolution?: { decision: string; evidence: string; by: string; at: number };
+}
+
 export interface WireMessage {
+  leadAction?: LeadActionSummary;
   /** Provenance for an inert, imported Discord transcript line. Never dispatch this as a turn. */
   discordImport?: { guildId: string; channelId: string; messageId: string; authorName: string; deliveryState: string };
   roomRequest?: { id: string; phase: "request" | "result" };
@@ -525,6 +536,7 @@ export type InboxKind = "waiting-on-you" | "question" | "failed" | "unread";
 
 /** One thing waiting on the person (GET /api/inbox). */
 export interface InboxItem {
+  leadAction?: LeadActionSummary;
   id: string;
   kind: InboxKind;
   botId: string;

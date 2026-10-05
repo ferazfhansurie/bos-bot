@@ -429,6 +429,9 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
       await wait(async()=>{ const current=await snapshot(room.id); const cards=current.messages.filter((m:any)=>m.card?.requestId&&!m.card.answered); if(answersA.length||answersB.length) throw new Error("provider answered before the person chose"); return cards.length===2; },"simultaneous approval cards");
       const notification=await approvalEvents.until(frame=>frame.kind==="notify"&&frame.notification.kind==="approval"&&frame.notification.botId===a.id);
       expect(notification.notification.threadId).toBe(room.threadId);
+      const sourceCard=(await snapshot(room.id)).messages.find((m:any)=>m.from?.botId===a.id&&m.card?.requestId&&!m.card.answered);
+      expect(notification.notification.messageId).toBe(sourceCard.id);
+      expect(notification.notification.requestId).toBe(sourceCard.card.requestId);
     } finally { approvalEvents.close(); }
     let cards=(await snapshot(room.id)).messages.filter((m:any)=>m.card?.requestId&&!m.card.answered);
     const cardA=cards.find((m:any)=>m.from.botId===a.id); const cardB=cards.find((m:any)=>m.from.botId===b.id);
