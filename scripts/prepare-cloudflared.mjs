@@ -141,15 +141,16 @@ export function executableTarget(value) {
     if (machine === 183) return "linux-arm64";
   }
 
-  // PE32+ AMD64. e_lfanew points from the DOS header to PE\0\0.
+  // PE32+ AMD64/ARM64. e_lfanew points from the DOS header to PE\0\0.
   if (bytes.length >= 0x40 && bytes[0] === 0x4d && bytes[1] === 0x5a) {
     const pe = bytes.readUInt32LE(0x3c);
     if (
       pe <= bytes.length - 6 &&
-      bytes.subarray(pe, pe + 4).equals(Buffer.from([0x50, 0x45, 0, 0])) &&
-      bytes.readUInt16LE(pe + 4) === 0x8664
+      bytes.subarray(pe, pe + 4).equals(Buffer.from([0x50, 0x45, 0, 0]))
     ) {
-      return "win32-x64";
+      const machine = bytes.readUInt16LE(pe + 4);
+      if (machine === 0x8664) return "win32-x64";
+      if (machine === 0xaa64) return "win32-arm64";
     }
   }
 
