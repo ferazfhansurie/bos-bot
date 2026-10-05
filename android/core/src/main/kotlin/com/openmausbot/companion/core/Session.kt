@@ -75,6 +75,10 @@ class Session(
     },
     /** Test seam for the handoff between a completed transfer and its caller. */
     private val afterAttachmentDownload: suspend () -> Unit = {},
+    /** Test seam: override the activity feed snapshot ([ACTIVITY_FEED_SNAPSHOT_PATH]). */
+    private val activityFn: suspend (CompanionClient) -> List<ActivityFeedEntry> = { client ->
+        client.activityFeed()
+    },
 ) {
     sealed interface Status {
         data object Unpaired : Status
@@ -846,6 +850,7 @@ class Session(
         val fleet = hydrateFn(activeClient, 50)
         _state.update { it.hydrate(fleet) }
         notificationSink.setBadge(_state.value.unreadCount)
+        refreshActivityFeed(activeClient)
         // Deliberately off hydrate's critical path: this only words the
         // composer, and the cursor commit — and with it the whole stream —
         // must not wait on a request that says nothing about the transcript.
@@ -862,6 +867,29 @@ class Session(
             } catch (_: Exception) {
                 emptySet()
             }
+        }
+    }
+
+    /**
+     * ACTIVITY FEED SEAM (snapshot half). Every full hydrate re-reads the feed,
+     * because a stream that did not resume missed the pushes that kept it true;
+     * after that, [ACTIVITY_FEED_EVENT] frames keep it current through the
+     * ordinary frame path ([CompanionState.apply]). Off the critical path like
+     * the engine list: the feed only chooses faces. A server without the route
+     * yields an empty snapshot (see [CompanionClient.activityFeed]); any other
+     * failure keeps whatever feed the phone already has.
+     */
+    private fun refreshActivityFeed(activeClient: CompanionClient) {
+        scope.launch {
+            val snapshot = try {
+                activityFn(activeClient)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                return@launch
+            }
+            if (client !== activeClient) return@launch
+            _state.update { it.apply(Frame.Activity(snapshot, replace = true)) }
         }
     }
 

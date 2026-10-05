@@ -97,6 +97,9 @@ public enum MascotActivityChoreography {
         guard state != .idle, state != .finished || elapsed < gestureDuration(state) else { return nil }
         return nextFrameDelay(state, elapsed: elapsed)
     }
+    /// Tools whose run reads as a search (the desktop's `SEARCH_TOOLS`): the
+    /// mascot peeks side to side rather than working.
+    public static let searchTools: Set<String> = ["web_search", "search_query", "browser_search", "search"]
     /// Candidate adapter to existing decoded task/message fields. Uncalled by
     /// the app until preview approval; role titles never choose runtime work.
     public static func activity(task: BotTask, last: Message?) -> MascotActivity {
@@ -111,7 +114,7 @@ public enum MascotActivityChoreography {
         if waitingOnTeammate || pendingRequest || ["waiting-on-you", "waiting", "queued"].contains(runtime ?? "") { return .waiting }
         guard busy || ["working", "running", "thinking", "searching"].contains(runtime ?? "") else { return .idle }
         if runtime == "thinking" { return .thinking }
-        if runtime == "searching" || ["web_search", "search_query", "browser_search", "search"].contains(toolName?.lowercased() ?? "") { return .searching }
+        if runtime == "searching" || searchTools.contains(toolName?.lowercased() ?? "") { return .searching }
         return .working
     }
 }

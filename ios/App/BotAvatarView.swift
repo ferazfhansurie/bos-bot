@@ -231,6 +231,9 @@ struct GroupMarkView: View {
 struct SharedBotFace: View {
     let bot: SharedContact
     let size: CGFloat
+    var state: MausState = .idle
+    /// Opt-in, mirroring MausAvatar: an animated face is a 30fps canvas.
+    var animated = false
     @Environment(\.sessionActions) private var sessionActions
     @State private var image: UIImage?
     @State private var failed = false
@@ -246,8 +249,8 @@ struct SharedBotFace: View {
                         .frame(width: size, height: size).clipShape(mask)
                 }
             case .gradientMascot:
-                MausAvatar(color: bot.color ?? "green", size: size, bodyId: bot.mascotBody,
-                    eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: false)
+                MausAvatar(color: bot.color ?? "green", size: size, bodyId: bot.mascotBody, state: state,
+                    eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: animated)
             }
         }
         .frame(width: size, height: size)

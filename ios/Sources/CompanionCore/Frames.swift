@@ -67,6 +67,10 @@ public enum Frame: Sendable {
     case computer(botId: String, state: String)
     case config
     case runtime(RuntimeEvent)
+    /// Pushed activity feed, folded into `CompanionState.activityFeed`:
+    /// `replace` is a whole snapshot (lanes it omits are gone), otherwise
+    /// the entries are updates to merge.
+    case activity([ActivityFeedEntry], replace: Bool)
     case unknown(kind: String)
 }
 
@@ -140,6 +144,11 @@ extension Frame: Decodable {
             self = .config
         case "runtime":
             self = .runtime(try container.decode(RuntimeEvent.self, forKey: .event))
+        case activityFeedEventName:
+            // Never throws: an unreadable activity frame is an empty
+            // update, not a lost one.
+            let payload = ActivityFeedSnapshot.frameEntries(from: decoder)
+            self = .activity(payload.entries, replace: payload.replace)
         default:
             // routines, and whatever the harness adds next
             self = .unknown(kind: kind)

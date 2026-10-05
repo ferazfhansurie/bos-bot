@@ -60,6 +60,10 @@ public struct CompanionState: Sendable {
     /// bounded tombstone list, so a slow response cannot re-add a row for a
     /// message that is already in the transcript.
     public var drainedQueueIds: [String] = []
+    /// What each bot is doing per thread, from the server's activity feed.
+    /// Empty until a snapshot or push arrives — and empty means every face
+    /// falls back to what the bot and task records imply.
+    public var activityFeed = ActivityFeed()
 
     public init() {}
 
@@ -390,6 +394,9 @@ public struct CompanionState: Sendable {
             }
 
         case let .botDeleted(botId):
+            // Whether or not the roster held it, a deleted bot's threads can
+            // never be named by the activity feed again.
+            activityFeed.remove(bot: botId)
             if let index = bots.firstIndex(where: { $0.id == botId }) {
                 let threadIds = Set([bots[index].threadId] + (bots[index].tasks ?? []).map(\.threadId))
                 for threadId in threadIds {
@@ -462,6 +469,13 @@ public struct CompanionState: Sendable {
 
         case let .botQueued(queues):
             replaceBotQueues(queues)
+
+        case let .activity(entries, replace):
+            if replace {
+                activityFeed.apply(snapshot: entries)
+            } else {
+                for entry in entries { activityFeed.apply(update: entry) }
+            }
 
         // Nothing to fold: config and provisioning state are not part of
         // this client's job yet.

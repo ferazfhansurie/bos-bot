@@ -9,13 +9,22 @@ struct BotThreadRow: View {
     /// The harness reports this out-of-band; the activity string never says
     /// it, so the row derives it here rather than parsing activity.
     var queued = false
+    /// The activity feed's state for exactly this (bot, thread), when the
+    /// server reports one. It decides whether the thread is working; nil
+    /// keeps the task record's own answer. Scoped to this thread, so a bot
+    /// busy elsewhere never marks this row.
+    var live: ActivityFeedState? = nil
+
+    private var working: Bool { live?.isBusy ?? task.isWorking }
 
     private var runtime: (title: String, icon: String, color: Color)? {
         // Ordered as the desktop orders its row: the person first, then a
         // teammate wait as a quiet clock (never a spinner), then work.
         if task.activity == "waiting-on-you" { return ("Waiting on you", "hand.raised.fill", .orange) }
         if task.isWaitingOnTeammate { return ("Waiting on teammate", "clock", .secondary) }
-        if task.isWorking { return ("Working", "arrow.triangle.2.circlepath", .accentColor) }
+        // The feed says waiting without saying on whom: a quiet clock.
+        if live == .waiting { return ("Waiting", "clock", .secondary) }
+        if working { return ("Working", "arrow.triangle.2.circlepath", .accentColor) }
         // The queued flag is client state the harness reports out-of-band.
         if task.activity == "queued" || queued { return ("Queued", "clock", .secondary) }
         return nil
@@ -24,7 +33,7 @@ struct BotThreadRow: View {
     /// A thread working in the background fades back, like the desktop's
     /// running row; waiting on you, unread or the open thread never fade.
     private var dimmed: Bool {
-        task.isWorking && task.activity != "waiting-on-you" && task.unread != true && !selected
+        working && task.activity != "waiting-on-you" && task.unread != true && !selected
     }
 
     /// A closed or archived thread with nothing live in it reads quieter,

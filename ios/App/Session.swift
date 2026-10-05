@@ -201,6 +201,8 @@ final class Session: ObservableObject {
     /// can finish after its replacement starts; its cleanup must not clear
     /// the replacement's handle.
     private var streamGeneration = 0
+    /// The in-flight activity-feed snapshot for the current connection.
+    private var activityFeedTask: Task<Void, Never>?
     private var reconnectDelay: UInt64 = 0
     /// How many computer panels are open. A count rather than a flag: the
     /// panel can be pushed twice in a navigation stack, and the last one to
@@ -993,6 +995,8 @@ final class Session: ObservableObject {
     /// either folded with its seq, or was never received.
     private func stopStream() {
         flushFrames()
+        activityFeedTask?.cancel()
+        activityFeedTask = nil
         streamTask?.cancel()
         streamTask = nil
     }
@@ -1301,6 +1305,9 @@ final class Session: ObservableObject {
                         // their explicit security priority next launch.
                         rememberWorkingRoute()
                         refreshConnectionMetadata(using: client)
+                        // Every hello, resumed or not: activity pushes may
+                        // not be replayable, so a gap is closed by a snapshot.
+                        refreshActivityFeed(using: client)
                         continue
                     }
                     enqueue(frame)
@@ -1330,6 +1337,43 @@ final class Session: ObservableObject {
             // not the laptop's should not hammer it.
             reconnectDelay = reconnectDelay == 0 ? 1 : min(reconnectDelay * 2, 15)
             try? await Task.sleep(nanoseconds: reconnectDelay * 1_000_000_000)
+        }
+    }
+
+    // MARK: - Activity feed seam
+    //
+    // SEAM: the server's activity feed enters the phone in exactly two places.
+    //   1. Snapshot — `refreshActivityFeed(using:)` below, on every hello,
+    //      GETting `activityFeedSnapshotPath`.
+    //   2. Pushes — SSE frames whose `kind` is `activityFeedEventName`, which
+    //      `Frame` decodes to `.activity` and `CompanionState.apply(_:)`
+    //      folds through `enqueue`/`flushFrames` like any other frame.
+    // Both names are declared once at the top of
+    // CompanionCore/ActivityFeed.swift.
+
+    /// Fetch the feed snapshot without holding up the stream. A server
+    /// without the route (404/405), or any failure, leaves the feed as it is
+    /// — empty on a fresh connection, so every face falls back to the bot
+    /// and task records exactly as before the feed existed.
+    private func refreshActivityFeed(using client: CompanionClient) {
+        activityFeedTask?.cancel()
+        let generation = streamGeneration
+        activityFeedTask = Task { [weak self] in
+            guard let self else { return }
+            // Pushes already received count as folded, so the mark below
+            // covers everything that arrives while the request is out.
+            self.flushFrames()
+            let mark = self.state.activityFeed.revision
+            guard let entries = try? await client.activityFeedSnapshot() else { return }
+            guard !Task.isCancelled, self.streamGeneration == generation,
+                  self.client?.connection.id == client.connection.id else { return }
+            self.flushFrames()
+            // A pushed replacement that landed during the fetch is at least
+            // as new as this response; applying it would resurrect lanes the
+            // push already removed.
+            guard self.state.activityFeed.revision == mark else { return }
+            self.state.activityFeed.apply(snapshot: entries, preservingUpdatesAfter: mark)
+            log.info("activity feed snapshot: \(entries.count, privacy: .public) entries")
         }
     }
 

@@ -249,8 +249,9 @@ struct SharedChatView: View {
             if currentRoom.isGroup, let preference = replyPreferences {
                 HStack(spacing: 6) {
                     ForEach(availableBots.filter { preference.replyBotIds?.contains($0.id) == true }) { bot in
-                        MausAvatar(color: bot.color ?? "blue", size: 22, bodyId: bot.mascotBody,
-                                   eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: false)
+                        let live = liveFace(botId: bot.id)
+                        MausAvatar(color: bot.color ?? "blue", size: 22, bodyId: bot.mascotBody, state: live ?? .idle,
+                                   eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: live?.showsActivity == true)
                         Text(bot.name)
                     }
                     Text(preference.replyBotIds?.isEmpty == false ? "will reply · @someone else to switch" : "Mention a bot for a reply")
@@ -409,7 +410,8 @@ struct SharedChatView: View {
 
     @ViewBuilder private var headerAvatar: some View {
         if let peer, peer.kind == "bot" {
-            SharedBotFace(bot: peer, size: 30)
+            let live = liveFace(botId: peer.id)
+            SharedBotFace(bot: peer, size: 30, state: live ?? .idle, animated: live?.showsActivity == true)
         } else if let peer, let avatar = peer.avatar, PersonCutout.image(dataURL: avatar) != nil {
             PersonPhotoView(dataURL: avatar, size: 30)
         } else if let peer {
@@ -417,6 +419,17 @@ struct SharedChatView: View {
         } else {
             GroupMarkView(members: GroupMarkView.faces(room, contacts: contacts, selfID: selfID), size: 34)
         }
+    }
+
+    /// The activity feed's face for a bot working in this room, or nil to
+    /// keep the still face. Shared ids are `home:bot:local` while the feed
+    /// names the local bot, so either spelling matches; the room id scopes
+    /// it, so the same bot busy in another chat never moves here.
+    private func liveFace(botId: String) -> MausState? {
+        let feed = session.state.activityFeed
+        let local = botId.components(separatedBy: ":bot:").last ?? botId
+        guard let live = feed.busiest(bot: botId, room: room.id) ?? feed.busiest(bot: local, room: room.id) else { return nil }
+        return MausState.forFeed(live)
     }
 
     private var mentionChoices: [SharedMentionChoice] {

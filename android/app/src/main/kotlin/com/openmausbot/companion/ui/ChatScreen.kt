@@ -871,8 +871,10 @@ private fun LoadedChat(
 
                 ChatHeader(
                     chat = chat,
-                    face = remember(chat, rawTranscript) {
-                        MausState.forChat(chat, rawTranscript.lastOrNull())
+                    // This exact (bot, thread) lane from the activity feed, else
+                    // the face the transcript argues for.
+                    face = remember(chat, rawTranscript, state.activity) {
+                        MascotFace.forOpenChat(chat, state.activity, rawTranscript.lastOrNull())
                     },
                     unreadElsewhere = remember(state, chat) {
                         (state.unreadCount - if (chat.unread) 1 else 0).coerceAtLeast(0)
@@ -1069,7 +1071,7 @@ private val HEADER_CLEARANCE = 128.dp
 @Composable
 private fun ChatHeader(
     chat: Chat,
-    face: MausState,
+    face: MascotFace,
     unreadElsewhere: Int,
     onBack: () -> Unit,
     onWatchComputer: () -> Unit,
@@ -1124,7 +1126,8 @@ private fun ChatHeader(
             ChatAvatar(
                 chat = chat,
                 size = 60.dp,
-                state = face,
+                state = face.state,
+                animated = face.animated,
                 modifier = if (chat is Chat.BotChat) {
                     Modifier
                         .clickable(role = Role.Button, onClick = onOpenProfile)
