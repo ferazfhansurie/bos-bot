@@ -18,12 +18,42 @@
 // drivers/ nested; import.meta.url still resolves to the same location, so
 // that lookup is unaffected.
 import { build } from "esbuild";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const server = join(root, "server");
+
+// Native PTY modules stay in their upstream CJS layout, outside app.asar via
+// dist-server's extraResources mapping. Ship the native files for this build
+// host only: release builders must run on the target platform/architecture.
+const require = createRequire(import.meta.url);
+const ptyRoot = dirname(require.resolve("node-pty/package.json"));
+const ptyVendor = join(root, "dist-server", "vendor", "node-pty");
+rmSync(ptyVendor, { recursive: true, force: true });
+mkdirSync(ptyVendor, { recursive: true });
+for (const file of ["package.json", "LICENSE"]) copyFileSync(join(ptyRoot, file), join(ptyVendor, file));
+cpSync(join(ptyRoot, "lib"), join(ptyVendor, "lib"), {
+  recursive: true,
+  filter: (path) => !path.endsWith(".test.js") && !path.endsWith(".map"),
+});
+const nativeRelative = ["build/Release", `prebuilds/${process.platform}-${process.arch}`]
+  .find((relative) => existsSync(join(ptyRoot, relative, process.platform === "win32" ? "conpty.node" : "pty.node")));
+if (!nativeRelative) throw new Error(`node-pty has no native runtime for ${process.platform}-${process.arch}; build it on the release target first`);
+const nativeSource = join(ptyRoot, nativeRelative);
+cpSync(nativeSource, join(ptyVendor, nativeRelative), {
+  recursive: true,
+  // Keep runtime addons/helpers; omit build intermediates and debug symbols.
+  filter: (path) => path === nativeSource || path === join(nativeSource, "conpty")
+    || /\.(node|dll|exe)$/.test(path) || basename(path) === "spawn-helper",
+});
+if (process.platform !== "win32") {
+  // npm's spawn-helper can be 0644 even when the prebuilt addon loads. Make
+  // the staged executable runnable before electron-builder copies resources.
+  chmodSync(join(ptyVendor, nativeRelative, "spawn-helper"), 0o755);
+}
 
 // yaml's Node export is CommonJS and contains dynamic requires that cannot run
 // after it is inlined into our ESM-only packaged server. Its browser export is
@@ -52,6 +82,8 @@ const ENTRY_POINTS = [
   // package smoke probe also imports local-computer.js directly.
   "proxy-paths.ts",
   "local-computer.ts",
+  // Also importable directly by the native packaged runtime smoke probe.
+  "terminal-pty.ts",
   "local-computer-proxy.ts",
   // the hook helper Claude Code runs at PostToolUse/PreCompact/SessionStart/Stop
   "hooks/omb-hook.ts",
@@ -78,6 +110,9 @@ await build({
   allowOverwrite: true,
   logLevel: "info",
   plugins: [yamlEsmPlugin],
+  // ws is CommonJS and dynamically requires Node builtins. Supply a native
+  // require to its inlined code while keeping node-pty itself lazy/external.
+  banner: { js: 'import { createRequire as __ombCreateRequire } from "node:module"; const require = __ombCreateRequire(import.meta.url);' },
 });
 
 // Native WhatsApp (server/whatsapp-wwebjs.ts) is whatsapp-web.js + puppeteer:

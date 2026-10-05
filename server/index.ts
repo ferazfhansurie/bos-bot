@@ -19,6 +19,8 @@ import { appendFileSync, existsSync, readFileSync, rmSync, mkdirSync } from "nod
 import { writeFileAtomic } from "./atomic.ts";
 import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { TerminalService } from "./terminal.ts";
+import { resolveTerminalTarget } from "./terminal-target.ts";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
 import { basename, extname, join } from "node:path";
 
@@ -12730,7 +12732,7 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<any> {
 const workspaceQuietHooks = {
     idle: () => !privateTurnDispatches.pending().length && !runningSharedRequests.size && !sharedRoomLocks.size && !sharedBotLocks.size && !settlingResourceOwners.size &&
       !pendingDelegationWakes.size && !pendingConnectorResumes.size && !pendingSecretResumes.size && !pendingTeamSetupResumes.size &&
-      !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall &&
+      !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall && !terminals.count &&
       !routines?.isTicking && !calendarCalls?.isTicking &&
       !localVmImageBusy && !localVmProvisionBusy && !localVmModeChangeBusy &&
       !localVmLifecycleBusy.size && !boxLifecycleBusyBots.size && !vpsPreviewRequests.size && !orphanBoxLifecycleBusyIds.size &&
@@ -12910,6 +12912,16 @@ const workspaceBackupRoutes = createWorkspaceBackupRoutes({
 });
 
 const toolResults = new ToolResults();
+const terminals = new TerminalService({
+  ownerToken: () => DESKTOP_MANAGED ? desktopMutationToken : undefined,
+  authenticate: req => resolveRequestAuth(req, {
+    sessions, cookieName: SESSION_COOKIE, streamPath: "/api/events",
+    url: new URL(req.url ?? "/", `http://localhost:${PORT}`),
+    loopbackMutationToken: desktopMutationToken, companionMutationToken,
+  }).auth?.kind === "loopback",
+  resolveTarget: (botId, threadId) => resolveTerminalTarget(store, botId, threadId, bot => Boolean(inheritedTeamComputer(bot))),
+  claim: () => workspaceMaintenance.request(),
+});
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   let url: URL;
   try {
@@ -13114,6 +13126,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
+    if (await terminals.handle(req, res)) return;
     if (auth.kind === "session" && !workspaceMaintenance.active) {
       const replaced = peerHandoffs.confirm(auth.session.id);
       if (replaced) sessions.revoke(replaced);
@@ -21193,6 +21206,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 };
 
 const server = createServer(handleRequest);
+// Deliberately absent from the public/IPC tunnel listener and companion relay.
+server.on("upgrade", (req, socket, head) => terminals.upgrade(req, socket, head));
 
 calendarCalls.start();
 
@@ -21408,6 +21423,7 @@ if (TUNNEL_SOCKET) {
 
 const gracefulShutdown = createGracefulShutdown({
   cleanup: [
+    () => terminals.close(),
     () => {
       followupsReady = false;
       companyShutdown = true;
