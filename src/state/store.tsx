@@ -215,6 +215,19 @@ export type GroupDefaultResponder =
   | { kind: "everyone" }
   | { kind: "mentions" };
 
+/** One member's turn running in a thread of a room, from the server's room
+ * snapshot, so a renderer that missed the turn's start frame still knows which
+ * thread owns it. */
+export interface RoomActiveMemberTurn {
+  botId: string;
+  /** public room thread id (the room's own or one of its tasks) */
+  threadId: string;
+  /** epoch ms; null when the server does not know */
+  startedAt: number | null;
+  /** the turn's runtime id, when the server has it */
+  turnId?: string;
+}
+
 /** A room: several bots + you in one shared thread. */
 export interface Group {
   id: string;
@@ -225,6 +238,8 @@ export interface Group {
   memberReplyModes?: Record<string, "always" | "mentions">;
   notifications?: "all" | "mentions" | "muted";
   activeBotIds?: string[];
+  /** every member turn running in this room, one per thread and member */
+  activeMemberTurns?: RoomActiveMemberTurn[];
   defaultResponder: GroupDefaultResponder;
   bulletin: string;
   unread: boolean;

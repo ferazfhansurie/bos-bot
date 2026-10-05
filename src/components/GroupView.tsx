@@ -1120,16 +1120,16 @@ export function GroupView({ group }: { group: Group }) {
   const working = useMemo(() => roomPresenceMembers({
     threadId: group.threadId,
     activeBotIds: group.activeBotIds,
-    busyBotId: group.busyBotId,
-    turnStartedAt: group.turnStartedAt,
-    otherThreadRunning: group.tasks?.some((task) => task.threadId !== group.threadId && task.state === "running") ?? false,
+    activeMemberTurns: group.activeMemberTurns,
     turns: memberTurns,
     messages: group.messages,
   }).flatMap((entry) => {
     const bot = members.find((member) => member.id === entry.botId);
-    // a member whose own reply already landed is done talking
-    return bot && showWorkingDots(true, lastGroupMessage, bot.id) ? [{ ...entry, bot }] : [];
-  }), [group.threadId, group.activeBotIds, group.busyBotId, group.turnStartedAt, group.tasks, memberTurns, group.messages, members, lastGroupMessage]);
+    // a member whose own reply already landed is done talking; a reply from
+    // before this turn started is its previous one and says nothing
+    const done = !showWorkingDots(true, lastGroupMessage, bot?.id) && (entry.since === null || lastGroupMessage!.at >= entry.since);
+    return bot && !done ? [{ ...entry, bot }] : [];
+  }), [group.threadId, group.activeBotIds, group.activeMemberTurns, memberTurns, group.messages, members, lastGroupMessage]);
   // A member busy elsewhere takes its turn when free; until then the room
   // works with no speaker, and the presence row names who it is waiting on.
   const awaited = working.length ? undefined : members.find(

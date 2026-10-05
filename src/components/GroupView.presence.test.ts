@@ -105,3 +105,33 @@ describe("room presence for simultaneous members", () => {
     expect(shown[0]).toContain("Juniper · Thinking");
   });
 });
+
+it("lead review: shows a fresh turn even when the tail is this member's previous reply", () => {
+  started("room-a", "atlas", 10);
+  const oldReply: Message = { id: "old-reply", role: "bot", kind: "text", text: "previous result", at: at + 5000, from: from("atlas") };
+  const shown = rows(render({ ...room, activeBotIds: ["atlas"], busyBotId: "atlas", messages: [...room.messages, oldReply] }));
+  expect(shown.some((row) => row.includes("Atlas · Thinking"))).toBe(true);
+});
+
+describe("room presence after opening or reconnecting mid-turn", () => {
+  const snapshot = [
+    { botId: "atlas", threadId: "room-a", startedAt: at, turnId: "atlas-room-a" },
+    { botId: "kai", threadId: "room-b", startedAt: at, turnId: "kai-room-b" },
+  ];
+
+  it("draws members the snapshot places in this thread, and only them", () => {
+    const shown = rows(render({ ...room, activeBotIds: ["atlas", "kai"], busyBotId: "atlas", activeMemberTurns: snapshot }));
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toContain("Atlas · Thinking");
+  });
+
+  it("draws nobody for room-wide activity with no snapshot to place it", () => {
+    expect(rows(render({ ...room, activeBotIds: ["atlas", "kai"], busyBotId: "atlas" }))).toHaveLength(0);
+  });
+
+  it("keeps a completed member out while the frame before its completion is still current", () => {
+    started("room-a", "atlas", 0);
+    roomMemberTurns.event({ type: "turn.completed", threadId: "room-a", roomBotId: "atlas", turnId: "atlas-room-a" });
+    expect(rows(render({ ...room, activeBotIds: ["atlas"], busyBotId: "atlas", activeMemberTurns: snapshot.slice(0, 1) }))).toHaveLength(0);
+  });
+});

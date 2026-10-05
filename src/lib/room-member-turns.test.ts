@@ -6,7 +6,7 @@ const at = Date.UTC(2026, 9, 5, 12);
 const iso = (seconds: number) => new Date(at + seconds * 1000).toISOString();
 const start = (turns: RoomMemberTurns, threadId: string, botId: string, seconds = 0) =>
   applyRoomTurnEvent(turns, { type: "turn.started", threadId, roomBotId: botId, turnId: `${botId}-${seconds}`, createdAt: iso(seconds) });
-const base = { threadId: "room-a", otherThreadRunning: false, messages: [] as Message[] };
+const base = { threadId: "room-a", messages: [] as Message[] };
 
 describe("room member turns", () => {
   it("keeps each member's own start time", () => {
@@ -19,8 +19,10 @@ describe("room member turns", () => {
     const first = start(new Map(), "room-a", "atlas", 0);
     const second = start(first, "room-a", "atlas", 9);
     const after = applyRoomTurnEvent(second, { type: "turn.completed", threadId: "room-a", roomBotId: "atlas", turnId: "atlas-0" });
-    expect(after.size).toBe(1);
-    expect(applyRoomTurnEvent(after, { type: "turn.completed", threadId: "room-a", roomBotId: "atlas", turnId: "atlas-9" }).size).toBe(0);
+    expect(after.get("room-a:room:atlas")?.completed).toBeUndefined();
+    expect(roomPresenceMembers({ ...base, activeBotIds: ["atlas"], turns: after })).toHaveLength(1);
+    const done = applyRoomTurnEvent(after, { type: "turn.completed", threadId: "room-a", roomBotId: "atlas", turnId: "atlas-9" });
+    expect(roomPresenceMembers({ ...base, activeBotIds: ["atlas"], turns: done })).toEqual([]);
   });
 
   it("prunes members the room frame no longer counts, only in that room", () => {
@@ -30,17 +32,31 @@ describe("room member turns", () => {
     expect(pruneRoomTurns(turns, ["room-a"], undefined)).toBe(turns);
   });
 
-  it("shows an untracked member opened mid-turn only when no other thread could own it", () => {
-    const input = { ...base, activeBotIds: ["atlas"], busyBotId: "atlas", turnStartedAt: at, turns: new Map() };
+  it("places an untracked member only where the server snapshot says it works", () => {
+    const input = { ...base, activeBotIds: ["atlas", "kai"], turns: new Map(), activeMemberTurns: [
+      { botId: "atlas", threadId: "room-a", startedAt: at, turnId: "t1" },
+      { botId: "kai", threadId: "room-b", startedAt: at, turnId: "t2" },
+    ] };
     expect(roomPresenceMembers(input)).toEqual([{ botId: "atlas", since: at, tool: null }]);
-    expect(roomPresenceMembers({ ...input, otherThreadRunning: true })).toEqual([]);
-    expect(roomPresenceMembers({ ...input, turns: start(new Map(), "room-b", "atlas") })).toEqual([]);
-    // a second untracked member has no reliable start time
-    expect(roomPresenceMembers({ ...input, activeBotIds: ["atlas", "kai"] })[1]).toEqual({ botId: "kai", since: null, tool: null });
+    expect(roomPresenceMembers({ ...input, threadId: "room-b" }).map((member) => member.botId)).toEqual(["kai"]);
+    // no snapshot: room-wide activeBotIds alone never proves which thread
+    expect(roomPresenceMembers({ ...input, activeMemberTurns: undefined })).toEqual([]);
+    // a snapshot without a start time shows the member with no timer
+    expect(roomPresenceMembers({ ...input, activeMemberTurns: [{ botId: "atlas", threadId: "room-a", startedAt: null }] }))
+      .toEqual([{ botId: "atlas", since: null, tool: null }]);
   });
 
-  it("falls back to the single busy speaker on servers without activeBotIds", () => {
-    expect(roomPresenceMembers({ ...base, busyBotId: "atlas", turnStartedAt: at, turns: new Map() }).map((member) => member.botId)).toEqual(["atlas"]);
+  it("keeps a completed turn settled against snapshots that predate it, but shows a newer one", () => {
+    const done = applyRoomTurnEvent(start(new Map(), "room-a", "atlas", 0), { type: "turn.completed", threadId: "room-a", roomBotId: "atlas", turnId: "atlas-0" });
+    const frame = (entry: { startedAt: number | null; turnId?: string }) =>
+      roomPresenceMembers({ ...base, activeBotIds: ["atlas"], turns: done, activeMemberTurns: [{ botId: "atlas", threadId: "room-a", ...entry }] });
+    expect(frame({ startedAt: at, turnId: "atlas-0" })).toEqual([]);
+    expect(frame({ startedAt: at })).toEqual([]);
+    expect(frame({ startedAt: null })).toEqual([]);
+    expect(frame({ startedAt: at + 30000, turnId: "atlas-30" })).toEqual([{ botId: "atlas", since: at + 30000, tool: null }]);
+    // a fresh start frame replaces the completed record
+    expect(roomPresenceMembers({ ...base, activeBotIds: ["atlas"], turns: start(done, "room-a", "atlas", 40) }))
+      .toEqual([{ botId: "atlas", since: at + 40000, tool: null }]);
   });
 
   it("takes only the member's own running step from this turn", () => {

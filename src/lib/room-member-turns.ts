@@ -2,18 +2,23 @@
 // when. The server's activeBotIds is the room-wide truth (a member drops out
 // the moment its provider turn ends or is stopped); the public runtime
 // turn.started/turn.completed frames, which carry roomBotId, say which room
-// thread each member is working in. A member shows only when both agree, so a
-// member busy in another thread of the room, or in its own private thread,
-// never appears here.
+// thread each member is working in, and the room's activeMemberTurns snapshot
+// says the same for turns whose start frame this renderer never saw (opened or
+// reconnected mid-turn). A member shows only when one of those places it in
+// this thread, so a member busy in another thread of the room, or in its own
+// private thread, never appears here.
 import { useSyncExternalStore } from "react";
 import { roomMemberStreamKey } from "@/lib/runtime-stream";
-import type { Message } from "@/state/store";
+import type { Message, RoomActiveMemberTurn } from "@/state/store";
 
 export interface RoomMemberTurn {
   threadId: string;
   botId: string;
   turnId?: string;
   startedAt: number;
+  /** its completion frame arrived; kept so a room frame sent before the
+   * completion cannot bring the member back, until a newer turn starts */
+  completed?: boolean;
 }
 
 export type RoomMemberTurns = ReadonlyMap<string, RoomMemberTurn>;
@@ -31,32 +36,43 @@ export function applyRoomTurnEvent(turns: RoomMemberTurns, event: RoomTurnEvent,
     return next;
   }
   // a late completion from an older turn must not end the member's newer one
-  if (!current || (current.turnId && event.turnId && current.turnId !== event.turnId)) return turns;
-  next.delete(key);
+  if (current && (current.completed || (current.turnId && event.turnId && current.turnId !== event.turnId))) return turns;
+  next.set(key, current
+    ? { ...current, completed: true }
+    // completion of a turn whose start was never seen still settles it
+    : { threadId: event.threadId, botId: event.roomBotId, turnId: event.turnId, startedAt: now, completed: true });
   return next;
 }
 
-/** A room frame is authoritative: drop any member it no longer counts as
- * working in that room, so a missed completion cannot leave a stale row. */
+/** A room frame is authoritative: drop any running member it no longer counts
+ * as working in that room, so a missed completion cannot leave a stale row.
+ * Completed turns stay as they are. */
 export function pruneRoomTurns(turns: RoomMemberTurns, threadIds: string[], activeBotIds: string[] | undefined): RoomMemberTurns {
   if (!activeBotIds) return turns;
   const threads = new Set(threadIds);
   let next: Map<string, RoomMemberTurn> | null = null;
   for (const [key, turn] of turns) {
-    if (!threads.has(turn.threadId) || activeBotIds.includes(turn.botId)) continue;
+    if (turn.completed || !threads.has(turn.threadId) || activeBotIds.includes(turn.botId)) continue;
     next ??= new Map(turns);
     next.delete(key);
   }
   return next ?? turns;
 }
 
+/** Whether a snapshot entry is a turn the renderer already saw finish. Equal
+ * turn ids, or a start no later than the finished one, mean the frame predates
+ * the completion; with neither fact the completion stands. */
+function settledBy(entry: RoomActiveMemberTurn, done: RoomMemberTurn): boolean {
+  if (entry.turnId && done.turnId) return entry.turnId === done.turnId;
+  if (entry.startedAt == null) return true;
+  return entry.startedAt <= done.startedAt;
+}
+
 export interface RoomPresenceInput {
   threadId: string;
   activeBotIds?: string[];
-  busyBotId?: string | null;
-  turnStartedAt?: number | null;
-  /** other room threads the server reports as running */
-  otherThreadRunning: boolean;
+  /** the server's per-thread snapshot; absent on servers that predate it */
+  activeMemberTurns?: RoomActiveMemberTurn[];
   turns: RoomMemberTurns;
   messages: Message[];
 }
@@ -70,21 +86,20 @@ export interface RoomPresenceMember {
 }
 
 export function roomPresenceMembers(input: RoomPresenceInput): RoomPresenceMember[] {
-  // servers without activeBotIds only know the one speaker
-  const active = input.activeBotIds ?? (input.busyBotId ? [input.busyBotId] : []);
+  const active = input.activeBotIds ?? [];
+  const snapshot = new Map((input.activeMemberTurns ?? [])
+    .filter((entry) => entry.threadId === input.threadId)
+    .map((entry) => [entry.botId, entry]));
   const out: RoomPresenceMember[] = [];
-  for (const botId of active) {
+  for (const botId of new Set([...active, ...snapshot.keys()])) {
     const own = input.turns.get(roomMemberStreamKey(input.threadId, botId));
+    const entry = snapshot.get(botId);
     let since: number | null;
-    if (own) since = own.startedAt;
-    else {
-      // Opened mid-turn: no start frame was seen. The member is still known
-      // to be in this thread when it is not tracked in any other thread and
-      // no other room thread is running; otherwise it stays out.
-      const elsewhere = [...input.turns.values()].some((turn) => turn.botId === botId);
-      if (elsewhere || input.otherThreadRunning) continue;
-      since = botId === input.busyBotId ? input.turnStartedAt ?? null : null;
-    }
+    if (own && !own.completed && active.includes(botId)) since = own.startedAt;
+    // Opened or reconnected mid-turn: only the server's snapshot can say this
+    // thread owns the turn; room-wide activeBotIds alone never does.
+    else if (entry && !(own?.completed && settledBy(entry, own))) since = entry.startedAt ?? null;
+    else continue;
     out.push({ botId, since, tool: inFlightTool(input.messages, botId, since) });
   }
   return out;
