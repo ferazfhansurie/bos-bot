@@ -51,7 +51,7 @@ Exit codes: 0 allowed/recorded, 2 refused, 1 bad invocation or io error. The
 verdict is one json object on stdout; a one-line summary goes to stderr.
 Never stops, launches, signs or swaps anything.
 """
-import argparse, hashlib, json, os, re, subprocess, sys, time
+import argparse, hashlib, json, os, re, stat, subprocess, sys, time
 from pathlib import Path
 
 STAMP = Path("Contents/Resources/build-commit.json")
@@ -82,6 +82,49 @@ def digests(app: Path) -> dict:
     return {"server_sha256": tree_digest(app, "server"), "ui_sha256": tree_digest(app, "ui")}
 
 
+def native_resource_digest(resources: Path) -> str:
+    h = hashlib.sha256()
+    swapped = {"server", "ui", "updater", "build-commit.json", "native-contract.json"}
+    def walk(directory):
+        for f in sorted(directory.iterdir()):
+            if directory == resources and f.name in swapped:
+                continue
+            details = f.lstat()
+            kind = "link" if f.is_symlink() else "dir" if f.is_dir() else "file"
+            h.update(json.dumps([str(f.relative_to(resources)), stat.S_IMODE(details.st_mode), kind], ensure_ascii=False, separators=(",", ":")).encode())
+            if kind == "link": h.update(os.readlink(f).encode())
+            elif kind == "dir": walk(f)
+            elif f.is_file(): h.update(f.read_bytes())
+            else: raise Refuse("native resource type unsupported")
+    walk(resources)
+    return h.hexdigest()
+
+
+def native_source_digest(repo: Path, commit: str) -> str:
+    if not SHA.match(str(commit)): raise Refuse("native shell commit invalid")
+    h = hashlib.sha256()
+    for entry in git(repo, "ls-tree", "-r", "--full-tree", commit).stdout.splitlines():
+        name = entry.split("\t", 1)[1]
+        if name.startswith("electron/resources/updater/"): continue
+        if re.match(r"^(electron/|companion/|skills/|scripts/|build/|third_party/|electron-builder[^/]*\.yml$|pnpm-lock\.yaml$)", name): h.update((entry + "\n").encode())
+    pkg = json.loads(git(repo, "show", f"{commit}:package.json").stdout)
+    pkg.pop("version", None); pkg.pop("bosSourceCommit", None)
+    h.update(json.dumps(pkg, ensure_ascii=False, separators=(",", ":")).encode())
+    return h.hexdigest()
+
+
+def check_native_contract(app: Path, repo: Path, commit: str):
+    resources = app / "Contents/Resources"
+    path = resources / "native-contract.json"
+    if not path.exists(): return  # pre-contract full packages retain legacy guard support
+    try: saved = json.loads(path.read_text())
+    except Exception as e: raise Refuse(f"native package identity unreadable: {e}")
+    if saved.get("schema") != 1: raise Refuse("native package identity unsupported")
+    if saved.get("resourcesSha256") != native_resource_digest(resources): raise Refuse("native resources changed after packaging; full desktop package required")
+    if saved.get("sourceSha256") != native_source_digest(repo, saved.get("shellCommit", "")): raise Refuse("native shell source identity mismatch")
+    if saved.get("sourceSha256") != native_source_digest(repo, commit): raise Refuse("target requires another native shell; full desktop package required")
+
+
 def read_stamp(app: Path):
     """(commit, how): the stamped commit, or None when there is no stamp or it describes other trees."""
     path = app / STAMP
@@ -94,6 +137,11 @@ def read_stamp(app: Path):
     commit = stamp.get("commit")
     if not isinstance(commit, str) or not SHA.match(commit):
         return None, "stamp has no full 40-hex commit"
+    native_stamp = stamp.get("native_contract_sha256")
+    if native_stamp:
+        native_path = app / "Contents/Resources/native-contract.json"
+        if not native_path.is_file() or hashlib.sha256(native_path.read_bytes()).hexdigest() != native_stamp:
+            return None, "native package identity changed after stamping"
     actual = digests(app)
     if stamp.get("server_sha256") != actual["server_sha256"] or stamp.get("ui_sha256") != actual["ui_sha256"]:
         return None, f"stamped {commit[:8]} but its server/ui trees were changed after stamping"
@@ -183,6 +231,8 @@ def cmd_stamp(a) -> dict:
     if not SHA.match(a.commit or ""):
         raise Refuse("--commit must be the full 40-hex source commit")
     body = {"commit": a.commit, **digests(app), "stamped_at": now()}
+    native = app / "Contents/Resources/native-contract.json"
+    if native.is_file(): body["native_contract_sha256"] = hashlib.sha256(native.read_bytes()).hexdigest()
     write_json(app / STAMP, body)
     return {"ok": True, "reason": f"stamped {app} as {a.commit[:8]}", "stamp": body}
 
@@ -238,6 +288,7 @@ def cmd_check(a) -> dict:
     out["candidate"].update(commit=commit, source="stamp")
     if not commit_exists(repo, commit):
         raise Refuse(f"candidate refused: stamped commit {commit[:8]} is not in {repo} (fetch it first). running is {running['commit'][:8]}")
+    check_native_contract(candidate, repo, commit)
     out.update(judge(repo, branch, prod, running["commit"], commit))
     return out
 

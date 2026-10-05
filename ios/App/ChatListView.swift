@@ -11,6 +11,7 @@ import CompanionCore
 struct ChatListView: View {
     @EnvironmentObject private var session: Session
     @State private var query = ""
+    @State private var conversationFilter = "all"
     @State private var pinnedChats = PinnedChats()
     @State private var showingProfile = false
     @State private var profilePhoto: PhotosPickerItem?
@@ -607,7 +608,20 @@ struct ChatListView: View {
 
     @ViewBuilder
     private var rosterSections: some View {
-        if !attention.isEmpty {
+        Picker("Conversation status", selection: $conversationFilter) {
+            Text("All").tag("all")
+            Text("Unread").tag("unread")
+            Text("Waiting").tag("waiting")
+            Text("Running").tag("running")
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .accessibilityIdentifier("conversation-status-filter")
+        if conversationFilter != "all" && shownConversations.isEmpty {
+            Text("No conversations match this filter.")
+                .foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 12)
+        }
+        if conversationFilter == "all" && !attention.isEmpty {
             sectionLabel(Text("Needs attention"))
                 .padding(.top, 10)
                 .padding(.bottom, 4)
@@ -654,7 +668,7 @@ struct ChatListView: View {
 
     private var pinnedConversations: [ConversationEntry] {
         let byID = Dictionary(uniqueKeysWithValues: orderedConversations.map { ($0.id, $0) })
-        return pinnedChats.visibleIDs(available: Set(byID.keys)).compactMap { byID[$0] }
+        return pinnedChats.visibleIDs(available: Set(byID.keys)).compactMap { byID[$0] }.filter(matchesConversationFilter)
     }
 
     private func togglePin(_ entry: ConversationEntry) {
@@ -793,12 +807,23 @@ struct ChatListView: View {
     /// are while touched and move at most every 1.5s, so a tap opens the
     /// chat that was under the finger.
     private var shownConversations: [ConversationEntry] {
-        let live = orderedConversations
+        let live = orderedConversations.filter(matchesConversationFilter)
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-roster-order-live") { return live }
 #endif
         let byID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return rowOrder.arrange(live.map(\.id)).compactMap { byID[$0] }
+    }
+
+    private func matchesConversationFilter(_ entry: ConversationEntry) -> Bool {
+        switch conversationFilter {
+        case "unread": return conversationUnread(entry)
+        case "running": return conversationBusy(entry)
+        case "waiting":
+            if case .local(let summary) = entry { return waitingChats.contains(summary.chat.id) }
+            return false
+        default: return true
+        }
     }
 
     private func settleOrder(_ ids: [String]) {

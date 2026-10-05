@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stampNativeContract, assertNativeCompatibility } from "../electron/native-contract.mjs";
 import { appDigests, discoverCandidate } from "./updater.ts";
 import { DEFAULT_PROD_BRANCH, DEFAULT_RELEASE_BRANCH, buildCandidate, buildRoot, missingPackages, previewUpdate, readUpdateSource, resolveUpdateTarget, runCommand, toolchainPath, type RunCommand } from "./updater-build.ts";
 
@@ -63,6 +64,7 @@ describe.skipIf(!hasPython)("update build", () => {
     repo = makeRepo(root);
     live = fakeApp(join(root, "Applications"), "BOS Bot.app", "live");
     dataDir = join(root, "data"); mkdirSync(dataDir);
+    stampNativeContract(join(live, "Contents", "Resources"), repo.dir, repo.a);
     // the canonical checkout's node_modules, with the same lockfile beside it
     nodeModules = join(repo.dir, "node_modules");
     for (const name of ["left-pad", "vite"]) { mkdirSync(join(nodeModules, name), { recursive: true }); writeFileSync(join(nodeModules, name, "package.json"), `{"name":"${name}"}`); }
@@ -118,6 +120,37 @@ describe.skipIf(!hasPython)("update build", () => {
     expect(await previewUpdate({ script: join(root, "missing.py"), ledger, liveApp: live, source, target, current })).toMatchObject({ reason: /no-downgrade guard failed/ });
   });
 
+  it("refuses an unknown legacy shell before dependencies or building", async () => {
+    rmSync(join(live, "Contents", "Resources", "native-contract.json"));
+    const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };
+    const target = await resolveUpdateTarget(source);
+    const calls: string[] = [];
+    await expect(buildCandidate({ dataDir, liveApp: live, source, target, codesign: false, commands: FAKE_BUILD,
+      run: async (file, args, options) => { calls.push(file); return runCommand(file, args, options); },
+    })).rejects.toMatchObject({ step: "native compatibility", message: /full desktop package/ });
+    expect(calls).not.toContain("pnpm");
+    expect(discoverCandidate(dataDir)).toBeNull();
+    expect(readFileSync(join(live, "Contents", "Resources", "server", "index.js"), "utf8")).toBe("// server live\n");
+  });
+
+  it("refuses changed native inputs and tampered native resources without replacing the candidate", async () => {
+    const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };
+    const target = await resolveUpdateTarget(source);
+    await buildCandidate({ dataDir, liveApp: live, source, target, codesign: false, commands: FAKE_BUILD });
+    const before = readFileSync(join(dataDir, "updates", "candidate", "manifest.json"), "utf8");
+    writeFileSync(join(repo.dir, "electron", "preload.cjs"), "// new browser native capability");
+    repo.g("add", "electron/preload.cjs"); repo.g("commit", "-q", "-m", "C: native shell change");
+    const c = repo.g("rev-parse", "HEAD");
+    await expect(buildCandidate({ dataDir, liveApp: live, source, target: { ...target, sha: c }, codesign: false, commands: FAKE_BUILD })).rejects.toMatchObject({ step: "native compatibility", message: /another native shell/ });
+    expect(readFileSync(join(dataDir, "updates", "candidate", "manifest.json"), "utf8")).toBe(before);
+    writeFileSync(join(live, "Contents", "Resources", "app.asar"), "tampered");
+    expect(() => assertNativeCompatibility(join(live, "Contents", "Resources"), repo.dir, repo.b)).toThrow(/changed after packaging/);
+    // A complete shell stamped from C admits C and records its native identity.
+    stampNativeContract(join(live, "Contents", "Resources"), repo.dir, c);
+    const complete = await buildCandidate({ dataDir, liveApp: live, source, target: { ...target, sha: c }, codesign: false, commands: FAKE_BUILD });
+    expect(assertNativeCompatibility(join(complete.candidate.appPath, "Contents", "Resources"), repo.dir, c)).toMatchObject({ shellCommit: c });
+  });
+
   it("archives the commit, links deps, builds, tree-swaps into a copy of the live bundle, stamps and stages", async () => {
     const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };
     const target = await resolveUpdateTarget(source);
@@ -147,6 +180,10 @@ describe.skipIf(!hasPython)("update build", () => {
     spawnSync(PYTHON, [SCRIPT, "record", "--live", live, "--commit", repo.a, "--ledger", ledger, "--repo", repo.dir, "--release-branch", DEFAULT_RELEASE_BRANCH]);
     const check = spawnSync(PYTHON, [SCRIPT, "check", "--candidate", staged.appPath, "--live", live, "--ledger", ledger], { encoding: "utf8" });
     expect(check.status).toBe(0); expect(JSON.parse(check.stdout)).toMatchObject({ ok: true, candidate: { commit: repo.b, source: "stamp" } });
+    writeFileSync(join(resources, "app.asar"), "changed native shell after admission");
+    const tampered = spawnSync(PYTHON, [SCRIPT, "check", "--candidate", staged.appPath, "--live", live, "--ledger", ledger], { encoding: "utf8" });
+    expect(tampered.status).toBe(2);
+    expect(JSON.parse(tampered.stdout).reason).toMatch(/native/);
     // a second build replaces the candidate
     const again = await buildCandidate({ dataDir, liveApp: live, source, target, codesign: false, commands: FAKE_BUILD });
     expect(again.stamp).toMatchObject({ commit: repo.b, server_sha256: outcome.stamp.server_sha256, ui_sha256: outcome.stamp.ui_sha256 });
@@ -173,7 +210,7 @@ describe.skipIf(!hasPython)("update build", () => {
     expect(existsSync(join(buildRoot(dataDir), repo.b.slice(0, 8), "src", "package.json"))).toBe(true);
     expect(discoverCandidate(dataDir)).toBeNull();
     // a commit from before the guard existed cannot be stamped, so it cannot be built
-    rmSync(join(repo.dir, "electron"), { recursive: true });
+    rmSync(join(repo.dir, "electron", "resources", "updater"), { recursive: true });
     mkdirSync(join(nodeModules, "vite")); writeFileSync(join(nodeModules, "vite", "package.json"), "{}");
     repo.g("add", "-A"); repo.g("commit", "-q", "-m", "C: drop the guard");
     const c = repo.g("rev-parse", "HEAD");

@@ -1,3 +1,4 @@
+import { stampNativeContract } from "../electron/native-contract.mjs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { packagedSourceCommit, stampBuildCommitSync } from "./after-pack.mjs";
@@ -22,6 +23,7 @@ export default async function signMac(options, packager) {
       if (path.resolve(file) === app) {
         // All children (including the PTY natives) now have final signed bytes.
         // Writing after signAsync returns would invalidate the app's signature.
+        stampNativeContract(resources, packager.projectDir, commit);
         stampBuildCommitSync(resources, commit);
         stamped = true;
       }

@@ -1,5 +1,6 @@
+import { stampNativeContract } from "../electron/native-contract.mjs";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { chmod, lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { LICENSE_FILES } from "./cua-linux-release.mjs";
@@ -110,6 +111,7 @@ export function stampBuildCommitSync(resources, commit) {
     server_sha256: treeDigest(resources, "server"),
     ui_sha256: treeDigest(resources, "ui"),
     stamped_at: new Date().toISOString(),
+    ...(existsSync(path.join(resources, "native-contract.json")) ? { native_contract_sha256: createHash("sha256").update(readFileSync(path.join(resources, "native-contract.json"))).digest("hex") } : {}),
   };
   writeFileSync(path.join(resources, "build-commit.json"), `${JSON.stringify(stamp, null, 2)}
 `, { mode: 0o644 });
@@ -137,6 +139,9 @@ export default async function afterPack(context) {
   // Unit fixtures for the older hooks carry no
   // server/ui trees and no commit, so they are left unstamped.
   const sourceCommit = packagedSourceCommit(context);
+  if (context.packager && context.electronPlatformName === "darwin") {
+    stampNativeContract(resources, context.packager.projectDir, sourceCommit);
+  }
   if (context.packager || sourceCommit) await stampBuildCommit(resources, sourceCommit);
   const browserRoot = path.join(resources, "browser-engine");
   const hasBrowser = await lstat(browserRoot).then(() => true, (error) => {

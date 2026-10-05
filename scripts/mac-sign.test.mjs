@@ -13,7 +13,7 @@ const builderRequire = createRequire(require.resolve("electron-builder"));
 const { sign } = builderRequire("app-builder-lib/out/codeSign/macCodeSign.js");
 const { resolveFunction } = builderRequire("app-builder-lib/out/util/resolve.js");
 const directories = [];
-const commit = "a".repeat(40);
+const commit = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
 const config = parse(fs.readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8"));
 
 afterEach(() => {
@@ -61,7 +61,7 @@ describe.skipIf(process.platform !== "darwin")("mac build stamp signing", () => 
     const hook = config.mac.sign
       ? await resolveFunction("module", config.mac.sign, "sign", process.cwd())
       : sign;
-    await hook(options, { metadata: { bosSourceCommit: commit } });
+    await hook(options, { metadata: { bosSourceCommit: commit }, projectDir: process.cwd() });
     expect(visited.at(-1)).toBe(app);
     expect(visited).toContain(native);
     const actual = appDigests(app);

@@ -11,6 +11,7 @@
 // grants keyed on that signature survive. electron-builder is not involved:
 // a packaged build needs the release signing secrets this machine does not
 // have, and the Electron shell does not change between release commits.
+import { assertNativeCompatibility, stampNativeContract } from "../electron/native-contract.mjs";
 import { execFile, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -127,6 +128,8 @@ export async function previewUpdate(options: PreviewOptions): Promise<UpdateChec
   const reason = verdict?.reason ?? result.stderr.trim().slice(0, 300);
   if (result.code !== 0 || verdict?.ok !== true) return { at, current: options.current, reason: result.code === 2 ? reason || "the no-downgrade guard said no" : `no-downgrade guard failed (exit ${result.code}): ${reason || "no output"}` };
   if (verdict.up_to_date) return { at, current: options.current, reason: reason || `up to date: running ${target.sha.slice(0, 8)} is the ${target.branch} head` };
+  try { assertNativeCompatibility(join(options.liveApp, "Contents", "Resources"), source.repo!, target.sha); }
+  catch (error) { return { at, current: options.current, reason: error instanceof Error ? error.message : String(error) }; }
   return { at, current: options.current, candidate: { version: target.version, sha: target.sha, branch: target.branch, ...(target.subject ? { subject: target.subject } : {}) }, reason };
 }
 
@@ -246,6 +249,10 @@ export async function buildCandidate(options: BuildOptions): Promise<BuildOutcom
     if (!existsSync(join(src, "package.json"))) throw new Error("archived tree has no package.json");
   });
 
+  await step("native compatibility", async () => {
+    assertNativeCompatibility(join(options.liveApp, "Contents", "Resources"), source.repo!, target.sha);
+  });
+
   // 2. dependencies: link the canonical checkout's node_modules when the
   //    lockfile is the same, install otherwise.
   await step("dependencies", async () => {
@@ -290,6 +297,12 @@ export async function buildCandidate(options: BuildOptions): Promise<BuildOutcom
     rmSync(join(resources, "build-commit.json"), { force: true });
   });
 
+  // Check again after copying/building: do not let changes to the live native
+  // tree during a build slip into a candidate carrying a stale contract.
+  await step("candidate native compatibility", async () => {
+    assertNativeCompatibility(resources, source.repo!, target.sha);
+  });
+
   // 5. stamp with the source commit (the guard's own script, from the source tree).
   let stamp: BuildOutcome["stamp"] = { commit: target.sha, server_sha256: "", ui_sha256: "" };
   await step("stamp", async () => {
@@ -313,10 +326,23 @@ export async function buildCandidate(options: BuildOptions): Promise<BuildOutcom
       const args = ["--force", "--deep", "--sign", identity, "--options", "runtime", "--timestamp=none"];
       if (current.code === 0 && current.stdout.includes("<plist")) { writeFileSync(entitlements, current.stdout); args.push("--entitlements", entitlements); }
       await sh("/usr/bin/codesign", [...args, staged], buildDir, 10 * 60_000);
+      // Deep signing may change nested native bytes. Refresh both identities
+      // after children are signed, then seal only the outer app again.
+      const native = JSON.parse(readFileSync(join(resources, "native-contract.json"), "utf8")) as { shellCommit: string };
+      stampNativeContract(resources, source.repo!, native.shellCommit);
+      const refreshed = await sh(options.python ?? "/usr/bin/python3", [join(src, "electron", "resources", "updater", "no-downgrade.py"), "stamp", "--app", staged, "--commit", target.sha], buildDir);
+      const verdict = JSON.parse(refreshed.stdout) as { ok?: boolean; stamp?: BuildOutcome["stamp"] };
+      if (verdict.ok !== true || !verdict.stamp) throw new Error("signed stamp wrote no verdict");
+      stamp = verdict.stamp;
+      await sh("/usr/bin/codesign", [...args.filter(arg => arg !== "--deep"), staged], buildDir, 10 * 60_000);
       await sh("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged], buildDir, 5 * 60_000);
       signed = identity;
     });
   }
+
+  assertNativeCompatibility(resources, source.repo!, target.sha);
+  const finalDigests = appDigests(staged);
+  if (finalDigests.server !== stamp.server_sha256 || finalDigests.ui !== stamp.ui_sha256) throw new Error("final signed trees do not match build stamp");
 
   // 7. stage: replace updates/candidate atomically enough (rename in, manifest last).
   const candidateDir = join(updatesDir(options.dataDir), CANDIDATE_DIRNAME);
@@ -326,7 +352,8 @@ export async function buildCandidate(options: BuildOptions): Promise<BuildOutcom
     mkdirSync(candidateDir, { recursive: true, mode: 0o700 });
     renameSync(staged, join(candidateDir, appName));
     manifest = writeCandidateManifest(candidateDir, { version: target.version, sha: target.sha, app: appName });
-    writeFileAtomic(join(candidateDir, "build.json"), JSON.stringify({ target, stamp, signed, builtAt: new Date().toISOString(), source: { repo: source.repo, releaseBranch: source.releaseBranch, prodBranch: source.prodBranch } }, null, 2), { mode: 0o600 });
+    const native = assertNativeCompatibility(join(candidateDir, appName, "Contents", "Resources"), source.repo!, target.sha);
+    writeFileAtomic(join(candidateDir, "build.json"), JSON.stringify({ target, stamp, native, signed, builtAt: new Date().toISOString(), source: { repo: source.repo, releaseBranch: source.releaseBranch, prodBranch: source.prodBranch } }, null, 2), { mode: 0o600 });
   });
   rmSync(buildDir, { recursive: true, force: true });
   log(`build: staged ${target.version} at ${join(candidateDir, appName)}`);
