@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArchiveRestore, FolderInput, Link2, Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, FolderInput, Link2, Loader2, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import type { BotProject, Task } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -8,7 +8,7 @@ import { nextRename } from "@/lib/rename";
 import { threadRefUrl } from "@/lib/thread-refs";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-type ThreadRowTask = Pick<Task, "threadId" | "title" | "projectId" | "busy" | "activity" | "unread" | "openedBy" | "closedBy" | "archivedAt"> & { queued?: boolean };
+type ThreadRowTask = Pick<Task, "threadId" | "title" | "projectId" | "busy" | "activity" | "unread" | "openedBy" | "closedBy" | "archivedAt" | "state"> & { queued?: boolean };
 
 /** "opened by Scout" for a thread a bot started, null for the person's own.
  * Shared by the sidebar row and the All-threads picker so both say it the
@@ -19,14 +19,20 @@ export function threadOpenerLabel(task: Pick<Task, "openedBy">): string | null {
 }
 
 /** The one line under a title: "closed by Scout" once a bot has closed the
- * thread, "Archived" once the person put it away, otherwise who opened it,
- * otherwise nothing. Closed wins because it is the newer fact; archived wins
- * over the opener because it explains why the row sits where it does. */
-export function threadByline(task: Pick<Task, "openedBy" | "closedBy" | "archivedAt">): string | null {
+ * thread, "Settled" once it closed itself after idle days, "Archived" once
+ * the person put it away, otherwise who opened it, otherwise nothing. Closed
+ * wins because it is the newer fact; archived wins over the opener because
+ * it explains why the row sits where it does. */
+export function threadByline(task: Pick<Task, "openedBy" | "closedBy" | "archivedAt" | "state">): string | null {
   const closer = task.closedBy?.name.trim();
   if (closer) return t("task.closedBy", { name: closer });
+  if (task.state === "closed" && !isArchived(task)) return t("task.settled");
   return isArchived(task) ? t("task.archived") : threadOpenerLabel(task);
 }
+
+/** Closed by a bot or settled by the server; either way out of the default
+ * list until it needs the person again. */
+export const isClosed = (task: Pick<Task, "closedBy" | "state">): boolean => Boolean(task.closedBy) || task.state === "closed";
 
 /** Archived means the field is present, not truthy: the task API accepts any
  * epoch number, so a thread persisted with archivedAt: 0 is archived. */
@@ -40,7 +46,8 @@ const isWorking = (task: Pick<Task, "activity" | "busy">): boolean => task.activ
 /** Whether a row must stay on screen regardless of age or closed state:
  * the person is looking at it, it needs them, or it has something new. */
 const demandsAttention = (task: ThreadRowTask, activeId: string) =>
-  task.threadId === activeId || task.activity === "waiting-on-you" || isWorking(task) || Boolean(task.queued) || Boolean(task.unread);
+  task.threadId === activeId || task.activity === "waiting-on-you" || task.state === "waiting-on-you" || isWorking(task) || task.state === "running"
+  || Boolean(task.queued) || task.state === "queued" || Boolean(task.unread);
 
 /** The default list is the six most recent OPEN threads plus anything that
  * demands attention. A thread a bot closed is folded away — a PM bot that
@@ -56,7 +63,7 @@ export function visibleSidebarThreads<T extends ThreadRowTask>(tasks: T[], activ
   }
   if (showAll) return tasks;
   let open = 0;
-  return tasks.filter((task) => task.closedBy || isArchived(task)
+  return tasks.filter((task) => isClosed(task) || isArchived(task)
     ? demandsAttention(task, activeId)
     : open++ < 6 || demandsAttention(task, activeId));
 }
@@ -85,7 +92,7 @@ export function orderedSidebarThreads<T extends ThreadRowTask>(tasks: T[], activ
 
 /** One quiet row for bot and group histories. Surface denotes selection;
  * working/waiting/unread remain independent signals, never different cards. */
-export function SidebarThreadRow({ task, ownerId, current, compact, folders, onSelect, onRename, onDelete, onMove, onArchive }: {
+export function SidebarThreadRow({ task, ownerId, current, compact, folders, onSelect, onRename, onDelete, onMove, onArchive, onReopen }: {
   task: ThreadRowTask;
   /** the bot or room that owns the thread: the link's ?bot= */
   ownerId: string;
@@ -97,6 +104,8 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
   onDelete: () => void;
   onMove?: (folderId: string | null) => void;
   onArchive?: (archivedAt: number | null) => void;
+  /** clears a bot's close or the server's idle settle */
+  onReopen?: () => void;
 }) {
   const [menu, setMenu] = useState<{ left: number; top: number } | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -108,7 +117,7 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
   const status = task.activity === "waiting-on-you" ? t("task.waiting") : isWorking(task) ? t("chat.activity.working") : task.queued ? t("task.queued") : null;
   const byline = threadByline(task);
   const dimRunning = isWorking(task) && task.activity !== "waiting-on-you" && !task.unread && !current;
-  const closed = Boolean(task.closedBy) && !status;
+  const closed = isClosed(task) && !status;
   const archived = isArchived(task);
   const openMenu = (x: number, y: number) => setMenu({ left: Math.max(8, Math.min(x, window.innerWidth - 228)), top: Math.max(8, Math.min(y, window.innerHeight - 190)) });
   const startRename = () => { finishing.current = false; setDraft(task.title); setRenaming(true); setMenu(null); };
@@ -170,6 +179,7 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
           <option value="">{t("folder.none")}</option>{folders?.map((folder) => <option key={folder.id} value={folder.id}>{folder.emoji ? `${folder.emoji} ` : ""}{folder.name}</option>)}
         </select>
       </label>}
+      {onReopen && closed && <button type="button" onClick={() => { setMenu(null); onReopen(); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised"><RotateCcw size={12} />{t("task.reopen")}</button>}
       {onArchive && <button type="button" disabled={isWorking(task)} onClick={() => { setMenu(null); onArchive(isArchived(task) ? null : Date.now()); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised disabled:opacity-40">{archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}{archived ? t("task.unarchive") : t("task.archive")}</button>}
       <button type="button" disabled={isWorking(task)} onClick={() => { setMenu(null); setDeleting(true); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-danger hover:bg-raised disabled:opacity-40"><Trash2 size={12} />{t("task.deleteAria")}</button>
     </div>, document.body)}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mentionChoicesForQuery, mentionRanges } from "./mentions";
+import { mentionChoicesForQuery, mentionMatchRange, mentionRanges } from "./mentions";
 
 const peers = [{ name: "Atlas" }, { name: "New Bot" }, { name: "New Bot 2" }, { name: "調査担当" }, { name: "Hidden", hidden: true }];
 const matches = (text: string, everyone = false) => mentionRanges(text, peers, everyone).map(({ start, end }) => text.slice(start, end));
@@ -50,5 +50,25 @@ describe("mention picker choices", () => {
   it("filters before display and closes after a completed exact tag", () => {
     expect(mentionChoicesForQuery(choices, "si").map((choice) => choice.name)).toEqual(["Six"]);
     expect(mentionChoicesForQuery(choices, "Six ")).toEqual([]);
+  });
+
+  it("ranks name prefixes, then word starts, then substrings, then owner text", () => {
+    const pool = [
+      { id: "a", name: "Nobody", searchText: "Bob's bot" },
+      { id: "b", name: "Jobs" },
+      { id: "c", name: "Big Bob" },
+      { id: "d", name: "Bobby" },
+    ];
+    expect(mentionChoicesForQuery(pool, "bob").map((choice) => choice.id)).toEqual(["d", "c", "a"]);
+    expect(mentionChoicesForQuery(pool, "ob").map((choice) => choice.id)).toEqual(["a", "b", "c", "d"]);
+  });
+});
+
+describe("mention match range", () => {
+  it("prefers a word start over an earlier mid-word hit", () => {
+    expect(mentionMatchRange("Rob Ober", "ob")).toEqual({ start: 4, end: 6 });
+    expect(mentionMatchRange("Robot", "ob")).toEqual({ start: 1, end: 3 });
+    expect(mentionMatchRange("Atlas", "")).toBeNull();
+    expect(mentionMatchRange("Atlas", "zz")).toBeNull();
   });
 });

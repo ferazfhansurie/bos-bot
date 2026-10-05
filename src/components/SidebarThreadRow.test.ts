@@ -149,6 +149,27 @@ describe("threads a bot closed", () => {
   });
 });
 
+describe("threads the server settled", () => {
+  const render = (task: Parameters<typeof SidebarThreadRow>[0]["task"], onReopen?: () => void) => renderToStaticMarkup(createElement(SidebarThreadRow, {
+    task, ownerId: "room", current: false, onSelect: vi.fn(), onRename: vi.fn(), onDelete: vi.fn(), onReopen,
+  }));
+  it("folds a settled thread like a closed one and says settled under the title", () => {
+    const settled = { threadId: "s", title: "Old plan", state: "closed" as const };
+    const own = Array.from({ length: 7 }, (_, index) => ({ threadId: String(index), title: `Thread ${index}` }));
+    expect(visibleSidebarThreads([settled, ...own], "0").map((task) => task.threadId)).toEqual(["0", "1", "2", "3", "4", "5"]);
+    expect(threadByline(settled)).toBe("settled");
+    expect(threadByline({ ...settled, closedBy: { botId: "pm", name: "Parker", at: 9 } })).toBe("closed by Parker");
+    expect(threadByline({ ...settled, archivedAt: 1 })).toBe("Archived");
+    expect(render(settled)).toContain('title="Old plan · Closed"');
+  });
+  it("keeps server-marked running, waiting and queued threads on screen", () => {
+    const old = Array.from({ length: 6 }, (_, index) => ({ threadId: String(index), title: `Thread ${index}` }));
+    const rows = [...old, { threadId: "r", title: "r", state: "running" as const }, { threadId: "w", title: "w", state: "waiting-on-you" as const },
+      { threadId: "q", title: "q", state: "queued" as const }, { threadId: "i", title: "i", state: "idle" as const }];
+    expect(visibleSidebarThreads(rows, "0").map((task) => task.threadId)).toEqual(["0", "1", "2", "3", "4", "5", "r", "w", "q"]);
+  });
+});
+
 describe("orderedSidebarThreads", () => {
   const task = (threadId: string, over: Record<string, unknown> = {}) => ({
     threadId,
@@ -303,6 +324,25 @@ describe("Copy link", () => {
       expect(writeText).toHaveBeenCalledWith(link);
       writeText.mockClear();
     }
+    vi.unstubAllGlobals();
+  });
+
+  it("offers Reopen only on a closed or settled row and calls it once", () => {
+    vi.stubGlobal("window", { innerWidth: 1024, innerHeight: 768 });
+    vi.stubGlobal("document", { body: { nodeType: 1 } });
+    const onReopen = vi.fn();
+    const menuFor = (task: RowTask) => {
+      rowHooks.begin(true);
+      const row = SidebarThreadRow({ task, ownerId: "room", current: false, onSelect: vi.fn(), onRename: vi.fn(), onDelete: vi.fn(), onReopen }) as RowNode;
+      (moreMenuButton(row)!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 100, bottom: 200 }) } });
+      rowHooks.begin(false);
+      return SidebarThreadRow({ task, ownerId: "room", current: false, onSelect: vi.fn(), onRename: vi.fn(), onDelete: vi.fn(), onReopen }) as RowNode;
+    };
+    expect(buttonWithLabel(menuFor({ threadId: "o", title: "Open" }), "Reopen")).toBeUndefined();
+    const reopen = buttonWithLabel(menuFor({ threadId: "s", title: "Settled", state: "closed" }), "Reopen");
+    expect(reopen).toBeDefined();
+    (reopen!.props!.onClick as () => void)();
+    expect(onReopen).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
   });
 });

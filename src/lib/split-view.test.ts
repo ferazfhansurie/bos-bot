@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_PANE_SHARE,
   MAX_EXTRA_PANES,
   addSplitPane,
+  clampPaneShare,
+  loadPaneShare,
+  savePaneShare,
+  shareFromPointer,
   loadSplitPanes,
   removeSplitPane,
   saveSplitPanes,
@@ -47,5 +52,31 @@ describe("split view panes", () => {
     data.set("bos.splitPanes", JSON.stringify(["x", 3, "", "y", "z"]));
     expect(loadSplitPanes(storage)).toEqual(["x", "y"]);
     expect(loadSplitPanes(undefined)).toEqual([]);
+  });
+});
+
+describe("split pane width", () => {
+  it("clamps so the primary keeps a quarter and each pane a fifth", () => {
+    expect(clampPaneShare(0.5, 1)).toBe(0.5);
+    expect(clampPaneShare(0.9, 1)).toBe(0.75);
+    expect(clampPaneShare(0.05, 1)).toBe(0.2);
+    expect(clampPaneShare(0.5, 2)).toBe(0.375);
+    expect(clampPaneShare(Number.NaN, 1)).toBe(DEFAULT_PANE_SHARE);
+  });
+
+  it("maps the pointer to a share, leaving panes on the right alone", () => {
+    expect(shareFromPointer(600, 0, 1000, 0, 0.4)).toBeCloseTo(0.4);
+    expect(shareFromPointer(300, 0, 1000, 1, 0.3)).toBeCloseTo(0.4);
+    expect(shareFromPointer(300, 0, 0, 0, 0.4)).toBe(0.4);
+  });
+
+  it("remembers the width and ignores junk", () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value) };
+    expect(loadPaneShare(storage)).toBe(DEFAULT_PANE_SHARE);
+    savePaneShare(0.55, storage);
+    expect(loadPaneShare(storage)).toBe(0.55);
+    storage.setItem("bos.splitPaneWidth", "abc");
+    expect(loadPaneShare(storage)).toBe(DEFAULT_PANE_SHARE);
   });
 });

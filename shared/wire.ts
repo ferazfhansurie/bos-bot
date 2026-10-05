@@ -516,10 +516,12 @@ export interface WireGroup {
   working: boolean;
 }
 
+export type InboxKind = "waiting-on-you" | "question" | "failed" | "unread";
+
 /** One thing waiting on the person (GET /api/inbox). */
 export interface InboxItem {
   id: string;
-  kind: "waiting-on-you" | "question" | "failed" | "unread";
+  kind: InboxKind;
   botId: string;
   groupId?: string;
   threadId: string;
@@ -533,13 +535,15 @@ export interface InboxResponse {
   count: number;
 }
 
+export type DigestChange = "done" | "started" | "closed" | "failed";
+
 /** What moved in a window (GET /api/digest). */
 export interface DigestMove {
   botId: string;
   groupId?: string;
   threadId: string;
   title: string;
-  change: "done" | "started" | "closed" | "failed";
+  change: DigestChange;
   summary: string;
   at: number;
 }

@@ -16,7 +16,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { CloudBackend, EffortLevel, RemoteBotOrigin, ServerFrame } from "../../shared/wire";
+import type { CloudBackend, EffortLevel, RemoteBotOrigin, ServerFrame, ThreadState } from "../../shared/wire";
 import type { TurnDigest } from "../../shared/digest";
 import type { ModelVariantOption, RuntimeEvent } from "../../shared/runtime-events";
 import type { MausColor, MausMotion } from "@/lib/mascot";
@@ -45,6 +45,7 @@ import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
 import { noteUpdateFrame } from "@/lib/bos-update";
+import { fetchInbox, inboxCountOf } from "@/lib/inbox";
 import { withSendPriority, type SendPriority } from "@/lib/composer-priority";
 
 const MAX_ROUTINE_RUNS = 2_000;
@@ -264,6 +265,10 @@ export interface GroupTask {
   createdAt: number;
   pinnedCwd?: string | null;
   pinnedMessageId?: string;
+  /** server-computed; "closed" once a bot closed it or it settled after idle days */
+  state?: ThreadState;
+  lastActivityAt?: number;
+  closedBy?: ThreadCloser;
 }
 
 export interface ModelSelection {
@@ -313,6 +318,9 @@ export interface Task {
    * under show-all and search, and back the moment it needs them again;
    * absent = never archived. Syncs like every other task field. */
   archivedAt?: number;
+  /** server-computed; "closed" covers both a bot's close_thread and a
+   * thread that settled after idle days, which carries no closedBy */
+  state?: ThreadState;
 }
 
 /** The bot that opened a thread on itself or a teammate. */
@@ -473,13 +481,15 @@ export type TaskUpdatePatch = Partial<Pick<Task, "modelSelection" | "approvalMod
   resetApprovalToAsk?: boolean;
   projectId?: string | null;
   archivedAt?: number | null;
+  /** false = reopen a closed or settled thread */
+  closed?: false;
   /** null = follow the bot's Works on again */
   surface?: Task["surface"] | null;
 };
 
 function taskPatchFields(patch: TaskUpdatePatch): Partial<Task> {
-  const { confirmFullAccess: _fullConsent, acknowledgeLocalAuto: _localAck, updateBotDefault: _modelDefault, resetApprovalToAsk, projectId, archivedAt, surface, ...fields } = patch;
-  return { ...fields, ...(resetApprovalToAsk ? { approvalMode: "ask", autoApprove: false, alwaysAllow: [] } : {}),
+  const { confirmFullAccess: _fullConsent, acknowledgeLocalAuto: _localAck, updateBotDefault: _modelDefault, resetApprovalToAsk, projectId, archivedAt, surface, closed, ...fields } = patch;
+  return { ...fields, ...(closed === false ? { closedBy: undefined, state: "idle" as const } : {}), ...(resetApprovalToAsk ? { approvalMode: "ask", autoApprove: false, alwaysAllow: [] } : {}),
     ...(projectId === undefined ? {} : { projectId: projectId ?? undefined }),
     ...(archivedAt === undefined ? {} : { archivedAt: archivedAt ?? undefined }),
     ...(surface === undefined ? {} : { surface: surface ?? undefined }) };
@@ -748,8 +758,10 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "team-map" | "routines" | "shared";
+  activeView: "chat" | "team-map" | "routines" | "shared" | "needs-me";
   selectedSharedRoomId: string | null;
+  /** threads waiting on the person: the needs-me badge */
+  inboxCount: number;
   routines: Routine[];
   routineRuns: RoutineRun[];
   routinesLoadState: "loading" | "ready" | "error";
@@ -915,6 +927,8 @@ export type Action =
   | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
   | { type: "showTeamMap" }
   | { type: "showChat" }
+  | { type: "showNeedsMe" }
+  | { type: "inboxCount"; count: number }
   | { type: "selectSharedRoom"; roomId: string }
   | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
   | { type: "showTeamMap" }
@@ -959,6 +973,7 @@ export type Action =
   | { type: "switchGroupTask"; groupId: string; threadId: string }
   | { type: "renameGroupTask"; groupId: string; threadId: string; title: string }
   | { type: "deleteGroupTask"; groupId: string; threadId: string }
+  | { type: "reopenGroupTask"; groupId: string; threadId: string }
   | { type: "interruptGroup"; groupId: string; threadId?: string; onError?: () => void }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
@@ -1331,6 +1346,13 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "showChat":
       return state.activeView === "chat" ? state : { ...state, activeView: "chat" };
+    case "showNeedsMe":
+      return { ...state, activeView: "needs-me",
+        settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
+    case "inboxCount": {
+      const count = inboxCountOf(action.count);
+      return count === state.inboxCount ? state : { ...state, inboxCount: count };
+    }
     case "selectSharedRoom":
       return { ...state, activeView: "shared", selectedSharedRoomId: action.roomId,
         settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
@@ -2051,6 +2073,13 @@ export function reducer(state: AppState, action: Action): AppState {
           task.threadId === action.threadId ? { ...task, title: action.title } : task,
         ),
       }));
+    case "reopenGroupTask":
+      return {
+        ...state,
+        groups: state.groups.map((group) => group.id === action.groupId
+          ? { ...group, tasks: (group.tasks ?? []).map((task) => task.threadId === action.threadId ? { ...task, closedBy: undefined, state: "idle" as const } : task) }
+          : group),
+      };
     case "renameGroupTask":
       return {
         ...state,
@@ -2139,6 +2168,7 @@ export const initialState: AppState = {
   selectedId: "",
   activeView: "chat",
   selectedSharedRoomId: null,
+  inboxCount: 0,
   routines: [],
   routineRuns: [],
   routinesLoadState: "loading",
@@ -3365,6 +3395,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ title: action.title }),
           }).catch(showError);
           break;
+        case "reopenGroupTask":
+          api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "PATCH", body: JSON.stringify({ closed: false }) })
+            .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
+            .catch(showError);
+          break;
         case "deleteGroupTask":
           api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "DELETE" })
             .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
@@ -3526,6 +3561,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let rehydrateRequested = false;
     const pendingFrames: ServerFrame[] = [];
     let handleFrame: (frame: ServerFrame) => void;
+    // A live `inbox` frame is newer than any fetch that started before it.
+    let inboxVersion = 0;
+    const refreshInboxCount = () => {
+      const version = inboxVersion;
+      void fetchInbox().then(({ count }) => {
+        if (alive && version === inboxVersion) rawDispatch({ type: "inboxCount", count });
+      }, () => {});
+    };
     const hydrate = (): Promise<boolean> => {
       if (hydrationPromise) {
         // A second non-resumable hello means this snapshot may have started
@@ -3543,6 +3586,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!alive || !loaded) return false;
         hydrated = true;
         for (const frame of pendingFrames.splice(0)) handleFrame(frame);
+        refreshInboxCount();
         return true;
       })().finally(() => {
         hydrationPromise = null;
@@ -3655,6 +3699,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             showNotification(
               frame.notification,
               (target) => {
+                // the daily digest points at no single thread
+                if (frame.notification.kind === "digest") return dispatch({ type: "showNeedsMe" });
                 openNotificationTarget(dispatch, target, stateRef.current);
                 dispatch({ type: "revealThread", threadId: target.threadId });
               },
@@ -3718,6 +3764,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "update.state":
           noteUpdateFrame(frame);
+          break;
+        case "inbox":
+          inboxVersion += 1;
+          rawDispatch({ type: "inboxCount", count: frame.count });
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately
