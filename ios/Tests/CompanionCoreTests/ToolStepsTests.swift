@@ -87,6 +87,9 @@ final class ToolStepsTests: XCTestCase {
         XCTAssertEqual(elapsedLabel(59), "59s")
         XCTAssertEqual(elapsedLabel(64), "1m 04s")
         XCTAssertEqual(elapsedLabel(-3), "0s")
+        XCTAssertEqual(elapsedLabel(3_599), "59m 59s")
+        XCTAssertEqual(elapsedLabel(3_600), "1h 00m")
+        XCTAssertEqual(elapsedLabel(7_530), "2h 05m")
     }
 
     /// The fields the row is built from are on the wire already; the phone

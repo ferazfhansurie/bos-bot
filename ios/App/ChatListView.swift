@@ -305,12 +305,38 @@ struct ChatListView: View {
             header
             StatusBanner()
             if searchOpen {
-                HStack {
-                    TextField("Search bots and messages", text: $query)
-                        .focused($searchFocused)
-                    Button("Done") { query = ""; searchOpen = false }
+                HStack(spacing: 12) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(Color.secondary)
+                            .accessibilityHidden(true)
+                        TextField("Search bots and messages", text: $query)
+                            .focused($searchFocused)
+                            .submitLabel(.search)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        if !query.isEmpty {
+                            Button {
+                                query = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(Color.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Clear search")
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 40)
+                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+
+                    Button("Done") {
+                        query = ""
+                        searchFocused = false
+                        withAnimation(.snappy(duration: 0.25)) { searchOpen = false }
+                    }
                 }
                 .padding(.horizontal, 20).padding(.bottom, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
 
             ScrollView {
@@ -601,13 +627,15 @@ struct ChatListView: View {
         if !pinnedConversations.isEmpty { pinnedConversationGrid }
 
         sectionLabel(Text("Chats")).padding(.top, 18).padding(.bottom, 4)
-        ForEach(shownConversations.filter { !pinnedChats.ids.contains($0.id) }) { entry in
+        let unpinned = shownConversations.filter { !pinnedChats.ids.contains($0.id) }
+        let lastID = unpinned.last?.id
+        ForEach(unpinned) { entry in
             switch entry {
-            case .local(let summary): botRows([summary])
-            case .contact(let contact): contactRow(contact)
+            case .local(let summary): botRow(summary, last: entry.id == lastID)
+            case .contact(let contact): contactRow(contact, last: entry.id == lastID)
             case .room(let room):
                 Button { open(room) } label: {
-                    sharedConversationRow(name: room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? ""), subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0) {
+                    sharedConversationRow(name: room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? ""), subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0, last: entry.id == lastID) {
                         GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 52)
                     }
                 }
@@ -804,10 +832,10 @@ struct ChatListView: View {
     }
 #endif
 
-    private func contactRow(_ contact: SharedContact) -> some View {
+    private func contactRow(_ contact: SharedContact, last: Bool = false) -> some View {
         let room = sharedRooms.first { $0.memberIds.count == 2 && !$0.isGroup && $0.memberIds.contains(sharedMe?.actorId ?? "") && $0.memberIds.contains(contact.id) }
         return Button { openContact(contact) } label: {
-            sharedConversationRow(name: contact.name, subtitle: contact.title, preview: room?.preview ?? "", at: room?.lastActivity ?? 0, unreadCount: room?.unreadCount ?? 0) {
+            sharedConversationRow(name: contact.name, subtitle: contact.title, preview: room?.preview ?? "", at: room?.lastActivity ?? 0, unreadCount: room?.unreadCount ?? 0, last: last) {
                 contactAvatar(contact, size: 52)
             }
         }
@@ -815,32 +843,36 @@ struct ChatListView: View {
         .contextMenu { pinButton(.contact(contact)) }
     }
 
-    private func sharedConversationRow<Avatar: View>(name: String, subtitle: String?, preview: String, at: Double, unreadCount: Int = 0, @ViewBuilder avatar: () -> Avatar) -> some View {
+    private func sharedConversationRow<Avatar: View>(name: String, subtitle: String?, preview: String, at: Double, unreadCount: Int = 0, last: Bool = false, @ViewBuilder avatar: () -> Avatar) -> some View {
         HStack(alignment: .top, spacing: 0) {
             Color.clear.frame(width: 22)
             HStack(alignment: .top, spacing: 14) {
-                avatar().padding(.top, 12)
+                avatar().padding(.top, 12).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(name).font(.system(size: 17, weight: .semibold)).foregroundStyle(Color.primary).lineLimit(1).layoutPriority(1)
+                        Text(name).font(.headline).foregroundStyle(Color.primary).lineLimit(1).layoutPriority(1)
                         Spacer(minLength: 4)
-                        if unreadCount > 0 { Text(unreadCount > 99 ? "99+" : String(unreadCount)).font(.caption.weight(.semibold)).foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 3).background(Color.accentColor, in: Capsule()).accessibilityLabel("\(unreadCount) unread messages") }
-                        if at > 0 { Text(RelativeStamp.list(at)).font(.system(size: 15)).foregroundStyle(Color.secondary).fixedSize() }
-                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.secondary.opacity(0.5))
+                        if unreadCount > 0 { Text(unreadCount > 99 ? "99+" : String(unreadCount)).font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.white).padding(.horizontal, 6).padding(.vertical, 3).background(Color.accentColor, in: Capsule()).accessibilityLabel("\(unreadCount) unread messages") }
+                        if at > 0 { Text(RelativeStamp.list(at)).font(.subheadline).foregroundStyle(Color.secondary).fixedSize() }
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Color.secondary.opacity(0.5)).accessibilityHidden(true)
                     }
                     if let subtitle, !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(subtitle).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.secondary).lineLimit(2)
+                        Text(subtitle).font(.footnote.weight(.medium)).foregroundStyle(Color.secondary).lineLimit(2)
                     }
-                    Text(preview.isEmpty ? " " : preview).font(.system(size: 15)).foregroundStyle(Color.secondary).lineLimit(1)
+                    Text(preview.isEmpty ? String(localized: "No messages yet") : preview)
+                        .font(.subheadline)
+                        .foregroundStyle(preview.isEmpty ? Color.secondary.opacity(0.6) : Color.secondary)
+                        .lineLimit(1)
                 }
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .bottom) { Divider() }
+                .overlay(alignment: .bottom) { if !last { RowSeparator() } }
             }
             .padding(.trailing, 16)
         }
         .padding(.leading, 6)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private func contactAvatar(_ contact: SharedContact, size: CGFloat) -> some View {
@@ -896,24 +928,25 @@ struct ChatListView: View {
     @ViewBuilder
     private func botRows(_ rows: [ChatSummary]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, summary in
-            VStack(spacing: 0) {
-                Button { open(homeChat(summary.chat)) } label: {
-                    ChatRow(
-                        chat: summary.chat,
-                        preview: summary.chat.busy ? "Working…" : summary.preview,
-                        at: summary.lastActivity,
-                        state: MausState.forChat(summary.chat, in: session.state),
-                        waiting: waitingChats.contains(summary.chat.id),
-                        last: index == rows.count - 1
-                    )
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    pinButton(.local(summary))
-                    OpenBesideButton(chat: homeChat(summary.chat))
-                }
+            botRow(summary, last: index == rows.count - 1)
+        }
+    }
 
-            }
+    private func botRow(_ summary: ChatSummary, last: Bool) -> some View {
+        Button { open(homeChat(summary.chat)) } label: {
+            ChatRow(
+                chat: summary.chat,
+                preview: summary.chat.busy ? String(localized: "Working…") : summary.preview,
+                at: summary.lastActivity,
+                state: MausState.forChat(summary.chat, in: session.state),
+                waiting: waitingChats.contains(summary.chat.id),
+                last: last
+            )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            pinButton(.local(summary))
+            OpenBesideButton(chat: homeChat(summary.chat))
         }
     }
 
@@ -1020,7 +1053,7 @@ struct ChatListView: View {
     private var searchButton: some View {
         GlassButton(systemImage: "magnifyingglass", size: 48, weight: .semibold) {
             Haptics.selection()
-            searchOpen = true
+            withAnimation(.snappy(duration: 0.25)) { searchOpen = true }
             searchFocused = true
         }
         .accessibilityLabel("Search")
@@ -1166,7 +1199,7 @@ struct ChatListView: View {
     private func sectionLabel(_ text: Text) -> some View {
         text
             .textCase(.uppercase)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.footnote.weight(.semibold))
             .tracking(0.4)
             .foregroundStyle(Color.secondary)
             .padding(.horizontal, 20)
@@ -1266,11 +1299,11 @@ struct AttentionRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: entry.task.displayTitle)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(Color.primary)
                     .lineLimit(1)
                 Text("\(entry.botName) · \(statusText)")
-                    .font(.system(size: 12))
+                    .font(.caption)
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)
             }
@@ -1294,7 +1327,8 @@ struct ChatRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // the unread dot, in the bot's own colour, at the very edge
+            // the unread dot, in the bot's own colour, at the very edge,
+            // level with the middle of the avatar however tall the row grows
             ZStack {
                 if chat.unread && !chat.busy {
                     Circle()
@@ -1302,17 +1336,18 @@ struct ChatRow: View {
                         .frame(width: 10, height: 10)
                 }
             }
-            .frame(width: 22)
-            .frame(maxHeight: .infinity)
+            .frame(width: 22, height: 52)
+            .padding(.top, 12)
 
             HStack(alignment: .top, spacing: 14) {
                 ChatAvatarView(chat: chat, size: 52, state: state, animated: state.showsActivity)
                     .padding(.top, 12)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(chat.name)
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.headline)
                             .foregroundStyle(Color.primary)
                             .lineLimit(1)
                             .layoutPriority(1)
@@ -1320,17 +1355,18 @@ struct ChatRow: View {
                         Spacer(minLength: 4)
 
                         Text(RelativeStamp.list(at))
-                            .font(.system(size: 15))
+                            .font(.subheadline)
                             .foregroundStyle(Color.secondary)
                             .fixedSize()
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.footnote.weight(.semibold))
                             .foregroundStyle(Color.secondary.opacity(0.5))
+                            .accessibilityHidden(true)
                     }
 
                     if chat.isBot, !chat.subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text(chat.subtitle)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.footnote.weight(.medium))
                             .foregroundStyle(Color.secondary)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1338,9 +1374,9 @@ struct ChatRow: View {
 
                     HStack(alignment: .top, spacing: 8) {
                         // one line for every bot, so the rows keep one rhythm
-                        Text(preview.isEmpty ? " " : preview)
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color.secondary)
+                        Text(preview.isEmpty ? String(localized: "No messages yet") : preview)
+                            .font(.subheadline)
+                            .foregroundStyle(preview.isEmpty ? Color.secondary.opacity(0.6) : Color.secondary)
                             .lineLimit(1)
 
                         Spacer(minLength: 0)
@@ -1352,7 +1388,7 @@ struct ChatRow: View {
 
                     if waiting {
                         Label("Waiting on you", systemImage: "hand.raised.fill")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
@@ -1363,13 +1399,34 @@ struct ChatRow: View {
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .bottom) {
-                    if !last { Divider() }
+                    if !last { RowSeparator() }
                 }
             }
             .padding(.trailing, 16)
         }
         .padding(.leading, 6)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(accessibilityStatus)
+    }
+
+    /// The states the row shows only as colour and motion.
+    private var accessibilityStatus: String {
+        if chat.busy { return String(localized: "Working") }
+        if chat.unread { return String(localized: "Unread") }
+        return ""
+    }
+}
+
+/// A hairline under a roster row, inset to the text like Messages.
+struct RowSeparator: View {
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(uiColor: .separator))
+            .frame(height: 1 / max(displayScale, 1))
+            .accessibilityHidden(true)
     }
 }
 
@@ -1498,20 +1555,22 @@ struct SearchHitRow: View {
                 .foregroundStyle(Color.secondary)
                 .frame(width: 26, height: 26)
                 .background(Circle().fill(Color.secondary.opacity(0.13)))
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(hit.name).font(.system(size: 15, weight: .semibold))
+                HStack(spacing: 6) {
+                    Text(hit.name).font(.subheadline.weight(.semibold)).lineLimit(1).layoutPriority(1)
                     if let task = hit.task, !task.isEmpty {
-                        Text(task).font(.system(size: 12)).foregroundStyle(Color.secondary)
+                        Text(task).font(.caption).foregroundStyle(Color.secondary).lineLimit(1)
                     }
-                    Spacer()
+                    Spacer(minLength: 4)
                     Text(RelativeStamp.list(hit.at))
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .foregroundStyle(Color.secondary)
+                        .fixedSize()
                 }
                 Text(hit.snippet)
-                    .font(.system(size: 14))
+                    .font(.subheadline)
                     .foregroundStyle(Color.secondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -1519,6 +1578,7 @@ struct SearchHitRow: View {
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }
 

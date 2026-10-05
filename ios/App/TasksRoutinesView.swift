@@ -22,6 +22,9 @@ struct TasksRoutinesView: View {
             }
 
             Section("Routines") {
+                if routines.isEmpty && loading {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
                 if routines.isEmpty && !loading {
                     ContentUnavailableView("No routines", systemImage: "calendar.badge.plus", description: Text("Schedule recurring or one-time agent work."))
                 }
@@ -30,6 +33,8 @@ struct TasksRoutinesView: View {
                     RoutineRow(routine: routine, bot: session.state.bot(routine.botId))
                         .contentShape(Rectangle())
                         .onTapGesture { editor = .edit(routine) }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint("Edits this routine")
                         .swipeActions(edge: .leading, allowsFullSwipe: true) {
                             if canToggle {
                                 Button(routine.enabled ? "Pause" : "Resume") {
@@ -112,12 +117,12 @@ struct TasksRoutinesView: View {
 
     private func toggle(_ routine: Routine) async {
         guard routine.canToggle() else { return }
-        _ = await session.setRoutineEnabled(routine, enabled: !routine.enabled)
+        if await session.setRoutineEnabled(routine, enabled: !routine.enabled) != nil { Haptics.selection() }
         await reload()
     }
 
     private func runNow(_ routine: Routine) async {
-        _ = await session.runRoutine(routine)
+        if await session.runRoutine(routine) != nil { Haptics.success() }
         await reload()
     }
 }
@@ -136,8 +141,11 @@ private struct RoutineRow: View {
     var body: some View {
         let canToggle = routine.canToggle()
         HStack(spacing: 12) {
-            if let bot { BotAvatarView(bot: bot, size: 42, state: routine.enabled ? .idle : .sleeping, animated: false) }
-            else { Image(systemName: "calendar.badge.exclamationmark").frame(width: 42, height: 42) }
+            Group {
+                if let bot { BotAvatarView(bot: bot, size: 42, state: routine.enabled ? .idle : .sleeping, animated: false) }
+                else { Image(systemName: "calendar.badge.exclamationmark").frame(width: 42, height: 42) }
+            }
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(routine.name).font(.headline)
                 ((bot.map { Text(verbatim: $0.name) } ?? Text("Deleted agent"))
@@ -152,6 +160,7 @@ private struct RoutineRow: View {
                     .accessibilityLabel(canToggle ? "Paused" : "Completed")
             }
         }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -176,7 +185,7 @@ private struct RoutineRunRow: View {
             .font(.subheadline)
         } label: {
             HStack {
-                Image(systemName: run.status.symbol).foregroundStyle(run.status.tint)
+                Image(systemName: run.status.symbol).foregroundStyle(run.status.tint).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(run.routineName)
                     ((bot.map { Text(verbatim: $0.name) } ?? Text("Deleted agent"))
@@ -302,10 +311,12 @@ private struct RoutineEditorView: View {
                             ForEach(0..<7) { day in
                                 Button(Self.dayLetters[day]) {
                                     if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
+                                    Haptics.selection()
                                 }
                                 .buttonStyle(.bordered)
                                 .tint(weekdays.contains(day) ? .accentColor : .secondary)
                                 .accessibilityLabel(Self.dayNames[day])
+                                .accessibilityAddTraits(weekdays.contains(day) ? .isSelected : [])
                             }
                         }
                     } else if kind == .interval {

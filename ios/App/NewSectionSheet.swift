@@ -211,7 +211,10 @@ struct NewSectionSheet: View {
                     step = .name
                     nameFocused = true
                 } label: {
-                    Text("Continue with \(selection.selectedIDs.count) bots")
+                    Group {
+                        if selection.selectedIDs.isEmpty { Text("Continue") }
+                        else { Text("Continue with \(selection.selectedIDs.count) bots") }
+                    }
                         .font(.system(size: 17, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .frame(height: 52)

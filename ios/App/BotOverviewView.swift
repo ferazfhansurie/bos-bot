@@ -42,15 +42,20 @@ struct BotOverviewView: View {
                     }
                 }
 
-                Section("Can reach") {
-                    ForEach(Array(overview.reaches.enumerated()), id: \.offset) { _, line in
-                        Label(line, systemImage: "network")
+                // an empty list would leave a bare heading
+                if !overview.reaches.isEmpty {
+                    Section("Can reach") {
+                        ForEach(Array(overview.reaches.enumerated()), id: \.offset) { _, line in
+                            Label(line, systemImage: "network")
+                        }
                     }
                 }
 
-                Section("Won't") {
-                    ForEach(Array(overview.wont.enumerated()), id: \.offset) { _, line in
-                        Label(line, systemImage: "hand.raised")
+                if !overview.wont.isEmpty {
+                    Section("Won't") {
+                        ForEach(Array(overview.wont.enumerated()), id: \.offset) { _, line in
+                            Label(line, systemImage: "hand.raised")
+                        }
                     }
                 }
 
@@ -71,7 +76,13 @@ struct BotOverviewView: View {
                 }
             } else if failed {
                 Section {
-                    ContentUnavailableView("Couldn't load", systemImage: "wifi.exclamationmark")
+                    ContentUnavailableView {
+                        Label("Couldn't load", systemImage: "wifi.exclamationmark")
+                    } actions: {
+                        Button("Try again") { Task { await load() } }
+                            .buttonStyle(.bordered)
+                            .disabled(loading)
+                    }
                 }
             }
         }

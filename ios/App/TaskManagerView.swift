@@ -178,6 +178,7 @@ struct TaskManagerView: View {
             HStack(spacing: 12) {
                 Button("Select all") {
                     selectedThreadIDs.formUnion(matchingTasks.filter(canSelectForBulkDelete).map(\.threadId))
+                    Haptics.selection()
                 }
                 .disabled(isMutating || !matchingTasks.contains(where: canSelectForBulkDelete))
                 .accessibilityIdentifier("select-all-threads")
@@ -281,10 +282,13 @@ struct TaskManagerView: View {
             Button {
                 if selected { selectedThreadIDs.remove(task.threadId) }
                 else { selectedThreadIDs.insert(task.threadId) }
+                Haptics.selection()
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                        .font(.title3)
+                        .foregroundStyle(selected ? Color.accentColor : Color.secondary.opacity(0.5))
+                        .accessibilityHidden(true)
                     BotThreadRow(
                         task: task,
                         selected: task.threadId == current.threadId,
@@ -295,6 +299,7 @@ struct TaskManagerView: View {
             }
             .disabled(isMutating || (!selected && !canSelectForBulkDelete(task)))
             .accessibilityLabel("\(selected ? "Deselect" : "Select") \(task.displayTitle)")
+            .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier("select-thread-\(task.threadId)")
         } else {
             Button {
@@ -522,6 +527,7 @@ struct TaskManagerView: View {
             selectedThreadIDs.remove(task.threadId)
             deleted += 1
         }
+        Haptics.success()
         isSelecting = false
     }
 

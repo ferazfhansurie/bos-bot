@@ -21,10 +21,16 @@ struct BotThreadRow: View {
         return nil
     }
 
-    /// A closed or archived thread with nothing live in it reads quieter,
-    /// like the desktop's dimmed row; a live status or unread outranks both.
+    /// A thread working in the background fades back, like the desktop's
+    /// running row; waiting on you, unread or the open thread never fade.
     private var dimmed: Bool {
         task.isWorking && task.activity != "waiting-on-you" && task.unread != true && !selected
+    }
+
+    /// A closed or archived thread with nothing live in it reads quieter,
+    /// as its title does on the desktop.
+    private var quiet: Bool {
+        (task.isClosed || task.isArchived) && runtime == nil && task.unread != true && !selected
     }
 
     var body: some View {
@@ -32,18 +38,25 @@ struct BotThreadRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(verbatim: task.displayTitle)
                     .font(.body.weight(task.unread == true ? .semibold : .regular))
-                    .foregroundStyle(dimmed ? Color.secondary : Color.primary)
+                    .foregroundStyle(quiet ? Color.secondary : Color.primary)
                     .lineLimit(2)
 
                 if runtime != nil || task.unread == true {
                     HStack(spacing: 10) {
                         if let runtime {
-                            Label(runtime.title, systemImage: runtime.icon)
-                                .foregroundStyle(runtime.color)
+                            HStack(spacing: 4) {
+                                Image(systemName: runtime.icon)
+                                    .font(.caption2.weight(.semibold))
+                                Text(runtime.title)
+                            }
+                            .foregroundStyle(runtime.color)
                         }
                         if task.unread == true {
-                            Label("Unread", systemImage: "circle.fill")
-                                .foregroundStyle(Color.accentColor)
+                            HStack(spacing: 4) {
+                                Circle().frame(width: 7, height: 7)
+                                Text("Unread")
+                            }
+                            .foregroundStyle(Color.accentColor)
                         }
                     }
                     .font(.caption.weight(.medium))
