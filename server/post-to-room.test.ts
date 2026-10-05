@@ -531,7 +531,7 @@ describe("post_to_room", () => {
     expect(await messagesOf(closed.threadId)).toHaveLength(0);
   }, 40_000);
 
-  it("posts into a shared mixed-team room without granting other team access", async () => {
+  it("posts into a shared mixed-team room; list_bots spans sections", async () => {
     const inside = await makeBot("Section Inside", "Section A");
     const outside = await makeBot("Section Outside", "Section B");
     const mixed = await makeRoom("Cross section", [inside.id, outside.id], "Section A");
@@ -540,7 +540,9 @@ describe("post_to_room", () => {
     expect(posted.status).toBe(201);
     expect((await messagesOf(mixed.threadId)).some(m => m.text?.includes("hello other section"))).toBe(true);
     const roster = await internal("GET", `/api/internal/agents?fromBotId=${inside.id}&fromThreadId=${inside.threadId}`);
-    expect(JSON.stringify(roster.body)).not.toContain(outside.id);
+    // Bot-to-bot messaging is not section-bounded, so the directory lists
+    // the other section's bot whether or not the two share a room.
+    expect(JSON.stringify(roster.body)).toContain(outside.id);
   }, 40_000);
 
   it("refuses a one-to-one bot channel and the room the sender is already speaking in", async () => {

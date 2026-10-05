@@ -425,8 +425,9 @@ describe("coordinate_bots on a teammate", () => {
       expect((await api("POST", "/api/internal/threads", { toBotId: near.id, title: "Job", message: "go" }, token)).status).toBe(409);
       const send = (botIds: string[]) => api("POST", "/api/internal/coordinate-bots", { botIds, message: "Check it.", requestKey: "scope" }, token);
       const outside = await send([other.id]);
+      // Sections no longer bound messaging; the sender's allow-list still does.
       expect(outside.status).toBe(403);
-      expect(outside.body.error).toContain("section boundary");
+      expect(outside.body.error).toContain("allowed peer");
       const unlisted = await send([far.id]);
       expect(unlisted.status).toBe(403);
       expect(unlisted.body.error).toContain("allowed peer");
