@@ -18,6 +18,14 @@ export interface RawCaptureFields {
   type?: unknown;
   body?: unknown;
   hasMedia?: unknown;
+  /** the whole serialized WhatsApp Web model (whatsapp-web.js Message#_data);
+   * interactive messages keep their visible text only here */
+  _data?: unknown;
+  title?: unknown;
+  description?: unknown;
+  dynamicReplyButtons?: unknown;
+  selectedButtonId?: unknown;
+  selectedRowId?: unknown;
 }
 
 export type CaptureFields =
@@ -55,6 +63,152 @@ export function serializedMessageId(key: unknown): string | null {
   return `${parts.fromMe}_${remote}_${id}${participant ? `_${participant}` : ""}`;
 }
 
+/** Messages whose visible text is a reply to buttons, a list or a template. */
+const REPLY_TYPES = new Set(["buttons_response", "list_response", "template_button_reply", "interactive_response"]);
+/** Messages that carry header/body/footer text and buttons outside `body`. */
+const INTERACTIVE_TYPES = new Set(["buttons", "list", "template", "hsm", "interactive", "native_flow", "product_list"]);
+/** Fields whose presence marks a message as interactive whatever its type
+ * (a buttons message can arrive typed "chat" or "image"). */
+const INTERACTIVE_FIELDS = [
+  "dynamicReplyButtons",
+  "replyButtons",
+  "hydratedButtons",
+  "templateButtons",
+  "list",
+  "interactiveHeader",
+  "interactiveBody",
+  "interactiveFooter",
+  "interactivePayload",
+  "nativeFlowButtons",
+] as const;
+
+function text(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/** value at a dotted path through plain records */
+function at(value: unknown, path: string): unknown {
+  let current: unknown = value;
+  for (const key of path.split(".")) {
+    const next = record(current);
+    if (!next) return undefined;
+    current = next[key];
+  }
+  return current;
+}
+
+function firstText(source: unknown, paths: readonly string[]): string | null {
+  for (const path of paths) {
+    const found = text(at(source, path));
+    if (found) return found;
+  }
+  return null;
+}
+
+/** A button's visible label across the shapes WhatsApp Web has used: reply
+ * buttons, hydrated template buttons and native-flow buttons. */
+function buttonLabel(button: unknown): string | null {
+  if (typeof button === "string") return text(button);
+  const label = firstText(button, [
+    "buttonText.displayText",
+    "buttonText",
+    "displayText",
+    "quickReplyButton.displayText",
+    "urlButton.displayText",
+    "callButton.displayText",
+    "title",
+    "body",
+  ]);
+  if (label) return label;
+  const params = text(at(button, "buttonParamsJson"));
+  if (!params) return null;
+  try {
+    const parsed: unknown = JSON.parse(params);
+    return firstText(parsed, ["display_text", "title"]);
+  } catch {
+    return null;
+  }
+}
+
+function listOf(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  // a serialized Backbone collection keeps its items under _models / models
+  const items = record(value)?._models ?? record(value)?.models;
+  return Array.isArray(items) ? items : [];
+}
+
+/** set and not empty: an empty array or record does not make a message interactive */
+function present(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  const fields = record(value);
+  if (fields) return Object.keys(fields).length > 0;
+  return value !== undefined && value !== null && value !== false && value !== "";
+}
+
+function unique(parts: (string | null)[]): string[] {
+  const seen = new Set<string>();
+  return parts.filter((part): part is string => {
+    if (!part || seen.has(part)) return false;
+    seen.add(part);
+    return true;
+  });
+}
+
+/** The text a person sees on an interactive message or a reply to one, for
+ * messages whose `body` is empty or incomplete; null for everything else. */
+export function interactiveBody(raw: RawCaptureFields): string | null {
+  const data = record(raw._data) ?? {};
+  const type = String(raw.type ?? data.type ?? "");
+  const body = text(raw.body) ?? text(data.body);
+
+  if (REPLY_TYPES.has(type) || present(raw.selectedButtonId) || present(raw.selectedRowId) || present(data.selectedButtonId) || present(data.listResponse)) {
+    // the selected button / row as displayed, then whatever body there is,
+    // then the bare id (better than an empty row)
+    return firstText(data, [
+      "selectedButtonDisplayText",
+      "selectedDisplayText",
+      "buttonsResponse.selectedDisplayText",
+      "templateButtonReply.selectedDisplayText",
+      "listResponse.title",
+      "interactiveResponseBody.text",
+      "interactiveResponseMessage.body.text",
+      "nativeFlowResponseBody.text",
+    ]) ?? body ?? firstText(data, ["listResponse.description"]) ?? text(raw.selectedButtonId) ?? text(raw.selectedRowId)
+      ?? firstText(data, ["selectedButtonId", "selectedId", "listResponse.singleSelectReply.selectedRowId"]);
+  }
+
+  const interactive = INTERACTIVE_TYPES.has(type) || present(raw.dynamicReplyButtons) ||
+    data.isDynamicReplyButtonsMsg === true || data.isFromTemplate === true ||
+    INTERACTIVE_FIELDS.some((field) => present(data[field]));
+  if (!interactive) return null;
+
+  const header = [text(raw.title), firstText(data, ["title", "list.title", "hydratedTitleText", "headerText", "interactiveHeader.title", "header.title"])];
+  const main = [
+    body,
+    firstText(data, ["caption", "list.description", "hydratedContentText", "contentText", "interactiveBody.text"]),
+    text(raw.description) ?? text(data.description),
+  ];
+  const footer = [firstText(data, ["footer", "footerText", "list.footerText", "hydratedFooterText", "interactiveFooter.text"])];
+  const buttons = [
+    raw.dynamicReplyButtons,
+    data.dynamicReplyButtons,
+    data.replyButtons,
+    data.buttons,
+    data.hydratedButtons,
+    data.templateButtons,
+    at(data, "interactivePayload.buttons"),
+    data.nativeFlowButtons,
+  ].flatMap((value) => listOf(value).map(buttonLabel));
+  const list = [
+    firstText(data, ["list.buttonText"]),
+    ...listOf(at(data, "list.sections")).flatMap((section) => listOf(at(section, "rows")).map((row) => firstText(row, ["title"]))),
+  ];
+  const visible = unique([...header, ...main, ...footer, ...buttons, ...list]);
+  return visible.length ? visible.join("\n") : null;
+}
+
 export function captureFields(raw: RawCaptureFields): CaptureFields {
   const id = serializedMessageId(raw.id);
   if (!id) return { skip: "the message has no readable id", expected: false };
@@ -74,7 +228,7 @@ export function captureFields(raw: RawCaptureFields): CaptureFields {
       fromMe,
       timestamp: Number(raw.timestamp) || Math.floor(Date.now() / 1000),
       type: String(raw.type ?? "unknown"),
-      body: typeof raw.body === "string" ? raw.body : "",
+      body: interactiveBody(raw) ?? (typeof raw.body === "string" ? raw.body : ""),
       hasMedia: raw.hasMedia === true,
     },
   };
