@@ -22,6 +22,7 @@
 import React, { useEffect, useId, useMemo, useRef } from 'react'
 
 import { MASCOT_BODIES } from "../../shared/mascot-bodies"
+import { gesturePose, IDLE_POSE, mixPose, morphBodyPath, type MascotGesture } from "../../shared/mascot-choreography"
 import {
   EXPRESSIONS,
   EXPRESSION_COUNT,
@@ -1160,6 +1161,9 @@ export interface CursorAvatarProps {
   title?: string | null
   className?: string
   style?: React.CSSProperties
+  /** Isolated review page only. Production Avatar does not pass this prop.
+   * Runs supplied full-body study through this retained face/frame engine. */
+  previewChoreography?: { gesture: MascotGesture; key: number; path: string; faceX: number; faceY: number; reduced?: boolean }
 }
 
 export interface CursorAvatarHandle {
@@ -1194,6 +1198,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       title,
       className,
       style,
+      previewChoreography,
     },
     ref
   ) {
@@ -1204,6 +1209,10 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
     const mouth = useRef<SVGPathElement | null>(null)
     const bodyGroup = useRef<SVGGElement | null>(null)
     const bodyContent = useRef<SVGGElement | null>(null)
+    const previewPath = useRef<SVGPathElement | null>(null)
+    const previewClip = useRef<SVGPathElement | null>(null)
+    const previewFace = useRef<SVGGElement | null>(null)
+    const previewSides = useRef<SVGGElement | null>(null)
     const trailLayer = useRef<SVGGElement | null>(null)
     const confettiLayer = useRef<SVGGElement | null>(null)
     const glyphLayer = useRef<SVGGElement | null>(null)
@@ -1237,6 +1246,8 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       // what the parked loop last painted; '' means "never" so a mascot that
       // mounts paused still gets its one resting-face paint
       pausedPaint: '',
+      gestureKey: '', gestureElapsed: 0, gestureChangedAt: 0, gestureLastPaint: 0,
+      gesturePose: { ...IDLE_POSE }, gestureFrom: { ...IDLE_POSE },
       props: {
         state,
         expression,
@@ -1249,6 +1260,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         motionStrength,
         effects,
         glyphs,
+        previewChoreography,
       },
     })
     engine.current.props = {
@@ -1263,6 +1275,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       motionStrength,
       effects,
       glyphs,
+      previewChoreography,
     }
 
     const selectExpression = (index: number) => {
@@ -1340,6 +1353,17 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
 
       const draw = (e: typeof engine.current, now: number, spinTurn: number) => {
         const p = e.props
+        const choreography = p.previewChoreography
+        const gestureKey = choreography ? `${choreography.gesture}:${choreography.key}:${choreography.path}` : ''
+        if (gestureKey !== e.gestureKey) {
+          e.gestureFrom = { ...e.gesturePose }; e.gestureChangedAt = now
+          e.gestureElapsed = 0; e.gestureKey = gestureKey
+        }
+        if (!p.paused && e.gestureLastPaint) e.gestureElapsed += Math.max(0, Math.min(40, now-e.gestureLastPaint))
+        e.gestureLastPaint = now
+        const targetPose = choreography ? gesturePose(choreography.gesture, e.gestureElapsed, choreography.reduced) : IDLE_POSE
+        const pose = choreography?.reduced ? targetPose : mixPose(e.gestureFrom, targetPose, (now-e.gestureChangedAt)/300)
+        e.gesturePose = pose
         // Re-apply a fraction of this expression's own look-direction.
         const g = displayedGaze(e)
         const look = p.lookAround ?? 0.35
@@ -1348,11 +1372,11 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         const rings = displayed(e).map(ring =>
           ring.map((pt): [number, number] => [pt[0] + ox, pt[1] + oy])
         )
-        const gx = clamp(p.gaze?.x ?? 0, -1, 1) * GAZE_TRAVEL.x
-        const gy = clamp(p.gaze?.y ?? 0, -1, 1) * GAZE_TRAVEL.y
+        const gx = clamp(p.gaze?.x ?? 0, -1, 1) * GAZE_TRAVEL.x + pose.gx*2.28541
+        const gy = clamp(p.gaze?.y ?? 0, -1, 1) * GAZE_TRAVEL.y + pose.gy*2.28541
         const radians = (((p.turn ?? 0) + spinTurn) * Math.PI) / 180
         const base = p.eyeScale ?? 1
-        const blink = blinkScale(e, now)
+        const blink = blinkScale(e, now) * pose.eye
 
         rings.forEach((ring, index) => {
           const el = index === 0 ? eye0.current : eye1.current
@@ -1405,11 +1429,28 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
             e.lastState = p.state
             e.stateStart = now
           }
-          const transform = bodyTransform(
-            MOTION[p.state] ?? {},
-            now - e.stateStart,
-            p.motionStrength ?? 1
-          )
+          const scale = FACE_BOX / 100
+          const transform = choreography
+            ? `translate(${pose.dx*scale} ${pose.dy*scale}) translate(${50*scale} ${80*scale}) rotate(${pose.rotate}) scale(${pose.sx} ${pose.sy}) translate(${-50*scale} ${-80*scale})`
+            : bodyTransform(MOTION[p.state] ?? {}, now - e.stateStart, p.motionStrength ?? 1)
+          if (choreography) {
+            const d = morphBodyPath(choreography.path, pose.m, 28-12*pose.split)
+            previewPath.current?.setAttribute('d', d)
+            previewClip.current?.setAttribute('d', d)
+            const anchor = { x: (50+choreography.faceX*(1-pose.m)*.5)*scale, y: (46+choreography.faceY*(1-pose.m))*scale, scale: .55*pose.face }
+            const faceYScale = choreography.gesture === 'waiting' ? 1/Math.max(.3,pose.sy) : 1
+            previewFace.current?.setAttribute('transform', `translate(${anchor.x} ${anchor.y}) scale(${anchor.scale} ${anchor.scale*faceYScale}) translate(${-FACE_CENTRE[0]} ${-FACE_CENTRE[1]})`)
+            if (previewSides.current) {
+              previewSides.current.setAttribute('transform', transform)
+              Array.from(previewSides.current.children).forEach((part, i) => {
+                const direction = i === 0 ? -1 : 1
+                const jump = Math.max(0, Math.sin(e.gestureElapsed/280+i*Math.PI))*6*pose.split
+                part.setAttribute('d', morphBodyPath(choreography.path, 1, 12))
+                part.setAttribute('transform', `translate(${direction*31*pose.split*scale} ${-jump*scale}) translate(${50*scale} ${50*scale}) scale(${pose.split}) translate(${-50*scale} ${-50*scale}) scale(${scale})`)
+                part.setAttribute('opacity', String(pose.split))
+              })
+            }
+          }
           if (transform !== e.lastBodyTransform) {
             e.lastBodyTransform = transform
             if (transform) bodyEl.setAttribute('transform', transform)
@@ -1442,11 +1483,12 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         // One draw per change of what the still face shows, then park.
         if (p.paused) {
           e.last = now
-          const still = `${p.state}|${p.expression ?? ''}|${paintRef.current}`
+          const still = `${p.state}|${p.expression ?? ''}|${paintRef.current}|${p.previewChoreography?.key ?? ''}|${p.previewChoreography?.gesture ?? ''}`
           if (e.pausedPaint !== still) {
             e.pausedPaint = still
             draw(e, now, 0)
           }
+          if (p.previewChoreography) return // Preview fully suspends offscreen/inactive.
           wake = setTimeout(() => {
             frame = requestAnimationFrame(step)
           }, 250)
@@ -1480,7 +1522,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         cancelAnimationFrame(frame)
         if (wake !== undefined) clearTimeout(wake)
       }
-    }, [])
+    }, [previewChoreography ? paused : false])
 
     const paint = `url(#${uid}-grad)`
     const paintRef = useRef(paint)
@@ -1509,11 +1551,9 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
           </linearGradient>
           {/* The fit goes on the clipPath itself: a <g> inside one is ignored by browsers,
               which is also why silhouette.clip is pre-flattened to bare shapes. */}
-          <clipPath
-            id={`${uid}-clip`}
-            transform={silhouette.fit || undefined}
-            dangerouslySetInnerHTML={{ __html: silhouette.clip }}
-          />
+          {previewChoreography ? <clipPath id={`${uid}-clip`} transform={silhouette.fit || undefined}><path ref={previewClip} d={previewChoreography.path} /></clipPath> : <clipPath
+            id={`${uid}-clip`} transform={silhouette.fit || undefined}
+            dangerouslySetInnerHTML={{ __html: silhouette.clip }} /> }
         </defs>
         <g transform={flip ? `translate(${FACE_BOX} 0) scale(-1 1)` : undefined}>
           {/* Ribbons sit behind the mascot, confetti in front of it. */}
@@ -1521,11 +1561,12 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
           {/* Body and face move together — the face is painted on the body, not floating
               in front of it, so a squash or a tilt has to carry both. The glyph rides the
               same motion but is not faded with them, since it replaces them. */}
+          {previewChoreography && <g ref={previewSides} fill={gradient[0]}><path opacity="0"/><path opacity="0"/></g>}
           <g ref={bodyGroup}>
           <g ref={bodyContent}>
-          <g transform={silhouette.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} />
+          {previewChoreography ? <g transform={silhouette.fit || undefined}><path ref={previewPath} d={previewChoreography.path} fill={gradient[0]} /></g> : <g transform={silhouette.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} /> }
           <g clipPath={`url(#${uid}-clip)`}>
-            <g transform={anchorTransform(silhouette.anchor)}>
+            <g ref={previewFace} transform={anchorTransform(silhouette.anchor)}>
               <path ref={eye0} fill={eyeColor} />
               <path ref={eye1} fill={eyeColor} />
               {showMouth && (
