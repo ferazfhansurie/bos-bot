@@ -203,6 +203,8 @@ import {
   roomHandoffLimits,
 } from "./config.ts";
 import { inboxCanClose, inboxShouldSettle, threadState, type InboxCandidate } from "./thread-inbox.ts";
+import { jobInboxItem } from "./job-inbox.ts";
+import type { JobInboxResponse } from "../shared/job-inbox.ts";
 import { buildDigest, buildInbox, digestDue, digestNotificationBody, localDateKey, partitionInboxClear, type NeedsMeThread } from "./needs-me.ts";
 import { sweepThreadEventLogs, type ThreadLogRetentionCandidate } from "./thread-retention.ts";
 import { ComputerControl } from "./computer-control.ts";
@@ -16706,6 +16708,46 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const resolved = leadActions.resolve(action.id, parsed.data, action.leadBotId);
       publishLeadAction(resolved);
       return json(res, 200, { action: resolved });
+    }
+    // Enumerate authorized conversations, never the unrestricted work ledger.
+    // Peer-only sessions have no workspace inbox authority (as for /api/inbox).
+    if (method === "GET" && path === "/api/jobs") {
+      if (peerSessionId) return json(res, 403, { error: "forbidden" });
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session revoked" });
+      const scope = needsMeScope(auth);
+      const items: JobInboxResponse["items"] = [];
+      const append = (botId: string, threadId: string, running: boolean, waiting: boolean) => {
+        const plan = workPlans.get(botId, threadId);
+        if (!plan) return;
+        const needsHuman = waiting || plan.steps.some(step => step.ownerBotId === "human" && step.status === "ready" &&
+          step.dependsOn.every(id => plan.steps.some(parent => parent.id === id && parent.status === "done"))) ||
+          store.messagesFor(threadId).some(message => message.card?.requestId && !message.card.answered && !message.card.dismissed);
+        items.push(jobInboxItem(plan, { running, held: workRuntime.isHeld(botId, threadId), needsHuman }));
+      };
+      try {
+        for (const bot of scope.bots) {
+          if (bot.hidden || !currentPrivateAccess(bot.id)) continue;
+          for (const task of store.tasks(bot.id)) {
+            append(bot.id, task.threadId, threadBusy(bot.id, task.threadId), task.activity === "waiting-on-you");
+          }
+        }
+        if (scope.includeGroups) for (const group of store.groups) {
+          if (group.dm) continue;
+          for (const task of store.groupTasks(group.id)) {
+            for (const botId of group.memberIds) {
+              const bot = store.bot(botId);
+              if (!bot || bot.hidden || !currentPrivateAccess(botId)) continue;
+              const running = roomRuntimeSpeakers(group.id, task.threadId).some(([, speaker]) => speaker.botId === botId) ||
+                [...(groupTurnOperations.get(group.id) ?? [])].some(operation => operation.threadId === task.threadId && operation.botIds.has(botId));
+              append(botId, task.threadId, running, store.roomThreadActivity(task.threadId) === "waiting-on-you");
+            }
+          }
+        }
+      } catch {
+        // Never return a partial inbox or silently treat unreadable state as idle.
+        return json(res, 503, { error: "Job state is unavailable" });
+      }
+      return json(res, 200, { items } satisfies JobInboxResponse);
     }
     // Needs-me: every open conversation waiting on the person, newest first.
     if (method === "GET" && path === "/api/inbox") {

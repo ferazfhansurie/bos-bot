@@ -15,6 +15,11 @@ export class WorkRuntimeLedger {
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") this.broken = true; }
   }
   private save() { if (this.broken) throw new Error("Work runtime storage unavailable"); try { writeFileAtomic(this.file, JSON.stringify(this.rows), { mode: 0o600 }); } catch (error) { this.broken = true; throw error; } }
+  /** Read Stop state without creating a round or changing its causal chain. */
+  isHeld(botId: string, threadId: string): boolean {
+    if (this.broken) throw new Error("Work runtime storage unavailable");
+    return this.rows.find(row => row.botId === botId && row.threadId === threadId)?.held ?? false;
+  }
   round(botId: string, threadId: string, chainId: string) {
     if (this.broken) throw new Error("Work runtime storage unavailable");
     let row = this.rows.find(r => r.botId === botId && r.threadId === threadId);
