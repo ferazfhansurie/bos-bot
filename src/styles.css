@@ -1,16 +1,15 @@
 @import "tailwindcss";
 
 /* Inline mentions keep the surrounding font metrics, including in the
-   textarea mirror. No padding/border/font-weight changes that shift the caret. */
+   textarea mirror. No padding/border/font-weight changes that shift the caret;
+   a spread shadow pads the tag visually instead. */
 .mention-highlight {
   --mention-color: var(--color-ink-secondary);
 
-  color: color-mix(in srgb, var(--mention-color) 30%, var(--color-ink));
-  background: color-mix(in srgb, var(--mention-color) 24%, var(--color-inset));
-  border-radius: 3px;
-  text-decoration: underline;
-  text-decoration-color: var(--mention-color);
-  text-underline-offset: 3px;
+  color: color-mix(in srgb, var(--mention-color) 45%, var(--color-ink));
+  background: color-mix(in srgb, var(--mention-color) 22%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mention-color) 22%, transparent);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
@@ -1586,9 +1585,10 @@ button:disabled.bg-danger {
   animation: status-swap 0.2s var(--room-ease-out) both;
 }
 
-/* Rendered @mentions read as chips: avatar + name on a lighter pill. Only
-   in rendered markdown; the composer mirror keeps plain metrics. */
-.chat-md .mention-highlight {
+/* Sent @mentions read as chips: avatar + name on a lighter pill, the same
+   in bot replies and your own bubbles. Only the composer mirror keeps plain
+   metrics, since it has to line up with the textarea's caret. */
+.mention-highlight:not(.mention-editor-mirror *) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1596,12 +1596,13 @@ button:disabled.bg-danger {
   margin: 0 1px;
   border-radius: 7px;
   line-height: 1.55;
-  text-decoration: none;
+  font-weight: 500;
   color: var(--color-ink);
-  background: color-mix(in srgb, var(--mention-color) 14%, var(--color-raised));
+  background: color-mix(in srgb, var(--mention-color) 18%, var(--color-raised));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mention-color) 30%, transparent);
 }
 /* the bot's colour as a small blob, standing in for its avatar */
-.chat-md .mention-highlight::before {
+.mention-highlight:not(.mention-editor-mirror *)::before {
   content: "";
   width: 11px;
   height: 11px;

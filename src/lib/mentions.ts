@@ -10,7 +10,38 @@ export function mentionChoicesForQuery<T extends { name: string; searchText?: st
   // "@Scout " is a completed tag, not a new search. Closing here lets Enter
   // send instead of selecting the same bot again.
   if (query.endsWith(" ") && pool.some((choice) => choice.name.toLowerCase() === normalized)) return [];
-  return pool.filter((choice) => !normalized || (choice.name.toLowerCase().includes(normalized) || choice.searchText?.toLowerCase().includes(normalized)));
+  if (!normalized) return [...pool];
+  // A few typed letters almost always mean the start of a name, so rank
+  // prefix > word start > anywhere in the name > owner/title. Input order
+  // holds within a tier; the caller's order (everyone first, room order) means something.
+  const tiers: T[][] = [[], [], [], []];
+  for (const choice of pool) {
+    const tier = mentionTier(choice, normalized);
+    if (tier !== -1) tiers[tier].push(choice);
+  }
+  return tiers.flat();
+}
+
+function mentionTier(choice: { name: string; searchText?: string }, normalized: string): number {
+  const name = choice.name.toLowerCase();
+  if (name.startsWith(normalized)) return 0;
+  if (name.split(/[\s._-]+/).some((word) => word.startsWith(normalized))) return 1;
+  if (name.includes(normalized)) return 2;
+  return choice.searchText?.toLowerCase().includes(normalized) ? 3 : -1;
+}
+
+/** Where the typed query sits in a picker row's name, for highlighting.
+ * Prefers a word start over an earlier mid-word hit. */
+export function mentionMatchRange(name: string, query: string): { start: number; end: number } | null {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return null;
+  const lower = name.toLowerCase();
+  let at = lower.indexOf(normalized);
+  if (at === -1) return null;
+  for (let i = at; i !== -1; i = lower.indexOf(normalized, i + 1)) {
+    if (i === 0 || /[\s._-]/.test(lower[i - 1])) { at = i; break; }
+  }
+  return { start: at, end: at + normalized.length };
 }
 
 /** Display word-start, longest-name matches without coloring Unicode prefixes.

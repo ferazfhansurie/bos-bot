@@ -61,7 +61,7 @@ import {
 } from "./ComposerQueuedMessages";
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
 import { composerPriorityVisible, effectiveSendPriority, type SendPriority } from "@/lib/composer-priority";
-import { mentionChoicesForQuery } from "@/lib/mentions";
+import { mentionChoicesForQuery, mentionMatchRange } from "@/lib/mentions";
 import { botControlAvailable, mentionableBots } from "@/lib/remote-bot";
 import { sharedAttachmentError, type SharedComposer } from "./shared-conversation";
 import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@/lib/thread-refs";
@@ -337,7 +337,9 @@ export function Composer({
   const pickMention = (peer: MentionChoice) => {
     if (!mention) return;
     const after = text.slice(caret);
-    const next = `${text.slice(0, mention.start)}@${peer.name} ${after}`;
+    // tagging mid-sentence already has a space after the caret; don't double it
+    const gap = /^\s/.test(after) ? "" : " ";
+    const next = `${text.slice(0, mention.start)}@${peer.name}${gap}${after}`;
     editText(next);
     const newCaret = mention.start + peer.name.length + 2;
     setCaret(newCaret);
@@ -852,44 +854,107 @@ export function Composer({
         )}
         {mentionPickerOpen && (
           <div
-            ref={mentionListRef}
-            role="listbox"
-            aria-label={shared ? "Mention a person or bot" : t("composer.mention.aria")}
-            className="absolute bottom-full left-2 z-20 mb-2 max-h-[min(28rem,60vh)] w-80 max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto overscroll-contain rounded-xl border border-hairline/40 bg-raised shadow-lg"
+            role="presentation"
+            className="absolute bottom-full left-2 z-20 mb-2 flex max-h-[min(28rem,60vh)] w-[22rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-hairline/40 bg-raised shadow-lg motion-safe:animate-pop-in"
           >
-            {candidates.map((peer, i) => (
+            <div className="flex items-center justify-between border-b border-hairline/20 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">
+              <span>{shared ? "Mention a person or bot" : t("composer.mention.aria")}</span>
+              <span className="font-normal normal-case tracking-normal" aria-hidden="true">↑↓ · ↵ or tab · esc</span>
+            </div>
+            <div
+              ref={mentionListRef}
+              role="listbox"
+              aria-label={shared ? "Mention a person or bot" : t("composer.mention.aria")}
+              className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain py-1"
+            >
+            {candidates.map((peer, i) => {
+              const match = mentionMatchRange(peer.name, mention?.query ?? "");
+              const waiting = peer.bot?.activity === "waiting-on-you";
+              const working = !waiting && Boolean(peer.bot?.busy);
+              const everyoneRow = peer.id === "__everyone__";
+              return (
               <button
                 key={peer.id}
+                type="button"
                 data-mention-index={i}
                 role="option"
                 aria-selected={i === highlight}
+                // keep the caret in the textarea; picking refocuses anyway,
+                // but a blur in between flickers the draft's mention mirror
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => pickMention(peer)}
                 onMouseEnter={() => setHighlight(i)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 px-3 py-2 text-left",
+                  "mx-1 flex w-[calc(100%-0.5rem)] items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left",
                   i === highlight ? "bg-raised-hover" : "",
                 )}
               >
-                {peer.bot ? (
-                  <BotAvatar
-                    bot={peer.bot}
-                    state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
-                    size={32}
-                    animated={false}
-                  />
-                ) : peer.avatar ? (
-                  <PersonPhoto src={peer.avatar} size={32} />
-                ) : (
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-raised text-ink-secondary">
-                    <Users size={14} aria-hidden="true" />
+                <span className="relative flex shrink-0">
+                  {peer.bot ? (
+                    <BotAvatar
+                      bot={peer.bot}
+                      state={normalizeState(peer.bot.mascotExpression) ?? "happy"}
+                      size={28}
+                      animated={false}
+                    />
+                  ) : peer.avatar ? (
+                    <PersonPhoto src={peer.avatar} size={28} />
+                  ) : everyoneRow && members?.length ? (
+                    // everyone = the room: a small stack of who it reaches
+                    <span className="flex -space-x-2.5">
+                      {members.slice(0, 3).map((member) => (
+                        <span key={member.id} className="rounded-full ring-2 ring-raised">
+                          <BotAvatar bot={member} size={20} animated={false} />
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-card text-ink-secondary">
+                      <Users size={13} aria-hidden="true" />
+                    </span>
+                  )}
+                  {(working || waiting) && (
+                    <span
+                      className={cn(
+                        "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-raised",
+                        waiting ? "bg-warning" : "bg-success motion-safe:animate-pulse",
+                      )}
+                      aria-hidden="true"
+                    />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-medium text-ink">
+                    <span className="text-ink-secondary">@</span>
+                    {match ? (
+                      <>
+                        {peer.name.slice(0, match.start)}
+                        <span className="text-accent">{peer.name.slice(match.start, match.end)}</span>
+                        {peer.name.slice(match.end)}
+                      </>
+                    ) : peer.name}
                   </span>
-                )}
-                <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{peer.name}</span>
-                <span className="shrink-0 text-xs text-ink-secondary">
-                  {shared ? peer.bot?.title ?? "Person" : peer.bot ? t("composer.mention.agent") : t("composer.mention.channel")}
+                  {(peer.bot?.title || shared) && (
+                    <span className="block truncate text-[11.5px] text-ink-secondary">
+                      {peer.bot?.title ?? (shared ? "Person" : "")}
+                    </span>
+                  )}
+                </span>
+                <span className={cn("shrink-0 text-[11px]", waiting ? "text-warning" : "text-ink-secondary")}>
+                  {waiting
+                    ? t("task.waiting")
+                    : working
+                    ? t("sidebar.preview.working")
+                    : everyoneRow
+                    ? t("composer.mention.channel")
+                    : shared
+                    ? ""
+                    : t("composer.mention.agent")}
                 </span>
               </button>
-            ))}
+              );
+            })}
+            </div>
           </div>
         )}
         {/* An approval takes over the composer: you answer it before you
@@ -1092,6 +1157,11 @@ export function Composer({
                 e.preventDefault();
                 const delta = e.key === "ArrowDown" ? 1 : -1;
                 setHighlight((h) => (h + delta + candidates.length) % candidates.length);
+                return;
+              }
+              if ((e.key === "Home" || e.key === "End") && !e.shiftKey) {
+                e.preventDefault();
+                setHighlight(e.key === "Home" ? 0 : candidates.length - 1);
                 return;
               }
               if (e.key === "Enter" || e.key === "Tab") {

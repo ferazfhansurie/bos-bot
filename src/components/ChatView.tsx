@@ -361,7 +361,8 @@ function Bubble({
   // provenance note stripped from what the reader sees.
   const peer = shared ? null : peerLine(message);
   const user = message.role === "user" && !peer;
-  const mentionPeers = useMemo(() => shared?.mentionBots ?? state.bots.filter((peer) => peer.id !== bot.id), [shared, state.bots, bot.id]);
+  // people in a shared room are taggable from the composer, so their tags chip too
+  const mentionPeers = useMemo(() => shared ? [...(shared.mentionPeople ?? []), ...shared.mentionBots] : state.bots.filter((peer) => peer.id !== bot.id), [shared, state.bots, bot.id]);
   const [expanded, setExpanded] = useState(false);
   const [viewRaw, setViewRaw] = useState(false);
   const speech = useSpeech();
