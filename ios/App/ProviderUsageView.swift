@@ -6,6 +6,7 @@ struct ProviderUsageView: View {
     @State private var accounts: [ProviderUsageAccount] = []
     @State private var loading = true
     @State private var error: String?
+    @State private var checkedAt: Date?
 
     var body: some View {
         List {
@@ -17,6 +18,10 @@ struct ProviderUsageView: View {
             }
             if !loading && error == nil && accounts.isEmpty {
                 ContentUnavailableView("No Claude or Codex account configured.", systemImage: "gauge.with.dots.needle.0percent")
+            }
+            if let checkedAt {
+                Text("Fetched \(checkedAt.formatted(date: .abbreviated, time: .shortened)). Pull to refresh.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(accounts) { account in
                 Section("\(account.provider.capitalized) · \(account.account)") {
@@ -54,6 +59,7 @@ struct ProviderUsageView: View {
         do {
             accounts = try await session.loadProviderUsage()
             error = nil
+            checkedAt = Date()
         } catch {
             self.error = "Limits unavailable. Pull to retry."
         }

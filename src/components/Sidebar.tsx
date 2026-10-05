@@ -1669,6 +1669,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
     restoreBot?: { id: string; name: string };
   } | null>(null);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "unread" | "waiting" | "running">("all");
   const [savedDensity, setDensityState] = useState<SidebarDensity>(() => loadSidebarDensity());
   const [sidebarWidth, setSidebarWidth] = useState(() => loadSidebarWidth());
   const [windowWidth, setWindowWidth] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
@@ -1946,8 +1947,12 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   // instantly from local state; transcript hits are the SearchResults
   // section below the list (debounced, lands on the message).
 
+  const matchesStatus = (unread: boolean, running: boolean, waiting: boolean) =>
+    statusFilter === "all" || (statusFilter === "unread" ? unread : statusFilter === "running" ? running : waiting);
+  const waitingThreadIds = new Set([...state.bots, ...state.groups].flatMap(owner => (owner.tasks ?? []).filter(task => task.state === "waiting-on-you").map(task => task.threadId)));
   const matchingBots = state.bots
     .filter((b) => !b.hidden)
+    .filter((b) => matchesStatus(b.unread, b.tasks?.some(task => task.state === "running") ?? (Boolean(b.busy) && !waitingThreadIds.has(b.threadId)), b.tasks?.some(task => waitingThreadIds.has(task.threadId)) ?? waitingThreadIds.has(b.threadId)))
     .filter(
       (b) =>
         !q ||
@@ -1957,7 +1962,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         b.tasks?.some((task) => !task.routineRunId && task.title.toLowerCase().includes(q)) ||
         b.projects?.some((folder) => folder.name.toLowerCase().includes(q)),
     );
-  const visibleGroups = state.groups.filter((g) => !q || g.name.toLowerCase().includes(q) || g.tasks?.some((task) => task.title.toLowerCase().includes(q)));
+  const visibleGroups = state.groups.filter((g) => matchesStatus(g.unread, g.tasks?.some(task => task.state === "running") ?? (Boolean(g.busyBotId || g.activeBotIds?.length) && !waitingThreadIds.has(g.threadId)), waitingThreadIds.has(g.threadId))).filter((g) => !q || g.name.toLowerCase().includes(q) || g.tasks?.some((task) => task.title.toLowerCase().includes(q)));
   const {
     unsectionedChief,
     pinnedBots,
@@ -2338,6 +2343,17 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
         </div>
       </div>
 
+      {density !== "icons" && (
+        <div role="group" aria-label="Conversation status" className="mx-3 mb-3 flex gap-1 rounded-lg bg-inset/40 p-1">
+          {(["all", "unread", "waiting", "running"] as const).map(value => (
+            <button key={value} type="button" aria-pressed={statusFilter === value}
+              onClick={() => setStatusFilter(value)}
+              className={cn("min-h-8 flex-1 rounded-md px-1 text-[11px] capitalize", statusFilter === value ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink")}>
+              {value}
+            </button>
+          ))}
+        </div>
+      )}
       <NeedsMeNavRow density={density} />
 
       {attentionPinned && density !== "icons" && (

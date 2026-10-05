@@ -818,7 +818,14 @@ struct ChatListView: View {
     private func matchesConversationFilter(_ entry: ConversationEntry) -> Bool {
         switch conversationFilter {
         case "unread": return conversationUnread(entry)
-        case "running": return conversationBusy(entry)
+        case "running":
+            if case .local(let summary) = entry {
+                if case .bot(let bot) = summary.chat, let tasks = bot.tasks {
+                    return tasks.contains { $0.activity == "working" || $0.activity == "running" }
+                }
+                return summary.chat.busy && !waitingChats.contains(summary.chat.id)
+            }
+            return false
         case "waiting":
             if case .local(let summary) = entry { return waitingChats.contains(summary.chat.id) }
             return false
