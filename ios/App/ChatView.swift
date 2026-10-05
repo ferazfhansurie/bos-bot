@@ -21,9 +21,14 @@ import AVFoundation
 
 struct ChatView: View {
     let chat: Chat
+    /// Set when this chat is the side pane of a wide window: there is no
+    /// stack to pop, so leaving closes the pane instead.
+    var onClose: (() -> Void)?
     @State private var selectedThreadId: String
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    /// Present only on a wide window's primary pane with room for a second.
+    @Environment(\.openBeside) private var openBeside
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     /// The draft lives in its own object so a keystroke redraws the
@@ -88,8 +93,13 @@ struct ChatView: View {
     @AppStorage(PrefKey.activityDetail) private var activityDetail = ActivityDetail.reduced.rawValue
     @AppStorage(PrefKey.quickReplies) private var quickReplies = ""
 
-    init(chat: Chat) {
+    /// This composer's own claim on `LiveTextStore.composing`; two panes can
+    /// each have a draft open.
+    @State private var composerID = UUID()
+
+    init(chat: Chat, onClose: (() -> Void)? = nil) {
         self.chat = chat
+        self.onClose = onClose
         _selectedThreadId = State(initialValue: chat.threadId)
     }
 
@@ -404,7 +414,7 @@ struct ChatView: View {
             if case let .bot(bot) = current { ComputerView(bot: bot) }
         }
         .task(id: threadId) {
-            if selectedThreadWasRemoved { dismiss(); return }
+            if selectedThreadWasRemoved { leave(); return }
             let openedChat = current
             await session.loadThreadIfNeeded(openedChat.threadId)
             // opening a chat is what marks it read, exactly as on the desktop
@@ -427,7 +437,7 @@ struct ChatView: View {
 #endif
         }
         .onChange(of: selectedThreadWasRemoved) { _, removed in
-            if removed { dismiss() }
+            if removed { leave() }
         }
 #if DEBUG
         .onAppear { Autopilot.chatAppeared?() }
@@ -466,7 +476,7 @@ struct ChatView: View {
             cancelThreadOpen()
         }
         .onDisappear {
-            session.liveText.composing = false
+            session.liveText.setComposing(false, by: composerID)
             dictation.stop()
             resetFilePreview()
             cancelThreadOpen()
@@ -550,16 +560,23 @@ struct ChatView: View {
     /// Back on the left with the rest-of-app unread count, threads and the
     /// bot's computer on the right — a blurred strip to the top edge.
     private var headerBar: some View {
-        ChatHeaderBar(name: current.name, unreadElsewhere: unreadElsewhere,
+        ChatHeaderBar(name: current.name, unreadElsewhere: onClose == nil ? unreadElsewhere : 0,
                       canOpenThreads: current.supportsTasks,
                       // A bot on another Mac has no settings or computer the
                       // server will open for this phone.
                       canOpenSettings: !current.isRemoteBot,
-                      canWatchComputer: current.isBot && !current.isRemoteBot, onBack: { dismiss() },
+                      canWatchComputer: current.isBot && !current.isRemoteBot, onBack: leave,
                       onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
-                      onComputer: { showingComputer = true }, accessory: rosterAccessory) {
+                      onComputer: { showingComputer = true }, accessory: rosterAccessory,
+                      closesPane: onClose != nil,
+                      beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) }) {
             ChatAvatarView(chat: current, size: 30, state: .idle, animated: false)
         }
+    }
+
+    /// Back on a phone or a primary pane; close on a side pane.
+    private func leave() {
+        if let onClose { onClose() } else { dismiss() }
     }
 
     private var channelMembers: [Bot] {
@@ -1196,9 +1213,7 @@ struct ChatView: View {
 #if DEBUG
                         MainThreadProbe.shared.typing(!value.isEmpty)
 #endif
-                        if session.liveText.composing == value.isEmpty {
-                            session.liveText.composing = !value.isEmpty
-                        }
+                        session.liveText.setComposing(!value.isEmpty, by: composerID)
                         let wantsHUD = value.hasPrefix("/")
                         if showCommandHUD != wantsHUD {
                             withAnimation(.easeInOut(duration: 0.15)) { showCommandHUD = wantsHUD }
@@ -1363,6 +1378,10 @@ struct ChatHeaderBar<Avatar: View>: View {
     /// trailing slot so the people in the room aren't hidden behind the
     /// title; it opens the same details sheet.
     var membersCount: Int? = nil
+    /// A side pane closes rather than goes back, and says so.
+    var closesPane = false
+    /// On a wide window, the menu that opens a second chat beside this one.
+    var beside: AnyView? = nil
     @ViewBuilder let avatar: () -> Avatar
 
     var body: some View {
@@ -1370,7 +1389,7 @@ struct ChatHeaderBar<Avatar: View>: View {
         HStack(alignment: .top) {
             Button(action: onBack) {
                 HStack(spacing: 4) {
-                    Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
+                    Image(systemName: closesPane ? "xmark" : "chevron.left").font(.system(size: 17, weight: .semibold))
                     if unreadElsewhere > 0 {
                         Text("\(unreadElsewhere)").font(.system(size: 13, weight: .semibold))
                             .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22)
@@ -1381,7 +1400,7 @@ struct ChatHeaderBar<Avatar: View>: View {
                 .padding(.leading, 12).padding(.trailing, unreadElsewhere > 0 ? 8 : 12)
                 .frame(height: 44).contentShape(Capsule())
             }
-            .buttonStyle(.plain).glassCapsule().accessibilityLabel("Back")
+            .buttonStyle(.plain).glassCapsule().accessibilityLabel(closesPane ? "Close" : "Back")
             Spacer(minLength: 4)
             if !canOpenThreads && canOpenSettings {
                 Button(action: onSettings) {
@@ -1409,6 +1428,7 @@ struct ChatHeaderBar<Avatar: View>: View {
             .accessibilityIdentifier("chat-options")
             }
             Spacer(minLength: 4)
+            if let beside { beside }
             if canWatchComputer {
                 GlassButton(systemImage: "display", size: 44, weight: .medium, action: onComputer)
                     .accessibilityLabel("Watch \(name)'s computer")
