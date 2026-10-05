@@ -23,7 +23,12 @@ export function nativeResourceDigest(resources) {
       else fail("unsupported native resource");
     }
   }
-  walk(resources); return hash.digest("hex");
+  // Inside Electron, fs treats app.asar as a directory; hash the archive file
+  // itself so the running app and the packaging script agree.
+  const asar = process.noAsar;
+  process.noAsar = true;
+  try { walk(resources); } finally { process.noAsar = asar; }
+  return hash.digest("hex");
 }
 
 export function nativeSourceDigest(repo, commit) {
