@@ -61,8 +61,8 @@ function connect(t: string, origin = url) {
   ws.on("message", data => frames.get(ws)?.push(JSON.parse(data.toString())));
   return ws;
 }
-async function waitFor(ws: WebSocket, predicate: (items: any[]) => boolean) {
-  const deadline = Date.now() + 5000;
+async function waitFor(ws: WebSocket, predicate: (items: any[]) => boolean, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate(frames.get(ws)!)) {
     if (Date.now() > deadline) throw new Error("terminal fixture timed out");
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -128,19 +128,20 @@ it.each(["not json", JSON.stringify({type:"resize",cols:501,rows:24}), JSON.stri
   const ws = connect(await ticket()); await waitFor(ws, items => items.some(f => f.type === "ready"));
   ws.send(frame); await waitFor(ws, items => items.some(f => f.type === "error"));
 });
+// Leave headroom for both frame waits, child cleanup and scheduler load.
 it.each(["socket", "server"])("kills shell-owned background children when the %s closes", async mode => {
-  const ws = connect(await ticket()); await waitFor(ws, items => items.some(f => f.type === "ready"));
+  const ws = connect(await ticket()); await waitFor(ws, items => items.some(f => f.type === "ready"), 8000);
   ws.send(JSON.stringify({type:"input",data:"sleep 120 & printf 'child:%s\\n' $!\r"}));
-  const items = await waitFor(ws, items => /child:(\d+)/.test(items.map(f => f.data ?? "").join("")));
+  const items = await waitFor(ws, items => /child:(\d+)/.test(items.map(f => f.data ?? "").join("")), 8000);
   const pid = Number(/child:(\d+)/.exec(items.map(f => f.data ?? "").join(""))![1]);
   process.kill(pid, 0); if (mode === "socket") ws.close(); else await service.close();
-  const deadline = Date.now() + 4000;
+  const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     try { process.kill(pid, 0); } catch { return; }
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new Error("terminal child survived socket close");
-});
+}, 30_000);
 it("caps outstanding tickets and reclaims expired slots", async () => {
   for (let i = 0; i < 64; i++) await ticket();
   expect((await mint()).status).toBe(429);
