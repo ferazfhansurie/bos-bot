@@ -3,6 +3,7 @@ import { Columns2, X } from "lucide-react";
 
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
+import { TerminalPanel } from "@/components/TerminalPanel";
 import { t } from "@/lib/i18n";
 import { SPLIT_DRAG_TYPE, visibleSplitPanes } from "@/lib/split-view";
 import { useSplitView } from "@/components/SplitViewContext";
@@ -33,7 +34,7 @@ function useSplitDragActive(): boolean {
  * right-edge drop target while a sidebar row is dragged. */
 export function SplitWorkspace({ children }: { children: ReactNode }) {
   const { state } = useStore();
-  const { panes, openSplit, closeSplit } = useSplitView();
+  const { panes, openSplit, closeSplit, terminal, closeTerminal } = useSplitView();
   const dragging = useSplitDragActive();
   const [over, setOver] = useState(false);
   useEffect(() => { if (!dragging) setOver(false); }, [dragging]);
@@ -56,6 +57,7 @@ export function SplitWorkspace({ children }: { children: ReactNode }) {
           </section>
         );
       })}
+      {terminal && <TerminalPanel target={terminal} onClose={closeTerminal} />}
       {dragging && (
         <div
           data-testid="split-drop-zone"

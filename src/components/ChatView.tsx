@@ -116,6 +116,7 @@ import { RenameTitle } from "./RenameTitle";
 import { BotActivityPicker, TaskPicker } from "./TaskPicker";
 import { ModelPicker } from "./ModelPicker";
 import { ExportTranscriptMenu } from "./ExportTranscriptMenu";
+import { TerminalButton } from "./TerminalPanel";
 import { botControlAvailable, remoteBotHint, remoteBotNotice } from "@/lib/remote-bot";
 
 import { SpeakButton } from "./SpeakButton";
@@ -1443,6 +1444,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           >
             <Monitor size={18} />
           </button>}
+          {local && <TerminalButton target={{ botId: bot.id, threadId: bot.threadId, name: bot.name }} className="rounded-md" />}
           {local && !remoteClient && <button
             onClick={() => dispatch({ type: "toggleInspector" })}
             aria-label={t("chat.inspector")}

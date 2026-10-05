@@ -2295,5 +2295,13 @@
   "split.drop": "Drop to open side by side",
   "split.pane": "{name}, split pane",
   "split.close": "Close split pane",
-  "split.closeNamed": "Close {name} split pane"
+  "split.closeNamed": "Close {name} split pane",
+  "terminal.toggle": "Terminal in this thread's folder",
+  "terminal.title": "Terminal",
+  "terminal.pane": "{name} terminal",
+  "terminal.connecting": "Connecting…",
+  "terminal.exited": "Exited with code {code}",
+  "terminal.disconnected": "Disconnected",
+  "terminal.restart": "Start a new terminal",
+  "terminal.close": "Close terminal"
 }
