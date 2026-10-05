@@ -94,9 +94,26 @@ module.exports = async function verifyModelSwitch({ root, url, api, until, grant
     window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Return" });
     await until(async () => !(await read()).busy && (await text()).includes("hello from fake claude"));
     writeFileSync(join(evidence, "after-send.png"), (await window.webContents.capturePage()).toPNG());
+    // A saved cross-provider grant must be honoured by the picker as well
+    // as the server. The old picker opened an Ask reset dialog here.
+    assert.equal((await api("/api/config", "PATCH", { approvals: { keepAcrossModelSwitch: true } })).status, 200);
+    await grant(bot.id, "full", { threadId: selected.threadId, threadOnly: true });
+    await window.loadURL(`${preview.previewUrl}?bot=${bot.id}&model-switch=1`);
+    await until(() => evaluate("!!document.querySelector('[data-tour=model]')"));
+    await openPicker();
+    await until(() => evaluate("!!document.querySelector('[data-model-picker-content] button[aria-label=Codex]')"));
+    await click("Codex");
+    await until(() => evaluate("[...document.querySelectorAll('[data-model-picker-content] button')].some(b => /GPT Fake Default/.test(b.textContent))"));
+    await evaluate("[...document.querySelectorAll('[data-model-picker-content] button')].find(b => /GPT Fake Default/.test(b.textContent)).click(); true");
+    await until(async () => {
+      const task = (await read()).tasks.find(task => task.threadId === selected.threadId);
+      return task.modelSelection.instanceId === "codex" && task.approvalMode === "full";
+    });
+    assert.equal(calls.length, 2, "Preserving Full must not invoke the Ask reset grant protocol");
+    assert.equal(await evaluate("!!document.querySelector('[role=alertdialog]')"), false);
     console.log(JSON.stringify({ modelSwitch: true, customHttpRefused: true, cancelPreservedSettings: true,
       scopedCustomSwitch: true, defaultMismatchHandled: true, siblingUnchanged: true, newThreadUsesDefault: true,
-      sentAfterSwitch: true, narrowLayout: true, providerReplies: "offline fake CLI", evidence }));
+      keptFullAcrossProviders: true, sentAfterSwitch: true, narrowLayout: true, providerReplies: "offline fake CLI", evidence }));
   } finally {
     ipcMain.removeHandler("fixture:thread-approval");
     window.destroy();

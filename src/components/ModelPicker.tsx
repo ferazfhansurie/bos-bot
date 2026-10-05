@@ -16,7 +16,7 @@ import { EngineSetup, EngineUpdateNotice, needsCli, needsSignIn } from "./Engine
 import { FreeModelSetup } from "./onboarding/FreeModelSetup";
 import { EngineGroupLabel } from "./EngineGroupLabel";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { approvalModeFor, modelSwitchNeedsAsk } from "../../shared/approval-mode";
+import { approvalCarriesAcrossModelSwitch, approvalModeFor } from "../../shared/approval-mode";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
@@ -461,9 +461,9 @@ export function ModelPicker({
     const updateBotDefault = !threadId || scope === "bot";
     const profile = state.bots.find((candidate) => candidate.id === bot.id) ?? bot;
     const targets = updateBotDefault ? [currentTaskBot(profile, threadId ?? bot.threadId), profile] : [bot];
-    if (targets.some((target) => modelSwitchNeedsAsk(approvalModeFor(target),
+    if (targets.some((target) => !approvalCarriesAcrossModelSwitch(approvalModeFor(target),
       state.instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId)?.driverKind,
-      instance.driverKind))) {
+      instance.driverKind, state.config?.approvals?.keepAcrossModelSwitch === true))) {
       setPendingSwitch({ botId: bot.id, threadId: threadId ?? bot.threadId,
         selection: nextSelection, updateBotDefault, name: modelLabel(instance, model) });
       setOpen(false);
