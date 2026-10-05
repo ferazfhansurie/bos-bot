@@ -1130,6 +1130,12 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("GET", "/api/provider-usage"), as: ProviderUsageResponse.self)
     }
 
+    /// Readable work plans only; the server scopes them to this device's
+    /// account and never resumes or dispatches anything on read.
+    public func jobInbox() async throws -> JobInboxResponse {
+        try await send(try makeRequest("GET", "/api/jobs"), as: JobInboxResponse.self)
+    }
+
     public func updateStatus() async throws -> UpdateStatusResponse {
         try await send(try makeRequest("GET", "/api/update/status"), as: UpdateStatusResponse.self)
     }

@@ -2650,6 +2650,38 @@ final class Session: ObservableObject {
         return try? await client.updateStatus()
     }
 
+    // MARK: - Job inbox
+
+    /// A pure read: the server scopes plans to this device and never resumes
+    /// or dispatches anything because the inbox was opened.
+    func loadJobs() async throws -> [JobInboxItem] {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return orderedJobs(try await client.jobInbox().items)
+    }
+
+    /// The existing conversation a job lives in. A direct thread is projected
+    /// locally; a room thread the room is not showing goes through the same
+    /// room task switch search results use. Never creates a thread.
+    func open(_ job: JobInboxItem) async -> Chat? {
+        switch state.destination(for: job) {
+        case let .bot(bot)?:
+            return .bot(bot)
+        case let .room(room, selected)?:
+            if selected { return .room(room) }
+            guard let client else { return nil }
+            do {
+                let switched = try await client.switchTask(groupId: room.id, threadId: job.threadId)
+                state.apply(.room(switched))
+                return state.rooms.first(where: { $0.id == room.id }).map(Chat.room)
+            } catch {
+                actionError = error.localizedDescription
+                return nil
+            }
+        case nil:
+            return nil
+        }
+    }
+
     // MARK: - Routines
 
     func loadRoutines() async -> (routines: [Routine], runs: [RoutineRun]) {
