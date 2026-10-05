@@ -93,7 +93,7 @@ export function recordProfileChange(
   for (const field of PROFILE_REQUEST_FIELDS) {
     const b = before[field] ?? "";
     const a = after[field] ?? "";
-    if (b !== a) rows.push(rowFor(field, at, actor, via, b, a));
+    if (b !== a) rows.push(rowFor(field, at, actor, via, String(b), String(a)));
   }
   if (!rows.length) return;
   const previous = writeQueues.get(botId) ?? Promise.resolve();

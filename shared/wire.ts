@@ -241,6 +241,7 @@ export interface WireBot {
   /** Tools this bot may always use without asking. */
   alwaysAllow?: string[];
   /** Speak this bot's replies aloud as they settle, without being asked. */
+  workContinuity?: boolean;
   speakReplies?: boolean;
   /** This bot's own voice id, so a room of bots doesn't sound like one person. */
   voice?: string;

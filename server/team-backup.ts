@@ -106,6 +106,7 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
     bots: store.bots.map((bot) => ({
       key: bot.id, name: bot.name, title: bot.title, description: bot.description, soul: bot.soul,
       section: bot.section, color: bot.color,
+      workContinuity: bot.workContinuity,
       mascotExpression: bot.mascotExpression ?? undefined, mascotBody: bot.mascotBody ?? undefined, mascotEyes: bot.mascotEyes ?? undefined,
       chiefOfStaff: Boolean(bot.chiefOfStaff), hidden: Boolean(bot.hidden), playbooks: bot.playbooks ?? [],
       memory: memoryFor(bot.id),
@@ -170,6 +171,7 @@ export function importTeamBackup(store: Store, routines: RoutineManager, input: 
         name: takeImportName(source.name, takenNames), title: source.title, description: source.description, soul: source.soul,
         color: source.color, mascotExpression: source.mascotExpression,
         mascotBody: botMascotBody(source.mascotBody),
+        ...(source.workContinuity !== undefined ? { workContinuity: source.workContinuity } : {}),
         ...(source.mascotEyes ? { mascotEyes: source.mascotEyes } : {}),
         modelSelection: selection, section: sectionFor(source.section),
       }, { seedMessages: false });

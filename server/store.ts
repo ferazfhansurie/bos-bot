@@ -232,7 +232,8 @@ function redactBotAuthored<T extends Omit<Message, "id" | "at"> & { at?: number 
       const scrubChanges = (changes: ProfileRequestChanges): ProfileRequestChanges => {
         const out: ProfileRequestChanges = {};
         for (const [key, value] of Object.entries(changes)) {
-          out[key as keyof ProfileRequestChanges] = redactSecretsInText(value);
+          if (key === "workContinuity") out.workContinuity = value === true;
+          else out[key as Exclude<keyof ProfileRequestChanges, "workContinuity">] = redactSecretsInText(String(value));
         }
         return out;
       };
@@ -602,6 +603,7 @@ export class Store {
         delete b.cloudBackend;
         botsMigrated = true;
       }
+      if (b.workContinuity !== undefined && typeof b.workContinuity !== "boolean") { delete b.workContinuity; botsMigrated = true; }
       if (b.autoStartVps !== undefined && b.autoStartVps !== true && b.autoStartVps !== false) {
         delete b.autoStartVps;
         botsMigrated = true;
@@ -1505,7 +1507,7 @@ export class Store {
     profile: Partial<
       Pick<
         BotRecord,
-        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "mascotEyes" | "modelSelection" | "fallbackModel" | "section"
+        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "mascotEyes" | "modelSelection" | "fallbackModel" | "section" | "workContinuity"
       >
     > = {},
     opts: {
@@ -1533,6 +1535,7 @@ export class Store {
       color: profile.color ?? COLORS[this.bots.length % COLORS.length],
       ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
+      ...(profile.workContinuity !== undefined ? { workContinuity: profile.workContinuity } : {}),
       ...(profile.mascotEyes ? { mascotEyes: profile.mascotEyes } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),

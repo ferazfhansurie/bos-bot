@@ -34,6 +34,7 @@ export const BOT_PROFILE_PATCH_FIELDS = [
   "mascotEyes",
   "voice",
   "speakReplies",
+  "workContinuity",
 ] as const;
 
 const profilePatchSchema = z.object({
@@ -71,6 +72,7 @@ const profilePatchSchema = z.object({
     .string({ error: "voice must be a string" })
     .max(BOT_PROFILE_LIMITS.voice, { error: "voice must be at most 200 characters" })
     .optional(),
+  workContinuity: z.boolean().optional(),
   speakReplies: z.boolean({ error: "speakReplies must be true or false" }).optional(),
 });
 
@@ -90,6 +92,7 @@ export type BotProfilePatch = Partial<
     | "mascotEyes"
     | "voice"
     | "speakReplies"
+    | "workContinuity"
   >
 >;
 

@@ -405,6 +405,7 @@ beforeAll(async () => {
       OMB_TURN_DEPTH: "0",
       OMB_SKILL_AUTHORING_ENABLED: "1",
       OMB_SHARED_COMPUTERS_ENABLED: "1",
+      OMB_WORK_CONTINUITY: "1",
     },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -592,6 +593,8 @@ describe("agents-proxy MCP surface", () => {
       "list_routines",
       "propose_routine",
       "propose_routine_action",
+      "get_work_plan",
+      "update_work_plan",
       "propose_profile",
       "skills_list",
       "skill_manage",
@@ -661,7 +664,7 @@ describe("agents-proxy MCP surface", () => {
       "list_shared_computers",
       "list_bots", "list_rooms", "check_delegation", "wait_delegation", "list_threads",
       "list_team_setup",
-      "session_search", "session_read", "list_routines", "skills_list",
+      "session_search", "session_read", "list_routines", "get_work_plan", "skills_list",
     ];
     expect(list.result.tools.filter((tool: any) => tool.annotations?.readOnlyHint)
       .map((tool: any) => tool.name)).toEqual(readNames);

@@ -21,6 +21,7 @@ const MAX_DIFF_LINES = 400;
 const STALE = "This bot's profile changed after this card was prepared. Ask the bot to review it and propose again.";
 const NO_SUCH_BOT = "That bot no longer exists";
 const LABELS: Record<Exclude<(typeof PROFILE_REQUEST_FIELDS)[number], "soul" | "cwd">, string> = {
+  workContinuity: "Work continuity",
   name: "Name",
   title: "Title",
   description: "Description",
@@ -54,7 +55,7 @@ export interface ProfileRequestStore {
     },
   ): { id: string };
   patchMessage(threadId: string, messageId: string, patch: { card: OptionCardLike }): { id: string } | null;
-  patchBotProfile(id: string, patch: Partial<Pick<BotRecord, "name" | "title" | "description" | "cwd" | "soul" | "lastProfileRequestId">>): BotRecord | null;
+  patchBotProfile(id: string, patch: Partial<Pick<BotRecord, "name" | "title" | "description" | "cwd" | "soul" | "lastProfileRequestId" | "workContinuity">>): BotRecord | null;
 }
 
 export interface ProfileRequestServiceOptions {
@@ -136,6 +137,10 @@ function parseChanges(input: unknown): ProfileRequestChanges {
   for (const field of PROFILE_REQUEST_FIELDS) {
     if (field === "cwd") continue;
     const value = parsed.patch[field];
+    if (field === "workContinuity") {
+      if (typeof value === "boolean") changes.workContinuity = value;
+      continue;
+    }
     // This payload is hidden under the card's visible fields, so the store's
     // shallow card redaction cannot reach it. Scrub before it is persisted.
     if (typeof value !== "string") continue;
@@ -272,8 +277,8 @@ export class ProfileRequestService {
       const value = changes[field];
       if (value === undefined) continue;
       if (value === snapshot[field]) continue;
-      before[field] = redactSecretsInText(snapshot[field]);
-      finalChanges[field] = value;
+      if (field === "workContinuity") { before.workContinuity = snapshot.workContinuity; finalChanges.workContinuity = changes.workContinuity; }
+      else { before[field] = redactSecretsInText(snapshot[field]); finalChanges[field] = changes[field]; }
     }
     if (Object.keys(finalChanges).length === 0) {
       throw new ProfileRequestError("Nothing would change");

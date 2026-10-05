@@ -1,3 +1,5 @@
+import { WorkContinuity, assessTeamWork, workPlanInputSchema } from "./work-continuity.ts";
+import { WorkRuntimeLedger } from "./work-continuity-runtime.ts";
 import { withMessagePostLock } from "./message-post-lock.ts";
 import { channelControlPatch, roomCompletionNotifies } from "./channel-controls.ts";
 import { RemoteFullService, readRemoteFullEnrollment } from "./remote-full.ts";
@@ -942,6 +944,8 @@ function revokeAllInternalCapabilities(): void {
 }
 
 function bindInternalCapabilityToProviderTurn(threadId: string, generation: string, turnId?: string): void {
+  const workTurn = workTurns.get(threadId);
+  if (workTurn?.generation === generation && turnId) workTurn.providerTurnId = turnId;
   if (turnId && !internalGenerationByProviderTurn.bind(threadId, generation, turnId)) {
     revokeInternalCapabilityGeneration(threadId, generation);
   }
@@ -1051,6 +1055,7 @@ function agentsIntegration(
       OMB_COMMS_TOKEN: token,
       OMB_TURN_DEPTH: String(depth),
       OMB_ROOM_TURN: roomCoordination ? "1" : "0",
+      OMB_WORK_CONTINUITY: store.bot(botId)?.workContinuity && workTurns.has(threadId) ? "1" : "0",
       OMB_OWN_THREAD_CREATION: ownThreadCreation ? "1" : "0",
       OMB_SKILL_AUTHORING_ENABLED: skillAuthoring ? "1" : "0",
       // The shared-computer tools are advertised only while the workspace
@@ -1242,6 +1247,7 @@ function requestedTaskBot(botId: string, rawThreadId: unknown): BotRecord {
 }
 
 async function interruptDirectThread(botId: string, threadId: string): Promise<void> {
+  holdWork(botId, threadId);
   const quotaRetry = quotaRetryTurns.get(threadId);
   if (quotaRetry) quotaRetry.cancelled = true;
   // Stop belongs to the conversation it was pressed in. This bot's turn ends
@@ -1852,6 +1858,72 @@ function checkedMemberIds(value: unknown): { ok: true; memberIds: string[] } | {
 }
 let bootSelection = { instanceId: "", model: "" };
 const store = new Store(() => bootSelection);
+const workPlans = new WorkContinuity(join(DATA_DIR, "work-plans.json"));
+const workRuntime = new WorkRuntimeLedger(join(DATA_DIR, "work-runtime.json"));
+type WorkTurn = { botId: string; threadId: string; runtimeThreadId: string; chainId: string; generation: string; snapshot: string; providerTurnId?: string; released?: Promise<void>; disposed: boolean; noWork: boolean; noWorkTeam?: z.infer<typeof workPlanInputSchema>["teamCheck"]; cancelled: () => boolean; dispatch: (text: string) => Promise<unknown> };
+const workTurns = new Map<string, WorkTurn>();
+const workTerminalSeen = new Set<string>();
+const workReleaseResolvers = new Map<string, () => void>();
+function releaseWorkTurn(generation: string | undefined) {
+  if (!generation) return;
+  const resolve = workReleaseResolvers.get(generation);
+  workReleaseResolvers.delete(generation);
+  resolve?.();
+}
+function workHuman(threadId: string) {
+  return [...store.activePath(store.canonicalThreadId(threadId))].reverse().find(m => m.role === "user" && !m.peerAsk && !m.from?.botId);
+}
+function workStepKey(botId: string, threadId: string, stepId: string) {
+  return "work-" + createHash("sha256").update(JSON.stringify([botId, threadId, stepId])).digest("hex");
+}
+function workHeld(botId: string, threadId: string) {
+  if (!store.bot(botId)?.workContinuity) return false;
+  try { return workRuntime.round(botId, store.canonicalThreadId(threadId), workHuman(threadId)?.id ?? "").held; }
+  catch { return true; }
+}
+function workSnapshot(botId: string, threadId: string) {
+  const b = store.groupByThread(threadId) ? store.bot(botId) : store.projectBotForTask(botId, threadId);
+  return JSON.stringify(b && [b.modelSelection, b.approvalMode, b.autoApprove, b.alwaysAllow, b.computer, b.sharedWorkComputer, b.cwd, b.section, b.hidden, b.browser, b.composio, b.mcpServers, b.approvalGrant, store.groupByThread(threadId)?.cwd]);
+}
+function workRoster(botId: string, threadId: string) {
+  const source = store.groupByThread(threadId);
+  const sender = store.bot(botId);
+  if (!sender) return [];
+  const peers = source ? source.memberIds.flatMap(id => { const b = store.bot(id); return b && id !== botId ? [b] : []; }) : messageablePeers(store.bots, sender);
+  const address = { groupId: source?.id, threadId: store.canonicalThreadId(threadId), botId };
+  return peers.filter(b => !roomHandoffProblem({ groupId: source?.id, threadId: source ? address.threadId : b.threadId, botId: b.id }, address)).map(b => {
+    const outstanding = [...roomHandoffs.nodes.values()].some(n => n.botId === b.id && ["queued", "running", "waiting", "resume"].includes(n.status));
+    return { botId: b.id, available: !b.busy && !outstanding, hasOutstandingWork: outstanding || Boolean(b.busy) };
+  });
+}
+function workPrompt(botId: string, threadId: string) {
+  if (!store.bot(botId)?.workContinuity) return "";
+  try { workRuntime.round(botId, store.canonicalThreadId(threadId), workHuman(threadId)?.id ?? ""); }
+  catch { return "Work continuity storage unavailable. Automatic continuation and planning assignments are disabled. Report the storage blocker and finish this turn."; }
+  return `Work continuity is enabled. Before finishing, use update_work_plan to record a current structured disposition and a decision for every live reachable helper. Keep useful independent own work moving while helpers run. Assign only explicitly authorized ready work through send_assignments; record reasons for other team decisions. Waiting, human gates and reported completion are not verified completion. Simple answers may declare no_actionable_work with a reason and team_check. Stop/pause holds require a human resume. Current plan: ${JSON.stringify(workPlans.get(botId, store.canonicalThreadId(threadId)) ?? null)}. Live team: ${JSON.stringify(workRoster(botId, threadId))}`;
+}
+function beginWorkTurn(botId: string, runtimeThreadId: string, generation: string, cancelled: () => boolean, dispatch: WorkTurn["dispatch"]) {
+  if (!store.bot(botId)?.workContinuity) return;
+  const threadId = store.canonicalThreadId(runtimeThreadId);
+  const human = workHuman(threadId);
+  if (!human) return;
+  let row: ReturnType<WorkRuntimeLedger["round"]>;
+  try { row = workRuntime.round(botId, threadId, human.id); }
+  catch { workTurns.delete(runtimeThreadId); return; }
+  // Only an actual human control command releases a durable hold.
+  if (row.held && row.heldAtChain !== human.id && /^(resume|continue)\s*[.!]?$/i.test(human.text?.trim() ?? "")) workRuntime.resume(botId, threadId, human.id);
+  if (/^(stop|pause)\s*[.!]?$/i.test(human.text?.trim() ?? "")) workRuntime.hold(botId, threadId, human.id);
+  workTurns.set(runtimeThreadId, { botId, threadId, runtimeThreadId, chainId: human.id, generation, snapshot: workSnapshot(botId, runtimeThreadId), disposed: false, noWork: false, cancelled, dispatch });
+}
+function holdWork(botId: string, threadId: string) {
+  const canonical = store.canonicalThreadId(threadId);
+  const human = workHuman(canonical);
+  if (store.bot(botId)?.workContinuity && human) {
+    try { workRuntime.hold(botId, canonical, human.id); }
+    catch { console.error("Work hold could not be persisted; continuity is fail-closed. Stop still interrupts the provider."); }
+  }
+}
+
 const modelFallback = new ModelFallbackService({ store, instances: () => registry.instances(),
   usage: () => providerUsage(persistableInstanceConfigs(cfg)), keepPermissions: () => keepApprovalAcrossModelSwitch(cfg),
   changing: id => providerFleetReloading || providerInstancesChanging.has(id), roomBusy: threadId => groupSpeakers.has(threadId), publish: event => bus.publish(event) });
@@ -2941,11 +3013,11 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
   // UI keeps showing this thread working. Fresh work still queues behind a
   // busy teammate's whole bot (#1238); an owed resume only needs its own
   // thread free and a thread slot to admit it.
-  busy: n => n.groupId
+  busy: n => (n.status === "resume" && workHeld(n.botId, n.threadId)) || (n.groupId
     ? roomMemberQueues.has(store.registerRoomRuntimeThread(n.groupId, n.threadId, n.botId)) || botAtThreadCapacity(n.botId)
     : n.status === "resume"
       ? threadBusy(n.botId, n.threadId) || botAtThreadCapacity(n.botId)
-      : Boolean(store.bot(n.botId)?.busy),
+      : Boolean(store.bot(n.botId)?.busy)),
   changed: (groupIds, directThreadIds) => {
     for (const id of groupIds) {
       const group = store.group(id);
@@ -5442,6 +5514,7 @@ bus.subscribe((event: RuntimeEvent) => {
             releaseLocalVmThread(event.threadId);
           }
           releaseTurnResources(resourceOwner);
+          releaseWorkTurn(generation);
           if (!isCurrent()) return;
           if (store.taskByThread(bot.id, event.threadId)?.activity !== "dead") {
             store.setTaskActivity(bot.id, event.threadId, "idle");
@@ -6286,6 +6359,56 @@ bus.subscribe((event: RuntimeEvent) => {
   drainQueuedSends();
   drainDelegationWakes();
   settleInboxThreads();
+});
+
+function workDispatchAllowed(turn: WorkTurn) {
+  const bot = store.bot(turn.botId);
+  const group = store.groupByThread(turn.runtimeThreadId);
+  return Boolean(bot?.workContinuity && !bot.hidden && !bot.approvalGrant &&
+    (group ? group.memberIds.includes(turn.botId) && store.groupTaskByThread(group.id, turn.threadId) && !store.groupTaskByThread(group.id, turn.threadId)?.closedBy
+      : store.taskByThread(turn.botId, turn.threadId) && !store.taskByThread(turn.botId, turn.threadId)?.closedBy) &&
+    workHuman(turn.threadId)?.id === turn.chainId && workSnapshot(turn.botId, turn.runtimeThreadId) === turn.snapshot &&
+    !workRuntime.round(turn.botId, turn.threadId, turn.chainId).held && !threadBusy(turn.botId, turn.runtimeThreadId) &&
+    !botAtThreadCapacity(turn.botId) && queuedThreadPosition(turn.botId, turn.threadId) === null &&
+    !store.messagesFor(turn.threadId).some(m => m.card?.requestId && !m.card.answered && !m.card.dismissed) &&
+    ![...roomHandoffs.nodes.values()].some(n => n.botId === turn.botId && n.threadId === turn.threadId && n.status === "resume"));
+}
+bus.subscribe((event: RuntimeEvent) => {
+  if (event.type !== "turn.completed" || shouldIgnoreProviderEvent(event)) return;
+  const terminalKey = event.turnId && JSON.stringify([event.threadId, event.turnId]);
+  if (terminalKey && workTerminalSeen.has(terminalKey)) return;
+  const turn = workTurns.get(event.threadId);
+  if (!turn || (turn.providerTurnId && event.turnId !== turn.providerTurnId)) return;
+  if (terminalKey) { workTerminalSeen.add(terminalKey); if (workTerminalSeen.size > 5000) workTerminalSeen.delete(workTerminalSeen.values().next().value!); }
+  workTurns.delete(event.threadId);
+  if (!event.ok || turn.cancelled()) return;
+  setImmediate(async () => {
+    try {
+      await turn.released;
+      if (turn.cancelled() || !workDispatchAllowed(turn)) return;
+      assertWithinBudget(cfg, DATA_DIR);
+      let prompt: string | undefined;
+      const plan = workPlans.get(turn.botId, turn.threadId);
+      const assessment = turn.noWork ? assessTeamWork({ steps: [], teamCheck: turn.noWorkTeam }, workRoster(turn.botId, turn.runtimeThreadId)) : plan && assessTeamWork(plan, workRoster(turn.botId, turn.runtimeThreadId));
+      const missingReceipts = assessment?.assignments.some(step => {
+        const key = workStepKey(turn.botId, turn.threadId, step.id);
+        return !workRuntime.receipt(turn.botId, turn.threadId, turn.chainId, key);
+      });
+      if (!turn.disposed || assessment?.errors.length || (!turn.noWork && (!plan || missingReceipts))) {
+        if (workRuntime.retry(turn.botId, turn.threadId, turn.chainId)) prompt = "Work disposition missing or stale. Record a current structured plan/team check or explicit no actionable work using update_work_plan. Accepted helper assignments need durable queue receipts. This is the single bounded preflight retry; do not claim the job completed.";
+        else store.appendMessage(turn.threadId, { role: "bot", kind: "activity", tool: { name: "Work unfinished: disposition retry exhausted", ok: false } });
+      } else if (!turn.noWork) {
+        const decision = workPlans.claim(turn.botId, turn.threadId, { chainId: turn.chainId, turnId: event.turnId ?? turn.generation, allowed: true, cancelled: false, awaitingApproval: false, providerSucceeded: true });
+        if (decision.kind === "continue") prompt = `Continue your independently runnable authorized work in this same conversation. Helpers retain their work. Do not claim verification from their status. Ready own steps: ${JSON.stringify(decision.steps)}. Update the structured disposition before finishing.`;
+        else if (decision.kind === "limited") store.appendMessage(turn.threadId, { role: "bot", kind: "activity", tool: { name: "Work unfinished: continuation limit reached", ok: false } });
+      }
+      if (prompt && workDispatchAllowed(turn)) void turn.dispatch(prompt).catch(() => {
+        store.appendMessage(turn.threadId, { role: "bot", kind: "activity", tool: { name: "Work unfinished: continuation dispatch refused", ok: false } });
+      });
+    } catch (error) {
+      store.appendMessage(turn.threadId, { role: "bot", kind: "activity", tool: { name: `Work unfinished: ${error instanceof Error ? error.message : "continuation refused"}`, ok: false } });
+    }
+  });
 });
 
 // A picture sent while a turn runs must reach it as the picture, or say
@@ -7597,6 +7720,20 @@ async function startTurn(
   const resourceOwner = { threadId, generation: dispatchClaimId };
   turnResourceOwners.set(threadId, resourceOwner);
   directTurnGenerationByThread.set(threadId, dispatchClaimId);
+  if (!sharedContext && !opts?.automationSource && !opts?.compactOnly) beginWorkTurn(botId, threadId, dispatchClaimId,
+    () => directTurnGenerationByThread.get(threadId) !== dispatchClaimId,
+    prompt => {
+      const causalHuman = workHuman(threadId)?.id;
+      const causalGeneration = directTurnGenerationByThread.get(threadId);
+      const snapshot = workSnapshot(botId, threadId);
+      const check = () => { opts?.dispatchGuard?.(); if (workHuman(threadId)?.id !== causalHuman || workSnapshot(botId, threadId) !== snapshot || workRuntime.round(botId, store.canonicalThreadId(threadId), causalHuman ?? "").held) throw new Error("Work continuation authority changed"); };
+      return startTurn(botId, prompt, { ...opts, userMessage: undefined, editedMessageId: undefined, replyTo: undefined, sendId: undefined, excludeMessageIds: undefined, onDispatchError: undefined, computerSelectionContinuation: undefined, cardContinuation: true, coordination: undefined, onTurnSettled: undefined, admissionGuard: () => { check(); if (directTurnGenerationByThread.get(threadId) !== causalGeneration) throw new Error("A newer turn owns this conversation"); }, dispatchGuard: check });
+    });
+  const workTurn = workTurns.get(threadId);
+  if (workTurn?.generation === dispatchClaimId) workTurn.released = new Promise(resolve => {
+    workReleaseResolvers.set(dispatchClaimId, resolve);
+    if (workReleaseResolvers.size > 5000) releaseWorkTurn(workReleaseResolvers.keys().next().value);
+  });
   if (opts?.coordination) directCoordinationSettlers.set(dispatchClaimId, opts.coordination.settle);
   // Ordinary sources need the same exact completion ownership as queued
   // follow-ups: any normal turn may ask teammates to coordinate work.
@@ -8381,6 +8518,7 @@ async function startTurn(
         { id: "skill-instructions", label: "Skill instructions", text: skillInstructions },
         { id: "playbooks", label: "Playbooks", text: packagePlaybooks },
         { id: "webhook", label: "Webhook provenance", text: opts?.automationSource === "webhook" ? WEBHOOK_PROMPT : "" },
+        { id: "work-continuity", label: "Work continuity", text: sharedContext ? "" : workPrompt(bot.id, threadId) },
         { id: "mentions", label: "Mentions", text: boundedCoordination && tagged.length ? `The user named these existing teammates: ${tagged.map(b => `${peerName(b.name)} (${b.id})`).join(", ")}. Use coordinate_bots when their contribution is needed; do not substitute native helper agents for these bots.` : mentionPrompt(tagged) },
       ]);
       runningTurnEngines.set(threadId, instance);
@@ -9932,6 +10070,13 @@ async function executeGroupMemberTurn(
     return true;
   }
   const internalGeneration = beginInternalCapabilityGeneration(threadId);
+  if (!orchestration || orchestration.roomHandoffId) beginWorkTurn(botId, threadId, internalGeneration, () => Boolean(isCancelled?.()),
+    prompt => {
+      const causalHuman = workHuman(threadId)?.id;
+      const snapshot = workSnapshot(botId, threadId);
+      return runGroupMemberTurn(groupId, store.canonicalThreadId(threadId), botId, hop, spoken, prompt, onDispatchError,
+        () => Boolean(isCancelled?.()) || workHuman(threadId)?.id !== causalHuman || workSnapshot(botId, threadId) !== snapshot || workRuntime.round(botId, store.canonicalThreadId(threadId), causalHuman ?? "").held);
+    });
   if (operation) roomOperationOwners.set(threadId, { generation: internalGeneration, operation });
   const resourceOwner = { threadId, generation: internalGeneration };
   turnResourceOwners.set(threadId, resourceOwner);
@@ -10387,6 +10532,7 @@ async function executeGroupMemberTurn(
     { id: "plan", label: "Surface", text: surfacePrompt({ computer: roomTeamComputer ? "cloud" : roomVmTarget ? "vm" : surfaceOfComputerKind(roomComputerKind), browser: Boolean(integrations.browser) }, { note: roomPlan.note }) },
     { id: "browser", label: "Browser", text: integrations.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
     { id: "recall", label: "Recall", text: integrations.agents ? SESSION_SEARCH_SYSTEM_PROMPT : "" },
+    { id: "work-continuity", label: "Work continuity", text: workPrompt(bot.id, threadId) },
     { id: "recent", label: "Recent work", text: recentWorkPrompt(recentLines) },
     { id: "section-context", label: "Section context", text: sectionContextSystemPrompt(bot.section) },
     // the room path has always put a newline before memory and trimmed
@@ -11126,6 +11272,7 @@ async function interruptRoom(
     const alias = store.roomRuntimeThread(runtimeId);
     if (alias?.groupId === group.id && targetThreadIds.includes(alias.threadId) && (!opts.botId || alias.botId === opts.botId)) roomMemberCancelEpoch.set(runtimeId, (roomMemberCancelEpoch.get(runtimeId) ?? 0) + 1);
   }
+  for (const threadId of targetThreadIds) for (const botId of group.memberIds) if (!opts.botId || opts.botId === botId) holdWork(botId, threadId);
   if (!opts.botId) {
     roomStopEpoch.set(group.id, (roomStopEpoch.get(group.id) ?? 0) + 1);
     for (const threadId of targetThreadIds) cancelGroupTurnOperations(group.id, threadId);
@@ -14409,6 +14556,47 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           throw Object.assign(new Error("the internal turn capability has expired"), { status: 401 });
         }
       };
+      if (path === "/api/internal/work-plan") {
+        if (["botId", "threadId", "chainId", "turnId", "cap", "allowed", "fromBotId", "fromThreadId"].some(key => url.searchParams.has(key))) return json(res, 400, { error: "Work scope is derived only from the active capability" });
+        const threadId = store.canonicalThreadId(internalCapability.threadId);
+        const turn = workTurns.get(internalCapability.threadId);
+        if (!internalSender.workContinuity || !turn || turn.generation !== internalCapability.generation) return json(res, 403, { error: "Work planning requires an opted-in active turn" });
+        const roster = workRoster(internalSender.id, internalCapability.threadId);
+        if (method === "GET") return json(res, 200, { plan: workPlans.get(internalSender.id, threadId) ?? null, team: roster, held: workRuntime.round(turn.botId, threadId, turn.chainId).held });
+        if (method === "POST") {
+          const parsed = z.object({ plan: workPlanInputSchema.optional(), send_assignments: z.boolean().optional(), no_actionable_work: z.boolean().optional(), reason: z.string().trim().min(1).max(4000).optional(), team_check: workPlanInputSchema.shape.teamCheck }).strict().safeParse(await readInternalBody());
+          if (!parsed.success) return json(res, 400, { error: parsed.error.issues.map(issue => issue.message).join("; ") });
+          const body = parsed.data;
+          if (body.no_actionable_work === true) {
+            if (body.plan || body.send_assignments || !body.reason) return json(res, 400, { error: "A no-work disposition needs only a reason and team_check" });
+            const assessment = assessTeamWork({ steps: [], teamCheck: body.team_check }, roster);
+            if (assessment.errors.length) return json(res, 409, { error: assessment.errors.join("; ") });
+            turn.disposed = true; turn.noWork = true; turn.noWorkTeam = body.team_check;
+            return json(res, 200, { noActionableWork: true });
+          }
+          if (!body.plan) return json(res, 400, { error: "Provide a structured plan" });
+          const owners = new Set([internalSender.id, "human", ...roster.map(p => p.botId)]);
+          if (body.plan.steps.some(step => !owners.has(step.ownerBotId))) return json(res, 403, { error: "Step owner must be self, human or a currently reachable teammate" });
+          const assessment = assessTeamWork(body.plan, roster);
+          if (assessment.errors.length) return json(res, 409, { error: assessment.errors.join("; ") });
+          const row = workRuntime.round(turn.botId, threadId, turn.chainId);
+          if (row.held && body.plan.status === "active") return json(res, 409, { error: "Work held until human resume" });
+          const prior = workPlans.get(turn.botId, threadId);
+          for (const step of prior?.steps ?? []) {
+            const receipt = workRuntime.receipt(turn.botId, threadId, turn.chainId, workStepKey(turn.botId, threadId, step.id));
+            const assignment = receipt && roomHandoffs.nodes.get(receipt);
+            if (!assignment || !["queued", "running", "waiting", "resume"].includes(assignment.status)) continue;
+            const next = body.plan.steps.find(candidate => candidate.id === step.id);
+            if (!next || next.ownerBotId !== step.ownerBotId || next.action !== step.action || next.status !== "waiting" || JSON.stringify(next.dependsOn) !== JSON.stringify(step.dependsOn)) return json(res, 409, { error: "Accepted helper work remains owned and waiting until its queue result settles; do not remove, reassign or mark it done" });
+          }
+          const plan = workPlans.set(turn.botId, threadId, body.plan);
+          if (plan.status === "paused") holdWork(turn.botId, threadId);
+          turn.disposed = true; turn.noWork = false;
+          const assignments = assessment.assignments.map(step => ({ botId: step.ownerBotId, message: step.action,
+            requestKey: workStepKey(turn.botId, threadId, step.id) }));
+          return json(res, 200, { plan, assignments, note: "Explicit send_assignments queues these steps. A plan alone is not an assignment receipt." });
+        }
+      }
       if (path.startsWith("/api/internal/lead-actions")) {
         const room = store.groupByThread(internalCapability.threadId);
         if (!room || room.dm || !room.memberIds.includes(internalSender.id)) return json(res, 403, { error: "Lead actions require current room membership" });
@@ -15473,6 +15661,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               : roomHandoffProblem(target, address);
             if (eligibility) return json(res, 403, { error: eligibility });
           }
+          const workTurn = workTurns.get(internalCapability.threadId);
+          const workPlan = internalSender.workContinuity ? workPlans.get(internalSender.id, address.threadId) : undefined;
+          const workAssignment = parsed.data.requestKey.startsWith("work-") && workPlan?.steps.find(step =>
+            workStepKey(internalSender.id, address.threadId, step.id) === parsed.data.requestKey);
+          if (parsed.data.requestKey.startsWith("work-") && (!workTurn || !workAssignment || botIds.length !== 1 || workAssignment.ownerBotId !== botIds[0] || workAssignment.action !== parsed.data.message || !(["ready", "waiting"].includes(workAssignment.status)))) return json(res, 409, { error: "Assignment no longer matches the current scoped plan" });
+          if (workAssignment && workTurn) {
+            const existing = [...roomHandoffs.nodes.values()].find(n => n.key === parsed.data.requestKey + ":" + botIds[0] && n.botId === botIds[0] && n.text === parsed.data.message && n.parentId && roomHandoffs.nodes.get(n.parentId)?.botId === internalSender.id && roomHandoffs.nodes.get(n.parentId)?.threadId === address.threadId);
+            const saved = workRuntime.receipt(internalSender.id, address.threadId, workTurn.chainId, parsed.data.requestKey);
+            if (saved && !existing) return json(res, 409, { error: "Assignment receipt retained but content or queue state changed; do not repeat. Use a new step id for independently authorized new work." });
+            if (existing || saved) return json(res, 200, { accepted: [{ requestId: existing?.id ?? saved, botId: botIds[0], duplicate: true, status: existing?.status ?? "receipt-retained" }], errors: [] });
+            if (workAssignment.status !== "ready") return json(res, 409, { error: "Helper step is already held; no new assignment permitted" });
+            if (workRuntime.round(internalSender.id, address.threadId, workTurn.chainId).held) return json(res, 409, { error: "Work is held" });
+          }
           let approvalGranted = false;
           if (peerReviewRequired(internalSender, address.threadId)) {
             const verdicts = await Promise.all(targets.map(target =>
@@ -15487,6 +15688,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             let createdThread: string | undefined;
             try {
               requireActiveInternalCapability();
+              const currentProblem = roomHandoffProblem(target, address);
+              if (currentProblem) throw new Error(currentProblem);
+              if (workAssignment && workTurn && (workRuntime.round(internalSender.id, address.threadId, workTurn.chainId).held || workHuman(address.threadId)?.id !== workTurn.chainId)) throw new Error("Work held or newer human steering arrived");
               if (!destination && !target.botId.startsWith("rb-")) {
                 // One durable conversation per pair of bots, resolved from
                 // the recipient's own threads — never from this turn, the
@@ -15515,6 +15719,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               // before anyone sees a row that leads nowhere.
               if (duplicate && createdThread && createdThread !== node.threadId) store.deleteTask(target.botId, createdThread);
               createdThread = undefined; // The durable coordinator now owns this task.
+              if (workAssignment && workTurn) {
+                workRuntime.receipt(internalSender.id, address.threadId, workTurn.chainId, parsed.data.requestKey, node.id);
+                const current = workPlans.get(internalSender.id, address.threadId)!;
+                const { botId: _bot, threadId: _thread, revision, chainId: _chain, attempts: _attempts, terminalIds: _terminals, ...input } = current;
+                input.steps = input.steps.map(step => step.id === workAssignment.id ? { ...step, status: "waiting", reason: `Accepted coordination request ${node.id}; awaiting recipient result and lead verification` } : step);
+                input.teamCheck = input.teamCheck?.map(check => check.botId === node.botId ? { ...check, decision: "already_working", stepIds: [], reason: `Accepted coordination request ${node.id}` } : check);
+                workPlans.set(internalSender.id, address.threadId, { ...input, expectedRevision: revision });
+              }
               accepted.push({ requestId: node.id, botId: node.botId, duplicate, status: node.status });
               if (!duplicate) {
                 const recipient = store.bot(target.botId) ?? { ...internalSender, id: target.botId, name: remoteRoster.bots.find(bot => bot.id === target.botId)?.name ?? "Remote teammate" };

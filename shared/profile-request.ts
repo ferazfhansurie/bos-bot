@@ -6,9 +6,9 @@
  * user was shown; `expectedRevision` is a hash of the target's whole profile
  * at proposal time so a confirmation fails closed if anything moved.
  */
-export const PROFILE_REQUEST_FIELDS = ["name", "title", "description", "soul", "cwd"] as const;
+export const PROFILE_REQUEST_FIELDS = ["name", "title", "description", "soul", "cwd", "workContinuity"] as const;
 export type ProfileRequestField = (typeof PROFILE_REQUEST_FIELDS)[number];
-export type ProfileRequestChanges = Partial<Record<ProfileRequestField, string>>;
+export type ProfileRequestChanges = Partial<Record<Exclude<ProfileRequestField, "workContinuity">, string>> & { workContinuity?: boolean };
 
 export interface ProfileRequestCardData {
   version: 1;

@@ -102,7 +102,9 @@ export function assessTeamWork(plan: Pick<WorkPlan, "steps" | "teamCheck">, cand
 export class WorkContinuity {
   private records: Record[] = [];
   private broken = false;
-  constructor(private file: string) {
+  private file: string;
+  constructor(file: string) {
+    this.file = file;
     try { this.records = z.array(recordSchema).max(2000).parse(JSON.parse(readFileSync(file, "utf8"))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.broken = true; }
   }

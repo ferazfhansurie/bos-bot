@@ -32,7 +32,7 @@ describe("profileRevision", () => {
       expect(profileRevision({ ...base, [field]: "x" })).not.toBe(profileRevision(base));
     }
     expect(profileSnapshot({ name: "A", title: "B", description: "C", soul: undefined })).toEqual({
-      name: "A", title: "B", description: "C", soul: "", cwd: "",
+      name: "A", title: "B", description: "C", soul: "", cwd: "", workContinuity: false,
     });
   });
 });

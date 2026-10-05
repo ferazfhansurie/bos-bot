@@ -34,6 +34,8 @@
 //   OMB_COMMS_TOKEN  shared secret for the localhost-only internal endpoints
 //   OMB_TURN_DEPTH   this turn's comms depth (the harness refuses recursion)
 import readline from "node:readline";
+import { z } from "zod";
+import { workPlanInputSchema } from "../work-continuity.ts";
 
 import { CREDENTIAL_TARGETS, isCredentialTargetId } from "../../shared/credential-request.ts";
 import { normalizeCronSchedule } from "../../shared/routine-schedule.ts";
@@ -830,6 +832,21 @@ const TOOLS = [
     },
   },
   {
+    name: "get_work_plan",
+    description: "Read only your active conversation's work plan and current reachable team state. Available only with work continuity enabled.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "update_work_plan",
+    description: "Record work disposition for this turn using CAS. Team decisions are mandatory. send_assignments explicitly sends validated independent helper steps through the existing coordination queue. Use no_actionable_work with a concrete reason for a simple answer. Never implies verified completion or grants permissions.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      plan: z.toJSONSchema(workPlanInputSchema),
+      send_assignments: { type: "boolean" }, no_actionable_work: { type: "boolean" },
+      reason: { type: "string", minLength: 1, maxLength: 4000 },
+      team_check: z.toJSONSchema(workPlanInputSchema.shape.teamCheck),
+    } },
+  },
+  {
     name: "propose_profile",
     description:
       "Submit user-requested changes to your own name, title, description, standing instructions (SOUL.md), or working folder (cwd). Keep SOUL.md short — who you are and the rules you never break; put step-by-step procedure into a skill instead. A Chief of Staff may pass for_bot_id (from list_bots) for a requested change to another bot in its section." + PROPOSAL_OUTCOME,
@@ -840,6 +857,7 @@ const TOOLS = [
         name: { type: "string", maxLength: 100, description: "New display name." },
         title: { type: "string", maxLength: 200, description: "New role or title." },
         description: { type: "string", maxLength: 4000, description: "New one-line blurb shown in rosters." },
+        work_continuity: { type: "boolean", description: "Opt in to bounded same-thread work and mandatory team disposition checks." },
         soul: { type: "string", description: "Full replacement text for SOUL.md, at most 24000 bytes." },
         cwd: {
           type: "string",
@@ -900,10 +918,13 @@ const TOOLS = [
   return annotations ? { ...tool, annotations } : tool;
 });
 
+const WORK_CONTINUITY_ENABLED = process.env.OMB_WORK_CONTINUITY === "1";
+const WORK_TOOL_NAMES = new Set(["get_work_plan", "update_work_plan"]);
 const SKILL_TOOL_NAMES = new Set(["skills_list", "skill_manage"]);
-const AUTHORING_TOOLS = SKILL_AUTHORING_ENABLED
+const AUTHORING_TOOLS = (SKILL_AUTHORING_ENABLED
   ? TOOLS
-  : TOOLS.filter((tool) => !SKILL_TOOL_NAMES.has(tool.name));
+  : TOOLS.filter((tool) => !SKILL_TOOL_NAMES.has(tool.name)))
+  .filter(tool => WORK_CONTINUITY_ENABLED || !WORK_TOOL_NAMES.has(tool.name));
 // A workspace with computer sharing off refuses the routes behind these two,
 // so they must not be advertised at all: a model that sees a tool it cannot
 // use spends turns discovering that.
@@ -1552,6 +1573,16 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     });
     return confirmationResult(r, `${action.replace("_", " ")} on routine ${routineId}`);
   }
+  if (name === "get_work_plan") return { text: JSON.stringify(await api("/api/internal/work-plan")) };
+  if (name === "update_work_plan") {
+    const result = await api("/api/internal/work-plan", { method: "POST", body: JSON.stringify(args) });
+    if (result.error) return { text: JSON.stringify(result), isError: true };
+    const receipts = [];
+    if (args.send_assignments === true) for (const assignment of (result.assignments as Json[] ?? [])) {
+      receipts.push(await api("/api/internal/coordinate-bots", { method: "POST", body: JSON.stringify({ botIds: [assignment.botId], message: assignment.message, requestKey: assignment.requestKey }) }));
+    }
+    return { text: JSON.stringify({ ...result, receipts }) };
+  }
   if (name === "propose_profile") {
     const changes: Json = {};
     if (typeof args.name === "string") changes.name = args.name.trim();
@@ -1559,6 +1590,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
     if (typeof args.description === "string") changes.description = args.description.trim();
     if (typeof args.soul === "string") changes.soul = args.soul;
     if (typeof args.cwd === "string") changes.cwd = args.cwd.trim();
+    if (typeof args.work_continuity === "boolean") changes.workContinuity = args.work_continuity;
     if (!Object.keys(changes).length) {
       return { text: "propose_profile needs at least one of name, title, description, soul, or cwd.", isError: true };
     }
