@@ -165,6 +165,47 @@ const snapshot = async (id: string) => (await api("GET", "/api/bots?messages=100
 const wait = async (predicate: ()=>Promise<boolean>, phase="condition") => { const end=Date.now()+15000; while(!await predicate()) { if(Date.now()>end) throw new Error(`${phase} not reached: ${stderr.slice(-1500)} `); await new Promise(r=>setTimeout(r,100)); } };
 
 describe("room runtime concurrency", { timeout: 45000 }, () => {
+  it("snapshots authoritative member turns after missed starts and removes only the completed or stopped member", async () => {
+    const a = await createBot("First", "patient");
+    const b = await createBot("Second", "held");
+    const room = (await api("POST", "/api/groups", { name: "Snapshot", memberIds: [a.id, b.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    expect(room.activeMemberTurns).toEqual([]);
+    rmSync(patientFinishGate, { force: true }); // patient waits while this file is absent
+    const stream = await openSse(`${base}/api/events`);
+    try {
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@First start" });
+      const startedA = await stream.until(f => f.kind === "runtime" && f.event.type === "turn.started" && f.event.roomBotId === a.id);
+      const setup = await stream.until(f => f.kind === "group" && f.group.activeMemberTurns?.some((t: any) => t.botId === a.id && t.startedAt === null));
+      expect(setup.group.activeMemberTurns).toEqual([{ botId: a.id, threadId: room.threadId, startedAt: null }]);
+      writeFileSync(patientFinishGate, "hold Second at tool result");
+      // First may now finish; wait before restarting it while Second is held.
+      await wait(async () => (await snapshot(room.id)).activeMemberTurns.length === 0);
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@Second start" });
+      const startedB = await stream.until(f => f.kind === "runtime" && f.event.type === "turn.started" && f.event.roomBotId === b.id);
+      rmSync(patientFinishGate, { force: true });
+      // Second can finish now; its completion must not clear First's new turn.
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@First restart" });
+      const restartedA = await stream.until(f => f.kind === "runtime" && f.event.type === "turn.started" && f.event.roomBotId === a.id && f.event.turnId !== startedA.event.turnId);
+      await wait(async () => {
+        const turns = (await snapshot(room.id)).activeMemberTurns;
+        return turns.length === 1 && turns[0].botId === a.id && turns[0].turnId === restartedA.event.turnId;
+      });
+      const initial = (await snapshot(room.id)).activeMemberTurns;
+      expect(initial).toEqual([{ botId: a.id, threadId: room.threadId, startedAt: expect.any(Number), turnId: restartedA.event.turnId }]);
+      expect(initial[0].startedAt).toBeGreaterThan(0);
+      expect(JSON.stringify(initial)).not.toContain(restartedA.event.roomRuntimeThreadId);
+      const groupFrame = await stream.until(f => f.kind === "group" && f.group.activeMemberTurns?.length === 1 && f.group.activeMemberTurns[0].turnId === restartedA.event.turnId);
+      expect(groupFrame.group.activeMemberTurns).toEqual(initial);
+      // A reconnecting client missed all starts and gets the same authoritative read.
+      const reconnect = await openSse(`${base}/api/events`);
+      try { expect((await snapshot(room.id)).activeMemberTurns).toEqual(initial); } finally { reconnect.close(); }
+      expect(startedB.event.threadId).toBe(room.threadId);
+      await api("POST", `/api/groups/${room.id}/interrupt`, { botId: a.id });
+      await wait(async () => (await snapshot(room.id)).activeMemberTurns.length === 0);
+      await stream.until(f => f.kind === "group" && f.group.id === room.id && f.group.activeMemberTurns?.length === 0);
+    } finally { stream.close(); writeFileSync(patientFinishGate, "release"); }
+  });
+
   it("keeps refused room text visible in bot.queued without delivery activity spam", async () => {
     const slow = await createBot("Refuser", "refuse");
     const other = await createBot("Other", "quick");
@@ -535,6 +576,11 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     try {
       await api("POST",`/api/groups/${room.id}/messages`,{text:"@Lead start"});
       await expect.poll(async()=>new Set((await snapshot(room.id)).activeBotIds),{timeout:6000}).toEqual(new Set(workers.map(b=>b.id)));
+      await wait(async () => (await snapshot(room.id)).activeMemberTurns.every((t: any) => t.startedAt !== null));
+      const turns = (await snapshot(room.id)).activeMemberTurns;
+      expect(turns).toHaveLength(5);
+      expect(new Set(turns.map((t: any) => t.botId))).toEqual(new Set(workers.map(b => b.id)));
+      expect(new Set(turns.map((t: any) => t.threadId))).toEqual(new Set([room.threadId]));
     } finally { rmSync(gate,{force:true}); }
     await wait(async()=>!(await snapshot(room.id)).working);
     const messages=(await snapshot(room.id)).messages;
@@ -595,6 +641,7 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     const recovered=await snapshot(room.id);
     expect(recovered.tasks).toHaveLength(1);
     expect(recovered.activeBotIds).toEqual([]);
+    expect(recovered.activeMemberTurns).toEqual([]);
     const receipt=recovered.messages.find((message:any)=>message.tool?.recovery)?.tool.recovery;
     expect(receipt).toMatchObject({botId:bot.id,threadId:room.threadId});
     const aliases=JSON.parse(readFileSync(join(home,".openmausbot","room-runtime-aliases.json"),"utf8"));

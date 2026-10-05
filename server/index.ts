@@ -1,3 +1,4 @@
+import { publicRoomMemberTurns } from "./room-member-turns.ts";
 import { WorkContinuity, assessTeamWork, workPlanInputSchema } from "./work-continuity.ts";
 import { WorkRuntimeLedger } from "./work-continuity-runtime.ts";
 import { withMessagePostLock } from "./message-post-lock.ts";
@@ -3194,7 +3195,9 @@ function wireGroupTasks(group: GroupRecord): GroupTask[] {
   return store.groupTasks(group.id).map(task => wireGroupTask(group, task));
 }
 function publicGroupState(group: GroupRecord): WireGroup {
-  return { ...group, ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set(roomRuntimeSpeakers(group.id).map(([, speaker]) => speaker.botId))], working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
+  const speakers = roomRuntimeSpeakers(group.id);
+  const activeMemberTurns = publicRoomMemberTurns(speakers, runtimeId => store.canonicalThreadId(runtimeId), roomMemberTurnFacts);
+  return { ...group, ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set(speakers.map(([, speaker]) => speaker.botId))], activeMemberTurns, working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
 }
 
 function beginGroupTurnOperation(
@@ -3968,6 +3971,9 @@ function notify(notification: Notification | null) {
 // Group threads: the fold needs to know WHO is talking — the turn engine
 // records the active member here before dispatching its turn.
 const groupSpeakers = new Map<string, { botId: string; name: string; color: string }>();
+// Key by the claimed speaker object, so a reused runtime lane cannot inherit
+// the previous generation's start time or identity. Cleanup retires its facts.
+const roomMemberTurnFacts = new WeakMap<object, { startedAt: number; turnId?: string }>();
 const roomMemberQueues = new Map<string, Promise<boolean>>();
 // runtimeId → frees that member's lane once its own reply has settled, so a
 // person's next message to it is not held behind the teammates it summoned.
@@ -5155,9 +5161,15 @@ bus.subscribe((event: RuntimeEvent) => {
         tool: { name: `${event.reason === "provider_reset" ? "Provider quota reset; restored" : "Provider limit; switched to"} ${event.to}`, ok: true } });
       break;
     }
-    case "turn.started":
-      turnStartedAt.set(event.threadId, Date.now());
+    case "turn.started": {
+      const startedAt = Date.now();
+      turnStartedAt.set(event.threadId, startedAt);
+      if (group && speaker) {
+        roomMemberTurnFacts.set(speaker, { startedAt, ...(event.turnId ? { turnId: event.turnId } : {}) });
+        broadcast({ kind: "group", group: publicGroupState(group) });
+      }
       break;
+    }
     case "session.started":
       if (bot && event.sessionId && event.providerInstanceId) {
         store.setResumeCursor(bot.id, event.providerInstanceId, event.sessionId, event.threadId);

@@ -506,6 +506,15 @@ export interface WireGroup {
   notifications?: "all" | "mentions" | "muted";
   /** Computed provider owners; never a persisted busy flag. */
   activeBotIds?: string[];
+  /** Authoritative live member ownership across every public room thread.
+   * Empty clears prior snapshots; setup has no start time or turn identity. */
+  activeMemberTurns?: Array<{
+    botId: string;
+    threadId: string;
+    startedAt: number | null;
+    /** Only the identity carried by this owner's actual runtime events. */
+    turnId?: string;
+  }>;
   defaultResponder: GroupDefaultResponder;
   /** The room's shared instructions. */
   bulletin: string;
