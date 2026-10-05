@@ -112,7 +112,6 @@ import { botListItemPointerIntent } from "@/lib/sidebar-selection";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
 import { SidebarUpdatePill } from "./BosUpdate";
 import { SidebarMoreMenu } from "./SidebarMoreMenu";
-import { SidebarUsageRow } from "./SidebarUsageRow";
 import { DesktopWorkspaceSwitcher } from "./DesktopWorkspaceSwitcher";
 import { profileInitials, SidebarProfileMenu } from "./SidebarProfileMenu";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
@@ -2572,7 +2571,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             ]}
           />
         )}
-        {density !== "icons" && <SidebarUsageRow />}
         {density === "icons" ? (
           <div className="flex items-center justify-center">
             <button
