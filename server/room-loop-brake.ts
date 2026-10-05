@@ -63,7 +63,12 @@ export function takeMentionCallback(spoken: Set<string>): { botId: string; hop: 
 
 /** Addressed reply lines, rather than names embedded in explanatory prose.
  * Accept the room's short handoff/result prefixes and exact display names. */
-export function isAddressedRoomReply(text: string, name: string): boolean {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^\\s*(?:(?:done|ready|blocked|approved|interface|claimed)\\s*[:,]?\\s+)?@${escaped}(?=$|[\\s:,.!?])`, "imu").test(text);
+export function isAddressedRoomReply(text: string, name: string, roomNames: readonly string[] = [name]): boolean {
+  const escapeName = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = escapeName(name);
+  const recipients = [...new Set(roomNames)].filter(Boolean).sort((a, b) => b.length - a.length).map(escapeName).join("|");
+  // Only a contiguous leading list of exact room member names addresses
+  // multiple recipients. Once ordinary prose starts, later mentions are inert.
+  const leading = recipients ? `(?:@(?:${recipients})(?=[\\t ,]|$)[\\t ,]+)*` : "";
+  return new RegExp(`^\\s*(?:(?:done|ready|blocked|approved|interface|claimed)\\s*[:,]?\\s+)?${leading}@${escaped}(?=$|[\\s:,.!?])`, "imu").test(text);
 }

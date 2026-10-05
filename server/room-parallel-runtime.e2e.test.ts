@@ -104,7 +104,7 @@ await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE).href)});
       patient: fixture("Patient fixture", { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: patientFinishGate }),
       held: fixture("Held fixture", { FAKE_CLAUDE_MODE: "stream", FAKE_CLAUDE_TOOL_RESULT_GATE: patientFinishGate }),
       quick: fixture("Quick fixture", { FAKE_CLAUDE_MODE: "stream" }),
-      lead: fixture("Lead fixture", { FAKE_CLAUDE_REPLIES: JSON.stringify(["handing off @Slow", "LEAD ANSWERED ASIDE"]), FAKE_CLAUDE_REPLY_STATE: join(home,"lead-replies.txt") }),
+      lead: fixture("Lead fixture", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@Slow check the handoff", "LEAD ANSWERED ASIDE"]), FAKE_CLAUDE_REPLY_STATE: join(home,"lead-replies.txt") }),
 
     },
   }));
@@ -492,6 +492,27 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(messages.filter((m: any) => m.role === "bot" && m.kind === "text").map((m: any) => m.from.botId)).toEqual([a.id, b.id, c.id, a.id]);
     expect(messages.some((m: any) => m.tool?.name?.startsWith("paused after "))).toBe(false);
   });
+  it("delivers room mention results exactly once while the lead's private thread is running", async () => {
+    const director = await createBot("Director", "director");
+    const reviewer = await createBot("Reviewer", "reviewer");
+    const builder = await createBot("Builder", "builder");
+    const patient = (await api("GET", "/api/instances")).body.instances.find((i: any) => i.instanceId === "patient");
+    expect((await api("PATCH", `/api/bots/${director.id}/tasks/${director.threadId}`, { modelSelection: { instanceId: "patient", model: patient.models.default } })).status).toBe(200);
+    rmSync(patientFinishGate, { force: true });
+    expect((await api("POST", `/api/bots/${director.id}/messages`, { text: "PRIVATE WORK", threadId: director.threadId })).status).toBe(202);
+    const privateTask = async () => (await api("GET", "/api/bots?messages=0")).body.bots.find((b: any) => b.id === director.id).tasks.find((t: any) => t.threadId === director.threadId);
+    await wait(async () => (await privateTask()).busy);
+    const room = (await api("POST", "/api/groups", { name: "Private plus mentions", memberIds: [director.id, reviewer.id, builder.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    await api("POST", `/api/groups/${room.id}/messages`, { text: "@Director start" });
+    await wait(async () => !(await snapshot(room.id)).working);
+    expect((await privateTask()).busy).toBe(true);
+    const messages = (await snapshot(room.id)).messages;
+    expect(messages.filter((m: any) => m.role === "bot" && m.kind === "text" && m.turnTerminal).map((m: any) => m.from.botId)).toEqual([director.id, reviewer.id, director.id, builder.id, director.id]);
+    expect(messages.filter((m: any) => m.text === "REVIEWED FINAL RESULT")).toHaveLength(1);
+    writeFileSync(patientFinishGate, "finish private work");
+    await wait(async () => !(await privateTask()).busy);
+  });
+
   it("delivers the second lead callback after reviewer and builder results", async () => {
     const director = await createBot("Director", "director");
     const reviewer = await createBot("Reviewer", "reviewer");

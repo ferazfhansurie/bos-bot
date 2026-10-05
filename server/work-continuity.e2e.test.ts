@@ -476,6 +476,52 @@ describe("work continuity real server", () => {
     expect(ledger.find((r: any) => r.botId === lead.id).plan.steps.find((step: any) => step.id === "helper").status).toBe("waiting");
     await cleanup([lead.id, worker.id]);
   }, 45000);
+  it.each(["running", "paused", "stopped"])("coordinated room results respect %s state while a sibling direct thread remains running", async (state) => {
+    const lead = state === "paused" ? await optIn("ConcurrentParent", "manual") : await createBot("ConcurrentParent", "manual");
+    const worker = await createBot("ConcurrentHelper", "manual");
+    const direct = await heldTurn(lead, "Private parent work stays running");
+    if (state === "paused") expect((await api("POST", "/api/internal/work-plan", { no_actionable_work: true, reason: "Private fixture only needs one answer", team_check: await rosterCheck(direct) }, direct)).status).toBe(200);
+    const room = (await api("POST", "/api/groups", { name: "Concurrent results", memberIds: [lead.id, worker.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    try {
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@ConcurrentParent begin delegated review" });
+      let runtime = "";
+      await expect.poll(() => {
+        try { runtime = JSON.parse(readFileSync(join(home, ".openmausbot", "room-runtime-aliases.json"), "utf8")).find((r: any) => r[1].botId === lead.id && r[1].threadId === room.threadId)?.[0]; return runtime; } catch { return ""; }
+      }, { timeout: 15000 }).toBeTruthy();
+      const h = await liveToken(runtime);
+      const node = await coordinated(h, worker.id, "Check isolated room evidence", "concurrent-room-result");
+      if (state === "paused") {
+        const plan = { ...ownPlan(lead, await rosterCheck(h), "waiting"), status: "paused", reason: "Human paused room parent" };
+        expect((await api("POST", "/api/internal/work-plan", { plan }, h)).status).toBe(200);
+      }
+      release(runtime);
+      let workerRuntime = "";
+      await expect.poll(() => {
+        try { workerRuntime = JSON.parse(readFileSync(join(home, ".openmausbot", "room-runtime-aliases.json"), "utf8")).find((r: any) => r[1].botId === worker.id && r[1].threadId === room.threadId)?.[0]; return workerRuntime; } catch { return ""; }
+      }, { timeout: 15000 }).toBeTruthy();
+      await liveToken(workerRuntime);
+      if (state === "stopped") expect((await api("POST", `/api/groups/${room.id}/interrupt`, { botId: lead.id })).status).toBe(200);
+      release(workerRuntime);
+      if (state === "running") await expect.poll(() => promptsOf(runtime).length, { timeout: 15000 }).toBe(2);
+      else {
+        await expect.poll(() => handoffs().find(n => n.id === node.parentId)?.status, { timeout: 15000 }).toBe(state === "paused" ? "resume" : "cancelled");
+        await new Promise(resolve => setTimeout(resolve, 350));
+        expect(promptsOf(runtime)).toHaveLength(1);
+      }
+      expect((await api("GET", "/api/internal/room-targets", undefined, direct)).status).toBe(200);
+      expect(promptsOf(lead.threadId)).toHaveLength(1);
+      expect((await botState(lead.id)).tasks.find((t: any) => t.threadId === lead.threadId).busy).toBe(true);
+      if (state === "running") {
+        release(runtime);
+        await expect.poll(() => handoffs().find(n => n.id === node.parentId)?.status, { timeout: 15000 }).toBe("completed");
+        expect(handoffs().find(n => n.id === node.parentId)?.executions).toBe(2);
+        expect(promptsOf(runtime)).toHaveLength(2);
+      }
+      expect(promptsOf(workerRuntime)).toHaveLength(1);
+      release(lead.threadId); await idle(lead);
+    } finally { await api("DELETE", `/api/groups/${room.id}`); await cleanup([lead.id, worker.id]); }
+  }, 45000);
+
   it("same-thread room continuation keeps canonical scoped plan and does not open another room", async () => {
     const lead = await optIn("RoomLead");
     const created = await api("POST", "/api/groups", { name: "Continuity room", memberIds: [lead.id], setup: { bulletin: "", defaultResponder: { kind: "member", botId: lead.id } } });

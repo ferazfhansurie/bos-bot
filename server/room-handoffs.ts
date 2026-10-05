@@ -253,6 +253,18 @@ export class RoomHandoffs {
       if (n.groupId === groupId && (!threadId || n.threadId === threadId) && !terminal(n)) this.cancelTree(n, "Stopped by user");
     }
   }
+  /** Targeted room Stop ends only this member's owed turns. Running work
+   * on other member lanes still reports, but cannot revive the stopped parent.
+   * Queued children of a stopped parent are cancelled by tick before dispatch. */
+  stopAwaitingRoomMember(groupId: string, threadId: string, botId: string) {
+    for (const node of this.nodes.values()) {
+      if (node.groupId !== groupId || node.threadId !== threadId || node.botId !== botId || terminal(node)) continue;
+      node.status = "cancelled"; node.result = "Stopped by user";
+      this.controllers.get(node.id)?.abort();
+      this.trackExecutionPauses();
+      this.publish(node);
+    }
+  }
   cancelDirect(threadId: string, reason = "Stopped by user") {
     for (const n of this.nodes.values()) {
       if (!n.groupId && n.threadId === threadId && !terminal(n)) this.cancelTree(n, reason);

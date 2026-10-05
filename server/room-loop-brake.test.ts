@@ -49,3 +49,12 @@ it("recognizes exact addressed reply lines without waking contextual names", () 
   for (const text of ["Assigned; @bos is context", "Built CSV; @bos is context", "@boss verify", "quote: @bos verify", "> @bos verify"]) expect(isAddressedRoomReply(text, "bos")).toBe(false);
   expect(isAddressedRoomReply("@bot (qa) check", "bot (qa)")).toBe(true);
 });
+
+it("addresses every recipient in a leading room mention list without waking later contextual names", () => {
+  const names = ["api", "ui", "bos", "bot (qa)"];
+  for (const name of ["api", "ui", "bos"]) expect(isAddressedRoomReply("@api @ui @bos verify each part", name, names)).toBe(true);
+  expect(isAddressedRoomReply("done: @api, @bot (qa) verify", "bot (qa)", names)).toBe(true);
+  expect(isAddressedRoomReply("@api checked; @bos is context", "bos", names)).toBe(false);
+  expect(isAddressedRoomReply("> @api @bos verify", "bos", names)).toBe(false);
+  expect(isAddressedRoomReply("@api @boss verify", "bos", names)).toBe(false);
+});

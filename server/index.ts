@@ -10808,7 +10808,7 @@ async function executeGroupMemberTurn(
     for (const next of roomResponders(replyText, group.memberIds.flatMap(id => {
       const member = store.bot(id); return member && !member.hidden && member.id !== bot.id ? [member] : [];
     }), { kind: "mentions" })) {
-      if (!isAddressedRoomReply(replyText, next.name)) continue;
+      if (!isAddressedRoomReply(replyText, next.name, group.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member.name] : []; }))) continue;
       if (roomHandoffs.path(handoff).some(ancestor => ancestor.botId === next.id)) continue;
       try {
         roomHandoffs.enqueue(
@@ -10857,7 +10857,7 @@ async function executeGroupMemberTurn(
       });
     }
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
-      if (!isAddressedRoomReply(replyText, next.name)) continue;
+      if (!isAddressedRoomReply(replyText, next.name, group.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member.name] : []; }))) continue;
       if (isCancelled?.()) return false;
       // Dispatch after this execution releases its slot. All mentions in
       // the next wave may work together, including callbacks to a lead.
@@ -11275,6 +11275,9 @@ async function interruptRoom(
     if (alias?.groupId === group.id && targetThreadIds.includes(alias.threadId) && (!opts.botId || alias.botId === opts.botId)) roomMemberCancelEpoch.set(runtimeId, (roomMemberCancelEpoch.get(runtimeId) ?? 0) + 1);
   }
   for (const threadId of targetThreadIds) for (const botId of group.memberIds) if (!opts.botId || opts.botId === botId) holdWork(botId, threadId);
+  if (opts.botId) {
+    for (const threadId of targetThreadIds) roomHandoffs.stopAwaitingRoomMember(group.id, threadId, opts.botId);
+  }
   if (!opts.botId) {
     roomStopEpoch.set(group.id, (roomStopEpoch.get(group.id) ?? 0) + 1);
     for (const threadId of targetThreadIds) cancelGroupTurnOperations(group.id, threadId);

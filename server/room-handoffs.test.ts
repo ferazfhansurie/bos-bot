@@ -51,6 +51,29 @@ describe("addressed room request tree", () => {
     expect(restarted.nodes.get(other.id)?.result).toContain("restart");
     expect(hooks.run).not.toHaveBeenCalled();
   }));
+  it("targeted room Stop cancels the parent's owed wake while its running helper and private sibling survive", () => fixture(async (engine, hooks) => {
+    const source = { groupId: "room", threadId: "room-thread", botId: "lead" };
+    const helper = { ...source, botId: "helper" };
+    let finish: ((result: { ok: boolean; text: string }) => void) | undefined;
+    let helperAborted = false;
+    hooks.run = vi.fn((_node, _resumed, signal) => new Promise<{ ok: boolean; text: string }>(resolve => {
+      finish = resolve; signal.addEventListener("abort", () => { helperAborted = true; });
+    }));
+    const node = engine.enqueue(source, "room-source", undefined, helper, "work", "check").node;
+    const sibling = engine.enqueue({ botId: "lead", threadId: "private" }, "private-source", undefined,
+      { botId: "other", threadId: "other-private" }, "private-work", "private").node;
+    engine.sourceSettled("room-source", true); engine.tick();
+    expect(node.status).toBe("running");
+    engine.stopAwaitingRoomMember("room", "room-thread", "lead");
+    expect(engine.nodes.get("room-source")?.status).toBe("cancelled");
+    expect(node.status).toBe("running"); expect(helperAborted).toBe(false);
+    expect(sibling.status).toBe("queued");
+    finish!({ ok: true, text: "verified helper result" }); await flush(); engine.tick(); await flush();
+    expect(node.status).toBe("completed");
+    expect(hooks.report).toHaveBeenCalledWith(node, engine.nodes.get("room-source"));
+    expect(hooks.run).toHaveBeenCalledTimes(1);
+    expect(engine.nodes.get("room-source")?.status).toBe("cancelled");
+  }));
   it("publishes only changed groups, including their final idle and cancelled states", () => fixture(async (engine, hooks) => {
     const updates: Array<{ id: string; active: boolean }[]> = [];
     hooks.changed = ids => updates.push([...ids].map(id => ({ id, active: [...engine.nodes.values()]

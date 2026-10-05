@@ -83,7 +83,7 @@ beforeAll(async () => {
       quick: fixture("Quick fixture", { FAKE_CLAUDE_MODE: "happy" }),
       summoner: fixture("Summoning fixture", {
         FAKE_CLAUDE_MODE: "happy",
-        FAKE_CLAUDE_REPLIES: JSON.stringify(["Let me pull in @Bee for this."]),
+        FAKE_CLAUDE_REPLIES: JSON.stringify(["@Bee check this with me."]),
         FAKE_CLAUDE_REPLY_STATE: join(home, "summoner-replies.txt"),
       }),
       // The dump proves the real per-turn token is mounted. An exact synthetic
