@@ -21,6 +21,7 @@ import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { TerminalService } from "./terminal.ts";
 import { resolveTerminalTarget } from "./terminal-target.ts";
+import { WorkspaceFilesService } from "./workspace-files.ts";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
 import { basename, extname, join } from "node:path";
 
@@ -12963,6 +12964,15 @@ const terminals = new TerminalService({
   resolveTarget: (botId, threadId) => resolveTerminalTarget(store, botId, threadId, bot => Boolean(inheritedTeamComputer(bot))),
   claim: () => workspaceMaintenance.request(),
 });
+const workspaceFiles = new WorkspaceFilesService({
+  ownerToken: () => DESKTOP_MANAGED ? desktopMutationToken : undefined,
+  authenticate: req => resolveRequestAuth(req, {
+    sessions, cookieName: SESSION_COOKIE, streamPath: "/api/events",
+    url: new URL(req.url ?? "/", `http://localhost:${PORT}`),
+    loopbackMutationToken: desktopMutationToken, companionMutationToken,
+  }).auth?.kind === "loopback",
+  resolveRoot: (botId, threadId) => resolveTerminalTarget(store, botId, threadId, bot => Boolean(inheritedTeamComputer(bot))),
+});
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   let url: URL;
   try {
@@ -13168,6 +13178,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
     if (await terminals.handle(req, res)) return;
+    if (await workspaceFiles.handle(req, res)) return;
     if (auth.kind === "session" && !workspaceMaintenance.active) {
       const replaced = peerHandoffs.confirm(auth.session.id);
       if (replaced) sessions.revoke(replaced);

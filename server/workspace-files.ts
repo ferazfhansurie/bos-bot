@@ -1,0 +1,146 @@
+import { open, readdir, realpath, stat } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { join, sep } from "node:path";
+import { sameSecret, terminalTransportAllowed } from "./terminal.ts";
+
+const PREFIX = "/api/workspace-files/";
+const ID = /^[\w-]{1,128}$/;
+const MAX_LIST = 2000, MAX_WALK = 20_000, WALK_MS = 2000, MAX_READ = 256 * 1024;
+const SKIP = new Set([".git","node_modules",".next","dist","build",".venv","venv","__pycache__",".cache","target","coverage",".turbo","Pods","DerivedData"]);
+type Options = {
+  ownerToken: () => string | undefined;
+  authenticate: (req: IncomingMessage) => boolean;
+  resolveRoot: (botId: string, threadId: string) => string;
+};
+export type WorkspaceEntry = {name: string; path: string; kind: "dir" | "file"; size?: number};
+function fail(status: number, message: string): never {throw Object.assign(new Error(message), {status});}
+function json(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, {"content-type":"application/json", "cache-control":"no-store"}); res.end(JSON.stringify(body));
+}
+const inside = (root: string, real: string) => real === root || real.startsWith(root.endsWith(sep) ? root : root + sep);
+function fsStatus(e: unknown): number {
+  const code = (e as {code?: string}).code;
+  return code === "ENOENT" || code === "ENOTDIR" ? 404 : code === "EACCES" || code === "EPERM" ? 403 : 500;
+}
+/** Validate a relative posix path, then resolve it and refuse anything whose realpath leaves the root. */
+async function resolveInside(root: string, rel: string): Promise<{real: string; rel: string}> {
+  if (rel.includes("\0") || rel.startsWith("/") || /^[a-z]:/i.test(rel) || rel.split(/[\\/]/).includes("..")) fail(400, "Invalid path");
+  const clean = rel.split("/").filter(s => s && s !== ".").join("/");
+  let real: string;
+  try {real = await realpath(clean ? join(root, ...clean.split("/")) : root);} catch (e) {fail(fsStatus(e), fsStatus(e) === 404 ? "Not found" : "Path unavailable");}
+  if (!inside(root, real)) fail(403, "Path escapes the working folder");
+  return {real, rel: clean};
+}
+const byName = (a: string, b: string) => {const x = a.toLowerCase(), y = b.toLowerCase(); return x < y ? -1 : x > y ? 1 : a < b ? -1 : a > b ? 1 : 0;};
+
+/** Greedy case-insensitive subsequence score; null when q is not a subsequence of text. */
+function fuzzy(text: string, q: string): number | null {
+  let score = 0, last = -2;
+  for (let i = 0, j = 0; j < q.length; i++) {
+    if (i >= text.length) return null;
+    if (text[i] !== q[j]) continue;
+    score += 1 + (i === last + 1 ? 5 : 0) + (i === 0 || "/_-. ".includes(text[i - 1]) ? 3 : 0);
+    last = i; j++;
+  }
+  return score;
+}
+const depth = (p: string) => p.split("/").length;
+/** Rank relative posix paths: basename matches first, then contiguous runs, then shorter paths. */
+export function rankFilePaths(paths: string[], query: string, limit: number): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...paths].sort((a, b) => depth(a) - depth(b) || a.length - b.length || byName(a, b)).slice(0, limit);
+  const scored: {p: string; s: number}[] = [];
+  for (const p of paths) {
+    const lower = p.toLowerCase(), base = lower.slice(lower.lastIndexOf("/") + 1);
+    const b = fuzzy(base, q);
+    let s: number;
+    if (b !== null) s = 1000 + b * 10 + (base.startsWith(q) ? 300 : base.includes(q) ? 200 : 0);
+    else {const f = fuzzy(lower, q); if (f === null) continue; s = f * 10 + (lower.includes(q) ? 150 : 0);}
+    scored.push({p, s: s - p.length - depth(p) * 5});
+  }
+  return scored.sort((a, b) => b.s - a.s || a.p.length - b.p.length || byName(a.p, b.p)).slice(0, limit).map(x => x.p);
+}
+
+/** Read-only browsing of a thread's working folder for the local desktop owner. */
+export class WorkspaceFilesService {
+  private options: Options;
+  constructor(options: Options) {this.options = options;}
+  async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    if (!req.url?.startsWith(PREFIX)) return false;
+    try {
+      if (!terminalTransportAllowed(req) || !this.options.authenticate(req) ||
+          !sameSecret(req.headers["x-openmausbot-desktop-owner"], this.options.ownerToken())) fail(403, "Local desktop owner required");
+      if (req.method !== "GET") fail(405, "GET only");
+      if (req.url.length > 8192) fail(413, "Request too large");
+      const url = new URL(req.url, "http://localhost");
+      const botId = url.searchParams.get("botId") ?? "", threadId = url.searchParams.get("threadId") ?? "";
+      if (!ID.test(botId) || !ID.test(threadId)) fail(400, "Send botId and threadId");
+      const action = url.pathname.slice(PREFIX.length);
+      if (!["list","search","read"].includes(action)) fail(404, "Unknown workspace files route");
+      const root = this.options.resolveRoot(botId, threadId);
+      if (action === "list") json(res, 200, {root, ...await this.list(root, url.searchParams.get("path") ?? "")});
+      else if (action === "search") {
+        const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "", 10) || 50));
+        const q = url.searchParams.get("q") ?? "";
+        if (q.length > 256) fail(400, "Query too long");
+        const {files, truncated} = await this.walk(root);
+        json(res, 200, {root, files: rankFilePaths(files, q, limit), truncated});
+      } else json(res, 200, await this.read(root, url.searchParams.get("path") ?? ""));
+    } catch (e) {
+      const status = (e as {status?: number}).status ?? 500;
+      json(res, status, {error: status === 500 ? "Workspace files unavailable" : e instanceof Error ? e.message : "Workspace files unavailable"});
+    }
+    return true;
+  }
+  private async list(root: string, path: string) {
+    const {real, rel} = await resolveInside(root, path);
+    if (!(await stat(real)).isDirectory()) fail(409, "Not a folder");
+    let names;
+    try {names = await readdir(real, {withFileTypes:true});} catch (e) {fail(fsStatus(e), "Folder unavailable");}
+    const entries: WorkspaceEntry[] = [];
+    for (const d of names) {
+      if (d.name === ".git") continue;
+      const childRel = rel ? `${rel}/${d.name}` : d.name, full = join(real, d.name);
+      try {
+        let target = full;
+        if (d.isSymbolicLink()) {target = await realpath(full); if (!inside(root, target)) continue;}
+        else if (!d.isDirectory() && !d.isFile()) continue;
+        const st = await stat(target);
+        if (st.isDirectory()) entries.push({name:d.name, path:childRel, kind:"dir"});
+        else if (st.isFile()) entries.push({name:d.name, path:childRel, kind:"file", size:st.size});
+      } catch {/* broken link or vanished entry */}
+    }
+    entries.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "dir" ? -1 : 1) || byName(a.name, b.name));
+    return {path: rel, entries: entries.slice(0, MAX_LIST), truncated: entries.length > MAX_LIST};
+  }
+  private async walk(root: string): Promise<{files: string[]; truncated: boolean}> {
+    const files: string[] = [], queue = [""], deadline = Date.now() + WALK_MS;
+    for (let i = 0; i < queue.length; i++) {
+      if (Date.now() > deadline) return {files, truncated:true};
+      let names;
+      try {names = await readdir(queue[i] ? join(root, ...queue[i].split("/")) : root, {withFileTypes:true});} catch {continue;}
+      names.sort((a, b) => byName(a.name, b.name));
+      for (const d of names) {
+        const rel = queue[i] ? `${queue[i]}/${d.name}` : d.name;
+        if (d.isDirectory()) {if (!SKIP.has(d.name)) queue.push(rel); continue;}
+        if (d.isSymbolicLink()) {
+          try {const t = await realpath(join(root, ...rel.split("/"))); if (!inside(root, t) || !(await stat(t)).isFile()) continue;} catch {continue;}
+        } else if (!d.isFile()) continue;
+        if (files.push(rel) >= MAX_WALK) return {files, truncated:true};
+      }
+    }
+    return {files, truncated:false};
+  }
+  private async read(root: string, path: string) {
+    const {real, rel} = await resolveInside(root, path);
+    const st = await stat(real);
+    if (!st.isFile()) fail(409, st.isDirectory() ? "Path is a folder" : "Not a regular file");
+    const fh = await open(real, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(MAX_READ, st.size));
+      const {bytesRead} = await fh.read(buf, 0, buf.length, 0);
+      const data = buf.subarray(0, bytesRead), binary = data.includes(0);
+      return {path: rel, size: st.size, binary, truncated: st.size > bytesRead, content: binary ? "" : data.toString("utf8")};
+    } finally {await fh.close();}
+  }
+}
