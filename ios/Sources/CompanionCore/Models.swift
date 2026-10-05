@@ -131,6 +131,39 @@ public struct ToolActivity: Codable, Hashable, Sendable {
     /// call from one of the harness's own receipts ("Messaged @Helper"),
     /// which are sentences rather than steps.
     public var itemId: String?
+    /// The turn ended here for good; nothing more streams after this chip.
+    public var terminal: Bool?
+    /// Set when a host restart cut this turn off. Its outcome is unknown, so
+    /// it never runs again on its own — the owner resumes it or leaves it.
+    public var recovery: TurnRecovery?
+}
+
+/// The receipt for a turn a host restart interrupted.
+public struct TurnRecovery: Codable, Hashable, Sendable {
+    public var id: String
+    public var botId: String
+    public var threadId: String
+    public var reviewedAt: Double?
+    public var resumedAt: Double?
+
+    public init(id: String, botId: String, threadId: String, reviewedAt: Double? = nil, resumedAt: Double? = nil) {
+        self.id = id
+        self.botId = botId
+        self.threadId = threadId
+        self.reviewedAt = reviewedAt
+        self.resumedAt = resumedAt
+    }
+
+    /// Still waiting on the owner: neither resumed nor marked as reviewed.
+    public var isOpen: Bool { (resumedAt ?? 0) <= 0 && (reviewedAt ?? 0) <= 0 }
+}
+
+/// One interrupted turn across every bot, for "resume all".
+public struct InterruptedTurn: Codable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var botId: String
+    public var threadId: String
+    public var at: Double?
 }
 
 /// The thread an activity chip opened — "Opened thread #Title on Scout" —

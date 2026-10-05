@@ -451,6 +451,11 @@ public enum APIError: Error, LocalizedError, Sendable {
         if case let .status(code, _) = self { return code == 401 }
         return false
     }
+
+    public var isNotFound: Bool {
+        if case let .status(code, _) = self { return code == 404 }
+        return false
+    }
 }
 
 /// What the harness answered about a send. Either the message went straight
@@ -1811,6 +1816,27 @@ public struct CompanionClient: Sendable {
 
     public func interrupt(botId: String, threadId: String? = nil) async throws {
         try await send(try makeRequest("POST", "/api/bots/\(botId)/interrupt", body: threadId.map { ["threadId": $0] }))
+    }
+
+    /// Run an interrupted turn again from where the restart cut it off.
+    public func resumeTurn(_ recovery: TurnRecovery) async throws {
+        try await send(try makeRequest(
+            "POST", "/api/bots/\(recovery.botId)/threads/\(recovery.threadId)/recovery/\(recovery.id)/resume"))
+    }
+
+    /// Every turn a restart left waiting on the owner. Computers without
+    /// resume answer 404, which reads as "none".
+    public func interruptedTurns() async throws -> [InterruptedTurn] {
+        struct Body: Decodable { var turns: [InterruptedTurn] }
+        do {
+            return try await send(try makeRequest("GET", "/api/recovery/interrupted"), as: Body.self).turns
+        } catch let error as APIError where error.isNotFound {
+            return []
+        }
+    }
+
+    public func resumeAllTurns() async throws {
+        try await send(try makeRequest("POST", "/api/recovery/resume-all"))
     }
 
     public func provideCredential(

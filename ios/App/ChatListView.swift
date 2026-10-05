@@ -304,6 +304,7 @@ struct ChatListView: View {
         VStack(spacing: 0) {
             header
             StatusBanner()
+            InterruptedTurnsBanner()
             if searchOpen {
                 HStack(spacing: 12) {
                     HStack(spacing: 6) {
@@ -1543,6 +1544,44 @@ struct StatusBanner: View {
             .padding(.vertical, 6)
             .glassCapsule(interactive: false)
             .padding(.bottom, 8)
+    }
+}
+
+/// Turns a host restart cut off, with one tap to run them all again.
+struct InterruptedTurnsBanner: View {
+    @EnvironmentObject private var session: Session
+    @State private var resuming = false
+
+    var body: some View {
+        let count = session.interruptedTurns.count
+        Group {
+            if count > 0 {
+                Button {
+                    Haptics.selection()
+                    resuming = true
+                    Task {
+                        await session.resumeAll()
+                        resuming = false
+                    }
+                } label: {
+                    Label(
+                        resuming ? "Resuming…" : count == 1 ? "1 turn stopped by a restart · Resume" : "\(count) turns stopped by a restart · Resume all",
+                        systemImage: "arrow.clockwise"
+                    )
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .glassCapsule(interactive: true)
+                }
+                .buttonStyle(.plain)
+                .disabled(resuming)
+                .padding(.bottom, 8)
+            }
+        }
+        .task(id: session.status) {
+            if session.status == .live { await session.refreshInterruptedTurns() }
+        }
+        .animation(.default, value: count)
     }
 }
 

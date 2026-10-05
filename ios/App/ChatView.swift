@@ -2143,9 +2143,39 @@ struct ActivityChip: View {
 
     var body: some View {
         if message.tool != nil {
-            ToolStepRow(step: toolStep(from: message), threadRef: threadRef, openThread: openThread)
-                .padding(.leading, 2)
+            VStack(alignment: .leading, spacing: 6) {
+                ToolStepRow(step: toolStep(from: message), threadRef: threadRef, openThread: openThread)
+                if let recovery = message.tool?.recovery, recovery.isOpen {
+                    ResumeTurnButton(recovery: recovery)
+                }
+            }
+            .padding(.leading, 2)
         }
+    }
+}
+
+/// Runs a turn a host restart cut off. The harness never replays it on its
+/// own, so this is the owner saying "go on".
+struct ResumeTurnButton: View {
+    let recovery: TurnRecovery
+    @EnvironmentObject private var session: Session
+    @State private var resuming = false
+
+    var body: some View {
+        Button {
+            Haptics.selection()
+            resuming = true
+            Task {
+                await session.resume(recovery)
+                resuming = false
+            }
+        } label: {
+            Label(resuming ? "Resuming…" : "Resume", systemImage: "arrow.clockwise")
+                .font(.system(size: 14, weight: .semibold))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(resuming)
     }
 }
 

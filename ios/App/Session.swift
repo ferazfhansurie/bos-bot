@@ -183,6 +183,8 @@ final class Session: ObservableObject {
     /// anywhere, so a failure now more likely means it is asleep than that
     /// this phone is on the wrong network.
     @Published private(set) var macMayBeAsleep = false
+    /// Turns a host restart cut off that are still waiting on the owner.
+    @Published private(set) var interruptedTurns: [InterruptedTurn] = []
     /// Dials that failed since the stream was last live. A full lap of the
     /// rotation means every known route failed.
     private var failedDialsSinceLive = 0
@@ -2151,6 +2153,23 @@ final class Session: ObservableObject {
 
     func interrupt(bot: Bot) async {
         await perform { try await $0.interrupt(botId: bot.id, threadId: bot.threadId) }
+    }
+
+    func refreshInterruptedTurns() async {
+        await perform(quietly: true) { client in
+            let turns = try await client.interruptedTurns()
+            self.interruptedTurns = turns
+        }
+    }
+
+    func resume(_ recovery: TurnRecovery) async {
+        await perform { try await $0.resumeTurn(recovery) }
+        await refreshInterruptedTurns()
+    }
+
+    func resumeAll() async {
+        await perform { try await $0.resumeAllTurns() }
+        await refreshInterruptedTurns()
     }
 
     /// Ask for one fresh cloud viewer URL. Unlike ordinary actions this
