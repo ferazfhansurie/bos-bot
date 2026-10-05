@@ -1,5 +1,7 @@
 package com.openmausbot.companion.ui
 
+import com.openmausbot.companion.core.ActivityFeed
+import com.openmausbot.companion.core.ActivityState
 import com.openmausbot.companion.core.Bot
 import com.openmausbot.companion.core.Chat
 import com.openmausbot.companion.core.CompanionState
@@ -112,4 +114,65 @@ internal fun MausState.Companion.forChat(chat: Chat, state: CompanionState): Mau
 internal fun MausState.Companion.forChat(chat: Chat, last: Message?): MausState = when (chat) {
     is Chat.BotChat -> forBot(chat.bot, last)
     is Chat.RoomChat -> MausState.HAPPY
+}
+
+/**
+ * A face and whether it keeps moving. The activity feed's settled states — a
+ * turn that failed or was stopped — hold one still face instead of cycling, so
+ * a broken lane does not look busy.
+ */
+internal data class MascotFace(val state: MausState, val animated: Boolean = true) {
+    companion object
+}
+
+/** The desktop's search tools: a tool lane running one of these peeks rather than works. */
+private val searchTools: Set<String> = setOf("web_search", "search_query", "browser_search", "search")
+
+/**
+ * The face the server's activity feed asks for — the desktop's `turnGesture`
+ * and `ActivityMascot` faces: a wait on a person is curious, a running tool
+ * works (a search tool searches), anything else in a live turn — thinking or
+ * writing the answer — thinks. Failed and stopped settle on a still idle face
+ * (the desktop has no face for them). Idle has nothing to say, so the caller
+ * keeps the face it would have drawn without the feed.
+ */
+internal fun MascotFace.Companion.forActivity(activity: ActivityState?, toolName: String? = null): MascotFace? =
+    when (activity) {
+        null, ActivityState.IDLE -> null
+        ActivityState.WAITING -> MascotFace(MausState.CURIOUS)
+        ActivityState.TOOL -> MascotFace(
+            if (toolName?.lowercase() in searchTools) MausState.SEARCHING else MausState.WORKING,
+        )
+        ActivityState.THINKING, ActivityState.TYPING -> MascotFace(MausState.THINKING)
+        // The iOS port settles both on the still idle face; so does this.
+        ActivityState.FAILED, ActivityState.STOPPED -> MascotFace(MausState.IDLE, animated = false)
+    }
+
+/**
+ * A chat-list row: the busiest thing this bot is doing in any of its own
+ * threads — so a bot working in a thread nobody has open still moves — or, for
+ * a room, the busiest member in any of the room's threads. Without a feed entry
+ * it is exactly [MausState.forChat].
+ */
+internal fun MascotFace.Companion.forRow(chat: Chat, state: CompanionState): MascotFace {
+    val feed = state.activity
+    val activity = when (chat) {
+        is Chat.BotChat -> feed.busiestForBot(chat.bot.id)
+        is Chat.RoomChat -> feed.busiestForRoom(chat.room.id) ?: feed.busiestForThread(chat.threadId)
+    }
+    return forActivity(activity) ?: MascotFace(MausState.forChat(chat, state))
+}
+
+/**
+ * The open chat's header: exactly this (bot, thread) lane, or for a room the
+ * busiest member in this thread. [last] is the visible transcript's last
+ * message, which both names a running tool and drives the fallback.
+ */
+internal fun MascotFace.Companion.forOpenChat(chat: Chat, feed: ActivityFeed, last: Message?): MascotFace {
+    val activity = when (chat) {
+        is Chat.BotChat -> feed.stateFor(chat.bot.id, chat.threadId)
+        is Chat.RoomChat -> feed.busiestForThread(chat.threadId)
+    }
+    val toolName = last?.takeIf { it.kind == Message.Kind.ACTIVITY }?.tool?.name
+    return forActivity(activity, toolName) ?: MascotFace(MausState.forChat(chat, last))
 }

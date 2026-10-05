@@ -276,6 +276,15 @@ struct TaskManagerView: View {
         ContentUnavailableView.search(text: search)
     }
 
+    /// The activity feed's state for one thread of this conversation: the
+    /// bot's own entry, or for a group the busiest member in that thread.
+    private func liveState(_ task: BotTask) -> ActivityFeedState? {
+        switch current {
+        case let .bot(bot): return session.state.activityFeed.state(bot: bot.id, thread: task.threadId)
+        case .room: return session.state.activityFeed.busiest(thread: task.threadId)?.state
+        }
+    }
+
     @ViewBuilder private func threadButton(_ task: BotTask) -> some View {
         if isSelecting {
             let selected = selectedThreadIDs.contains(task.threadId)
@@ -292,7 +301,8 @@ struct TaskManagerView: View {
                     BotThreadRow(
                         task: task,
                         selected: task.threadId == current.threadId,
-                        queued: session.state.pendingQueued[task.threadId]?.isEmpty == false
+                        queued: session.state.pendingQueued[task.threadId]?.isEmpty == false,
+                        live: liveState(task)
                     )
                 }
                 .contentShape(Rectangle())
@@ -308,7 +318,8 @@ struct TaskManagerView: View {
                 BotThreadRow(
                     task: task,
                     selected: task.threadId == current.threadId,
-                    queued: session.state.pendingQueued[task.threadId]?.isEmpty == false
+                    queued: session.state.pendingQueued[task.threadId]?.isEmpty == false,
+                    live: liveState(task)
                 )
             }
             .disabled(isMutating || (!current.isBot && current.busy && task.threadId != current.threadId))

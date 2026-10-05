@@ -686,7 +686,11 @@ struct ChatView: View {
                       onComputer: { showingComputer = true }, accessory: rosterAccessory,
                       closesPane: onClose != nil,
                       beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) }) {
-            ChatAvatarView(chat: current, size: 30, state: .idle, animated: false)
+            // The activity feed's face for this exact thread, so the header
+            // moves while the bot works here; without a feed entry, the
+            // still idle face it always had.
+            let live = MausState.forThread(current, in: session.state)
+            ChatAvatarView(chat: current, size: 30, state: live ?? .idle, animated: live?.showsActivity == true)
         }
     }
 

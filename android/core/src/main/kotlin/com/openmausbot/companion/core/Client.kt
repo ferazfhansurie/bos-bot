@@ -20,6 +20,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -171,6 +172,18 @@ class CompanionClient(
         path = "/api/bots",
         query = messages?.let { listOf("messages" to it.toString()) }.orEmpty(),
     ))
+
+    /**
+     * ACTIVITY FEED SEAM (snapshot half): every lane's state, from
+     * [ACTIVITY_FEED_SNAPSHOT_PATH]. A server without the route answers 404,
+     * which is an empty feed rather than an error — the phone then shows what it
+     * always did. Any other failure throws; the caller keeps the feed it has.
+     */
+    suspend fun activityFeed(): List<ActivityFeedEntry> = try {
+        ActivityFeed.decodeSnapshot(send<JsonElement>(makeRequest("GET", ACTIVITY_FEED_SNAPSHOT_PATH)))
+    } catch (error: APIError.Status) {
+        if (error.code == 404) emptyList() else throw error
+    }
 
     suspend fun messages(threadId: String, before: String? = null, limit: Int = 50): ThreadPage {
         val query = buildList {

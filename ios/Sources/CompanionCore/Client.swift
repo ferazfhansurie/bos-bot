@@ -1031,6 +1031,21 @@ public struct CompanionClient: Sendable {
         }
     }
 
+    /// What every bot is doing per thread, at `activityFeedSnapshotPath`.
+    /// `nil` means a server without the feed (404/405): the phone keeps
+    /// inferring faces from bot and task records, exactly as before. Other
+    /// errors throw so the caller can keep what it already holds.
+    public func activityFeedSnapshot() async throws -> [ActivityFeedEntry]? {
+        do {
+            return try await send(
+                try makeRequest("GET", activityFeedSnapshotPath),
+                as: ActivityFeedSnapshot.self
+            ).entries
+        } catch let APIError.status(code, _) where code == 404 || code == 405 {
+            return nil
+        }
+    }
+
     /// Hydrate. `messages` opts into the paged shape — the newest n per
     /// thread, with screen captures reduced to a flag.
     public func fleet(messages: Int? = 50) async throws -> Fleet {

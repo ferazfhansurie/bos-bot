@@ -58,6 +58,12 @@ sealed interface Frame {
     data class Computer(val botId: String, val state: String) : Frame
     data object Config : Frame
     data class Runtime(val event: RuntimeEvent) : Frame
+
+    /**
+     * The activity feed ([ACTIVITY_FEED_EVENT]). [replace] is a whole snapshot —
+     * lanes it leaves out are gone; otherwise [entries] are updates to merge.
+     */
+    data class Activity(val entries: List<ActivityFeedEntry>, val replace: Boolean) : Frame
     data class Unknown(val kind: String) : Frame
 
 }
@@ -133,6 +139,7 @@ object FrameSerializer : KSerializer<Frame> {
                 RuntimeEvent.serializer(),
                 objectValue.required("event"),
             ))
+            ACTIVITY_FEED_EVENT -> decodeActivity(objectValue) ?: Frame.Unknown(kind)
             else -> Frame.Unknown(kind)
         }
     }
@@ -195,6 +202,30 @@ private fun decodeBotQueued(objectValue: JsonObject): Frame.BotQueued? = runCatc
         },
     )
 }.getOrNull()
+
+/**
+ * ACTIVITY FEED SEAM (push half): how an [ACTIVITY_FEED_EVENT] frame reaches the
+ * store. The shape is provisional, so every plausible spelling is read: a list
+ * under `items`/`entries`/`activity` is a full snapshot (the server in progress
+ * pushes whole replacements), a single `item`/`entry` object — or the entry's
+ * own fields inline — is one update. A frame with nothing readable — including
+ * a non-empty list none of whose lanes decode — is Unknown, never an empty
+ * snapshot that would wipe the feed on a glitch.
+ */
+private fun decodeActivity(objectValue: JsonObject): Frame.Activity? {
+    ActivityFeed.SNAPSHOT_KEYS.firstNotNullOfOrNull { objectValue[it] as? JsonArray }?.let { list ->
+        val entries = ActivityFeed.decodeEntries(list)
+        // An empty list is the server saying nothing is running. A list that
+        // had lanes and none of them read is a shape this build does not know.
+        if (entries.isEmpty() && list.isNotEmpty()) return null
+        return Frame.Activity(entries, replace = true)
+    }
+    val single = listOf("item", "entry").firstNotNullOfOrNull { objectValue[it] as? JsonObject } ?: objectValue
+    val entry = runCatching {
+        CompanionJson.decodeFromJsonElement(ActivityFeedEntrySerializer, single)
+    }.getOrNull() ?: return null
+    return Frame.Activity(listOf(entry), replace = false)
+}
 
 private fun Frame.toJsonObject(output: JsonEncoder): JsonObject = buildJsonObject {
     when (this@toJsonObject) {
@@ -261,6 +292,11 @@ private fun Frame.toJsonObject(output: JsonEncoder): JsonObject = buildJsonObjec
         is Frame.Runtime -> {
             put("kind", "runtime")
             put("event", output.json.encodeToJsonElement(RuntimeEvent.serializer(), event))
+        }
+        is Frame.Activity -> {
+            put("kind", ACTIVITY_FEED_EVENT)
+            val encoded = entries.map { output.json.encodeToJsonElement(ActivityFeedEntrySerializer, it) }
+            if (replace) put("items", JsonArray(encoded)) else encoded.firstOrNull()?.let { put("entry", it) }
         }
         is Frame.Unknown -> put("kind", kind)
     }

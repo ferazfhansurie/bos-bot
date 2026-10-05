@@ -41,6 +41,11 @@ data class CompanionState(
      * message that is already in the transcript.
      */
     val drainedQueueIds: List<String> = emptyList(),
+    /**
+     * What every bot is doing in every thread, from the server's activity feed.
+     * Empty against a server without one; faces then fall back to the bot record.
+     */
+    val activity: ActivityFeed = ActivityFeed(),
 ) {
     /** Threads holding at least one queued send. The row label, the Updates
      * pill, and the closed-thread fold all read this, never task activity. */
@@ -260,6 +265,9 @@ data class CompanionState(
 
         is Frame.Notify -> copy(notifications = (notifications + frame.notification).takeLast(100))
         is Frame.Runtime -> applyRuntime(frame.event)
+        is Frame.Activity -> copy(
+            activity = if (frame.replace) activity.applySnapshot(frame.entries) else activity.applyUpdates(frame.entries),
+        )
         is Frame.Screen -> copy(screens = screens + (frame.botId to ScreenFrame(frame.png, frame.mime)))
 
         is Frame.Computer, Frame.Config, is Frame.Unknown -> this
@@ -437,6 +445,7 @@ data class CompanionState(
             reasoning = reasoning - threads.toSet(),
             pendingQueued = pendingQueued - threads.toSet(),
             screens = screens - botId,
+            activity = activity.forgetBot(botId),
         )
     }
 

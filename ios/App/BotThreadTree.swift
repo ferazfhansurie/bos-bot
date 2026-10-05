@@ -101,7 +101,8 @@ struct BotThreadTree: View {
         ForEach(tasks, id: \.threadId) { task in
             if let projected = bot.projected(forThread: task.threadId) {
                 NavigationLink(value: Chat.bot(projected)) {
-                    BotThreadRow(task: task, queued: session.state.pendingQueued[task.threadId]?.isEmpty == false)
+                    BotThreadRow(task: task, queued: session.state.pendingQueued[task.threadId]?.isEmpty == false,
+                                 live: session.state.activityFeed.state(bot: bot.id, thread: task.threadId))
                         .padding(.vertical, 8)
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())

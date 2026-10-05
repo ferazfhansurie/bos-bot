@@ -158,9 +158,10 @@ fun RosterScreen(navigator: CompanionNavigator) {
     val approvals = remember(state) { state.pendingApprovals }
     val waiting = remember(state, approvals) { RosterLayout.waitingChats(state, approvals) }
     // One pass over the fleet rather than one per row: resolving a face walks the
-    // chat's visible transcript.
+    // chat's visible transcript. The activity feed rides in `state`, so a bot
+    // that starts work in a thread nobody has open re-faces its row here.
     val faces = remember(state, summaries) {
-        summaries.associate { it.id to MausState.forChat(it.chat, state) }
+        summaries.associate { it.id to MascotFace.forRow(it.chat, state) }
     }
     val summariesById = remember(summaries) { summaries.associateBy { it.id } }
     // Hoisted out of the list: read inside a lazy item, `state` would make that
@@ -179,7 +180,7 @@ fun RosterScreen(navigator: CompanionNavigator) {
         Column {
             ChatRow(
                 summary = summary,
-                face = faces[summary.id] ?: MausState.IDLE,
+                face = faces[summary.id] ?: MascotFace(MausState.IDLE),
                 waiting = summary.id in waiting,
                 last = last,
                 onClick = { navigator.open(summary.chat) },
@@ -715,7 +716,7 @@ private fun GroupTileFrame(
 @Composable
 private fun ChatRow(
     summary: ChatSummary,
-    face: MausState,
+    face: MascotFace,
     waiting: Boolean,
     last: Boolean,
     onClick: () -> Unit,
@@ -752,7 +753,8 @@ private fun ChatRow(
             ChatAvatar(
                 chat = chat,
                 size = 52.dp,
-                state = face,
+                state = face.state,
+                animated = face.animated,
                 modifier = Modifier.padding(top = 12.dp),
             )
 
