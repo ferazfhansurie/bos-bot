@@ -295,6 +295,24 @@ function cutout(src: string): Promise<string> {
   return started;
 }
 
+/** A person in a room: their photo, or their initial on their color. */
+export function PersonFace({ person, size = 28 }: { person: { name: string; avatar?: string | null; color?: string | null }; size?: number }) {
+  const initial = (
+    <span
+      className="flex shrink-0 items-center justify-center rounded-full bg-accent/20 font-semibold text-accent"
+      style={{
+        width: size,
+        height: size,
+        fontSize: Math.round(size * 0.43),
+        ...(person.color ? { backgroundColor: (MAUS_COLORS as Record<string, string>)[person.color] ?? person.color, color: "#fff" } : {}),
+      }}
+    >
+      {person.name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+  return person.avatar ? <PersonPhoto src={person.avatar} size={size} fallback={initial} /> : initial;
+}
+
 export function PersonPhoto({ src, size, className = "", testId, fallback }: { src: string; size: number; className?: string; testId?: string; fallback?: ReactNode }) {
   const [shown, setShown] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);

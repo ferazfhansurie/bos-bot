@@ -8,12 +8,15 @@ import type { Message } from "@/state/store";
 export function ReplyQuote({
   message,
   fallbackName,
+  authorName,
   onJump,
   onClear,
   compact = false,
 }: {
   message: Message;
   fallbackName?: string;
+  /** Who wrote it, when that isn't the message's own label (another person in a room). */
+  authorName?: string;
   onJump?: () => void;
   onClear?: () => void;
   compact?: boolean;
@@ -22,7 +25,7 @@ export function ReplyQuote({
     <>
       <MessageSquareReply size={compact ? 12 : 14} className="shrink-0 text-accent" />
       <span className="min-w-0 flex-1">
-        <span className="block text-[10.5px] font-medium text-accent">{t("chat.reply.replyingTo", { name: replyAuthor(message, fallbackName) })}</span>
+        <span className="block text-[10.5px] font-medium text-accent">{t("chat.reply.replyingTo", { name: authorName ?? replyAuthor(message, fallbackName) })}</span>
         <span dir="auto" className="block truncate text-[11.5px] text-ink-secondary">{replySnippet(peerLine(message)?.body ?? message.text ?? "")}</span>
       </span>
     </>

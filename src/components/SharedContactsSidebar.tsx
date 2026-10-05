@@ -203,7 +203,7 @@ function InviteToggle({ open, onToggle }: { open: boolean; onToggle: () => void 
 }
 
 /** The invite as a link with a Copy button, not a raw URL in a text box. */
-function InviteLink({ link }: { link: string }) {
+export function InviteLink({ link }: { link: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;

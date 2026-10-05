@@ -18,7 +18,7 @@ import {
   type GroupDefaultResponder,
   type Message,
 } from "@/state/store";
-import { BotAvatar } from "./Avatar";
+import { BotAvatar, PersonFace } from "./Avatar";
 import { RoomRoster } from "./RoomRoster";
 import { ThreadChip } from "./ThreadChip";
 import { ToolActivity } from "./ToolActivity";
@@ -74,6 +74,7 @@ import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { botAvatarUrlFromStoredPath, botAvatarUrlSchema } from "../../shared/bot-avatar";
 import { roomMemberReplyMode, roomMemberStatus, sameBubbleRun, shouldCollapseRoomReply, type RoomViewFields } from "@/lib/room-view";
 import { isArriving, trackArrivals, type ArrivalState } from "@/lib/message-arrivals";
+import { roomSender, roomSenderName, useMultiplayerMe } from "@/lib/room-sender";
 
 export function RoomAvatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }) {
   const safe = botAvatarUrlSchema.safeParse(avatarUrl);
@@ -292,6 +293,7 @@ const Transcript = memo(function Transcript({
   arrivals.current = trackArrivals(arrivals.current, group.threadId, transcript, now);
   const showToolCalls = showToolCallsEnabled(state.config);
   const memberOf = (id?: string) => members.find((b) => b.id === id);
+  const meId = useMultiplayerMe()?.actorId;
   // Several bots working at once turn a room into a wall of chips; fold the
   // finished ones the same way a 1:1 chat does.
   // Hidden runs are dropped here, not at render, so the bubbles either side
@@ -334,11 +336,15 @@ const Transcript = memo(function Transcript({
         }
         const m = item.message;
         const user = m.role === "user";
+        // another person's line reads like a member's: left side, their face and name
+        const person = user ? roomSender(m, group, meId) : null;
+        const other = Boolean(person && !person.mine);
+        const right = user && !other;
         const following = items[i + 1];
         const runStarts = !sameBubbleRun(prev, m);
         const runEnds = !sameBubbleRun(m, following && following.kind !== "run" ? following.message : undefined);
         const attachments = user && m.text ? splitTranscriptAttachments(m.text) : null;
-        const newCluster = !prev || prev.role !== m.role || prev.from?.botId !== m.from?.botId || Boolean(prev.comm) || newDay;
+        const newCluster = !prev || prev.role !== m.role || prev.from?.botId !== m.from?.botId || prev.sender?.id !== m.sender?.id || Boolean(prev.comm) || newDay;
         const routineOwner = m.kind === "routine.run" ? memberOf(m.from?.botId) : undefined;
         const routineExecutionThreadId = m.routineRun?.executionThreadId;
         const routineTarget = routineOwner && hasRoutineExecutionTask(routineOwner.tasks, routineExecutionThreadId)
@@ -394,13 +400,18 @@ const Transcript = memo(function Transcript({
           ) : m.kind === "text" && (m.text || m.attachments?.length) ? (
             <div className={cn(
               "group flex w-full flex-col",
-              user ? "items-end" : "items-start",
+              right ? "items-end" : "items-start",
               !runStarts && "-mt-2",
               isArriving(arrivals.current, m.id) && m.id !== emergingId
                 && !(m.from?.botId && now - (streamedAt.get(m.from.botId) ?? 0) < 2000)
-                && (user ? "msg-spring origin-right" : "msg-spring origin-left"),
+                && (right ? "msg-spring origin-right" : "msg-spring origin-left"),
             )}>
-              <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
+              <div className={cn("flex w-full items-end gap-1.5", right ? "justify-end" : "justify-start")}>
+                {other && (
+                  <span className="w-6 shrink-0 self-end">
+                    {runEnds && person && <PersonFace person={person.person ?? { name: person.name }} size={24} />}
+                  </span>
+                )}
                 {!user && (
                   <span className="w-6 shrink-0 self-end">
                     {runEnds && m.from && (
@@ -415,7 +426,7 @@ const Transcript = memo(function Transcript({
                     )}
                   </span>
                 )}
-                {user && (
+                {right && (
                   <>
                     <button
                       type="button"
@@ -433,7 +444,7 @@ const Transcript = memo(function Transcript({
                   className={cn(
                     "w-fit max-w-[min(42rem,78%)] rounded-2xl p-3 text-[15px] leading-relaxed",
                     !user && m.id === emergingId && "turn-answer",
-                    user ? "chat-text whitespace-pre-wrap bg-bubble-user text-ink" : "bg-card text-ink",
+                    right ? "chat-text whitespace-pre-wrap bg-bubble-user text-ink" : user ? "chat-text whitespace-pre-wrap bg-card text-ink" : "bg-card text-ink",
                   )}
                   title={new Date(m.at).toLocaleString()}
                 >
@@ -444,6 +455,7 @@ const Transcript = memo(function Transcript({
                         <ReplyQuote
                           message={target}
                           fallbackName={t("room.fallbackBot")}
+                          authorName={roomSenderName(target, group, meId) ?? undefined}
                           compact
                           onJump={() =>
                             dispatch({ type: "focusMessage", threadId: group.threadId, messageId: target.id })
@@ -467,7 +479,7 @@ const Transcript = memo(function Transcript({
                     </>
                   )}
                 </div>
-                {!user && (
+                {!right && (
                   <>
                     <button
                       type="button"
@@ -497,6 +509,9 @@ const Transcript = memo(function Transcript({
             )}
             {!user && m.from && newCluster && !(m.kind === "activity" && m.comm) && (
               <ClusterLabel bot={memberOf(m.from.botId)} name={m.from.name} color={m.from.color} bubble={m.kind === "text"} />
+            )}
+            {other && person?.name && newCluster && m.kind === "text" && (
+              <ClusterLabel name={person.name} color={person.person?.color ?? ""} bubble />
             )}
             {row}
           </div>
@@ -1071,6 +1086,7 @@ const ROOM_NAME_PILL = "flex min-w-0 max-w-full items-center gap-2 rounded-full 
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
+  const meId = useMultiplayerMe()?.actorId;
   // Same Windows caption handling as ChatView: drag on the header, shift the
   // right-hand controls below the renderer-drawn caption buttons.
   const { dragStyle: headerDragStyle, noDragStyle: headerNoDragStyle, controlsShiftStyle } = useCaptionChrome();
@@ -1463,7 +1479,7 @@ export function GroupView({ group }: { group: Group }) {
         const pinned = group.messages.find((m) => m.id === group.pinnedMessageId && m.kind === "text");
         const text = pinned ? (pinned.text ?? "").replace(/\s+/g, " ").trim() : "";
         if (!pinned || !text) return null;
-        const sender = pinned.role === "user" ? t("chat.you") : (pinned.from?.name ?? t("room.aBot"));
+        const sender = pinned.role === "user" ? (roomSenderName(pinned, group, meId) ?? t("chat.you")) : (pinned.from?.name ?? t("room.aBot"));
         return (
           <div className="w-full px-5">
             <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
@@ -1638,6 +1654,7 @@ export function GroupView({ group }: { group: Group }) {
         members={members}
         locked={setupPending}
         replyTo={replyTo}
+        replyToAuthor={replyTo ? roomSenderName(replyTo, group, meId) ?? undefined : undefined}
         onClearReply={clearReply}
         onConsumeReply={consumeReply}
         onRestoreReply={restoreReply}
