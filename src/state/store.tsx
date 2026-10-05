@@ -45,6 +45,7 @@ import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
 import { noteUpdateFrame } from "@/lib/bos-update";
+import { fetchInbox, inboxCountOf } from "@/lib/inbox";
 import { withSendPriority, type SendPriority } from "@/lib/composer-priority";
 
 const MAX_ROUTINE_RUNS = 2_000;
@@ -748,8 +749,10 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "team-map" | "routines" | "shared";
+  activeView: "chat" | "team-map" | "routines" | "shared" | "needs-me";
   selectedSharedRoomId: string | null;
+  /** threads waiting on the person: the needs-me badge */
+  inboxCount: number;
   routines: Routine[];
   routineRuns: RoutineRun[];
   routinesLoadState: "loading" | "ready" | "error";
@@ -915,6 +918,8 @@ export type Action =
   | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
   | { type: "showTeamMap" }
   | { type: "showChat" }
+  | { type: "showNeedsMe" }
+  | { type: "inboxCount"; count: number }
   | { type: "selectSharedRoom"; roomId: string }
   | { type: "showRoutines"; section?: "schedule" | "logs"; view?: "calendar" | "list"; botId?: string; routineId?: string }
   | { type: "showTeamMap" }
@@ -1331,6 +1336,13 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "showChat":
       return state.activeView === "chat" ? state : { ...state, activeView: "chat" };
+    case "showNeedsMe":
+      return { ...state, activeView: "needs-me",
+        settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
+    case "inboxCount": {
+      const count = inboxCountOf(action.count);
+      return count === state.inboxCount ? state : { ...state, inboxCount: count };
+    }
     case "selectSharedRoom":
       return { ...state, activeView: "shared", selectedSharedRoomId: action.roomId,
         settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
@@ -2139,6 +2151,7 @@ export const initialState: AppState = {
   selectedId: "",
   activeView: "chat",
   selectedSharedRoomId: null,
+  inboxCount: 0,
   routines: [],
   routineRuns: [],
   routinesLoadState: "loading",
@@ -3526,6 +3539,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let rehydrateRequested = false;
     const pendingFrames: ServerFrame[] = [];
     let handleFrame: (frame: ServerFrame) => void;
+    // A live `inbox` frame is newer than any fetch that started before it.
+    let inboxVersion = 0;
+    const refreshInboxCount = () => {
+      const version = inboxVersion;
+      void fetchInbox().then(({ count }) => {
+        if (alive && version === inboxVersion) rawDispatch({ type: "inboxCount", count });
+      }, () => {});
+    };
     const hydrate = (): Promise<boolean> => {
       if (hydrationPromise) {
         // A second non-resumable hello means this snapshot may have started
@@ -3543,6 +3564,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!alive || !loaded) return false;
         hydrated = true;
         for (const frame of pendingFrames.splice(0)) handleFrame(frame);
+        refreshInboxCount();
         return true;
       })().finally(() => {
         hydrationPromise = null;
@@ -3655,6 +3677,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             showNotification(
               frame.notification,
               (target) => {
+                // the daily digest points at no single thread
+                if (frame.notification.kind === "digest") return dispatch({ type: "showNeedsMe" });
                 openNotificationTarget(dispatch, target, stateRef.current);
                 dispatch({ type: "revealThread", threadId: target.threadId });
               },
@@ -3718,6 +3742,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "update.state":
           noteUpdateFrame(frame);
+          break;
+        case "inbox":
+          inboxVersion += 1;
+          rawDispatch({ type: "inboxCount", count: frame.count });
           break;
         // a key changed and the fleet hot-reloaded — refresh the picker so
         // newly available providers un-dim immediately

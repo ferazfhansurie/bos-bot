@@ -12,7 +12,9 @@ export type NotifyKind =
   /** A run failed, stalled or could not start and no Chief of Staff was
    * there to take it: the person is the one who has to look. */
   | "incident"
-  | "takeover";
+  | "takeover"
+  /** The daily digest; opening it lands on the needs-me view. */
+  | "digest";
 
 export interface Notification {
   kind: NotifyKind;
