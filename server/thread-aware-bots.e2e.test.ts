@@ -610,3 +610,59 @@ describe("close_thread", () => {
     }
   });
 });
+
+describe("thread state, reopen, needs-me and digest", () => {
+  it("projects state, reopens a closed thread by PATCH, and serves the inbox and digest", async () => {
+    const pm = await createBot("Petra", "gated");
+    try {
+      const token = await heldTurn(pm, "Close the notes thread.");
+      expect((await taskOf(pm.id, pm.threadId)).state).toBe("running");
+      const notes = (await api("POST", `/api/bots/${pm.id}/tasks`, { title: "Notes" })).body.task.threadId as string;
+      expect((await taskOf(pm.id, notes)).state).toBe("idle");
+      expect((await api("POST", `/api/internal/threads/${notes}/close`, {}, token)).status).toBe(200);
+      expect(await taskOf(pm.id, notes)).toMatchObject({ state: "closed", closedBy: { name: "Petra" } });
+      // only reopening is a person's PATCH; closing stays the bot's/settler's job
+      expect((await api("PATCH", `/api/bots/${pm.id}/tasks/${notes}`, { closed: true })).status).toBe(400);
+      const reopened = await api("PATCH", `/api/bots/${pm.id}/tasks/${notes}`, { closed: false });
+      expect(reopened.status).toBe(200);
+      const row = await taskOf(pm.id, notes);
+      expect(row).not.toHaveProperty("closedBy");
+      expect(row.state).toBe("idle");
+      release(pm.threadId);
+      await expect.poll(async () => (await taskOf(pm.id, pm.threadId))?.busy, { timeout: 15_000 }).toBe(false);
+
+      // room threads carry state and the same reopen contract
+      const created = await api("POST", "/api/groups", { name: "State room", memberIds: [pm.id], setup: { bulletin: "", defaultResponder: { kind: "member", botId: pm.id } } });
+      expect(created.status).toBe(201);
+      const room = created.body.group;
+      const roomTask = room.tasks[0];
+      expect(roomTask).toMatchObject({ state: "idle", lastActivityAt: expect.any(Number) });
+      expect((await api("PATCH", `/api/groups/${room.id}/tasks/${roomTask.threadId}`, { closed: true })).status).toBe(400);
+      expect((await api("PATCH", `/api/groups/${room.id}/tasks/nope`, { closed: false })).status).toBe(404);
+      const roomReopen = await api("PATCH", `/api/groups/${room.id}/tasks/${roomTask.threadId}`, { closed: false });
+      expect(roomReopen.status).toBe(200);
+
+      // the finished turn left an unread reply: it is in needs-me
+      const inbox = await api("GET", "/api/inbox");
+      expect(inbox.status).toBe(200);
+      expect(inbox.body.count).toBe(inbox.body.items.length);
+      expect(inbox.body.items).toContainEqual(expect.objectContaining({ id: `unread:${pm.threadId}`, kind: "unread", botId: pm.id, threadId: pm.threadId }));
+      const times = inbox.body.items.map((item: any) => item.at);
+      expect(times).toEqual([...times].sort((a, b) => b - a));
+      expect((await api("POST", `/api/bots/${pm.id}/read`, { threadId: pm.threadId })).status).toBe(200);
+      expect((await api("GET", "/api/inbox")).body.items.some((item: any) => item.threadId === pm.threadId)).toBe(false);
+
+      const since = Date.now() - 60 * 60 * 1000;
+      const digest = await api("GET", `/api/digest?since=${since}`);
+      expect(digest.status).toBe(200);
+      expect(digest.body).toMatchObject({ since, until: expect.any(Number), counts: { done: expect.any(Number), started: expect.any(Number), closed: expect.any(Number), failed: expect.any(Number), waiting: expect.any(Number) } });
+      expect(digest.body.moved).toContainEqual(expect.objectContaining({ botId: pm.id, threadId: notes, change: "started" }));
+      expect(digest.body.moved).toContainEqual(expect.objectContaining({ botId: pm.id, threadId: pm.threadId, change: "done" }));
+      expect((await api("GET", "/api/digest")).status).toBe(200);
+      for (const bad of ["abc", "-1", String(Date.now() + 3_600_000)]) expect((await api("GET", `/api/digest?since=${bad}`)).status).toBe(400);
+    } finally {
+      release(pm.threadId);
+      await cleanup([pm.id]);
+    }
+  });
+});
