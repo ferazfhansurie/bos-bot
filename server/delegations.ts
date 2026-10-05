@@ -19,7 +19,7 @@ import { getOrCreateChannel, mirrorExchange, type CommsBus } from "./comms-visib
 import { DATA_DIR } from "./config.ts";
 import { newId } from "./contracts.ts";
 import { requestPeerApproval, type ApprovalBus } from "./peer-approval.ts";
-import { canAccessTeam, peerAllowed } from "./peer-roster.ts";
+import { peerAllowed } from "./peer-roster.ts";
 import { type BotRecord, type GroupRecord, type Message, type Store } from "./store.ts";
 
 export interface DelegationItem {
@@ -833,11 +833,12 @@ function sourceThreadBelongsToBot(store: Store, botId: string, threadId: string)
   return Boolean(group && group.memberIds.includes(botId));
 }
 
-/** Section membership and the sender's peer allow-list are execution
- * boundaries, not just sidebar styling. A queued handoff may wait through a
- * turn, a busy target, or human approval, so the permission granted when it
- * was queued must be checked again at the final dispatch edge — the user may
- * have moved either bot, or narrowed the sender's peers, in between. */
+/** The target's availability and the sender's peer allow-list are execution
+ * boundaries. A queued handoff may wait through a turn, a busy target, or
+ * human approval, so the permission granted when it was queued must be
+ * checked again at the final dispatch edge — the user may have hidden the
+ * target, or narrowed the sender's peers, in between. Sections do not bound
+ * bot-to-bot messaging. */
 function dropIfUnreachable(
   bus: CommsBus,
   sender: BotRecord,
@@ -845,13 +846,12 @@ function dropIfUnreachable(
   sourceThreadId: string,
   item: PendingDelegationItem,
 ): boolean {
-  const sectionsDiffer = !canAccessTeam(sender, target.section);
-  if (!sectionsDiffer && !target.hidden && peerAllowed(sender, target.id)) return false;
-  const reason = sectionsDiffer
-    ? "bots now belong to different sections"
+  if (!target.hidden && peerAllowed(sender, target.id)) return false;
+  const reason = target.hidden
+    ? `@${target.name} is no longer available`
     : `@${target.name} is no longer an allowed peer`;
-  const result = sectionsDiffer
-    ? `@${sender.name} and @${target.name} now belong to different sections`
+  const result = target.hidden
+    ? `@${target.name} is no longer available`
     : `@${sender.name} is no longer allowed to contact @${target.name}`;
   recordDelegationReceipt({
     id: item.id,

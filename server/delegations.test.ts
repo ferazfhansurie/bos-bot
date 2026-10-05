@@ -342,8 +342,10 @@ describe("drainDelegations", () => {
     expect(runTargetCalls).toEqual([]);
   });
 
-  it("drops a queued handoff when section assignment separates the bots before dispatch", async () => {
-    const queued = queueDelegation(
+  it("still dispatches a queued handoff when section assignment separates the bots", async () => {
+    // Sections do not bound bot-to-bot messaging: moving the target to
+    // another section between queue and dispatch must not drop the handoff.
+    queueDelegation(
       commsBus,
       from,
       { toBotId: target.id, message: "do this", depth: 0 },
@@ -355,21 +357,34 @@ describe("drainDelegations", () => {
       runTargetCalls.push({ toBotId, message, commsDepth });
     });
 
+    await waitFor(() => runTargetCalls.length === 1);
+    expect(runTargetCalls[0]!.toBotId).toBe(target.id);
+  });
+
+  it("drops a queued handoff when the target is hidden before dispatch", async () => {
+    const queued = queueDelegation(
+      commsBus,
+      from,
+      { toBotId: target.id, message: "do this", depth: 0 },
+      1,
+    );
+    store.patchBot(target.id, { hidden: true });
+
+    drainDelegations(commsBus, approvalBus, from.threadId, (toBotId, message, commsDepth) => {
+      runTargetCalls.push({ toBotId, message, commsDepth });
+    });
+
     await waitFor(() => findDelegationReceipt(queued.id!) && _pendingCount(from.threadId) === 0);
     expect(findDelegationReceipt(queued.id!)).toMatchObject({
       status: "dropped",
-      result: expect.stringContaining("different sections"),
+      result: expect.stringContaining("no longer available"),
     });
     expect(runTargetCalls).toEqual([]);
-    expect(
-      store.messagesFor(from.threadId).some((message) =>
-        message.tool?.name.includes("bots now belong to different sections")),
-    ).toBe(true);
   });
 
   it("drops a queued handoff when the sender's allow-list stops covering the target", async () => {
     // The allow-list is checked again at the dispatch edge for the same
-    // reason section membership is: a handoff can sit in the queue across a
+    // reason target availability is: a handoff can sit in the queue across a
     // busy target or an approval card, and the grant it was queued under may
     // have been narrowed since.
     const queued = queueDelegation(
@@ -464,7 +479,7 @@ describe("drainDelegations", () => {
     expect(runTargetCalls[0]!.commsDepth).toBe(1);
   });
 
-  it("rechecks sections after a pending human approval before dispatch", async () => {
+  it("rechecks target availability after a pending human approval before dispatch", async () => {
     store.patchBot(from.id, { approvePeerComms: true });
     const queued = queueDelegation(
       commsBus,
@@ -479,7 +494,7 @@ describe("drainDelegations", () => {
     const card = await waitFor(() =>
       store.messagesFor(from.threadId).find((message) => message.card?.requestId),
     );
-    expect(store.setBotsSection([target.id], "Elsewhere").ok).toBe(true);
+    store.patchBot(target.id, { hidden: true });
     resolvePeerComms(approvalBus, card.card!.requestId!, "allow");
 
     await waitFor(() => findDelegationReceipt(queued.id!) && _pendingCount(from.threadId) === 0);

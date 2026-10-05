@@ -145,7 +145,7 @@ import {
 import * as composio from "./composio.ts";
 import { WhatsAppService, WHATSAPP_NATIVE_PROMPT } from "./whatsapp-service.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
-import { canAccessTeam, canReachPeer, peerAllowed, peerName, peerRosterSystemPrompt, peerStatus, peerStatusWords, reachablePeers, resolveTeammate, roomPeerRosterSystemPrompt, roomRosterLine, PEER_ACCESS_HELP } from "./peer-roster.ts";
+import { canAccessTeam, canMessagePeer, canReachPeer, messageablePeers, peerAllowed, peerName, peerRosterSystemPrompt, peerStatus, peerStatusWords, reachablePeers, resolveTeammate, roomPeerRosterSystemPrompt, roomRosterLine, PEER_ACCESS_HELP } from "./peer-roster.ts";
 import { openMausStatusSystemPrompt } from "./openmaus-status-capsule.ts";
 import {
   containerComputerAction,
@@ -2144,8 +2144,11 @@ function peerReviewRequired(bot: BotRecord, threadId: string): boolean {
  * recipient switches, whatever its own level says. The recipient's engine
  * has to implement Full (supportsApprovalMode); otherwise the work keeps the
  * recipient's own level, as before. Only a Chief passes access on — an
- * ordinary bot's delegation still uses the recipient's setting. */
+ * ordinary bot's delegation still uses the recipient's setting. Messaging
+ * now crosses sections, but this inheritance does not: a Chief only passes
+ * Full on to bots on a team it is allowed to manage (canAccessTeam). */
 function delegatedFullAccess(from: BotRecord, fromThreadId: string, target: BotRecord): boolean {
+  if (!canAccessTeam(from, target.section)) return false;
   return delegationInheritsFullAccess({
     senderIsChief: Boolean(from.chiefOfStaff),
     senderHasFullAccess: fullAccessForSource(from.id, fromThreadId),
@@ -2856,7 +2859,9 @@ function roomHandoffProblem(node: Pick<RoomHandoff, "groupId" | "threadId" | "bo
     const sameRoom = source && group && source.id === group.id;
     if (!sameRoom) {
       if (group && outsideSection(group, bot)) return "Destination room includes a member outside the agent's section";
-      if (!canAccessTeam(from, bot.section) || (source && outsideSection(source, from))) return "Room work cannot cross the sender's section boundary";
+      // A 1:1 destination is ordinary bot-to-bot messaging, which is not
+      // section-bounded. Handing work into a different room still is.
+      if ((node.groupId && !canAccessTeam(from, bot.section)) || (source && outsideSection(source, from))) return "Room work cannot cross the sender's section boundary";
     }
     if (source && group && source.id === group.id && parent.threadId !== node.threadId) return "Same-room work must stay in the originating conversation";
     if (!peerAllowed(from, bot.id)) return "The recipient is not an allowed peer of the sender";
@@ -5914,10 +5919,10 @@ function finalizeDelegationWatch(
   const source = watched.sourceBotId
     ? store.bot(watched.sourceBotId)
     : (watched.sourceThreadId ? store.botByThread(watched.sourceThreadId) : undefined);
-  if (source && target && !canReachPeer(source, target)) {
+  if (source && target && !canMessagePeer(source, target)) {
     ok = false;
     reply = "";
-    failureName = "Result withheld: team or peer access changed while the teammate was working";
+    failureName = "Result withheld: peer access changed while the teammate was working";
   }
   // The receipt is written before any mirror short-circuits: the delegating
   // bot's check/wait_delegation must see a terminal state even when the
@@ -14399,8 +14404,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // does what, who has no job description yet). Every bot reads this
         // now, not just the Chief, so it answers the same reachability
         // question the roster does — same peers, same order.
-        const sourceRoom = internalCapability.roomCoordination ? connectorThread(sender.id, internalCapability.threadId)?.group : undefined;
-        const bots = reachablePeers(store.bots, sender, sourceRoom && !sourceRoom.dm ? sourceRoom.memberIds : undefined)
+        // Messaging is not bounded by section: list every bot this one may
+        // message (hidden bots and the sender's peers allow-list excluded).
+        const bots = messageablePeers(store.bots, sender)
           .map((b) => {
             const status = peerStatus(b.activity, b.busy);
             return {
@@ -14457,7 +14463,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             delegationId: task.openedBy?.delegationId, own: true,
           });
         }
-        for (const peer of reachablePeers(store.bots, from)) {
+        for (const peer of messageablePeers(store.bots, from)) {
           for (const task of store.tasks(peer.id)) {
             if (task.openedBy?.botId !== from.id) continue;
             rows.push({
@@ -14482,7 +14488,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 403, { error: "source conversation does not belong to sender" });
         }
         const threadId = closeMatch[1]!;
-        const owner = [from, ...reachablePeers(store.bots, from)].find((bot) => store.taskByThread(bot.id, threadId));
+        const owner = [from, ...messageablePeers(store.bots, from)].find((bot) => store.taskByThread(bot.id, threadId));
         const task = owner ? store.taskByThread(owner.id, threadId) : undefined;
         if (!owner || !task) return json(res, 404, { error: "no such thread — call list_threads for the ones you can see" });
         if (owner.id !== from.id && task.openedBy?.botId !== from.id) {
@@ -14936,8 +14942,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // unresolvable id the cheapest way past the gate, so it is now a
         // hard refusal — every peer turn has an accountable sender.
         const from = internalSender;
-        if (!canAccessTeam(from, target.section) || target.hidden) {
-          return json(res, 403, { error: `that bot belongs to a different section or is unavailable. ${PEER_ACCESS_HELP}` });
+        if (target.hidden) {
+          return json(res, 403, { error: `that bot is unavailable. ${PEER_ACCESS_HELP}` });
         }
         // The sender's allow-list, when it has one. Checked here rather than
         // trusted from the roster: the tool call carries a bot id, and an id
@@ -15003,8 +15009,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const freshFrom = store.bot(fromBotId);
           const freshTarget = store.bot(toBotId);
           if (!freshFrom || !freshTarget) return json(res, 404, { error: "no such bot" });
-          if (!canAccessTeam(freshFrom, freshTarget.section) || freshTarget.hidden) {
-            return json(res, 200, { error: "that bot moved to a different section" });
+          if (freshTarget.hidden) {
+            return json(res, 200, { error: "that bot is no longer available" });
           }
           if (!peerAllowed(freshFrom, freshTarget.id)) {
             return json(res, 200, { error: "that bot is no longer an allowed peer" });
@@ -15044,8 +15050,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         requireActiveInternalCapability();
         const replySender = store.bot(fromBotId);
         const replyTarget = store.bot(toBotId);
-        if (!replySender || !replyTarget || !canReachPeer(replySender, replyTarget)) {
-          return json(res, 403, { error: "Result withheld: team access changed while the teammate was working" });
+        if (!replySender || !replyTarget || !canMessagePeer(replySender, replyTarget)) {
+          return json(res, 403, { error: "Result withheld: peer access changed while the teammate was working" });
         }
         if (outcome.status === "timeout" && !delegationWatch.has(targetThreadId)) {
           // The peer's turn is still running — only the wait ended. Convert
@@ -15202,8 +15208,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const toBotId = resolvedTo.id;
         const target = store.bot(toBotId);
         if (!target) return json(res, 404, { error: "no such bot" });
-        if (!canAccessTeam(from, target.section) || target.hidden) {
-          return json(res, 403, { error: `that bot belongs to a different section or is unavailable. ${PEER_ACCESS_HELP}` });
+        if (target.hidden) {
+          return json(res, 403, { error: `that bot is unavailable. ${PEER_ACCESS_HELP}` });
         }
         if (!peerAllowed(from, target.id)) {
           return json(res, 403, { error: `that bot is not on this bot's allowed peers. ${PEER_ACCESS_HELP}` });
@@ -15259,7 +15265,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const remote = internalSender.chiefOfStaff && !internalSender.hidden ? await delegatedRosterFor(internalSender.id) : { bots: [], errors: [] };
           requireActiveInternalCapability();
           return json(res, 200, { errors: remote.errors, currentRoom: source ? { id: source.id, name: source.name, workingFolder: source.cwd || null } : null,
-            bots: [...reachablePeers(store.bots, internalSender, source?.memberIds).map(bot => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section, busy: bot.busy })), ...remote.bots],
+            bots: [...messageablePeers(store.bots, internalSender).map(bot => ({ id: bot.id, name: bot.name, title: bot.title, section: bot.section, busy: bot.busy })), ...remote.bots],
             rooms, note: "Without group_id: use this room when in a room, otherwise your standing conversation with that teammate — every assignment you send it continues the same thread, so write as if it remembers the last one. Each bot uses its own environment and permissions. Files are not transferred: pass absolute paths only when accessible to the recipient, otherwise pass the content." });
         }
         if (method === "POST" && path === "/api/internal/coordinate-bots") {
@@ -15291,8 +15297,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               if (!remoteRoster.bots.some(bot => bot.id === raw)) return json(res, 403, { error: remoteRoster.errors.join("; ") || "No live delegation for this remote target" });
               botIds.push(raw); continue;
             }
-            const resolved = resolveTeammate(store.bots, internalSender, raw,
-              source && destination?.id === source.id ? source.memberIds : undefined);
+            const resolved = resolveTeammate(store.bots, internalSender, raw);
             if ("error" in resolved) return json(res, 403, { error: resolved.error });
             botIds.push(resolved.id);
           }
@@ -15601,8 +15606,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (depth >= MAX_COMMS_DEPTH) {
           return json(res, 200, { error: "thread chains are limited to one hop — open the thread on yourself, or do this one here" });
         }
-        if (!canAccessTeam(from, target.section) || target.hidden) {
-          return json(res, 403, { error: `that bot belongs to a different section or is unavailable. ${PEER_ACCESS_HELP}` });
+        if (target.hidden) {
+          return json(res, 403, { error: `that bot is unavailable. ${PEER_ACCESS_HELP}` });
         }
         if (!peerAllowed(from, target.id)) {
           return json(res, 403, { error: `that bot is not on this bot's allowed peers. ${PEER_ACCESS_HELP}` });

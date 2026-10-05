@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   canAccessTeam,
   PEER_ACCESS_HELP,
+  canMessagePeer,
   canReachPeer,
+  messageablePeers,
   peerAllowed,
   peerName,
   peerRosterSystemPrompt,
@@ -84,8 +86,10 @@ describe("owner-granted cross-team coordination", () => {
   it("labels actual Chiefs and explains unreachable Chiefs without changing access", () => {
     const chief = { id: "chief", name: "Clive", section: "Personal", chiefOfStaff: true, managedSections: ["Work"] };
     expect(canReachPeer(self, chief)).toBe(false);
-    const blocked = resolveTeammate([...fleet, chief], self, "Clive");
-    expect(blocked).toHaveProperty("error", expect.stringContaining("team membership"));
+    // messaging is not section-bounded: the name resolves across sections
+    expect(resolveTeammate([...fleet, chief], self, "Clive")).toEqual({ id: "chief", byName: true });
+    const blocked = resolveTeammate([...fleet, chief], { ...self, peers: ["writer"] }, "Clive");
+    expect(blocked).toHaveProperty("error", expect.stringContaining("allowed peers"));
     const reachable = { ...chief, section: "Work" };
     const prompt = peerRosterSystemPrompt([reachable]);
     expect(prompt).toContain("[Chief of Staff]");
@@ -131,6 +135,42 @@ describe("reachablePeers", () => {
   });
 });
 
+describe("cross-section messaging", () => {
+  it("lets a bot message a visible bot in another section", () => {
+    const other = fleet.find((bot) => bot.id === "elsewhere")!;
+    expect(canMessagePeer(self, other)).toBe(true);
+    expect(messageablePeers(fleet, self).map((bot) => bot.id)).toEqual(["writer", "coder", "elsewhere"]);
+    // team management stays section-scoped
+    expect(canReachPeer(self, other)).toBe(false);
+    expect(canAccessTeam(self, "Personal")).toBe(false);
+  });
+
+  it("still enforces the sender's peers allow-list", () => {
+    const other = fleet.find((bot) => bot.id === "elsewhere")!;
+    expect(canMessagePeer({ ...self, peers: ["writer"] }, other)).toBe(false);
+    expect(messageablePeers(fleet, { ...self, peers: ["writer"] }).map((bot) => bot.id)).toEqual(["writer"]);
+    expect(messageablePeers(fleet, { ...self, peers: ["elsewhere"] }).map((bot) => bot.id)).toEqual(["elsewhere"]);
+    expect(messageablePeers(fleet, { ...self, peers: [] })).toEqual([]);
+    // only the sender's list is read: the target's own list does not block
+    expect(canMessagePeer(self, { ...other, peers: [] })).toBe(true);
+  });
+
+  it("never reaches a hidden bot or the bot itself, in any section", () => {
+    const hiddenElsewhere: RosterMember = { id: "ghost", name: "Ghost", hidden: true, section: "Personal" };
+    expect(canMessagePeer(self, fleet.find((bot) => bot.id === "hidden")!)).toBe(false);
+    expect(canMessagePeer(self, hiddenElsewhere)).toBe(false);
+    expect(canMessagePeer({ ...self, peers: ["ghost", "hidden"] }, hiddenElsewhere)).toBe(false);
+    expect(canMessagePeer(self, self)).toBe(false);
+    expect(messageablePeers([...fleet, hiddenElsewhere], { ...self, peers: ["hidden", "ghost", "self", "elsewhere"] }).map((bot) => bot.id)).toEqual(["elsewhere"]);
+  });
+
+  it("resolves another section's bot by name, but not a hidden or disallowed one", () => {
+    expect(resolveTeammate(fleet, self, "Scout")).toEqual({ id: "elsewhere", byName: true });
+    expect(resolveTeammate(fleet, { ...self, peers: ["writer"] }, "Scout")).toHaveProperty("error");
+    expect(resolveTeammate([...fleet, { id: "ghost", name: "Ghost", hidden: true, section: "Personal" }], self, "Ghost")).toHaveProperty("error");
+  });
+});
+
 describe("resolveTeammate", () => {
   it("takes an id as an id, even one the caller cannot reach", () => {
     expect(resolveTeammate(fleet, self, "writer")).toEqual({ id: "writer", byName: false });
@@ -146,8 +186,8 @@ describe("resolveTeammate", () => {
   });
 
   it("never resolves a name to a bot the id could not reach", () => {
-    // hidden, another section, the caller itself, and a name nobody has
-    for (const raw of ["Secret", "Scout", "Ada", "Nobody"]) {
+    // hidden, the caller itself, and a name nobody has
+    for (const raw of ["Secret", "Ada", "Nobody"]) {
       expect(resolveTeammate(fleet, self, raw)).toEqual({
         error: `No bot with id or name "${raw}" — call list_bots and copy the exact id from the result. ${PEER_ACCESS_HELP}`,
       });
@@ -319,9 +359,8 @@ describe("shared room peer scope", () => {
     expect(reachablePeers(fleet, { ...self, peers: [] }, members)).toEqual([]);
     expect(reachablePeers(fleet, { ...self, peers: ["self", "hidden", "elsewhere"] }, members).map(bot => bot.id)).toEqual(["elsewhere"]);
   });
-  it("resolves a shared member's name without granting access outside the room", () => {
-    expect(resolveTeammate(fleet, self, "Scout", members)).toEqual({ id: "elsewhere", byName: true });
-    expect(resolveTeammate(fleet, self, "Scout")).toHaveProperty("error");
-    expect(resolveTeammate(fleet, { ...self, peers: [] }, "Scout", members)).toHaveProperty("error");
+  it("resolves a shared member's name, and still honors explicit peer limits", () => {
+    expect(resolveTeammate(fleet, self, "Scout")).toEqual({ id: "elsewhere", byName: true });
+    expect(resolveTeammate(fleet, { ...self, peers: [] }, "Scout")).toHaveProperty("error");
   });
 });

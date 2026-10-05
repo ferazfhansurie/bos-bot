@@ -29,7 +29,7 @@ export interface RosterMember {
 
 const sectionKey = (section?: string): string => section?.trim() || "";
 
-export const PEER_ACCESS_HELP = "Call list_bots for reachable teammates. If the intended Chief is missing, ask the user to check team membership and this bot's allowed peers, or message the Chief directly. A Chief's access to another team does not grant that team's bots access back to the Chief. Do not use computer control to bypass this.";
+export const PEER_ACCESS_HELP = "Call list_bots for reachable bots — it includes bots in other sections. If the bot you need is missing, ask the user to check that it is not hidden and that it is on this bot's allowed peers. Do not use computer control to bypass this.";
 
 /** Coordination is scoped to the bot's own team unless the owner explicitly
  * allows its Chief to work with additional teams. A title, peer id, imported
@@ -98,6 +98,22 @@ export function canReachPeer(from: RosterMember, target: RosterMember, roomMembe
   return from.id !== target.id && !target.hidden && (canAccessTeam(from, target.section) || Boolean(sharesRoom)) && peerAllowed(from, target.id);
 }
 
+/** The messaging gate: who a bot may ask, delegate to, or open a thread on.
+ * Sections no longer bound messaging — any bot may message any other bot —
+ * but a hidden bot stays unreachable and the sender's explicit `peers`
+ * allow-list still narrows it. Team management (profiles, routines for
+ * another bot, Chief staffing) stays on `canReachPeer`/`canAccessTeam`. */
+export function canMessagePeer(from: RosterMember, target: RosterMember): boolean {
+  return from.id !== target.id && !target.hidden && peerAllowed(from, target.id);
+}
+
+/** Every bot `from` may message, across all sections. list_bots and teammate
+ * name resolution read this, so the directory is never wider than the comms
+ * endpoints. */
+export function messageablePeers<T extends RosterMember>(bots: readonly T[], from: RosterMember): T[] {
+  return bots.filter(bot => canMessagePeer(from, bot));
+}
+
 /** The peers a bot can both see and reach right now. The roster, list_bots
  * and @mention resolution all read this one list, so what a bot is TOLD
  * about its team can never be wider than what the comms endpoints will
@@ -112,8 +128,8 @@ export function reachablePeers<T extends RosterMember>(bots: readonly T[], from:
  * roster reaches for the name it sees there, and a name that names exactly
  * one reachable teammate is not a mistake worth refusing: the refusal reads
  * as a teammate that is gone, and the person is then told the platform lost
- * their team (#1348). Names resolve only inside `reachablePeers` — the same
- * set list_bots and the roster show — so a name can never reach a bot the id
+ * their team (#1348). Names resolve only inside `messageablePeers` — the same
+ * set list_bots shows — so a name can never reach a bot the id
  * could not. An id is always taken as an id, hidden or unreachable included:
  * the route says what is wrong with it. Two reachable teammates with one
  * name is the person's naming, not the model's error, so it is refused with
@@ -122,7 +138,6 @@ export function resolveTeammate<T extends RosterMember>(
   bots: readonly T[],
   from: RosterMember,
   raw: string,
-  roomMemberIds?: readonly string[],
 ): { id: string; byName: boolean } | { error: string } {
   const wanted = raw.trim();
   if (bots.some(bot => bot.id === wanted)) return { id: wanted, byName: false };
@@ -132,7 +147,7 @@ export function resolveTeammate<T extends RosterMember>(
   // other text that lands in a model's context, never a bot's persona.
   const shown = peerName(wanted) || wanted;
   if (!name) return { error: `No bot with id "${shown}" — call list_bots and copy the exact id from the result` };
-  const matches = reachablePeers(bots, from, roomMemberIds).filter(bot => fold(bot.name) === name);
+  const matches = messageablePeers(bots, from).filter(bot => fold(bot.name) === name);
   if (matches.length === 1) return { id: matches[0]!.id, byName: true };
   if (matches.length > 1) {
     return { error: `${matches.length} reachable teammates are named "${shown}" — call list_bots and use the id of the one you mean` };
