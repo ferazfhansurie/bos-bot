@@ -224,8 +224,9 @@ export interface RoomActiveMemberTurn {
   threadId: string;
   /** epoch ms; null when the server does not know */
   startedAt: number | null;
-  /** the turn's runtime id, when the server has it */
-  turnId?: string;
+  /** the turn's id as turn.started/turn.completed carry it; null until the
+   * server has seen the real turn.started */
+  turnId?: string | null;
 }
 
 /** A room: several bots + you in one shared thread. */
