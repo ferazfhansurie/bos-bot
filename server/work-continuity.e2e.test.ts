@@ -458,6 +458,11 @@ describe("work continuity real server", () => {
     release(lead.threadId);
     await expect.poll(() => promptsOf(node.threadId).length, { timeout: 15000 }).toBe(1); release(node.threadId);
     await expect.poll(() => handoffs().find(n => n.id === node.id)?.status, { timeout: 15000 }).toBe("completed");
+    // The parent precedes its child in the scheduler: one tick reports the
+    // child, then the next makes the parent resumable. Wait for that durable
+    // state rather than assuming both 250ms ticks fit inside a 350ms sleep.
+    await expect.poll(() => handoffs().some(n => n.botId === lead.id && n.status === "resume"), { timeout: 15000 }).toBe(true);
+    expect(handoffs().find(n => n.id === node.id)?.reported).toBe(true);
     await new Promise(r => setTimeout(r, 350)); expect(count(lead)).toBe(1);
     expect(handoffs().some(n => n.botId === lead.id && n.status === "resume")).toBe(true);
     const ledger = JSON.parse(readFileSync(join(home, ".openmausbot", "work-plans.json"), "utf8"));
