@@ -56,7 +56,7 @@ import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type 
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { LeadActions, taggedLeadReport, leadResolutionSchema, type LeadAction } from "./lead-actions.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
-import { deferMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
+import { deferMentionCallback, isAddressedRoomReply, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
@@ -10644,6 +10644,30 @@ async function executeGroupMemberTurn(
   // must not hold its lane, or the person's next message to it waits for
   // the whole chain. Goal steps keep their serialized coordinator.
   if (!orchestration) roomMemberLaneReleases.get(threadId)?.();
+  // Coordination owns its own durable queue and result resumes. An explicit
+  // addressed reply may still reach another room member through that queue;
+  // incidental mentions stay inert and ancestor results already return once.
+  const handoff = roomHandoffs.nodes.get(orchestration?.roomHandoffId ?? internalGeneration);
+  if (handoff && outcome === "settled" && !isCancelled?.() && !isBareAck(replyText)) {
+    for (const next of roomResponders(replyText, group.memberIds.flatMap(id => {
+      const member = store.bot(id); return member && !member.hidden && member.id !== bot.id ? [member] : [];
+    }), { kind: "mentions" })) {
+      if (!isAddressedRoomReply(replyText, next.name)) continue;
+      if (roomHandoffs.path(handoff).some(ancestor => ancestor.botId === next.id)) continue;
+      try {
+        roomHandoffs.enqueue(
+          { groupId, threadId: handoff.threadId, botId: bot.id }, internalGeneration, orchestration?.roomHandoffId,
+          { groupId, threadId: handoff.threadId, botId: next.id },
+          `mention-${next.id}-${createHash("sha256").update(replyText.trim().replace(/\s+/g, " ")).digest("hex")}`,
+          replyText, false, true,
+        );
+      } catch (error) {
+        store.appendMessage(threadId, { role: "bot", kind: "activity",
+          from: { botId: bot.id, name: bot.name, color: bot.color },
+          tool: { name: `${next.name} mention not delivered: ${error instanceof Error ? error.message : String(error)}`, ok: false } });
+      }
+    }
+  }
   // chained mentions: a member's reply can summon teammates, MAX_GROUP_HOPS deep
   if (
     (orchestration?.followMentions ?? true) &&
@@ -10677,13 +10701,14 @@ async function executeGroupMemberTurn(
       });
     }
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
+      if (!isAddressedRoomReply(replyText, next.name)) continue;
       if (isCancelled?.()) return false;
       // Dispatch after this execution releases its slot. All mentions in
       // the next wave may work together, including callbacks to a lead.
       // Equal routes within this user round are loops/retries, while new
       // results from the same bot are legitimate follow-up deliveries.
       deferMentionCallback(spoken, next.id, hop + 1,
-        JSON.stringify([bot.id, replyText.trim().replace(/\s+/g, " ")]));
+        JSON.stringify([bot.id, replyText.trim().replace(/\s+/g, " ")]), bot.id);
     }
   }
   return true;
@@ -11341,6 +11366,18 @@ function startGroupTurn(
           if (!member || !store.group(groupId)?.memberIds.includes(member.id)) return;
           const verdict = await waitForChatRoomMember(operation, threadId, member);
           if (verdict !== "run") return;
+          // Waiting may outlive membership or peer permission. Recheck the
+          // addressed route on admission; a mention never grants approval.
+          const source = callback.sourceBotId && store.bot(callback.sourceBotId);
+          const problem = source ? roomHandoffProblem(
+            { groupId, threadId, botId: member.id }, { groupId, threadId, botId: source.id },
+          ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, threadId)
+            ? "Sender requires peer approval; use coordinate_bots" : undefined) : "Mention source no longer exists";
+          if (problem) {
+            store.appendMessage(threadId, { role: "bot", kind: "activity",
+              tool: { name: `${member.name} mention not delivered: ${problem}`, ok: false } });
+            return;
+          }
           try {
             await runGroupMemberTurn(
               groupId, threadId, member.id, callback.hop, spoken,

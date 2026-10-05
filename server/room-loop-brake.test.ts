@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deferMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
+import { deferMentionCallback, isAddressedRoomReply, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
 
 describe("room stop and mention routing", () => {
   it("recognises a bare stop and nothing longer", () => {
@@ -42,4 +42,10 @@ describe("room stop and mention routing", () => {
     deferMentionCallback(round, "dev", 2, "pipe:result");
     expect(takeMentionCallback(round)?.botId).toBe("dev");
   });
+});
+
+it("recognizes exact addressed reply lines without waking contextual names", () => {
+  for (const text of ["@bos check this", "done @bos: fixture ready", "summary\n@bos verify", "approved @bos", "ready @bos: result"]) expect(isAddressedRoomReply(text, "bos")).toBe(true);
+  for (const text of ["Assigned; @bos is context", "Built CSV; @bos is context", "@boss verify", "quote: @bos verify", "> @bos verify"]) expect(isAddressedRoomReply(text, "bos")).toBe(false);
+  expect(isAddressedRoomReply("@bot (qa) check", "bot (qa)")).toBe(true);
 });

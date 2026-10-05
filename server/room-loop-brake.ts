@@ -38,25 +38,32 @@ export function isBareAck(text: string): boolean {
  * wake the same lead again; repeating the same source/recipient/content route
  * may not. The caller enforces the hop limit independently of this ledger. */
 const mentionCallbacks = new WeakMap<Set<string>, {
-  pending: Map<string, { botId: string; hop: number }>;
+  pending: Map<string, { botId: string; hop: number; sourceBotId?: string }>;
   seen: Set<string>;
 }>();
 
-export function deferMentionCallback(spoken: Set<string>, botId: string, hop: number, sourceKey: string): void {
+export function deferMentionCallback(spoken: Set<string>, botId: string, hop: number, sourceKey: string, sourceBotId?: string): void {
   let entry = mentionCallbacks.get(spoken);
   if (!entry) mentionCallbacks.set(spoken, entry = { pending: new Map(), seen: new Set() });
   const key = JSON.stringify([botId, sourceKey]);
   if (entry.seen.has(key)) return;
   entry.seen.add(key);
-  entry.pending.set(key, { botId, hop });
+  entry.pending.set(key, { botId, hop, ...(sourceBotId ? { sourceBotId } : {}) });
 }
 
 /** Remove one delivery before dispatch so it cannot run twice. */
-export function takeMentionCallback(spoken: Set<string>): { botId: string; hop: number } | null {
+export function takeMentionCallback(spoken: Set<string>): { botId: string; hop: number; sourceBotId?: string } | null {
   const entry = mentionCallbacks.get(spoken);
   const next = entry?.pending.entries().next();
   if (!entry || !next || next.done) return null;
   const [key, delivery] = next.value;
   entry.pending.delete(key);
   return delivery;
+}
+
+/** Addressed reply lines, rather than names embedded in explanatory prose.
+ * Accept the room's short handoff/result prefixes and exact display names. */
+export function isAddressedRoomReply(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\s*(?:(?:done|ready|blocked|approved|interface|claimed)\\s*[:,]?\\s+)?@${escaped}(?=$|[\\s:,.!?])`, "imu").test(text);
 }

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
@@ -33,7 +33,17 @@ async function withRooms(test: (f: any) => Promise<void>) {
     const start = async () => { savePlan(); return cli("send-channel", "--channel", source.id, "--text", "@Director Start the assignment"); };
     const wait = async () => cli("wait", "--channel", source.id, "--timeout", "30");
     const provider = () => readFileSync(`${planPath}.evidence.jsonl`, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    await test({ session, api, cli, tool, sender, target, source, destination, plan, savePlan, nodes, messages, start, wait, provider });
+    const recordWake = async (label: string) => {
+      const dir = process.env.WAKE_EVIDENCE_DIR;
+      if (!dir) return;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${label}.json`), JSON.stringify({ fixture: session.info,
+        wait: await wait(), turns: provider().map((t: any) => ({ botId: t.botId, threadId: t.threadId, resumed: t.resumed })),
+        bots: { sender: sender.id, target: target.id }, nodes: nodes(),
+        transcript: (await messages(source.activeTaskId)).map((m: any) => ({ id: m.id, role: m.role, from: m.from, text: m.text, tool: m.tool?.name, roomRequest: m.roomRequest })),
+      }, null, 2));
+    };
+    await test({ recordWake, session, api, cli, tool, sender, target, source, destination, plan, savePlan, nodes, messages, start, wait, provider });
   } finally { await session.close(); }
 }
 
@@ -498,3 +508,82 @@ it("resolves a unique teammate name in a bot_ids slot, and refuses an ambiguous 
     .evidence.find((entry: any) => entry.step).response.result.content[0].text;
   expect(refused).toBe(`2 reachable teammates are named "${f.target.name}" — call list_bots and use the id of the one you mean`);
 }), 60_000);
+
+// Explicit addressed replies must survive the coordination mention gate.
+it.each(["source", "recipient", "settled-resume"])("wakes an explicitly addressed room member from a %s coordination reply", phase => withRooms(async f => {
+  const lead = (await f.cli("new-bot", "--name", "bos", "--section", "A")).bot;
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id, lead.id] });
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id], request_key: "work", message: "Build fixture" } }];
+  const addressed = "ready @bos: fixture result needs your verification";
+  if (phase === "source") f.plan[f.sender.id].reply = addressed;
+  if (phase === "recipient") f.plan[f.target.id].reply = addressed;
+  if (phase === "settled-resume") f.plan[f.sender.id].resumeReply = addressed;
+  f.plan[lead.id] = { reply: "Verified addressed fixture result" };
+  await f.start(); expect((await f.wait()).status).toBe("settled");
+  await f.recordWake(`explicit-${phase}`);
+  expect(f.provider().filter((t: any) => t.botId === lead.id)).toHaveLength(1);
+  expect((await f.messages(f.source.activeTaskId)).filter((m: any) => m.text === "Verified addressed fixture result")).toHaveLength(1);
+  expect(f.nodes().every((n: any) => n.status === "completed")).toBe(true);
+}), 45_000);
+
+it("returns an explicitly addressed result to a busy source once after its lane frees", () => withRooms(async f => {
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id] });
+  const workerGate = join(f.session.info.dataDir, "worker.gate");
+  const sourceGate = join(f.session.info.dataDir, "source.gate");
+  f.plan[f.sender.id] = { turns: [
+    { steps: [{ arguments: { bot_ids: [f.target.id], request_key: "work", message: "Build fixture" } }], reply: "Assigned" },
+    { gateFile: sourceGate, progress: "BUSY_SOURCE", reply: "Independent work finished" },
+    { reply: "Verified returned result" },
+  ] };
+  f.plan[f.target.id] = { gateFile: workerGate, reply: "@Director done: fixture checks passed" };
+  await f.start();
+  await expect.poll(() => f.nodes().find((n: any) => n.parentId)?.status, { timeout: 15000 }).toBe("running");
+  await f.cli("send", "--bot", f.sender.id, "--text", "Independent fixture task");
+  await expect.poll(async () => (await f.api("/api/bots")).bots.find((b: any) => b.id === f.sender.id)?.busy).toBe(true);
+  writeFileSync(workerGate, "release");
+  await expect.poll(() => f.nodes().find((n: any) => !n.parentId)?.status, { timeout: 15000 }).toBe("resume");
+  expect(f.provider().filter((t: any) => t.botId === f.sender.id)).toHaveLength(1);
+  writeFileSync(sourceGate, "release");
+  expect((await f.wait()).status).toBe("settled");
+  expect(f.provider().filter((t: any) => t.botId === f.sender.id)).toHaveLength(3);
+  expect((await f.messages(f.source.activeTaskId)).filter((m: any) => m.text === "Verified returned result")).toHaveLength(1);
+  await f.recordWake("busy-source");
+}), 45000);
+
+it.each(["deliver", "membership", "peer", "approval", "cancel"])("retains a busy explicit mention and honors %s before dispatch", mode => withRooms(async f => {
+  const lead = (await f.cli("new-bot", "--name", "bos", "--section", "A")).bot;
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id, lead.id] });
+  const gate = join(f.session.info.dataDir, "lead.gate");
+  f.plan[lead.id] = { turns: [{ gateFile: gate, reply: "Independent lead work" }, { reply: "Verified queued result" }] };
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id], request_key: "work", message: "Build fixture" } }];
+  f.plan[f.target.id].reply = "@bos done: fixture checks passed";
+  f.savePlan(); await f.cli("send", "--bot", lead.id, "--text", "Independent fixture task");
+  await expect.poll(async () => (await f.api("/api/bots")).bots.find((b: any) => b.id === lead.id)?.busy).toBe(true);
+  await f.start();
+  await expect.poll(() => f.nodes().find((n: any) => n.botId === lead.id)?.status, { timeout: 15000 }).toBe("queued");
+  if (mode === "membership") await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id] });
+  if (mode === "peer") await f.api(`/api/bots/${f.target.id}`, { peers: [] }, "PATCH");
+  if (mode === "approval") await f.api(`/api/bots/${f.target.id}`, { approvePeerComms: true }, "PATCH");
+  if (mode === "cancel") await f.cli("interrupt", "--channel", f.source.id);
+  writeFileSync(gate, "release");
+  await f.wait(); await f.cli("wait", "--bot", lead.id, "--timeout", "15");
+  expect(f.provider().filter((t: any) => t.botId === lead.id)).toHaveLength(mode === "deliver" ? 2 : 1);
+  expect(f.nodes().find((n: any) => n.botId === lead.id).status).toBe(mode === "deliver" ? "completed" : mode === "cancel" ? "cancelled" : "failed");
+  await f.recordWake(`busy-mention-${mode}`);
+}), 45000);
+
+it("keeps distinct addressed worker results and suppresses acknowledgement loops", () => withRooms(async f => {
+  const lead = (await f.cli("new-bot", "--name", "bos", "--section", "A")).bot;
+  const other = (await f.cli("new-bot", "--name", "Other", "--section", "A")).bot;
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id, other.id, lead.id] });
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id, other.id], request_key: "work", message: "Build fixture" } }];
+  f.plan[f.target.id] = { reply: "@bos done: first result", resumeReply: "@bos done: first result" };
+  f.plan[other.id] = { reply: "@bos done: second result", resumeReply: "@bos done: second result" };
+  f.plan[lead.id] = { reply: "agreed @Engineer @Other" };
+  await f.start(); expect((await f.wait()).status).toBe("settled");
+  expect(f.provider().filter((t: any) => t.botId === lead.id)).toHaveLength(2);
+  expect(f.provider().filter((t: any) => t.botId === f.target.id)).toHaveLength(2);
+  expect(f.provider().filter((t: any) => t.botId === other.id)).toHaveLength(2);
+  expect(f.nodes().filter((n: any) => n.botId === lead.id)).toHaveLength(2);
+  await f.recordWake("distinct-results");
+}), 45000);

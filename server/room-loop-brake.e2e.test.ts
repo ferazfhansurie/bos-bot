@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
@@ -62,3 +62,48 @@ it("treats a typed stop as the room's Stop button", () => withPair(async f => {
   expect(log.some((m: any) => m.kind === "activity" && m.tool?.name === "stopped 1 running turn in this room")).toBe(true);
   expect(log.some((m: any) => m.text === "@Bee your turn")).toBe(false);
 }), 60_000);
+
+it.each(["idle", "busy"])("wakes an %s lead once from a plain teammate reply", state => withPair(async f => {
+  await f.api("/api/config", { threads: { maxConcurrentPerBot: 1 } }, "PATCH");
+  const gate = join(f.planPath, "..", "lead.gate");
+  f.savePlan({ [f.ace.id]: { reply: "ready @Bee: verify the fixture result" },
+    [f.bee.id]: { turns: state === "busy" ? [{ gateFile: gate, reply: "Independent work" }, { reply: "Verified plain result" }] : [{ reply: "Verified plain result" }] } });
+  if (state === "busy") {
+    await f.cli("send", "--bot", f.bee.id, "--text", "Independent fixture task");
+    await expect.poll(async () => (await f.api("/api/bots")).bots.find((b: any) => b.id === f.bee.id)?.busy).toBe(true);
+  }
+  await f.cli("send-channel", "--channel", f.room.id, "--text", "@Ace finish");
+  if (state === "busy") {
+    await expect.poll(() => f.turns().includes(f.ace.id), { timeout: 15000 }).toBe(true);
+    expect(f.turns().filter((id: string) => id === f.bee.id)).toHaveLength(0);
+    writeFileSync(gate, "release");
+  }
+  expect((await f.wait()).status).toBe("settled");
+  // A depth-capped plain mention deliberately mounts no agents MCP. Its
+  // fixture reply and durable transcript prove dispatch, not MCP evidence.
+  const transcript = await f.messages();
+  expect(transcript.filter((m: any) => m.kind === "text" && m.from?.botId === f.bee.id)).toHaveLength(1);
+  expect(transcript.filter((m: any) => m.kind === "text" && m.from?.botId === f.ace.id)).toHaveLength(1);
+  if (process.env.WAKE_EVIDENCE_DIR) {
+    mkdirSync(process.env.WAKE_EVIDENCE_DIR, { recursive: true });
+    writeFileSync(join(process.env.WAKE_EVIDENCE_DIR, `plain-${state}.json`), JSON.stringify({
+      wait: await f.wait(), transcript, providerTurns: f.turns(), dispatches: { workerRoom: 1, leadRoom: 1, leadIndependent: state === "busy" ? 1 : 0 },
+    }, null, 2));
+  }
+}), 45000);
+
+it.each(["peer", "membership", "approval"])("withholds a busy plain callback after %s is revoked", mode => withPair(async f => {
+  await f.api("/api/config", { threads: { maxConcurrentPerBot: 1 } }, "PATCH");
+  const gate = join(f.planPath, "..", "plain-revoke.gate");
+  f.savePlan({ [f.ace.id]: { reply: "@Bee check the fixture" }, [f.bee.id]: { gateFile: gate, reply: "Independent task finished" } });
+  await f.cli("send", "--bot", f.bee.id, "--text", "Independent fixture task");
+  await expect.poll(async () => (await f.api("/api/bots")).bots.find((b: any) => b.id === f.bee.id)?.busy).toBe(true);
+  await f.cli("send-channel", "--channel", f.room.id, "--text", "@Ace finish");
+  await expect.poll(() => f.turns().includes(f.ace.id), { timeout: 15000 }).toBe(true);
+  if (mode === "peer") await f.api(`/api/bots/${f.ace.id}`, { peers: [] }, "PATCH");
+  if (mode === "membership") await f.api(`/api/groups/${f.room.id}`, { memberIds: [f.bee.id] }, "PATCH");
+  if (mode === "approval") await f.api(`/api/bots/${f.ace.id}`, { approvePeerComms: true }, "PATCH");
+  writeFileSync(gate, "release");
+  await f.wait(); await f.cli("wait", "--bot", f.bee.id, "--timeout", "15");
+  expect((await f.messages()).filter((m: any) => m.kind === "text" && m.from?.botId === f.bee.id)).toHaveLength(0);
+}), 45000);
