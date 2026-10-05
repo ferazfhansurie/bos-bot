@@ -21,6 +21,7 @@ import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { TerminalService } from "./terminal.ts";
 import { resolveTerminalTarget } from "./terminal-target.ts";
+import { WorkspaceFilesService } from "./workspace-files.ts";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
 import { basename, extname, join } from "node:path";
 
@@ -133,7 +134,7 @@ import { groupTurnCwd } from "./room-cwd.ts";
 import { RoomTurnDeadline, RoomTurnStallRegistry, roomTurnTimeoutMessage } from "./room-turn-timeout.ts";
 import * as box from "./box.ts";
 import { TeamComputers, teamComputerAssignment, teamComputerCreate, teamComputerOwner, type TeamComputerRecord } from "./team-computers.ts";
-import { isEffortLevel, type GroupTask, type ThreadState, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
+import { isEffortLevel, type GroupTask, type InboxClearResponse, type InboxItem, type ThreadState, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
 import type { TeamComputersPayload } from "../shared/team-computer.ts";
 import { boxCreateRecoverySnapshot, retireDeletedBoxCreate } from "./box-create-idempotency.ts";
 import { boxDeletionSnapshot } from "./box-delete-journal.ts";
@@ -199,7 +200,7 @@ import {
   roomHandoffLimits,
 } from "./config.ts";
 import { inboxCanClose, inboxShouldSettle, threadState, type InboxCandidate } from "./thread-inbox.ts";
-import { buildDigest, buildInbox, digestDue, digestNotificationBody, localDateKey, type NeedsMeThread } from "./needs-me.ts";
+import { buildDigest, buildInbox, digestDue, digestNotificationBody, localDateKey, partitionInboxClear, type NeedsMeThread } from "./needs-me.ts";
 import { sweepThreadEventLogs, type ThreadLogRetentionCandidate } from "./thread-retention.ts";
 import { ComputerControl } from "./computer-control.ts";
 import { augmentedPath, findCliCandidates, resetPathCache } from "./env-path.ts";
@@ -12963,6 +12964,15 @@ const terminals = new TerminalService({
   resolveTarget: (botId, threadId) => resolveTerminalTarget(store, botId, threadId, bot => Boolean(inheritedTeamComputer(bot))),
   claim: () => workspaceMaintenance.request(),
 });
+const workspaceFiles = new WorkspaceFilesService({
+  ownerToken: () => DESKTOP_MANAGED ? desktopMutationToken : undefined,
+  authenticate: req => resolveRequestAuth(req, {
+    sessions, cookieName: SESSION_COOKIE, streamPath: "/api/events",
+    url: new URL(req.url ?? "/", `http://localhost:${PORT}`),
+    loopbackMutationToken: desktopMutationToken, companionMutationToken,
+  }).auth?.kind === "loopback",
+  resolveRoot: (botId, threadId) => resolveTerminalTarget(store, botId, threadId, bot => Boolean(inheritedTeamComputer(bot))),
+});
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   let url: URL;
   try {
@@ -13168,6 +13178,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
     if (await terminals.handle(req, res)) return;
+    if (await workspaceFiles.handle(req, res)) return;
     if (auth.kind === "session" && !workspaceMaintenance.active) {
       const replaced = peerHandoffs.confirm(auth.session.id);
       if (replaced) sessions.revoke(replaced);
@@ -16360,6 +16371,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (peerSessionId) return json(res, 403, { error: "forbidden" });
       return json(res, 200, currentInbox(needsMeScope(auth)));
     }
+    // Clear all (no ids) or the named rows; live asks are kept, never decided.
+    if (method === "POST" && path === "/api/inbox/clear") {
+      if (peerSessionId) return json(res, 403, { error: "forbidden" });
+      const body = await readBody(req);
+      const parsed = z.object({ ids: z.array(z.string().max(200)).max(500).optional() }).strict().safeParse(body ?? {});
+      if (!parsed.success) return json(res, 400, { error: "body must be { ids?: string[] }" });
+      return json(res, 200, clearInbox(needsMeScope(auth), parsed.data.ids));
+    }
     // What moved since `since` (epoch ms; default the last 24 hours).
     if (method === "GET" && path === "/api/digest") {
       if (peerSessionId) return json(res, 403, { error: "forbidden" });
@@ -19285,7 +19304,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (body.projectId !== undefined && (typeof body.projectId !== "string" || !store.project(bot.id, body.projectId))) {
         return json(res, 400, { error: "projectId must belong to this bot" });
       }
-      const task = store.createTask(bot.id, typeof body.title === "string" ? body.title : undefined, true, body.projectId);
+      if (body.activate !== undefined && typeof body.activate !== "boolean") return json(res, 400, { error: "activate must be a boolean" });
+      // activate:false opens a side thread (the tools panel's side chat)
+      // without switching the conversation on screen. Peers always switch.
+      const activate = body.activate !== false || Boolean(peerSessionId);
+      const task = store.createTask(bot.id, typeof body.title === "string" ? body.title : undefined, activate, body.projectId);
       if (!task) return json(res, 500, { error: "couldn't create that task" });
       if (peerSessionId) {
         store.patchTask(bot.id, task.threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [] });
@@ -21380,6 +21403,7 @@ function needsMeThreads(tailFor: (lastActivityAt: number, createdAt: number, clo
       threads.push({
         botId: bot.id, threadId: task.threadId, title: task.title, createdAt: task.openedBy?.at ?? task.createdAt, lastActivityAt,
         ...(task.closedBy ? { closedBy: task.closedBy } : {}), archived: Boolean(task.archivedAt), unread: task.unread === true,
+        ...(task.failureAckedAt !== undefined ? { failureAckedAt: task.failureAckedAt } : {}),
         waiting: state === "waiting-on-you", working: state === "running" || state === "queued",
         messages: tail(task.threadId, tailFor(lastActivityAt, task.createdAt, task.closedBy)),
       });
@@ -21398,6 +21422,7 @@ function needsMeThreads(tailFor: (lastActivityAt: number, createdAt: number, clo
       rows.push({
         botId, groupId: group.id, threadId: task.threadId, title: task.title, createdAt: task.createdAt, lastActivityAt,
         ...(task.closedBy ? { closedBy: task.closedBy } : {}), archived: false, unread: false,
+        ...(task.failureAckedAt !== undefined ? { failureAckedAt: task.failureAckedAt } : {}),
         waiting: state === "waiting-on-you", working: state === "running" || state === "queued", messages,
       });
     }
@@ -21430,6 +21455,58 @@ function currentDigest(since: number, until: number, scope: { includeGroups: boo
   const waiting = buildInbox(threads.map(thread => ({ ...thread, messages: thread.messages.slice(-INBOX_TAIL) })))
     .items.filter(item => item.kind === "waiting-on-you" || item.kind === "question").length;
   return buildDigest(threads, since, until, waiting);
+}
+
+/** Settle one clearable row the same way the app would by hand: read the
+ * reply, acknowledge the failure, dismiss the card. */
+function clearInboxItem(item: InboxItem): void {
+  if (item.kind === "unread") {
+    if (item.groupId) {
+      const group = store.patchGroup(item.groupId, { unread: false });
+      if (group) broadcast({ kind: "group", group: publicGroupState(group) });
+      return;
+    }
+    if (!store.patchTask(item.botId, item.threadId, { unread: false })) return;
+    settleInboxThreads();
+    const bot = store.bot(item.botId);
+    if (bot) broadcast({ kind: "bot", bot: wireBot(bot) });
+    return;
+  }
+  if (item.kind === "failed") {
+    const at = Math.max(Date.now(), item.at);
+    if (item.groupId) {
+      const task = store.ackGroupTaskFailure(item.groupId, item.threadId, at);
+      const group = task ? store.group(item.groupId) : undefined;
+      if (group) broadcast({ kind: "group", group: publicGroupState(group) });
+      return;
+    }
+    if (!store.patchTask(item.botId, item.threadId, { failureAckedAt: at })) return;
+    const bot = store.bot(item.botId);
+    if (bot) broadcast({ kind: "bot", bot: wireBot(bot) });
+    return;
+  }
+  if (item.kind === "question" && item.messageId && !item.requestId) {
+    const existing = store.messagesTail(item.threadId, INBOX_TAIL).messages.find(message => message.id === item.messageId);
+    if (!existing?.card || existing.card.requestId) return;
+    store.patchMessage(item.threadId, item.messageId, { card: { ...existing.card, dismissed: true } });
+  }
+}
+
+/** One thread can hold more than one clearable reason (a dismissed card can
+ * uncover a failure, a failure an unread reply), so a cleared thread is
+ * re-read until only what clearing cannot settle is left. Counts are rows as
+ * the viewer saw them. */
+function clearInbox(scope: { includeGroups: boolean; bots: readonly BotRecord[] }, ids?: readonly string[]): InboxClearResponse {
+  const first = partitionInboxClear(currentInbox(scope).items, ids);
+  const threads = new Set(first.clear.map(item => item.threadId));
+  let round = first.clear;
+  // four reasons at most, each pass settles the newest one per thread
+  for (let pass = 0; round.length > 0 && pass < 4; pass += 1) {
+    for (const item of round) clearInboxItem(item);
+    round = partitionInboxClear(currentInbox(scope).items).clear.filter(item => threads.has(item.threadId));
+  }
+  scheduleInboxCount();
+  return { cleared: first.clear.length, kept: first.kept.length };
 }
 
 // The count frame is a refetch hint: debounced, and only sent when the

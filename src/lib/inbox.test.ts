@@ -2,12 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiError, initialState, reducer } from "@/state/store";
 import {
+  answerInboxItem,
+  clearInbox,
   digestCountEntries,
   EMPTY_INBOX,
   fetchDigest,
   fetchInbox,
   groupInboxItems,
   inboxBadge,
+  inboxItemAnswerable,
+  inboxItemClearable,
   inboxKindLabel,
   inboxRelativeTime,
   normalizeDigest,
@@ -40,6 +44,63 @@ describe("normalizeInbox", () => {
     expect(normalizeInbox({ items: [item()] }).count).toBe(1);
     expect(normalizeInbox({})).toEqual(EMPTY_INBOX);
     expect(normalizeInbox("<!doctype html>")).toEqual(EMPTY_INBOX);
+  });
+});
+
+describe("normalizeInbox answer fields", () => {
+  it("keeps card ids, live request ids and string options", () => {
+    const [row] = normalizeInbox({ items: [item({ messageId: "m1", options: ["A", 3, "", "B"] as never })] }).items;
+    expect(row).toMatchObject({ messageId: "m1", options: ["A", "B"] });
+    expect(row).not.toHaveProperty("requestId");
+    expect(inboxItemAnswerable(row)).toBe(true);
+    expect(inboxItemClearable(row)).toBe(true);
+  });
+
+  it("an approval needs a request id and drops options", () => {
+    const [live] = normalizeInbox({ items: [item({ kind: "waiting-on-you", messageId: "m1", requestId: "r1", approval: true, options: ["Allow"] })] }).items;
+    expect(live).toMatchObject({ requestId: "r1", approval: true });
+    expect(live).not.toHaveProperty("options");
+    expect(inboxItemClearable(live)).toBe(false);
+    const [bogus] = normalizeInbox({ items: [item({ approval: true })] }).items;
+    expect(bogus).not.toHaveProperty("approval");
+    expect(inboxItemAnswerable(bogus)).toBe(false);
+  });
+
+  it("an old server's rows read as plain open-only rows", () => {
+    const [row] = normalizeInbox({ items: [item()] }).items;
+    expect(row).not.toHaveProperty("options");
+    expect(inboxItemAnswerable(row)).toBe(false);
+  });
+});
+
+describe("clear and answer", () => {
+  it("clears all with an empty body, named rows with ids, and tolerates an old server", async () => {
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => ({ cleared: 2, kept: 1 }));
+    await expect(clearInbox(undefined, request)).resolves.toEqual({ cleared: 2, kept: 1 });
+    expect(request).toHaveBeenLastCalledWith("/api/inbox/clear", { method: "POST", body: "{}" });
+    await clearInbox(["unread:t1"], request);
+    expect(request).toHaveBeenLastCalledWith("/api/inbox/clear", { method: "POST", body: JSON.stringify({ ids: ["unread:t1"] }) });
+    await expect(clearInbox(undefined, async () => { throw new ApiError("404 Not Found", 404); })).resolves.toBeNull();
+    await expect(clearInbox(undefined, async () => { throw new ApiError("boom", 500); })).rejects.toThrow("boom");
+  });
+
+  it("answers live asks by thread, the way the in-chat cards do", async () => {
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => ({}));
+    await answerInboxItem(item({ kind: "waiting-on-you", requestId: "r1", approval: true }), { behavior: "deny" }, request);
+    expect(request).toHaveBeenLastCalledWith("/api/threads/t1/respond", { method: "POST", body: JSON.stringify({ requestId: "r1", behavior: "deny", message: "Denied by the user." }) });
+    await answerInboxItem(item({ kind: "waiting-on-you", requestId: "r1", approval: true }), { behavior: "allow" }, request);
+    expect(JSON.parse(String(request.mock.lastCall?.[1]?.body))).toEqual({ requestId: "r1", behavior: "allow" });
+    await answerInboxItem(item({ kind: "waiting-on-you", requestId: "r2", options: ["Ship"] }), { option: "Ship" }, request);
+    expect(JSON.parse(String(request.mock.lastCall?.[1]?.body))).toEqual({ requestId: "r2", behavior: "answer", message: "Ship" });
+  });
+
+  it("answers a plain card by settling it, then sending the choice", async () => {
+    const request = vi.fn(async (_path: string, _init?: RequestInit) => ({}));
+    await answerInboxItem(item({ messageId: "m1", options: ["A"] }), { option: "A" }, request);
+    expect(request.mock.calls.map(([path]) => path)).toEqual(["/api/bots/atlas/cards/m1", "/api/bots/atlas/messages"]);
+    expect(JSON.parse(String(request.mock.calls[0][1]?.body))).toEqual({ answered: "A", dismissed: true, threadId: "t1" });
+    expect(JSON.parse(String(request.mock.calls[1][1]?.body))).toEqual({ text: "A", threadId: "t1" });
+    await expect(answerInboxItem(item({ messageId: "m1", groupId: "room" }), { option: "A" }, request)).rejects.toThrow();
   });
 });
 

@@ -221,6 +221,18 @@ const bridge = {
       return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
     },
   },
+  /** Partition used by the side-panel Browser tool's <webview>. Main forces
+   * it on every attach regardless of what the renderer sets. */
+  toolsBrowserPartition: "persist:bos-tools-browser",
+  /** A page in the Browser tool asked for a new window; main denied it and
+   * forwards the (already allowed) URL so the renderer can open a tab. */
+  onToolsBrowserPopup: (cb) => {
+    const handler = (_event, url) => {
+      if (typeof url === "string") cb(url);
+    };
+    ipcRenderer.on("tools-browser:popup", handler);
+    return () => ipcRenderer.removeListener("tools-browser:popup", handler);
+  },
   /** Native folder picker for a bot's working folder; null when cancelled. */
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),
   /** Writes the redacted diagnostics report to a user-chosen file; resolves

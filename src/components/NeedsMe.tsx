@@ -2,23 +2,28 @@
 // day. The sidebar row carries the live count; the page refetches whenever
 // that count changes (the server's `inbox` frame).
 import { useEffect, useState } from "react";
-import { BellDot, CheckCircle2, CircleAlert, CircleHelp, Inbox, Loader2, XCircle } from "lucide-react";
+import { BellDot, CheckCheck, CheckCircle2, CircleAlert, CircleHelp, Inbox, Loader2, X, XCircle } from "lucide-react";
 import { openThread, useStore, type AppState } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { BotAvatar } from "./Avatar";
 import {
   DIGEST_WINDOW_MS,
+  answerInboxItem,
+  clearInbox,
   digestChangeLabel,
   digestCountEntries,
   fetchDigest,
   fetchInbox,
   groupInboxItems,
   inboxBadge,
+  inboxItemAnswerable,
+  inboxItemClearable,
   inboxKindLabel,
   inboxRelativeTime,
   type DigestMove,
   type DigestResponse,
+  type InboxAnswer,
   type InboxItem,
   type InboxKind,
   type InboxResponse,
@@ -83,6 +88,12 @@ export function NeedsMePage() {
   const { state, dispatch } = useStore();
   const [inbox, setInbox] = useState<InboxResponse | null>(null);
   const [digest, setDigest] = useState<DigestResponse | null>(null);
+  // a local bump refetches after a clear or an answer without waiting on
+  // the server's debounced count frame
+  const [reload, setReload] = useState(0);
+  // row ids with a clear or answer in flight; "*" is clear all
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
 
   // the count is the change signal; the list itself always comes fresh
   useEffect(() => {
@@ -93,7 +104,7 @@ export function NeedsMePage() {
       dispatch({ type: "inboxCount", count: next.count });
     }, () => { if (alive) setInbox((current) => current ?? { items: [], count: 0 }); });
     return () => { alive = false; };
-  }, [state.inboxCount, dispatch]);
+  }, [state.inboxCount, reload, dispatch]);
 
   useEffect(() => {
     let alive = true;
@@ -104,16 +115,48 @@ export function NeedsMePage() {
   const open = (row: { botId: string; threadId: string }) =>
     openThread(dispatch, { botId: row.botId, threadId: row.threadId }, state);
 
+  /** One in-flight action per key; a failure stays on the page, not a toast. */
+  const run = (key: string, work: () => Promise<unknown>, failure: "needsMe.clearFailed" | "needsMe.answerFailed") => {
+    if (busy.has(key) || busy.has("*")) return;
+    setBusy((current) => new Set(current).add(key));
+    setError(null);
+    work()
+      .catch((cause) => setError(t(failure, { error: cause instanceof Error ? cause.message : String(cause) })))
+      .finally(() => {
+        setBusy((current) => { const next = new Set(current); next.delete(key); return next; });
+        setReload((n) => n + 1);
+      });
+  };
+  const clear = (ids?: string[]) => run(ids?.[0] ?? "*", async () => {
+    if (!(await clearInbox(ids))) setError(t("needsMe.unsupported"));
+  }, "needsMe.clearFailed");
+  const answer = (item: InboxItem, choice: InboxAnswer) => run(item.id, () => answerInboxItem(item, choice), "needsMe.answerFailed");
+
   const groups = groupInboxItems(inbox?.items ?? []);
+  const clearable = inbox?.items.some(inboxItemClearable) ?? false;
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-app text-ink">
       <header className="flex shrink-0 items-center gap-2.5 border-b border-hairline/40 px-6 py-4 max-md:pl-12">
         <Inbox size={18} className="text-ink-secondary" />
         <h1 className="text-[17px] font-semibold">{t("needsMe.title")}</h1>
         {inbox && inbox.count > 0 && <span className="ml-1 text-[11px] text-ink-secondary">{inbox.count}</span>}
+        {clearable && (
+          <button
+            type="button"
+            data-needs-me-clear-all
+            onClick={() => clear()}
+            disabled={busy.has("*")}
+            title={t("needsMe.clearAllHint")}
+            className="ml-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised/50 hover:text-ink disabled:opacity-50"
+          >
+            {busy.has("*") ? <Loader2 size={14} className="animate-spin" /> : <CheckCheck size={14} />}
+            {t("needsMe.clearAll")}
+          </button>
+        )}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-6 py-5">
+          {error && <p role="alert" className="px-1 text-[12px] text-danger">{error}</p>}
           {!inbox ? (
             <div className="flex justify-center py-10 text-ink-secondary"><Loader2 size={18} className="animate-spin" /></div>
           ) : groups.length === 0 ? (
@@ -128,7 +171,17 @@ export function NeedsMePage() {
                 <h2 className="px-1 text-[11px] font-medium uppercase tracking-wide text-ink-secondary">
                   {inboxKindLabel(group.kind)} · {group.items.length}
                 </h2>
-                {group.items.map((item) => <InboxRow key={item.id} item={item} state={state} onOpen={open} />)}
+                {group.items.map((item) => (
+                  <InboxRow
+                    key={item.id}
+                    item={item}
+                    state={state}
+                    busy={busy.has(item.id) || busy.has("*")}
+                    onOpen={open}
+                    onClear={() => clear([item.id])}
+                    onAnswer={(choice) => answer(item, choice)}
+                  />
+                ))}
               </section>
             ))
           )}
@@ -139,31 +192,71 @@ export function NeedsMePage() {
   );
 }
 
-function InboxRow({ item, state, onOpen }: { item: InboxItem; state: AppState; onOpen: (row: InboxItem) => void }) {
+function InboxRow({ item, state, busy, onOpen, onClear, onAnswer }: {
+  item: InboxItem;
+  state: AppState;
+  busy: boolean;
+  onOpen: (row: InboxItem) => void;
+  onClear: () => void;
+  onAnswer: (choice: InboxAnswer) => void;
+}) {
   const { bot, name } = owners(state, item);
   const Icon = KIND_ICON[item.kind];
   const kind = inboxKindLabel(item.kind);
+  const chip = "rounded-full border border-hairline/50 bg-control px-2.5 py-0.5 text-[12px] text-ink transition-colors hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50";
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(item)}
-      aria-label={`${kind}: ${item.title}${name ? ` · ${name}` : ""}`}
-      className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-raised/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
-    >
-      {bot ? <BotAvatar bot={bot} size={28} animated={false} /> : <Icon size={18} className={cn("mt-1 shrink-0", KIND_TONE[item.kind])} />}
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{item.title || t("needsMe.untitled")}</span>
-          <span className="shrink-0 text-[11px] text-ink-secondary">{inboxRelativeTime(item.at)}</span>
+    <div className="group relative rounded-xl hover:bg-raised/50">
+      <button
+        type="button"
+        onClick={() => onOpen(item)}
+        aria-label={`${kind}: ${item.title}${name ? ` · ${name}` : ""}`}
+        className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      >
+        {bot ? <BotAvatar bot={bot} size={28} animated={false} /> : <Icon size={18} className={cn("mt-1 shrink-0", KIND_TONE[item.kind])} />}
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{item.title || t("needsMe.untitled")}</span>
+            {/* the clear (x) takes the time's place on hover */}
+            <span className={cn("shrink-0 text-[11px] text-ink-secondary", inboxItemClearable(item) && "group-hover:invisible group-focus-within:invisible")}>{inboxRelativeTime(item.at)}</span>
+          </span>
+          <span className="flex items-center gap-1.5 text-[11.5px] text-ink-secondary">
+            <Icon size={12} aria-hidden="true" className={cn("shrink-0", KIND_TONE[item.kind])} />
+            {/* the section heading already names the kind */}
+            <span className="min-w-0 truncate">{name || kind}</span>
+          </span>
+          {item.preview && <span className="mt-0.5 line-clamp-2 block text-[12.5px] text-ink-secondary">{item.preview}</span>}
         </span>
-        <span className="flex items-center gap-1.5 text-[11.5px] text-ink-secondary">
-          <Icon size={12} aria-hidden="true" className={cn("shrink-0", KIND_TONE[item.kind])} />
-          {/* the section heading already names the kind */}
-          <span className="min-w-0 truncate">{name || kind}</span>
-        </span>
-        {item.preview && <span className="mt-0.5 line-clamp-2 block text-[12.5px] text-ink-secondary">{item.preview}</span>}
-      </span>
-    </button>
+      </button>
+      {/* a live approval has no clear: only an answer settles it */}
+      {inboxItemClearable(item) && (
+        <button
+          type="button"
+          data-needs-me-clear
+          onClick={onClear}
+          disabled={busy}
+          aria-label={`${t("needsMe.clearRow")}: ${item.title || t("needsMe.untitled")}`}
+          title={t("needsMe.clearRow")}
+          className="absolute right-2 top-2 rounded-md p-1 text-ink-secondary opacity-0 hover:bg-control hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 disabled:opacity-50 max-md:opacity-100"
+        >
+          <X size={14} />
+        </button>
+      )}
+      {inboxItemAnswerable(item) && (
+        <div className="flex flex-wrap gap-1.5 pb-2.5 pl-[52px] pr-3">
+          {item.approval ? (
+            <>
+              <button type="button" disabled={busy} onClick={() => onAnswer({ behavior: "allow" })} className={chip}>{t("approval.action.allowOnce")}</button>
+              <button type="button" disabled={busy} onClick={() => onAnswer({ behavior: "deny" })} className={chip}>{t("approval.action.deny")}</button>
+            </>
+          ) : (
+            item.options?.map((option) => (
+              <button key={option} type="button" disabled={busy} onClick={() => onAnswer({ option })} className={cn(chip, "max-w-full truncate")}>{option}</button>
+            ))
+          )}
+          {busy && <Loader2 size={14} className="mt-1 animate-spin text-ink-secondary" />}
+        </div>
+      )}
+    </div>
   );
 }
 

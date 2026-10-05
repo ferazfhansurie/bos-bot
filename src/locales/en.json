@@ -401,6 +401,12 @@
   "needsMe.kind.question": "Question",
   "needsMe.kind.failed": "Failed",
   "needsMe.kind.unread": "Unread",
+  "needsMe.clearAll": "Clear all",
+  "needsMe.clearAllHint": "Mark replies read, clear failed runs and dismiss open cards. Approvals stay until you answer them.",
+  "needsMe.clearRow": "Clear",
+  "needsMe.clearFailed": "Couldn't clear: {error}",
+  "needsMe.answerFailed": "Couldn't answer: {error}",
+  "needsMe.unsupported": "Update the OpenMausBot server to clear from here.",
   "needsMe.digest.title": "Last 24h",
   "needsMe.digest.done": "done",
   "needsMe.digest.started": "started",
@@ -2329,5 +2335,6 @@
   "terminal.exited": "Exited with code {code}",
   "terminal.disconnected": "Disconnected",
   "terminal.restart": "Start a new terminal",
-  "terminal.close": "Close terminal"
+  "terminal.close": "Close terminal",
+  "terminal.resize": "Resize terminal (double-click to reset)"
 }

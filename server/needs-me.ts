@@ -9,6 +9,7 @@
 // Pure on purpose: the harness (server/index.ts) gathers each thread's live
 // signals and a bounded tail of its transcript, and these functions decide.
 import type { DigestMove, DigestResponse, InboxItem, OptionCardData, TaskClosedBy } from "../shared/wire.ts";
+import { parseChoices } from "../shared/ask-question.ts";
 import { summarize } from "./notify.ts";
 
 /** The slice of a transcript line these rules read. */
@@ -18,7 +19,8 @@ export interface NeedsMeMessage {
   role: "bot" | "user";
   kind: string;
   text?: string;
-  card?: Pick<OptionCardData, "title" | "subtitle" | "answered" | "dismissed">;
+  card?: Pick<OptionCardData, "title" | "subtitle" | "answered" | "dismissed"> &
+    Partial<Pick<OptionCardData, "options" | "requestId" | "tool" | "skillRequest" | "routineRequest" | "profileRequest" | "teamSetupRequest" | "questionRequest">>;
   tool?: { name: string; ok?: boolean };
   turnTerminal?: boolean;
   turnOutcome?: { ok: boolean; stopReason?: string };
@@ -35,6 +37,8 @@ export interface NeedsMeThread {
   closedBy?: TaskClosedBy;
   archived: boolean;
   unread: boolean;
+  /** the person cleared a failure from needs-me at this time */
+  failureAckedAt?: number;
   /** a live provider ask is parked on the person */
   waiting: boolean;
   /** a turn is running or queued; an old failure is not news while it is */
@@ -66,20 +70,42 @@ const cardPreview = (card: NonNullable<NeedsMeMessage["card"]>) =>
 const messagePreview = (message: NeedsMeMessage) =>
   summarize(message.text || message.tool?.name || "", PREVIEW_CHARS);
 
+const INLINE_OPTIONS = 6;
+
+/** What needs-me may offer to answer a card in place. Only the two plain
+ * shapes: a tool approval (allow/deny) and a question with written choices.
+ * Proposals (skills, routines, profiles, team setup) and multi-question sets
+ * need their full card, so the row only opens the thread. A room's own
+ * (non-live) card has no answer path outside the room either. */
+function cardAnswer(message: NeedsMeMessage, inRoom: boolean): Pick<InboxItem, "messageId" | "requestId" | "approval" | "options"> {
+  const card = message.card!;
+  const live = card.requestId ? { requestId: card.requestId } : {};
+  const base = { messageId: message.id, ...live };
+  if (card.skillRequest || card.routineRequest || card.profileRequest || card.teamSetupRequest || card.questionRequest) return base;
+  if (card.tool) return card.requestId ? { ...base, approval: true } : base;
+  if (!card.requestId && inRoom) return base;
+  const options = parseChoices(card.options, INLINE_OPTIONS);
+  return options?.length ? { ...base, options } : base;
+}
+
 /** The one inbox row a conversation earns, or null when it needs nothing. */
 export function inboxItemFor(thread: NeedsMeThread): InboxItem | null {
   if (thread.closedBy || thread.archived) return null;
   const base = { botId: thread.botId, ...(thread.groupId ? { groupId: thread.groupId } : {}), threadId: thread.threadId, title: thread.title };
   const card = pendingCard(thread.messages);
+  const answer = card?.card ? cardAnswer(card, Boolean(thread.groupId)) : {};
   if (thread.waiting) {
     return { id: `waiting-on-you:${thread.threadId}`, kind: "waiting-on-you", ...base,
-      preview: card?.card ? cardPreview(card.card) : "Waiting on you", at: card?.at ?? thread.lastActivityAt };
+      preview: card?.card ? cardPreview(card.card) : "Waiting on you", at: card?.at ?? thread.lastActivityAt,
+      // the ask that is parked is the live one; an older plain card waits its turn
+      ...(answer.requestId ? answer : {}) };
   }
   if (card?.card) {
-    return { id: `question:${thread.threadId}`, kind: "question", ...base, preview: cardPreview(card.card), at: card.at };
+    return { id: `question:${thread.threadId}`, kind: "question", ...base, preview: cardPreview(card.card), at: card.at, ...answer };
   }
   const failed = thread.working ? undefined : failedTurn(thread.messages);
-  if (failed) {
+  // cleared from needs-me: only a newer failure is news again
+  if (failed && !(thread.failureAckedAt !== undefined && thread.failureAckedAt >= failed.at)) {
     return { id: `failed:${thread.threadId}`, kind: "failed", ...base,
       preview: summarize(failed.turnOutcome?.stopReason || messagePreview(failed) || "The run failed", PREVIEW_CHARS), at: failed.at };
   }
@@ -99,6 +125,27 @@ export function buildInbox(threads: Iterable<NeedsMeThread>): { items: InboxItem
   }
   items.sort((a, b) => b.at - a.at);
   return { items, count: items.length };
+}
+
+/** A row clearing can settle: an unread reply, a failed run, or a card
+ * nobody is blocked on. A live ask is only settled by answering it —
+ * clearing must never allow, deny or answer on the person's behalf. */
+export function inboxItemClearable(item: InboxItem): boolean {
+  return item.kind !== "waiting-on-you" && !item.requestId;
+}
+
+/** The rows a clear names (every row when `ids` is absent), split into what
+ * clearing settles and what it keeps. Ids the viewer cannot see match
+ * nothing, so a scoped viewer can only clear its own rows. */
+export function partitionInboxClear(items: readonly InboxItem[], ids?: readonly string[]): { clear: InboxItem[]; kept: InboxItem[] } {
+  const named = ids ? new Set(ids) : null;
+  const clear: InboxItem[] = [];
+  const kept: InboxItem[] = [];
+  for (const item of items) {
+    if (named && !named.has(item.id)) continue;
+    (inboxItemClearable(item) ? clear : kept).push(item);
+  }
+  return { clear, kept };
 }
 
 /** What one conversation did inside [since, until]. A thread can start and

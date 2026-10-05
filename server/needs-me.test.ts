@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDigest, buildInbox, digestDue, digestNotificationBody, failedTurn, inboxItemFor, localDateKey, type NeedsMeMessage, type NeedsMeThread } from "./needs-me.ts";
+import { buildDigest, buildInbox, digestDue, digestNotificationBody, failedTurn, inboxItemClearable, inboxItemFor, localDateKey, partitionInboxClear, type NeedsMeMessage, type NeedsMeThread } from "./needs-me.ts";
 
 const now = 1_800_000_000_000;
 let seq = 0;
@@ -54,6 +54,63 @@ describe("inbox", () => {
     expect(inbox.items.map(item => item.threadId)).toEqual(["room", "old"]);
     expect(inbox.items[0]).toMatchObject({ groupId: "grp_1", botId: "bot_a", title: "Brief" });
     expect(inbox.items[1]).not.toHaveProperty("groupId");
+  });
+});
+
+describe("inbox clear and inline answers", () => {
+  it("an acknowledged failure stops showing until a newer one", () => {
+    const failed = failure(now - 300);
+    expect(inboxItemFor(thread({ messages: [failed], failureAckedAt: now - 300 }))).toBeNull();
+    // the ack only covers the failure; an unread reply under it still shows
+    expect(inboxItemFor(thread({ unread: true, messages: [failed], failureAckedAt: now - 200 }))).toMatchObject({ kind: "unread" });
+    expect(inboxItemFor(thread({ messages: [failed], failureAckedAt: now - 301 }))).toMatchObject({ kind: "failed" });
+    expect(inboxItemFor(thread({ messages: [failed, failure(now - 100)], failureAckedAt: now - 200 }))).toMatchObject({ kind: "failed", at: now - 100 });
+  });
+
+  it("a plain question carries its choices and card id", () => {
+    const open = card(now, { options: ["A", "B", { label: "C" } as unknown as string, "A"] });
+    expect(inboxItemFor(thread({ messages: [open] }))).toMatchObject({ kind: "question", messageId: open.id, options: ["A", "B", "C"] });
+    expect(inboxItemFor(thread({ messages: [open] }))).not.toHaveProperty("requestId");
+    // a room's plain card has no answer path outside the room
+    expect(inboxItemFor(thread({ groupId: "grp_1", messages: [open] }))).not.toHaveProperty("options");
+  });
+
+  it("a live approval is allow/deny, a live question offers its options, proposals offer nothing", () => {
+    const approval = card(now, { requestId: "req_1", tool: "Bash", options: ["Allow", "Deny"] });
+    expect(inboxItemFor(thread({ waiting: true, messages: [approval] }))).toMatchObject({ kind: "waiting-on-you", requestId: "req_1", messageId: approval.id, approval: true });
+    expect(inboxItemFor(thread({ waiting: true, messages: [approval] }))).not.toHaveProperty("options");
+    const ask = card(now, { requestId: "req_2", options: ["Ship", "Hold"] });
+    expect(inboxItemFor(thread({ waiting: true, groupId: "grp_1", messages: [ask] }))).toMatchObject({ requestId: "req_2", options: ["Ship", "Hold"] });
+    const routine = card(now, { requestId: "req_3", options: ["Confirm"], routineRequest: {} as never });
+    const item = inboxItemFor(thread({ waiting: true, messages: [routine] }))!;
+    expect(item).toMatchObject({ requestId: "req_3" });
+    expect(item).not.toHaveProperty("options");
+    expect(item).not.toHaveProperty("approval");
+  });
+
+  it("a waiting row does not offer an older plain card's options", () => {
+    const item = inboxItemFor(thread({ waiting: true, messages: [card(now, { options: ["A"] })] }))!;
+    expect(item.kind).toBe("waiting-on-you");
+    expect(item).not.toHaveProperty("options");
+    expect(item).not.toHaveProperty("messageId");
+  });
+
+  it("clears everything but live asks, and only the rows it names", () => {
+    const inbox = buildInbox([
+      thread({ threadId: "wait", waiting: true, messages: [card(now - 1, { requestId: "req_1", tool: "Bash" })] }),
+      thread({ threadId: "live-q", messages: [card(now - 2, { requestId: "req_2" })] }),
+      thread({ threadId: "q", messages: [card(now - 3)] }),
+      thread({ threadId: "f", messages: [failure(now - 4)] }),
+      thread({ threadId: "u", unread: true }),
+    ]);
+    expect(inbox.items.filter(inboxItemClearable).map(item => item.threadId)).toEqual(["q", "f", "u"]);
+    const all = partitionInboxClear(inbox.items);
+    expect(all.clear.map(item => item.id)).toEqual(["question:q", "failed:f", "unread:u"]);
+    expect(all.kept.map(item => item.id)).toEqual(["waiting-on-you:wait", "question:live-q"]);
+    const named = partitionInboxClear(inbox.items, ["failed:f", "waiting-on-you:wait", "unread:not-visible"]);
+    expect(named.clear.map(item => item.id)).toEqual(["failed:f"]);
+    expect(named.kept.map(item => item.id)).toEqual(["waiting-on-you:wait"]);
+    expect(partitionInboxClear(inbox.items, [])).toEqual({ clear: [], kept: [] });
   });
 });
 

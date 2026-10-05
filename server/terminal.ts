@@ -24,7 +24,7 @@ export function terminalTransportAllowed(req: IncomingMessage): boolean {
     !req.headers["x-openmausbot-companion-owner"] && !req.headers["x-openmausbot-companion"] && !req.headers["x-openmausbot-companion-auth"];
 }
 function origin(req: IncomingMessage): string {return typeof req.headers.origin === "string" ? req.headers.origin : "";}
-function sameSecret(actual: unknown, expected: string | undefined): boolean {
+export function sameSecret(actual: unknown, expected: string | undefined): boolean {
   if (typeof actual !== "string" || !actual || !expected) return false;
   const a = Buffer.from(actual), b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);

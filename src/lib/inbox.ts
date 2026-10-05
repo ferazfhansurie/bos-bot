@@ -5,15 +5,17 @@ import type {
   DigestChange,
   DigestMove,
   DigestResponse,
+  InboxClearResponse,
   InboxItem,
   InboxKind,
   InboxResponse,
 } from "../../shared/wire";
 import type { LocaleKey } from "@/locales";
 import { api, ApiError } from "@/state/store";
+import { answerResponse } from "./card-answer";
 import { t } from "./i18n";
 
-export type { DigestChange, DigestMove, DigestResponse, InboxItem, InboxKind, InboxResponse };
+export type { DigestChange, DigestMove, DigestResponse, InboxClearResponse, InboxItem, InboxKind, InboxResponse };
 
 export const DIGEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -52,6 +54,11 @@ function inboxItemOf(raw: unknown): InboxItem | null {
     at: time(raw.at),
   };
   if (text(raw.groupId)) item.groupId = text(raw.groupId);
+  if (text(raw.messageId)) item.messageId = text(raw.messageId);
+  if (text(raw.requestId)) item.requestId = text(raw.requestId);
+  if (raw.approval === true && item.requestId) item.approval = true;
+  const options = Array.isArray(raw.options) ? raw.options.filter((option): option is string => typeof option === "string" && option.trim() !== "") : [];
+  if (options.length && !item.approval) item.options = options;
   return item;
 }
 
@@ -120,6 +127,56 @@ export async function fetchDigest(since?: number, request: Request = api): Promi
     if (missing(error)) return null;
     throw error;
   }
+}
+
+type Send = (path: string, init?: RequestInit) => Promise<unknown>;
+
+/** Same rule as the server's: a live ask is settled only by answering it. */
+export const inboxItemClearable = (item: InboxItem): boolean => item.kind !== "waiting-on-you" && !item.requestId;
+
+/** Whether a row can be answered in place (needs its card's message too). */
+export const inboxItemAnswerable = (item: InboxItem): boolean =>
+  Boolean(item.messageId && (item.approval || item.options?.length));
+
+/** Clear every clearable row, or just `ids`. null when the server predates
+ * the endpoint. */
+export async function clearInbox(ids?: readonly string[], request: Send = api): Promise<InboxClearResponse | null> {
+  try {
+    const body = await request("/api/inbox/clear", { method: "POST", body: JSON.stringify(ids ? { ids } : {}) });
+    const record = isRecord(body) ? body : {};
+    return { cleared: inboxCountOf(record.cleared), kept: inboxCountOf(record.kept) };
+  } catch (error) {
+    if (missing(error)) return null;
+    throw error;
+  }
+}
+
+export type InboxAnswer = { behavior: "allow" | "deny" } | { option: string };
+
+/** Answer a row's card through the same calls the in-chat card makes: a
+ * live ask by thread (POST /api/threads/:id/respond, as decideRequest and
+ * answerCard send it); a plain card by settling it and sending the choice as
+ * the person's message (answerCard's 1:1 path). */
+export async function answerInboxItem(item: InboxItem, answer: InboxAnswer, request: Send = api): Promise<void> {
+  if (item.requestId) {
+    const response = "option" in answer
+      ? answerResponse({}, answer.option)
+      : { behavior: answer.behavior, message: answer.behavior === "deny" ? "Denied by the user." : undefined };
+    await request(`/api/threads/${item.threadId}/respond`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: item.requestId, ...response }),
+    });
+    return;
+  }
+  if (!("option" in answer) || !item.messageId || item.groupId) throw new Error("this card can only be answered in its thread");
+  await request(`/api/bots/${item.botId}/cards/${item.messageId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ answered: answer.option, dismissed: true, threadId: item.threadId }),
+  });
+  await request(`/api/bots/${item.botId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ text: answer.option, threadId: item.threadId }),
+  });
 }
 
 /** Most urgent first; within a kind the server's newest-first order holds. */
