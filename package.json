@@ -1,8 +1,10 @@
 {
   "name": "bos-bot",
   "private": true,
-  "bosUpdatePolicy": { "mode": "offline" },
-  "version": "1.4.0",
+  "bosUpdatePolicy": {
+    "mode": "offline"
+  },
+  "version": "1.6.0-rc.1",
   "description": "A private, local-first multi-model AI desktop for Claude and Codex.",
   "homepage": "https://github.com/milind-soni/OpenMausBot",
   "repository": {
