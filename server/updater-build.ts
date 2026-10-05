@@ -10,14 +10,14 @@
 // re-sign it with the identity the live bundle already carries so the TCC
 // grants keyed on that signature survive. electron-builder is not involved:
 // a packaged build needs the release signing secrets this machine does not
-// have, and the Electron shell does not change between release commits.
+// have. Native compatibility is checked before using this tree recipe.
 import { assertNativeCompatibility, stampNativeContract } from "../electron/native-contract.mjs";
 import { execFile, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
-import { CANDIDATE_DIRNAME, appDigests, updatesDir, writeCandidateManifest, type CandidateManifest, type UpdateCheck } from "./updater.ts";
+import { CANDIDATE_DIRNAME, discoverCandidate, appDigests, updatesDir, writeCandidateManifest, type CandidateManifest, type Candidate, type UpdateCheck } from "./updater.ts";
 
 /** Where updates come from. Environment first, then <dataDir>/updates/source.json
  * (the operator's file), then the no-downgrade ledger (seeded by its first
@@ -127,10 +127,88 @@ export async function previewUpdate(options: PreviewOptions): Promise<UpdateChec
   try { verdict = JSON.parse(result.stdout) as PreviewVerdict; } catch { verdict = null; }
   const reason = verdict?.reason ?? result.stderr.trim().slice(0, 300);
   if (result.code !== 0 || verdict?.ok !== true) return { at, current: options.current, reason: result.code === 2 ? reason || "the no-downgrade guard said no" : `no-downgrade guard failed (exit ${result.code}): ${reason || "no output"}` };
-  if (verdict.up_to_date) return { at, current: options.current, reason: reason || `up to date: running ${target.sha.slice(0, 8)} is the ${target.branch} head` };
+  // Server identity alone does not establish that the retained Electron shell
+  // can run this target. In particular a tree update can already be at prod.
   try { assertNativeCompatibility(join(options.liveApp, "Contents", "Resources"), source.repo!, target.sha); }
-  catch (error) { return { at, current: options.current, reason: error instanceof Error ? error.message : String(error) }; }
+  catch (error) {
+    const reason = `full desktop package required: ${error instanceof Error ? error.message : String(error)}`;
+    try {
+      const staged = discoverCandidate(dirname(dirname(options.ledger)));
+      if (!staged) return { at, current: options.current, shellRequired: true, reason: `${reason}; no staged full candidate` };
+      await validateFullCandidate(options, staged);
+      return { at, current: options.current, shellRequired: true,
+        candidate: { version: staged.version, sha: staged.sha, branch: target.branch, stagedAt: staged.stagedAt, delivery: "staged-full" },
+        reason: "validated full desktop package ready" };
+    } catch (invalid) {
+      return { at, current: options.current, shellRequired: true, reason: `${reason}; candidate refused: ${invalid instanceof Error ? invalid.message : String(invalid)}` };
+    }
+  }
+  if (verdict.up_to_date) return { at, current: options.current, upToDate: true, reason: reason || `up to date: running ${target.sha.slice(0, 8)} is the ${target.branch} head` };
   return { at, current: options.current, candidate: { version: target.version, sha: target.sha, branch: target.branch, ...(target.subject ? { subject: target.subject } : {}) }, reason };
+}
+
+/** A full candidate comes from the local package lane, never a feed. The
+ * existing manifest is its adapter to /api/update. Validate it read-only on
+ * every check; apply then runs the same executor/guard as a tree candidate. */
+export async function validateFullCandidate(options: PreviewOptions, candidate: Candidate): Promise<void> {
+  const refuse = (reason: string): never => { throw Object.assign(new Error(reason), { status: 409 }); };
+  if (candidate.sha !== options.target.sha || candidate.version !== options.target.version) refuse("staged full candidate does not match the release target");
+  const resources = join(candidate.appPath, "Contents", "Resources");
+  if (!existsSync(join(resources, "app.asar"))) refuse("full candidate has no Electron archive");
+  const native = assertNativeCompatibility(resources, options.source.repo!, options.target.sha);
+  if (native.shellCommit !== options.target.sha) refuse("candidate is a tree build, not a full package of the target");
+  const digest = appDigests(candidate.appPath);
+  if (digest.server !== candidate.serverSha256 || digest.ui !== candidate.uiSha256) refuse("candidate manifest digest mismatch");
+  const run = options.run ?? runCommand;
+  const checked = async (file: string, args: string[]) => {
+    const result = await run(file, args, { timeoutMs: 120_000 });
+    if (result.code !== 0) refuse(`${basename(file)} validation failed: ${result.stderr.trim().slice(0, 300)}`);
+    return result;
+  };
+  // Keep both the outer application and speech helper's installed signing
+  // requirements: replacing either with ad-hoc/different identity loses TCC.
+  for (const suffix of ["", "Contents/Resources/OpenMausBot Speech.app"]) {
+    const live = suffix ? join(options.liveApp, suffix) : options.liveApp;
+    const staged = suffix ? join(candidate.appPath, suffix) : candidate.appPath;
+    await checked("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged]);
+    const description = await checked("/usr/bin/codesign", ["-d", "-r-", live]);
+    const requirement = /^designated => (.+)$/m.exec(description.stderr)?.[1];
+    if (!requirement) refuse("installed signing requirement unavailable");
+    await checked("/usr/bin/codesign", ["--verify", "--strict", "-R", requirement!, staged]);
+  }
+  const plist = join(candidate.appPath, "Contents", "Info.plist");
+  const identifier = await checked("/usr/libexec/PlistBuddy", ["-c", "Print CFBundleIdentifier", plist]);
+  if (identifier.stdout.trim() !== "ai.bos.bot") refuse("candidate application identity mismatch");
+  const version = await checked("/usr/libexec/PlistBuddy", ["-c", "Print CFBundleShortVersionString", plist]);
+  if (version.stdout.trim() !== options.target.version.split("+")[0]) refuse("candidate shell version mismatch");
+  const args = [options.script, "check", "--candidate", candidate.appPath, "--live", options.liveApp, "--ledger", options.ledger,
+    "--repo", options.source.repo!, "--release-branch", options.source.releaseBranch, "--prod-branch", options.source.prodBranch];
+  const guard = await checked(options.python ?? "/usr/bin/python3", args);
+  if (JSON.parse(guard.stdout).ok !== true) refuse("full candidate guard did not return an ok verdict");
+}
+
+/** Supported local staging adapter. It copies a fully packaged app into a
+ * private temporary slot, validates it, then publishes manifest last. It
+ * never builds, promotes, stops or installs anything. */
+export async function stageFullCandidate(options: PreviewOptions & { dataDir: string; appPath: string }): Promise<CandidateManifest> {
+  const slot = join(updatesDir(options.dataDir), `full-stage-${process.pid}-${Date.now()}`);
+  const app = basename(options.appPath);
+  if (!app.endsWith(".app") || app.includes("..")) throw new Error("full candidate must be an app bundle");
+  const lock = join(updatesDir(options.dataDir), "apply.lock");
+  mkdirSync(updatesDir(options.dataDir), { recursive: true, mode: 0o700 });
+  try { writeFileSync(lock, JSON.stringify({ staging: true, pid: process.pid }), { flag: "wx", mode: 0o600 }); }
+  catch { throw new Error("an update owns the candidate; staging refused"); }
+  try {
+    mkdirSync(slot, { recursive: true, mode: 0o700 });
+    cpSync(options.appPath, join(slot, app), { recursive: true, verbatimSymlinks: true });
+    const manifest = writeCandidateManifest(slot, { version: options.target.version, sha: options.target.sha, app });
+    await validateFullCandidate(options, { ...manifest, dir: slot, appPath: join(slot, app) });
+    const destination = join(updatesDir(options.dataDir), CANDIDATE_DIRNAME);
+    // Apply owns this lock before admission/drain. Never replace its input.
+    rmSync(destination, { recursive: true, force: true });
+    renameSync(slot, destination);
+    return manifest;
+  } finally { rmSync(slot, { recursive: true, force: true }); rmSync(lock, { force: true }); }
 }
 
 /** PATH for the build tools. The packaged server runs on Electron's node, so

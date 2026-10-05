@@ -25,6 +25,7 @@ export interface UpdateCandidate extends UpdateBuild {
   branch?: string;
   stagedAt?: number | string;
   notes?: string[];
+  delivery?: "staged-full";
 }
 
 export interface UpdateStatus {
@@ -33,6 +34,8 @@ export interface UpdateStatus {
   candidate?: UpdateCandidate;
   /** Why there is no candidate, one line (from /check). */
   reason?: string;
+  shellRequired?: boolean;
+  upToDate?: boolean;
   busyTurns: Array<{ botId: string; threadId: string; botName?: string }>;
   /** `from` ran before, `to` runs now: after a rollback or failure to == from,
    * and `attempted` is the build that did not make it. */
@@ -50,6 +53,8 @@ export interface UpdateCheck {
   current: UpdateBuild;
   candidate?: UpdateCandidate;
   reason?: string;
+  shellRequired?: boolean;
+  upToDate?: boolean;
 }
 
 export interface UpdateFrame {
@@ -204,7 +209,7 @@ export async function checkForUpdate() {
     const status = view.status ?? { state: "idle" as const, busyTurns: [], current: found.current };
     set({
       checking: false,
-      status: { ...status, current: found.current, candidate: found.candidate, reason: found.reason },
+      status: { ...status, current: found.current, candidate: found.candidate, reason: found.reason, shellRequired: found.shellRequired, upToDate: found.upToDate },
       state: found.candidate && status.state === "idle" ? "ready" : !found.candidate && status.state === "ready" ? "idle" : view.state,
     });
   } catch (error) {
@@ -258,6 +263,7 @@ export function updateNotice(status: UpdateStatus | null): UpdateNotice | null {
   const to = result.to ?? status!.current;
   const from = result.from ?? status!.current;
   const tried = result.attempted && result.attempted.sha !== to.sha ? `${result.attempted.version} · ` : "";
+  if (isUpdateSuccess(result.state) && status?.shellRequired) return null;
   if (isUpdateSuccess(result.state))
     return { key, tone: "ok", title: `Updated to ${to.version}`, detail: result.from ? `${from.version} → ${to.version} · ${shortSha(to.sha)}` : shortSha(to.sha) };
   if (result.state === "rolled_back")

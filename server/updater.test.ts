@@ -516,6 +516,35 @@ describe("updater coordinator", () => {
     expect((await c.status()).candidate).toMatchObject({ sha: "feedface00000000", branch: "prod", stagedAt: expect.any(String) });
   });
 
+  it("full staged delivery bypasses the tree builder and keeps admission/checkpoint gates", async () => {
+    const manifest = stage(h);
+    let built = 0;
+    const target = { version: manifest.version, sha: manifest.sha, branch: "prod", delivery: "staged-full" as const };
+    const c = h.make({ builder: { check: async () => ({ at: "now", current: { version: "old", sha: "old" }, shellRequired: true, candidate: target }), build: async () => { built++; } } });
+    expect(await c.check()).toMatchObject({ candidate: target });
+    expect(await c.status()).toMatchObject({ candidate: target, shellRequired: true });
+    h.preflight = JSON.stringify({ ok: false, checks: { health_ok: false } });
+    await expect(c.apply()).rejects.toMatchObject({ status: 409 });
+    expect(h.stopped).toBe(0); expect(h.quiesced).toBe(0);
+    h.preflight = PREFLIGHT_OK;
+    h.turns = [{ botId: "busy", threadId: "direct", kind: "direct" }];
+    const { updateId } = await c.apply({ force: true });
+    await h.settle();
+    expect(built).toBe(0);
+    expect(h.events.map(e => e.state)).toEqual(["draining", "checkpointing", "stopping", "applying"]);
+    expect(readCheckpoint(h.dataDir, updateId)?.turns).toHaveLength(1);
+    expect(h.bootstraps).toHaveLength(1);
+  });
+
+  it("a builder refusal hides stale staging and apply cannot install it", async () => {
+    stage(h);
+    const c = h.make({ builder: { check: async () => ({ at: "now", current: { version: "old", sha: "old" }, shellRequired: true, reason: "candidate invalid" }), build: async () => { throw new Error("must not build"); } } });
+    await c.check();
+    expect((await c.status()).candidate).toBeUndefined();
+    await expect(c.apply()).rejects.toMatchObject({ status: 409, message: "candidate invalid" });
+    expect(h.bootstraps).toHaveLength(0);
+  });
+
   it("with a builder, apply refuses when the check finds nothing and fails cleanly when the build or its admission fails", async () => {
     let check = { at: "2026-10-04T10:00:00Z", current: { version: "0.1.85", sha: "2d83ba23aaaaaaaa" }, reason: "up to date: running 2d83ba23 is the prod head" } as Awaited<ReturnType<UpdateCoordinator["check"]>>;
     let buildError: Error | null = new Error("build failed at build:server: tsc exited 2");

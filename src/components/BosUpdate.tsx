@@ -217,12 +217,14 @@ export function UpdatesPanel({
             <div className="text-[15px] font-medium text-ink">BOS {status.current.version}</div>
             <div className="mt-0.5 font-mono text-[12px] text-ink-secondary">{shortSha(status.current.sha)}</div>
           </div>
-          {!candidate && !running && (!notice || notice.tone === "ok") && (
+          {!status.shellRequired && (status.upToDate === true || /^(up to date:|already on the newest prod build)/i.test(status.reason ?? "")) && !candidate && !running && (!notice || notice.tone === "ok") && (
             <span className="flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[12px] text-success">
               <Check size={12} /> Up to date
             </span>
           )}
         </div>
+
+        {status.shellRequired && !running && <div role="status" className="mt-4 text-[13px] text-amber-500">Desktop shell update required</div>}
 
         {candidate && !running && (
           <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-3">
@@ -233,7 +235,7 @@ export function UpdatesPanel({
               <span className="shrink-0 font-mono text-[11.5px] text-ink-secondary">{shortSha(candidate.sha)}</span>
             </div>
             <div className="mt-0.5 text-[12px] text-ink-secondary">
-              Newer build on {candidate.branch ?? "prod"}
+              {candidate.delivery === "staged-full" ? "Full desktop package on " : "Newer build on "}{candidate.branch ?? "prod"}
               {formatStaged(candidate.stagedAt) ? ` · ${formatStaged(candidate.stagedAt)}` : ""}
             </div>
             {candidate.notes && candidate.notes.length > 0 && (

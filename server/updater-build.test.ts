@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stampNativeContract, assertNativeCompatibility } from "../electron/native-contract.mjs";
 import { appDigests, discoverCandidate } from "./updater.ts";
-import { DEFAULT_PROD_BRANCH, DEFAULT_RELEASE_BRANCH, buildCandidate, buildRoot, missingPackages, previewUpdate, readUpdateSource, resolveUpdateTarget, runCommand, toolchainPath, type RunCommand } from "./updater-build.ts";
+import { DEFAULT_PROD_BRANCH, DEFAULT_RELEASE_BRANCH, buildCandidate, buildRoot, missingPackages, previewUpdate, readUpdateSource, resolveUpdateTarget, runCommand, toolchainPath, stageFullCandidate, type RunCommand } from "./updater-build.ts";
 
 const PYTHON = "/usr/bin/python3";
 const hasPython = existsSync(PYTHON) && spawnSync(PYTHON, ["--version"]).status === 0;
@@ -118,6 +118,59 @@ describe.skipIf(!hasPython)("update build", () => {
     expect(older.candidate).toBeUndefined(); expect(older.reason).toMatch(/refused|older|ancestor|behind|prod/i);
     // the script itself failing is a reason too
     expect(await previewUpdate({ script: join(root, "missing.py"), ledger, liveApp: live, source, target, current })).toMatchObject({ reason: /no-downgrade guard failed/ });
+  });
+
+  it("server current with an old shell requires a full package, even without a candidate", async () => {
+    const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };
+    const ledger = join(dataDir, "updates", "live-build.json");
+    spawnSync(PYTHON, [SCRIPT, "record", "--live", live, "--commit", repo.b, "--ledger", ledger, "--repo", repo.dir, "--release-branch", DEFAULT_RELEASE_BRANCH]);
+    rmSync(join(live, "Contents", "Resources", "native-contract.json"));
+    const result = await previewUpdate({ script: SCRIPT, ledger, liveApp: live, source, target: await resolveUpdateTarget(source), current: { version: "1.3.1", sha: repo.b } });
+    expect(result).toMatchObject({ shellRequired: true, reason: /full desktop package required/i });
+    expect(result.candidate).toBeUndefined();
+    expect(result.reason).not.toMatch(/up to date/i);
+  });
+
+  it("selects a validated full candidate at current server commit; rejects corrupt or unsigned packages", async () => {
+    const source = { repo: repo.dir, releaseBranch: DEFAULT_RELEASE_BRANCH, prodBranch: DEFAULT_PROD_BRANCH };
+    const ledger = join(dataDir, "updates", "live-build.json");
+    spawnSync(PYTHON, [SCRIPT, "record", "--live", live, "--commit", repo.b, "--ledger", ledger, "--repo", repo.dir, "--release-branch", DEFAULT_RELEASE_BRANCH]);
+    rmSync(join(live, "Contents", "Resources", "native-contract.json"));
+    const target = await resolveUpdateTarget(source);
+    const full = fakeApp(root, "Full.app", "full");
+    writeFileSync(join(full, "Contents", "Resources", "app.asar"), "complete shell");
+    stampNativeContract(join(full, "Contents", "Resources"), repo.dir, repo.b);
+    expect(spawnSync(PYTHON, [SCRIPT, "stamp", "--app", full, "--commit", repo.b]).status).toBe(0);
+    let signed = true;
+    const run: RunCommand = async (file, args, opts) => {
+      if (file === "/usr/bin/codesign") return { code: signed ? 0 : 1, stdout: "", stderr: signed ? "designated => identifier ai.bos.bot and anchor trusted" : "invalid signature" };
+      if (file === "/usr/libexec/PlistBuddy") return { code: 0, stdout: args[1].includes("Identifier") ? "ai.bos.bot" : "1.3.1", stderr: "" };
+      return runCommand(file, args, opts);
+    };
+    const options = { script: SCRIPT, ledger, liveApp: live, source, target, current: { version: "1.3.1", sha: repo.b }, run };
+    await stageFullCandidate({ ...options, dataDir, appPath: full });
+    expect(await previewUpdate(options)).toMatchObject({ shellRequired: true, candidate: { sha: repo.b, delivery: "staged-full" } });
+    signed = false;
+    const before = readFileSync(join(dataDir, "updates", "candidate", "manifest.json"), "utf8");
+    await expect(stageFullCandidate({ ...options, dataDir, appPath: full })).rejects.toThrow(/signature/);
+    expect(readFileSync(join(dataDir, "updates", "candidate", "manifest.json"), "utf8")).toBe(before);
+    expect(await previewUpdate(options)).toMatchObject({ shellRequired: true, reason: /signature/ });
+    expect((await previewUpdate(options)).candidate).toBeUndefined();
+    signed = true;
+    const manifestPath = join(dataDir, "updates", "candidate", "manifest.json");
+    const wrongTarget = JSON.parse(before); wrongTarget.sha = repo.a;
+    writeFileSync(manifestPath, JSON.stringify(wrongTarget));
+    expect((await previewUpdate(options)).candidate).toBeUndefined();
+    writeFileSync(manifestPath, before);
+    const staged = discoverCandidate(dataDir)!;
+    writeFileSync(join(staged.appPath, "Contents", "Resources", "app.asar"), "tampered");
+    expect((await previewUpdate(options)).candidate).toBeUndefined();
+    await stageFullCandidate({ ...options, dataDir, appPath: full });
+    writeFileSync(join(discoverCandidate(dataDir)!.appPath, "Contents", "Resources", "server", "index.js"), "tampered");
+    expect(await previewUpdate(options)).toMatchObject({ reason: /digest mismatch/ });
+    expect((await previewUpdate(options)).candidate).toBeUndefined();
+    writeFileSync(join(dataDir, "updates", "apply.lock"), "busy");
+    await expect(stageFullCandidate({ ...options, dataDir, appPath: full })).rejects.toThrow(/update owns/);
   });
 
   it("refuses an unknown legacy shell before dependencies or building", async () => {

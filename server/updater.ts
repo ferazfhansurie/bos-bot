@@ -13,7 +13,7 @@
 // scheduler and is not a safe thing to guess at.
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { UPDATER_APPLY_SCRIPT } from "./updater-apply-script.ts";
@@ -33,7 +33,9 @@ export interface BuildRef { version: string; sha: string }
 export interface UpdateCheck {
   at: string;
   current: BuildRef;
-  candidate?: BuildRef & { branch: string; subject?: string; stagedAt?: string };
+  candidate?: BuildRef & { branch: string; subject?: string; stagedAt?: string; delivery?: "staged-full" };
+  shellRequired?: boolean;
+  upToDate?: boolean;
   reason?: string;
 }
 export interface UpdateLastResult {
@@ -47,7 +49,10 @@ export interface UpdateStatus {
   state: UpdateState; updateId?: string; detail?: string;
   current: BuildRef;
   /** The staged build, or the one `check` found; `branch` is set when it came from a check. */
-  candidate?: BuildRef & { stagedAt?: string; branch?: string };
+  candidate?: BuildRef & { stagedAt?: string; branch?: string; delivery?: "staged-full" };
+  shellRequired?: boolean;
+  upToDate?: boolean;
+  reason?: string;
   busyTurns: Array<{ botId: string; botName?: string; threadId: string }>;
   /** The last `check`, so the ui can show "checked 2 minutes ago: up to date". */
   lastCheck?: { at: string; reason?: string };
@@ -369,13 +374,14 @@ export class UpdateCoordinator {
   async status(): Promise<UpdateStatus> {
     const staged = await this.candidateSafe();
     const found = this.lastCheck?.candidate;
-    const candidate: UpdateStatus["candidate"] | undefined = staged
+    const candidate: UpdateStatus["candidate"] | undefined = this.hooks.builder ? (found ? { ...found, ...(staged && staged.sha === found.sha ? { stagedAt: staged.stagedAt } : {}) } : undefined) : staged
       ? { version: staged.version, sha: staged.sha, stagedAt: staged.stagedAt, ...(found && found.sha === staged.sha ? { branch: found.branch } : {}) }
       : found ? { version: found.version, sha: found.sha, branch: found.branch } : undefined;
     const state: UpdateState = this.running ? this.state : candidate ? "ready" : "idle";
     return {
       state, ...(this.updateId ? { updateId: this.updateId } : {}), ...(this.detail ? { detail: this.detail } : {}),
       current: this.hooks.current(),
+      ...(this.lastCheck ? { shellRequired: this.lastCheck.shellRequired, upToDate: this.lastCheck.upToDate, reason: this.lastCheck.reason } : {}),
       ...(candidate ? { candidate } : {}),
       busyTurns: this.hooks.listBusyTurns().map(turn => ({ botId: turn.botId, ...(turn.botName ? { botName: turn.botName } : {}), threadId: turn.threadId })),
       ...(this.lastCheck ? { lastCheck: { at: this.lastCheck.at, ...(this.lastCheck.reason ? { reason: this.lastCheck.reason } : {}) } } : {}),
@@ -433,7 +439,12 @@ export class UpdateCoordinator {
       // there is something to admit. The check is the cheap pre-answer.
       const check = await this.check();
       if (!check.candidate) throw err(check.reason ?? "nothing to update", 409);
-      target = check.candidate;
+      if (check.candidate.delivery === "staged-full") {
+        candidate = await this.hooks.executor.candidate();
+        if (!candidate || candidate.sha !== check.candidate.sha || candidate.version !== check.candidate.version) throw err("full candidate changed since check; stage and check again", 409);
+        notes = await this.hooks.executor.admit(mode);
+        for (const note of notes) this.log(note);
+      } else target = check.candidate;
     } else {
       candidate = mode === "update" ? await this.hooks.executor.candidate() : null;
       if (mode === "update" && !candidate) throw err("no staged update to apply", 409);
@@ -446,7 +457,8 @@ export class UpdateCoordinator {
     // against a second server on the same data dir. boot() clears it.
     if (this.running && this.updateId) return { updateId: this.updateId, inProgress: true };
     if (existsSync(lockPath)) throw err("another update owns the lock; restart BOS if nothing is running", 409);
-    writeFileAtomic(lockPath, JSON.stringify({ updateId, pid: process.pid, at: this.now().toISOString() }), { mode: 0o600 });
+    try { writeFileSync(lockPath, JSON.stringify({ updateId, pid: process.pid, at: this.now().toISOString() }), { flag: "wx", mode: 0o600 }); }
+    catch { throw err("another update owns the lock; restart BOS if nothing is running", 409); }
     this.running = true; this.updateId = updateId; this.mode = mode; this.startedAt = this.now().toISOString(); this.steps = []; this.buildLog = []; this.detail = "";
     const dir = updateDir(this.hooks.dataDir, updateId);
     mkdirSync(dir, { recursive: true, mode: 0o700 });

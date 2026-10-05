@@ -42,6 +42,23 @@ describe("BosUpdate", () => {
     expect(html).toContain("Up to date");
   });
 
+  it("does not call a missing full shell current", () => {
+    const idle = { ...status, state: "idle" as const, candidate: undefined, shellRequired: true, lastResult: { state: "done" as const, at: "now", to: status.current }, reason: "full desktop package required: no validated candidate" };
+    const html = renderToStaticMarkup(createElement(UpdatesPanel, { view: view({ status: idle, state: "idle" }), busy: [], onApply: noop, onRestart: noop, onCheck: noop }));
+    expect(html).toContain("Desktop shell update required");
+    expect(html).not.toContain("Up to date");
+    expect(html).not.toContain(">Update<");
+    expect(html).not.toContain("Updated to");
+  });
+
+  it("does not show current while check is unknown or failed", () => {
+    for (const reason of [undefined, "check failed: source unavailable"]) {
+      const idle = { ...status, state: "idle" as const, candidate: undefined, reason };
+      const html = renderToStaticMarkup(createElement(UpdatesPanel, { view: view({ status: idle, state: "idle" }), busy: [], onApply: noop, onRestart: noop }));
+      expect(html).not.toContain("Up to date");
+    }
+  });
+
   it("buttons lock while a run is in progress and the step list shows", () => {
     const html = renderToStaticMarkup(createElement(UpdatesPanel, { view: view({ state: "applying" }), busy: [], onApply: noop, onRestart: noop }));
     expect(html).toContain("Updating to 1.3.0");
