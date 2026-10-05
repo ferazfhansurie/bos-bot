@@ -119,6 +119,7 @@ import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { useShowThreads } from "@/lib/thread-preferences";
 import { SidebarActivityAvatar, useBotActivity } from "./SidebarActivityAvatar";
 import { useActivityFeed, withLiveActivity } from "@/lib/activity-feed";
+import { roomSenderName, useMultiplayerMe } from "@/lib/room-sender";
 import { AttentionThreadRows, crossBotAttentionThreads, SidebarBotActivity, sidebarBotActivityTasks } from "./SidebarBotActivity";
 import { SidebarAttentionPanel } from "./SidebarAttentionPanel";
 import { ShortcutHint } from "./ShortcutHint";
@@ -160,7 +161,7 @@ interface MenuState {
   y: number;
 }
 
-function groupPreview(group: Group, bots: Bot[]): string {
+function groupPreview(group: Group, bots: Bot[], meId?: string | null): string {
   if (group.busyBotId) {
     return t("sidebar.preview.botWorking", {
       name: bots.find((b) => b.id === group.busyBotId)?.name ?? t("sidebar.preview.aBot"),
@@ -174,7 +175,10 @@ function groupPreview(group: Group, bots: Bot[]): string {
     : last.kind === "goal.run" && last.goalRun
       ? sidebarGoalRunPreview(last.goalRun)
       : (last.text ?? "");
-  if (last.role === "user") return t("sidebar.preview.you", { text });
+  if (last.role === "user") {
+    const person = roomSenderName(last, group, meId);
+    return person ? `${person}: ${text}` : t("sidebar.preview.you", { text });
+  }
   return last.from ? `${last.from.name}: ${text}` : text;
 }
 
@@ -221,6 +225,7 @@ export function GroupListItem({
   onMenu: (menu: { groupId: string; x: number; y: number }) => void;
 }) {
   const { state, dispatch } = useStore();
+  const meId = useMultiplayerMe()?.actorId;
   const selected = state.activeView === "chat" && state.selectedId === group.id;
   const [threadsOpen, setThreadsOpen] = useState(selected || Boolean(query));
   useEffect(() => { if (selected || query) setThreadsOpen(true); }, [selected, query]);
@@ -265,11 +270,12 @@ export function GroupListItem({
       <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-[14px] font-semibold text-ink">{group.name}</span>
+          {group.home && <span className="max-w-[45%] shrink-0 truncate text-[10px] text-ink-secondary" title={group.home.name}>{group.home.name}</span>}
           {selected && last && !expanded && <span className="shrink-0 text-[10px] text-ink-secondary">{formatTime(last.at)}</span>}
           {expanded && group.unread && <span className="size-1.5 shrink-0 rounded-full bg-accent" aria-label={t("task.unreadMany")} />}
         </div>
         {!expanded && <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-[11px] text-ink-secondary">{groupPreview(group, state.bots)}</span>
+          <span className="truncate text-[11px] text-ink-secondary">{groupPreview(group, state.bots, meId)}</span>
           {group.unread && <span className="size-2 shrink-0 rounded-full bg-accent" />}
         </div>}
       </div>

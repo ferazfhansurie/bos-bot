@@ -174,6 +174,9 @@ export interface Message {
   steerDelivery?: "transport_written" | "provider_accepted" | "outcome_unknown";
   /** a user message that arrived through the server's API, not typed here */
   via?: "api";
+  /** Authenticated person who sent this user message. Older owner messages
+   * have none; see lib/room-sender for how a room reads it. */
+  sender?: { id?: string; name: string };
   /** Provider turn that produced this message. */
   turnId?: string;
   /** Last assistant text item from a settled provider turn. */
@@ -230,12 +233,27 @@ export interface RoomActiveMemberTurn {
   turnId?: string | null;
 }
 
+/** A person in a room, as the server projects `Group.peopleIds`. */
+export interface RoomPerson {
+  id: string;
+  name: string;
+  homeId: string;
+  homeName?: string;
+  avatar?: string | null;
+  color?: string;
+}
+
 /** A room: several bots + you in one shared thread. */
 export interface Group {
   id: string;
   threadId: string;
   name: string;
   memberIds: string[];
+  /** People sharing this room as `home:person:id`; the owner is always in. */
+  peopleIds?: string[];
+  people?: RoomPerson[];
+  /** Set when the room lives on another home and is opened through it. */
+  home?: { id: string; name: string };
   avatarUrl?: string | null;
   memberReplyModes?: Record<string, "always" | "mentions">;
   notifications?: "all" | "mentions" | "muted";

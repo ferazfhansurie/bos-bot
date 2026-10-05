@@ -98,6 +98,7 @@ export function Composer({
   shared,
   onEditLast,
   replyTo,
+  replyToAuthor,
   onClearReply,
   onConsumeReply,
   onRestoreReply,
@@ -109,6 +110,8 @@ export function Composer({
   shared?: SharedComposer;
   onEditLast?: () => void;
   replyTo?: Message | null;
+  /** The quoted line's author when it isn't the message's own label (another person in a room). */
+  replyToAuthor?: string;
   onClearReply?: () => void;
   onConsumeReply?: () => void;
   onRestoreReply?: (message: Message, threadId: string) => void;
@@ -982,6 +985,7 @@ export function Composer({
             <ReplyQuote
               message={replyTo}
               fallbackName={bot?.name}
+              authorName={replyToAuthor}
               onClear={onClearReply}
             />
           </div>
