@@ -768,6 +768,8 @@
   "task.openedBy": "opened by {name}",
   "task.closedBy": "closed by {name}",
   "task.closed": "Closed",
+  "task.settled": "settled",
+  "task.reopen": "Reopen",
   "task.archive": "Archive",
   "task.copyLink": "Copy link",
   "task.unarchive": "Unarchive",

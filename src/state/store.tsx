@@ -16,7 +16,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { CloudBackend, EffortLevel, RemoteBotOrigin, ServerFrame } from "../../shared/wire";
+import type { CloudBackend, EffortLevel, RemoteBotOrigin, ServerFrame, ThreadState } from "../../shared/wire";
 import type { TurnDigest } from "../../shared/digest";
 import type { ModelVariantOption, RuntimeEvent } from "../../shared/runtime-events";
 import type { MausColor, MausMotion } from "@/lib/mascot";
@@ -264,6 +264,10 @@ export interface GroupTask {
   createdAt: number;
   pinnedCwd?: string | null;
   pinnedMessageId?: string;
+  /** server-computed; "closed" once a bot closed it or it settled after idle days */
+  state?: ThreadState;
+  lastActivityAt?: number;
+  closedBy?: ThreadCloser;
 }
 
 export interface ModelSelection {
@@ -313,6 +317,9 @@ export interface Task {
    * under show-all and search, and back the moment it needs them again;
    * absent = never archived. Syncs like every other task field. */
   archivedAt?: number;
+  /** server-computed; "closed" covers both a bot's close_thread and a
+   * thread that settled after idle days, which carries no closedBy */
+  state?: ThreadState;
 }
 
 /** The bot that opened a thread on itself or a teammate. */
@@ -473,13 +480,15 @@ export type TaskUpdatePatch = Partial<Pick<Task, "modelSelection" | "approvalMod
   resetApprovalToAsk?: boolean;
   projectId?: string | null;
   archivedAt?: number | null;
+  /** false = reopen a closed or settled thread */
+  closed?: false;
   /** null = follow the bot's Works on again */
   surface?: Task["surface"] | null;
 };
 
 function taskPatchFields(patch: TaskUpdatePatch): Partial<Task> {
-  const { confirmFullAccess: _fullConsent, acknowledgeLocalAuto: _localAck, updateBotDefault: _modelDefault, resetApprovalToAsk, projectId, archivedAt, surface, ...fields } = patch;
-  return { ...fields, ...(resetApprovalToAsk ? { approvalMode: "ask", autoApprove: false, alwaysAllow: [] } : {}),
+  const { confirmFullAccess: _fullConsent, acknowledgeLocalAuto: _localAck, updateBotDefault: _modelDefault, resetApprovalToAsk, projectId, archivedAt, surface, closed, ...fields } = patch;
+  return { ...fields, ...(closed === false ? { closedBy: undefined, state: "idle" as const } : {}), ...(resetApprovalToAsk ? { approvalMode: "ask", autoApprove: false, alwaysAllow: [] } : {}),
     ...(projectId === undefined ? {} : { projectId: projectId ?? undefined }),
     ...(archivedAt === undefined ? {} : { archivedAt: archivedAt ?? undefined }),
     ...(surface === undefined ? {} : { surface: surface ?? undefined }) };
@@ -959,6 +968,7 @@ export type Action =
   | { type: "switchGroupTask"; groupId: string; threadId: string }
   | { type: "renameGroupTask"; groupId: string; threadId: string; title: string }
   | { type: "deleteGroupTask"; groupId: string; threadId: string }
+  | { type: "reopenGroupTask"; groupId: string; threadId: string }
   | { type: "interruptGroup"; groupId: string; threadId?: string; onError?: () => void }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
@@ -2051,6 +2061,13 @@ export function reducer(state: AppState, action: Action): AppState {
           task.threadId === action.threadId ? { ...task, title: action.title } : task,
         ),
       }));
+    case "reopenGroupTask":
+      return {
+        ...state,
+        groups: state.groups.map((group) => group.id === action.groupId
+          ? { ...group, tasks: (group.tasks ?? []).map((task) => task.threadId === action.threadId ? { ...task, closedBy: undefined, state: "idle" as const } : task) }
+          : group),
+      };
     case "renameGroupTask":
       return {
         ...state,
@@ -3364,6 +3381,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             method: "PATCH",
             body: JSON.stringify({ title: action.title }),
           }).catch(showError);
+          break;
+        case "reopenGroupTask":
+          api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "PATCH", body: JSON.stringify({ closed: false }) })
+            .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
+            .catch(showError);
           break;
         case "deleteGroupTask":
           api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "DELETE" })

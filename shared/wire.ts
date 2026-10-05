@@ -78,6 +78,10 @@ export interface TaskOpenedBy {
   at: number;
 }
 
+/** Server-computed thread state, the same values bots see in list_threads.
+ * closed = a bot closed it or it settled after idle days with nothing pending. */
+export type ThreadState = "running" | "waiting-on-you" | "queued" | "idle" | "closed";
+
 /** The bot that closed a thread it opened (or one of its own). */
 export interface TaskClosedBy {
   botId: string;
@@ -106,6 +110,7 @@ export interface TaskUsage {
  * own bookkeeping that no client has ever used. */
 export interface WireTask {
   lastActivityAt?: number;
+  state?: ThreadState;
   threadId: string;
   title: string;
   createdAt: number;
@@ -457,6 +462,10 @@ export interface GroupTask {
   /** The first message already drove a title attempt for this thread, so a
    * later one does not rename a room the person may have retitled. */
   titleFromFirstMessage?: true;
+  state?: ThreadState;
+  lastActivityAt?: number;
+  /** Set by close_thread; absent while open or when the thread settled on its own. */
+  closedBy?: TaskClosedBy;
 }
 
 /** A room as a client may see it: the record plus the computed working
