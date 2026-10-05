@@ -21,6 +21,10 @@ struct ChatListView: View {
     /// cannot push without a tap, and a new bot appearing silently at the
     /// bottom of the roster is a poor answer to pressing +.
     @State private var path = NavigationPath()
+    /// A wide window's second chat, beside the one `path` shows.
+    @State private var sideChat: Chat?
+    @AppStorage(PrefKey.splitFraction) private var splitFraction = SplitPanes.defaultFraction
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var searchHits: [SearchHit] = []
     @State private var searching = false
     @State private var searchOpen = false
@@ -57,121 +61,7 @@ struct ChatListView: View {
 #if DEBUG
         let _ = MainThreadProbe.shared.listBody()
 #endif
-        NavigationStack(path: $path) {
-            GeometryReader { geo in
-            VStack(spacing: 0) {
-                header
-                StatusBanner()
-                if searchOpen {
-                    HStack {
-                        TextField("Search bots and messages", text: $query)
-                            .focused($searchFocused)
-                        Button("Done") { query = ""; searchOpen = false }
-                    }
-                    .padding(.horizontal, 20).padding(.bottom, 12)
-                }
-
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if query.isEmpty {
-                            rosterSections
-                        } else {
-                            if !searchHits.isEmpty {
-                                HStack {
-                                    sectionLabel(Text("Messages"))
-                                    Spacer()
-                                    if searching { ProgressView().controlSize(.small) }
-                                }
-                                .padding(.top, 10)
-                                .padding(.bottom, 4)
-
-                                ForEach(searchHits) { hit in
-                                    Button {
-                                        Task {
-                                            if let chat = await session.open(hit) {
-                                                Haptics.selection()
-                                                path.append(chat)
-                                            }
-                                        }
-                                    } label: {
-                                        SearchHitRow(hit: hit)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .padding(.horizontal, 16)
-                                }
-                                sectionLabel(Text("Threads"))
-                                    .padding(.top, 14)
-                                    .padding(.bottom, 4)
-                            } else if searching {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.top, 24)
-                            }
-
-                            botRows(chats)
-                        }
-                    }
-                    .padding(.bottom, Self.barClearance)
-                }
-                .refreshable { await session.refresh(); await refreshShared() }
-                .modifier(WatchRosterTouches(touching: $touching, scrolling: $scrolling))
-                .onChange(of: orderedConversations.map(\.id), initial: true) { _, ids in settleOrder(ids) }
-                .onChange(of: touching || scrolling) { _, busy in
-                    if busy {
-                        rowOrder.hold(true)
-#if DEBUG
-                        if touching { debugReorderMidTap() }
-#endif
-                    } else {
-                        rowOrder.release()
-                        settleOrder(orderedConversations.map(\.id))
-                    }
-                }
-                .overlay {
-                    if rosterIsEmpty {
-                        if query.isEmpty && !session.state.rosterLoaded {
-                            ContentUnavailableView {
-                                Label("Your chats are not loaded yet", systemImage: "wifi.slash")
-                            } description: {
-                                Text("Keep BOS open on your Mac. Your chats will appear when the connection is ready.")
-                            } actions: {
-                                Button("Try again") { Task { await session.refresh(); await refreshShared() } }
-                                    .buttonStyle(.bordered)
-                            }
-                        } else {
-                            ContentUnavailableView(
-                                query.isEmpty ? "Your chats start here" : "Nothing matches",
-                                systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
-                                description: Text(
-                                    query.isEmpty
-                                        ? "Use + to start a conversation or create a bot."
-                                        : "No thread matches \u{201C}\(query)\u{201D}."
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-            // top-aligned: the roster fills downward from the header
-            .frame(maxWidth: CompanionLayout.rosterWidth, maxHeight: .infinity, alignment: .top)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            // a bot that stopped for you grows out of the island
-            .overlay(alignment: .top) {
-                if CompanionLayout.supportsIslandPresentation {
-                    NeedsYouIsland(
-                        update: session.state.updates.first { $0.kind == .needsYou },
-                        hasIsland: IslandGeometry.hasIsland(topInset: geo.safeAreaInsets.top)
-                    ) { chat in path.append(chat) }
-                }
-            }
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .interactiveBackSwipe()
-            .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
-            .navigationDestination(for: SharedRoomSummary.self) { room in
-                SharedChatView(room: room, selfID: sharedMe?.actorId ?? "", contacts: sharedContacts)
-            }
+        layout
             .task(id: session.connection?.id) {
                 pinnedChats = PinnedChats.load(scope: session.connection?.id ?? "")
                 while !Task.isCancelled {
@@ -183,7 +73,7 @@ struct ChatListView: View {
                 guard let roomID = event.object as? String else { return }
                 if let room = sharedRooms.first(where: { $0.id == roomID }) {
                     UserDefaults.standard.removeObject(forKey: "bos.pendingSharedRoomPush")
-                    path.append(room)
+                    open(room)
                 } else { Task { await refreshShared() } }
             }
             .task(id: "\(session.connection?.id ?? "")|\(personalAvatar.hashValue)") {
@@ -193,12 +83,12 @@ struct ChatListView: View {
             }
             .onChange(of: session.notificationChat) { _, chat in
                 guard let chat else { return }
-                path.append(chat)
+                open(chat)
                 session.consumeNotificationChat()
             }
             .task {
                 if let chat = session.notificationChat {
-                    path.append(chat)
+                    open(chat)
                     session.consumeNotificationChat()
                 }
             }
@@ -217,13 +107,18 @@ struct ChatListView: View {
                 }
                 if ProcessInfo.processInfo.arguments.contains("-open-first"),
                    path.isEmpty, let first = chats.first {
-                    path.append(first.chat)
+                    open(first.chat)
                 }
                 // `-open-chat room-hq`: any chat by id, rooms included
                 let args = ProcessInfo.processInfo.arguments
                 if let i = args.firstIndex(of: "-open-chat"), i + 1 < args.count, path.isEmpty,
                    let match = session.state.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
-                    path.append(match.chat)
+                    open(match.chat)
+                }
+                // `-open-beside oracle`: a second chat in a wide window's side pane
+                if let i = args.firstIndex(of: "-open-beside"), i + 1 < args.count, usesSplit,
+                   let match = session.state.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
+                    openBeside(homeChat(match.chat))
                 }
                 if Autopilot.scenario == "switch" { Task { await runSwitchAutopilot() } }
             }
@@ -231,13 +126,13 @@ struct ChatListView: View {
             .sheet(isPresented: $showingUpdates) {
                 UpdatesSheet { chat in
                     showingUpdates = false
-                    path.append(chat)
+                    open(chat)
                 }
             }
             .fullScreenCover(isPresented: $showingWalkie) {
                 WalkieView { chat in
                     showingWalkie = false
-                    path.append(chat)
+                    open(chat)
                 }
                 .session(session)
             }
@@ -263,11 +158,11 @@ struct ChatListView: View {
             .sheet(isPresented: $showingNewGroup) {
                 NewGroupSheet(created: { room in
                     showingNewGroup = false
-                    path.append(Chat.room(room))
+                    open(Chat.room(room))
                 }, sharedContacts: sharedContacts, sharedMe: sharedMe, createdShared: { room in
                     showingNewGroup = false
                     sharedRooms.append(room)
-                    path.append(room)
+                    open(room)
                 })
             }
             .sheet(isPresented: $showingNewSection) {
@@ -306,7 +201,7 @@ struct ChatListView: View {
                 TaskManagerView(chat: chat) { threadId in
                     guard let bot = session.state.bot(forThread: threadId) else { return }
                     managingThreads = nil
-                    path.append(Chat.bot(bot))
+                    open(Chat.bot(bot))
                 }
             }
             .task(id: query) {
@@ -326,6 +221,192 @@ struct ChatListView: View {
                 guard !Task.isCancelled, query == expected else { return }
                 searchHits = hits
             }
+            .onChange(of: path.isEmpty) { _, empty in
+                // The primary chat closed with one still beside it: that one
+                // takes the primary place rather than sitting next to nothing.
+                guard empty, usesSplit, let side = sideChat else { return }
+                sideChat = nil
+                open(side)
+            }
+            .onChange(of: usesSplit) { _, split in
+                // A narrowed window is a phone again: one chat at a time.
+                if !split { sideChat = nil }
+            }
+    }
+
+    // MARK: - Layout
+
+    /// iPad, and the widest phones in landscape: the roster beside the open
+    /// chat. Everything compact keeps the phone's one stack.
+    private var usesSplit: Bool { sizeClass == .regular }
+
+    @ViewBuilder private var layout: some View {
+        if usesSplit {
+            SplitChatLayout(chatOpen: !path.isEmpty, sideOpen: sideChat != nil,
+                            fraction: $splitFraction, openBeside: openBeside) {
+                roster
+            } primary: {
+                NavigationStack(path: $path) { chatDestinations(detailPlaceholder) }
+            } side: {
+                if let sideChat {
+                    NavigationStack {
+                        chatDestinations(ChatView(chat: sideChat) { self.sideChat = nil })
+                    }
+                    // a different chat is a fresh pane: its own draft, scroll
+                    // and selected thread
+                    .id(sideChat.conversationID)
+                }
+            }
+        } else {
+            NavigationStack(path: $path) { chatDestinations(roster) }
+        }
+    }
+
+    /// The screens a stack can push. The same for the phone's one stack and
+    /// for each pane of a wide window.
+    private func chatDestinations<Root: View>(_ root: Root) -> some View {
+        root
+            .toolbar(.hidden, for: .navigationBar)
+            .interactiveBackSwipe()
+            .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
+            .navigationDestination(for: SharedRoomSummary.self) { room in
+                SharedChatView(room: room, selfID: sharedMe?.actorId ?? "", contacts: sharedContacts)
+            }
+    }
+
+    private var detailPlaceholder: some View {
+        ContentUnavailableView("No chat open", systemImage: "bubble.left.and.bubble.right",
+                               description: Text("Pick a chat from the list."))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Shows a chat. A phone pushes it; a wide window puts it in the detail
+    /// column in place of whatever was there, the way picking a row in a
+    /// sidebar does — not stacked on top for the back button to unwind.
+    private func open<Value: Hashable>(_ value: Value) {
+        guard usesSplit else { path.append(value); return }
+        var replaced = NavigationPath()
+        replaced.append(value)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { path = replaced }
+    }
+
+    /// A second chat beside the open one, or the first if nothing is open.
+    private func openBeside(_ chat: Chat) {
+        Haptics.selection()
+        guard !path.isEmpty else { open(chat); return }
+        sideChat = chat
+    }
+
+    private var roster: some View {
+        GeometryReader { geo in
+        VStack(spacing: 0) {
+            header
+            StatusBanner()
+            if searchOpen {
+                HStack {
+                    TextField("Search bots and messages", text: $query)
+                        .focused($searchFocused)
+                    Button("Done") { query = ""; searchOpen = false }
+                }
+                .padding(.horizontal, 20).padding(.bottom, 12)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if query.isEmpty {
+                        rosterSections
+                    } else {
+                        if !searchHits.isEmpty {
+                            HStack {
+                                sectionLabel(Text("Messages"))
+                                Spacer()
+                                if searching { ProgressView().controlSize(.small) }
+                            }
+                            .padding(.top, 10)
+                            .padding(.bottom, 4)
+
+                            ForEach(searchHits) { hit in
+                                Button {
+                                    Task {
+                                        if let chat = await session.open(hit) {
+                                            Haptics.selection()
+                                            open(chat)
+                                        }
+                                    }
+                                } label: {
+                                    SearchHitRow(hit: hit)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 16)
+                            }
+                            sectionLabel(Text("Threads"))
+                                .padding(.top, 14)
+                                .padding(.bottom, 4)
+                        } else if searching {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 24)
+                        }
+
+                        botRows(chats)
+                    }
+                }
+                .padding(.bottom, Self.barClearance)
+            }
+            .refreshable { await session.refresh(); await refreshShared() }
+            .modifier(WatchRosterTouches(touching: $touching, scrolling: $scrolling))
+            .onChange(of: orderedConversations.map(\.id), initial: true) { _, ids in settleOrder(ids) }
+            .onChange(of: touching || scrolling) { _, busy in
+                if busy {
+                    rowOrder.hold(true)
+#if DEBUG
+                    if touching { debugReorderMidTap() }
+#endif
+                } else {
+                    rowOrder.release()
+                    settleOrder(orderedConversations.map(\.id))
+                }
+            }
+            .overlay {
+                if rosterIsEmpty {
+                    if query.isEmpty && !session.state.rosterLoaded {
+                        ContentUnavailableView {
+                            Label("Your chats are not loaded yet", systemImage: "wifi.slash")
+                        } description: {
+                            Text("Keep BOS open on your Mac. Your chats will appear when the connection is ready.")
+                        } actions: {
+                            Button("Try again") { Task { await session.refresh(); await refreshShared() } }
+                                .buttonStyle(.bordered)
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            query.isEmpty ? "Your chats start here" : "Nothing matches",
+                            systemImage: query.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
+                            description: Text(
+                                query.isEmpty
+                                    ? "Use + to start a conversation or create a bot."
+                                    : "No thread matches \u{201C}\(query)\u{201D}."
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        // top-aligned: the roster fills downward from the header
+        .frame(maxWidth: CompanionLayout.rosterWidth, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // a bot that stopped for you grows out of the island
+        .overlay(alignment: .top) {
+            if CompanionLayout.supportsIslandPresentation {
+                NeedsYouIsland(
+                    update: session.state.updates.first { $0.kind == .needsYou },
+                    hasIsland: IslandGeometry.hasIsland(topInset: geo.safeAreaInsets.top)
+                ) { chat in open(chat) }
+            }
+        }
         }
     }
 
@@ -444,7 +525,7 @@ struct ChatListView: View {
             if let roomID = UserDefaults.standard.string(forKey: "bos.pendingSharedRoomPush"),
                let room = rooms.first(where: { $0.id == roomID }) {
                 UserDefaults.standard.removeObject(forKey: "bos.pendingSharedRoomPush")
-                path.append(room)
+                open(room)
             }
         } catch {
             guard session.connection?.id == connectionID else { return }
@@ -525,7 +606,7 @@ struct ChatListView: View {
             case .local(let summary): botRows([summary])
             case .contact(let contact): contactRow(contact)
             case .room(let room):
-                Button { path.append(room) } label: {
+                Button { open(room) } label: {
                     sharedConversationRow(name: room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? ""), subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0) {
                         GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 52)
                     }
@@ -584,6 +665,7 @@ struct ChatListView: View {
                 .accessibilityLabel("\(conversationName(entry)), pinned chat\(conversationBusy(entry) ? ", working" : conversationUnread(entry) ? ", unread" : "")")
                 .contextMenu {
                     pinButton(entry)
+                    if case .local(let summary) = entry { OpenBesideButton(chat: homeChat(summary.chat)) }
                     if pinnedChats.ids.first != entry.id {
                         Button("Move to front", systemImage: "arrow.up.to.line") {
                             pinnedChats.moveToFront(entry.id)
@@ -628,8 +710,8 @@ struct ChatListView: View {
     }
     private func openConversation(_ entry: ConversationEntry) {
         switch entry {
-        case .local(let summary): path.append(homeChat(summary.chat))
-        case .room(let room): path.append(room)
+        case .local(let summary): open(homeChat(summary.chat))
+        case .room(let room): open(room)
         case .contact(let contact): openContact(contact)
         }
     }
@@ -640,7 +722,7 @@ struct ChatListView: View {
                 let room = try await session.openSharedDM(targetId: contact.id)
                 guard session.connection?.id == connectionID else { return }
                 if !sharedRooms.contains(where: { $0.id == room.id }) { sharedRooms.append(room) }
-                path.append(room)
+                open(room)
             } catch { session.actionError = error.localizedDescription }
         }
     }
@@ -783,10 +865,13 @@ struct ChatListView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(rooms) { room in
-                    NavigationLink(value: Chat.room(room)) {
+                    // A button rather than a value link: on a wide window the
+                    // roster sits outside the stack a link would push onto.
+                    Button { open(Chat.room(room)) } label: {
                         GroupTile(room: room)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu { OpenBesideButton(chat: .room(room)) }
                 }
                 if showsCreate {
                     Button {
@@ -812,7 +897,7 @@ struct ChatListView: View {
     private func botRows(_ rows: [ChatSummary]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, summary in
             VStack(spacing: 0) {
-                NavigationLink(value: homeChat(summary.chat)) {
+                Button { open(homeChat(summary.chat)) } label: {
                     ChatRow(
                         chat: summary.chat,
                         preview: summary.chat.busy ? "Working…" : summary.preview,
@@ -823,7 +908,10 @@ struct ChatListView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .contextMenu { pinButton(.local(summary)) }
+                .contextMenu {
+                    pinButton(.local(summary))
+                    OpenBesideButton(chat: homeChat(summary.chat))
+                }
 
             }
         }
@@ -985,7 +1073,7 @@ struct ChatListView: View {
             if let bot = await session.createBot() {
                 showingNewBot = false
                 Haptics.success()
-                path.append(Chat.bot(bot))
+                open(Chat.bot(bot))
             }
         }
     }
@@ -1053,7 +1141,7 @@ struct ChatListView: View {
 
     private func openAttention(_ entry: AttentionThread) {
         guard let bot = entry.destinationBot(in: session.state) else { return }
-        path.append(Chat.bot(bot))
+        open(Chat.bot(bot))
     }
 
     private func summaries(for bots: [Bot]) -> [ChatSummary] {
