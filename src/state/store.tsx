@@ -45,6 +45,7 @@ import { t } from "@/lib/i18n";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
+import { remoteRoomFrame } from "@/lib/remote-room-frames";
 import { noteUpdateFrame } from "@/lib/bos-update";
 import { fetchInbox, inboxCountOf } from "@/lib/inbox";
 import { withSendPriority, type SendPriority } from "@/lib/composer-priority";
@@ -253,7 +254,7 @@ export interface Group {
   peopleIds?: string[];
   people?: RoomPerson[];
   /** Set when the room lives on another home and is opened through it. */
-  home?: { id: string; name: string };
+  home?: { id: string; name: string; available?: boolean };
   avatarUrl?: string | null;
   memberReplyModes?: Record<string, "always" | "mentions">;
   notifications?: "all" | "mentions" | "muted";
@@ -2632,6 +2633,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   });
   const [state, rawDispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
+  const remoteFrame = useRef<(homeId: string, frame: ServerFrame) => void>(() => {});
+  const remoteSnapshot = useRef<(homeId: string) => Promise<boolean>>(async () => false);
+  /** True for a room this home joined on another home (see `Group.home`). */
+  const onAnotherHome = (groupId: string) => Boolean(stateRef.current.groups.find((g) => g.id === groupId)?.home);
   stateRef.current = state;
   // per-frame stream-delta batching (see the "runtime" SSE case); stream
   // state is intentionally OUTSIDE the reducer so token frames re-render
@@ -3258,7 +3263,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           if (bot?.unread) {
             api(`/api/bots/${action.id}/read`, { method: "POST", body: JSON.stringify({ threadId: bot.threadId }) }).catch(() => {});
-          } else if (group?.unread) {
+          } else if (group?.unread && !group.home) {
             api(`/api/groups/${action.id}/read`, { method: "POST" }).catch(() => {});
           }
           break;
@@ -3328,12 +3333,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "patchGroup":
+          // a room on another home answers PATCH with 403; its controls are hidden
+          if (onAnotherHome(action.groupId)) break;
           api(`/api/groups/${action.groupId}`, {
             method: "PATCH",
             body: JSON.stringify(action.patch),
           }).catch(showError);
           break;
         case "deleteGroup":
+          if (onAnotherHome(action.groupId)) break;
           api(`/api/groups/${action.groupId}`, { method: "DELETE" }).catch(showError);
           break;
         case "setModel":
@@ -3421,27 +3429,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Channel tasks mirror bot tasks, but hydrate the whole channel so
         // switching atomically replaces its transcript, folder and pin.
         case "newGroupTask":
+          if (onAnotherHome(action.groupId)) break;
           api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks`, { method: "POST", body: "{}" })
             .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
             .catch(showError);
           break;
         case "switchGroupTask":
+          if (onAnotherHome(action.groupId)) break;
           api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}?messages=${MESSAGE_PAGE_SIZE}`, { method: "POST" })
             .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
             .catch(showError);
           break;
         case "renameGroupTask":
+          if (onAnotherHome(action.groupId)) break;
           api(`/api/groups/${action.groupId}/tasks/${action.threadId}`, {
             method: "PATCH",
             body: JSON.stringify({ title: action.title }),
           }).catch(showError);
           break;
         case "reopenGroupTask":
+          if (onAnotherHome(action.groupId)) break;
           api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "PATCH", body: JSON.stringify({ closed: false }) })
             .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
             .catch(showError);
           break;
         case "deleteGroupTask":
+          if (onAnotherHome(action.groupId)) break;
           api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}`, { method: "DELETE" })
             .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
             .catch(showError);
@@ -3722,7 +3735,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // reading the selected room clears its badge immediately
           if (group.unread && group.id === stateRef.current.selectedId) {
             group.unread = false;
-            fetch(`/api/groups/${group.id}/read`, { method: "POST" }).catch(() => {});
+            if (!onAnotherHome(group.id)) fetch(`/api/groups/${group.id}/read`, { method: "POST" }).catch(() => {});
           }
           rawDispatch({ type: "groupPatched", group });
           if (group.threadId) roomMemberTurns.room([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)], group.activeBotIds);
@@ -3834,6 +3847,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
       }
     };
+    remoteFrame.current = (homeId, frame) => {
+      const scoped = hydrated ? remoteRoomFrame(stateRef.current.groups, homeId, frame) : null;
+      if (scoped) handleFrame(scoped);
+    };
+    remoteSnapshot.current = async (homeId) => {
+      const { groups } = await api<{ groups: Group[] }>("/api/groups");
+      for (const group of groups) if (group.home?.id === homeId) rawDispatch({ type: "groupPatched", group });
+      return true;
+    };
     const stopLive = openLiveEvents({
       onOpen: () => rawDispatch({ type: "connected", value: true }),
       onError: () => rawDispatch({ type: "connected", value: false }),
@@ -3857,8 +3879,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (refresh.timer) clearTimeout(refresh.timer);
       }
       stopLive();
+      remoteFrame.current = () => {};
     };
   }, []);
+
+  // Rooms joined on another home stream from that home through
+  // /api/groups/:id/events. The relay carries every room this guest shares
+  // with that home, so one stream per home, opened through any of its rooms.
+  const remoteHomes = useMemo(() => {
+    const via = new Map<string, string>();
+    for (const group of state.groups) if (group.home && !via.has(group.home.id)) via.set(group.home.id, group.id);
+    return [...via].map(([homeId, groupId]) => `${homeId}\u0000${groupId}`).sort().join("\n");
+  }, [state.groups]);
+  useEffect(() => {
+    if (!remoteHomes) return;
+    const stops = remoteHomes.split("\n").map((entry) => {
+      const [homeId, groupId] = entry.split("\u0000");
+      return openLiveEvents({
+        path: `/api/groups/${encodeURIComponent(groupId)}/events`,
+        onFrame: (frame) => remoteFrame.current(homeId, frame as ServerFrame),
+        onSnapshotRequired: () => remoteSnapshot.current(homeId).catch(() => false),
+      });
+    });
+    return () => { for (const stop of stops) stop(); };
+  }, [remoteHomes]);
 
   // Re-probe the engines on demand. A CLI installed while the app is running
   // is invisible until something asks again — the setup screens expose this

@@ -244,7 +244,7 @@ function ClusterLabel({ bot, name, color, bubble = false }: { bot?: Bot; name: s
 /** Pin toggle for one room message — one pin per room, patchGroup path. */
 function PinToggle({ group, message }: { group: Group; message: Message }) {
   const { dispatch } = useStore();
-  if (window.ogb?.remoteClient?.active) return null;
+  if (window.ogb?.remoteClient?.active || group.home) return null;
   const pinned = group.pinnedMessageId === message.id;
   return (
     <button
@@ -1086,6 +1086,9 @@ const ROOM_NAME_PILL = "flex min-w-0 max-w-full items-center gap-2 rounded-full 
 export function GroupView({ group }: { group: Group }) {
   const { state, dispatch } = useStore();
   const remoteClient = window.ogb?.remoteClient?.active === true;
+  // A room on another home relays reads, sends and people only; its
+  // settings, pins, bulletin and tasks belong to that home.
+  const readOnly = remoteClient || Boolean(group.home);
   const meId = useMultiplayerMe()?.actorId;
   // Same Windows caption handling as ChatView: drag on the header, shift the
   // right-hand controls below the renderer-drawn caption buttons.
@@ -1127,7 +1130,7 @@ export function GroupView({ group }: { group: Group }) {
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
     [group.memberIds, state.bots],
   );
-  const setupPending = !remoteClient && roomNeedsSetup(group);
+  const setupPending = !readOnly && roomNeedsSetup(group);
 
   // One mascot per member working in THIS thread; each finished reply pops in
   // above while the members still working keep their own rows.
@@ -1367,7 +1370,7 @@ export function GroupView({ group }: { group: Group }) {
         )}
       >
         <div className="flex min-w-0 items-center" style={headerNoDragStyle}>
-          {!setupPending && !group.dm && <GroupTaskPicker group={group} />}
+          {!setupPending && !group.dm && !group.home && <GroupTaskPicker group={group} />}
         </div>
         <div className="flex min-w-0 justify-center" style={headerNoDragStyle}>
           {group.dm || remoteClient ? (
@@ -1421,11 +1424,11 @@ export function GroupView({ group }: { group: Group }) {
             messages={group.messages}
             isGroup
           />
-          {!remoteClient && !group.dm && <button type="button" aria-label="Room settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)} className={cn("rounded-full p-1.5 hover:bg-raised", settingsOpen ? "text-accent" : "text-ink-secondary hover:text-ink")}><Settings2 size={18} /></button>}
+          {!readOnly && !group.dm && <button type="button" aria-label="Room settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)} className={cn("rounded-full p-1.5 hover:bg-raised", settingsOpen ? "text-accent" : "text-ink-secondary hover:text-ink")}><Settings2 size={18} /></button>}
         </div>
       </div>
 
-      {settingsOpen && !remoteClient && !group.dm && <RoomSettings key={group.id} group={roomFields} members={members} setupPending={setupPending} onToggleFolder={() => setFolderOpen((open) => !open)} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && !readOnly && !group.dm && <RoomSettings key={group.id} group={roomFields} members={members} setupPending={setupPending} onToggleFolder={() => setFolderOpen((open) => !open)} onClose={() => setSettingsOpen(false)} />}
 
       {findOpen && <ChatFindBar threadId={group.threadId} onClose={() => setFindOpen(false)} />}
 
@@ -1452,14 +1455,14 @@ export function GroupView({ group }: { group: Group }) {
           </div>
         ) : (
           <button
-            disabled={remoteClient}
-            onClick={() => { if (!remoteClient) setBulletinOpen(true); }}
-            className={cn("mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left", !remoteClient && "hover:bg-raised/40")}
+            disabled={readOnly}
+            onClick={() => { if (!readOnly) setBulletinOpen(true); }}
+            className={cn("mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left", !readOnly && "hover:bg-raised/40")}
             title={t("room.bulletin.title")}
           >
             <Pin size={12} className="shrink-0 text-ink-secondary" />
             <span className={cn("truncate text-[12.5px]", group.bulletin ? "text-ink-secondary" : "text-ink-secondary/60")}>
-              {group.bulletin.split("\n")[0] || (remoteClient ? t("room.bulletin.none") : t("room.bulletin.add"))}
+              {group.bulletin.split("\n")[0] || (readOnly ? t("room.bulletin.none") : t("room.bulletin.add"))}
             </span>
           </button>
         )}
@@ -1496,7 +1499,7 @@ export function GroupView({ group }: { group: Group }) {
                 onClick={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
                 aria-label={t("chat.unpinMessage")}
                 title={t("chat.unpin")}
-                className={cn("shrink-0 rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink", remoteClient && "hidden")}
+                className={cn("shrink-0 rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink", readOnly && "hidden")}
               >
                 <X size={13} />
               </button>

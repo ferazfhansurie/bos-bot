@@ -53,18 +53,21 @@ export interface LiveEventsHandlers {
   onSnapshotRequired: () => Promise<boolean>;
   onOpen?: () => void;
   onError?: () => void;
+  /** Stream path; defaults to the home's own `/api/events`. */
+  path?: string;
   screens?: boolean;
   staleMs?: number;
   retryMinMs?: number;
   retryMaxMs?: number;
 }
 
-export function liveEventsUrl(options?: { since?: string | null; screens?: boolean }): string {
+export function liveEventsUrl(options?: { since?: string | null; screens?: boolean; path?: string }): string {
   const params = new URLSearchParams();
   if (options?.since) params.set("since", options.since);
   if (options?.screens === false) params.set("screens", "off");
   const query = params.toString();
-  return query ? `${LIVE_EVENTS_PATH}?${query}` : LIVE_EVENTS_PATH;
+  const path = options?.path ?? LIVE_EVENTS_PATH;
+  return query ? `${path}?${query}` : path;
 }
 
 export function isLivePing(frame: Pick<LiveFrame, "kind">): boolean {
@@ -234,7 +237,7 @@ export function openLiveEvents(
     let current: LiveEventSourceLike;
     try {
       current = platform.createEventSource(
-        liveEventsUrl({ since: cursor, screens: handlers.screens }),
+        liveEventsUrl({ since: cursor, screens: handlers.screens, path: handlers.path }),
       );
     } catch {
       handlers.onError?.();

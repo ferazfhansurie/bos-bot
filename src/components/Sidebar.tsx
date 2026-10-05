@@ -315,6 +315,8 @@ export function GroupThreadList({ group, selected, density = "comfortable", quer
   }));
   const visible = visibleSidebarThreads(tasks, group.threadId, query, [], showAll);
   useRevealedThreadRow(state.revealThread, selected ? group.threadId : null);
+  // Tasks in a room on another home are that home's to create and change.
+  if (group.home) return null;
   return <div className="mb-2 ml-5 space-y-0.5 border-l border-hairline/30 pl-2" role="group" aria-label={t("task.namedList", { name: group.name })}>
     {visible.map((task) => <SidebarThreadRow key={task.threadId} task={task} ownerId={group.id} current={selected && task.threadId === group.threadId} compact={density === "compact"}
       onSelect={() => { if (task.threadId !== group.threadId) dispatch({ type: "switchGroupTask", groupId: group.id, threadId: task.threadId }); else dispatch({ type: "select", id: group.id }); }}
@@ -341,8 +343,9 @@ function RoomContextMenu({
   onTogglePin: (groupId: string) => void;
 }) {
   const { state, dispatch } = useStore();
-  const remoteClient = window.ogb?.remoteClient?.active === true;
   const group = state.groups.find((g) => g.id === menu.groupId);
+  // A room on another home can't be renamed, sectioned or deleted from here.
+  const remoteClient = window.ogb?.remoteClient?.active === true || Boolean(group?.home);
   const { openSplit } = useSplitView();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(group?.name ?? "");
