@@ -134,7 +134,7 @@ struct UnpairedHomeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Text("On your computer, open BOS → Settings → Phone.")
+                    Text("On your computer, open Settings → Phone → Set up a phone.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

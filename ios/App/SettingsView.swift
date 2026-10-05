@@ -19,9 +19,6 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Threads") {
-                NavigationLink("Inbox settlement") { InboxSettlementSettings() }
-            }
             Section("Computer") {
                 if let connection = session.connection {
                     NavigationLink {
@@ -53,14 +50,18 @@ struct SettingsView: View {
                 } header: {
                     Text("BOS updates")
                 } footer: {
-                    Text("Updates install on the mac from Settings > Updates. Bots that are working are paused and pick up where they left off.")
+                    Text("Updates install on your Mac from BOS → Settings → Updates. Working bots pause and pick up where they left off.")
                 }
             }
 
             if session.connection != nil {
                 Section("Subscription limits") {
                     NavigationLink { ProviderUsageView() } label: {
-                        Label("Claude & Codex", systemImage: "chart.bar.fill")
+                        Label {
+                            Text("Claude & Codex")
+                        } icon: {
+                            SettingsIcon(symbol: "chart.bar.fill", color: .green)
+                        }
                     }
                 }
             }
@@ -79,6 +80,9 @@ struct SettingsView: View {
                     } label: {
                         notificationRow
                     }
+                    // A settings row, not a link: keep the label in the
+                    // primary colour like every other row on this screen.
+                    .tint(.primary)
                     .disabled(enablingNotifications)
                     .accessibilityHint(notificationAccessibilityHint)
                 }
@@ -105,7 +109,7 @@ struct SettingsView: View {
                     }
                 } label: {
                     Label {
-                        Text("Bot intro animation")
+                        Text("Intro animation")
                     } icon: {
                         SettingsIcon(symbol: "sparkles", color: .pink)
                     }
@@ -153,12 +157,26 @@ struct SettingsView: View {
                         SettingsIcon(symbol: "globe", color: .teal)
                     }
                 }
+            } header: {
+                Text("Display")
             } footer: {
                 Text("Automatic appearance follows this device's display setting. Language changes inside BOS; iOS buttons follow the device language.")
             }
 
             if session.connection != nil {
                 Section("Workspace") {
+                    // Read from and saved to the computer, so it only makes
+                    // sense while one is connected.
+                    NavigationLink {
+                        InboxSettlementSettings()
+                    } label: {
+                        Label {
+                            Text("Inbox settlement")
+                        } icon: {
+                            SettingsIcon(symbol: "tray.full.fill", color: .gray)
+                        }
+                    }
+
                     NavigationLink {
                         TasksRoutinesView()
                     } label: {
@@ -184,18 +202,41 @@ struct SettingsView: View {
                     }
                 }
             }
-            Section("Help & feedback") {
+            Section {
                 Link(destination: URL(string: "mailto:ferazfhansurie@gmail.com?subject=BOS%20alpha%20feedback")!) {
-                    Label("Contact BOS", systemImage: "envelope")
+                    Label {
+                        Text("Contact BOS")
+                            .foregroundStyle(.primary)
+                    } icon: {
+                        SettingsIcon(symbol: "envelope.fill", color: .blue)
+                    }
                 }
-                Text("For help, alpha feedback or privacy requests: ferazfhansurie@gmail.com").font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
-                Text("Include your app version and steps to reproduce. Please leave out passwords, keys and private conversations.").font(.footnote).foregroundStyle(.secondary)
+                .accessibilityHint("ferazfhansurie@gmail.com")
+            } header: {
+                Text("Help & feedback")
+            } footer: {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("For help, alpha feedback or privacy requests: ferazfhansurie@gmail.com")
+                        .textSelection(.enabled)
+                    Text("Include your app version and steps to reproduce. Please leave out passwords, keys and private conversations.")
+                    Text(verbatim: Self.appVersion)
+                        .monospacedDigit()
+                        .textSelection(.enabled)
+                }
             }
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .task { await session.refreshNotificationAuthorization() }
     }
+
+    /// "BOS 1.0.0 (57)" — the version the help footer asks people to include.
+    private static let appVersion: String = {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "BOS \(version) (\(build))"
+    }()
 
     private var notificationsAreEnabled: Bool {
         switch session.notificationAuthorization {
@@ -419,10 +460,10 @@ private struct UpdateStatusRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: status?.isRunning == true ? "arrow.triangle.2.circlepath" : status?.state == "ready" ? "arrow.up.circle.fill" : "checkmark.circle")
-                .foregroundStyle(status?.state == "ready" ? Color.accentColor : Color.secondary)
-                .frame(width: 24)
-                .accessibilityHidden(true)
+            SettingsIcon(
+                symbol: status == nil ? "arrow.down" : status?.isRunning == true ? "arrow.triangle.2.circlepath" : status?.state == "ready" ? "arrow.up" : "checkmark",
+                color: status?.isRunning == true || status?.state == "ready" ? .accentColor : (status == nil ? .gray : .green)
+            )
             VStack(alignment: .leading, spacing: 2) {
                 Text(status.map { "BOS \($0.current.version)" } ?? "BOS")
                 Text(status?.summary ?? (loaded ? "Unavailable on this computer" : "Checking…"))
@@ -557,6 +598,12 @@ struct ConnectedComputersView: View {
                                 pendingRemoval = computer
                             }
                         }
+                        // Swipe is easy to miss; a long press offers the same.
+                        .contextMenu {
+                            Button("Remove from this device", systemImage: "trash", role: .destructive) {
+                                pendingRemoval = computer
+                            }
+                        }
                         .accessibilityHint("Switches BOS to this computer")
                     }
                 }
@@ -614,10 +661,12 @@ struct ConnectionSecurityView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(connection.name)
                                 .font(.headline)
-                            Label {
-                                session.status.settingsText
-                            } icon: {
+                            // A Form row stretches Label's icon column to the
+                            // list's icon width, which left a wide gap here.
+                            HStack(spacing: 5) {
                                 Image(systemName: session.status == .live ? "checkmark.circle.fill" : "circle.dotted")
+                                    .accessibilityHidden(true)
+                                session.status.settingsText
                             }
                                 .font(.subheadline)
                                 .foregroundStyle(session.status == .live ? Color.green : Color.secondary)
@@ -627,21 +676,35 @@ struct ConnectionSecurityView: View {
                     .accessibilityElement(children: .combine)
                 }
 
-                Section {
-                    if let remote = session.companionStatus {
+                // Read-only: remote access and keep-awake are changed on the Mac.
+                if let remote = session.companionStatus,
+                   remote.hosted != nil || remote.keepAwake != nil {
+                    Section {
                         if let hosted = remote.hosted {
-                            LabeledContent("Remote access") {
+                            LabeledContent {
                                 remoteAccessText(hosted, host: remote.hostedDisplayHost)
+                                    .foregroundStyle(hosted.state == .error ? Color.orange : Color.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
+                            } label: {
+                                Label("Remote access", systemImage: "globe")
                             }
                         }
                         if let keepAwake = remote.keepAwake {
-                            LabeledContent("Keep Mac awake") {
+                            LabeledContent {
                                 Text(keepAwake ? "On" : "Off")
+                            } label: {
+                                Label("Keep Mac awake", systemImage: "cup.and.saucer")
                             }
                         }
+                    } header: {
+                        Text("Away from home")
+                    } footer: {
+                        Text("Change these on your Mac in BOS → Settings → Phone.")
                     }
+                }
+
+                Section {
                     DisclosureGroup("Connection details") {
                         VStack(alignment: .leading, spacing: 12) {
                             Group {
@@ -768,8 +831,8 @@ struct ConnectionSecurityView: View {
             return Text("Ready") + Text(verbatim: " · \(host)")
         case .provisioning: return Text("Setting up…")
         case .off: return Text("Off")
-        case .error: return Text("Error")
-        case .unknown: return Text("Unknown")
+        case .error: return Text("Needs attention on your Mac")
+        case .unknown: return Text("Not reported")
         }
     }
 
@@ -797,36 +860,63 @@ private struct InboxSettlementSettings: View {
     @State private var days = 3
     @State private var loaded = false
     @State private var saving = false
+    @State private var unavailable = false
+
     var body: some View {
         Form {
-            Picker("Close idle threads after", selection: $days) {
-                ForEach([0, 1, 3, 7, 14, 30], id: \.self) { value in
-                    Text(value == 0 ? "Off" : "\(value) days").tag(value)
-                }
-            }
-            .disabled(!loaded || saving)
-            .onChange(of: days) { _, value in
-                guard loaded else { return }
-                saving = true
-                Task {
-                    await session.setThreadSettlement(days: value)
-                    if let config = await session.configStatus() {
-                        loaded = false
-                        days = config.threads?.autoSettleDays ?? 3
-                        loaded = true
+            Section {
+                Picker(selection: $days) {
+                    ForEach([0, 1, 3, 7, 14, 30], id: \.self) { value in
+                        Text(Self.label(for: value)).tag(value)
                     }
-                    saving = false
+                } label: {
+                    HStack {
+                        Text("Close idle threads after")
+                        if (!loaded && !unavailable) || saving {
+                            Spacer()
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                .disabled(!loaded || saving)
+                .onChange(of: days) { _, value in
+                    guard loaded else { return }
+                    saving = true
+                    Task {
+                        await session.setThreadSettlement(days: value)
+                        if let config = await session.configStatus() {
+                            loaded = false
+                            days = config.threads?.autoSettleDays ?? 3
+                            loaded = true
+                        }
+                        saving = false
+                    }
+                }
+            } footer: {
+                if unavailable {
+                    Text("Couldn't load this setting from your computer. Check that it's connected, then open this screen again.")
+                } else {
+                    Text("Unread replies, questions, approvals and running work stay open. Closed threads remain in All threads.")
                 }
             }
-            Text("Unread replies, questions, approvals and running work stay open. Closed threads remain in All threads.")
-                .foregroundStyle(.secondary)
         }
         .navigationTitle("Inbox settlement")
+        .navigationBarTitleDisplayMode(.inline)
         .task {
             if let config = await session.configStatus() {
                 days = config.threads?.autoSettleDays ?? 3
                 loaded = true
+            } else {
+                unavailable = true
             }
+        }
+    }
+
+    private static func label(for days: Int) -> LocalizedStringKey {
+        switch days {
+        case 0: "Off"
+        case 1: "1 day"
+        default: "\(days) days"
         }
     }
 }

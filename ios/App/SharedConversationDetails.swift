@@ -179,7 +179,7 @@ struct SharedConversationDetails: View {
                 if let member = memberToRemove {
                     Button("Remove from group", role: .destructive) { Task { await update(members: displayed.memberIds.filter { $0 != member.id }) } }
                 }
-            }
+            } message: { Text("They won't see new messages in this group unless someone adds them back.") }
         }
     }
 

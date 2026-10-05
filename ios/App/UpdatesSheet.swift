@@ -18,10 +18,11 @@ struct UpdatesSheet: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Updates")
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.title2.bold())
+                        .accessibilityAddTraits(.isHeader)
                     Spacer()
-                    Text(updates.isEmpty ? "All quiet" : "\(updates.count) active")
-                        .font(.system(size: 13))
+                    Text(updates.isEmpty ? LocalizedStringKey("All quiet") : LocalizedStringKey("\(updates.count) active"))
+                        .font(.footnote)
                         .foregroundStyle(Color.secondary)
                 }
                 .padding(.horizontal, 20)
@@ -56,7 +57,7 @@ struct UpdatesSheet: View {
             let color = kind == .needsYou ? MausPalette.color(items[0].chat.color) : Color.secondary
             Text(title)
                 .textCase(.uppercase)
-                .font(.system(size: 12, weight: .bold))
+                .font(.caption.bold())
                 .tracking(0.5)
                 .foregroundStyle(color)
                 .padding(.horizontal, 20)
@@ -83,10 +84,10 @@ private struct UpdateRow: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(update.chat.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.primary)
                     Text(update.chat.threadTitle)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(Color.secondary)
                         .lineLimit(1)
                     if update.typing {
@@ -95,7 +96,7 @@ private struct UpdateRow: View {
                             .accessibilityLabel(update.line)
                     } else {
                         Text(update.line.isEmpty ? " " : update.line)
-                            .font(.system(size: 14))
+                            .font(.subheadline)
                             .foregroundStyle(Color.secondary)
                             .lineLimit(update.kind == .needsYou ? 3 : 1)
                             .multilineTextAlignment(.leading)
@@ -104,7 +105,7 @@ private struct UpdateRow: View {
                     if update.kind == .needsYou, let card = update.card, card.isPending {
                         if card.skillRequest != nil {
                             Label("Open the chat to review SKILL.md", systemImage: "doc.text.magnifyingglass")
-                                .font(.system(size: 12, weight: .medium))
+                                .font(.caption.weight(.medium))
                                 .foregroundStyle(Color.secondary)
                                 .padding(.top, 6)
                         } else {
@@ -121,10 +122,11 @@ private struct UpdateRow: View {
                                         }
                                     } label: {
                                         Text(option)
-                                            .font(.system(size: 13, weight: .semibold))
+                                            .font(.footnote.weight(.semibold))
                                             .foregroundStyle(CardStyle.isRefusal(option) ? Color.primary : .white)
                                             .padding(.horizontal, 14)
-                                            .frame(height: 32)
+                                            .padding(.vertical, 6)
+                                            .frame(minHeight: 32)
                                             .background(
                                                 Capsule().fill(
                                                     CardStyle.isRefusal(option)

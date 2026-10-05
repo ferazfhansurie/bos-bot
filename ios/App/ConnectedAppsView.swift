@@ -73,6 +73,25 @@ struct ConnectedAppsView: View {
             ForEach(cards) { card in
                 connectorSection(card)
             }
+
+            if !loading, catalog == nil {
+                Section {
+                    ContentUnavailableView {
+                        Label("Couldn't load apps", systemImage: "wifi.exclamationmark")
+                    } description: {
+                        Text("Check that your computer is on and connected, then try again.")
+                    } actions: {
+                        Button("Try again") { Task { await load() } }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .listRowBackground(Color.clear)
+            } else if !loading, !query.isEmpty, cards.isEmpty {
+                Section {
+                    ContentUnavailableView.search(text: query)
+                }
+                .listRowBackground(Color.clear)
+            }
         }
         .navigationTitle("Connected Apps")
         .searchable(text: $query, prompt: "Search apps")
