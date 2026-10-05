@@ -2302,6 +2302,7 @@
   "split.drop": "Drop to open side by side",
   "split.pane": "{name}, split pane",
   "split.close": "Close split pane",
+  "split.resize": "Drag to resize, double-click to reset",
   "split.closeNamed": "Close {name} split pane",
   "terminal.toggle": "Terminal in this thread's folder",
   "terminal.title": "Terminal",

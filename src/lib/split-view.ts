@@ -51,3 +51,42 @@ export function saveSplitPanes(panes: readonly string[], storage: Pick<Storage, 
     // private mode or a full store: the split simply does not survive a reload
   }
 }
+
+const WIDTH_KEY = "bos.splitPaneWidth";
+/** Default share of the chat column each extra pane takes before a drag. */
+export const DEFAULT_PANE_SHARE = 0.4;
+const MIN_PANE_SHARE = 0.2;
+/** The primary pane always keeps at least this much of the column. */
+const MIN_PRIMARY_SHARE = 0.25;
+
+/** Clamp a pane's share so the primary and every extra pane stay usable. */
+export function clampPaneShare(share: number, extraCount: number): number {
+  const max = (1 - MIN_PRIMARY_SHARE) / Math.max(1, extraCount);
+  if (!Number.isFinite(share)) return Math.min(DEFAULT_PANE_SHARE, max);
+  return Math.min(max, Math.max(MIN_PANE_SHARE, share));
+}
+
+/** Share for an extra pane whose left edge was dragged to `pointerX`. Panes
+ * to its right keep their width, so the dragged pane spans from the pointer
+ * to the right edge minus those panes. */
+export function shareFromPointer(pointerX: number, left: number, width: number, panesToRight: number, share: number): number {
+  if (width <= 0) return share;
+  return (left + width - pointerX) / width - panesToRight * share;
+}
+
+export function loadPaneShare(storage: Pick<Storage, "getItem"> | undefined = globalThis.localStorage): number {
+  try {
+    const parsed = Number(storage?.getItem(WIDTH_KEY));
+    return parsed > 0 && parsed < 1 ? parsed : DEFAULT_PANE_SHARE;
+  } catch {
+    return DEFAULT_PANE_SHARE;
+  }
+}
+
+export function savePaneShare(share: number, storage: Pick<Storage, "setItem"> | undefined = globalThis.localStorage): void {
+  try {
+    storage?.setItem(WIDTH_KEY, String(share));
+  } catch {
+    // the width just resets on reload
+  }
+}
