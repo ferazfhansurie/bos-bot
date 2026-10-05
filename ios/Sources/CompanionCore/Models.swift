@@ -200,6 +200,15 @@ public struct Sender: Codable, Hashable, Sendable {
     public var color: String
 }
 
+/// The authenticated person behind a user line in a room. Older owner lines
+/// carry no id, or no sender at all; both read as the owner's own.
+public struct MessageSender: Codable, Hashable, Sendable {
+    public var id: String?
+    public var name: String
+
+    public init(id: String? = nil, name: String) { self.id = id; self.name = name }
+}
+
 public struct Reaction: Codable, Hashable, Sendable {
     public var emoji: String
     public var by: String
@@ -281,6 +290,8 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var queueId: String?
     /// Rooms: which member said this.
     public var from: Sender?
+    /// Rooms: which person said this, when the line is a person's.
+    public var sender: MessageSender?
     public var reactions: [Reaction]?
     public var comm: CommChip?
     /// Screen messages in the paged shape: the pixels live behind
@@ -293,6 +304,14 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var attachments: [MessageImageAttachment]?
 
     public var date: Date { Date(timeIntervalSince1970: at / 1000) }
+
+    /// A person's line written by someone other than `selfID`. Unstamped
+    /// lines and lines with no sender id are the owner's from before rooms
+    /// had people, so they stay yours.
+    public func isFromAnotherPerson(selfID: String?) -> Bool {
+        guard role == .user, let id = sender?.id, !id.isEmpty, let selfID, !selfID.isEmpty else { return false }
+        return id != selfID
+    }
 }
 
 // MARK: - Bots and rooms
@@ -621,11 +640,29 @@ public struct GroupResponder: Codable, Hashable, Sendable {
     public var botId: String?
 }
 
+/// A person sharing an ordinary room, as the room lists them.
+public struct RoomPerson: Codable, Hashable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var homeId: String
+    public var homeName: String?
+    public var avatar: String?
+    public var color: String?
+
+    public init(id: String, name: String, homeId: String, homeName: String? = nil, avatar: String? = nil, color: String? = nil) {
+        self.id = id; self.name = name; self.homeId = homeId
+        self.homeName = homeName; self.avatar = avatar; self.color = color
+    }
+}
+
 public struct Room: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var threadId: String
     public var name: String
     public var memberIds: [String]
+    /// People sharing the room, owner first. Older computers omit both.
+    public var peopleIds: [String]?
+    public var people: [RoomPerson]?
     public var defaultResponder: GroupResponder
     public var avatarUrl: String?
     public var memberReplyModes: [String: String]?
@@ -1387,6 +1424,15 @@ struct SidebarSectionResponse: Codable, Sendable {
     var section: String
     var bots: [Bot]
 }
+public struct RoomInvite: Codable, Hashable, Sendable {
+    public var url: String
+    public var expiresAt: Double?
+}
+
+struct RoomBotGrants: Codable, Sendable {
+    var botIds: [String]
+}
+
 struct RoomResponse: Codable, Sendable {
     var group: Room
 }
@@ -1563,6 +1609,13 @@ public struct RoomSettingsPatch: Encodable, Sendable {
 }
 
 public extension Room {
+    /// The server lists the owner first; it is the fallback self when the
+    /// phone has not yet learned which person it pairs as.
+    var ownerPersonId: String? { peopleIds?.first ?? people?.first?.id }
+
+    /// True once someone besides the owner shares the room.
+    var hasGuests: Bool { (peopleIds?.count ?? people?.count ?? 0) > 1 }
+
     func replyMode(for botId: String) -> String {
         if let mode = memberReplyModes?[botId], ["always", "mentions"].contains(mode) { return mode }
         if defaultResponder.kind == "everyone" { return "always" }

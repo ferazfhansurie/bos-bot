@@ -1844,6 +1844,29 @@ public struct CompanionClient: Sendable {
         try await send(try makeRequest("PATCH", "/api/groups/\(id)", encodedBody: patch), as: RoomResponse.self).group
     }
 
+    /// Owner or admin only. The person joins this room; it does not make another.
+    public func addRoomPerson(roomId: String, personId: String) async throws -> Room {
+        try await send(try makeRequest("POST", "/api/groups/\(roomId)/people", body: ["personId": personId]), as: RoomResponse.self).group
+    }
+
+    public func removeRoomPerson(roomId: String, personId: String) async throws -> Room {
+        try await send(try makeRequest("DELETE", "/api/groups/\(roomId)/people/\(personId)"), as: RoomResponse.self).group
+    }
+
+    /// A one-time team link that joins whoever opens it to these rooms.
+    public func createRoomInvite(roomIds: [String]) async throws -> RoomInvite {
+        try await send(try makeRequest("POST", "/api/multiplayer/invites", body: ["roomIds": roomIds]), as: RoomInvite.self)
+    }
+
+    /// Which room bots answer guests, as `home:bot:id` identities.
+    public func roomBotGrants(roomId: String) async throws -> [String] {
+        try await send(try makeRequest("GET", "/api/multiplayer/rooms/\(roomId)/bot-grants"), as: RoomBotGrants.self).botIds
+    }
+
+    public func setRoomBotGrants(roomId: String, botIds: [String]) async throws -> [String] {
+        try await send(try makeRequest("PUT", "/api/multiplayer/rooms/\(roomId)/bot-grants", body: ["botIds": botIds]), as: RoomBotGrants.self).botIds
+    }
+
     public func createTask(groupId: String, title: String? = nil) async throws -> Room {
         var body: [String: Any] = [:]
         if let title, !title.isEmpty { body["title"] = title }
