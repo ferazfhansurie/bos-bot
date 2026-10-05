@@ -39,7 +39,7 @@ export class ApnsPush {
   configured(): boolean { return this.credential() !== null; }
   countFor(actorId: string): number { return [...this.devices.values()].filter(device => device.actorId === actorId).length; }
 
-  async send(actorId: string, title: string, body: string, target: { roomId?: string; botId?: string; threadId?: string; senderId?: string; senderName?: string }, id = randomUUID()): Promise<void> {
+  async send(actorId: string, title: string, body: string, target: { roomId?: string; botId?: string; threadId?: string; senderId?: string; senderName?: string; kind?: "digest" }, id = randomUUID()): Promise<void> {
     const credential = this.credential();
     if (!credential) return;
     const devices = [...this.devices.values()].filter(device => device.actorId === actorId);

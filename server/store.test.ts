@@ -1928,3 +1928,60 @@ it("persists the work-computer identity across restart and clearing without chan
   restored.patchBot(bot.id, { sharedWorkComputer: undefined });
   expect(new Store(selection).bot(bot.id)?.sharedWorkComputer).toBeUndefined();
 });
+
+describe("room thread settle and reopen", () => {
+  beforeEach(() => { rmSync(DATA_DIR, { recursive: true, force: true }); });
+
+  it("stamps and clears a room thread's closer, persists it, and reopening restarts the idle clock", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Scout" }, { seedMessages: false });
+    const group = store.createGroup("Ops", [bot.id])!;
+    const task = store.activeGroupTask(group.id)!;
+    const closedBy = { botId: "", name: "Inbox", at: 1_800_000_000_000 };
+    expect(store.setGroupTaskClosedBy(group.id, task.threadId, closedBy)?.closedBy).toEqual(closedBy);
+    expect(new Store(selection).group(group.id)?.tasks?.find(row => row.threadId === task.threadId)?.closedBy).toEqual(closedBy);
+    const before = Date.now();
+    const reopened = store.setGroupTaskClosedBy(group.id, task.threadId, null)!;
+    expect(reopened.closedBy).toBeUndefined();
+    expect(reopened.lastActivityAt).toBeGreaterThanOrEqual(before);
+    expect(store.setGroupTaskClosedBy(group.id, "nope", closedBy)).toBeNull();
+  });
+
+  it("any new message reopens a settled room thread", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({ name: "Scout" }, { seedMessages: false });
+    const group = store.createGroup("Ops", [bot.id])!;
+    const task = store.activeGroupTask(group.id)!;
+    store.setGroupTaskClosedBy(group.id, task.threadId, { botId: "", name: "Inbox", at: 1 });
+    store.appendMessage(task.threadId, { role: "bot", kind: "text", text: "Late result", botId: bot.id } as never);
+    expect(store.group(group.id)?.tasks?.find(row => row.threadId === task.threadId)?.closedBy).toBeUndefined();
+  });
+
+  it("reopening a bot thread restarts its idle clock", () => {
+    const store = new Store(selection);
+    const bot = store.createBot({}, { seedMessages: false });
+    store.setTaskClosedBy(bot.id, bot.threadId, { botId: "", name: "Inbox", at: 1 });
+    const before = Date.now();
+    const reopened = store.setTaskClosedBy(bot.id, bot.threadId, null)!;
+    expect(reopened.closedBy).toBeUndefined();
+    expect(reopened.lastActivityAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("a room thread's activity prefers waiting-on-you across members", () => {
+    const store = new Store(selection);
+    const a = store.createBot({ name: "A" }, { seedMessages: false });
+    const b = store.createBot({ name: "B" }, { seedMessages: false });
+    const group = store.createGroup("Ops", [a.id, b.id])!;
+    const task = store.activeGroupTask(group.id)!;
+    expect(store.roomThreadActivity(task.threadId)).toBeUndefined();
+    const runA = store.registerRoomRuntimeThread(group.id, task.threadId, a.id);
+    const runB = store.registerRoomRuntimeThread(group.id, task.threadId, b.id);
+    store.setRoomActivity(runA, a.id, "working");
+    expect(store.roomThreadActivity(task.threadId)).toBe("working");
+    store.setRoomActivity(runB, b.id, "waiting-on-you");
+    expect(store.roomThreadActivity(task.threadId)).toBe("waiting-on-you");
+    store.setRoomActivity(runB, b.id, "idle");
+    store.setRoomActivity(runA, a.id, "idle");
+    expect(store.roomThreadActivity(task.threadId)).toBeUndefined();
+  });
+});

@@ -549,6 +549,39 @@ describe("WhatsAppNative auto-reconnect", () => {
     expect(native.snapshot()).toMatchObject({ state: "disconnected", failures: 1 });
   });
 
+  it("a runtime load that never settles is bounded, retried, and does not wedge Connect", async () => {
+    let loads = 0;
+    const handlersSeen: ReadOnlyClientHandlers[] = [];
+    const factory: CreateReadOnlyClient = (_options, handlers) => {
+      handlersSeen.push(handlers);
+      return { initialize: async () => {}, getState: async () => "CONNECTED", destroy: async () => {}, goInvisible: async () => {}, browserPid: () => null };
+    };
+    const { native, timers } = harness({
+      session: true,
+      loadFactory: () => {
+        loads += 1;
+        return loads === 1 ? new Promise<never>(() => {}) : Promise.resolve(factory);
+      },
+    });
+    let settled = false;
+    const resumed = native.autoStart().then(() => {
+      settled = true;
+    });
+    await timers.advance(0);
+    await timers.advance(29_999);
+    expect(settled).toBe(false);
+    await timers.advance(1);
+    await resumed;
+    expect(native.snapshot()).toMatchObject({ state: "disconnected", failures: 1 });
+    expect(native.snapshot().reason).toMatch(/did not load within 30s/);
+    // the backoff retry loads again and this time gets a client
+    await timers.advance(5_000);
+    expect(loads).toBe(2);
+    expect(handlersSeen).toHaveLength(1);
+    handlersSeen[0].onReady();
+    expect(native.snapshot()).toMatchObject({ state: "linked", failures: 0 });
+  });
+
   it("a ready client resets the failure count", async () => {
     const { native, latest, timers } = harness({ session: true });
     await native.autoStart();

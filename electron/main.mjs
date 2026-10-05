@@ -41,7 +41,9 @@ import {
   resolveManagedComposioBrokerUrl,
 } from "./managed-composio.mjs";
 import {
+  companionKeepAwakeWanted,
   createManagedCompanionTunnel,
+  hostedCompanionStatus,
   managedCompanionTunnelAccess,
   resolveCloudflaredBinary,
   resolveManagedCompanionGuardian,
@@ -489,6 +491,7 @@ let desktopShutdownStarted = false;
 import {
   companionAdvertisedHostedUrl,
   companionEnabledAtRest,
+  companionKeepAwakeAtRest,
   companionOriginTarget,
   companionPairing,
   companionRefreshTailscale,
@@ -500,6 +503,7 @@ import {
   rememberCompanionKeepAwake,
   setCompanionHostedUrl,
   setCompanionLifecycleListener,
+  setCompanionStatus,
   startCompanion,
   stopCompanion,
 } from "./companion.mjs";
@@ -516,8 +520,7 @@ const { isLocalSender: senderIsLocal, localOnly, localOnlySync, setLocalOrigin }
 
 let companionPowerBlocker = null;
 
-function syncCompanionKeepAwake(companionEnabled, keepAwake) {
-  const shouldBlock = companionEnabled && keepAwake;
+function syncCompanionKeepAwake(shouldBlock) {
   if (shouldBlock && companionPowerBlocker === null) {
     companionPowerBlocker = powerSaveBlocker.start("prevent-app-suspension");
   } else if (!shouldBlock && companionPowerBlocker !== null) {
@@ -694,10 +697,34 @@ function publicManagedCompanionState() {
     : { status: "unconfigured", configured: false, ready: false };
 }
 
+/** One place that turns connector state plus `companion.keepAwake` into
+ * both the power assertion and the sidecar's `GET /api/companion/status`.
+ * Called on every connector transition, after every advertisement change,
+ * when the setting flips, and on each panel poll; repeats are cheap. */
+function syncCompanionHostedState(
+  companionEnabled = companionRunning(),
+  keepAwake = companionKeepAwakeAtRest(),
+) {
+  const hosted = companionEnabled
+    ? hostedCompanionStatus(managedCompanionConnector?.getStatus(), companionAdvertisedHostedUrl())
+    : "off";
+  syncCompanionKeepAwake(companionKeepAwakeWanted({
+    companionEnabled,
+    keepAwake,
+    hostedConfigured: Boolean(managedCompanionTunnelAccess(secureCredentials)),
+    hostedStatus: hosted,
+  }));
+  if (companionEnabled) {
+    void setCompanionStatus({ hosted, keepAwake }).catch((error) => {
+      slog(`companion status report failed: ${error?.message ?? error}`);
+    });
+  }
+}
+
 function decorateDesktopCompanionState(state) {
   // The panel polls this state, so a sidecar that exited on its own releases
   // the blocker within one poll instead of keeping the computer awake forever.
-  syncCompanionKeepAwake(state.enabled && !state.error, state.keepAwake === true);
+  syncCompanionHostedState(state.enabled && !state.error, state.keepAwake === true);
   return { ...state, managedConnection: publicManagedCompanionState() };
 }
 
@@ -734,7 +761,13 @@ function ensureManagedCompanionConnector() {
     onChange: (status) => {
       slog(`managed companion connection ${status.status}`);
       if (!companionDesiredThisLaunch) return;
-      void reconcileCompanionAdvertisement(status.ready ? status.endpoint : null);
+      // Sync now so a lost tunnel releases the keep-awake hold at once, and
+      // again once the advertisement settles so "ready" follows the URL.
+      syncCompanionHostedState();
+      void reconcileCompanionAdvertisement(status.ready ? status.endpoint : null).then(
+        () => syncCompanionHostedState(),
+        () => syncCompanionHostedState(),
+      );
     },
     log: slog,
   });
@@ -805,7 +838,7 @@ async function stopDesktopCompanion({ remember = true } = {}) {
   companionDesiredThisLaunch = false;
   companionLaunchGeneration += 1;
   if (remember) rememberCompanionEnabled(false);
-  syncCompanionKeepAwake(false, false);
+  syncCompanionKeepAwake(false);
   await managedCompanionConnector?.stop();
   await stopCompanion();
   return desktopCompanionState();
@@ -824,7 +857,7 @@ setCompanionLifecycleListener(({ expected, pid }) => {
   slog(`owned companion exited unexpectedly pid=${pid ?? "unknown"}`);
   companionDesiredThisLaunch = false;
   companionLaunchGeneration += 1;
-  syncCompanionKeepAwake(false, false);
+  syncCompanionKeepAwake(false);
   // stop() invalidates the guardian's owner pipe synchronously, before the
   // sidecar module removes this generation's private socket.
   void managedCompanionConnector?.stop().catch(() => {});
@@ -3055,7 +3088,7 @@ app.on("before-quit", (e) => {
   // even if it has not passed its boot probe yet.
   const stoppingServer = serverSupervisor.shutdown();
   // Release the sleep blocker synchronously; child shutdown is awaited below.
-  syncCompanionKeepAwake(false, false);
+  syncCompanionKeepAwake(false);
   routineWake.stop();
   try {
     desktopCompanionRelay?.close?.();

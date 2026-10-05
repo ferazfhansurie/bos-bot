@@ -228,10 +228,13 @@ export function drainChannelMessages(
   }
 }
 
-/** Test helper. */
-export function _queuedChannelCount(threadId: string): number {
+/** Sends waiting behind a room thread's current turn. */
+export function queuedChannelCount(threadId: string): number {
   return queues.get(threadId)?.items.length ?? 0;
 }
+
+/** Test helper. */
+export const _queuedChannelCount = queuedChannelCount;
 
 const UNDELIVERED_SNIPPET_CHARS = 80;
 

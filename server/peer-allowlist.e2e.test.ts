@@ -210,9 +210,13 @@ describe("peer allow-list", () => {
       expect(changed.status).toBe(200);
       expect((await state()).managedSections).toEqual([]);
       expect((await api("POST", "/api/sidebar-sections", { name: team, botIds: [engineer.id] })).status).toBe(200);
-      expect(await peerNames(clive.id, token)).toEqual([]);
-      const refused = await api("POST", "/api/internal/ask-bot", { toBotId: engineer.id, message: "Old grants must not return" }, { authorization: `Bearer ${token}` });
-      expect(refused.status).toBe(403);
+      // Messaging is not section-bounded, so Clive can still list the
+      // Engineer — but the revoked team-management grant must not return.
+      expect(await peerNames(clive.id, token)).toContain(`Engineer ${mode}`);
+      const catalog = await api("GET", "/api/internal/team-setup-catalog", undefined, { authorization: `Bearer ${token}` });
+      expect(catalog.status).toBe(200);
+      expect((catalog.body.bots as Array<{ id: string }>).map(bot => bot.id)).not.toContain(engineer.id);
+      expect(catalog.body.teams).not.toContain(team);
     } finally {
       for (const bot of [clive, engineer]) {
         await api("POST", `/api/bots/${bot.id}/interrupt`, {}).catch(() => undefined);
@@ -234,14 +238,15 @@ describe("peer allow-list", () => {
       expect((await api("PATCH", `/api/bots/${clive.id}`, { managedSections: ["Engineering"], acknowledgePeerScope: true })).status).toBe(200);
       await warmUp(clive.id);
       const token = await mintCapability(clive.id, clive.threadId);
-      expect(await peerNames(clive.id, token)).toEqual(["Engineer"]);
+      expect(await peerNames(clive.id, token)).toContain("Engineer");
       const outcome = await api("POST", "/api/internal/ask-bot", { toBotId: specialist.id, message: "Review this small test plan" }, { authorization: `Bearer ${token}` });
       expect(outcome.status).toBe(200);
       expect(outcome.body.error).toBeUndefined();
       expect(outcome.body.text).toBeTruthy();
       await api("PATCH", `/api/bots/${clive.id}`, { chiefOfStaff: false });
       await api("PATCH", `/api/bots/${clive.id}`, { chiefOfStaff: true });
-      expect(await peerNames(clive.id, token)).toEqual([]);
+      // Messaging stays open across sections; the team grant is what demotion revokes.
+      expect(await peerNames(clive.id, token)).toContain("Engineer");
       const state = (await api("GET", "/api/bots?messages=0")).body.bots.find((bot: any) => bot.id === clive.id);
       expect(state.managedSections ?? []).toEqual([]);
     } finally {

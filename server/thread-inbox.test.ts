@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inboxCanClose, inboxShouldSettle, type InboxCandidate } from "./thread-inbox.ts";
+import { inboxCanClose, inboxShouldSettle, threadState, type InboxCandidate, type ThreadStateSignals } from "./thread-inbox.ts";
 const now = 1_800_000_000_000;
 const base: InboxCandidate = { lastActivityAt: now - 3 * 86_400_000, closed: false, archived: false, unread: false, busy: false, queued: false, needsInput: false, pendingWork: false };
 describe("inbox settlement", () => {
@@ -18,5 +18,15 @@ describe("inbox settlement", () => {
   });
   it("a picked-up thread waits for a fresh idle window", () => {
     expect(inboxShouldSettle({ ...base, lastActivityAt: now }, 3, now)).toBe(false);
+  });
+});
+describe("thread state", () => {
+  const idle: ThreadStateSignals = { waiting: false, running: false, queued: false, closed: false };
+  it("is idle with no signal", () => expect(threadState(idle)).toBe("idle"));
+  it("waiting-on-you beats running, running beats queued, queued beats closed", () => {
+    expect(threadState({ waiting: true, running: true, queued: true, closed: true })).toBe("waiting-on-you");
+    expect(threadState({ ...idle, running: true, queued: true, closed: true })).toBe("running");
+    expect(threadState({ ...idle, queued: true, closed: true })).toBe("queued");
+    expect(threadState({ ...idle, closed: true })).toBe("closed");
   });
 });

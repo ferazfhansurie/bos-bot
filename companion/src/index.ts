@@ -38,6 +38,11 @@ import {
 import { createProxyHandler } from "./proxy.ts";
 import { companionOriginSocket, listenCompanionOrigin } from "./origin.ts";
 import { normalizedPhoneSecretPublicKey } from "./phone-secret-key.ts";
+import {
+  companionStatusSnapshot,
+  DEFAULT_REPORTED_STATUS,
+  type ReportedCompanionStatus,
+} from "./status.ts";
 
 // Only Electron supplies this port. Standalone sidecars retain the existing
 // unguarded local-server path; Electron children fail closed until initialized.
@@ -67,6 +72,8 @@ const COMPANION_PORT = num(process.env.OMB_COMPANION_PORT, 8810);
 const CONTROL_PORT = num(process.env.OMB_CONTROL_PORT, 8811);
 const SERVICE_TYPE = "_openmausbot._tcp";
 let hostedUrl = hostedCompanionUrl(process.env.OMB_COMPANION_HOSTED_URL);
+/** Connector state and keep-awake as the desktop last reported them. */
+let reportedStatus: ReportedCompanionStatus = DEFAULT_REPORTED_STATUS;
 const PRIVATE_ORIGIN = companionOriginSocket(process.env.OMB_COMPANION_INTERNAL_ORIGIN);
 const SECRET_PUBLIC_KEY = normalizedPhoneSecretPublicKey(
   process.env.OMB_PHONE_SECRET_PUBLIC_KEY ?? "",
@@ -165,6 +172,7 @@ const proxy = createProxyHandler({
     // list has to be right.
     hosts: () => hostCandidates(),
     endpoints: () => companionEndpointCandidates(COMPANION_PORT, undefined, undefined, hostedUrl),
+    status: () => companionStatusSnapshot(hostedUrl, reportedStatus),
     connected: connectedDevices.open,
   });
 const companion = createServer(proxy);
@@ -182,6 +190,9 @@ const control = createControlServer({
   hostedUrl: () => hostedUrl,
   setHostedUrl: (next) => {
     hostedUrl = next;
+  },
+  setStatus: (next) => {
+    reportedStatus = next;
   },
   discovery: () => ({ advertising: mdns.advertising, name: service().name }),
   connectedDeviceIds: connectedDevices.ids,

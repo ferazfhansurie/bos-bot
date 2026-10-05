@@ -27,6 +27,17 @@ export interface ManagedTunnel {
   shutdown(): Promise<ManagedTunnelState>;
 }
 
+export type HostedCompanionStatus = "off" | "provisioning" | "ready" | "error";
+export declare function hostedCompanionStatus(
+  tunnelState: (ManagedTunnelState & { endpoint?: string }) | null | undefined,
+  advertisedUrl?: string | null,
+): HostedCompanionStatus;
+export declare function companionKeepAwakeWanted(options?: {
+  companionEnabled?: boolean;
+  keepAwake?: boolean;
+  hostedConfigured?: boolean;
+  hostedStatus?: HostedCompanionStatus;
+}): boolean;
 export declare function normalizeManagedCompanionEndpoint(value: unknown): string;
 export declare function managedCompanionTunnelAccess(credentials: Record<string, unknown>): ManagedTunnelAccess | null;
 export declare function resolveCloudflaredBinary(options?: {

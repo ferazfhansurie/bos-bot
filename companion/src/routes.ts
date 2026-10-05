@@ -82,11 +82,17 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/events$/ },
   { method: "GET", path: /^\/api\/instances$/ },
   { method: "GET", path: /^\/api\/team-map$/ },
+  // Read-only needs-me list and daily digest, derived from fleet reads.
+  { method: "GET", path: /^\/api\/inbox$/ },
+  { method: "GET", path: /^\/api\/digest$/ },
   // Paired-device subscription meters; no credentials or write operations.
   { method: "GET", path: /^\/api\/provider-usage$/ },
   // Sidecar-owned, authenticated endpoint metadata. The proxy terminates it
   // locally; it never becomes a newly exposed harness route.
   { method: "GET", path: /^\/api\/companion\/endpoints$/ },
+  // Same terms: hosted-route state and the keep-awake setting, answered by
+  // the sidecar from what the desktop reported. Read-only; no write exists.
+  { method: "GET", path: /^\/api\/companion\/status$/ },
 
   // the fleet, and making a bot
   { method: "GET", path: /^\/api\/bots$/ },

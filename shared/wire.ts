@@ -79,6 +79,10 @@ export interface TaskOpenedBy {
 }
 
 /** The bot that closed a thread it opened (or one of its own). */
+/** Where a conversation stands, computed server-side: the same values bots
+ * read from list_threads, so the sidebar and the bot agree. Never stored. */
+export type ThreadState = "running" | "waiting-on-you" | "queued" | "idle" | "closed";
+
 export interface TaskClosedBy {
   botId: string;
   name: string;
@@ -106,6 +110,8 @@ export interface TaskUsage {
  * own bookkeeping that no client has ever used. */
 export interface WireTask {
   lastActivityAt?: number;
+  /** Computed at projection time; see ThreadState. */
+  state?: ThreadState;
   threadId: string;
   title: string;
   createdAt: number;
@@ -457,6 +463,13 @@ export interface GroupTask {
   /** The first message already drove a title attempt for this thread, so a
    * later one does not rename a room the person may have retitled. */
   titleFromFirstMessage?: true;
+  /** Set when the thread settled; absent while it is open. Same shape as a
+   * bot task's closedBy. Any new message clears it. */
+  closedBy?: TaskClosedBy;
+  /** Newest message time, or when it was last reopened, else createdAt. */
+  lastActivityAt?: number;
+  /** Projection only; see ThreadState. */
+  state?: ThreadState;
 }
 
 /** A room as a client may see it: the record plus the computed working
@@ -503,6 +516,41 @@ export interface WireGroup {
   working: boolean;
 }
 
+/** One thing waiting on the person (GET /api/inbox). */
+export interface InboxItem {
+  id: string;
+  kind: "waiting-on-you" | "question" | "failed" | "unread";
+  botId: string;
+  groupId?: string;
+  threadId: string;
+  title: string;
+  preview: string;
+  at: number;
+}
+
+export interface InboxResponse {
+  items: InboxItem[];
+  count: number;
+}
+
+/** What moved in a window (GET /api/digest). */
+export interface DigestMove {
+  botId: string;
+  groupId?: string;
+  threadId: string;
+  title: string;
+  change: "done" | "started" | "closed" | "failed";
+  summary: string;
+  at: number;
+}
+
+export interface DigestResponse {
+  since: number;
+  until: number;
+  counts: { done: number; started: number; closed: number; failed: number; waiting: number };
+  moved: DigestMove[];
+}
+
 // ── live wire frames ───────────────────────────────────────────────────
 // Derived from the client's frame switch (src/state/store.tsx handleFrame)
 // cross-checked against every server broadcast site: one member per kind
@@ -526,6 +574,8 @@ export type ServerFrame =
   | { kind: "bot"; bot: WireBot }
   | { kind: "group"; group: WireGroup }
   | { kind: "notify"; notification: Notification }
+  /** The needs-me count changed; clients refetch GET /api/inbox. */
+  | { kind: "inbox"; count: number }
   | { kind: "group.deleted"; groupId: string }
   | { kind: "routine"; routine: Routine }
   | { kind: "routine.deleted"; routineId: string }

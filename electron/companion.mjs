@@ -369,6 +369,24 @@ export function setCompanionHostedUrl(endpoint) {
   });
 }
 
+/** Tell the running sidecar what a paired phone may read from
+ * `GET /api/companion/status`: connector state and the keep-awake setting.
+ * Repeats of the same report to the same sidecar are skipped, so callers can
+ * sync on every state change without a loopback write each time. */
+let reportedStatus = { child: null, key: "" };
+export function setCompanionStatus(status) {
+  const body = { hosted: status.hosted, keepAwake: status.keepAwake === true };
+  const key = JSON.stringify(body);
+  return serialize(async () => {
+    if (!proc) return false;
+    if (reportedStatus.child === proc && reportedStatus.key === key) return true;
+    const child = proc;
+    await control("PUT", "/status", body);
+    reportedStatus = { child, key };
+    return true;
+  });
+}
+
 /** Everything the panel renders. Shaped so "off" is a complete answer rather
  * than an absence — the panel should never have to guess. */
 export async function companionState() {

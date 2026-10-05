@@ -97,6 +97,8 @@ export interface WhatsAppNativeOptions {
   probeTimeoutMs?: number;
   /** a start that produces no lifecycle event for this long is a failure */
   startTimeoutMs?: number;
+  /** loading the client runtime longer than this is a (retryable) failure */
+  loadTimeoutMs?: number;
   maxFailures?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
@@ -213,6 +215,7 @@ export class WhatsAppNative {
       probeIntervalMs: 30_000,
       probeTimeoutMs: 15_000,
       startTimeoutMs: 180_000,
+      loadTimeoutMs: 30_000,
       maxFailures: 5,
       baseDelayMs: 5_000,
       maxDelayMs: 5 * 60_000,
@@ -317,12 +320,12 @@ export class WhatsAppNative {
     this.ready = false;
     this.qr = null;
     this.set("linking", null);
-    let factory: CreateReadOnlyClient;
+    let factory: CreateReadOnlyClient | null;
     try {
       // A previous client's Chromium must be gone before a new one opens the
       // same profile: two browsers on one LocalAuth directory corrupt it.
       await this.awaitDestroys();
-      factory = await this.options.loadFactory();
+      factory = await this.loadFactoryBounded();
     } catch (error) {
       if (gen !== this.generation) return;
       // Missing runtime is a packaging fault, not something a retry fixes.
@@ -331,6 +334,12 @@ export class WhatsAppNative {
       return;
     }
     if (gen !== this.generation || this.stopped) return;
+    if (!factory) {
+      // A load that never settles would hold `starting` forever, and with it
+      // every Connect/Reconnect. Count it as a failure so backoff retries.
+      this.fail(gen, `WhatsApp runtime did not load within ${Math.round(this.options.loadTimeoutMs / 1000)}s.`);
+      return;
+    }
     try {
       this.options.releaseStaleProfile(this.sessionDir);
     } catch {}
@@ -607,6 +616,21 @@ export class WhatsAppNative {
       } catch (error) {
         this.options.log(`could not stop the previous WhatsApp browser (pid ${entry.pid}): ${message(error)}`);
       }
+    }
+  }
+
+  /** loadFactory(), or null once loadTimeoutMs passes without an answer */
+  private async loadFactoryBounded(): Promise<CreateReadOnlyClient | null> {
+    let timer: unknown = null;
+    try {
+      return await Promise.race([
+        this.options.loadFactory(),
+        new Promise<null>((resolve) => {
+          timer = this.options.timers.setTimeout(() => resolve(null), this.options.loadTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) this.options.timers.clearTimeout(timer);
     }
   }
 

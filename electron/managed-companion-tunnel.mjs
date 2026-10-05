@@ -102,6 +102,42 @@ export function withoutManagedCompanionTunnelAccess(credentials) {
   return next;
 }
 
+/** The phone-facing hosted status (`GET /api/companion/status`) for one
+ * connector state. "ready" additionally requires that exact endpoint to be
+ * the one the sidecar advertises: the connector reports ready a moment before
+ * the URL is published, and the phone must never see "ready" for a route that
+ * is missing from its endpoint list. */
+export function hostedCompanionStatus(tunnelState, advertisedUrl = null) {
+  switch (tunnelState?.status) {
+    case "ready":
+      return tunnelState.ready === true && Boolean(advertisedUrl) && advertisedUrl === tunnelState.endpoint
+        ? "ready"
+        : "provisioning";
+    case "starting":
+      return "provisioning";
+    case "retrying":
+    case "unavailable":
+      return "error";
+    default:
+      return "off";
+  }
+}
+
+/** Whether `companion.keepAwake` should hold a power assertion right now.
+ * With a hosted route configured, only while it is ready: a computer whose
+ * public route is down gains nothing from staying up for it. Without one the
+ * setting keeps its original meaning (awake while Remote access is on), so a
+ * LAN or tailnet-only setup does not silently lose the hold. */
+export function companionKeepAwakeWanted({
+  companionEnabled = false,
+  keepAwake = false,
+  hostedConfigured = false,
+  hostedStatus = "off",
+} = {}) {
+  if (companionEnabled !== true || keepAwake !== true) return false;
+  return hostedConfigured ? hostedStatus === "ready" : true;
+}
+
 /** Packaged apps only trust the connector shipped in Resources. Development
  * can opt into an absolute binary path, use a freshly-staged release, or fall
  * back to PATH for contributor convenience. */

@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createControlServer, hostCandidates, originIsLoopback } from "../src/control.ts";
 import { DeviceRegistry } from "../src/devices.ts";
+import type { ReportedCompanionStatus } from "../src/status.ts";
 
 let control: Server;
 let port = 0;
@@ -17,6 +18,7 @@ let connectedDeviceIds: string[] = [];
 let disconnectedDeviceIds: string[] = [];
 let tailscaleRefreshes = 0;
 let completedTailscaleRefreshes = 0;
+let reportedStatus: ReportedCompanionStatus | null = null;
 
 const ask = async (
   method: string,
@@ -43,6 +45,9 @@ beforeAll(async () => {
     hostedUrl: () => hostedUrl,
     setHostedUrl: (next) => {
       hostedUrl = next;
+    },
+    setStatus: (next) => {
+      reportedStatus = next;
     },
     discovery: () => ({ advertising: false, name: "Test computer" }),
     connectedDeviceIds: () => connectedDeviceIds,
@@ -314,6 +319,42 @@ describe("hosted endpoint advertisement", () => {
     expect((await ask("GET", "/state")).body.endpoints.some(
       (endpoint: { kind: string }) => endpoint.kind === "hosted",
     )).toBe(false);
+  });
+});
+
+describe("companion status report", () => {
+  const headers = { "content-type": "application/json" };
+
+  it("stores exactly what the desktop reports", async () => {
+    const result = await ask("PUT", "/status", headers, JSON.stringify({ hosted: "provisioning", keepAwake: true }));
+    expect(result.status).toBe(200);
+    expect(reportedStatus).toEqual({ hosted: "provisioning", keepAwake: true });
+  });
+
+  it("refuses any other shape and leaves the last report alone", async () => {
+    reportedStatus = { hosted: "off", keepAwake: false };
+    for (const body of [
+      {},
+      { hosted: "ready" },
+      { hosted: "ready", keepAwake: true, url: "https://c-1.openmausbot.test" },
+      { hosted: "online", keepAwake: true },
+      { hosted: "ready", keepAwake: 1 },
+      null,
+    ]) {
+      const result = await ask("PUT", "/status", headers, JSON.stringify(body));
+      expect(result).toEqual({ status: 400, body: { error: "invalid JSON body" } });
+    }
+    expect(reportedStatus).toEqual({ hosted: "off", keepAwake: false });
+  });
+
+  it("is a loopback write like every other control route", async () => {
+    const result = await ask(
+      "PUT",
+      "/status",
+      { ...headers, origin: "https://evil.example" },
+      JSON.stringify({ hosted: "error", keepAwake: true }),
+    );
+    expect(result.status).toBe(403);
   });
 });
 

@@ -25,6 +25,18 @@ const { Client, LocalAuth } = wwebjs;
 const CHAT_NAME_TTL_MS = 10 * 60_000;
 /** a chat lookup that takes longer than this stores the message without a name */
 const CHAT_LOOKUP_TIMEOUT_MS = 5_000;
+/** how long after initialize() a resume that produced no lifecycle event is
+ * checked for an already-synced page */
+export const SYNCED_RESUME_CHECK_MS = 3_000;
+/** Page script: if WhatsApp Web has already synced, run whatsapp-web.js's own
+ * exposed sync handler (it emits authenticated, then ready). A string, like
+ * whatsapp-web.js's own probes: it runs in the page, not in Node. */
+const SYNCED_RESUME_SCRIPT = `(() => {
+  const socket = window.require("WAWebSocketModel").Socket;
+  if (socket.hasSynced !== true || typeof window.onAppStateHasSyncedEvent !== "function") return false;
+  window.onAppStateHasSyncedEvent();
+  return true;
+})()`;
 
 type RawMessage = wwebjs.Message;
 
@@ -91,10 +103,22 @@ export function createReadOnlyClient(
     return { ...fields.message, chatId, chatName };
   }
 
-  client.on("qr", (qr: string) => handlers.onQr(qr));
-  client.on("authenticated", () => handlers.onAuthenticated());
+  // any of these means whatsapp-web.js's auth flow is moving on its own
+  let lifecycleSeen = false;
+  let destroyed = false;
+  client.on("qr", (qr: string) => {
+    lifecycleSeen = true;
+    handlers.onQr(qr);
+  });
+  client.on("authenticated", () => {
+    lifecycleSeen = true;
+    handlers.onAuthenticated();
+  });
   client.on("auth_failure", (message: unknown) => handlers.onAuthFailure(String(message ?? "authentication failed")));
-  client.on("ready", () => handlers.onReady());
+  client.on("ready", () => {
+    lifecycleSeen = true;
+    handlers.onReady();
+  });
   client.on("disconnected", (reason: unknown) => handlers.onDisconnected(String(reason ?? "disconnected")));
   client.on("change_state", (state: unknown) => handlers.onStateChange(String(state ?? "")));
   // message_create fires for received messages AND for messages the user
@@ -106,13 +130,41 @@ export function createReadOnlyClient(
     }).catch((error: unknown) => handlers.onDropped(`capture failed: ${error instanceof Error ? error.message : String(error)}`));
   });
 
+  /** whatsapp-web.js attaches its `change:hasSynced` listener only at the end
+   * of inject(). A session LocalAuth restores at boot can finish syncing
+   * before that, and the event never fires again: no authenticated, no
+   * ready, and every retry stalls the same way. Once initialize() has
+   * returned and nothing happened for a short grace period, ask the page
+   * whether it has already synced and, if so, run the handler it missed. */
+  async function resumeIfAlreadySynced(): Promise<void> {
+    if (lifecycleSeen || destroyed) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, SYNCED_RESUME_CHECK_MS);
+      timer.unref?.();
+    });
+    const page = client.pupPage;
+    if (lifecycleSeen || destroyed || !page) return;
+    try {
+      await page.evaluate(SYNCED_RESUME_SCRIPT);
+    } catch {
+      // the page went away: the start timer and probe in whatsapp-native.ts
+      // turn that into a retry
+    }
+  }
+
   return {
-    initialize: () => client.initialize(),
+    initialize: async () => {
+      await client.initialize();
+      await resumeIfAlreadySynced();
+    },
     getState: async () => {
       const state = await client.getState();
       return state ? String(state) : null;
     },
-    destroy: () => client.destroy(),
+    destroy: () => {
+      destroyed = true;
+      return client.destroy();
+    },
     // The single presence call. An online WhatsApp Web session mutes the
     // phone's notifications; "unavailable" keeps them ringing. It sends no
     // message, receipt or typing state.
