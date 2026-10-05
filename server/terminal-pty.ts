@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IPty } from "node-pty";
+import { stripWorkspaceCredentialEnv } from "./config.ts";
 
 const requirePty = createRequire(import.meta.url);
 let ptyModule: typeof import("node-pty") | undefined;
@@ -37,11 +38,13 @@ export function spawnTerminalPty(cwd: string): IPty {
   const shell = process.platform === "win32"
     ? process.env.ComSpec || "cmd.exe"
     : process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+  const env = { ...process.env, TERM: "xterm-256color" };
+  stripWorkspaceCredentialEnv(env);
   return loadPty().spawn(shell, [], {
     name: "xterm-256color",
     cols: 80,
     rows: 24,
     cwd,
-    env: { ...process.env, TERM: "xterm-256color" },
+    env,
   });
 }

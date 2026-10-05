@@ -89,6 +89,21 @@ it("runs a real pty in the server folder, resizes it and emits exit", async () =
   ws.send(JSON.stringify({type: "input", data: "exit 7\r"}));
   await waitFor(ws, items => items.some(f => f.type === "exit" && f.code === 7));
 });
+it("strips workspace credentials from the real shell without changing the server env", async () => {
+  vi.stubEnv("SHELL", "/bin/sh");
+  vi.stubEnv("HOME", cwd);
+  for (const key of ["XAI_API_KEY", "BOX_TOKEN", "OMB_TTS_KEY"]) vi.stubEnv(key, "fixture-workspace-secret");
+  vi.stubEnv("TERMINAL_FIXTURE_SAFE", "safe-value");
+  try {
+    const ws = connect(await ticket());
+    await waitFor(ws, items => items.some(f => f.type === "ready"));
+    ws.send(JSON.stringify({type: "input", data: "printf 'credential-state:%s:%s:%s:%s:%s\\n' \"${XAI_API_KEY+present}\" \"${BOX_TOKEN+present}\" \"${OMB_TTS_KEY+present}\" \"$TERMINAL_FIXTURE_SAFE\" \"$TERM\"; exit\r"}));
+    const items = await waitFor(ws, items => items.some(f => f.type === "exit"));
+    const lines = items.filter(f => f.type === "output").map(f => f.data).join("").split(/\r?\n/);
+    expect(lines).toContain("credential-state::::safe-value:xterm-256color");
+    for (const key of ["XAI_API_KEY", "BOX_TOKEN", "OMB_TTS_KEY"]) expect(process.env[key]).toBe("fixture-workspace-secret");
+  } finally { vi.unstubAllEnvs(); }
+});
 it("requires desktop authority even for a loopback admin or companion", async () => {
   expect((await mint(undefined, {"x-openmausbot-desktop-owner": ""})).status).toBe(403);
   const admin = sessions.issue({label: "remote admin", scopes: ["admin", "client"]});

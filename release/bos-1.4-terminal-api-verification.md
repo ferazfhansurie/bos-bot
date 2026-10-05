@@ -2,7 +2,9 @@
 
 implementation: `v14/api-terminal`, based on `v14/api-server` at `eb92a515`.
 worktree: `/Users/firazfhansurie/.bos-bot/workspaces/6ca32513-1716-40e6-b006-59a6130e3570/v14-api-terminal`.
-status: implemented and committed for one bos auth/data review; not installed.
+status: endpoint committed at `9d67c6d4`; bos's one auth/data review requested
+workspace credential stripping. the follow-up below addresses that condition;
+bos authorized integration after the fix with no second review. not installed.
 
 implements the interface posted on `v14/api-connection-findings` at `e9cfb78a`:
 `POST /api/terminal/ticket {botId,threadId}` returns `201 {ticket}` and
@@ -57,7 +59,7 @@ and inherited team-computer bot targets fail closed.
 
 ## remaining with ship
 
-bos reviews auth/data once before integration. ship integrates this endpoint with
+ship integrates this endpoint and its credential-env follow-up with
 ui terminal `15005330`, resolves package/lockfile additions, and checks the actual
 desktop header button, ticket handshake and Electron native PTY in the packaged app.
 api did not install or restart. full repository suite was not rerun; existing
@@ -68,3 +70,18 @@ build on their target; Linux needs a compiled node-pty addon because this versio
 does not ship a Linux prebuild. Windows PTY/taskkill paths are implemented but
 unverified. arbitrary deliberately detached daemon processes are outside the
 shell-owned child teardown guarantee.
+
+## auth/data review follow-up, 2026-10-05
+
+- `spawnTerminalPty` copies the server environment, applies
+  `stripWorkspaceCredentialEnv` to that copy, then passes it to node-pty.
+- regression verified red before the fix and green afterward through the real
+  HTTP ticket / WebSocket / shell fixture: `XAI_API_KEY`, `BOX_TOKEN`, and
+  `OMB_TTS_KEY` are absent in the shell. ordinary env and TERM survive; the
+  server retains its credential env. fixtures use synthetic secrets only.
+- `pnpm exec vitest run server/terminal.test.ts server/terminal-target.test.ts server/request-auth.test.ts server/desktop-update-lifecycle.test.ts server/engine-install.test.ts`: 72 passed.
+- `pnpm typecheck`, `pnpm build:server`, changed-file oxlint deny-warnings,
+  and `git diff --check`: passed.
+- `node scripts/smoke-terminal-pty.mjs` and
+  `node scripts/smoke-packaged-server.mjs`: passed with relocated runtimes and
+  disposable homes, including real PTY output/resize/exit and server startup.
