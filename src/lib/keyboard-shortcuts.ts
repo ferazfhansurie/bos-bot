@@ -73,6 +73,12 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
         winKeys: ["Enter"],
       },
       {
+        id: "send-block",
+        description: "Send now, interrupting the running turn",
+        macKeys: ["⌥", "Return"],
+        winKeys: ["Alt", "Enter"],
+      },
+      {
         id: "new-line",
         description: "Insert new line without sending",
         macKeys: ["⇧", "Return"],
