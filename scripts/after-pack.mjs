@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, readFile, readdir, writeFile } from "node:fs/promises";
+import { lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmod, lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { LICENSE_FILES } from "./cua-linux-release.mjs";
 import {
@@ -69,22 +70,25 @@ async function validateCloudflared(resources, platform, required) {
 // Same digest as server/updater.ts treeDigest and updater/no-downgrade.py:
 // files under Resources/<name> sorted by relative posix path, each hashed as
 // path then bytes. The three must agree or the stamp is treated as missing.
-async function treeDigest(resources, name) {
+function treeDigest(resources, name) {
   const root = path.join(resources, name);
-  await requireRealDirectory(root, undefined);
+  const details = lstatSync(root);
+  if (!details.isDirectory() || details.isSymbolicLink()) {
+    throw new Error(`Package resource must be a real directory: ${root}`);
+  }
   const files = [];
-  const walk = async (dir) => {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) await walk(file);
+      if (entry.isDirectory()) walk(file);
       else if (entry.isFile()) files.push(file);
     }
   };
-  await walk(root);
+  walk(root);
   const hash = createHash("sha256");
   for (const file of files.sort((a, b) => (path.relative(root, a).split(path.sep).join("/") < path.relative(root, b).split(path.sep).join("/") ? -1 : 1))) {
     hash.update(path.relative(root, file).split(path.sep).join("/"));
-    hash.update(await readFile(file));
+    hash.update(readFileSync(file));
   }
   return hash.digest("hex");
 }
@@ -94,14 +98,20 @@ async function treeDigest(resources, name) {
  * no-downgrade guard refuses any bundle without a valid stamp, so a real
  * package with no bosSourceCommit fails here rather than shipping unstampable. */
 export async function stampBuildCommit(resources, commit) {
+  return stampBuildCommitSync(resources, commit);
+}
+
+// osx-sign's per-file options callback is synchronous. At the outer app it
+// runs after every nested binary is signed and before the resource seal.
+export function stampBuildCommitSync(resources, commit) {
   if (!/^[0-9a-f]{40}$/.test(commit ?? "")) throw new Error(`build stamp needs the full 40-hex source commit, got ${JSON.stringify(commit ?? null)}`);
   const stamp = {
     commit,
-    server_sha256: await treeDigest(resources, "server"),
-    ui_sha256: await treeDigest(resources, "ui"),
+    server_sha256: treeDigest(resources, "server"),
+    ui_sha256: treeDigest(resources, "ui"),
     stamped_at: new Date().toISOString(),
   };
-  await writeFile(path.join(resources, "build-commit.json"), `${JSON.stringify(stamp, null, 2)}
+  writeFileSync(path.join(resources, "build-commit.json"), `${JSON.stringify(stamp, null, 2)}
 `, { mode: 0o644 });
   return stamp;
 }
@@ -123,7 +133,8 @@ export default async function afterPack(context) {
       : path.join(context.appOutDir, "resources")
   );
   await validateCloudflared(resources, context.electronPlatformName, Boolean(context.packager));
-  // Stamp every real package. Unit fixtures for the older hooks carry no
+  // Stamp every real package (mac-sign refreshes it before the outer app seal).
+  // Unit fixtures for the older hooks carry no
   // server/ui trees and no commit, so they are left unstamped.
   const sourceCommit = packagedSourceCommit(context);
   if (context.packager || sourceCommit) await stampBuildCommit(resources, sourceCommit);
