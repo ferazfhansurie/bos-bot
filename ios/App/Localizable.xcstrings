@@ -194,16 +194,6 @@
         }
       }
     },
-    "Agent notifications": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Notificações do agente"
-          }
-        }
-      }
-    },
     "Agent tasks": {
       "localizations": {
         "pt-BR": {
@@ -354,12 +344,12 @@
         }
       }
     },
-    "Bot intro animation": {
+    "Intro animation": {
       "localizations": {
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Animação de entrada do bot"
+            "value": "Animação de entrada"
           }
         }
       }
@@ -2339,16 +2329,6 @@
         }
       }
     },
-    "On your computer, open BOS → Settings → Phone.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No seu computador, abra BOS → Ajustes → Telefone."
-          }
-        }
-      }
-    },
     "On your computer, open Settings → Phone → Set up a phone.": {
       "localizations": {
         "pt-BR": {
@@ -3785,16 +3765,6 @@
         }
       }
     },
-    "That isn't an BOS pairing QR code.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Esse não é um QR code de pareamento do BOS."
-          }
-        }
-      }
-    },
     "That link couldn't be opened.": {
       "localizations": {
         "pt-BR": {
@@ -4295,16 +4265,6 @@
         }
       }
     },
-    "Use the Camera app to scan the QR code, or enter the address and code manually.": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Use o app Câmera para escanear o QR code, ou digite o endereço e o código manualmente."
-          }
-        }
-      }
-    },
     "Use the address shown in Phone settings on your computer.": {
       "localizations": {
         "pt-BR": {
@@ -4431,16 +4391,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Como esta seção deve se chamar?"
-          }
-        }
-      }
-    },
-    "What this agent does": {
-      "localizations": {
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O que este agente faz"
           }
         }
       }
@@ -4621,6 +4571,116 @@
           "stringUnit": {
             "state": "translated",
             "value": "minutos"
+          }
+        }
+      }
+    },
+    "Description": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descrição"
+          }
+        }
+      }
+    },
+    "That isn't a BOS pairing QR code.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esse não é um QR code de pareamento do BOS."
+          }
+        }
+      }
+    },
+    "Use the Camera app to scan the QR code, or go back and choose Other ways to connect.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use o app Câmera para escanear o QR code, ou volte e escolha Outras formas de conectar."
+          }
+        }
+      }
+    },
+    "Go back": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voltar"
+          }
+        }
+      }
+    },
+    "Pairing code": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de pareamento"
+          }
+        }
+      }
+    },
+    "Save your changes?": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar as alterações?"
+          }
+        }
+      }
+    },
+    "Save changes": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar alterações"
+          }
+        }
+      }
+    },
+    "Discard changes": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descartar alterações"
+          }
+        }
+      }
+    },
+    "Keep editing": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar editando"
+          }
+        }
+      }
+    },
+    "You changed this agent's profile but haven't saved it.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você alterou o perfil deste agente, mas ainda não salvou."
+          }
+        }
+      }
+    },
+    "%lld active": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ativas"
           }
         }
       }

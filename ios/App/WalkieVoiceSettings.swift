@@ -68,6 +68,7 @@ struct WalkieVoiceSheet: View {
     @State private var voices: [ElevenLabs.Voice] = []
     @State private var problem: String?
     @State private var checking = false
+    @State private var confirmingRemove = false
 
     var body: some View {
         NavigationStack {
@@ -76,9 +77,16 @@ struct WalkieVoiceSheet: View {
                     if hasKey {
                         LabeledContent("ElevenLabs key", value: String(localized: "Saved on this phone"))
                         Button("Remove key", role: .destructive) {
-                            WalkieVoiceKey.remove()
-                            hasKey = false
-                            voices = []
+                            confirmingRemove = true
+                        }
+                        .confirmationDialog("Remove the ElevenLabs key?", isPresented: $confirmingRemove, titleVisibility: .visible) {
+                            Button("Remove key", role: .destructive) {
+                                WalkieVoiceKey.remove()
+                                hasKey = false
+                                voices = []
+                            }
+                        } message: {
+                            Text("Walkie won't speak replies until you paste a key again.")
                         }
                     } else {
                         SecureField("ElevenLabs API key", text: $keyDraft)

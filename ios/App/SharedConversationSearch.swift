@@ -36,7 +36,11 @@ struct SharedConversationSearch: View {
             }
             Section {
                 if !loading && error == nil && messages.isEmpty {
-                    ContentUnavailableView("No matching messages", systemImage: "magnifyingglass", description: Text("Try another word or filter."))
+                    if query.isEmpty && kind == "all" && author.isEmpty {
+                        ContentUnavailableView("No messages yet", systemImage: "bubble.left.and.bubble.right", description: Text("Messages in this group will show up here."))
+                    } else {
+                        ContentUnavailableView("No matching messages", systemImage: "magnifyingglass", description: Text("Try another word or filter."))
+                    }
                 }
                 ForEach(messages) { message in
                     Button { Task {

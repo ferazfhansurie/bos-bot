@@ -247,6 +247,7 @@ struct SharedChatView: View {
                                 Image(systemName: file.mime.hasPrefix("image/") ? "photo" : file.mime.hasPrefix("video/") ? "video" : "doc")
                                 Text(file.name).lineLimit(1)
                                 Button { composer.removeFile(file.id) } label: { Image(systemName: "xmark.circle.fill") }
+                                    .accessibilityLabel("Remove \(file.name)")
                             }.font(.caption).padding(8).background(Color.secondary.opacity(0.14), in: Capsule())
                         }
                     }.padding(.horizontal, 16)
@@ -255,7 +256,7 @@ struct SharedChatView: View {
             if let replyTarget {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Replying to " + (contacts.first { $0.id == replyTarget.actor.id }?.name ?? "Member")).font(.caption.weight(.medium))
+                        Text("Replying to \(contacts.first { $0.id == replyTarget.actor.id }?.name ?? String(localized: "Member"))").font(.caption.weight(.medium))
                         Text(replyTarget.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                     Spacer()
@@ -295,7 +296,9 @@ struct SharedChatView: View {
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.vertical, 6)
             }
             if !typing.isEmpty {
-                Text(typing.map { id in contacts.first(where: { $0.id == id })?.name ?? "A member" }.joined(separator: ", ") + (typing.count == 1 ? " is typing…" : " are typing…"))
+                let names = typing.map { id in contacts.first(where: { $0.id == id })?.name ?? String(localized: "A member") }
+                    .formatted(.list(type: .and))
+                Text(typing.count == 1 ? LocalizedStringKey("\(names) is typing…") : LocalizedStringKey("\(names) are typing…"))
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
             }
             ChatComposerBar(

@@ -40,6 +40,7 @@ struct AgentProfileView: View {
     @State private var confirmingModelReset = false
     @State private var player: AVAudioPlayer?
     @State private var baseline: ProfileFormSnapshot
+    @State private var confirmingDiscard = false
 
     init(bot: Bot) {
         self.bot = bot
@@ -280,9 +281,9 @@ struct AgentProfileView: View {
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.words)
                     TextField("Title", text: $title)
-                    TextField("What this agent does", text: $description, axis: .vertical)
+                    TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(3...8)
-                    Toggle("Agent notifications", isOn: $notifications)
+                    Toggle("Notifications", isOn: $notifications)
                 }
 
                 Section {
@@ -418,7 +419,28 @@ struct AgentProfileView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        if hasUnsavedIdentityChanges { confirmingDiscard = true } else { dismiss() }
+                    }
+                }
+            }
+            // Name, title, description and notifications only reach the
+            // computer through "Save profile changes". Closing used to drop
+            // them without a word.
+            .interactiveDismissDisabled(hasUnsavedIdentityChanges)
+            .confirmationDialog("Save your changes?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
+                Button("Save changes") {
+                    Task {
+                        await save()
+                        if !hasUnsavedIdentityChanges { dismiss() }
+                    }
+                }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Discard changes", role: .destructive) { dismiss() }
+                Button("Keep editing", role: .cancel) {}
+            } message: {
+                Text("You changed this agent's profile but haven't saved it.")
             }
             .overlay { if busy { ProgressView().controlSize(.large) } }
             .task {
@@ -500,6 +522,13 @@ struct AgentProfileView: View {
             config = status
             voices = await session.voiceOptions()
         }
+    }
+
+    private var hasUnsavedIdentityChanges: Bool {
+        name != baseline.name
+            || title != baseline.title
+            || description != baseline.description
+            || notifications != baseline.notifications
     }
 
     private func profilePatch() -> BotProfilePatch {
