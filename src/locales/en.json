@@ -2290,5 +2290,18 @@
   "composer.queued.waitsForTurn": "Waits for its turn",
   "composer.queued.pasted": "Pasted · {lines} lines",
   "chat.steerUnknown": "delivery unknown",
-  "chat.steerUnknownHint": "Sent while the bot was working, but it's unclear whether the running turn received it. Check the reply before sending it again."
+  "chat.steerUnknownHint": "Sent while the bot was working, but it's unclear whether the running turn received it. Check the reply before sending it again.",
+  "split.open": "Open in split view",
+  "split.drop": "Drop to open side by side",
+  "split.pane": "{name}, split pane",
+  "split.close": "Close split pane",
+  "split.closeNamed": "Close {name} split pane",
+  "terminal.toggle": "Terminal in this thread's folder",
+  "terminal.title": "Terminal",
+  "terminal.pane": "{name} terminal",
+  "terminal.connecting": "Connecting…",
+  "terminal.exited": "Exited with code {code}",
+  "terminal.disconnected": "Disconnected",
+  "terminal.restart": "Start a new terminal",
+  "terminal.close": "Close terminal"
 }

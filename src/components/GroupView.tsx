@@ -35,6 +35,7 @@ import { Composer } from "./Composer";
 import { ChatFindBar } from "./ChatFindBar";
 import { GroupTaskPicker } from "./TaskPicker";
 import { ExportTranscriptMenu } from "./ExportTranscriptMenu";
+import { TerminalButton } from "./TerminalPanel";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
 import { SecretRequestCard } from "./SecretRequestCard";
@@ -1373,6 +1374,7 @@ export function GroupView({ group }: { group: Group }) {
           >
             <Search size={18} />
           </button>
+          {!group.dm && <TerminalButton target={{ botId: group.id, threadId: group.threadId, name: group.name }} className="rounded-full" />}
           {!remoteClient && <ToolCallsToggle />}
           <GroupCallButton group={group} members={members} />
           <ExportTranscriptMenu
