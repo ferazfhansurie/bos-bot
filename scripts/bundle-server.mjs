@@ -18,10 +18,11 @@
 // drivers/ nested; import.meta.url still resolves to the same location, so
 // that lookup is unaffected.
 import { build } from "esbuild";
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
+import { stageNodePty } from "./stage-node-pty.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const server = join(root, "server");
@@ -32,28 +33,8 @@ const server = join(root, "server");
 const require = createRequire(import.meta.url);
 const ptyRoot = dirname(require.resolve("node-pty/package.json"));
 const ptyVendor = join(root, "dist-server", "vendor", "node-pty");
-rmSync(ptyVendor, { recursive: true, force: true });
-mkdirSync(ptyVendor, { recursive: true });
-for (const file of ["package.json", "LICENSE"]) copyFileSync(join(ptyRoot, file), join(ptyVendor, file));
-cpSync(join(ptyRoot, "lib"), join(ptyVendor, "lib"), {
-  recursive: true,
-  filter: (path) => !path.endsWith(".test.js") && !path.endsWith(".map"),
-});
-const nativeRelative = ["build/Release", `prebuilds/${process.platform}-${process.arch}`]
-  .find((relative) => existsSync(join(ptyRoot, relative, process.platform === "win32" ? "conpty.node" : "pty.node")));
-if (!nativeRelative) throw new Error(`node-pty has no native runtime for ${process.platform}-${process.arch}; build it on the release target first`);
-const nativeSource = join(ptyRoot, nativeRelative);
-cpSync(nativeSource, join(ptyVendor, nativeRelative), {
-  recursive: true,
-  // Keep runtime addons/helpers; omit build intermediates and debug symbols.
-  filter: (path) => path === nativeSource || path === join(nativeSource, "conpty")
-    || /\.(node|dll|exe)$/.test(path) || basename(path) === "spawn-helper",
-});
-if (process.platform !== "win32") {
-  // npm's spawn-helper can be 0644 even when the prebuilt addon loads. Make
-  // the staged executable runnable before electron-builder copies resources.
-  chmodSync(join(ptyVendor, nativeRelative, "spawn-helper"), 0o755);
-}
+const nativeRelative = stageNodePty(ptyRoot, ptyVendor);
+console.log(`staged node-pty ${process.platform}-${process.arch} from ${nativeRelative}`);
 
 // yaml's Node export is CommonJS and contains dynamic requires that cannot run
 // after it is inlined into our ESM-only packaged server. Its browser export is
