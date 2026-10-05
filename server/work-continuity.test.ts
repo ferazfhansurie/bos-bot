@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { WorkContinuity } from "./work-continuity.ts";
+import { assessTeamWork, WorkContinuity } from "./work-continuity.ts";
 
 const plan = { outcome: "package release", status: "active" as const, steps: [
   { id: "mobile", ownerBotId: "mobile", action: "finish editor", status: "waiting" as const, reason: "helper running", dependsOn: [] },
@@ -58,3 +58,26 @@ it("fails closed on corrupt storage and keeps returned objects detached", () => 
   writeFileSync(file, "broken");
   expect(() => new WorkContinuity(file).claim("bos", "thread", gate)).toThrow(/unreadable/);
 }));
+const candidates = [{ botId: "mobile", available: true, hasOutstandingWork: true }, { botId: "api", available: true, hasOutstandingWork: false }];
+it("requires a team decision for every live candidate rather than relying on prose", () => {
+  expect(assessTeamWork(plan, candidates).errors).toHaveLength(2);
+  expect(assessTeamWork({ ...plan, teamCheck: [
+    { botId: "mobile", decision: "already_working", reason: "editor owned", stepIds: [] },
+    { botId: "api", decision: "no_ready_work", reason: "remaining API slice already verified", stepIds: [] },
+  ] }, candidates).errors).toEqual([]);
+});
+it("returns concrete independent assignments and rejects ready work explained away", () => {
+  const helperPlan = { ...plan, steps: [...plan.steps, { id: "runtime", ownerBotId: "api", action: "wire guard", status: "ready" as const, dependsOn: [] }] };
+  const teamCheck = [
+    { botId: "mobile", decision: "already_working" as const, reason: "editor owned", stepIds: [] },
+    { botId: "api", decision: "assign" as const, reason: "independent backend work", stepIds: ["runtime"] },
+  ];
+  expect(assessTeamWork({ ...helperPlan, teamCheck }, candidates)).toMatchObject({ errors: [], assignments: [{ id: "runtime", ownerBotId: "api" }] });
+  expect(assessTeamWork({ ...helperPlan, teamCheck: teamCheck.map(x => ({ ...x, decision: "no_ready_work", stepIds: [] })) }, candidates).errors).toContain("Ready helper step runtime has no assignment");
+});
+it("rejects invented busy state, unavailable bypass, unknown peers and dependent assignment", () => {
+  expect(assessTeamWork({ ...plan, teamCheck: [{ botId: "api", decision: "already_working", reason: "claimed busy", stepIds: [] }] }, candidates).errors).toContain("No outstanding work for api");
+  expect(assessTeamWork({ ...plan, teamCheck: [{ botId: "api", decision: "unavailable", reason: "claimed unavailable", stepIds: [] }] }, candidates).errors).toContain("Teammate api is available");
+  expect(assessTeamWork({ ...plan, teamCheck: [{ botId: "stranger", decision: "assign", reason: "unknown", stepIds: ["bos"] }] }, candidates).assignments).toEqual([]);
+  expect(assessTeamWork({ ...plan, teamCheck: [{ botId: "mobile", decision: "assign", reason: "dependent", stepIds: ["mobile"] }] }, candidates).assignments).toEqual([]);
+});
