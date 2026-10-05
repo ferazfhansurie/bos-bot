@@ -67,9 +67,16 @@ const promptsOf = (threadId: string): any[] => {
 };
 /** The live per-turn token of a held turn — the only credential the
  * internal endpoints accept, and the one a real tool call would carry. */
-const liveToken = async (threadId: string): Promise<Record<string, string>> => {
-  await expect.poll(() => dumpOf(threadId)?.mcpConfig?.mcpServers?.agents?.env?.OMB_COMMS_TOKEN, { timeout: 15_000 }).toBeTruthy();
-  return { authorization: `Bearer ${dumpOf(threadId)!.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN}` };
+const liveToken = async (threadId: string, previous?: Record<string, string>): Promise<Record<string, string>> => {
+  let authorization = "";
+  // A new prompt is recorded before its dump is rewritten. Reject the old
+  // turn's token and retain the successful read instead of racing a second read.
+  await expect.poll(() => {
+    const token = dumpOf(threadId)?.mcpConfig?.mcpServers?.agents?.env?.OMB_COMMS_TOKEN;
+    authorization = token ? `Bearer ${token}` : "";
+    return Boolean(authorization && authorization !== previous?.authorization);
+  }, { timeout: 15_000 }).toBe(true);
+  return { authorization };
 };
 /** Hold a fresh turn open on a bot's own thread and hand back its live
  * token. A wake that lands on that thread cannot start while this turn
@@ -340,10 +347,10 @@ describe("work continuity real server", () => {
     release(lead.threadId); await idle(lead);
     const source = (await messages(lead.threadId)).find(m => m.role === "user");
     const edited = await api("POST", `/api/bots/${lead.id}/messages/${source.id}/edit`, { threadId: lead.threadId, text: "Edited human request" });
-    expect(edited.status).toBe(202); await expect.poll(() => count(lead), { timeout: 15000 }).toBe(2); h = await liveToken(lead.threadId);
+    expect(edited.status).toBe(202); await expect.poll(() => count(lead), { timeout: 15000 }).toBe(2); h = await liveToken(lead.threadId, h);
     const current = (await api("GET", "/api/internal/work-plan", undefined, h)).body.plan;
     expect((await api("POST", "/api/internal/work-plan", { plan: { ...ownPlan(lead, await rosterCheck(h)), expectedRevision: current.revision } }, h)).status).toBe(200);
-    release(lead.threadId); await expect.poll(() => count(lead), { timeout: 15000 }).toBe(3); h = await liveToken(lead.threadId);
+    release(lead.threadId); await expect.poll(() => count(lead), { timeout: 15000 }).toBe(3); h = await liveToken(lead.threadId, h);
     expect((await messages(lead.threadId)).find(m => m.id === edited.body.message.id).text).toBe("Edited human request");
     const plan = (await api("GET", "/api/internal/work-plan", undefined, h)).body.plan;
     expect((await api("POST", "/api/internal/work-plan", { plan: { expectedRevision: plan.revision, outcome: plan.outcome, status: "completed", steps: plan.steps.map((step: any) => ({ ...step, status: "done", evidence: "Fixture own work checked" })), teamCheck: await rosterCheck(h) } }, h)).status).toBe(200);
