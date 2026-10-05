@@ -55,7 +55,7 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
     writeFileSync(browser, "#!/bin/sh\nif [ \"$1\" = session ]; then printf '%s\\n' '{\"success\":true,\"data\":{\"sessions\":[]}}'; fi\nexit 0\n", { mode: 0o755 });
     writeFileSync(join(data, "config.json"), JSON.stringify({
       features: { browser: true },
-      instances: Object.fromEntries(["default", "absolute"].map((id) => [id, {
+      instances: Object.fromEntries(["default", "absolute", "local"].map((id) => [id, {
         driver: "codex",
         environment: { FAKE_CODEX_DUMP: join(home, `${id}.json`) },
         config: { cli: id === "default" ? "codex" : codex },
@@ -67,7 +67,7 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
       cwd: join(SERVER_DIR, ".."),
       env: {
         PATH: FINDER_PATH, HOME: home, OMB_DATA_DIR: data, OMB_PORT: String(port),
-        OMB_AGENT_BROWSER_PATH: browser, VITEST: "1",
+        OMB_AGENT_BROWSER_PATH: browser, OMB_USER_DATA: home, VITEST: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -91,13 +91,20 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
     if (home) await removeTempDir(home);
   });
 
-  it.each(["default", "absolute"])("keeps the browser mounted and completes a turn with the %s Codex CLI", async (instanceId) => {
+  it.each(["default", "absolute", ...(process.platform === "darwin" ? ["local"] : [])])("keeps the browser mounted and completes a turn with the %s Codex CLI", async (instanceId) => {
     const created = await api("POST", "/api/bots", {
       name: `Browser PATH ${instanceId}`, browser: true,
       modelSelection: { instanceId, model: "gpt-fake-default" },
     });
     expect(created.status).toBe(201);
     const botId = created.body.bot.id;
+    if (instanceId === "local") {
+      // Inert descriptor: mount both transports without any real CUA daemon.
+      writeFileSync(join(home, "cua-connection.json"), JSON.stringify({
+        mode: "embedded", mcpCommand: browser, mcpArgs: [], mcpEnv: {},
+      }), { mode: 0o600 });
+      expect((await api("PATCH", `/api/bots/${botId}`, { computer: "local" })).status).toBe(200);
+    }
     const since = events.frames.length;
     expect((await api("POST", `/api/bots/${botId}/messages`, { text: "Check the browser integration." })).status).toBe(202);
     const started = await events.until((frame) => events.frames.indexOf(frame) >= since && frame.kind === "bot" && frame.bot?.id === botId && frame.bot?.busy === true);
@@ -119,6 +126,9 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
     expect(dump.env.OMB_BROWSER_TOKEN).toBeTruthy();
     expect(dump.env.AGENT_BROWSER_SESSION).toBeUndefined();
     expect(dump.env.AGENT_BROWSER_ENCRYPTION_KEY).toBeUndefined();
+    if (instanceId === "local") {
+      expect(dump.argv.some((arg: string) => arg.startsWith("mcp_servers.computer.args=") && arg.includes("local-computer-proxy.ts"))).toBe(true);
+    }
     expect(dump.calls.some((call: any) => call.method === "turn/start")).toBe(true);
   });
 });

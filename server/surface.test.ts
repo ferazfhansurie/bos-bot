@@ -30,12 +30,21 @@ describe("resolveSurface", () => {
     expect(plan.note).toMatch(/no browser and no computer/);
   });
 
-  it("a computer destination mounts only that computer: one place per turn", () => {
-    for (const destination of ["cloud", "vm", "local"] as const) {
+  it("remote computer destinations mount only the selected computer", () => {
+    for (const destination of ["cloud", "vm"] as const) {
       // the bot's browser switch no longer adds a second place next to a computer
       expect(resolveSurface({ destination, browserOn: true })).toEqual({ computer: destination, browser: false, pinned: null, clearPin: false, note: "" });
       expect(resolveSurface({ destination, browserOn: false })).toMatchObject({ computer: destination, browser: false });
     }
+  });
+
+  it("local desktop work keeps the independent panel browser available", () => {
+    expect(resolveSurface({ destination: "local", browserOn: true }))
+      .toMatchObject({ computer: "local", browser: true, pinned: null });
+    expect(resolveSurface({ destination: "local", browserOn: false }))
+      .toMatchObject({ computer: "local", browser: false });
+    expect(resolveSurface({ destination: "cloud", pinnedSurface: "local", browserOn: true }))
+      .toMatchObject({ computer: "local", browser: true, pinned: "local" });
   });
 
   it("Off mounts no computer and no browser, and says which setting did it", () => {
@@ -65,7 +74,7 @@ describe("resolveSurface", () => {
     for (const destination of ["browser", undefined] as const) {
       for (const pin of ["cloud", "vm", "local"] as const) {
         expect(resolveSurface({ destination, pinnedSurface: pin, browserOn: true }))
-          .toEqual({ computer: pin, browser: false, pinned: pin, clearPin: false, note: "" });
+          .toEqual({ computer: pin, browser: pin === "local", pinned: pin, clearPin: false, note: "" });
       }
     }
   });
@@ -98,6 +107,14 @@ describe("surfacePrompt", () => {
     expect(text).toMatch(/Desktop apps, files and shell → the cloud computer tools/);
     expect(text).toMatch(/Pick one surface for a task and stay on it/);
     expect(text).toMatch(/say which surface — the Browser tab or the cloud computer/);
+  });
+
+  it("local dual-surface guidance names panel tools and refuses foreground fallback", () => {
+    const text = surfacePrompt({ computer: "local", browser: true });
+    expect(text).toContain("agent_browser");
+    expect(text).toContain("background");
+    expect(text).toContain("Never retry a background refusal as foreground input");
+    expect(text).toContain("fresh snapshot");
   });
 
   it("names only the computer when it is the only surface", () => {

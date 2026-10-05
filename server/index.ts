@@ -8246,9 +8246,9 @@ async function startTurn(
           description: liveBot?.description ?? bot.description,
           text: providerText,
         });
-      // One place per turn. On Auto the branches above may have reached a
-      // computer; then the built-in browser stays unmounted and web work
-      // happens in that computer's own browser, where the person can see it.
+      // Explicit local turns keep the independent panel browser alongside
+      // desktop tools. Auto retains its existing computer-or-browser fallback;
+      // remote destinations never gain a host browser implicitly.
       const mountedComputer = surfaceOfComputerKind(computerKind);
       if (
         liveBot &&
@@ -10144,8 +10144,8 @@ async function executeGroupMemberTurn(
   if (roomPlan.computer === "local" && instance.driverKind === "boxAgent") {
     throw new Error("the Computer engine works on the cloud computer — set Works on to Cloud, or choose another engine");
   }
-  // One place per room turn as well: a team computer reached on Auto means
-  // no separate built-in browser.
+  // Local speakers retain the independent panel browser; a team computer
+  // reached on Auto still means no separate host browser.
   if (roomPlan.browser && !(roomPlan.computer === undefined && roomTeamComputer)) {
     const selectedProfile = readyBot.browserProfile;
     const browser = await browserIntegration(readyBot.id, selectedProfile, { threadId, generation: internalGeneration });

@@ -56,15 +56,12 @@ const NO_BROWSER_NOTE =
 const OFF_NOTE =
   " This bot's \"Works on\" setting is Off, so no computer and no built-in browser are mounted this turn: you cannot open a page, click, or type on any screen. If the user asks for something that needs one, tell them Works on is Off in this bot's settings — never claim you are opening a browser you do not have.";
 
-/** Decide what a turn mounts. One place per turn: a computer destination
- * mounts only that computer (web work happens in its own browser), a browser
- * destination mounts only the built-in browser, Off mounts nothing. A
- * conversation pin — set by the person from the composer, or by the
- * conversation's own first turn on Auto — wins over the bot's default, so a
- * thread never changes place under someone; only Off overrides it. Auto
- * without a pin leaves the computer choice to the dispatch, which then
- * mounts the browser only when no computer was reached. A pin the turn
- * cannot honour is retained and reported instead of being swapped silently. */
+/** Decide what a turn mounts. Local desktop work also mounts the independent
+ * built-in browser when enabled, so web work need not take over the host's
+ * Chrome. Remote computers remain exclusive to avoid silently moving web
+ * work onto the host. Browser-only and Off retain their existing boundaries.
+ * A conversation pin wins over the default; only Off overrides it. Auto
+ * leaves computer discovery to dispatch and uses the browser as a fallback. */
 export function resolveSurface(input: {
   destination: Destination;
   pinnedSurface?: Surface | null;
@@ -91,14 +88,14 @@ export function resolveSurface(input: {
     return { computer: "off", browser: false, pinned: pin, clearPin: false,
       note: " This conversation is pinned to the built-in browser, but its tools are unavailable this turn. No computer is mounted instead. Do not claim to have used it; a different place must be selected before acting there." };
   }
-  if (pin) return { computer: pin, browser: false, pinned: pin, clearPin: false, note: "" };
+  if (pin) return { computer: pin, browser: pin === "local" && browserOn, pinned: pin, clearPin: false, note: "" };
   if (destination === "browser") {
     return browserOn
       ? { computer: "off", browser: true, pinned: null, clearPin: false, note: "" }
       : { computer: "off", browser: false, pinned: null, clearPin: false, note: NO_BROWSER_NOTE };
   }
   if (destination !== undefined) {
-    return { computer: destination, browser: false, pinned: null, clearPin: false, note: "" };
+    return { computer: destination, browser: destination === "local" && browserOn, pinned: null, clearPin: false, note: "" };
   }
   return { computer: undefined, browser: browserOn, pinned: null, clearPin: false, note: "" };
 }
@@ -138,13 +135,16 @@ export function surfacePrompt(
   let text = "";
   if (computer && mounted.browser) {
     text =
-      ` Two surfaces are mounted this turn: the built-in browser (the browser server's browser_navigate, browser_snapshot, browser_click, browser_fill and friends) and ${computer} (the computer server's tools). Web tasks → the built-in browser. Desktop apps, files and shell → ${computer} tools. Pick one surface for a task and stay on it; if you need the user to sign in, say which surface — the Browser tab or ${computer}.`;
+      ` Two surfaces are mounted this turn: the built-in browser (the browser server's agent_browser_open, agent_browser_snapshot, agent_browser_click, agent_browser_fill and friends) and ${computer} (the computer server's tools). Web tasks → the built-in browser. Desktop apps, files and shell → ${computer} tools. Pick one surface for a task and stay on it; if you need the user to sign in, say which surface — the Browser tab or ${computer}.`;
   } else if (computer) {
     text =
       ` Everything you do on screen happens on ${computer}, web pages included, through its own browser; there is no separate built-in browser this turn. If you need the user to sign in, tell them it is on ${computer}.`;
   } else if (mounted.browser) {
     text =
       " Everything you do on screen happens in the built-in browser tab; there is no desktop, file or shell computer this turn. If you need the user to sign in, tell them it is in the Browser tab of the Computer panel.";
+  }
+  if (mounted.computer === "local") {
+    text += " Prefer documented window-targeted background desktop actions so the user can keep working. Inspect a fresh snapshot before choosing a target; verify the action with independent readback or a screenshot. If a reference is stale, refresh the snapshot before choosing it again; never replay an uncertain click or submission. Never retry a background refusal as foreground input. Ask before activation, full-desktop input or any foreground fallback, unless the user already authorized that control. Background support is per action, not a promise for every app.";
   }
   if (text) text += RESTATE_SENTENCE + (opts.canSelect
     ? SURFACE_AUTHORITY.replace("explain the mismatch and ask the user to change the conversation's computer selector", "inspect connected choices with select_computer and select the requested available place; on a pending result end this turn so OpenMausBot can reconnect the correct tools and continue the original request")
