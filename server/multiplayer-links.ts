@@ -14,9 +14,38 @@ interface RemoteLink {
   ownerName?: string;
   ownerAvatar?: string | null;
   proxyGroups: Record<string, string>;
+  /** Rooms on this canonical home that this guest has joined, as last
+   * reported by the home's own membership-checked GET /api/groups. */
+  joinedGroups?: JoinedGroup[];
 }
+interface JoinedGroup { id: string; name: string; threadIds: string[] }
+/** A joined room exactly as the canonical home serves it, plus the home. */
+export type RemoteGroupView = Record<string, unknown> & { id: string; name: string; threadId: string; home: { id: string; name: string; available: boolean } };
 interface Snapshot { version: 1; links: RemoteLink[] }
 interface PrimaryRoomHome { homeId: string; actorId: string }
+
+const ROOM_ID = /^[\w-]{1,128}$/;
+/** The only canonical-home room routes a guest home relays. Each route is
+ * membership-checked again by the canonical home; nothing else is reachable. */
+const GROUP_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
+  { method: "GET", path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?(?:\?[\w%+.,:~=&-]+)?$/ },
+  { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
+  { method: "POST", path: /^\/api\/groups\/[\w-]+\/people$/ },
+  { method: "DELETE", path: /^\/api\/groups\/[\w-]+\/people\/[\w%.:-]{1,300}$/ },
+  { method: "GET", path: /^\/api\/threads\/[\w-]+\/messages(?:\?[\w%+.,:~=&-]+)?$/ },
+];
+export const remoteGroupRouteAllowed = (method: string, path: string): boolean =>
+  GROUP_ROUTES.some(route => route.method === method && route.path.test(path));
+
+const parseJoinedGroup = (value: unknown): JoinedGroup | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const group = value as Record<string, unknown>;
+  if (typeof group.id !== "string" || !ROOM_ID.test(group.id) || typeof group.name !== "string" || typeof group.threadId !== "string" || !ROOM_ID.test(group.threadId)) return null;
+  const tasks = Array.isArray(group.tasks) ? group.tasks : [];
+  const threadIds = [group.threadId, ...tasks.map(task => (task as { threadId?: unknown })?.threadId)]
+    .filter((id): id is string => typeof id === "string" && ROOM_ID.test(id));
+  return { id: group.id, name: group.name.slice(0, 200), threadIds: [...new Set(threadIds)].slice(0, 500) };
+};
 
 const parseBot = (value: unknown): RemoteBot | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -38,6 +67,8 @@ export class MultiplayerLinks {
   private readonly homeId: string;
   private readonly fetcher: typeof fetch;
   private primary: PrimaryRoomHome | null = null;
+  /** Last full room views per home, from the canonical home. Memory only. */
+  private readonly groupViews = new Map<string, Array<Record<string, unknown>>>();
 
   constructor(file: string, homeId: string, fetcher: typeof fetch = fetch) {
     this.file = file;
@@ -76,7 +107,9 @@ export class MultiplayerLinks {
     if (origin.protocol !== "https:" || origin.pathname !== "/" ||
         origin.search || origin.hash || origin.username || origin.password ||
         !/^[\w-]{1,128}$/.test(link.homeId) || link.homeId === this.homeId ||
-        !link.token.startsWith("omb_sess_") || !Array.isArray(link.bots) || !link.proxyGroups || typeof link.proxyGroups !== "object") {
+        !link.token.startsWith("omb_sess_") || !Array.isArray(link.bots) || !link.proxyGroups || typeof link.proxyGroups !== "object" ||
+        link.joinedGroups !== undefined && (!Array.isArray(link.joinedGroups) || link.joinedGroups.some(group => !group || typeof group.name !== "string" ||
+          !ROOM_ID.test(group.id) || !Array.isArray(group.threadIds) || !group.threadIds.length || group.threadIds.some(id => !ROOM_ID.test(id))))) {
       throw new Error("invalid multiplayer link");
     }
   }
@@ -125,17 +158,96 @@ export class MultiplayerLinks {
     return this.forwardTo(link, path, method, body);
   }
 
-  private async forwardTo(link: RemoteLink, path: string, method: string, body?: unknown): Promise<{ status: number; body: unknown }> {
-    if (!/^\/api\/multiplayer\/(?:me|contacts|members|invites|dm|push-token|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|leave|bots|bot-grants|members|preferences|files|search|requests(?:\/[\w-]+\/cancel)?|attachments(?:\/[\w-]+)?))?)?)?(?:\?[\w%+.,:~=&-]+)?$/.test(path)) {
-      throw new Error("invalid shared chat route");
+  private async forwardTo(link: RemoteLink, path: string, method: string, body?: unknown, routes?: typeof GROUP_ROUTES): Promise<{ status: number; body: unknown }> {
+    if (routes ? !routes.some(route => route.method === method && route.path.test(path))
+      : !/^\/api\/multiplayer\/(?:me|contacts|members|invites|dm|push-token|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|leave|bots|bot-grants|members|preferences|files|search|requests(?:\/[\w-]+\/cancel)?|attachments(?:\/[\w-]+)?))?)?)?(?:\?[\w%+.,:~=&-]+)?$/.test(path)) {
+      throw new Error(routes ? "invalid joined room route" : "invalid shared chat route");
     }
     const url = new URL(path, link.origin);
+    if (routes && (url.origin !== link.origin || url.pathname + url.search !== path)) throw new Error("invalid joined room route");
     const response = await this.fetcher(url, {
       method, redirect: "error", signal: AbortSignal.timeout(25_000),
       headers: { authorization: `Bearer ${link.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     return { status: response.status, body: await response.json() };
+  }
+
+  /** Seam for room-people: joined remote room id -> canonical home id. */
+  joinedGroupHomes(): Map<string, string> {
+    const homes = new Map<string, string>();
+    for (const link of this.links.values()) for (const group of link.joinedGroups ?? []) if (!homes.has(group.id)) homes.set(group.id, link.homeId);
+    return homes;
+  }
+
+  homeLabel(homeId: string): string {
+    const link = this.links.get(homeId);
+    return link?.ownerName ?? link?.name ?? "Other home";
+  }
+
+  /** Canonical home of a thread inside a joined remote room. */
+  joinedThreadHome(threadId: string): string | null {
+    for (const link of this.links.values()) if (link.joinedGroups?.some(group => group.threadIds.includes(threadId))) return link.homeId;
+    return null;
+  }
+
+  /** Ask one canonical home which rooms this guest belongs to and record the
+   * answer in the link. A home without room people (or that refuses) leaves
+   * the previous record untouched; a 200 list is authoritative. */
+  async refreshJoinedGroups(homeId: string): Promise<boolean> {
+    const link = this.links.get(homeId);
+    if (!link) return false;
+    const answer = await this.forwardTo(link, "/api/groups", "GET", undefined, GROUP_ROUTES);
+    const groups = (answer.body as { groups?: unknown } | null)?.groups;
+    if (answer.status !== 200 || !Array.isArray(groups)) return false;
+    const views = groups.slice(0, 500).filter(group => parseJoinedGroup(group)) as Array<Record<string, unknown>>;
+    const joined = views.map(group => parseJoinedGroup(group)!);
+    if (this.links.get(homeId) !== link) return false;
+    this.groupViews.set(homeId, views);
+    if (JSON.stringify(joined) !== JSON.stringify(link.joinedGroups ?? [])) {
+      const previous = link.joinedGroups;
+      link.joinedGroups = joined;
+      try { this.persist(); }
+      catch (error) { link.joinedGroups = previous; throw error; }
+    }
+    return true;
+  }
+
+  /** Joined remote rooms in the local Group shape plus `home`. Each home gets
+   * `waitMs` to answer; an unreachable home lists its last known rooms. */
+  async remoteGroups(waitMs = 2_500): Promise<RemoteGroupView[]> {
+    const links = [...this.links.values()];
+    const fresh = await Promise.all(links.map(link => Promise.race([
+      this.refreshJoinedGroups(link.homeId).catch(() => false),
+      new Promise<boolean>(resolve => setTimeout(resolve, waitMs, false).unref?.()),
+    ])));
+    return links.flatMap((link, index) => {
+      const home = { id: link.homeId, name: this.homeLabel(link.homeId), available: fresh[index] };
+      const views = this.groupViews.get(link.homeId);
+      const joined = new Set((link.joinedGroups ?? []).map(group => group.id));
+      if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...view, home }) as RemoteGroupView);
+      return (link.joinedGroups ?? []).map(group => ({
+        id: group.id, name: group.name, threadId: group.threadIds[0], memberIds: [], defaultResponder: { kind: "mentions" },
+        bulletin: "", unread: false, createdAt: 0, messages: [], home,
+      }));
+    });
+  }
+
+  /** Relay one allowlisted room route to the room's canonical home with only
+   * the link's own chat-only token. */
+  async forwardGroup(homeId: string, path: string, method: string, body?: unknown): Promise<{ status: number; body: unknown }> {
+    const link = this.links.get(homeId);
+    if (!link) throw new Error("joined room home is unavailable");
+    return this.forwardTo(link, path, method, body, GROUP_ROUTES);
+  }
+
+  /** The canonical home's person-scoped event stream for this guest. */
+  async openGroupEvents(homeId: string, signal: AbortSignal): Promise<Response> {
+    const link = this.links.get(homeId);
+    if (!link) throw new Error("joined room home is unavailable");
+    return this.fetcher(new URL("/api/events", link.origin), {
+      redirect: "error", signal, headers: { authorization: `Bearer ${link.token}`, accept: "text/event-stream" },
+    });
   }
 
   async addFromPairingUrl(pairingUrl: string): Promise<{ homeId: string; name: string; bots: RemoteBot[] }> {
@@ -188,7 +300,7 @@ export class MultiplayerLinks {
     }
     const previous = this.links.get(descriptor.environmentId);
     const link: RemoteLink = { homeId: descriptor.environmentId, origin, name: String(descriptor.label ?? previous?.name ?? "Other Mac").slice(0, 80), token,
-      bots: [], proxyGroups: previous?.proxyGroups ?? {} };
+      bots: [], proxyGroups: previous?.proxyGroups ?? {}, ...(previous?.joinedGroups ? { joinedGroups: previous.joinedGroups } : {}) };
     this.checkLink(link);
     let bots: RemoteBot[];
     try { bots = await this.refreshBotsFor(link); }
@@ -273,6 +385,7 @@ export class MultiplayerLinks {
     if (this.primary?.homeId === homeId) this.primary = null;
     try { this.persist(); }
     catch (error) { this.links.set(homeId, previous); this.primary = primary; throw error; }
+    this.groupViews.delete(homeId);
     await this.fetcher(new URL("/api/auth/logout", previous.origin), {
       method: "POST", headers: { authorization: `Bearer ${previous.token}` }, redirect: "error", signal: AbortSignal.timeout(5_000),
     }).catch(() => {});

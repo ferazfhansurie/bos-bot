@@ -42,6 +42,7 @@ import { peerEvent } from "./peer-events.ts";
 import { privateRoomForViewer } from "./private-room-visibility.ts";
 import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
+import { handleRemoteRoom, withRemoteGroups, type RemoteRoomContext } from "./remote-rooms.ts";
 import { RemoteBotBridge, isRemoteBotPath, homeKey } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
 /** Self-hosts may advertise a public HTTPS origin; private hosts use Tailscale. */
@@ -13585,6 +13586,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const auth = gate.auth;
     if (await terminals.handle(req, res)) return;
     if (await workspaceFiles.handle(req, res)) return;
+    // Rooms this home joined on another home are relayed to that home with
+    // the link's own chat-only token (server/remote-rooms.ts). Owner only.
+    const remoteRoomOwner = !HOSTED_WORKSPACE && workspaceActor(auth) === multiplayerActors.ownerId && !auth.scopes.includes("peer");
+    const remoteRooms: RemoteRoomContext = {
+      links: multiplayerLinks,
+      isLocalGroup: id => !!store.group(id),
+      isLocalThread: id => !!store.groupByThread(id) || !!store.botByThread(id),
+      localGroups: () => store.groups.map(group => ({ ...publicGroupState(group), ...messagePage(group.threadId, DEFAULT_PAGE) })),
+      readBody, json,
+      stillOwner: () => auth.kind !== "session" || (sessions.isLive(auth.session.id) && workspaceActor(auth) === multiplayerActors.ownerId),
+      waitMs: 1_500,
+    };
+    if (await handleRemoteRoom(req, res, { method, path, search: url.search, owner: remoteRoomOwner }, remoteRooms)) return;
     if (auth.kind === "session" && !workspaceMaintenance.active) {
       const replaced = peerHandoffs.confirm(auth.session.id);
       if (replaced) sessions.revoke(replaced);
@@ -14124,6 +14138,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const added = await multiplayerLinks.addVerified(homeOrigin, paired.token);
           linked = true;
           const me = await multiplayerLinks.forwardServer(added.homeId, "/api/multiplayer/me", "GET");
+          // Record the rooms this invite joined; the canonical home answers
+          // with exactly the rooms this person belongs to.
+          await multiplayerLinks.refreshJoinedGroups(added.homeId).catch(() => false);
           remoteBots.sync();
           return json(res, 201, { link: added, guest: me.body, homeId: ENVIRONMENT_ID });
         } catch (error) {
@@ -17081,7 +17098,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const foreignNow = auth.kind === "session" && viewerActor != null && viewerActor !== multiplayerActors.ownerId;
       const visibleBots = foreignNow ? store.bots.filter(bot => bot.visibility !== "private") : store.bots;
       const visibleBotIds = new Set(visibleBots.map(bot => bot.id));
-      return json(res, 200, {
+      const withJoinedRooms = <T extends { groups: Array<{ id: string }> }>(body: T): Promise<T> | T =>
+        remoteRoomOwner && !foreignNow ? withRemoteGroups(body.groups, remoteRooms).then(groups => ({ ...body, groups })) : body;
+      return json(res, 200, await withJoinedRooms({
         bots: [...visibleBots.map((bot) => ({
           ...wireBot(bot),
           tasks: store.tasks(bot.id).map(task => wireTask(task, bot.id)),
@@ -17096,7 +17115,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             return [bot.id, { held: snapshot.held, helpReason: snapshot.helpReason }];
           }),
         ),
-      });
+      }));
     }
 
     // scrollback: the page before a message the client already holds
