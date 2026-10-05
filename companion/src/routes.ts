@@ -143,6 +143,15 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
   // Shared people chats remain bound to the owner identity when reached
   // through this owner's paired companion; remote people use server sessions.
+  { method: "GET", path: /^\/api\/multiplayer\/servers$/ },
+  { method: "PUT", path: /^\/api\/multiplayer\/servers\/[\w-]+\/(?:me|contacts|members|invites|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|bots|bot-grants|members|preferences|leave|files|search|requests(?:\/[\w-]+\/cancel)?))?)?)$/ },
+  { method: "DELETE", path: /^\/api\/multiplayer\/servers\/[\w-]+\/(?:me|contacts|members|invites|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|bots|bot-grants|members|preferences|leave|files|search|requests(?:\/[\w-]+\/cancel)?))?)?)$/ },
+  { method: "PATCH", path: /^\/api\/multiplayer\/servers\/[\w-]+\/(?:me|contacts|members|invites|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|bots|bot-grants|members|preferences|leave|files|search|requests(?:\/[\w-]+\/cancel)?))?)?)$/ },
+  { method: "POST", path: /^\/api\/multiplayer\/servers\/[\w-]+\/(?:me|contacts|members|invites|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|bots|bot-grants|members|preferences|leave|files|search|requests(?:\/[\w-]+\/cancel)?))?)?)$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/servers\/[\w-]+\/(?:me|contacts|members|invites|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|bots|bot-grants|members|preferences|leave|files|search|requests(?:\/[\w-]+\/cancel)?))?)?)$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/members$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/members$/ },
+  { method: "GET", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/bot-grants$/ },
   { method: "GET", path: /^\/api\/multiplayer\/me$/ },
   { method: "GET", path: /^\/api\/multiplayer\/contacts$/ },
   { method: "PUT", path: /^\/api\/multiplayer\/profile-photo$/ },

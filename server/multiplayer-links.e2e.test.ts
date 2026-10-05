@@ -50,6 +50,7 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     expect((await links.setPrimary(added.homeId)).actorId).toBe(actorId);
     const forwarded = await links.forwardShared("/api/multiplayer/me", "GET");
     expect(forwarded).toMatchObject({ status: 200, body: { actorId } });
+    expect((await remote("PUT", `/api/multiplayer/members/${encodeURIComponent(actorId)}`, { role: "member" })).status).toBe(200);
     const room = await links.forwardShared("/api/multiplayer/rooms", "POST", {
       name: "Firaz and Pixie", memberIds: [actorId, `${added.homeId}:person:owner`],
     });

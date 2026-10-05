@@ -83,6 +83,7 @@ it("owner and paired owner read only existing direct and room bot/thread pairs",
 it("foreign account sees shared direct jobs but no private bot, room or orphan plans", async () => {
   const guest = await pair();
   expect((await api("POST", "/api/multiplayer/actor-bindings", { sessionId: guest.session.id, personId: "synthetic-home:person:guest", name: "Synthetic guest" })).status).toBe(200);
+  expect((await api("PUT", "/api/multiplayer/members/synthetic-home%3Aperson%3Aguest", { role: "member" })).status).toBe(200);
   expect((await items(guest.token)).map(item => item.outcome)).toEqual(["Shared direct"]);
   expect((await api("PATCH", `/api/bots/${other.id}`, { visibility: "private" })).status).toBe(200);
   expect(await items(guest.token)).toEqual([]);
@@ -117,6 +118,7 @@ it("activity snapshots exclude private, orphan and nonmember lanes", async () =>
   expect(owner.body.items.find((item: any) => item.threadId === room.threadId).roomId).toBe(room.id);
   const guest = await pair();
   await api("POST", "/api/multiplayer/actor-bindings", { sessionId: guest.session.id, personId: "activity-home:person:guest", name: "Activity guest" });
+  expect((await api("PUT", "/api/multiplayer/members/activity-home%3Aperson%3Aguest", { role: "member" })).status).toBe(200);
   const foreign = await api("GET", "/api/activity", undefined, guest.token);
   expect(foreign.status).toBe(200);
   expect(foreign.body.items.filter((item: any) => [lead.id, other.id].includes(item.botId)).map((item: any) => [item.botId, item.threadId])).toEqual([[other.id, other.threadId]]);

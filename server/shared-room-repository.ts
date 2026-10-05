@@ -81,6 +81,25 @@ export class SharedRoomRepository {
 
   /** Internal restart recovery only; request handlers must use member-filtered reads. */
   allRooms(): SharedRoom[] { return [...this.rooms.values()].map(log => log.room); }
+  /** Redeem one invitation as one room-store replacement. A revoked issuer,
+   * missing room or disk failure cannot leave a partial room grant. */
+  addInvitedMember(roomIds: string[], issuerId: string, personId: string): void {
+    if (parseContactId(personId)?.kind !== "person" || new Set(roomIds).size !== roomIds.length) throw new Error("invalid room invitation");
+    const previous = new Map<string, SharedRoomLog>();
+    const replacements = new Map<string, SharedRoomLog>();
+    for (const roomId of roomIds) {
+      const log = this.rooms.get(roomId);
+      if (!log || !log.room.memberIds.includes(issuerId) || log.room.kind !== "group") throw new Error("invited room is unavailable");
+      if (log.room.memberIds.includes(personId)) continue;
+      if (log.room.memberIds.length >= 50) throw new Error("invited room is full");
+      previous.set(roomId, log);
+      replacements.set(roomId, new SharedRoomLog({ ...log.room, memberIds: [...log.room.memberIds, personId], revision: (log.room.revision ?? 1) + 1 }, log.all()));
+    }
+    if (!replacements.size) return;
+    for (const [id, log] of replacements) this.rooms.set(id, log);
+    try { this.persist(); }
+    catch (error) { for (const [id, log] of previous) this.rooms.set(id, log); throw error; }
+  }
   allMessages(roomId: string): SharedTextMessage[] { return this.rooms.get(roomId)?.all() ?? []; }
 
   summariesFor(actorId: string): Array<SharedRoom & { lastActivity: number; preview: string; unreadCount: number; readSequence: number; notifications: SharedConversationPreferences["notifications"] }> {

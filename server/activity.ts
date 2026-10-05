@@ -40,7 +40,7 @@ export class ActivityFeed {
       : fact && ["failed", "stopped"].includes(fact.state) ? fact.state : "idle";
     // Preserve timestamps across reads. Terminal provider identity is omitted.
     const view = this.views.get(key);
-    const next = { state, since: view?.state === state ? view.since : fact?.state === state ? fact.since : this.now(), ...(pair.running && fact?.turnId ? { turnId: fact.turnId } : {}) };
+    const next = { state, since: view?.state === state && (!pair.running || view.turnId === fact?.turnId) ? view.since : fact?.state === state ? fact.since : this.now(), ...(pair.running && fact?.turnId ? { turnId: fact.turnId } : {}) };
     const item = { botId: pair.botId, threadId: pair.threadId, roomId: pair.roomId, ...next };
     this.views.set(key, item);
     return item;

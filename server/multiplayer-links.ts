@@ -73,7 +73,7 @@ export class MultiplayerLinks {
 
   private checkLink(link: RemoteLink): void {
     const origin = new URL(link.origin);
-    if (origin.protocol !== "https:" || !origin.hostname.endsWith(".ts.net") || origin.pathname !== "/" ||
+    if (origin.protocol !== "https:" || origin.pathname !== "/" ||
         origin.search || origin.hash || origin.username || origin.password ||
         !/^[\w-]{1,128}$/.test(link.homeId) || link.homeId === this.homeId ||
         !link.token.startsWith("omb_sess_") || !Array.isArray(link.bots) || !link.proxyGroups || typeof link.proxyGroups !== "object") {
@@ -112,10 +112,21 @@ export class MultiplayerLinks {
     return this.primary;
   }
 
+  /** Explicit server selection never rewrites this home's identity or primary. */
+  async forwardServer(homeId: string, path: string, method: string, body?: unknown): Promise<{ status: number; body: unknown }> {
+    const link = this.links.get(homeId);
+    if (!link) throw new Error("server is not joined");
+    return this.forwardTo(link, path, method, body);
+  }
+
   async forwardShared(path: string, method: string, body?: unknown): Promise<{ status: number; body: unknown }> {
     const link = this.primary && this.links.get(this.primary.homeId);
     if (!link) throw new Error("shared chat home is unavailable");
-    if (!/^\/api\/multiplayer\/(?:me|contacts|dm|push-token|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|leave|bots|preferences|files|search|requests(?:\/[\w-]+\/cancel)?|attachments(?:\/[\w-]+)?))?)?)?(?:\?[\w%+.,:~=&-]+)?$/.test(path)) {
+    return this.forwardTo(link, path, method, body);
+  }
+
+  private async forwardTo(link: RemoteLink, path: string, method: string, body?: unknown): Promise<{ status: number; body: unknown }> {
+    if (!/^\/api\/multiplayer\/(?:me|contacts|members|invites|dm|push-token|rooms(?:\/[\w-]+(?:\/(?:messages(?:\/[\w-]+)?|leave|bots|bot-grants|members|preferences|files|search|requests(?:\/[\w-]+\/cancel)?|attachments(?:\/[\w-]+)?))?)?)?(?:\?[\w%+.,:~=&-]+)?$/.test(path)) {
       throw new Error("invalid shared chat route");
     }
     const url = new URL(path, link.origin);
@@ -129,8 +140,8 @@ export class MultiplayerLinks {
 
   async addFromPairingUrl(pairingUrl: string): Promise<{ homeId: string; name: string; bots: RemoteBot[] }> {
     const url = new URL(pairingUrl);
-    if (url.protocol !== "https:" || !url.hostname.endsWith(".ts.net") || url.pathname !== "/pair" || url.username || url.password) {
-      throw new Error("use a private HTTPS pairing link from the other Mac");
+    if (url.protocol !== "https:" || url.pathname !== "/pair" || url.username || url.password) {
+      throw new Error("use an HTTPS pairing link from the other server");
     }
     const code = new URLSearchParams(url.hash.slice(1)).get("code");
     if (!code || !/^[A-Z0-9-]{12,20}$/i.test(code)) throw new Error("pairing link has no valid code");
@@ -163,8 +174,8 @@ export class MultiplayerLinks {
   /** Install a client-scoped link created by the other home's owner during a team join. */
   async addVerified(origin: string, token: string, knownDescriptor?: Record<string, unknown>): Promise<{ homeId: string; name: string; bots: RemoteBot[] }> {
     const url = new URL(origin);
-    if (url.protocol !== "https:" || !url.hostname.endsWith(".ts.net") || url.pathname !== "/" || url.search || url.hash || url.username || url.password || !/^omb_sess_[A-Za-z0-9_-]{43}$/.test(token)) {
-      throw new Error("invalid private workspace link");
+    if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password || !/^omb_sess_[A-Za-z0-9_-]{43}$/.test(token)) {
+      throw new Error("invalid HTTPS workspace link");
     }
     const descriptorResponse = knownDescriptor ? null : await this.fetcher(new URL("/.well-known/openmausbot/environment", origin), {
       redirect: "error", signal: AbortSignal.timeout(20_000),

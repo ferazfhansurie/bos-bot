@@ -9,6 +9,23 @@ const root = mkdtempSync(join(tmpdir(), "omb-shared-rooms-"));
 afterEach(() => rmSync(root, { force: true, recursive: true }));
 
 describe("shared room repository", () => {
+  it("redeems invited room membership together and preserves home room identities", () => {
+    const file = join(root, "invited", "rooms.json");
+    const repo = new SharedRoomRepository(file, "home");
+    const owner = "home:person:owner", member = "other:person:owner", guest = "guest:person:owner";
+    const first = repo.create("First", [owner, member], 1, owner, "group");
+    const second = repo.create("Second", [owner, member], 2, owner, "group");
+    expect(() => repo.addInvitedMember([first.id, "missing"], owner, guest)).toThrow("unavailable");
+    expect(repo.listFor(guest)).toEqual([]);
+    repo.addInvitedMember([first.id, second.id], owner, guest);
+    expect(repo.listFor(guest).map(room => room.id)).toEqual([first.id, second.id]);
+    expect(new SharedRoomRepository(file, "home").listFor(guest).map(room => room.id)).toEqual([first.id, second.id]);
+    const before = readFileSync(file, "utf8");
+    repo.addInvitedMember([first.id, second.id], owner, guest);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    expect(() => repo.addInvitedMember([first.id], "uninvited:person:owner", "another:person:owner")).toThrow("unavailable");
+  });
+
   it("persists per-person reply preferences without losing notification state", () => {
     const file = join(root, "reply-preferences", "rooms.json");
     const repo = new SharedRoomRepository(file, "home");

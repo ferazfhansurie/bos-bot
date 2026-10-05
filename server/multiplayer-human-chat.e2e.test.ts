@@ -17,7 +17,7 @@ it("invokes an owned bot inside a human group without giving it membership", asy
     expect((await api("POST", "/api/multiplayer/actor-bindings", { sessionId: paired.body.session.id, personId: teammate, name: "Teammate" })).status).toBe(200);
     const bot = (await api("POST", "/api/bots", { name: "Ultron", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true })).body.bot;
     const botId = `${me.homeId}:bot:${bot.id}`;
-    expect((await api("POST", "/api/multiplayer/rooms", { name: "Forged grant", memberIds: [teammate, botId] }, paired.body.token)).status).toBe(400);
+    expect((await api("POST", "/api/multiplayer/rooms", { name: "Forged grant", memberIds: [teammate, botId] }, paired.body.token)).status).toBe(403);
     expect((await api("POST", "/api/multiplayer/dm", { targetId: botId }, paired.body.token)).status).toBe(403);
     await api("POST", "/api/bots", { name: "Spare", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true });
     const direct = await api("POST", "/api/multiplayer/dm", { targetId: botId });

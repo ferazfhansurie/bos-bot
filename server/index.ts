@@ -43,6 +43,15 @@ import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { RemoteBotBridge, isRemoteBotPath, homeKey } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
+/** Self-hosts may advertise a public HTTPS origin; private hosts use Tailscale. */
+async function federationOrigin(peer?: string): Promise<string | null> {
+  if (process.env.OMB_FEDERATION_ORIGIN) {
+    const origin = new URL(process.env.OMB_FEDERATION_ORIGIN);
+    if (origin.protocol !== "https:" || origin.pathname !== "/" || origin.username || origin.password || origin.search || origin.hash) throw new Error("invalid federation origin");
+    return origin.origin;
+  }
+  return tailnetOrigin(peer);
+}
 import { onboardingChief } from "./onboarding-chief.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
 import { BOS_FREE_API, BOS_FREE_MODEL, BOS_FREE_NAME } from "./drivers/openrouter-free.ts";
@@ -204,6 +213,8 @@ import {
   roomHandoffLimits,
 } from "./config.ts";
 import { inboxCanClose, inboxShouldSettle, threadState, type InboxCandidate } from "./thread-inbox.ts";
+import { WorkspaceMembership } from "./workspace-membership.ts";
+import type { WorkspaceRole } from "../shared/workspace-membership.ts";
 import { ActivityFeed } from "./activity.ts";
 import type { ActivityResponse } from "../shared/activity.ts";
 import { jobInboxItem } from "./job-inbox.ts";
@@ -585,6 +596,15 @@ if (startupUpdateReceipt) workspaceMaintenance.restoreUpdate(startupUpdateReceip
 // for this server, the paired sessions, and the cookie the served UI uses.
 const ENVIRONMENT_ID = loadEnvironmentId(DATA_DIR);
 const multiplayerActors = new MultiplayerActors(join(DATA_DIR, "multiplayer-actors.json"), ENVIRONMENT_ID);
+/** Device pairing already grants access to this home. Account sign-ins and
+ * peer links require explicit actor binding and never inherit its owner. */
+function workspaceActor(auth: RequestAuth): string | null {
+  if (auth.kind === "loopback") return multiplayerActors.ownerId;
+  const bound = multiplayerActors.actorFor(auth.session.id);
+  if (bound) return bound;
+  return !auth.session.email && !auth.session.userId && !auth.scopes.includes("peer") && auth.scopes.includes("client")
+    ? multiplayerActors.ownerId : null;
+}
 const peerThreads = new PeerThreads(join(DATA_DIR, "peer-threads.json"));
 const peerHandoffs = new PeerHandoffs(join(DATA_DIR, "peer-handoffs.json"));
 const apnsPush = new ApnsPush(undefined, (sessionId, actorId) => {
@@ -618,6 +638,7 @@ function ownerPhotoData(): string | null {
   if (!photo || photo.bytes.byteLength > 256_000 || !/^image\/(?:jpeg|png|webp)$/.test(photo.mime)) return null;
   return `data:${photo.mime};base64,${photo.bytes.toString("base64")}`;
 }
+const workspaceMembers = new WorkspaceMembership(join(DATA_DIR, "workspace-membership.json"), multiplayerActors.ownerId, multiplayerActors.list().map(binding => binding.personId));
 const sharedRooms = new SharedRoomRepository(join(DATA_DIR, "shared-rooms.json"), ENVIRONMENT_ID);
 const sharedAttachments = new SharedAttachmentStore();
 const sharedBotTasks = new SharedBotTasks(join(DATA_DIR, "shared-bot-tasks.json"));
@@ -636,8 +657,9 @@ const sessions = new SessionRegistry({
   },
   portalMembership: hostedWorkspaceConfiguration()?.portalMembership === true,
 });
-const teamInvites = new Map<string, { expiresAt: number; personId?: string }>();
-const pendingTeamJoins = new Map<string, { expiresAt: number; personId?: string }>();
+type TeamInvite = { expiresAt: number; personId?: string; role?: Exclude<WorkspaceRole, "owner">; roomIds?: string[]; issuerId?: string };
+const teamInvites = new Map<string, TeamInvite>();
+const pendingTeamJoins = new Map<string, TeamInvite>();
 const sharedComputers = new SharedComputers(id => sessions.isLive(id));
 const SESSION_COOKIE = sessionCookieName(PORT, ENVIRONMENT_ID);
 const HOSTED_WORKSPACE = hostedWorkspaceConfigured();
@@ -6841,10 +6863,13 @@ interface SharedRoomBot { color?: string; mascotBody?: string | null; mascotEyes
 function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
   const owner = cfg.profile?.name?.trim() || "Owner";
   const links = new Map(multiplayerLinks.bridgeLinks().map(link => [link.homeId, link]));
-  const candidates = sharedRoomBotCandidates(room, actorId, ENVIRONMENT_ID,
+  const candidates = [...new Set([...sharedRoomBotCandidates(room, actorId, ENVIRONMENT_ID,
     store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => `${ENVIRONMENT_ID}:bot:${bot.id}`),
-    multiplayerLinks.contacts().map(bot => bot.id));
-  return candidates.flatMap((id): SharedRoomBot[] => {
+    multiplayerLinks.contacts().map(bot => bot.id)),
+    ...(actorId && room.memberIds.includes(actorId) ? workspaceMembers.grants(room.id) : [])])];
+  const permitted = actorId && workspaceMembers.role(actorId) === "client-guest"
+    ? candidates.filter(id => workspaceMembers.grants(room.id).includes(id)) : candidates;
+  return permitted.flatMap((id): SharedRoomBot[] => {
     const key = parseContactId(id);
     if (key?.kind !== "bot") return [];
     const bot = { homeId: key.homeId, kind: "bot" as const, localId: key.localId };
@@ -13241,7 +13266,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   } catch {
     return json(res, 400, { error: "invalid request URL" });
   }
-  const path = url.pathname;
+  let path = url.pathname;
+  const selectedServer = /^\/api\/multiplayer\/servers\/([\w-]+)\/(.+)$/.exec(path);
+  if (selectedServer?.[1] === ENVIRONMENT_ID) { path = `/api/multiplayer/${selectedServer[2]}`; url.pathname = path; }
   const method = req.method ?? "GET";
   /** scratch for route matches, shared by every `path.match` below */
   let m: RegExpMatchArray | null = null;
@@ -13446,7 +13473,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     const peerSessionId = auth.kind === "session" && auth.scopes.includes("peer") && !auth.scopes.includes("client") && !auth.scopes.includes("admin")
       ? auth.session.id : null;
-    const requestActor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : multiplayerActors.ownerId;
+    const requestActor = workspaceActor(auth);
     const foreignClient = auth.kind === "session" &&
       multiplayerActors.actorFor(auth.session.id) != null &&
       multiplayerActors.actorFor(auth.session.id) !== multiplayerActors.ownerId;
@@ -13465,7 +13492,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (bot && !currentPrivateAccess(bot.id)) throw Object.assign(new Error("no such bot"), { status: 404 });
       const roomId = /^\/api\/multiplayer\/rooms\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
       if (roomId) {
-        const actor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : multiplayerActors.ownerId;
+        const actor = workspaceActor(auth);
         if (!actor || actor !== requestActor) throw Object.assign(new Error("room unavailable"), { status: 404 });
         const room = sharedRooms.roomFor(roomId, actor);
         if (!room) throw Object.assign(new Error("room unavailable"), { status: 404 });
@@ -13491,6 +13518,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           store.groupByThread(/^\/api\/threads\/([\w-]+)/.exec(path)![1]!)) {
         req.resume(); return json(res, 403, { error: "this device cannot read owner-private channels" });
       }
+    }
+    const restrictedGuest = requestActor && requestActor !== multiplayerActors.ownerId && workspaceMembers.role(requestActor) === "client-guest";
+    if (restrictedGuest && (/^\/api\/(?:bots\/|threads\/|groups(?:\/|$)|search$|team-map$|inbox|digest|lead-actions)/.test(path))) {
+      req.resume(); return json(res, 403, { error: "client guests access invited rooms only" });
     }
     const peerOwns = (botId: string, threadId: unknown): boolean =>
       !peerSessionId || (typeof threadId === "string" && peerThreads.owns(peerSessionId, botId, threadId));
@@ -13742,9 +13773,73 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // Shared-chat identities are explicit. A paired device called "Putri"
     // does not become Putri merely because its client chose that label.
     if (path.startsWith("/api/multiplayer/")) {
-      const actorId = auth.kind === "loopback"
-        ? multiplayerActors.ownerId
-        : multiplayerActors.actorFor(auth.session.id);
+      const actorId = workspaceActor(auth);
+      if (selectedServer && selectedServer[1] !== ENVIRONMENT_ID) {
+        if (actorId !== multiplayerActors.ownerId || peerSessionId) return json(res, 403, { error: "home owner access required" });
+        const body = ["POST", "PATCH", "DELETE", "PUT"].includes(method) ? await readBody(req, 100_000) : undefined;
+        try {
+          if (auth.kind === "session" && (!sessions.isLive(auth.session.id) || workspaceActor(auth) !== multiplayerActors.ownerId)) return json(res, 403, { error: "home owner session ended" });
+          const forwarded = await multiplayerLinks.forwardServer(selectedServer[1], `/api/multiplayer/${selectedServer[2]}${url.search}`, method, body);
+          if (auth.kind === "session" && (!sessions.isLive(auth.session.id) || workspaceActor(auth) !== multiplayerActors.ownerId)) return json(res, 403, { error: "home owner session ended" });
+          return json(res, forwarded.status, forwarded.body);
+        } catch { return json(res, 502, { error: "joined server is unavailable" }); }
+      }
+      if (path === "/api/multiplayer/servers" && method === "GET") {
+        if (actorId !== multiplayerActors.ownerId || peerSessionId) return json(res, 403, { error: "home owner access required" });
+        const joined = await Promise.all(multiplayerLinks.bridgeLinks().map(async link => {
+          try {
+            const me = await multiplayerLinks.forwardServer(link.homeId, "/api/multiplayer/me", "GET");
+            const body = me.body as { actorId?: string; role?: WorkspaceRole };
+            return { homeId: link.homeId, name: link.name, home: false, available: me.status === 200, actorId: body.actorId ?? null, role: body.role ?? "client-guest" };
+          } catch { return { homeId: link.homeId, name: link.name, home: false, available: false, actorId: null, role: "client-guest" }; }
+        }));
+        if (auth.kind === "session" && (!sessions.isLive(auth.session.id) || workspaceActor(auth) !== multiplayerActors.ownerId)) return json(res, 403, { error: "home owner session ended" });
+        return json(res, 200, { servers: [{ homeId: ENVIRONMENT_ID, name: cfg.profile?.name ?? "Owner", home: true, available: true, actorId, role: "owner" }, ...joined] });
+      }
+      const memberRoute = /^\/api\/multiplayer\/members(?:\/([^/]+))?$/.exec(path);
+      if (memberRoute) {
+        if (!actorId) return json(res, 403, { error: "person binding required" });
+        if (method === "GET" && !memberRoute[1]) {
+          const members = [...new Map([...workspaceMembers.list(), ...multiplayerActors.people(cfg.profile?.name ?? "Owner").map(person => ({ actorId: person.id, role: workspaceMembers.role(person.id) }))].map(member => [member.actorId, member])).values()];
+          const visible = workspaceMembers.canManage(actorId) ? members : members.filter(member => member.actorId === actorId || sharedRooms.listFor(actorId).some(room => room.memberIds.includes(member.actorId)));
+          return json(res, 200, { members: visible.map(member => ({ ...member, name: member.actorId === multiplayerActors.ownerId ? cfg.profile?.name ?? "Owner" : multiplayerActors.nameFor(member.actorId) ?? member.actorId })) });
+        }
+        if (actorId !== multiplayerActors.ownerId || peerSessionId) return json(res, 403, { error: "only the home owner assigns workspace roles" });
+        if (method === "PUT" && memberRoute[1]) {
+          const target = decodeURIComponent(memberRoute[1]);
+          const body = await readBody(req, 1024);
+          if (workspaceActor(auth) !== multiplayerActors.ownerId || auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 403, { error: "owner session ended" });
+          if (!["admin", "member", "client-guest"].includes(body?.role)) return json(res, 400, { error: "role must be admin, member or client-guest" });
+          if (!multiplayerActors.people(cfg.profile?.name ?? "Owner").some(person => person.id === target)) return json(res, 404, { error: "person unavailable" });
+          try { return json(res, 200, { member: workspaceMembers.set(target, body.role) }); }
+          catch { return json(res, 400, { error: "invalid membership" }); }
+        }
+        return json(res, 405, { error: "method not allowed" });
+      }
+      const roomMembersRoute = /^\/api\/multiplayer\/rooms\/([\w-]+)\/members$/.exec(path);
+      if (roomMembersRoute && method === "GET") {
+        const room = actorId && sharedRooms.roomFor(roomMembersRoute[1], actorId);
+        if (!room) return json(res, 404, { error: "room unavailable" });
+        return json(res, 200, { members: room.memberIds.filter(id => parseContactId(id)?.kind === "person").map(id => ({ actorId: id, name: id === multiplayerActors.ownerId ? cfg.profile?.name ?? "Owner" : multiplayerActors.nameFor(id) ?? id, role: workspaceMembers.role(id) })) });
+      }
+      const grantsRoute = /^\/api\/multiplayer\/rooms\/([\w-]+)\/bot-grants$/.exec(path);
+      if (grantsRoute) {
+        const room = actorId && sharedRooms.roomFor(grantsRoute[1], actorId);
+        if (!room) return json(res, 404, { error: "room unavailable" });
+        if (method === "GET") return json(res, 200, { roomId: room.id, botIds: workspaceMembers.grants(room.id) });
+        if (method === "PUT") {
+          if (!workspaceMembers.canManage(actorId)) return json(res, 403, { error: "room grants require owner or admin" });
+          const body = await readBody(req, 4096);
+          if (!Array.isArray(body?.botIds) || body.botIds.length > 50 || body.botIds.some((id: unknown) => {
+            const key = parseContactId(id); const bot = key?.homeId === ENVIRONMENT_ID && key.kind === "bot" ? store.bot(key.localId) : null;
+            return !bot || bot.hidden || bot.visibility === "private";
+          })) return json(res, 400, { error: "grant only shared bots on this server" });
+          if (workspaceActor(auth) !== actorId || !workspaceMembers.canManage(actorId) || auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 403, { error: "room grant authority ended" });
+          workspaceMembers.setGrants(room.id, body.botIds);
+          return json(res, 200, { roomId: room.id, botIds: workspaceMembers.grants(room.id) });
+        }
+        return json(res, 405, { error: "method not allowed" });
+      }
       if (path === "/api/multiplayer/peer-migrate" && method === "POST") {
         if (auth.kind !== "session") return json(res, 403, { error: "a linked peer session is required" });
         if (auth.scopes.includes("peer")) return json(res, 200, { scoped: true });
@@ -13839,16 +13934,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, { avatarUrl });
       }
       if (path === "/api/multiplayer/invites" && method === "POST") {
-        if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
-        const origin = await tailnetOrigin();
-        if (!origin) return json(res, 503, { error: "private Tailscale address is unavailable" });
-        const body = await readBody(req, 1024);
+        if (!actorId || !workspaceMembers.canManage(actorId)) return json(res, 403, { error: "owner or admin access required" });
+        const origin = await federationOrigin();
+        if (!origin) return json(res, 503, { error: "configure an HTTPS federation origin or private Tailscale address" });
+        const body = await readBody(req, 4096);
         const personId = typeof body?.personId === "string" ? body.personId : undefined;
         if (personId && !multiplayerActors.people(cfg.profile?.name ?? "Owner").some(person => person.id === personId && person.id !== multiplayerActors.ownerId)) {
           return json(res, 400, { error: "choose an existing person" });
         }
+        const role = body?.role ?? "client-guest";
+        if (!["admin", "member", "client-guest"].includes(role) || role === "admin" && actorId !== multiplayerActors.ownerId) return json(res, 403, { error: "invalid or unassignable invite role" });
+        const roomIds = body?.roomIds ?? [];
+        if (!Array.isArray(roomIds) || roomIds.length > 50 || new Set(roomIds).size !== roomIds.length || roomIds.some((id: unknown) => typeof id !== "string" || !actorId || sharedRooms.roomFor(id, actorId)?.kind !== "group")) return json(res, 400, { error: "invite only rooms you belong to" });
+        if (workspaceActor(auth) !== actorId || !workspaceMembers.canManage(actorId) || auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 403, { error: "invitation authority ended" });
         const opened = sessions.openPairing({ scopes: ["peer"], label: "BOS team member" });
-        teamInvites.set(opened.id, { expiresAt: opened.expiresAt, personId });
+        teamInvites.set(opened.id, { expiresAt: opened.expiresAt, personId, role, roomIds, issuerId: actorId ?? undefined });
         return json(res, 201, { url: `${origin}/pair#code=${opened.code}`, expiresAt: opened.expiresAt });
       }
       if (path === "/api/multiplayer/register" && method === "POST") {
@@ -13859,21 +13959,25 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (typeof body?.origin !== "string" || typeof body?.token !== "string") return json(res, 400, { error: "workspace link required" });
         try {
           const remote = new URL(body.origin);
-          if (remote.protocol !== "https:" || !remote.hostname.endsWith(".ts.net") || remote.pathname !== "/" || remote.search || remote.hash) throw new Error("invalid private workspace address");
+          if (remote.protocol !== "https:" || remote.pathname !== "/" || remote.search || remote.hash || remote.username || remote.password) throw new Error("invalid private workspace address");
           const homeResponse = await fetch(new URL("/api/multiplayer/home", remote), { headers: { authorization: `Bearer ${body.token}` }, redirect: "error", signal: AbortSignal.timeout(20_000) });
           if (!homeResponse.ok) throw new Error("other workspace refused the team link");
           const remoteHome = await homeResponse.json() as { homeId?: string; name?: string };
           if (typeof remoteHome.name !== "string" || !remoteHome.name.trim() || typeof remoteHome.homeId !== "string") throw new Error("other workspace identity is unavailable");
           const link = await multiplayerLinks.addVerified(remote.origin, body.token);
           if (link.homeId !== remoteHome.homeId) throw new Error("workspace identity changed during registration");
-          const matchingPeople = multiplayerActors.people(cfg.profile?.name ?? "Owner")
-            .filter(person => person.id !== multiplayerActors.ownerId && person.name.trim().toLowerCase() === remoteHome.name!.trim().toLowerCase());
-          const personId = pending.personId ?? (matchingPeople.length === 1 ? matchingPeople[0].id : contactId({ homeId: link.homeId, kind: "person", localId: "owner" }));
+          const personId = pending.personId ?? contactId({ homeId: link.homeId, kind: "person", localId: "owner" });
           multiplayerActors.bind(auth.session.id, personId, remoteHome.name);
+          if (!sessions.isLive(auth.session.id) || pending.issuerId && !workspaceMembers.canManage(pending.issuerId)) throw new Error("invitation authority ended");
+          const existingMember = workspaceMembers.list().find(member => member.actorId === personId);
+          const invitedRole = pending.role ?? "client-guest";
+          if (pending.issuerId !== multiplayerActors.ownerId && existingMember && existingMember.role !== invitedRole) throw new Error("only the owner changes existing workspace roles");
+          workspaceMembers.set(personId, invitedRole);
+          if (pending.roomIds?.length) sharedRooms.addInvitedMember(pending.roomIds, pending.issuerId!, personId);
           pendingTeamJoins.delete(auth.session.id);
           remoteBots.sync();
           return json(res, 201, { actorId: personId, homeId: ENVIRONMENT_ID });
-        } catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "could not register workspace" }); }
+        } catch (error) { sessions.revoke(auth.session.id); pendingTeamJoins.delete(auth.session.id); return json(res, 400, { error: error instanceof Error ? error.message : "could not register workspace" }); }
       }
       if (path === "/api/multiplayer/join" && method === "POST") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
@@ -13885,10 +13989,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         let linked = false;
         try {
           const invite = new URL(body.url);
-          const ownOrigin = await tailnetOrigin(invite.origin);
-          if (!ownOrigin) return json(res, 503, { error: "no Running Tailscale client matches that peer's tailnet" });
+          const ownOrigin = await federationOrigin(invite.origin);
+          if (!ownOrigin) return json(res, 503, { error: "configure an HTTPS federation origin or matching Tailscale client" });
           const code = new URLSearchParams(invite.hash.slice(1)).get("code");
-          if (invite.protocol !== "https:" || !invite.hostname.endsWith(".ts.net") || invite.pathname !== "/pair" || invite.username || invite.password || !code || !/^[A-Z0-9-]{12,20}$/i.test(code)) throw new Error("invalid team invitation");
+          if (invite.protocol !== "https:" || invite.pathname !== "/pair" || invite.username || invite.password || !code || !/^[A-Z0-9-]{12,20}$/i.test(code)) throw new Error("invalid team invitation");
           homeOrigin = invite.origin;
           const pairedResponse = await fetch(new URL("/api/auth/pair", homeOrigin), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, label: "BOS team link" }), redirect: "error", signal: AbortSignal.timeout(20_000) });
           if (!pairedResponse.ok) throw new Error("team invitation expired or was already used");
@@ -13901,9 +14005,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (!registered.ok) throw new Error(`other workspace refused registration (${registered.status})`);
           const added = await multiplayerLinks.addVerified(homeOrigin, paired.token);
           linked = true;
-          const primary = await multiplayerLinks.setPrimary(added.homeId);
+          const me = await multiplayerLinks.forwardServer(added.homeId, "/api/multiplayer/me", "GET");
           remoteBots.sync();
-          return json(res, 201, { link: added, primary });
+          return json(res, 201, { link: added, guest: me.body, homeId: ENVIRONMENT_ID });
         } catch (error) {
           if (!linked) {
             if (localSessionId) sessions.revoke(localSessionId);
@@ -13945,7 +14049,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const roomId = /^\/api\/multiplayer\/rooms\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
       const requestedRoom = roomId && actorId ? sharedRooms.roomFor(roomId, actorId) : null;
       if (requestedRoom && privateRoom(requestedRoom)) { req.resume(); return json(res, 404, { error: "room unavailable" }); }
-      if (multiplayerLinks.primaryActorId() && !path.startsWith("/api/multiplayer/links") &&
+      if (!selectedServer && multiplayerLinks.primaryActorId() && !path.startsWith("/api/multiplayer/links") &&
           !path.startsWith("/api/multiplayer/actor-bindings")) {
         if (auth.kind !== "loopback" && actorId !== multiplayerLinks.primaryActorId()) {
           return json(res, 403, { error: "this device is not bound to the shared person" });
@@ -13991,6 +14095,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, {
           actorId,
           homeId: ENVIRONMENT_ID,
+          role: actorId ? workspaceMembers.role(actorId) : null,
           name: actorId === multiplayerActors.ownerId ? cfg.profile?.name ?? "Owner" : actorId ? multiplayerActors.nameFor(actorId) : null,
         });
       }
@@ -13998,6 +14103,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!actorId) return json(res, 403, { error: "this device has not been assigned to a person" });
         void multiplayerLinks.refreshAllBots().catch(error =>
           console.warn(`shared contact refresh failed: ${error instanceof Error ? error.message : "unknown"}`));
+        if (workspaceMembers.role(actorId) === "client-guest") {
+          const rooms = sharedRooms.listFor(actorId);
+          const people = new Set(rooms.flatMap(room => room.memberIds));
+          const bots = new Map(rooms.flatMap(room => sharedRoomBots(room, actorId)).map(bot => [bot.id, bot]));
+          return json(res, 200, { contacts: [...multiplayerActors.people(cfg.profile?.name ?? "Owner").filter(person => people.has(person.id)), ...bots.values()] });
+        }
         return json(res, 200, { contacts: [
           ...multiplayerActors.people(cfg.profile?.name ?? "Owner").map(person => ({
             ...person, avatar: person.id === multiplayerActors.ownerId ? ownerPhotoData() : multiplayerLinks.avatarForPerson(person.name),
@@ -14068,6 +14179,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, { registered: true, deliveryConfigured: apnsPush.configured() });
       }
       if (method === "POST" && path === "/api/multiplayer/dm") {
+        if (workspaceMembers.role(actorId) === "client-guest") return json(res, 403, { error: "guests cannot create direct rooms" });
         const body = await readBody(req, 1024);
         const targetId = body?.targetId;
         const target = [
@@ -14083,6 +14195,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 201, { room: sharedRooms.create(target.name, members, Date.now(), actorId, "direct") });
       }
       if (path === "/api/multiplayer/rooms") {
+        if (method === "POST" && workspaceMembers.role(actorId) === "client-guest") return json(res, 403, { error: "guests cannot create rooms" });
         if (method === "GET") return json(res, 200, { rooms: sharedRooms.summariesFor(actorId).filter(listedRoom) });
         if (method === "POST") {
           const body = await readBody(req, 16_384);
@@ -14109,12 +14222,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       m = path.match(/^\/api\/multiplayer\/rooms\/([\w-]+)$/);
       if (m && (method === "PATCH" || method === "DELETE")) {
+        if (workspaceMembers.role(actorId) === "client-guest") return json(res, 403, { error: "guests cannot manage rooms" });
         const room = sharedRooms.roomFor(m[1], actorId);
         if (!room) return json(res, 404, { error: "room unavailable" });
         const body = await readBody(req, 16_384);
         if (!Number.isSafeInteger(body?.revision) || body.revision < 1) return json(res, 400, { error: "room revision required" });
         if (method === "DELETE") {
-          if (actorId !== (room.createdBy ?? `${room.homeId}:person:owner`) && actorId !== multiplayerActors.ownerId) {
+          if (actorId !== (room.createdBy ?? `${room.homeId}:person:owner`) && !workspaceMembers.canManage(actorId)) {
             return json(res, 403, { error: "only the creator or home owner can delete this room" });
           }
           try { sharedRooms.deleteRoom(room.id, actorId, body.revision); return json(res, 200, { ok: true }); }
@@ -14123,7 +14237,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (body.name === undefined && body.memberIds === undefined) return json(res, 400, { error: "name or members required" });
         if (body.name !== undefined && typeof body.name !== "string") return json(res, 400, { error: "invalid room name" });
         if (body.memberIds !== undefined) {
-          if (actorId !== (room.createdBy ?? `${room.homeId}:person:owner`) && actorId !== multiplayerActors.ownerId) return json(res, 403, { error: "only the group creator can change its members" });
+          if (actorId !== (room.createdBy ?? `${room.homeId}:person:owner`) && !workspaceMembers.canManage(actorId)) return json(res, 403, { error: "only the group creator can change its members" });
           if (!Array.isArray(body.memberIds) || !body.memberIds.includes(actorId)) return json(res, 400, { error: "you must remain a member; use leave to exit" });
           if (body.memberIds.some((id: unknown) => parseContactId(id)?.kind !== "person")) return json(res, 400, { error: "add people to the group; mention bots when you need them" });
           const allowedMembers = new Set([
@@ -14281,7 +14395,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const roomId = m[1];
         if (!sharedRooms.roomFor(roomId, actorId)) return json(res, 404, { error: "room unavailable" });
         const body = await readBody(req, 100_000);
-        if (auth.kind === "session" && (multiplayerActors.actorFor(auth.session.id) !== actorId || !sessions.isLive(auth.session.id))) return json(res, 403, { error: "room unavailable" });
+        if (auth.kind === "session" && (workspaceActor(auth) !== actorId || !sessions.isLive(auth.session.id))) return json(res, 403, { error: "room unavailable" });
         const liveRoom = sharedRooms.roomFor(roomId, actorId);
         if (!liveRoom || privateRoom(liveRoom)) return json(res, 404, { error: "room unavailable" });
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session ended" });
@@ -16821,6 +16935,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, currentDigest(since, until, needsMeScope(auth)));
     }
     if (method === "GET" && path === "/api/bots") {
+      if (restrictedGuest && requestActor) {
+        const granted = new Set(sharedRooms.listFor(requestActor).flatMap(room => workspaceMembers.grants(room.id)));
+        const bots = store.bots.filter(bot => !bot.hidden && bot.visibility !== "private" && granted.has(`${ENVIRONMENT_ID}:bot:${bot.id}`)).map(bot => peerBotView(bot, auth.kind === "session" ? auth.session.id : ""));
+        return json(res, 200, { bots, botQueuedMessages: {}, sections: [], groups: [], computerControl: {} });
+      }
       if (peerSessionId) {
         const bots = store.bots.filter(bot => !bot.hidden && bot.visibility !== "private").map(bot => peerBotView(bot, peerSessionId));
         peerKnownBots.set(peerSessionId, new Set(bots.map(bot => bot.id)));
@@ -21905,7 +22024,7 @@ function needsMeThreads(tailFor: (lastActivityAt: number, createdAt: number, clo
 function needsMeScope(auth: RequestAuth): { includeGroups: boolean; bots: readonly BotRecord[] } {
   const viewerActor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : null;
   const foreign = auth.kind === "session" && viewerActor != null && viewerActor !== multiplayerActors.ownerId;
-  return foreign ? { includeGroups: false, bots: store.bots.filter(bot => bot.visibility !== "private") } : { includeGroups: true, bots: store.bots };
+  return foreign ? { includeGroups: false, bots: viewerActor && workspaceMembers.role(viewerActor) === "client-guest" ? [] : store.bots.filter(bot => bot.visibility !== "private") } : { includeGroups: true, bots: store.bots };
 }
 
 /** Scope matches the jobs inbox; runtime lane ids never enter this projection. */
