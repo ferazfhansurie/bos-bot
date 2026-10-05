@@ -60,6 +60,7 @@ import { BOTTOM_FOLLOW_THRESHOLD, shouldResumeBottomFollow, useBottomFollowResiz
 import { useComposerDockPad } from "@/lib/composer-dock";
 import { awaitedMemberId, showWorkingDots } from "@/lib/turn-tail";
 import { liveActivityLabel } from "@/lib/live-activity";
+import { roomPresenceMembers, useRoomMemberTurns } from "@/lib/room-member-turns";
 import { splitTranscriptAttachments } from "@/lib/composer-attachments";
 import {
   TRANSCRIPT_WINDOW_SIZE,
@@ -1110,20 +1111,31 @@ export function GroupView({ group }: { group: Group }) {
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
     [group.memberIds, state.bots],
   );
-  const speaker = members.find((b) => b.id === group.busyBotId);
   const setupPending = !remoteClient && roomNeedsSetup(group);
 
-  // Mascot stays while a member works; the finished reply pops in above it.
+  // One mascot per member working in THIS thread; each finished reply pops in
+  // above while the members still working keep their own rows.
   const lastGroupMessage = group.messages.at(-1);
-  const toolInFlight = lastGroupMessage?.kind === "activity" && lastGroupMessage.tool?.ok === undefined;
-  const activityLabel = liveActivityLabel(lastGroupMessage);
+  const memberTurns = useRoomMemberTurns();
+  const working = useMemo(() => roomPresenceMembers({
+    threadId: group.threadId,
+    activeBotIds: group.activeBotIds,
+    busyBotId: group.busyBotId,
+    turnStartedAt: group.turnStartedAt,
+    otherThreadRunning: group.tasks?.some((task) => task.threadId !== group.threadId && task.state === "running") ?? false,
+    turns: memberTurns,
+    messages: group.messages,
+  }).flatMap((entry) => {
+    const bot = members.find((member) => member.id === entry.botId);
+    // a member whose own reply already landed is done talking
+    return bot && showWorkingDots(true, lastGroupMessage, bot.id) ? [{ ...entry, bot }] : [];
+  }), [group.threadId, group.activeBotIds, group.busyBotId, group.turnStartedAt, group.tasks, memberTurns, group.messages, members, lastGroupMessage]);
   // A member busy elsewhere takes its turn when free; until then the room
   // works with no speaker, and the presence row names who it is waiting on.
-  const awaited = members.find(
+  const awaited = working.length ? undefined : members.find(
     (b) => b.id === awaitedMemberId(group.working, group.busyBotId, lastGroupMessage),
   );
-  const waiting =
-    Boolean(speaker && showWorkingDots(true, group.messages.at(-1), speaker.id)) || awaited !== undefined;
+  const waiting = working.length > 0 || awaited !== undefined;
   const wasWaiting = useRef(false);
   const [popping, setPopping] = useState<{ id: string; botId?: string; streamed?: boolean } | null>(null);
   const streamedAt = useRef(new Map<string, number>()).current;
@@ -1162,9 +1174,18 @@ export function GroupView({ group }: { group: Group }) {
     lastGroupMessage?.kind,
     lastGroupMessage?.from?.botId,
   ]);
-  const presenceVisible = waiting || popping !== null;
-  const presenceSpeaker =
-    speaker ?? awaited ?? members.find((member) => member.id === popping?.botId) ?? members[0];
+  const presenceRows = useMemo(() => {
+    const rows = working.map(({ bot, since, tool }) => ({
+      bot, since, label: `${bot.name} · ${liveActivityLabel(tool ?? undefined)}`,
+      gesture: turnGesture({ toolInFlight: tool !== null, toolName: tool?.tool?.name }),
+    }));
+    if (awaited) rows.push({ bot: awaited, since: null, label: liveActivityLabel(lastGroupMessage), gesture: turnGesture({ waiting: true }) });
+    return rows;
+  }, [working, awaited, lastGroupMessage]);
+  // the member whose reply just landed hands its row to that reply
+  const poppingMember = popping && !presenceRows.some((row) => row.bot.id === popping.botId)
+    ? members.find((member) => member.id === popping.botId) ?? members[0]
+    : undefined;
 
   // Windowed transcript, mirroring ChatView: only a tail of the room mounts;
   // the anchored boundary re-tails on a render-phase reset when the room (or
@@ -1571,19 +1592,22 @@ export function GroupView({ group }: { group: Group }) {
             </div>
           )}
           {members.map(member => <RoomStreamBubble key={`stream-${member.id}`} threadId={group.threadId} member={member} members={members} everyone={!group.dm} streamedAt={streamedAt} />)}
-          {(speaker || presenceVisible) && (
+          {presenceRows.map((row) => (
             <TurnPresence
-              avatar={
-                // the speaker's real profile image when it has one, as in ChatView
-                <ActivityMascot
-                  bot={presenceSpeaker ?? { color: "green" }}
-                  gesture={turnGesture({ waiting: !speaker && awaited !== undefined, toolInFlight, toolName: lastGroupMessage?.tool?.name })}
-                />
-              }
-              visible={presenceVisible}
-              label={activityLabel}
-              answering={popping !== null}
-              since={speaker ? group.turnStartedAt ?? null : null}
+              key={row.bot.id}
+              // the member's real profile image when it has one, as in ChatView
+              avatar={<ActivityMascot bot={row.bot} gesture={row.gesture} />}
+              visible
+              label={row.label}
+              since={row.since}
+            />
+          ))}
+          {poppingMember && (
+            <TurnPresence
+              key={poppingMember.id}
+              avatar={<ActivityMascot bot={poppingMember} gesture="thinking" />}
+              visible
+              answering
             />
           )}
         </div>

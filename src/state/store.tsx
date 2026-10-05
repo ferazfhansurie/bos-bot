@@ -1,5 +1,6 @@
 import { claimDecision, releaseDecision } from "@/lib/approval-submit";
 import { runtimeStreamKey, roomMemberStreamKey } from "@/lib/runtime-stream";
+import { roomMemberTurns } from "@/lib/room-member-turns";
 import { createStreamStore, roomStreamingMembers, type StreamState, type StreamStore } from "@/lib/stream-store";
 // Server-backed store. The React app holds no transports of its own:
 // it dispatches typed commands over HTTP and folds the one SSE event
@@ -3685,6 +3686,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             fetch(`/api/groups/${group.id}/read`, { method: "POST" }).catch(() => {});
           }
           rawDispatch({ type: "groupPatched", group });
+          if (group.threadId) roomMemberTurns.room([group.threadId, ...(group.tasks ?? []).map((task) => task.threadId)], group.activeBotIds);
           break;
         }
         // the harness decided this was worth interrupting for; the toggle
@@ -3740,6 +3742,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (event.type === "turn.started" || event.type === "session.model-variants" || event.type === "turn.completed") {
             rawDispatch({ type: "modelVariantRuntime", event });
           }
+          if (event.roomBotId) roomMemberTurns.event(event);
           if (event.type === "content.delta") {
             deltaBuffer.push(runtimeStreamKey(event), event.streamKind, event.delta);
           } else if (event.type === "turn.completed") {
