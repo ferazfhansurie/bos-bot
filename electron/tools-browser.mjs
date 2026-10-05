@@ -135,10 +135,15 @@ export function attachToolsBrowserGuest(guestContents, { appOrigins, onPopup } =
     const url = typeof details === "object" && details && "url" in details ? details.url : legacyUrl;
     const isMainFrame = typeof details === "object" && details && "isMainFrame" in details ? details.isMainFrame : legacyIsMainFrame;
     if (!isMainFrame || allowed(url)) return;
-    try {
-      guestContents.stop();
-      void Promise.resolve(guestContents.loadURL("about:blank")).catch(() => {});
-    } catch {}
+    // Stopping and reloading synchronously inside did-start-navigation aborts
+    // the main process (SIGTRAP, Electron 43). Defer to the next turn.
+    setImmediate(() => {
+      try {
+        if (guestContents.isDestroyed?.()) return;
+        guestContents.stop();
+        void Promise.resolve(guestContents.loadURL("about:blank")).catch(() => {});
+      } catch {}
+    });
   });
   // Nested webviews are disabled by webPreferences; refuse them regardless.
   guestContents.on("will-attach-webview", (event) => event.preventDefault());

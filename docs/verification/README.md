@@ -98,6 +98,10 @@ The [live browser fixture](browser-live.md) mounts the real Browser panel with
 an explicitly selected native engine and Chrome in a disposable home, covering
 watching, takeover, input, and profile switching.
 
+The [tools panel fixture](tools-panel.md) mounts the real side-panel Tools in
+disposable Electron windows for a 1.6 shell and a pre-1.6 shell, covering the
+Browser tool's guest load, app-origin refusal and the old-shell notice.
+
 The [local computer launch regression](local-computer-launch.md) starts the
 host CUA gate through real Electron in a disposable home, without opening the
 desktop app or controlling the user's computer.

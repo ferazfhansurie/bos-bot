@@ -131,14 +131,21 @@ test("navigation and redirects to file: or the app origin are prevented", () => 
   assert.equal(nested.prevented, true);
 });
 
-test("programmatic main-frame loads of disallowed URLs are aborted", () => {
+test("programmatic main-frame loads of disallowed URLs are aborted after the event", async () => {
   const guest = new Guest();
   attachToolsBrowserGuest(guest, { appOrigins });
   guest.emit("did-start-navigation", { url: "https://example.com/", isMainFrame: true });
-  assert.equal(guest.stopped, false);
   guest.emit("did-start-navigation", { url: "file:///etc/passwd", isMainFrame: true });
+  assert.equal(guest.stopped, false, "never stopped inside did-start-navigation");
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(guest.stopped, true);
   assert.deepEqual(guest.loads, ["about:blank"]);
+  const gone = new Guest();
+  gone.isDestroyed = () => true;
+  attachToolsBrowserGuest(gone, { appOrigins });
+  gone.emit("did-start-navigation", { url: "http://127.0.0.1:8799/", isMainFrame: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(gone.stopped, false);
 });
 
 test("session denies every permission and cancels app-origin requests", () => {
