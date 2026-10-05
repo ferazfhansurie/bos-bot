@@ -197,6 +197,8 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/edition$/ },
   { methods: ["GET"], path: /^\/api\/brand$/ },
   { methods: ["GET"], path: /^\/api\/events$/ },
+  { methods: ["GET"], path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?$/ },
+  { methods: ["POST", "DELETE"], path: /^\/api\/groups\/[\w-]+\/people(?:\/[^/]+)?$/ },
   // reads: fleet, transcripts, search (no secrets in any of these)
   { methods: ["GET"], path: /^\/api\/bots$/ },
   { methods: ["GET"], path: /^\/api\/team-map$/ },
@@ -299,9 +301,17 @@ export function isLegacyPeerSession(session: SessionRecord): boolean {
 }
 
 /** Peers have room membership plus their own bridge threads. No approvals,
- * export, search, events, config, files, routines or task PATCH. Thread IDs
- * are checked again against PeerThreads in the server handler. */
+ * export, search, global events, config, files, routines or task PATCH.
+ * Ordinary-room reads and events require current person membership; bridge
+ * thread IDs are checked again against PeerThreads in the server handler. */
 export const PEER_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegExp }> = [
+  { methods: ["POST", "DELETE"], path: /^\/api\/groups\/[\w-]+\/people(?:\/[^/]+)?$/ },
+  { methods: ["POST"], path: /^\/api\/auth\/stream-ticket$/ },
+  // Canonical room handlers recheck person membership on every operation.
+  { methods: ["GET"], path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?$/ },
+  { methods: ["POST"], path: /^\/api\/groups\/[\w-]+\/messages$/ },
+  { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
+  { methods: ["GET"], path: /^\/api\/events$/ },
   // Handler requires an exact live deployment grant in addition to peer auth.
   { methods: ["GET", "POST", "PATCH", "DELETE"], path: /^\/api\/delegated\/(?:roster|catalog|setup|coordinate(?:\/[\w-]+)?|bots(?:\/[\w-]+)?|proposals\/[\w-]+)$/ },
   { methods: ["GET"], path: /^\/api\/multiplayer\/peer-events$/ },

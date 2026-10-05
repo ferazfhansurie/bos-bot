@@ -69,12 +69,17 @@ globalThis.fetch = (input, init) => {
       const botId = `${owner.homeId}:bot:${bot.body.bot.id}`;
       const privateRoom = await api(index, "POST", "/api/multiplayer/dm", { targetId: botId });
       expect(privateRoom.status).toBe(201);
-      const invitation = await api(index, "POST", "/api/multiplayer/invites", { role: "client-guest", roomIds: [room.body.room.id] });
+      const channel = await api(index, "POST", "/api/groups", { name: "Existing team inbox", memberIds: [bot.body.bot.id] });
+      expect(channel.status).toBe(201);
+      const invitation = await api(index, "POST", "/api/multiplayer/invites", { role: "client-guest", roomIds: [room.body.room.id, channel.body.group.id] });
       expect(invitation.status, JSON.stringify(invitation.body)).toBe(201);
       expect(new URL(invitation.body.url).origin).toBe(origins[index]);
       const joined = await api(0, "POST", "/api/multiplayer/join", { url: invitation.body.url });
       expect(joined.status, JSON.stringify(joined.body)).toBe(201);
       expect(joined.body).toMatchObject({ homeId: home.homeId, guest: { actorId: home.actorId, role: "client-guest" }, link: { homeId: owner.homeId } });
+      const channelAfter = await api(index, "GET", `/api/groups/${channel.body.group.id}`);
+      expect(channelAfter.body.group.peopleIds).toContain(home.actorId);
+      expect(channelAfter.body.group.memberIds).toEqual([bot.body.bot.id]);
       expect((await api(0, "GET", "/api/multiplayer/primary")).body).toEqual({ actorId: null });
       const currentHome = (await api(0, "GET", "/api/multiplayer/me")).body;
       const currentBot = (await api(0, "GET", "/api/bots")).body.bots.find((value: any) => value.id === originalIds.botId);

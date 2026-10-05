@@ -355,14 +355,8 @@ export interface WireMessage {
   steerDelivery?: "transport_written" | "provider_accepted" | "outcome_unknown";
   /** A user-role message that arrived through the server's HTTP API. */
   via?: "api";
-  /** Which person sent this user message, when the workspace has more than
-   * one. The server authenticates per person but used to attribute every
-   * user turn to the single profile name, so on a shared or paired instance
-   * every human collapsed into whoever Settings named — bots addressed the
-   * wrong person and remembered work under their name. Absent for the
-   * desktop owner's own sends and for every message written before this
-   * existed; both still read as the profile name. */
-  sender?: { name: string };
+  /** Authenticated sender. Older owner messages have no sender stamp. */
+  sender?: { id?: string; name: string };
   /** Provider turn that produced this message. */
   turnId?: string;
   /** The last assistant text item from a settled provider turn. */
@@ -501,6 +495,9 @@ export interface WireGroup {
   tasks?: GroupTask[];
   name: string;
   memberIds: string[];
+  /** Authenticated people sharing this existing room. Owner is implicit. */
+  peopleIds?: string[];
+  people?: { id: string; name: string; homeId: string; homeName?: string; avatar?: string | null; color?: string }[];
   avatarUrl?: string | null;
   memberReplyModes?: Record<string, "always" | "mentions">;
   notifications?: "all" | "mentions" | "muted";

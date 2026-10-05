@@ -1,6 +1,8 @@
 /** Fail-closed projection for the dedicated peer stream. No global replay
  * buffer is used: reconnects hydrate authorized durable transcripts. */
 export interface PeerEventAccess {
+  knownRoom?(groupId: string): boolean;
+  roomView?(groupId: string): Record<string, unknown> | null;
   owns(threadId: string): boolean;
   botView(botId: string): Record<string, unknown> | null;
   /** Only revoke an identity this peer already received. */
@@ -8,6 +10,11 @@ export interface PeerEventAccess {
 }
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 export function peerEvent(frame: Record<string, unknown>, access: PeerEventAccess): Record<string, unknown> | null {
+  if (frame.kind === "group" && object(frame.group) && typeof frame.group.id === "string" && access.roomView) {
+    const group = access.roomView(frame.group.id);
+    return group ? { kind: "group", group } : access.knownRoom?.(frame.group.id) ? { kind: "group.deleted", groupId: frame.group.id } : null;
+  }
+  if (frame.kind === "group.deleted" && typeof frame.groupId === "string") return access.knownRoom?.(frame.groupId) ? { kind: "group.deleted", groupId: frame.groupId } : null;
   if (frame.kind === "bot") {
     if (!object(frame.bot) || typeof frame.bot.id !== "string") return null;
     const bot = access.botView(frame.bot.id);

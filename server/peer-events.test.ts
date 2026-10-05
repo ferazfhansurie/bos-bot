@@ -5,9 +5,9 @@ import { peerAllowed } from "./request-auth.ts";
 describe("scoped peer events", () => {
   const view = { id: "bot", tasks: [{ threadId: "shared" }], messages: [] };
   const access = { owns: (threadId: string) => threadId === "shared", botView: (id: string) => id === "bot" ? view : null };
-  it("allows only the separate peer stream route", () => {
+  it("allows scoped event routes, but never event writes", () => {
     expect(peerAllowed("GET", "/api/multiplayer/peer-events")).toBe(true);
-    expect(peerAllowed("GET", "/api/events")).toBe(false);
+    expect(peerAllowed("GET", "/api/events")).toBe(true);
     expect(peerAllowed("POST", "/api/multiplayer/peer-events")).toBe(false);
   });
   it("drops private events and rebuilds bot snapshots from scoped state", () => {
@@ -26,4 +26,13 @@ describe("scoped peer events", () => {
       .toEqual({ kind: "message", threadId: "shared", message: { id: "m", text: "hi" } });
     expect(peerEvent({ kind: "thread", threadId: "shared", activeLeafId: "m" }, { ...access, owns: () => false })).toBeNull();
   });
+  it("projects joined rooms and evicts only previously visible memberships", () => {
+    const scoped = { ...access, roomView: (id: string) => id === "joined" ? { id, peopleIds: ["guest"] } : null, knownRoom: (id: string) => id === "removed" };
+    expect(peerEvent({ kind: "group", group: { id: "joined", cwd: "/private", memberIds: ["secret"] } }, scoped)).toEqual({ kind: "group", group: { id: "joined", peopleIds: ["guest"] } });
+    expect(peerEvent({ kind: "group", group: { id: "removed", name: "private" } }, scoped)).toEqual({ kind: "group.deleted", groupId: "removed" });
+    expect(peerEvent({ kind: "group", group: { id: "unknown" } }, scoped)).toBeNull();
+    expect(peerEvent({ kind: "group.deleted", groupId: "removed" }, scoped)).toEqual({ kind: "group.deleted", groupId: "removed" });
+    expect(peerEvent({ kind: "group.deleted", groupId: "unknown" }, scoped)).toBeNull();
+  });
+
 });

@@ -242,7 +242,7 @@ describe("what it may not", () => {
     expect(allowed("POST", "/api/threads/th_1/messages")).toBe(false);
     expect(allowed("GET", "/api/threads/th_1/messages/msg_2/file")).toBe(false);
     expect(allowed("POST", "/api/threads/th_1/messages/msg_2/file/extra")).toBe(false);
-    expect(allowed("GET", "/api/groups/room-1")).toBe(false);
+    expect(allowed("GET", "/api/groups/room-1")).toBe(true);
     expect(allowed("PATCH", "/api/bots/bot_123")).toBe(false);
     expect(allowed("GET", "/api/bots/bot_123/model")).toBe(false);
     expect(allowed("POST", "/api/bots/bot_123/model")).toBe(false);
@@ -293,4 +293,11 @@ describe("what it may not", () => {
       expect(allowed("DELETE", path), path).toBe(false);
     }
   });
+});
+
+ it("allows authenticated ordinary-room people and invitations through the companion", () => {
+  for (const [method, path] of [["GET", "/api/groups"], ["GET", "/api/groups/room"], ["POST", "/api/groups/room/people"], ["DELETE", "/api/groups/room/people/home%3Aperson%3Aowner"], ["POST", "/api/multiplayer/invites"], ["PUT", "/api/multiplayer/rooms/room/bot-grants"]]) {
+    expect(ask(method!, path!)).toBeNull();
+    expect(ask(method!, path!, false)).not.toBeNull();
+  }
 });

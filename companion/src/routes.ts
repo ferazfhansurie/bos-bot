@@ -137,6 +137,11 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   CLOUD_DESKTOP_JOIN_ROUTE,
 
   CLOUD_DESKTOP_CONTROL_ROUTE,
+  { method: "GET", path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?$/ },
+  { method: "POST", path: /^\/api\/groups\/[\w-]+\/people$/ },
+  { method: "DELETE", path: /^\/api\/groups\/[\w-]+\/people\/[^/]+$/ },
+  { method: "POST", path: /^\/api\/multiplayer\/invites$/ },
+  { method: "PUT", path: /^\/api\/multiplayer\/rooms\/[\w-]+\/bot-grants$/ },
   // rooms — making one, and talking in one
   { method: "POST", path: /^\/api\/groups$/ },
   { method: "PATCH", path: /^\/api\/groups\/[\w-]+$/ },
