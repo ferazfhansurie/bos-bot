@@ -499,6 +499,8 @@ struct ChatListView: View {
 
     @ViewBuilder
     private var rosterSections: some View {
+        RosterUsageRow()
+
         if !attention.isEmpty {
             sectionLabel(Text("Needs attention"))
                 .padding(.top, 10)

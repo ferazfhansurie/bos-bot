@@ -283,3 +283,41 @@ extension Message {
         }
     }
 }
+
+/// What a held send reads as above the composer: the typed words, plus one
+/// summary per pasted block or attachment. The queue holds the composed
+/// prompt, so without this a paste shows up as its raw `<pasted-text>`
+/// wrapper and an image as the transport tag that carries its path.
+public struct QueuedSendPreview: Hashable, Sendable {
+    public struct Paste: Hashable, Sendable {
+        public let lines: Int
+        public let size: Int
+    }
+
+    /// The typed words on one line; empty for a paste- or file-only send.
+    public let display: String
+    public let pastes: [Paste]
+    public let attachments: [DisplayedMessageAttachment]
+
+    /// Only the app's own wrapper (`<pasted-text index="N">` on its own
+    /// line) counts as a paste, so a typed `<pasted-text>` stays prose.
+    private static let pasteBlock = try! NSRegularExpression(
+        pattern: #"(?:^|\n)<pasted-text index="\d+">\n([\s\S]*?)\n</pasted-text>(?=\n|$)"#)
+
+    public static func parse(_ text: String) -> QueuedSendPreview {
+        var pastes: [Paste] = []
+        var remainder = ""
+        var cursor = text.startIndex
+        for match in pasteBlock.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) {
+            guard let whole = Range(match.range, in: text), let body = Range(match.range(at: 1), in: text) else { continue }
+            let pasted = text[body]
+            pastes.append(Paste(lines: pasted.components(separatedBy: "\n").count, size: pasted.utf8.count))
+            remainder += text[cursor..<whole.lowerBound]
+            cursor = whole.upperBound
+        }
+        remainder += text[cursor...]
+        let content = AttachedMessageContent.parse(remainder)
+        let display = content.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return QueuedSendPreview(display: display, pastes: pastes, attachments: content.attachments)
+    }
+}

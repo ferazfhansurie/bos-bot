@@ -57,6 +57,9 @@ struct ChatView: View {
     @State private var threadDrafts: [String: ComposerSnapshot] = [:]
     @State private var preparingAttachments = false
     @State private var sendingMessage = false
+    /// Queue or block for the next send while a turn runs. Every send puts
+    /// it back to queue, so block is never sticky.
+    @State private var sendPriority: MessagePriority = .queue
     @State private var attachmentError: String?
     @State private var openingFileName: String?
     @State private var fileOpenError: String?
@@ -716,6 +719,21 @@ struct ChatView: View {
         session.state.pendingQueued[threadId] ?? []
     }
 
+    /// Rooms run several members at once: the queued head steers into the
+    /// member the server will pick for it (its @mention, else the only
+    /// active speaker), never whoever happens to be listed busy first. When
+    /// that pick is ambiguous or not running, the reason replaces Steer.
+    private var roomSteerTarget: (target: Bot?, unavailable: String?)? {
+        guard case let .room(room) = current, let head = heldSends.first else { return nil }
+        switch RoomSteerTarget.resolve(queuedText: head.text, members: channelMembers,
+                                       activeBotIds: RoomSteerTarget.activeBotIds(room)) {
+        case let .member(bot): return (bot, nil)
+        case .ambiguous: return (nil, String(localized: "Mention one bot to steer"))
+        case let .waiting(bots):
+            return (nil, bots.count == 1 ? String(localized: "Waits for \(bots[0].name)") : String(localized: "Waits for its turn"))
+        }
+    }
+
     private var hasPendingApproval: Bool {
         messages.contains { $0.card?.isPending == true }
     }
@@ -734,6 +752,8 @@ struct ChatView: View {
               !preparingAttachments,
               !sendingMessage
         else { return }
+        let priorityAtSend: MessagePriority = chatAtSend.busy ? sendPriority : .queue
+        sendPriority = .queue
         sendingMessage = true
         attachmentError = nil
         showCommandHUD = false
@@ -743,7 +763,8 @@ struct ChatView: View {
                 text: text,
                 attachments: outgoingAttachments,
                 to: chatAtSend,
-                replyToId: replyAtSend?.id
+                replyToId: replyAtSend?.id,
+                priority: priorityAtSend
             )
             sendingMessage = false
             guard sent else {
@@ -1020,8 +1041,10 @@ struct ChatView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             if !heldSends.isEmpty {
-                QueuedSendList(sends: heldSends, steer: { send in
-                    await session.steerQueued(send, threadId: threadId, in: current)
+                let roomSteer = roomSteerTarget
+                QueuedSendList(sends: heldSends, steerTargetName: roomSteer?.target?.name,
+                               steerUnavailable: roomSteer?.unavailable, steer: { send in
+                    await session.steerQueued(send, threadId: threadId, in: current, botId: roomSteer?.target?.id)
                 }) { send in
                     Task { await session.cancelQueued(send, threadId: threadId, in: current) }
                 }
@@ -1154,6 +1177,11 @@ struct ChatView: View {
                     withAnimation(.snappy(duration: 0.22)) { mentionPicks.removeAll { $0.id == bot.id } }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if current.busy, !sendingMessage {
+                SendPriorityToggle(priority: $sendPriority, color: MausPalette.color(current.color))
+                    .transition(.opacity)
             }
 
             // The binding is made inside DraftBinding: making it here reads
@@ -1331,6 +1359,10 @@ struct ChatHeaderBar<Avatar: View>: View {
     /// A second row that belongs to the header, under the same glass: the
     /// room roster. Drawn inside so the transcript scrolls beneath it.
     var accessory: AnyView? = nil
+    /// A shared group's member count. Shown as a labelled button in the
+    /// trailing slot so the people in the room aren't hidden behind the
+    /// title; it opens the same details sheet.
+    var membersCount: Int? = nil
     @ViewBuilder let avatar: () -> Avatar
 
     var body: some View {
@@ -1380,6 +1412,15 @@ struct ChatHeaderBar<Avatar: View>: View {
             if canWatchComputer {
                 GlassButton(systemImage: "display", size: 44, weight: .medium, action: onComputer)
                     .accessibilityLabel("Watch \(name)'s computer")
+            } else if let membersCount {
+                Button(action: onSettings) {
+                    Label("\(membersCount)", systemImage: "person.2")
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.primary)
+                        .padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.plain).glassCapsule()
+                .accessibilityLabel(membersCount == 1 ? "1 member" : "\(membersCount) members")
+                .accessibilityIdentifier("chat-members")
             } else {
                 Color.clear.frame(width: 44, height: 44)
             }
@@ -1452,6 +1493,42 @@ struct ChatActionSheet: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }.transition(.opacity)
         }
+    }
+}
+
+/// Shown above the composer while a turn runs. Queue holds the message
+/// until the turn settles; block stops the turn and sends this one now.
+struct SendPriorityToggle: View {
+    @Binding var priority: MessagePriority
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 2) {
+            option(.queue, "Queue", "tray.and.arrow.down")
+            option(.block, "Block", "hand.raised")
+        }
+        .padding(3)
+        .glassCapsule()
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("While it's working")
+    }
+
+    private func option(_ value: MessagePriority, _ title: LocalizedStringKey, _ icon: String) -> some View {
+        let selected = priority == value
+        return Button {
+            Haptics.selection()
+            withAnimation(.snappy(duration: 0.2)) { priority = value }
+        } label: {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(selected ? Color.white : Color.secondary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(selected ? (value == .block ? Color.red : color) : Color.clear))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("send-priority-\(value.rawValue)")
     }
 }
 
@@ -2754,6 +2831,12 @@ struct StreamingBubble: View {
 /// capacity rather than because a turn is running.
 private struct QueuedSendList: View {
     let sends: [QueuedSend]
+    /// Room steer: the one running member the server will deliver the head
+    /// to, so the button names who actually receives it.
+    var steerTargetName: String? = nil
+    /// Room steer the server would refuse or hold: shown in place of the
+    /// button so nobody taps a Steer that lands nowhere.
+    var steerUnavailable: String? = nil
     let steer: (QueuedSend) async -> Void
     @State private var steering = false
     let cancel: (QueuedSend) -> Void
@@ -2774,21 +2857,24 @@ private struct QueuedSendList: View {
                     Image(systemName: "arrow.turn.down.right")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Color.secondary)
-                    Text(send.text)
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    QueuedSendPreviewLine(preview: QueuedSendPreview.parse(send.text))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if index == 0 {
-                        Button("Steer") {
+                    if index == 0, let steerUnavailable {
+                        Text(steerUnavailable)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(1)
+                            .layoutPriority(-1)
+                    } else if index == 0 {
+                        Button(steerTargetName.map { String(localized: "Steer \($0)") } ?? String(localized: "Steer")) {
                             guard !steering else { return }
                             steering = true
                             Task { await steer(send); steering = false }
                         }
+                        .lineLimit(1)
                         .disabled(steering)
                         .onChange(of: sends) { _, _ in steering = false }
-                        .accessibilityLabel("Steer queued message now")
+                        .accessibilityLabel(steerTargetName.map { String(localized: "Send this into \($0)'s running turn now") } ?? String(localized: "Steer queued message now"))
                     }
                     Button {
                         cancel(send)
@@ -2810,5 +2896,43 @@ private struct QueuedSendList: View {
         .padding(.horizontal, 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(sends.count == 1 ? "1 queued message" : "\(sends.count) queued messages")
+    }
+}
+
+/// One held send: typed words first, then a quiet chip per pasted block or
+/// attachment, so the queue never shows the prompt's raw wrapper tags.
+private struct QueuedSendPreviewLine: View {
+    let preview: QueuedSendPreview
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if !preview.display.isEmpty {
+                Text(preview.display)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            ForEach(Array(preview.pastes.enumerated()), id: \.offset) { _, paste in
+                chip("doc.on.clipboard", "Pasted · \(paste.lines) lines")
+            }
+            ForEach(Array(preview.attachments.enumerated()), id: \.offset) { _, attachment in
+                chip(attachment.kind == .image ? "photo" : "doc", attachment.name)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func chip(_ systemImage: String, _ label: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage).font(.system(size: 11))
+            Text(label).lineLimit(1).truncationMode(.middle)
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(Color.secondary)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
+        .frame(maxWidth: 140, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

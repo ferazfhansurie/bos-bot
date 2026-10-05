@@ -184,6 +184,18 @@ final class ProfileClientTests: XCTestCase {
         XCTAssertEqual(body["text"], "Follow up")
     }
 
+    func testQueueSendOmitsPriorityAndBlockSendsIt() async throws {
+        ProfileRequestStub.responseBody = Data(#"{"accepted":true}"#.utf8)
+        _ = try await client.send(text: "Later", to: .bot(id: "b", threadId: "t"), sendId: "queue-send-1234567")
+        let queued = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(ProfileRequestStub.capturedBody)) as? [String: String])
+        XCTAssertNil(queued["priority"])
+
+        _ = try await client.send(text: "Now", to: .room(id: "r", threadId: "t"), sendId: "block-send-1234567", priority: .block)
+        let blocked = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(ProfileRequestStub.capturedBody)) as? [String: String])
+        XCTAssertEqual(blocked["priority"], "block")
+        XCTAssertEqual(blocked["text"], "Now")
+    }
+
     private static let botJSON = """
     {
       "id":"avatar-bot","threadId":"avatar-thread","name":"Scout","title":"Researcher",

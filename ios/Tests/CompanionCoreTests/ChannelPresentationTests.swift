@@ -19,6 +19,41 @@ final class ChannelPresentationTests: XCTestCase {
         remote.remote = BotRemote(homeId: "remote", homeName: "Remote", online: false)
         XCTAssertEqual(ChannelMemberStatus.resolve(room: room, bot: remote, hostLive: true), .offline)
     }
+    private func member(_ id: String, _ name: String, hidden: Bool = false) throws -> Bot {
+        var bot = try bot(id)
+        bot.name = name
+        bot.hidden = hidden ? true : nil
+        return bot
+    }
+    func testRoomSteerReachesTheAddressedMemberNotTheFirstBusyOne() throws {
+        let members = [try member("pipe", "pipe"), try member("pix", "pix"), try member("nit", "nit")]
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "@pix tighten the chip", members: members, activeBotIds: ["pipe", "pix"]), .member(members[1]))
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "also check the logs", members: members, activeBotIds: ["nit"]), .member(members[2]))
+    }
+    func testRoomSteerRefusesToGuessAndWaitsForAnIdleAddressee() throws {
+        let members = [try member("pipe", "pipe"), try member("pix", "pix"), try member("nit", "nit")]
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "also check the logs", members: members, activeBotIds: ["pipe", "nit"]), .ambiguous([members[0], members[2]]))
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "@pipe @nit both of you", members: members, activeBotIds: ["pipe", "nit"]), .ambiguous([members[0], members[2]]))
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "@pix later", members: members, activeBotIds: ["pipe"]), .waiting([members[1]]))
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "anyone?", members: members, activeBotIds: []), .waiting([]))
+    }
+    func testRoomSteerMentionsMatchWholeNamesAfterAStandaloneAt() throws {
+        let members = [try member("pix", "pix"), try member("pix2", "pix2"), try member("ghost", "ghost", hidden: true)]
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "@pix2 go", members: members, activeBotIds: ["pix", "pix2"]), .member(members[1]))
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "mail me@pix go", members: members, activeBotIds: ["pix", "pix2"]), .ambiguous([members[0], members[1]]))
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "@PIX, go", members: members, activeBotIds: ["pix", "pix2"]), .member(members[0]))
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "@ghost go", members: members, activeBotIds: ["pix"]), .member(members[0]), "A hidden member is never an addressee.")
+        XCTAssertEqual(RoomSteerTarget.resolve(queuedText: "@everyone go", members: members, activeBotIds: ["pix", "pix2"]), .ambiguous([members[0], members[1]]))
+    }
+    func testRoomSteerActiveSpeakersFallBackToTheLegacyBusyBot() throws {
+        var room = try room()
+        XCTAssertEqual(RoomSteerTarget.activeBotIds(room), ["a"])
+        room.activeBotIds = []
+        room.busyBotId = "b"
+        XCTAssertEqual(RoomSteerTarget.activeBotIds(room), ["b"])
+        room.busyBotId = nil
+        XCTAssertEqual(RoomSteerTarget.activeBotIds(room), [])
+    }
     func testCollapseExcludesUserQuestionsApprovalsAndTools() throws {
         let data = Data(#"{"id":"m","at":1,"kind":"text","role":"bot","text":"Long prose"}"#.utf8)
         var message = try JSONDecoder().decode(Message.self, from: data)

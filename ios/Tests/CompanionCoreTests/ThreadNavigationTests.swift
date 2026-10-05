@@ -352,6 +352,10 @@ final class ThreadNavigationTests: XCTestCase {
         )]
 
         XCTAssertEqual(state.unreadCount, 3)
+        state.rooms[0].notifications = "muted"
+        XCTAssertEqual(state.unreadCount, 2, "A muted room keeps its dot but leaves the app badge.")
+        state.rooms[0].notifications = "mentions"
+        XCTAssertEqual(state.unreadCount, 3)
         state.rooms = []
         XCTAssertEqual(state.unreadCount, 2)
         state.bots[0].tasks = [execution]

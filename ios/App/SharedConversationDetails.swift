@@ -26,7 +26,8 @@ struct SharedConversationDetails: View {
     @State private var confirmDelete = false
     @State private var memberToRemove: SharedContact?
     private var displayed: SharedRoomSummary { current ?? room }
-    private var canManage: Bool { selfID == (displayed.createdBy ?? "\(displayed.homeId):person:owner") || selfID == "\(displayed.homeId):person:owner" }
+    private var ownerID: String { displayed.createdBy ?? "\(displayed.homeId):person:owner" }
+    private var canManage: Bool { selfID == ownerID || selfID == "\(displayed.homeId):person:owner" }
 
     private func saveReplies(mode: String? = nil, botId: String? = nil) async {
         saving = true
@@ -52,14 +53,22 @@ struct SharedConversationDetails: View {
                     }.frame(maxWidth: .infinity).padding(.vertical, 16)
                 }.listRowBackground(Color.clear)
                 if displayed.isGroup {
-                    Section("Group name") {
-                        TextField("Name", text: $name)
-                        Button("Save name") { Task { await update(name: name.trimmingCharacters(in: .whitespacesAndNewlines)) } }
-                            .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == displayed.name)
+                    Section {
+                        TextField("Name", text: $name).disabled(!canManage)
+                        // the server only lets the owner rename; don't offer a Save that fails
+                        if canManage {
+                            Button("Save name") { Task { await update(name: name.trimmingCharacters(in: .whitespacesAndNewlines)) } }
+                                .disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == displayed.name)
+                        }
+                    } header: { Text("Group name") } footer: {
+                        if !canManage { Text("Only the owner can rename the group or change members.") }
                     }
                 }
                 Section("People") {
                     Text("New members can see retained history and files. Removing someone stops future access; copies they already saved cannot be erased.").font(.caption).foregroundStyle(.secondary)
+                    if displayed.isGroup {
+                        Text("Owner: can rename the group, add and remove people. Member: can chat, share files and @mention bots.").font(.caption).foregroundStyle(.secondary)
+                    }
                     ForEach(displayed.memberIds, id: \.self) { id in
                         HStack(spacing: 12) {
                             let contact = contacts.first { $0.id == id }
@@ -69,9 +78,11 @@ struct SharedConversationDetails: View {
                                 ProfileAvatar(name: contact?.name ?? "Member", size: 34)
                             }
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(contact?.name ?? "Member")
-                                if id == selfID { Text("You").font(.caption).foregroundStyle(.secondary) }
-                                else if id == displayed.createdBy { Text("Group creator").font(.caption).foregroundStyle(.secondary) }
+                                Text(contact?.name ?? "Member") + Text(id == selfID ? " (you)" : "").foregroundStyle(.secondary)
+                                if displayed.isGroup {
+                                    Text(id == ownerID ? "Owner" : "Member").font(.caption).foregroundStyle(.secondary)
+                                        .accessibilityHint(id == ownerID ? "Can rename the group, add and remove people" : "Can chat, share files and @mention bots")
+                                }
                             }
                             Spacer()
                             if displayed.isGroup && canManage && id != selfID, let contact {

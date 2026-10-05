@@ -200,4 +200,39 @@ final class AttachedMessageContentTests: XCTestCase {
         XCTAssertEqual(attachment.path, "/tmp/9fd2.pdf")
         XCTAssertEqual(attachment.name, "Project.pdf")
     }
+    func testQueuedPreviewSummarisesPastedBlocksInsteadOfTheirWrapper() {
+        let text = "@scout look at this\n\n<pasted-text index=\"1\">\nline one\nline two\n\nline four\n</pasted-text>"
+        let preview = QueuedSendPreview.parse(text)
+        XCTAssertEqual(preview.display, "@scout look at this")
+        XCTAssertEqual(preview.pastes, [.init(lines: 4, size: "line one\nline two\n\nline four".utf8.count)])
+        XCTAssertTrue(preview.attachments.isEmpty)
+    }
+
+    func testQueuedPreviewKeepsAPasteOnlySendEmptyAndCountsEveryBlockAndFile() {
+        let text = """
+        <pasted-text index="1">
+        a
+        </pasted-text>
+
+        <pasted-text index="2">
+        b
+        c
+        </pasted-text>
+
+        <attached-image path="/tmp/042c.png" name="image.png" />
+        <attached-file path="/tmp/notes.md" name="notes.md" />
+        """
+        let preview = QueuedSendPreview.parse(text)
+        XCTAssertEqual(preview.display, "")
+        XCTAssertEqual(preview.pastes.map(\.lines), [1, 2])
+        XCTAssertEqual(preview.attachments.map(\.name), ["image.png", "notes.md"])
+        XCTAssertEqual(preview.attachments.map(\.kind), [.image, .file])
+    }
+
+    func testQueuedPreviewLeavesATypedTagAloneAndFoldsLinesForTheChip() {
+        let typed = QueuedSendPreview.parse("explain <pasted-text> please")
+        XCTAssertEqual(typed.display, "explain <pasted-text> please")
+        XCTAssertTrue(typed.pastes.isEmpty)
+        XCTAssertEqual(QueuedSendPreview.parse("first line\n\n  second").display, "first line second")
+    }
 }

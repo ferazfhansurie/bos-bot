@@ -61,6 +61,12 @@ final class InboxClientTests: XCTestCase {
         let body = try JSONSerialization.jsonObject(with: XCTUnwrap(InboxRequestStub.capturedBody)) as! [String: String]
         XCTAssertEqual(body, ["threadId": "thread-2"])
     }
+    func testRoomSteerNamesTheMemberItMustReach() async throws {
+        try await client.steerQueued(queueId: "queue-1", to: .room(id: "room-1", threadId: "thread-2"), botId: "pix")
+        XCTAssertEqual(InboxRequestStub.capturedRequest?.url?.path, "/api/groups/room-1/queue/queue-1/steer")
+        let body = try JSONSerialization.jsonObject(with: XCTUnwrap(InboxRequestStub.capturedBody)) as! [String: String]
+        XCTAssertEqual(body, ["threadId": "thread-2", "botId": "pix"])
+    }
     func testSteerRejectsRouteInjectionBeforeSending() async {
         do {
             try await client.steerQueued(queueId: "../other", to: .bot(id: "bot-1", threadId: "thread-2"))
