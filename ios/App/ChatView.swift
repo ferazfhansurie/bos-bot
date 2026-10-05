@@ -18,6 +18,7 @@ import ImageIO
 // lives.
 import UIKit
 import AVFoundation
+import CryptoKit
 
 struct ChatView: View {
     let chat: Chat
@@ -53,13 +54,10 @@ struct ChatView: View {
     @State private var showingFileImporter = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var attachments: [PendingMessageAttachment] = []
-    private struct ComposerSnapshot {
-        var text = ""
-        var attachments: [PendingMessageAttachment] = []
-        var error: String?
-        var reply: Message?
-    }
-    @State private var threadDrafts: [String: ComposerSnapshot] = [:]
+    @State private var activeArchive: BotDraft?
+    @State private var activeScope: String?
+    @State private var archives: [String: BotDraft] = [:]
+    @State private var uploadStatus: String?
     @State private var preparingAttachments = false
     @State private var sendingMessage = false
     /// Queue or block for the next send while a turn runs. Every send puts
@@ -441,6 +439,7 @@ struct ChatView: View {
             .id(threadId)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            if let uploadStatus { Text(uploadStatus).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("composer-upload-progress") }
             composer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -453,6 +452,8 @@ struct ChatView: View {
         }
         .task(id: threadId) {
             if selectedThreadWasRemoved { leave(); return }
+            if activeArchive == nil { restoreDraft() }
+            session.setNotificationVisible(threadId: threadId, visible: true)
             let openedChat = current
             await session.loadThreadIfNeeded(openedChat.threadId)
             // opening a chat is what marks it read, exactly as on the desktop
@@ -493,13 +494,11 @@ struct ChatView: View {
             if unread { Task { await session.markRead(readChat) } }
         }
         .onChange(of: threadId) { previous, next in
+            session.setNotificationVisible(threadId: previous, visible: false)
+            session.setNotificationVisible(threadId: next, visible: true)
+            checkpointDraft()
             dictation.stop()
-            threadDrafts[previous] = ComposerSnapshot(text: draft, attachments: attachments, error: attachmentError, reply: replyTarget)
-            let restored = threadDrafts.removeValue(forKey: next) ?? ComposerSnapshot()
-            draft = restored.text
-            attachments = restored.attachments
-            attachmentError = restored.error
-            replyTarget = restored.reply
+            restoreDraft()
             mentionPicks = []
             selectedPhotos = []
             showCommandHUD = false
@@ -511,16 +510,28 @@ struct ChatView: View {
             cancelThreadOpen()
         }
         .onChange(of: session.connection?.id) { _, _ in
+            checkpointDraft()
+            restoreDraft()
             cancelThreadOpen()
         }
+        .onChange(of: session.status) { _, status in
+            if status == .live { checkpointDraft(); restoreDraft() }
+        }
+        .onChange(of: session.credentialEntryResetGeneration) { _, _ in
+            checkpointDraft(); activeScope = nil; restoreDraft()
+        }
+        .onChange(of: attachments) { _, _ in checkpointDraft() }
+        .onChange(of: replyTarget) { _, _ in checkpointDraft() }
         .onDisappear {
+            checkpointDraft()
+            session.setNotificationVisible(threadId: threadId, visible: false)
             session.liveText.setComposing(false, by: composerID)
             dictation.stop()
             resetFilePreview()
             cancelThreadOpen()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { dictation.stop() }
+            if phase != .active { checkpointDraft(); dictation.stop() }
         }
         .onChange(of: showingComputer) { _, shown in
             if shown { dictation.stop() }
@@ -811,6 +822,41 @@ struct ChatView: View {
         messages.contains { $0.card?.isPending == true }
     }
 
+    private func checkpointDraft() {
+        composerDraft.pendingCheckpoint?.cancel()
+        guard let archive = activeArchive else { return }
+        archive.text = draft; archive.files = attachments; archive.reply = replyTarget
+        do { try archive.checkpoint() } catch { attachmentError = archive.error }
+    }
+
+    private func restoreDraft() {
+        do {
+            guard let connection = session.connection,
+                  let token = try OpenMausSharedKeychain.token(for: connection.id) else {
+                composerDraft.pendingCheckpoint?.cancel(); composerDraft.onEdit = nil
+                activeArchive = nil; activeScope = nil
+                draft = ""; attachments = []; replyTarget = nil
+                attachmentError = "Unlock and reconnect before restoring or sending this draft."
+                return
+            }
+            // A bearer rotation/account re-pair owns a separate namespace.
+            // Only its digest reaches disk; credential bytes never do.
+            let scope = [connection.id, token, current.id, threadId].joined(separator: "\u{0}")
+            let key = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
+            guard activeScope != key else { return }
+            composerDraft.pendingCheckpoint?.cancel(); composerDraft.onEdit = nil
+            let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let archive = archives[key] ?? BotDraft(directory: root.appendingPathComponent("BotDrafts").appendingPathComponent(key))
+            archives[key] = archive
+            activeArchive = archive; activeScope = key
+            draft = archive.text; attachments = archive.files; replyTarget = archive.reply; attachmentError = archive.error
+            composerDraft.onEdit = { text in
+                archive.text = text
+                do { try archive.checkpoint() } catch { attachmentError = archive.error }
+            }
+        } catch { attachmentError = "Couldn’t restore this draft. Unlock and reconnect before sending." }
+    }
+
     private func submit(_ explicitText: String? = nil) {
         // This also cancels an in-flight permission prompt before it can
         // open the microphone after the message has already been sent.
@@ -826,6 +872,11 @@ struct ChatView: View {
               !sendingMessage
         else { return }
         let priorityAtSend: MessagePriority = chatAtSend.busy ? sendPriority : .queue
+        checkpointDraft()
+        guard let archive = activeArchive else { return }
+        let durableID: String
+        do { durableID = try archive.prepareSend(text: text, priority: priorityAtSend) }
+        catch { attachmentError = archive.error; return }
         sendPriority = .queue
         sendingMessage = true
         attachmentError = nil
@@ -837,25 +888,24 @@ struct ChatView: View {
                 attachments: outgoingAttachments,
                 to: chatAtSend,
                 replyToId: replyAtSend?.id,
-                priority: priorityAtSend
+                priority: priorityAtSend,
+                durableSendID: durableID,
+                uploadProgress: { name, completed, total in
+                    if activeArchive === archive { uploadStatus = "\(name) (\(completed)/\(total))" }
+                }
             )
             sendingMessage = false
+            uploadStatus = nil
             guard sent else {
                 let failure = session.actionError ?? "Couldn't send this message. Try again."
-                if threadId == chatAtSend.threadId { attachmentError = failure }
-                else { threadDrafts[chatAtSend.threadId]?.error = failure }
+                if activeArchive === archive { attachmentError = failure }
                 session.actionError = nil
                 Haptics.notification(.error)
                 return
             }
-            if threadId != chatAtSend.threadId {
-                if threadDrafts[chatAtSend.threadId]?.text == draftAtSend { threadDrafts[chatAtSend.threadId]?.text = "" }
-                if threadDrafts[chatAtSend.threadId]?.attachments.map(\.id) == outgoingAttachments.map(\.id) {
-                    threadDrafts[chatAtSend.threadId]?.attachments = []
-                }
-                if threadDrafts[chatAtSend.threadId]?.reply?.id == replyAtSend?.id { threadDrafts[chatAtSend.threadId]?.reply = nil }
-                return
-            }
+            archive.complete(sendID: durableID)
+            guard activeArchive === archive else { return }
+            attachmentError = archive.error
             if replyTarget?.id == replyAtSend?.id { replyTarget = nil }
             // HUD commands expand `/diff` into a longer prompt. Compare with
             // what was actually in the field at tap time, not the expanded
@@ -874,7 +924,7 @@ struct ChatView: View {
 
     private func importPhotos(_ items: [PhotosPickerItem]) async {
         guard !preparingAttachments, !sendingMessage else { return }
-        let importingThread = threadId
+        let importingArchive = activeArchive
         let existingAttachments = attachments
         let available = AttachmentPolicy.maximumItems - existingAttachments.count
         guard items.count <= available else {
@@ -928,12 +978,14 @@ struct ChatView: View {
                 try AttachmentPolicy.validate(existingAttachments + imported + [candidate])
                 imported.append(candidate)
             }
-            if threadId == importingThread { attachments.append(contentsOf: imported) }
-            else { threadDrafts[importingThread, default: ComposerSnapshot()].attachments.append(contentsOf: imported) }
+            if activeArchive === importingArchive { attachments.append(contentsOf: imported); checkpointDraft() }
+            else if let importingArchive {
+                importingArchive.files.append(contentsOf: imported)
+                try importingArchive.checkpoint()
+            }
             Haptics.selection()
         } catch {
-            if threadId == importingThread { attachmentError = error.localizedDescription }
-            else { threadDrafts[importingThread]?.error = error.localizedDescription }
+            if activeArchive === importingArchive { attachmentError = error.localizedDescription }
         }
     }
 
@@ -948,7 +1000,7 @@ struct ChatView: View {
 
     private func importFiles(_ urls: [URL]) async {
         guard !preparingAttachments, !sendingMessage else { return }
-        let importingThread = threadId
+        let importingArchive = activeArchive
         let existingAttachments = attachments
         let available = AttachmentPolicy.maximumItems - existingAttachments.count
         guard urls.count <= available else {
@@ -971,12 +1023,14 @@ struct ChatView: View {
                 try AttachmentPolicy.validate(existingAttachments + imported + [candidate])
                 imported.append(candidate)
             }
-            if threadId == importingThread { attachments.append(contentsOf: imported) }
-            else { threadDrafts[importingThread, default: ComposerSnapshot()].attachments.append(contentsOf: imported) }
+            if activeArchive === importingArchive { attachments.append(contentsOf: imported); checkpointDraft() }
+            else if let importingArchive {
+                importingArchive.files.append(contentsOf: imported)
+                try importingArchive.checkpoint()
+            }
             Haptics.selection()
         } catch {
-            if threadId == importingThread { attachmentError = error.localizedDescription }
-            else { threadDrafts[importingThread]?.error = error.localizedDescription }
+            if activeArchive === importingArchive { attachmentError = error.localizedDescription }
         }
     }
 
@@ -1379,7 +1433,19 @@ extension View {
 
 @Observable
 final class ComposerDraft {
-    var text = ""
+    var onEdit: ((String) -> Void)?
+    @ObservationIgnored var pendingCheckpoint: Task<Void, Never>?
+    var text = "" {
+        didSet {
+            pendingCheckpoint?.cancel()
+            guard let onEdit else { return }
+            let captured = text
+            pendingCheckpoint = Task { @MainActor in
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                onEdit(captured)
+            }
+        }
+    }
 }
 
 /// Its content only while the draft is empty. Reading the draft here rather
@@ -1747,6 +1813,12 @@ struct MessageRow: View {
                     .accessibilityIdentifier("reply-quote-" + reference)
             }
             content
+            if let action = message.leadAction {
+                Label(action.status.capitalized, systemImage: action.status == "resolved" ? "checkmark.circle" : "exclamationmark.circle")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(action.status == "resolved" ? Color.secondary : Color.orange)
+                    .accessibilityLabel("Lead action " + action.status + ": " + action.requiredAction)
+            }
 
             if let comm = message.comm {
                 // the chip already says what happened ("Posted in Standup");
@@ -2736,7 +2808,7 @@ struct CardView: View {
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(Self.isRefusal(option) ? Color.primary : .white)
                                     .frame(maxWidth: .infinity)
-                                    .frame(height: 40)
+                                    .frame(minHeight: 44)
                                     .background(
                                         Capsule().fill(Self.isRefusal(option) ? Color.secondary.opacity(0.18) : tint)
                                     )

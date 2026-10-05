@@ -1562,7 +1562,9 @@ final class Session: ObservableObject {
         attachments: [PendingMessageAttachment],
         to chat: Chat,
         replyToId: String? = nil,
-        priority: MessagePriority = .queue
+        priority: MessagePriority = .queue,
+        durableSendID: String? = nil,
+        uploadProgress: ((String, Int, Int) -> Void)? = nil
     ) async -> Bool {
         guard let client else {
             actionError = "This computer is offline."
@@ -1602,12 +1604,13 @@ final class Session: ObservableObject {
             if attachmentSendIDs.count >= 20, attachmentSendIDs[draftKey] == nil {
                 attachmentSendIDs.removeAll(keepingCapacity: true)
             }
-            let sendID = attachmentSendIDs[draftKey] ?? UUID().uuidString
+            let sendID = durableSendID ?? attachmentSendIDs[draftKey] ?? UUID().uuidString
             attachmentSendIDs[draftKey] = sendID
 
             var uploaded: [SharedAttachmentReference] = []
             uploaded.reserveCapacity(attachments.count)
-            for attachment in attachments {
+            for (index, attachment) in attachments.enumerated() {
+                uploadProgress?(attachment.name, index, attachments.count)
                 try Task.checkCancellation()
                 let mime = AttachmentPolicy.normalizedMIME(attachment.mime)
                 switch attachment.kind {
@@ -1637,6 +1640,7 @@ final class Session: ObservableObject {
                 }
             }
 
+            uploadProgress?("Sending message", attachments.count, attachments.count)
             let message = SharedMessageComposer.compose(
                 instruction: text,
                 text: [],
