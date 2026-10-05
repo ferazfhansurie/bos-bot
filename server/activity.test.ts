@@ -29,7 +29,17 @@ it("tracks turn phases, timestamps and isolation across bot/thread lanes", () =>
   feed.observe("b", "t", event({ type: "turn.started", turnId: "two" }));
   feed.observe("b", "t", event({ type: "turn.completed", ok: false }));
   expect(read()).toMatchObject({ state: "thinking", turnId: "two" });
+  feed.stop("b", "t");
   expect(read("b", "t", true, false, true).state).toBe("stopped");
   feed.observe("b", "t", event({ type: "turn.completed", turnId: "two", ok: true }));
+  expect(read("b", "t", false, false, true).state).toBe("stopped");
+  // A later turn in a still-held thread (hold kept across Stop or a restart) is live.
+  feed.observe("b", "t", event({ type: "turn.started", turnId: "three" }));
+  expect(read("b", "t", true, false, true)).toMatchObject({ state: "thinking", turnId: "three" });
+  feed.observe("b", "t", event({ type: "item.started", turnId: "three", itemType: "tool" }));
+  expect(read("b", "t", true, false, true).state).toBe("tool");
+  // Held with no turn seen since the restart still reads stopped.
+  expect(read("b", "fresh", true, false, true).state).toBe("stopped");
+  feed.observe("b", "t", event({ type: "turn.completed", turnId: "three", ok: true }));
   expect(read("b", "t", false).state).toBe("idle");
 });

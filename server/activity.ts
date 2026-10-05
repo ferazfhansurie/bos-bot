@@ -35,8 +35,11 @@ export class ActivityFeed {
   project(pair: { botId: string; threadId: string; roomId: string | null; running: boolean; waiting: boolean; held: boolean }): ActivityItem {
     const key = this.key(pair.botId, pair.threadId);
     const fact = this.facts.get(key);
-    const state: ActivityState = (pair.held || fact?.state === "stopped") ? "stopped" : pair.waiting ? "waiting" : pair.running
-      ? fact && ["thinking", "tool", "typing", "waiting"].includes(fact.state) ? fact.state : "thinking"
+    // A turn that started after Stop (or after a restart kept the hold) is
+    // live again: its turn.started fact clears the stop, so it beats the hold.
+    const live = pair.running && fact && ["thinking", "tool", "typing", "waiting"].includes(fact.state) ? fact.state : undefined;
+    const state: ActivityState = live ? (pair.waiting ? "waiting" : live) : (pair.held || fact?.state === "stopped") ? "stopped" : pair.waiting ? "waiting" : pair.running
+      ? "thinking"
       : fact && ["failed", "stopped"].includes(fact.state) ? fact.state : "idle";
     // Preserve timestamps across reads. Terminal provider identity is omitted.
     const view = this.views.get(key);
