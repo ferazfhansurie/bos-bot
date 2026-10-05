@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { botMascotEyes, type MascotEyes } from "../shared/mascot-eyes.ts";
 
 import { schemaIssue, type JsonValue } from "./schema.ts";
 import type { MausColor } from "./store.ts";
@@ -57,6 +58,7 @@ const memberSchema = z.object({
     color: z.enum(COLORS, { error: "is not supported" }),
     mascotExpression: optionalText(80),
     mascotBody: optionalText(40),
+    mascotEyes: optionalText(40),
   }),
 });
 
@@ -101,6 +103,7 @@ export interface TeamManifestMember {
     color: MausColor;
     mascotExpression?: string;
     mascotBody?: string;
+    mascotEyes?: string;
   };
 }
 
@@ -148,6 +151,7 @@ interface ExportableBot {
   color: MausColor;
   mascotExpression?: string | null;
   mascotBody?: string | null;
+  mascotEyes?: string | null;
 }
 
 interface ExportableTeam {
@@ -175,6 +179,7 @@ export function parseTeamManifest(value: TeamManifestInput): ParsedTeamManifest 
     const appearance: TeamManifestMember["appearance"] = { color: member.appearance.color };
     if (member.appearance.mascotExpression) appearance.mascotExpression = member.appearance.mascotExpression;
     if (member.appearance.mascotBody) appearance.mascotBody = member.appearance.mascotBody;
+    if (member.appearance.mascotEyes) appearance.mascotEyes = member.appearance.mascotEyes;
     return {
       key: member.key,
       name: member.name,
@@ -219,6 +224,7 @@ export interface ImportedMemberProfile {
   color: MausColor;
   mascotExpression?: string;
   mascotBody?: MascotBodyId;
+  mascotEyes?: MascotEyes;
 }
 
 /** Everything an untrusted manifest may seed into a brand-new bot — and
@@ -271,6 +277,7 @@ export function importedMemberProfile(
   // an imported member becomes bot fields — falling back to the default
   // body rather than rejecting the whole import over a cosmetic field.
   if (member.appearance.mascotBody) profile.mascotBody = botMascotBody(member.appearance.mascotBody);
+  if (member.appearance.mascotEyes) profile.mascotEyes = botMascotEyes(member.appearance.mascotEyes);
   return profile;
 }
 
@@ -301,6 +308,7 @@ export function createTeamManifest(team: ExportableTeam, bots: ExportableBot[]):
     const appearance: TeamManifestMember["appearance"] = { color: bot.color };
     if (bot.mascotExpression) appearance.mascotExpression = bot.mascotExpression;
     if (bot.mascotBody) appearance.mascotBody = bot.mascotBody;
+    if (bot.mascotEyes) appearance.mascotEyes = bot.mascotEyes;
     return {
       key,
       name: bot.name,

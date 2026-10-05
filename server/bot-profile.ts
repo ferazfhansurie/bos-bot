@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { mascotEyesSchema } from "../shared/mascot-eyes.ts";
 
 import { BOT_AVATAR_CROPS, botAvatarCropSchema, botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
@@ -30,6 +31,7 @@ export const BOT_PROFILE_PATCH_FIELDS = [
   "avatarUrl",
   "avatarCrop",
   "mascotBody",
+  "mascotEyes",
   "voice",
   "speakReplies",
 ] as const;
@@ -64,6 +66,7 @@ const profilePatchSchema = z.object({
     .optional(),
   avatarCrop: botAvatarCropSchema.optional(),
   mascotBody: mascotBodySchema.optional(),
+  mascotEyes: mascotEyesSchema.nullable().optional(),
   voice: z
     .string({ error: "voice must be a string" })
     .max(BOT_PROFILE_LIMITS.voice, { error: "voice must be at most 200 characters" })
@@ -84,6 +87,7 @@ export type BotProfilePatch = Partial<
     | "avatarUrl"
     | "avatarCrop"
     | "mascotBody"
+    | "mascotEyes"
     | "voice"
     | "speakReplies"
   >

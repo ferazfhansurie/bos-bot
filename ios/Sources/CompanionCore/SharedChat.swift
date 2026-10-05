@@ -7,6 +7,7 @@ public struct SharedContact: Codable, Hashable, Identifiable, Sendable {
     public let homeId: String?
     public let title: String?
     public let color: String?
+    public var mascotEyes: String? = nil
     public let mascotBody: String?
     public let avatar: String?
     /// A bot's stored profile image and the crop it is shown with; same
@@ -172,6 +173,7 @@ public struct SharedConversationPreferences: Codable, Sendable {
 
 public struct SharedEligibleBot: Codable, Hashable, Identifiable, Sendable {
     public let color: String?
+    public var mascotEyes: String? = nil
     public let mascotBody: String?
     public let id: String
     public let name: String

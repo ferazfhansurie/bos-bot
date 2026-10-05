@@ -207,6 +207,12 @@ struct AgentProfileView: View {
                     .pickerStyle(.segmented)
 
                     if crop == .mascot {
+                        Picker("Eyes", selection: Binding(
+                            get: { MascotEyeStyle(stored: current.mascotEyes) },
+                            set: { eyes in Task { await selectEyes(eyes) } }
+                        )) {
+                            ForEach(MascotEyeStyle.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                        }.pickerStyle(.segmented).disabled(busy)
                         ForEach(FlatMascotBodies.groups, id: \.self) { group in
                             VStack(alignment: .leading, spacing: 12) {
                                 Text(group).font(.subheadline).foregroundStyle(.secondary)
@@ -216,7 +222,7 @@ struct AgentProfileView: View {
                                             Task { await selectBody(body.id) }
                                         } label: {
                                             VStack(spacing: 4) {
-                                                FlatBotMark(color: current.color, bodyId: body.id)
+                                                FlatBotMark(color: current.color, bodyId: body.id, eyeStyle: MascotEyeStyle(stored: current.mascotEyes))
                                                     .frame(width: 58, height: 58)
                                                     .padding(6)
                                                     .overlay(Circle().stroke(FlatMascotBodies.body(current.mascotBody).id == body.id ? Color.secondary : Color.clear, lineWidth: 2))
@@ -603,6 +609,12 @@ struct AgentProfileView: View {
         case "xhigh": "X-High"
         default: effort.capitalized
         }
+    }
+
+    private func selectEyes(_ eyes: MascotEyeStyle) async {
+        busy = true
+        defer { busy = false }
+        _ = await session.updateProfile(BotProfilePatch(mascotEyes: eyes.rawValue), for: current)
     }
 
     private func selectBody(_ body: String) async {

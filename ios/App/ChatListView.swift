@@ -909,7 +909,8 @@ struct ChatListView: View {
 
     @ViewBuilder private func contactAvatar(_ contact: SharedContact, size: CGFloat) -> some View {
         if contact.kind == "bot" {
-            MausAvatar(color: contact.color ?? "green", size: size, bodyId: contact.mascotBody, animated: false)
+            MausAvatar(color: contact.color ?? "green", size: size, bodyId: contact.mascotBody,
+                       eyeStyle: MascotEyeStyle(stored: contact.mascotEyes), animated: false)
         } else if let avatar = contact.avatar, PersonCutout.image(dataURL: avatar) != nil {
             PersonPhotoView(dataURL: avatar, size: size)
         } else {

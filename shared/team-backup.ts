@@ -75,6 +75,7 @@ const backupSchema = z.object({
     color,
     mascotExpression: z.string().max(80).optional(),
     mascotBody: z.string().max(40).optional(),
+    mascotEyes: z.enum(["classic", "round", "arches", "angled"]).optional(),
     chiefOfStaff: z.boolean(),
     hidden: z.boolean(),
     playbooks: z.array(playbook).max(200),

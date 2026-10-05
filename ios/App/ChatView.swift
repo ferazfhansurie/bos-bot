@@ -252,7 +252,7 @@ struct ChatView: View {
         // content, so a short transcript left the composer floating in the
         // middle of the screen with black beneath it. Here the scroll area is
         // explicitly told to take everything the composer does not.
-        VStack(spacing: 0) {
+        let transcriptView = VStack(spacing: 0) {
             if let notice = chat.remoteConnectionNotice {
                 Text(notice).font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(12)
@@ -473,6 +473,8 @@ struct ChatView: View {
             composer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+        let lifecycleView = transcriptView
         .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { chatHeight = $0 }
         .overlay(alignment: .bottom) { plusSheet }
         .toolbar(.hidden, for: .navigationBar)
@@ -584,6 +586,8 @@ struct ChatView: View {
         .onChange(of: showingPlus) { _, shown in
             if shown { dictation.stop() }
         }
+
+        return lifecycleView
         .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
             let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt)

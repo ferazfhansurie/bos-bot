@@ -478,6 +478,7 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     public var mascotExpression: String?
     /// Which body from the mascot body catalog this bot wears. Absent (an
     /// older harness included) means the shipped `cursor` silhouette.
+    public var mascotEyes: String? = nil
     public var mascotBody: String?
     public var tasks: [BotTask]?
     public var projects: [BotProject]?
@@ -991,6 +992,7 @@ public struct BotProfilePatch: Encodable, Sendable {
     public var notifications: Bool?
     public var avatarUrl: AvatarURL?
     public var avatarCrop: AvatarCrop?
+    public var mascotEyes: String?
     public var mascotBody: String?
     public var voice: String?
     public var speakReplies: Bool?
@@ -1011,6 +1013,7 @@ public struct BotProfilePatch: Encodable, Sendable {
         avatarUrl: AvatarURL? = nil,
         avatarCrop: AvatarCrop? = nil,
         mascotBody: String? = nil,
+        mascotEyes: String? = nil,
         voice: String? = nil,
         speakReplies: Bool? = nil
     ) {
@@ -1021,12 +1024,13 @@ public struct BotProfilePatch: Encodable, Sendable {
         self.avatarUrl = avatarUrl
         self.avatarCrop = avatarCrop
         self.mascotBody = mascotBody
+        self.mascotEyes = mascotEyes
         self.voice = voice
         self.speakReplies = speakReplies
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, title, description, notifications, avatarUrl, avatarCrop, mascotBody, voice, speakReplies
+        case name, title, description, notifications, avatarUrl, avatarCrop, mascotBody, mascotEyes, voice, speakReplies
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1043,6 +1047,7 @@ public struct BotProfilePatch: Encodable, Sendable {
         }
         try values.encodeIfPresent(avatarCrop, forKey: .avatarCrop)
         try values.encodeIfPresent(mascotBody, forKey: .mascotBody)
+        try values.encodeIfPresent(mascotEyes, forKey: .mascotEyes)
         try values.encodeIfPresent(voice, forKey: .voice)
         try values.encodeIfPresent(speakReplies, forKey: .speakReplies)
     }

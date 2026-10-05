@@ -87,7 +87,7 @@ interface SafeBot {
   description: string;
   color: string;
   mascotExpression?: string | null;
-  mascotBody?: string | null;
+  mascotBody?: string | null; mascotEyes?: string | null;
   avatarUrl: string | null;
   avatarCrop?: string;
   modelSelection: WireBot["modelSelection"];
@@ -219,6 +219,7 @@ function safeBot(raw: Record<string, any>, previous?: SafeBot): SafeBot {
     color: typeof raw.color === "string" ? raw.color : previous?.color ?? "blue",
     ...(raw.mascotExpression === null || typeof raw.mascotExpression === "string" ? { mascotExpression: raw.mascotExpression } : {}),
     ...(raw.mascotBody === null || typeof raw.mascotBody === "string" ? { mascotBody: raw.mascotBody } : {}),
+    ...(raw.mascotEyes === null || typeof raw.mascotEyes === "string" ? { mascotEyes: raw.mascotEyes } : {}),
     avatarUrl: avatar,
     ...(typeof raw.avatarCrop === "string" ? { avatarCrop: raw.avatarCrop } : {}),
     modelSelection: model as SafeBot["modelSelection"],
@@ -711,10 +712,10 @@ export class RemoteBotBridge {
 
   /** A shared room member on a linked Mac: the contact's home and bot id, or
    * null when that Mac is not linked or does not share the bot. */
-  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string; color: string; mascotBody?: string | null; avatarUrl: string | null; avatarCrop?: string; availability?: RemoteBotOrigin["availability"] } | null {
+  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string; color: string; mascotBody?: string | null; mascotEyes?: string | null; avatarUrl: string | null; avatarCrop?: string; availability?: RemoteBotOrigin["availability"] } | null {
     const home = this.homes.get(homeId);
     const bot = home?.state.bots[remoteBotId];
-    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), color: bot.color, mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop, availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
+    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), color: bot.color, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop, availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
   }
 
   /** Run one shared-room turn on a linked Mac's bot. The turn goes to a
@@ -909,6 +910,7 @@ export class RemoteBotBridge {
       color: bot.color as WireBot["color"],
       ...(bot.mascotExpression !== undefined ? { mascotExpression: bot.mascotExpression } : {}),
       ...(bot.mascotBody !== undefined ? { mascotBody: bot.mascotBody as WireBot["mascotBody"] } : {}),
+      ...(bot.mascotEyes !== undefined ? { mascotEyes: bot.mascotEyes as WireBot["mascotEyes"] } : {}),
       avatarUrl: bot.avatarUrl,
       ...(bot.avatarCrop ? { avatarCrop: bot.avatarCrop as WireBot["avatarCrop"] } : {}),
       unread: tasks.some((candidate) => candidate.unread === true),

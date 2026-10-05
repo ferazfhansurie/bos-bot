@@ -74,6 +74,8 @@ struct MausAvatar: View {
     /// shipped yet — falls back to the shipped `cursor`.
     var bodyId: String? = MausSilhouette.defaultBody
     var state: MausState = .idle
+    var eyeStyle: MascotEyeStyle = .classic
+    var completedTurnID: String? = nil
     /// Animation is OPT-IN: a mounted face costs a 30fps Canvas redraw, and a
     /// roster of them once pegged the app (and SimRenderServer) all night.
     /// Pass true only where motion carries meaning — a busy bot, an open
@@ -87,9 +89,14 @@ struct MausAvatar: View {
     @State private var engine = MausFaceEngine()
 
     var body: some View {
-        FlatBotMark(color: color, bodyId: bodyId)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        Group {
+            if animated || completedTurnID != nil {
+                MascotActivityMark(color: color, bodyID: FlatMascotBodies.body(bodyId).id,
+                    activity: state.activityChoreography, size: size, eyeStyle: eyeStyle, completedTurnID: completedTurnID)
+            } else {
+                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+            }
+        }.frame(width: size, height: size).accessibilityHidden(true)
     }
 }
 
@@ -619,16 +626,16 @@ extension Color {
 struct FlatBotMark: View {
     let color: String
     var bodyId: String?
+    var eyeStyle: MascotEyeStyle = .classic
     var body: some View {
         Canvas { context, size in
             let body = FlatMascotBodies.body(bodyId)
             context.scaleBy(x: size.width / 100, y: size.height / 100)
             context.fill(Path(FlatMascotBodies.outline(bodyId)), with: .color(MausPalette.color(color)))
-            context.translateBy(x: body.faceX, y: body.faceY)
-            var eyes = Path()
-            eyes.move(to: CGPoint(x: 51, y: 43)); eyes.addLine(to: CGPoint(x: 54, y: 52))
-            eyes.move(to: CGPoint(x: 73, y: 39)); eyes.addLine(to: CGPoint(x: 76, y: 48))
-            context.stroke(eyes, with: .color(Color(hex: "#151515")), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+            context.translateBy(x: body.faceX * 0.5, y: body.faceY)
+            for path in eyeStyle.paths() {
+                context.fill(Path(path), with: .color(Color(hex: "#151515")))
+            }
         }
     }
 }

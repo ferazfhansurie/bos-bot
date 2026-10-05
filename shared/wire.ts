@@ -11,6 +11,7 @@
 import type { ApprovalMode } from "./approval-mode.ts";
 import type { TurnDigest } from "./digest.ts";
 import type { BotAvatarCrop } from "./bot-avatar.ts";
+import type { MascotEyes } from "./mascot-eyes.ts";
 import type { MascotBodyId } from "./mascot-bodies.ts";
 import type { CredentialTargetId } from "./credential-request.ts";
 import type { TeamSetupRequest } from "./team-setup.ts";
@@ -211,6 +212,7 @@ export interface WireBot {
   color: MausColor;
   mascotExpression?: MausExpression | null;
   mascotBody?: MascotBodyId | null;
+  mascotEyes?: MascotEyes | null;
   /** App-owned attachment served as this bot's custom profile image;
    * always present on the wire, null when the bot has none. */
   avatarUrl: string | null;

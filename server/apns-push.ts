@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 
-interface Device { actorId: string; token: string; environment: "development" | "production"; updatedAt: number; connectionId?: string }
+interface Device { actorId: string; token: string; environment: "development" | "production"; updatedAt: number; connectionId?: string; sessionId?: string }
 interface Credential { teamId: string; keyId: string; privateKey: string }
 const TOKEN = /^[a-f0-9]{64}$/i;
 const APNS_TOPIC = "com.aihlete.aios";
@@ -28,10 +28,11 @@ export function buildApnsPayload(title: string, body: string, target: PushTarget
 export class ApnsPush {
   private readonly file: string;
   private readonly devices = new Map<string, Device>();
+  private readonly authorized: (sessionId: string, actorId: string) => boolean;
   private bearer: { value: string; at: number } | null = null;
 
-  constructor(file = join(DATA_DIR, "apns-devices.json")) {
-    this.file = file;
+  constructor(file = join(DATA_DIR, "apns-devices.json"), authorized: (sessionId: string, actorId: string) => boolean = () => false) {
+    this.file = file; this.authorized = authorized;
     if (!existsSync(file)) return;
     const parsed = JSON.parse(readFileSync(file, "utf8")) as { version?: number; devices?: Device[] };
     if (parsed.version !== 1 || !Array.isArray(parsed.devices)) throw new Error("invalid APNs device registry");
@@ -39,26 +40,43 @@ export class ApnsPush {
       if (!/^[A-Za-z0-9_-]+:person:[A-Za-z0-9_-]+$/.test(device.actorId)) throw new Error("invalid APNs actor");
       if (!TOKEN.test(device.token) || !["development", "production"].includes(device.environment)) throw new Error("invalid APNs device");
       if (device.connectionId !== undefined && !CONNECTION.test(device.connectionId)) throw new Error("invalid push connection");
-      this.devices.set(device.token, device);
+      if (device.sessionId !== undefined && !CONNECTION.test(device.sessionId)) throw new Error("invalid push session");
+      this.devices.set(device.token.toLowerCase(), device);
     }
   }
 
-  register(actorId: string, token: string, environment: "development" | "production", connectionId?: string): void {
+  register(actorId: string, token: string, environment: "development" | "production", connectionId?: string, sessionId?: string): void {
     if (!/^[A-Za-z0-9_-]+:person:[A-Za-z0-9_-]+$/.test(actorId) || !TOKEN.test(token)) throw new Error("invalid push registration");
     if (environment !== "development" && environment !== "production") throw new Error("invalid push environment");
     if (connectionId !== undefined && !CONNECTION.test(connectionId)) throw new Error("invalid push connection");
-    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now(), ...(connectionId ? { connectionId } : {}) });
+    if (!connectionId || !sessionId || !CONNECTION.test(sessionId) || !this.authorized(sessionId, actorId)) throw new Error("push registration requires a live owned session and connection");
+    const existing = this.devices.get(token.toLowerCase());
+    if (existing && existing.actorId !== actorId && existing.sessionId && this.authorized(existing.sessionId, existing.actorId)) throw new Error("push token is already owned by another actor");
+    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now(), connectionId, sessionId });
     this.persist();
   }
 
   configured(): boolean { return this.credential() !== null; }
-  countFor(actorId: string): number { return [...this.devices.values()].filter(device => device.actorId === actorId).length; }
+  countFor(actorId: string): number { return [...this.devices.values()].filter(device => device.actorId === actorId && this.active(device)).length; }
+  private active(device: Device): boolean { return Boolean(device.sessionId && device.connectionId && this.authorized(device.sessionId, device.actorId)); }
+  revokeSession(sessionId: string): void {
+    const removed = [...this.devices.values()].filter(device => device.sessionId === sessionId);
+    for (const device of removed) this.devices.delete(device.token);
+    if (removed.length) this.persist();
+  }
+  private pruneRevoked(): void {
+    const removed = [...this.devices.values()].filter(device => !this.active(device));
+    for (const device of removed) this.devices.delete(device.token);
+    if (removed.length) this.persist();
+  }
 
   async send(actorId: string, title: string, body: string, target: PushTarget, id = randomUUID()): Promise<void> {
+    this.pruneRevoked();
     const credential = this.credential();
     if (!credential) return;
     const devices = [...this.devices.values()].filter(device => device.actorId === actorId);
     await Promise.all(devices.map(async device => {
+      if (!this.active(device)) return;
       const host = device.environment === "development" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
       const client = connect(host);
       client.on("error", error => console.warn(`APNs connection failed: ${error.message}`));

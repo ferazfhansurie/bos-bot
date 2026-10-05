@@ -249,7 +249,8 @@ struct SharedChatView: View {
             if currentRoom.isGroup, let preference = replyPreferences {
                 HStack(spacing: 6) {
                     ForEach(availableBots.filter { preference.replyBotIds?.contains($0.id) == true }) { bot in
-                        MausAvatar(color: bot.color ?? "blue", size: 22, bodyId: bot.mascotBody, animated: false)
+                        MausAvatar(color: bot.color ?? "blue", size: 22, bodyId: bot.mascotBody,
+                                   eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: false)
                         Text(bot.name)
                     }
                     Text(preference.replyBotIds?.isEmpty == false ? "will reply · @someone else to switch" : "Mention a bot for a reply")

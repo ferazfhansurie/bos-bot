@@ -580,7 +580,11 @@ const ENVIRONMENT_ID = loadEnvironmentId(DATA_DIR);
 const multiplayerActors = new MultiplayerActors(join(DATA_DIR, "multiplayer-actors.json"), ENVIRONMENT_ID);
 const peerThreads = new PeerThreads(join(DATA_DIR, "peer-threads.json"));
 const peerHandoffs = new PeerHandoffs(join(DATA_DIR, "peer-handoffs.json"));
-const apnsPush = new ApnsPush();
+const apnsPush = new ApnsPush(undefined, (sessionId, actorId) => {
+  if (!sessions.isLive(sessionId)) return false;
+  const bound = multiplayerActors.actorFor(sessionId);
+  return bound === actorId || (actorId === multiplayerActors.ownerId && bound !== null && bound === multiplayerLinks.primaryActorId());
+});
 const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.json"), ENVIRONMENT_ID);
 const crossHomeGrants = new Delegations(join(DATA_DIR, "delegations.json"));
 const delegatedJobs = new DelegatedJobs(join(DATA_DIR, "delegated-jobs.json"));
@@ -1952,7 +1956,7 @@ function peerBotView(bot: BotRecord, sessionId: string) {
   const selected = tasks.at(-1);
   return {
     id: bot.id, name: bot.name, title: bot.title, description: bot.description,
-    color: bot.color, mascotExpression: bot.mascotExpression, mascotBody: bot.mascotBody,
+    color: bot.color, mascotExpression: bot.mascotExpression, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes,
     avatarUrl: bot.avatarUrl ?? null, avatarCrop: bot.avatarCrop,
     modelSelection: bot.modelSelection, notifications: bot.notifications, createdAt: bot.createdAt,
     threadId: selected?.threadId ?? "", tasks, messages: [], hasMore: false, activeLeafId: null,
@@ -3603,6 +3607,8 @@ function closeSessionStreams(sessionId: string): void {
   }
 }
 sessions.onSessionRevoked((sessionId) => {
+  try { apnsPush.revokeSession(sessionId); }
+  catch { console.error("Could not persist push removal; revoked session still blocks future delivery."); }
   peerHandoffs.forget(sessionId);
   const revokedThreads = peerThreads.list(sessionId);
   peerThreads.revoke(sessionId);
@@ -6668,7 +6674,7 @@ const sharedRoomLocks = new Set<string>();
 const sharedBotLocks = new Set<string>();
 const runningSharedRequests = new Set<string>();
 
-interface SharedRoomBot { color?: string; mascotBody?: string | null; avatarUrl?: string | null; avatarCrop?: string; key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string; availability?: "ready" | "offline" | "update-required" | "reconnect-required" }
+interface SharedRoomBot { color?: string; mascotBody?: string | null; mascotEyes?: string | null; avatarUrl?: string | null; avatarCrop?: string; key: { homeId: string; kind: "bot"; localId: string }; id: string; name: string; remote: boolean; ownerName: string; availability?: "ready" | "offline" | "update-required" | "reconnect-required" }
 
 function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
   const owner = cfg.profile?.name?.trim() || "Owner";
@@ -6682,11 +6688,11 @@ function sharedRoomBots(room: SharedRoom, actorId?: string): SharedRoomBot[] {
     const bot = { homeId: key.homeId, kind: "bot" as const, localId: key.localId };
     if (key.homeId === ENVIRONMENT_ID) {
       const local = store.bot(key.localId);
-      return local && !local.hidden && (actorId === multiplayerActors.ownerId || local.visibility !== "private") ? [{ key: bot, id, name: local.name, color: local.color, mascotBody: local.mascotBody, avatarUrl: local.avatarUrl, avatarCrop: local.avatarCrop, remote: false, ownerName: owner }] : [];
+      return local && !local.hidden && (actorId === multiplayerActors.ownerId || local.visibility !== "private") ? [{ key: bot, id, name: local.name, color: local.color, mascotBody: local.mascotBody, mascotEyes: local.mascotEyes, avatarUrl: local.avatarUrl, avatarCrop: local.avatarCrop, remote: false, ownerName: owner }] : [];
     }
     const remote = remoteBots.roomBot(key.homeId, key.localId);
     const link = links.get(key.homeId);
-    return remote && link ? [{ key: bot, id, name: remote.name, color: remote.color, mascotBody: remote.mascotBody, avatarUrl: remote.avatarUrl, avatarCrop: remote.avatarCrop, remote: true, ownerName: link.ownerName ?? link.name, availability: remote.availability }] : [];
+    return remote && link ? [{ key: bot, id, name: remote.name, color: remote.color, mascotBody: remote.mascotBody, mascotEyes: remote.mascotEyes, avatarUrl: remote.avatarUrl, avatarCrop: remote.avatarCrop, remote: true, ownerName: link.ownerName ?? link.name, availability: remote.availability }] : [];
   });
 }
 
@@ -13760,11 +13766,14 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             (path === "/api/multiplayer/rooms" && Array.isArray(body?.memberIds) && body.memberIds.length === 2 && body.memberIds.some(remoteBotMember)))) {
           return json(res, 403, { error: "a bot on another Mac is not a room member; open it from the bot list instead" });
         }
-        if (method === "POST" && path === "/api/multiplayer/push-token" && actorId &&
-            typeof body?.token === "string" && (body.environment === "development" || body.environment === "production")) {
-          if (body.connectionId !== undefined && (typeof body.connectionId !== "string" || body.connectionId.length > 128)) return json(res, 400, { error: "invalid connection id" });
-          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId); }
-          catch { return json(res, 400, { error: "invalid APNs token" }); }
+        if (method === "POST" && path === "/api/multiplayer/push-token") {
+          if (auth.kind !== "session" || !sessions.isLive(auth.session.id)) return json(res, 403, { error: "Push registration requires this device's live paired session" });
+          if (typeof body?.token !== "string" || !["development", "production"].includes(body.environment) || typeof body.connectionId !== "string" || body.connectionId.length > 128) return json(res, 400, { error: "APNs token, environment and connection id required" });
+          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId, auth.session.id); }
+          catch { return json(res, 400, { error: "invalid or unowned APNs registration" }); }
+          // The shared home's bridge session outlives this device's session.
+          // Forwarding would keep delivering after device revocation here.
+          return json(res, 200, { registered: true, remoteRegistered: false, deliveryScope: "local", deliveryConfigured: apnsPush.configured() });
         }
         try {
           const forwarded = await multiplayerLinks.forwardShared(path + url.search, method, body);
@@ -13803,12 +13812,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           })),
           ...store.bots.filter(bot => !bot.hidden && (actorId === multiplayerActors.ownerId || bot.visibility !== "private")).map(bot => ({
             id: `${ENVIRONMENT_ID}:bot:${bot.id}`, name: bot.name, kind: "bot" as const, homeId: ENVIRONMENT_ID, title: bot.title,
-            color: bot.color, mascotBody: bot.mascotBody ?? null, avatarUrl: bot.avatarUrl ?? null, avatarCrop: bot.avatarCrop ?? "mascot",
+            color: bot.color, mascotBody: bot.mascotBody ?? null, mascotEyes: bot.mascotEyes ?? null, avatarUrl: bot.avatarUrl ?? null, avatarCrop: bot.avatarCrop ?? "mascot",
           })),
           // A linked Mac's bots can join group rooms; their turns run on
           // their own Mac through the bridge (server/remote-bot-bridge.ts).
           ...multiplayerLinks.contacts().filter(bot => remoteBots.roomBot(bot.homeId, parseContactId(bot.id)!.localId))
-            .map(bot => ({ ...bot, remote: true, mascotBody: bot.mascotBody ?? null, avatarUrl: null, avatarCrop: "mascot",
+            .map(bot => ({ ...bot, remote: true, mascotBody: bot.mascotBody ?? null, mascotEyes: bot.mascotEyes ?? null, avatarUrl: null, avatarCrop: "mascot",
               ownerName: multiplayerLinks.bridgeLinks().find(link => link.homeId === bot.homeId)?.ownerName ?? null })),
         ] });
       }
@@ -13858,11 +13867,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (!actorId) return json(res, 403, { error: "this device has not been assigned to a person" });
       if (method === "POST" && path === "/api/multiplayer/push-token") {
         const body = await readBody(req, 1024);
-        if (typeof body?.token !== "string" || (body.environment !== "development" && body.environment !== "production")) {
-          return json(res, 400, { error: "APNs token and environment required" });
+        if (auth.kind !== "session" || !sessions.isLive(auth.session.id)) return json(res, 403, { error: "Push registration requires this device's live paired session" });
+        if (typeof body?.token !== "string" || (body.environment !== "development" && body.environment !== "production") || typeof body.connectionId !== "string" || body.connectionId.length > 128) {
+          return json(res, 400, { error: "APNs token, environment and connection id required" });
         }
-        if (body.connectionId !== undefined && (typeof body.connectionId !== "string" || body.connectionId.length > 128)) return json(res, 400, { error: "invalid connection id" });
-        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId); }
+        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId, auth.session.id); }
         catch { return json(res, 400, { error: "invalid APNs token" }); }
         return json(res, 200, { registered: true, deliveryConfigured: apnsPush.configured() });
       }
@@ -18057,7 +18066,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           else section = trimmed;
         }
       }
-      for (const key of ["unread", "cloudBackend", "color", "mascotExpression", "mascotBody", "pinned", "hidden"] as const) {
+      for (const key of ["unread", "cloudBackend", "color", "mascotExpression", "mascotBody", "mascotEyes", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
       }
       if (Object.prototype.hasOwnProperty.call(body, "sharedWorkComputer")) {

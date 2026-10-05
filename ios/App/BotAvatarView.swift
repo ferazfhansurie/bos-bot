@@ -96,7 +96,9 @@ struct BotAvatarView: View {
     private var mascot: some View {
         MausAvatar(
             color: bot.color, size: size, bodyId: bot.mascotBody,
-            state: state, animated: animated, comets: comets)
+            state: state, eyeStyle: MascotEyeStyle(stored: bot.mascotEyes),
+            completedTurnID: session.mascotCompletionIDs[bot.threadId],
+            animated: animated, comets: comets)
     }
 
     private var mask: AnyShape {
@@ -244,7 +246,8 @@ struct SharedBotFace: View {
                         .frame(width: size, height: size).clipShape(mask)
                 }
             case .gradientMascot:
-                MausAvatar(color: bot.color ?? "green", size: size, bodyId: bot.mascotBody, animated: false)
+                MausAvatar(color: bot.color ?? "green", size: size, bodyId: bot.mascotBody,
+                    eyeStyle: MascotEyeStyle(stored: bot.mascotEyes), animated: false)
             }
         }
         .frame(width: size, height: size)

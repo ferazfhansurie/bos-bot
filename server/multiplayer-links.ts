@@ -4,7 +4,7 @@ import { writeFileAtomic } from "./atomic.ts";
 import { quarantineSaved } from "./quarantine-saved.ts";
 import { contactId, parseContactId } from "../shared/multiplayer.ts";
 
-interface RemoteBot { id: string; name: string; title: string; color?: string; mascotBody?: string | null; avatarUrl?: string | null; avatarCrop?: string; hidden?: boolean }
+interface RemoteBot { id: string; name: string; title: string; color?: string; mascotBody?: string | null; mascotEyes?: string | null; avatarUrl?: string | null; avatarCrop?: string; hidden?: boolean }
 interface RemoteLink {
   homeId: string;
   origin: string;
@@ -25,6 +25,7 @@ const parseBot = (value: unknown): RemoteBot | null => {
   return { id: bot.id, name: bot.name, title: bot.title,
     color: typeof bot.color === "string" ? bot.color : undefined,
     mascotBody: typeof bot.mascotBody === "string" ? bot.mascotBody : null,
+    mascotEyes: typeof bot.mascotEyes === "string" ? bot.mascotEyes : null,
     avatarUrl: typeof bot.avatarUrl === "string" ? bot.avatarUrl : null,
     avatarCrop: typeof bot.avatarCrop === "string" ? bot.avatarCrop : undefined,
     hidden: bot.hidden === true };
@@ -218,11 +219,11 @@ export class MultiplayerLinks {
     await Promise.allSettled([...this.links.keys()].map(homeId => this.refreshBots(homeId)));
   }
 
-  contacts(): Array<{ id: string; name: string; kind: "bot"; homeId: string; title: string; color?: string; mascotBody?: string | null; avatarUrl?: string | null; avatarCrop?: string }> {
+  contacts(): Array<{ id: string; name: string; kind: "bot"; homeId: string; title: string; color?: string; mascotBody?: string | null; mascotEyes?: string | null; avatarUrl?: string | null; avatarCrop?: string }> {
     return [...this.links.values()].flatMap(link => link.bots.map(bot => ({
       id: contactId({ homeId: link.homeId, kind: "bot", localId: bot.id }),
       name: bot.name, kind: "bot" as const, homeId: link.homeId, title: bot.title,
-      color: bot.color, mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop,
+      color: bot.color, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop,
     })));
   }
 

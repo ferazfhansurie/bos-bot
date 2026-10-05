@@ -1505,7 +1505,7 @@ export class Store {
     profile: Partial<
       Pick<
         BotRecord,
-        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "modelSelection" | "fallbackModel" | "section"
+        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "mascotEyes" | "modelSelection" | "fallbackModel" | "section"
       >
     > = {},
     opts: {
@@ -1533,6 +1533,7 @@ export class Store {
       color: profile.color ?? COLORS[this.bots.length % COLORS.length],
       ...(profile.mascotExpression ? { mascotExpression: profile.mascotExpression } : {}),
       ...(profile.mascotBody ? { mascotBody: profile.mascotBody } : {}),
+      ...(profile.mascotEyes ? { mascotEyes: profile.mascotEyes } : {}),
       unread: false,
       modelSelection: profile.modelSelection ?? this.defaultSelection(),
       ...(profile.fallbackModel ? { fallbackModel: profile.fallbackModel } : {}),
