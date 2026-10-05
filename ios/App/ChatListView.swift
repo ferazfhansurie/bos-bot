@@ -630,9 +630,10 @@ struct ChatListView: View {
         sectionLabel(Text("Chats")).padding(.top, 18).padding(.bottom, 4)
         let unpinned = shownConversations.filter { !pinnedChats.ids.contains($0.id) }
         let lastID = unpinned.last?.id
+        let waiting = waitingChats
         ForEach(unpinned) { entry in
             switch entry {
-            case .local(let summary): botRow(summary, last: entry.id == lastID)
+            case .local(let summary): botRow(summary, waiting: waiting.contains(summary.chat.id), last: entry.id == lastID)
             case .contact(let contact): contactRow(contact, last: entry.id == lastID)
             case .room(let room):
                 Button { open(room) } label: {
@@ -928,19 +929,20 @@ struct ChatListView: View {
 
     @ViewBuilder
     private func botRows(_ rows: [ChatSummary]) -> some View {
+        let waiting = waitingChats
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, summary in
-            botRow(summary, last: index == rows.count - 1)
+            botRow(summary, waiting: waiting.contains(summary.chat.id), last: index == rows.count - 1)
         }
     }
 
-    private func botRow(_ summary: ChatSummary, last: Bool) -> some View {
+    private func botRow(_ summary: ChatSummary, waiting: Bool, last: Bool) -> some View {
         Button { open(homeChat(summary.chat)) } label: {
             ChatRow(
                 chat: summary.chat,
                 preview: summary.chat.busy ? String(localized: "Working…") : summary.preview,
                 at: summary.lastActivity,
                 state: MausState.forChat(summary.chat, in: session.state),
-                waiting: waitingChats.contains(summary.chat.id),
+                waiting: waiting,
                 last: last
             )
         }

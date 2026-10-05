@@ -193,6 +193,10 @@ public struct CompanionState: Sendable {
         var out: [(threadId: String, message: Message)] = []
         let activeThreads = Set(bots.flatMap { [$0.threadId] + ($0.tasks ?? []).map(\.threadId) } + rooms.map(\.threadId))
         for threadId in activeThreads {
+            // Most stored threads have no outstanding request. Rebuilding their
+            // active branches also searches the entire bot/task roster; doing it
+            // for every badge on every streaming redraw blocks the main thread.
+            guard messages[threadId]?.contains(where: { $0.card?.isPending == true }) == true else { continue }
             for message in visibleTranscript(forThread: threadId) where message.card?.isPending == true {
                 out.append((threadId: threadId, message: message))
             }
