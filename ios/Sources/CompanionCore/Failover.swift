@@ -34,6 +34,17 @@ public struct CandidateRotation: Equatable, Sendable {
         index = 0
     }
 
+    /// The walk for the phone's current network. Off the local network
+    /// (cellular, no wifi or ethernet) a LAN or Bonjour address cannot answer
+    /// — at best it fails fast, at worst it holds the dial for the stream's
+    /// long timeout. When a protected route exists it leads, which by the
+    /// usual ratchet also leaves cleartext routes out of this walk. The saved
+    /// order is untouched and comes back with the next local path.
+    public init(endpoints: [CompanionEndpoint], onLocalNetwork: Bool) {
+        let protected = endpoints.filter(\.protectsCredentials)
+        self.init(endpoints: onLocalNetwork || protected.isEmpty ? endpoints : protected)
+    }
+
     /// Compatibility view for tests and callers that only understand the old
     /// host list. New dialing code uses `currentEndpoint` so it never loses a
     /// route's HTTPS scheme or distinct port.

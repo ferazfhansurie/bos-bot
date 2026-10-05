@@ -1376,7 +1376,13 @@ struct StatusBanner: View {
             case .connecting:
                 banner("Connecting…", systemImage: "arrow.triangle.2.circlepath", tint: .secondary)
             case let .offline(reason):
-                banner(reason, systemImage: "wifi.slash", tint: .orange)
+                // The Mac was reachable from anywhere last time, so the
+                // likeliest cause is the Mac, not this phone's network.
+                banner(
+                    session.macMayBeAsleep ? "Your Mac may be asleep. \(reason)" : reason,
+                    systemImage: session.macMayBeAsleep ? "moon.zzz" : "wifi.slash",
+                    tint: .orange
+                )
             case .unauthorized:
                 banner("This device was unpaired on the computer.", systemImage: "lock.slash", tint: .red)
             }

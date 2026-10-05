@@ -628,6 +628,20 @@ struct ConnectionSecurityView: View {
                 }
 
                 Section {
+                    if let remote = session.companionStatus {
+                        if let hosted = remote.hosted {
+                            LabeledContent("Remote access") {
+                                remoteAccessText(hosted, host: remote.hostedDisplayHost)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        if let keepAwake = remote.keepAwake {
+                            LabeledContent("Keep Mac awake") {
+                                Text(keepAwake ? "On" : "Off")
+                            }
+                        }
+                    }
                     DisclosureGroup("Connection details") {
                         VStack(alignment: .leading, spacing: 12) {
                             Group {
@@ -743,6 +757,19 @@ struct ConnectionSecurityView: View {
             return Text("This device was removed from the computer. Pair it again to reconnect.")
         case .unpaired:
             return Text("This device is not paired with a computer.")
+        }
+    }
+
+    /// Read-only: remote access is set up and changed on the Mac.
+    private func remoteAccessText(_ hosted: CompanionStatus.Hosted, host: String?) -> Text {
+        switch hosted.state {
+        case .ready:
+            guard let host else { return Text("Ready") }
+            return Text("Ready") + Text(verbatim: " · \(host)")
+        case .provisioning: return Text("Setting up…")
+        case .off: return Text("Off")
+        case .error: return Text("Error")
+        case .unknown: return Text("Unknown")
         }
     }
 
