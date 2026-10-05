@@ -2329,5 +2329,6 @@
   "terminal.exited": "Exited with code {code}",
   "terminal.disconnected": "Disconnected",
   "terminal.restart": "Start a new terminal",
-  "terminal.close": "Close terminal"
+  "terminal.close": "Close terminal",
+  "terminal.resize": "Resize terminal (double-click to reset)"
 }
