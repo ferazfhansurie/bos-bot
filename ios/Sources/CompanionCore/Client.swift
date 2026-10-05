@@ -684,7 +684,7 @@ public struct CompanionClient: Sendable {
     }
 
     public func registerPushToken(_ token: String, environment: String) async throws {
-        try await send(makeRequest("POST", "/api/multiplayer/push-token", body: ["token": token, "environment": environment]))
+        try await send(makeRequest("POST", "/api/multiplayer/push-token", body: ["token": token, "environment": environment, "connectionId": connection.id]))
     }
 
     public func sharedContacts() async throws -> [SharedContact] {

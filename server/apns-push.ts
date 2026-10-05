@@ -5,10 +5,23 @@ import { dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 
-interface Device { actorId: string; token: string; environment: "development" | "production"; updatedAt: number }
+interface Device { actorId: string; token: string; environment: "development" | "production"; updatedAt: number; connectionId?: string }
 interface Credential { teamId: string; keyId: string; privateKey: string }
 const TOKEN = /^[a-f0-9]{64}$/i;
 const APNS_TOPIC = "com.aihlete.aios";
+const CONNECTION = /^[A-Za-z0-9_-]{1,128}$/;
+export interface PushTarget {
+  roomId?: string; botId?: string; threadId?: string; senderId?: string;
+  senderName?: string; kind?: string; requestId?: string; messageId?: string;
+}
+
+/** Routing scope comes from this device's authenticated registration, never
+ * from the event producer. It is a navigation hint; API access still requires
+ * the device's existing token for that connection. */
+export function buildApnsPayload(title: string, body: string, target: PushTarget, connectionId?: string) {
+  return { aps: { alert: { title: title.slice(0, 120), body: body.slice(0, 1000) }, sound: "default", "thread-id": target.roomId ?? target.threadId ?? "bos", ...(target.senderId ? { "mutable-content": 1 } : {}) },
+    ...target, ...(connectionId ? { connectionId } : {}) };
+}
 
 /** The canonical shared home owns delivery. Registration is bound to the
  * authenticated person by the HTTP handler, never to a caller-supplied id. */
@@ -25,21 +38,23 @@ export class ApnsPush {
     for (const device of parsed.devices) {
       if (!/^[A-Za-z0-9_-]+:person:[A-Za-z0-9_-]+$/.test(device.actorId)) throw new Error("invalid APNs actor");
       if (!TOKEN.test(device.token) || !["development", "production"].includes(device.environment)) throw new Error("invalid APNs device");
+      if (device.connectionId !== undefined && !CONNECTION.test(device.connectionId)) throw new Error("invalid push connection");
       this.devices.set(device.token, device);
     }
   }
 
-  register(actorId: string, token: string, environment: "development" | "production"): void {
+  register(actorId: string, token: string, environment: "development" | "production", connectionId?: string): void {
     if (!/^[A-Za-z0-9_-]+:person:[A-Za-z0-9_-]+$/.test(actorId) || !TOKEN.test(token)) throw new Error("invalid push registration");
     if (environment !== "development" && environment !== "production") throw new Error("invalid push environment");
-    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now() });
+    if (connectionId !== undefined && !CONNECTION.test(connectionId)) throw new Error("invalid push connection");
+    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now(), ...(connectionId ? { connectionId } : {}) });
     this.persist();
   }
 
   configured(): boolean { return this.credential() !== null; }
   countFor(actorId: string): number { return [...this.devices.values()].filter(device => device.actorId === actorId).length; }
 
-  async send(actorId: string, title: string, body: string, target: { roomId?: string; botId?: string; threadId?: string; senderId?: string; senderName?: string; kind?: "digest" }, id = randomUUID()): Promise<void> {
+  async send(actorId: string, title: string, body: string, target: PushTarget, id = randomUUID()): Promise<void> {
     const credential = this.credential();
     if (!credential) return;
     const devices = [...this.devices.values()].filter(device => device.actorId === actorId);
@@ -48,7 +63,7 @@ export class ApnsPush {
       const client = connect(host);
       client.on("error", error => console.warn(`APNs connection failed: ${error.message}`));
       try {
-        const payload = JSON.stringify({ aps: { alert: { title: title.slice(0, 120), body: body.slice(0, 1000) }, sound: "default", "thread-id": target.roomId ?? target.threadId ?? "bos", ...(target.senderId ? { "mutable-content": 1 } : {}) }, ...target });
+        const payload = JSON.stringify(buildApnsPayload(title, body, target, device.connectionId));
         const result = await new Promise<{ status: number; reason: string }>((resolve, reject) => {
           const request = client.request({ ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${this.jwt(credential)}`, "apns-topic": APNS_TOPIC, "apns-push-type": "alert", "apns-id": id, "content-type": "application/json" });
           let status = 0;

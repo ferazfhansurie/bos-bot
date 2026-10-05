@@ -31,5 +31,8 @@ export interface Notification {
    * already works off `threadId` alone; this is what lets a client say which
    * room, and stack a room's banners together instead of under the bot. */
   groupId?: string;
+  /** Immutable request/card identities for exact notification navigation.
+   * Omitted for non-request notices and legacy producers. */
+  requestId?: string;
+  messageId?: string;
 }
-

@@ -239,6 +239,7 @@ final class Session: ObservableObject {
     /// is available. Retain the last explicitly tapped destination until the
     /// paired client can be rebuilt after unlock.
     private var pendingNotification: NotificationTarget?
+    private var notificationVisibleThreads = Set<String>()
 
     /// The exact route the current client will use for a credential write.
     var phoneCredentialTransportIsProtected: Bool {
@@ -258,15 +259,32 @@ final class Session: ObservableObject {
     init() {
         Self.removeStaleFilePreviews()
         _ = NotificationCoordinator.shared
+        NotificationCoordinator.shared.foregroundPresentation = { [weak self] target in
+            self?.notificationPresentation(for: target) ?? .quiet
+        }
+        NotificationCoordinator.shared.foregroundSharedPresentation = { [weak self] roomID, connectionID in
+            guard let self, let connectionID, connectionID == self.client?.connection.id else { return .quiet }
+            let visible = UIApplication.shared.applicationState == .active && self.notificationVisibleThreads.contains(connectionID + ":shared:" + roomID)
+            // The authenticated server already applies shared-room mute and
+            // mentions preferences before emitting this remote push.
+            return .resolve(enabled: true, visible: visible, blocking: false)
+        }
         NotificationCoordinator.shared.responseHandler = { [weak self] target in
             Task { @MainActor in await self?.openNotification(target) }
         }
         NotificationCoordinator.shared.pushTokenHandler = { [weak self] token in
             Task { @MainActor in await self?.registerPushToken(token) }
         }
-        NotificationCoordinator.shared.sharedRoomHandler = { roomID in
-            UserDefaults.standard.set(roomID, forKey: "bos.pendingSharedRoomPush")
-            NotificationCenter.default.post(name: .sharedRoomPushTapped, object: roomID)
+        NotificationCoordinator.shared.sharedRoomHandler = { [weak self] roomID, connectionID in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let connectionID, connectionID == self.client?.connection.id else {
+                    self.actionError = "This notification has no matching account. Open its conversation from the original computer."
+                    return
+                }
+                UserDefaults.standard.set(roomID, forKey: "bos.pendingSharedRoomPush")
+                NotificationCenter.default.post(name: .sharedRoomPushTapped, object: roomID)
+            }
         }
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
@@ -1170,9 +1188,16 @@ final class Session: ObservableObject {
             deferredPublish?.cancel()
             deferredPublish = nil
         }
-        for frame in batch {
-            if case let .notify(notification) = frame.frame {
-                NotificationCoordinator.shared.deliver(notification, sequence: frame.seq)
+        let notices = batch.compactMap { frame -> (NotificationFrame, Int?)? in
+            guard case let .notify(notification) = frame.frame else { return nil }
+            return (notification, frame.seq)
+        }
+        if let connectionID = client?.connection.id {
+            for index in NotificationPresentation.coalescedIndices(notices.map { ($0.0.threadId, $0.0.isBlocking) }) {
+                let (notification, sequence) = notices[index]
+                guard notificationEnabled(botId: notification.botId, threadId: notification.threadId) else { continue }
+                NotificationCoordinator.shared.deliver(notification, sequence: sequence, connectionId: connectionID,
+                    requestId: notification.requestId, messageId: notification.messageId)
             }
         }
         applyBadge(state.unreadCount)
@@ -2628,60 +2653,96 @@ final class Session: ObservableObject {
 
     // MARK: - Notification navigation
 
+    func setNotificationVisible(threadId: String, visible: Bool) {
+        guard let connectionID = client?.connection.id else { return }
+        let key = connectionID + ":thread:" + threadId
+        if visible { notificationVisibleThreads.insert(key) }
+        else { notificationVisibleThreads.remove(key) }
+    }
+
+    func setSharedNotificationVisible(roomId: String, visible: Bool) {
+        guard let connectionID = client?.connection.id else { return }
+        let key = connectionID + ":shared:" + roomId
+        if visible { notificationVisibleThreads.insert(key) }
+        else { notificationVisibleThreads.remove(key) }
+    }
+
+    private func notificationEnabled(botId: String, threadId: String) -> Bool {
+        guard state.bot(botId)?.notifications != false else { return false }
+        let room = state.rooms.first { $0.threadId == threadId || ($0.tasks ?? []).contains { $0.threadId == threadId } }
+        return room?.notifications != "muted"
+    }
+
+    private func notificationPresentation(for target: NotificationTarget) -> NotificationPresentation {
+        guard target.belongs(to: client?.connection.id) else { return .quiet }
+        let visible = UIApplication.shared.applicationState == .active && notificationVisibleThreads.contains((target.connectionId ?? "") + ":thread:" + target.threadId)
+        return .resolve(enabled: notificationEnabled(botId: target.botId, threadId: target.threadId),
+                        visible: visible, blocking: target.isBlocking)
+    }
+
     func openNotification(_ target: NotificationTarget) async {
+        guard target.belongs(to: client?.connection.id ?? registry.activeConnectionID) else {
+            actionError = "This notification belongs to another or an older connection. Select its computer and open the conversation there."
+            return
+        }
         guard let client else {
-            // Do not carry a stale destination into a future, unrelated
-            // pairing. Only a saved connection waiting for Keychain access is
-            // eligible for replay.
             if restorePending {
                 pendingNotification = target
                 connect()
             } else {
-                actionError = "Pair this device with your computer to open that task."
+                actionError = "Pair this device with its original computer to open that task."
             }
             return
         }
         pendingNotification = nil
+        notificationChat = nil
+        let generation = streamGeneration
         do {
-            var bot = state.bot(target.botId)
-            if bot == nil {
-                try await hydrate(using: client)
-                bot = state.bot(target.botId)
+            try await hydrate(using: client)
+            let page: ThreadPage
+            if let messageID = target.messageId {
+                page = try await client.messages(threadId: target.threadId, around: messageID)
+            } else {
+                page = try await client.messages(threadId: target.threadId)
             }
-            // A room's approval/question notification carries the asker bot
-            // with the ROOM's thread id — open the room rather than asking
-            // the bot to switch to a thread it does not own (a 404).
+            try Task.checkCancellation()
+            guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
+            switch target.requestState(in: page.messages) {
+            case .unavailable:
+                throw APIError.status(code: 404, message: "That exact request is no longer available. Open the conversation to review its history.")
+            case .settled:
+                throw APIError.status(code: 409, message: "That request has already been answered or dismissed.")
+            case .pending, .notRequired: break
+            }
+            state.merge(page, intoThread: target.threadId)
             if var room = state.rooms.first(where: {
                 $0.threadId == target.threadId || ($0.tasks ?? []).contains(where: { $0.threadId == target.threadId })
             }) {
                 if room.threadId != target.threadId {
-                    do {
-                        room = try await client.switchTask(groupId: room.id, threadId: target.threadId)
-                        state.apply(.room(room))
-                    } catch {
-                        // A stale notification should still open the channel's
-                        // current task instead of leaving the person nowhere.
-                    }
+                    room = try await client.switchTask(groupId: room.id, threadId: target.threadId)
+                    guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
+                    state.apply(.room(room))
                 }
+                focusedMessageId = target.messageId
                 notificationChat = .room(room)
                 return
             }
-            guard var selected = bot else { throw APIError.status(code: 404, message: "That agent no longer exists.") }
-            if target.requiresTaskSwitch(activeThreadId: selected.threadId) {
-                do {
-                    selected = try await client.switchTask(botId: selected.id, threadId: target.threadId)
-                    state.apply(.bot(selected))
-                } catch {
-                    // The thread may be gone (task deleted, stale payload).
-                    // Landing in the bot's current chat still beats an error
-                    // banner and no navigation at all.
-                }
+            guard var selected = state.bot(target.botId) else {
+                throw APIError.status(code: 404, message: "That agent no longer exists.")
             }
+            if target.requiresTaskSwitch(activeThreadId: selected.threadId) {
+                selected = try await client.switchTask(botId: selected.id, threadId: target.threadId)
+                guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
+                state.apply(.bot(selected))
+            }
+            focusedMessageId = target.messageId
             notificationChat = .bot(selected)
         } catch is CancellationError {
-            // A refresh from the previous computer must not alert on the
-            // newly selected connection after its generation guard rejects it.
-        } catch { actionError = error.localizedDescription }
+            // A previous connection's response cannot navigate the new account.
+        } catch {
+            guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { return }
+            actionError = "Couldn't open this notification's exact task. " + error.localizedDescription
+        }
     }
 
     func consumeNotificationChat() { notificationChat = nil }

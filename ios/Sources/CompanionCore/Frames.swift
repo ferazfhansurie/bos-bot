@@ -16,6 +16,10 @@ public struct NotificationFrame: Codable, Hashable, Sendable {
     public var threadId: String
     public var title: String
     public var body: String
+    /// Exact stored card identity. Older servers omit it; never infer a
+    /// different request from the newest pending card on the same thread.
+    public var requestId: String? = nil
+    public var messageId: String? = nil
 
     /// A bot blocked on you, as opposed to one reporting in.
     public var isBlocking: Bool { kind == "approval" || kind == "question" }

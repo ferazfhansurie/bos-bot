@@ -68,7 +68,7 @@ export function buildNotification(
   bot: NotifyBot,
   threadId: string,
   detail: string,
-  extra?: { avatarUrl?: string; group?: { id: string; name: string } },
+  extra?: { avatarUrl?: string; group?: { id: string; name: string }; requestId?: string; messageId?: string },
 ): Notification | null {
   // The toggle means what it says: off is off, including for approvals.
   // A bot whose notifications you turned off can still block waiting for
@@ -104,5 +104,7 @@ export function buildNotification(
   const notification: Notification = { kind, botId: bot.id, botName: bot.name, threadId, title, body };
   if (extra?.avatarUrl) notification.avatarUrl = extra.avatarUrl;
   if (extra?.group) notification.groupId = extra.group.id;
+  if (extra?.requestId) notification.requestId = extra.requestId;
+  if (extra?.messageId) notification.messageId = extra.messageId;
   return notification;
 }
