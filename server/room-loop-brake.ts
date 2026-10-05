@@ -42,13 +42,27 @@ const mentionCallbacks = new WeakMap<Set<string>, {
   seen: Set<string>;
 }>();
 
-export function deferMentionCallback(spoken: Set<string>, botId: string, hop: number, sourceKey: string, sourceBotId?: string): void {
+/** False when this route already ran this round (the loop brake). */
+export function deferMentionCallback(spoken: Set<string>, botId: string, hop: number, sourceKey: string, sourceBotId?: string): boolean {
   let entry = mentionCallbacks.get(spoken);
   if (!entry) mentionCallbacks.set(spoken, entry = { pending: new Map(), seen: new Set() });
   const key = JSON.stringify([botId, sourceKey]);
-  if (entry.seen.has(key)) return;
+  if (entry.seen.has(key)) return false;
   entry.seen.add(key);
   entry.pending.set(key, { botId, hop, ...(sourceBotId ? { sourceBotId } : {}) });
+  return true;
+}
+
+/** The deferred delivery was steered into a running turn instead: drop it,
+ * keeping the route marked seen so it cannot run again this round. */
+export function dropMentionCallback(spoken: Set<string>, botId: string, sourceKey: string): boolean {
+  return mentionCallbacks.get(spoken)?.pending.delete(JSON.stringify([botId, sourceKey])) ?? false;
+}
+
+/** A steer that was refused goes back to the normal deferred delivery. */
+export function restoreMentionCallback(spoken: Set<string>, botId: string, hop: number, sourceKey: string, sourceBotId?: string): void {
+  const entry = mentionCallbacks.get(spoken);
+  entry?.pending.set(JSON.stringify([botId, sourceKey]), { botId, hop, ...(sourceBotId ? { sourceBotId } : {}) });
 }
 
 /** Remove one delivery before dispatch so it cannot run twice. */

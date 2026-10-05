@@ -14,6 +14,8 @@
 //                        sends, captured from 2.1.263)
 //                      | api-error (the CLI reports a non-auth API error as
 //                        assistant text, then an error result; no model output)
+//                      | slow-tool (one Bash call held open until
+//                        FAKE_CLAUDE_SLOW_TOOL_GATE exists; steers fold in)
 //   FAKE_CLAUDE_DUMP   path to write {argv, env, prompt, systemPrompt,
 //                      mcpConfig} as JSON,
 //                      so the test can assert on argv shape and env hygiene.
@@ -453,6 +455,27 @@ const playTurn = (prompt: JsonValue) => {
     if (context.trim()) replyParts = [`${context.trim()}\n\n${replyParts[0] ?? ""}`, ...replyParts.slice(1)];
   }
   const usage = { input_tokens: 10, cache_read_input_tokens: 2, output_tokens: 5 };
+  if (mode === "slow-tool") {
+    // A tool call held open until FAKE_CLAUDE_SLOW_TOOL_GATE exists, read
+    // asynchronously so a steer folds in while the tool runs; the closing
+    // reply carries it, the way the real CLI's next model call would.
+    const id = `tu-${process.pid}-${++toolUseCount}`;
+    out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command: "sleep" } }], usage } });
+    const gate = process.env.FAKE_CLAUDE_SLOW_TOOL_GATE ?? "";
+    const poll = setInterval(() => {
+      if (!existsSync(gate)) return;
+      clearInterval(poll);
+      setImmediate(() => {
+        out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: false, content: [{ type: "text", text: "slept" }] }] } });
+        const tail = steered.length ? ` + steered: ${steered.join(" | ")}` : "";
+        out({ type: "assistant", message: { content: [{ type: "text", text: `tool done for: ${promptText(prompt)}${tail}` }], usage } });
+        out({ type: "result", is_error: false, stop_reason: "end_turn", total_cost_usd: 0.01, usage });
+        turnRunning = false;
+        finishIfDone();
+      });
+    }, 10);
+    return;
+  }
   if (scriptedToolCalls) {
     // scripted calls come first, each settled before the reply text
     for (const call of scriptedToolCalls) {

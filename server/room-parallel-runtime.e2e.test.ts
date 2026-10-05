@@ -84,8 +84,13 @@ await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE).href)});
       // own @mentions back out
       approvalA: {...fixture("Approval A", { FAKE_CLAUDE_MODE: "hang", FAKE_APPROVAL_DUMP_DIR: approvalDumps, FAKE_CLAUDE_TEXT_DUMP: join(home,"approvalA-text.json") }),config:{cli:approvalCli}},
       approvalB: {...fixture("Approval B", { FAKE_CLAUDE_MODE: "hang", FAKE_APPROVAL_DUMP_DIR: approvalDumps, FAKE_CLAUDE_TEXT_DUMP: join(home,"approvalB-text.json") }),config:{cli:approvalCli}},
-      loopA: fixture("Loop A", { FAKE_CLAUDE_REPLIES: JSON.stringify(Array(10).fill("@LoopB continue")), FAKE_CLAUDE_REPLY_STATE: join(home,"loopA-replies.txt") }),
-      loopB: fixture("Loop B", { FAKE_CLAUDE_REPLIES: JSON.stringify(Array(10).fill("@LoopA continue")), FAKE_CLAUDE_REPLY_STATE: join(home,"loopB-replies.txt") }),
+      // Tool-free: the fake ends a turn right after its tool result, which
+      // the real CLI never does, so a tool-step mention steer would open a
+      // second turn here. This case is about route dedupe, not steering.
+      loopA: fixture("Loop A", { FAKE_CLAUDE_REPLIES: JSON.stringify(Array(10).fill("@LoopB continue")), FAKE_CLAUDE_REPLY_STATE: join(home,"loopA-replies.txt"), FAKE_CLAUDE_TOOL_CALLS: "[]" }),
+      loopB: fixture("Loop B", { FAKE_CLAUDE_REPLIES: JSON.stringify(Array(10).fill("@LoopA continue")), FAKE_CLAUDE_REPLY_STATE: join(home,"loopB-replies.txt"), FAKE_CLAUDE_TOOL_CALLS: "[]" }),
+      pinger: fixture("Pinger", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@Toolworker PING FROM PINGER"]), FAKE_CLAUDE_TOOL_CALLS: "[]" }),
+      toolworker: fixture("Toolworker", { FAKE_CLAUDE_MODE: "slow-tool", FAKE_CLAUDE_SLOW_TOOL_GATE: join(home,"toolworker.gate") }),
       chainA: fixture("Chain A", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainB check the route"]) }),
       chainB: fixture("Chain B", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainC check the queue"]) }),
       chainC: fixture("Chain C", { FAKE_CLAUDE_REPLIES: JSON.stringify(["@ChainD check the handoff"]) }),
@@ -602,6 +607,23 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     expect(speakers).toHaveLength(4);
     expect(new Set(speakers)).toEqual(new Set([a.id,b.id]));
   });
+  it("steers a teammate's @mention into a member whose tool call is running, like a person's @", async () => {
+    const worker=await createBot("Toolworker","toolworker"); const pinger=await createBot("Pinger","pinger");
+    const room=(await api("POST","/api/groups",{name:"Mention steer",memberIds:[worker.id,pinger.id],setup:{bulletin:"",defaultResponder:{kind:"mentions"}}})).body.group;
+    rmSync(join(home,"toolworker.gate"),{force:true});
+    await api("POST",`/api/groups/${room.id}/messages`,{text:"@Toolworker @Pinger go"});
+    await wait(async()=>(await snapshot(room.id)).messages.some((m:any)=>m.kind==="activity"&&m.tool?.name==="Pinger's mention steered into Toolworker's running turn"),"mention steered");
+    writeFileSync(join(home,"toolworker.gate"),"done");
+    await wait(async()=>!(await snapshot(room.id)).working);
+    const texts=(await snapshot(room.id)).messages.filter((m:any)=>m.role==="bot"&&m.kind==="text");
+    // Every reply is owned, and the steer folded into the running turn
+    // instead of queueing a second Toolworker turn.
+    expect(texts.every((m:any)=>m.from?.botId)).toBe(true);
+    const workerTexts=texts.filter((m:any)=>m.from.botId===worker.id);
+    expect(workerTexts).toHaveLength(1);
+    expect(workerTexts[0].text).toContain("PING FROM PINGER");
+  });
+
   it("publishes canonical room events with distinct member lane attribution", async () => {
     const a=await createBot("StreamA","quick"); const b=await createBot("StreamB","quick");
     const room=(await api("POST","/api/groups",{name:"Lane events",memberIds:[a.id,b.id],setup:{bulletin:"",defaultResponder:{kind:"everyone"}}})).body.group;

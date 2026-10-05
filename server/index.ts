@@ -59,7 +59,7 @@ import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type 
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { LeadActions, taggedLeadReport, leadResolutionSchema, type LeadAction } from "./lead-actions.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
-import { deferMentionCallback, isAddressedRoomReply, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
+import { deferMentionCallback, dropMentionCallback, isAddressedRoomReply, restoreMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
@@ -6706,6 +6706,89 @@ async function steerRoomQueue(groupId: string, targetThreadId: string, queueId: 
   return { status: 200, body: { ok: true, queued: true, threadId: targetThreadId } };
 }
 
+const roomRepliesSettled = new Set<string>(); // runtime threads whose member reply is final
+interface MentionSteer {
+  groupId: string; sourceThreadId: string; sourceBotId: string; targetBotId: string;
+  text: string; spoken: Set<string>; hop: number; routeKey: string;
+}
+const mentionSteers = new Map<string, MentionSteer[]>(); // target runtime thread → waiting mentions
+const mentionSteersDelivering = new Set<string>();
+const roomToolsRunning = new Map<string, number>(); // room runtime thread → open tool calls
+bus.subscribe((event: RuntimeEvent) => {
+  if (shouldIgnoreProviderEvent(event)) return;
+  if (event.type === "turn.completed" || event.type === "session.exited") {
+    roomToolsRunning.delete(event.threadId);
+    if (groupSpeakers.has(event.threadId)) { roomRepliesSettled.add(event.threadId); mentionSteers.delete(event.threadId); }
+    return;
+  }
+  if ((event.type !== "item.started" && event.type !== "item.completed") || event.itemType !== "tool" || !groupSpeakers.has(event.threadId)) return;
+  const open = roomToolsRunning.get(event.threadId) ?? 0;
+  if (event.type === "item.started") roomToolsRunning.set(event.threadId, open + 1);
+  else if (open > 1) roomToolsRunning.set(event.threadId, open - 1);
+  else roomToolsRunning.delete(event.threadId);
+});
+
+/** A teammate's addressed reply to a member whose room turn is running
+ * waits for that turn's next tool step, exactly like a person's @ does. The
+ * deferred mention delivery stays registered as the fallback. */
+function queueMentionSteer(groupId: string, sourceThreadId: string, source: BotRecord, target: BotRecord, replyText: string,
+  route: { spoken: Set<string>; hop: number; routeKey: string }) {
+  const live = roomRuntimeSpeakers(groupId, sourceThreadId).find(([runtimeId, speaker]) =>
+    speaker.botId === target.id && runtimeId !== sourceThreadId && !roomRepliesSettled.has(runtimeId));
+  if (!live) return;
+  const [runtimeThreadId] = live;
+  const list = mentionSteers.get(runtimeThreadId) ?? [];
+  list.push({ groupId, sourceThreadId, sourceBotId: source.id, targetBotId: target.id,
+    text: `[${source.name} in the room, while you were working]\n${replyText.trim()}`, ...route });
+  mentionSteers.set(runtimeThreadId, list);
+  // Inside a tool call the engine reads the words at its next model call.
+  // While it is writing, a steer could land after its final reply and open
+  // a turn nobody owns, so that waits for the next tool step instead.
+  if ((roomToolsRunning.get(runtimeThreadId) ?? 0) > 0) void deliverMentionSteers(runtimeThreadId).catch(error => {
+    console.warn("room mention steer failed", error instanceof Error ? error.message : String(error));
+  });
+}
+
+async function deliverMentionSteers(runtimeThreadId: string) {
+  if (mentionSteersDelivering.has(runtimeThreadId)) return;
+  mentionSteersDelivering.add(runtimeThreadId);
+  try {
+    for (;;) {
+      const list = mentionSteers.get(runtimeThreadId);
+      const next = list?.[0];
+      if (!next) return;
+      const speaker = groupSpeakers.get(runtimeThreadId);
+      const target = store.bot(next.targetBotId);
+      const source = store.bot(next.sourceBotId);
+      if (!speaker || speaker.botId !== next.targetBotId || !target || roomRepliesSettled.has(runtimeThreadId)) return;
+      list!.shift();
+      if (!list!.length) mentionSteers.delete(runtimeThreadId);
+      // Already taken by the deferred delivery: never deliver twice.
+      if (!source || !dropMentionCallback(next.spoken, target.id, next.routeKey)) continue;
+      const restore = () => restoreMentionCallback(next.spoken, target.id, next.hop, next.routeKey, source.id);
+      const problem = roomHandoffProblem(
+        { groupId: next.groupId, threadId: store.canonicalThreadId(next.sourceThreadId), botId: target.id },
+        { groupId: next.groupId, threadId: store.canonicalThreadId(next.sourceThreadId), botId: source.id },
+      ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, next.sourceThreadId) ? "peer approval required" : undefined);
+      const instance = runningTurnInstance(target, runtimeThreadId);
+      if (problem || !instance?.adapter.capabilities.queueing || !instance.adapter.steer) { restore(); return; }
+      const outcome: SteerOutcome = await instance.adapter.steer(runtimeThreadId, next.text)
+        .catch((): SteerOutcome => "indeterminate");
+      if (outcome === "refused") { restore(); return; }
+      store.appendMessage(next.sourceThreadId, {
+        role: "bot", kind: "activity",
+        from: { botId: target.id, name: target.name, color: target.color },
+        tool: {
+          name: outcome === "steered"
+            ? `${source.name}'s mention steered into ${target.name}'s running turn`
+            : `${source.name}'s mention may not have reached ${target.name}'s running turn — check before resending`,
+          ok: outcome === "steered",
+        },
+      });
+    }
+  } finally { mentionSteersDelivering.delete(runtimeThreadId); }
+}
+
 const priorityDirectPreemptions = new Set<string>();
 const priorityRoomPreemptions = new Set<string>();
 const roomBoundarySteers = new Set<string>();
@@ -6737,6 +6820,9 @@ async function steerRoomAtToolBoundary(runtimeThreadId: string) {
 bus.subscribe((event: RuntimeEvent) => {
   if (shouldIgnoreProviderEvent(event) || event.type !== "item.completed" || event.itemType !== "tool") return;
   if (groupSpeakers.has(event.threadId)) {
+    void deliverMentionSteers(event.threadId).catch(error => {
+      console.warn("room mention steer failed", error instanceof Error ? error.message : String(error));
+    });
     void steerRoomAtToolBoundary(event.threadId).catch(error => {
       console.warn("room boundary steer failed", error instanceof Error ? error.message : String(error));
     });
@@ -10836,6 +10922,10 @@ async function executeGroupMemberTurn(
       }
     }
   }
+  // This member's reply is final: a teammate's mention must not steer into
+  // it now, or the engine would start an orphan turn nobody owns.
+  roomRepliesSettled.add(threadId);
+  mentionSteers.delete(threadId);
   // chained mentions: a member's reply can summon teammates, MAX_GROUP_HOPS deep
   if (
     (orchestration?.followMentions ?? true) &&
@@ -10875,8 +10965,13 @@ async function executeGroupMemberTurn(
       // the next wave may work together, including callbacks to a lead.
       // Equal routes within this user round are loops/retries, while new
       // results from the same bot are legitimate follow-up deliveries.
-      deferMentionCallback(spoken, next.id, hop + 1,
-        JSON.stringify([bot.id, replyText.trim().replace(/\s+/g, " ")]), bot.id);
+      const routeKey = JSON.stringify([bot.id, replyText.trim().replace(/\s+/g, " ")]);
+      if (!deferMentionCallback(spoken, next.id, hop + 1, routeKey, bot.id)) continue;
+      // A teammate already mid-turn in this room hears the mention the way a
+      // person's @ reaches it: steered into the running turn, not parked
+      // until the whole wave settles. It lands at the teammate's next tool
+      // step; if that turn finishes first, the deferred delivery runs.
+      queueMentionSteer(group.id, threadId, bot, next, replyText, { spoken, hop: hop + 1, routeKey });
     }
   }
   return true;
@@ -10904,6 +10999,8 @@ async function executeGroupMemberTurn(
   } finally {
     // Covers connector/setup failures, cancellation before dispatch, and all
     // other early returns that never produce a provider terminal event.
+    roomRepliesSettled.delete(threadId);
+    mentionSteers.delete(threadId);
     revokeInternalCapabilityGeneration(threadId, internalGeneration);
     roomHandoffs.sourceSettled(internalGeneration, roomHandoffSourceSucceeded);
     if (!retainRoomVmLease) releaseRoomVmLease();
