@@ -35,7 +35,17 @@ public struct AttachedMessageContent: Hashable, Sendable {
     /// Splits only the exact, standalone tags OpenMausBot writes. An inline
     /// example in somebody's prose stays prose instead of disappearing.
     public static func parse(_ source: String) -> AttachedMessageContent {
+        let scanned = scan(source)
+        return AttachedMessageContent(text: scanned.visible, attachments: scanned.attachments)
+    }
+
+    /// The same split as `parse`, plus where each consumed transport tag line
+    /// sits in `source`, so an editor can keep those lines byte for byte.
+    static func scan(_ source: String) -> (
+        visible: String, attachments: [DisplayedMessageAttachment], tagLines: [Range<String.Index>]
+    ) {
         var attachments: [DisplayedMessageAttachment] = []
+        var tagLines: [Range<String.Index>] = []
         var visible = ""
         var fence: Fence?
         var htmlBlock: HTMLBlock?
@@ -67,6 +77,7 @@ public struct AttachedMessageContent: Hashable, Sendable {
                 fence = Fence(character: marker.character, length: marker.length)
             } else if let attachment = attachmentTag(in: line) {
                 attachments.append(attachment)
+                tagLines.append(cursor..<lineEnd)
                 consumedTransportTag = true
             } else if let openingHTMLBlock = htmlBlockStarting(in: line) {
                 htmlBlock = openingHTMLBlock
@@ -78,10 +89,7 @@ public struct AttachedMessageContent: Hashable, Sendable {
             cursor = wholeLineEnd
         }
 
-        return AttachedMessageContent(
-            text: visible.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachments: attachments
-        )
+        return (visible.trimmingCharacters(in: .whitespacesAndNewlines), attachments, tagLines)
     }
 
     private struct Fence {
@@ -301,7 +309,7 @@ public struct QueuedSendPreview: Hashable, Sendable {
 
     /// Only the app's own wrapper (`<pasted-text index="N">` on its own
     /// line) counts as a paste, so a typed `<pasted-text>` stays prose.
-    private static let pasteBlock = try! NSRegularExpression(
+    static let pasteBlock = try! NSRegularExpression(
         pattern: #"(?:^|\n)<pasted-text index="\d+">\n([\s\S]*?)\n</pasted-text>(?=\n|$)"#)
 
     public static func parse(_ text: String) -> QueuedSendPreview {
