@@ -48,6 +48,7 @@ import { openLiveEvents } from "@/lib/live-events";
 import { noteUpdateFrame } from "@/lib/bos-update";
 import { fetchInbox, inboxCountOf } from "@/lib/inbox";
 import { withSendPriority, type SendPriority } from "@/lib/composer-priority";
+import { applyActivityFrame, loadActivityFeed } from "@/lib/activity-feed";
 
 const MAX_ROUTINE_RUNS = 2_000;
 const ACTIVE_ROUTINE_RUN_STATUSES = new Set<RoutineRun["status"]>(["queued", "running", "waiting"]);
@@ -3570,6 +3571,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const part = partByKey.get(failed.key);
         if (part) schedulePeripheralRetry(part, error);
       });
+      if (chatReady) void loadActivityFeed((path) => api(path));
       return alive && chatReady;
     };
 
@@ -3624,6 +3626,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // server replays what we missed when it can, and re-downloading every
     // transcript on a reconnect it already covered is pure waste.
     handleFrame = (frame) => {
+      // the activity feed keeps its own store so a background tool step
+      // re-renders only the rows that read it
+      if (applyActivityFrame(frame as { kind: string } & Record<string, unknown>)) return;
       if (frame.kind === "config") bumpPeripheralVersion("config", "instances");
       else if (frame.kind === "routine" || frame.kind === "routine.deleted" || frame.kind === "routine.run") {
         bumpPeripheralVersion("routines");
