@@ -34,6 +34,7 @@ final class SpeechDictation: ObservableObject {
     /// system permission sheets are still in flight.
     @Published private(set) var isStarting = false
     @Published private(set) var transcript = ""
+    private var spoken = Dictation.Transcript()
     @Published private(set) var error: LocalizedStringKey?
 
     /// Composer text captured when listening started. Frozen for the
@@ -66,6 +67,7 @@ final class SpeechDictation: ObservableObject {
         error = nil
         self.base = base.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript = ""
+        spoken = Dictation.Transcript()
         isStarting = true
         generation += 1
         let gen = generation
@@ -205,7 +207,11 @@ final class SpeechDictation: ObservableObject {
         // new draft or stopping the new capture.
         guard gen == generation, !stopping, isListening else { return }
         if let result {
-            transcript = Dictation.updateTranscript(transcript, new: result.bestTranscription.formattedString)
+            spoken.apply(
+                result.bestTranscription.formattedString,
+                endsUtterance: result.speechRecognitionMetadata != nil
+            )
+            transcript = spoken.text
             // Composer dictation does not wait for isFinal — the last
             // partial is what you send. If the recognizer finalizes on
             // its own (rare without endAudio), just stop listening.

@@ -93,13 +93,57 @@ final class DictationTests: XCTestCase {
         )
     }
 
-    /// A new sentence that happens to share the first word with the previous
-    /// sentence is still treated as a new segment.
-    func testASharedFirstWordIsNotEnoughToMergeAcrossSegments() {
+    /// Within one utterance the recognizer revises its last word; that is
+    /// still the same utterance, not a new one to append.
+    func testALastWordRevisionReplacesInPlace() {
         XCTAssertEqual(
             Dictation.updateTranscript("first sentence", new: "first word"),
-            "first sentence first word"
+            "first word"
         )
+    }
+
+    /// The bug from the phone: punctuation arriving on a partial must not
+    /// start a new segment, and the stream must end as the last reading.
+    func testAPartialStreamWithPunctuationDoesNotRepeat() {
+        var t = Dictation.Transcript()
+        for p in ["Can", "Can you", "Can you?", "Can you list", "Can you list some",
+                  "Can you list something like", "Can you list something like that?",
+                  "Can you list something like that more I wanna",
+                  "Can you list something like that more I want",
+                  "Can you list something like that more I want 1.6 will be ready"] {
+            t.apply(p)
+        }
+        XCTAssertEqual(t.text, "Can you list something like that more I want 1.6 will be ready")
+    }
+
+    /// An utterance the recognizer marks as finished stays, and the next one
+    /// is appended after it, even if it starts with the same word.
+    func testAFinishedUtteranceIsKeptAndTheNextAppended() {
+        var t = Dictation.Transcript()
+        t.apply("I went home", endsUtterance: true)
+        t.apply("I")
+        t.apply("I ate")
+        XCTAssertEqual(t.text, "I went home I ate")
+    }
+
+    /// If the recognizer keeps reporting from the start after marking an
+    /// utterance done, the committed text is reopened rather than repeated.
+    func testACumulativeRecognizerAfterAnUtteranceEndDoesNotRepeat() {
+        var t = Dictation.Transcript()
+        t.apply("hello there.", endsUtterance: true)
+        t.apply("hello there. how are you")
+        XCTAssertEqual(t.text, "hello there. how are you")
+    }
+
+    /// Once a segment was appended, later partials only compare with the new
+    /// segment, so a revision there replaces in place.
+    func testPartialsAfterAFreshSegmentReviseOnlyThatSegment() {
+        var t = Dictation.Transcript()
+        t.apply("first sentence.")
+        t.apply("second")
+        t.apply("second sentence")
+        t.apply("second sentence.")
+        XCTAssertEqual(t.text, "first sentence. second sentence.")
     }
 
     // MARK: - Locale candidates

@@ -33,33 +33,86 @@ public enum Dictation {
 
     /// Merge a new formatted partial into the accumulated transcript.
     ///
-    /// Partials for the same segment extend or revise the current text in
-    /// place. A fresh segment after a pause does not start with the previous
-    /// partial, so it is appended instead of replacing the accumulated text.
+    /// One-shot form of `Transcript` for callers holding only a string: the
+    /// whole of `current` is treated as the live segment.
     public static func updateTranscript(_ current: String, new: String) -> String {
-        let current = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        let new = new.trimmingCharacters(in: .whitespacesAndNewlines)
-        if new.isEmpty { return current }
-        if current.isEmpty { return new }
+        var transcript = Transcript(live: current)
+        transcript.apply(new)
+        return transcript.text
+    }
 
-        // Same segment: the recognizer lengthened the current text.
-        if new.hasPrefix(current) { return new }
+    /// The spoken text for one dictation session: finished utterances plus
+    /// the one still being recognized.
+    ///
+    /// A partial is only ever compared with the live utterance, never with
+    /// everything said so far. Comparing with the whole transcript is what
+    /// made the composer repeat itself: once one partial was appended (a
+    /// recognizer turning "can you" into "can you?" was enough), every later
+    /// partial shared no prefix with the accumulated text and was appended
+    /// again, so the field filled with "can you can you? can you list ...".
+    public struct Transcript: Equatable, Sendable {
+        public private(set) var committed: [String] = []
+        public private(set) var live = ""
 
-        // Same segment with a brief backtrack: keep the longer version.
-        if current.hasPrefix(new) { return current }
-
-        // Same segment with a word-level revision: most leading words match.
-        let currentWords = current.split(separator: " ")
-        let newWords = new.split(separator: " ")
-        let commonWordCount = zip(currentWords, newWords)
-            .prefix(while: { $0.lowercased() == $1.lowercased() })
-            .count
-        if commonWordCount >= 2, commonWordCount * 2 >= currentWords.count {
-            return new
+        public init(live: String = "") {
+            self.live = live.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        // New segment after a pause: append, separated by a space.
-        return draft(base: current, transcript: new)
+        public var text: String {
+            (committed + [live]).reduce("") { draft(base: $0, transcript: $1) }
+        }
+
+        /// Take the recognizer's latest reading of the live utterance.
+        /// `endsUtterance` is the recognizer saying this utterance is done
+        /// (on iOS, a result carrying `speechRecognitionMetadata`); the next
+        /// partial then starts a new one.
+        public mutating func apply(_ partial: String, endsUtterance: Bool = false) {
+            let new = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !new.isEmpty {
+                if live.isEmpty, let last = committed.last, Dictation.startsWith(new, last) {
+                    // The recognizer kept reporting from the start of the
+                    // utterance we already committed: reopen it, don't repeat it.
+                    committed.removeLast()
+                    live = new
+                } else if live.isEmpty || Dictation.revises(live, with: new) {
+                    // A partial that is a shorter prefix of the live text is a
+                    // momentary backtrack; keep the longer reading.
+                    if !(Dictation.startsWith(live, new) && Dictation.words(new).count < Dictation.words(live).count) {
+                        live = new
+                    }
+                } else {
+                    committed.append(live)
+                    live = new
+                }
+            }
+            if endsUtterance, !live.isEmpty {
+                committed.append(live)
+                live = ""
+            }
+        }
+    }
+
+    /// Lowercased words with punctuation stripped, so "you?" and "You" match.
+    static func words(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isWhitespace)
+            .map { $0.lowercased().filter { $0.isLetter || $0.isNumber } }
+            .filter { !$0.isEmpty }
+    }
+
+    static func startsWith(_ text: String, _ prefix: String) -> Bool {
+        let t = words(text), p = words(prefix)
+        return !p.isEmpty && t.count >= p.count && Array(t.prefix(p.count)) == p
+    }
+
+    /// Whether `new` is another reading of the same utterance as `current`:
+    /// it extends it, backtracks within it, or revises some of its words.
+    static func revises(_ current: String, with new: String) -> Bool {
+        let a = words(current), b = words(new)
+        if a.isEmpty || b.isEmpty { return true }
+        let common = zip(a, b).prefix(while: { $0 == $1 }).count
+        if common == min(a.count, b.count) { return true }
+        if common * 2 >= a.count { return true }
+        return common >= 1 && b.count >= a.count
     }
 
     /// Locales to try, in order. First available recognizer wins.
