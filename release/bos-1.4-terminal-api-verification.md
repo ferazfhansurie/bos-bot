@@ -85,3 +85,31 @@ shell-owned child teardown guarantee.
 - `node scripts/smoke-terminal-pty.mjs` and
   `node scripts/smoke-packaged-server.mjs`: passed with relocated runtimes and
   disposable homes, including real PTY output/resize/exit and server startup.
+
+## child-pid fixture follow-up, 2026-10-05
+
+The 8-second child-pid failure reproduced on Node 24.21.0. Diagnostic frames
+contained only `ready` and the echoed input line; neither a shell prompt nor the
+executed `child:<pid>` marker arrived. This happened before the cleanup assertion.
+The fixture inherited the runner's `/bin/zsh` and treated PTY allocation as shell
+initialization. The diagnostic does not establish why that shell failed to start
+executing input, so the earlier load-only explanation is not proven.
+
+The fixture now selects `/bin/sh`, a disposable HOME and empty ENV startup file,
+and a known prompt. Both socket/server cleanup cases wait for actual prompt output
+before launching their child. Real child creation, PID liveness before close and
+bounded PID disappearance afterward remain required. The test deadlines stay at
+8 seconds inside the 30-second case timeout. Failure diagnostics show only frame
+types and socket state, never raw shell output or environment values.
+
+Verified on Node 24.21.0, darwin-arm64:
+
+- Temporary stress parameterization: 50 socket-close and 50 server-close cases
+  passed; the final committed parameterization remains the two original cases.
+- Final `pnpm exec vitest run server/terminal.test.ts server/terminal-target.test.ts server/request-auth.test.ts server/desktop-update-lifecycle.test.ts server/engine-install.test.ts`:
+  72/72 passed (11:11:35 run).
+- `pnpm typecheck`, changed-file oxlint deny-warnings and `git diff --check`: passed.
+
+This change only touches tests and this handoff document. Ship still owns merged
+checks, packaging and the guarded install; no runtime-shell startup claim follows
+from these isolated fixture results.

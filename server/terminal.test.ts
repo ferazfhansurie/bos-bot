@@ -19,9 +19,16 @@ let targetValid: boolean;
 let maintenance: WorkspaceBackupMaintenance;
 const sockets: WebSocket[] = [];
 const frames = new Map<WebSocket, any[]>();
+const shellPrompt = "terminal-fixture-ready> ";
 beforeEach(async () => {
   cwd = mkdtempSync(join(tmpdir(), "bos-terminal-"));
   writeFileSync(join(cwd, "fixture-file"), "fixture");
+  // Use a controlled interactive shell rather than the runner's login shell.
+  writeFileSync(join(cwd, ".terminal-rc"), "");
+  vi.stubEnv("SHELL", "/bin/sh");
+  vi.stubEnv("HOME", cwd);
+  vi.stubEnv("ENV", join(cwd, ".terminal-rc"));
+  vi.stubEnv("PS1", shellPrompt);
   sessions = new SessionRegistry({ file: join(cwd, "sessions.json") });
   now = Date.now(); targetValid = true;
   maintenance = new WorkspaceBackupMaintenance();
@@ -50,6 +57,7 @@ afterEach(async () => {
   sockets.splice(0).forEach(s => s.terminate()); frames.clear();
   await new Promise<void>(resolve => server.close(() => resolve()));
   sessions.close(); rmSync(cwd, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 function mint(body: unknown = {botId: "bot", threadId: "thread"}, headers: Record<string, string> = {}) {
   return fetch(`${url}/api/terminal/ticket`, {method: "POST", headers: {"content-type": "application/json", "x-openmausbot-desktop-owner": "fixture-owner-capability", origin: url, ...headers}, body: JSON.stringify(body)});
@@ -64,7 +72,11 @@ function connect(t: string, origin = url) {
 async function waitFor(ws: WebSocket, predicate: (items: any[]) => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (!predicate(frames.get(ws)!)) {
-    if (Date.now() > deadline) throw new Error("terminal fixture timed out");
+    if (Date.now() > deadline) {
+      const items = frames.get(ws)!;
+      // Do not include raw shell output: credential tests use this helper too.
+      throw new Error(`terminal fixture timed out (socket ${ws.readyState}, frames ${items.map(f => f.type).join(",")})`);
+    }
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   return frames.get(ws)!;
@@ -130,7 +142,10 @@ it.each(["not json", JSON.stringify({type:"resize",cols:501,rows:24}), JSON.stri
 });
 // Leave headroom for both frame waits, child cleanup and scheduler load.
 it.each(["socket", "server"])("kills shell-owned background children when the %s closes", async mode => {
-  const ws = connect(await ticket()); await waitFor(ws, items => items.some(f => f.type === "ready"), 8000);
+  const ws = connect(await ticket());
+  // ready confirms PTY allocation; the prompt confirms shell initialization.
+  await waitFor(ws, items => items.some(f => f.type === "ready") &&
+    items.filter(f => f.type === "output").map(f => f.data).join("").includes(shellPrompt), 8000);
   ws.send(JSON.stringify({type:"input",data:"sleep 120 & printf 'child:%s\\n' $!\r"}));
   const items = await waitFor(ws, items => /child:(\d+)/.test(items.map(f => f.data ?? "").join("")), 8000);
   const pid = Number(/child:(\d+)/.exec(items.map(f => f.data ?? "").join(""))![1]);
