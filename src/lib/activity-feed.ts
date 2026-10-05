@@ -1,5 +1,6 @@
-/** Live activity per (bot, thread), from api's feed: a snapshot on every
- * hydrate plus one live frame per change. Kept outside the app reducer so a
+/** Live activity per (bot, thread), from api's feed (shared/activity.ts):
+ * GET /api/activity on every hydrate, then `activity` frames on /api/events,
+ * each a full replacement including removals. Kept outside the app reducer so a
  * tool step in a background thread re-renders the sidebar rows that read it,
  * not the whole app. The mascot gesture is derived here so the sidebar row,
  * the collapsed activity list and tests all ask the same question. */
@@ -21,7 +22,7 @@ const key = (botId: string, threadId: string) => `${botId}\u0000${threadId}`;
 export function parseActivityEntry(raw: unknown): ActivityEntry | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
-  const state = value.state === "waiting-on-person" ? "waiting" : value.state;
+  const state = value.state;
   if (typeof value.botId !== "string" || typeof value.threadId !== "string" || !STATES.has(state as ActivityState)) return null;
   const since = typeof value.since === "number" ? value.since : typeof value.since === "string" ? Date.parse(value.since) : NaN;
   return {
@@ -33,6 +34,9 @@ export function parseActivityEntry(raw: unknown): ActivityEntry | null {
 
 export function createActivityFeed() {
   let entries = new Map<string, ActivityEntry>();
+  /** bumped by every replacement, so a snapshot fetch that a live frame
+   * overtook is dropped instead of rolling the sidebar back */
+  let generation = 0;
   const listeners = new Set<() => void>();
   const emit = () => { for (const listener of listeners) listener(); };
   const upsert = (next: Map<string, ActivityEntry>, entry: ActivityEntry) => {
@@ -50,8 +54,10 @@ export function createActivityFeed() {
       const next = new Map<string, ActivityEntry>();
       for (const item of raw) { const entry = parseActivityEntry(item); if (entry) upsert(next, entry); }
       entries = next;
+      generation += 1;
       emit();
     },
+    generation: () => generation,
     apply(raw: unknown) {
       const entry = parseActivityEntry(raw);
       if (!entry) return;
@@ -73,19 +79,17 @@ export function createActivityFeed() {
 export type ActivityFeed = ReturnType<typeof createActivityFeed>;
 export const activityFeed = createActivityFeed();
 
-/** The frame may carry one entry flat or under `activity`; both are accepted
- * until the wire type lands in shared/wire.ts. */
 export function applyActivityFrame(frame: { kind: string } & Record<string, unknown>, feed: ActivityFeed = activityFeed): boolean {
   if (frame.kind !== ACTIVITY_FRAME_KIND) return false;
-  feed.apply(frame.activity ?? frame);
+  if (Array.isArray(frame.items)) feed.replace(frame.items);
   return true;
 }
 
 export async function loadActivityFeed(fetcher: (path: string) => Promise<unknown>, feed: ActivityFeed = activityFeed): Promise<void> {
+  const started = feed.generation();
   try {
-    const body = await fetcher(ACTIVITY_FEED_PATH) as { items?: unknown[]; activity?: unknown[] } | unknown[];
-    const items = Array.isArray(body) ? body : body?.items ?? body?.activity ?? [];
-    feed.replace(items);
+    const body = await fetcher(ACTIVITY_FEED_PATH) as { items?: unknown[] } | null;
+    if (feed.generation() === started && Array.isArray(body?.items)) feed.replace(body.items);
   } catch {
     // fail closed: no feed means the sidebar falls back to task.activity
   }

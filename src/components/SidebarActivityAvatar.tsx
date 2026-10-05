@@ -34,7 +34,7 @@ export function SidebarActivityAvatar({ bot, gesture, size, children }: {
   gesture: MascotGesture;
   size: number;
   /** the resting avatar, shown whenever nothing is happening */
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   if (gesture === "idle") return <>{children}</>;
   return <span data-sidebar-activity-mascot={gesture} className="flex">

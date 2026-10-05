@@ -14,21 +14,28 @@ describe("activity feed", () => {
   it("drops malformed and unknown states instead of animating on them", () => {
     expect(parseActivityEntry({ botId: "a", threadId: "t", state: "dancing", since: 1 })).toBeNull();
     expect(parseActivityEntry({ threadId: "t", state: "tool", since: 1 })).toBeNull();
-    expect(parseActivityEntry(entry("t", "waiting-on-person"))?.state).toBe("waiting");
     expect(parseActivityEntry({ ...entry("t", "tool"), since: "2026-10-06T00:00:00Z" })?.since).toBe(Date.parse("2026-10-06T00:00:00Z"));
   });
 
-  it("applies live frames per (bot, thread) and never rolls back to an older frame", () => {
+  it("treats each live frame as a full replacement, removals included", () => {
     const feed = createActivityFeed();
-    let renders = 0;
-    feed.subscribe(() => { renders += 1; });
-    expect(applyActivityFrame({ kind: "activity", ...entry("t1", "thinking", 10) }, feed)).toBe(true);
-    applyActivityFrame({ kind: "activity", activity: entry("t1", "tool", 20) }, feed);
-    applyActivityFrame({ kind: "activity", ...entry("t1", "thinking", 15) }, feed);
-    applyActivityFrame({ kind: "activity", ...entry("t1", "tool", 20) }, feed);
+    expect(applyActivityFrame({ kind: "activity", items: [entry("t1", "thinking"), entry("t2", "tool"), entry("r1", "typing", 1, "bos")] }, feed)).toBe(true);
+    expect(feed.forBot("scout").map((item) => item.state)).toEqual(["thinking", "tool"]);
+    applyActivityFrame({ kind: "activity", items: [entry("t1", "tool", 20)] }, feed);
     expect(feed.get("scout", "t1")?.state).toBe("tool");
-    expect(renders).toBe(2);
+    expect(feed.get("scout", "t2")).toBeUndefined();
+    expect(feed.forBot("bos")).toEqual([]);
     expect(applyActivityFrame({ kind: "bot" }, feed)).toBe(false);
+  });
+
+  it("drops a snapshot fetch that a live frame overtook", async () => {
+    const feed = createActivityFeed();
+    let resolve: (body: unknown) => void = () => {};
+    const loading = loadActivityFeed(() => new Promise((done) => { resolve = done; }), feed);
+    applyActivityFrame({ kind: "activity", items: [entry("t1", "tool", 30)] }, feed);
+    resolve({ items: [entry("t1", "thinking", 10)] });
+    await loading;
+    expect(feed.get("scout", "t1")?.state).toBe("tool");
   });
 
   it("replaces everything from the snapshot and fails closed when it can't load", async () => {
