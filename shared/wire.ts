@@ -130,6 +130,9 @@ export interface WireTask {
   closeWhenDone?: TaskClosedBy;
   /** When the person archived this thread. Absent = unarchived. */
   archivedAt?: number;
+  /** When the person cleared a failed run from needs-me; a failure at or
+   * before it is no longer news. */
+  failureAckedAt?: number;
   /** Defaults are copied when a task is created. */
   modelSelection?: ModelSelection;
   approvalMode?: ApprovalMode;
@@ -468,6 +471,8 @@ export interface GroupTask {
   closedBy?: TaskClosedBy;
   /** Newest message time, or when it was last reopened, else createdAt. */
   lastActivityAt?: number;
+  /** Same as a bot task's failureAckedAt. */
+  failureAckedAt?: number;
   /** Projection only; see ThreadState. */
   state?: ThreadState;
 }
@@ -528,11 +533,26 @@ export interface InboxItem {
   title: string;
   preview: string;
   at: number;
+  /** the pending card this row is about, when it is about one */
+  messageId?: string;
+  /** a live ask: answers go through POST /api/threads/:id/respond */
+  requestId?: string;
+  /** a tool approval, answered allow/deny rather than with an option */
+  approval?: boolean;
+  /** the card's choices, when the row can be answered with one tap */
+  options?: string[];
 }
 
 export interface InboxResponse {
   items: InboxItem[];
   count: number;
+}
+
+/** POST /api/inbox/clear: rows settled, and named rows that only an answer
+ * can settle (live asks are never cleared on the person's behalf). */
+export interface InboxClearResponse {
+  cleared: number;
+  kept: number;
 }
 
 export type DigestChange = "done" | "started" | "closed" | "failed";

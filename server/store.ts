@@ -103,7 +103,7 @@ export function toWireTask(task: TaskRecord): WireTask {
 const TASK_PATCH_FIELDS = [
   "title", "projectId", "modelSelection", "approvalMode", "autoApprove", "alwaysAllow",
   "unread", "rewound", "archivedAt", "pinnedMessageId", "resumeCursors", "lastInstanceId", "cwd",
-  "closeWhenDone", "routineRunId", "surface", "appliedCompactionId", "contextFloor", "lastContextModel", "modelFallback",
+  "closeWhenDone", "failureAckedAt", "routineRunId", "surface", "appliedCompactionId", "contextFloor", "lastContextModel", "modelFallback",
 ] as const satisfies readonly (keyof TaskRecord)[];
 export type TaskPatch = Partial<Pick<TaskRecord, typeof TASK_PATCH_FIELDS[number]>>;
 
@@ -1142,6 +1142,16 @@ export class Store {
       delete task.closedBy;
       task.lastActivityAt = Date.now();
     }
+    this.saveGroups();
+    this.emit({ type: "group", groupId });
+    return task;
+  }
+
+  /** Needs-me's clear: a failure at or before `at` stops being news. */
+  ackGroupTaskFailure(groupId: string, threadId: string, at: number): GroupTaskRecord | null {
+    const task = this.groupTaskByThread(groupId, threadId);
+    if (!task) return null;
+    task.failureAckedAt = at;
     this.saveGroups();
     this.emit({ type: "group", groupId });
     return task;

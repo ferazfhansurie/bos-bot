@@ -650,8 +650,19 @@ describe("thread state, reopen, needs-me and digest", () => {
       expect(inbox.body.items).toContainEqual(expect.objectContaining({ id: `unread:${pm.threadId}`, kind: "unread", botId: pm.id, threadId: pm.threadId }));
       const times = inbox.body.items.map((item: any) => item.at);
       expect(times).toEqual([...times].sort((a, b) => b - a));
-      expect((await api("POST", `/api/bots/${pm.id}/read`, { threadId: pm.threadId })).status).toBe(200);
+      // clearing one row reads it, the same as opening the thread
+      expect((await api("POST", "/api/inbox/clear", { ids: [`unread:${pm.threadId}`] })).body).toEqual({ cleared: 1, kept: 0 });
       expect((await api("GET", "/api/inbox")).body.items.some((item: any) => item.threadId === pm.threadId)).toBe(false);
+      expect((await taskOf(pm.id, pm.threadId)).unread).toBeFalsy();
+      expect((await api("POST", `/api/bots/${pm.id}/read`, { threadId: pm.threadId })).status).toBe(200);
+      // clear all leaves nothing clearable; junk bodies are refused
+      const clearedAll = await api("POST", "/api/inbox/clear", {});
+      expect(clearedAll.status).toBe(200);
+      expect(clearedAll.body).toMatchObject({ cleared: expect.any(Number), kept: expect.any(Number) });
+      const left = (await api("GET", "/api/inbox")).body.items;
+      expect(left.every((item: any) => item.kind === "waiting-on-you" || item.requestId)).toBe(true);
+      expect((await api("POST", "/api/inbox/clear", { ids: "all" })).status).toBe(400);
+      expect((await api("POST", "/api/inbox/clear", { ids: [], other: 1 })).status).toBe(400);
 
       const since = Date.now() - 60 * 60 * 1000;
       const digest = await api("GET", `/api/digest?since=${since}`);
