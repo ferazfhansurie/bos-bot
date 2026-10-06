@@ -1717,6 +1717,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // submitted user turn. Settling it would revoke browser access
             // and deny approvals while that user turn is still running.
             if (o.origin?.kind === "task-notification") break;
+            // Newer CLIs answer a --resume of a missing session with an error
+            // result and no `init` frame. Leave it unsettled so the close
+            // handler takes the resume-rejected path and rebuilds the thread.
+            if (o.is_error === true && sessionId && !session.sawInit && !o.num_turns) break;
             // result.usage is this invocation's total — one process per turn,
             // so it is the turn's figure. cache reads count as input: they
             // are billed (at the cache rate) and they fill the window — but

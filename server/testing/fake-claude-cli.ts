@@ -6,6 +6,8 @@
 //
 //   FAKE_CLAUDE_MODE   happy (default) | exit-early | hang | malformed |
 //                      dead-session (fails only when --resume is passed)
+//                      | dead-session-result (2.1.288: a --resume of a
+//                        missing session prints an error result, no init)
 //                      | resume-dies-after-init (a --resume launch emits
 //                        init, then exits without result or output)
 //                      | stream (partial-message text deltas before the
@@ -328,6 +330,14 @@ const playTurn = (prompt: JsonValue) => {
   // works normally, which is what makes recovery observable.
   if (mode === "dead-session" && argv.includes("--resume")) {
     process.stderr.write(`fake-claude: No conversation found with session ID: ${argAfter("--resume")}\n`);
+    process.exit(1);
+  }
+
+  if (mode === "dead-session-result" && argv.includes("--resume")) {
+    process.stderr.write(`No conversation found with session ID: ${argAfter("--resume")}\n`);
+    process.stdout.write(JSON.stringify({ type: "result", subtype: "error_during_execution", duration_ms: 0, is_error: true,
+      num_turns: 0, stop_reason: null, session_id: argAfter("--resume"), total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }) + "\n");
     process.exit(1);
   }
 

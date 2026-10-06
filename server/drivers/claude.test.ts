@@ -2686,6 +2686,21 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
     expect(text).toBe(REBUILD);
   });
 
+  it("rebuilds when the CLI reports a missing resume session as an error result", async () => {
+    // Claude Code 2.1.288 prints an error result without an init frame
+    // instead of just exiting; settling it bricked trusted peer threads.
+    process.env.FAKE_CLAUDE_MODE = "dead-session-result";
+    const dispatch = await instance.adapter.sendTurn({
+      threadId: "t-dead-result",
+      text: "what now?",
+      resumeCursor: "a-session-claude-no-longer-has",
+      recoveryText: REBUILD,
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+    expect(recorder.events.find((e) => e.type === "turn.retrying")).toMatchObject({ reason: "resume_rejected" });
+    expect(recorder.events.filter((e) => e.type === "turn.completed").at(-1)).toMatchObject({ ok: true, turnId: dispatch.turnId });
+  });
+
   it("does not announce a replacement as rebuilt when there was nothing to replay", async () => {
     // recoveryPromptFor falls back to the turn text when the harness attached
     // no rebuild: that session holds the turn, not the conversation, and the
