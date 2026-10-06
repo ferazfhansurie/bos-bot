@@ -307,6 +307,12 @@ const ownPlan = (b: any, teamCheck: any[], status = "ready") => ({ expectedRevis
   steps: [{ id: "own", ownerBotId: b.id, action: "Finish isolated fixture own work", status, dependsOn: [], ...(status === "waiting" ? { reason: "Waiting for dependency" } : {}) }] });
 const idle = async (b: any) => expect.poll(async () => Boolean((await botState(b.id))?.busy), { timeout: 15000 }).toBe(false);
 const count = (b: any) => promptsOf(b.threadId).length;
+const runtimeRow = (botId: string, threadId: string): any => { try { return JSON.parse(readFileSync(join(home, ".openmausbot", "work-runtime.json"), "utf8")).find((r: any) => r.botId === botId && r.threadId === threadId); } catch { return undefined; } };
+const roomRuntime = async (botId: string, threadId: string) => {
+  let runtime = "";
+  await expect.poll(() => { try { runtime = JSON.parse(readFileSync(join(home, ".openmausbot", "room-runtime-aliases.json"), "utf8")).find((r: any) => r[1].botId === botId && r[1].threadId === threadId)?.[0]; return runtime; } catch { return ""; } }, { timeout: 15000 }).toBeTruthy();
+  return runtime;
+};
 
 describe("work continuity real server", () => {
   it("ordinary bot stays one dispatch; opted-in missing plan has exactly one retry", async () => {
@@ -358,16 +364,18 @@ describe("work continuity real server", () => {
     expect((await messages(lead.threadId)).filter(m => m.role === "user").every(m => !m.text.includes("Continue your independently runnable"))).toBe(true);
     await cleanup([lead.id]);
   }, 45000);
-  it("stop persists a hold and a new non-resume message cannot release it", async () => {
+  it("stop holds only its own chain: no self-restart, any new human message releases it, stop/pause keep it", async () => {
     const lead = await optIn("Stop"); let h = await heldTurn(lead, "Build authorized fixture");
     expect((await api("POST", "/api/internal/work-plan", { plan: ownPlan(lead, await rosterCheck(h)) }, h)).status).toBe(200);
     await api("POST", `/api/bots/${lead.id}/interrupt`, {}); await idle(lead);
+    await new Promise(r => setTimeout(r, 300)); expect(count(lead)).toBe(1);
     h = await heldTurn(lead, "A different question");
-    const read = await api("GET", "/api/internal/work-plan", undefined, h); expect(read.body.held).toBe(true);
-    const plan = read.body.plan;
-    const update = { ...ownPlan(lead, await rosterCheck(h)), expectedRevision: plan.revision };
-    expect((await api("POST", "/api/internal/work-plan", { plan: update }, h)).status).toBe(409);
+    const read = await api("GET", "/api/internal/work-plan", undefined, h); expect(read.body.held).toBe(false);
+    const update = { ...ownPlan(lead, await rosterCheck(h), "waiting"), expectedRevision: read.body.plan.revision };
+    expect((await api("POST", "/api/internal/work-plan", { plan: update }, h)).status).toBe(200);
     release(lead.threadId); await idle(lead); expect(count(lead)).toBe(2);
+    h = await heldTurn(lead, "stop"); expect((await api("GET", "/api/internal/work-plan", undefined, h)).body.held).toBe(true);
+    release(lead.threadId); await idle(lead);
     h = await heldTurn(lead, "resume"); expect((await api("GET", "/api/internal/work-plan", undefined, h)).body.held).toBe(false);
     await cleanup([lead.id]);
   }, 45000);
@@ -519,6 +527,45 @@ describe("work continuity real server", () => {
       }
       expect(promptsOf(workerRuntime)).toHaveLength(1);
       release(lead.threadId); await idle(lead);
+    } finally { await api("DELETE", `/api/groups/${room.id}`); await cleanup([lead.id, worker.id]); }
+  }, 45000);
+
+  it("an earlier room Stop does not starve the owed helper result of a newer human request", async () => {
+    const lead = await optIn("HeldRoomLead", "manual"); const worker = await createBot("HeldRoomHelper", "manual");
+    const room = (await api("POST", "/api/groups", { name: "Held lead", memberIds: [lead.id, worker.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    try {
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@HeldRoomLead first request" });
+      const runtime = await roomRuntime(lead.id, room.threadId); let h = await liveToken(runtime);
+      expect((await api("POST", `/api/groups/${room.id}/interrupt`, { botId: lead.id })).status).toBe(200);
+      await expect.poll(() => runtimeRow(lead.id, room.threadId)?.held, { timeout: 15000 }).toBe(true); await idle(lead);
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@HeldRoomLead second request" });
+      h = await liveToken(runtime, h);
+      const node = await coordinated(h, worker.id, "Check isolated room evidence", "held-room-result");
+      release(runtime);
+      const workerRuntime = await roomRuntime(worker.id, room.threadId); await liveToken(workerRuntime); release(workerRuntime);
+      await expect.poll(() => handoffs().find(n => n.id === node.id)?.status, { timeout: 15000 }).toBe("completed");
+      await expect.poll(() => promptsOf(runtime).length, { timeout: 15000 }).toBe(3);
+      h = await liveToken(runtime, h); expect((await api("GET", "/api/internal/work-plan", undefined, h)).body.held).toBe(false);
+      release(runtime); await idle(lead);
+    } finally { await api("DELETE", `/api/groups/${room.id}`); await cleanup([lead.id, worker.id]); }
+  }, 45000);
+  it("a teammate's addressed room mention releases the Stop hold and wakes the held bot", async () => {
+    const lead = await optIn("MentionLead", "manual"); const worker = await createBot("MentionHelper", "manual");
+    const room = (await api("POST", "/api/groups", { name: "Mention wake", memberIds: [lead.id, worker.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    try {
+      await api("POST", `/api/groups/${room.id}/messages`, { text: "@MentionLead @MentionHelper start the fixture\n@MentionLead sync when the helper is done" });
+      const runtime = await roomRuntime(lead.id, room.threadId); await liveToken(runtime);
+      const workerRuntime = await roomRuntime(worker.id, room.threadId); await liveToken(workerRuntime);
+      expect((await api("POST", `/api/groups/${room.id}/interrupt`, { botId: lead.id })).status).toBe(200);
+      await expect.poll(() => runtimeRow(lead.id, room.threadId)?.held, { timeout: 15000 }).toBe(true);
+      await new Promise(r => setTimeout(r, 300)); expect(promptsOf(runtime)).toHaveLength(1); const before = promptsOf("peer").length;
+      release(workerRuntime);
+      // The mention is a depth-1 room turn (no agents server), so it is gated on "peer".
+      await expect.poll(() => promptsOf("peer").length, { timeout: 15000 }).toBe(before + 1);
+      await expect.poll(() => runtimeRow(lead.id, room.threadId)?.held, { timeout: 15000 }).toBe(false);
+      // The echoing fixture replies keep mentioning each other; stop the room to end the chain.
+      release("peer"); expect((await api("POST", `/api/groups/${room.id}/interrupt`, {})).status).toBe(200);
+      await idle(lead); await idle(worker); expect(promptsOf(runtime)).toHaveLength(1);
     } finally { await api("DELETE", `/api/groups/${room.id}`); await cleanup([lead.id, worker.id]); }
   }, 45000);
 

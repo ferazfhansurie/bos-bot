@@ -1971,10 +1971,17 @@ function beginWorkTurn(botId: string, runtimeThreadId: string, generation: strin
   let row: ReturnType<WorkRuntimeLedger["round"]>;
   try { row = workRuntime.round(botId, threadId, human.id); }
   catch { workTurns.delete(runtimeThreadId); return; }
-  // Only an actual human control command releases a durable hold.
-  if (row.held && row.heldAtChain !== human.id && /^(resume|continue)\s*[.!]?$/i.test(human.text?.trim() ?? "")) workRuntime.resume(botId, threadId, human.id);
+  // Any new human message releases an older hold; stop/pause sets one. The
+  // stopped chain itself stays held, so it never restarts on its own.
   if (/^(stop|pause)\s*[.!]?$/i.test(human.text?.trim() ?? "")) workRuntime.hold(botId, threadId, human.id);
+  else if (workRuntime.isHeld(botId, threadId) && row.heldAtChain !== human.id) workRuntime.resume(botId, threadId, human.id);
   workTurns.set(runtimeThreadId, { botId, threadId, runtimeThreadId, chainId: human.id, generation, snapshot: workSnapshot(botId, runtimeThreadId), disposed: false, noWork: false, cancelled, dispatch });
+}
+/** A teammate's addressed room mention wakes a Stop-held bot, like a human message. */
+function releaseWorkHold(botId: string, threadId: string) {
+  const canonical = store.canonicalThreadId(threadId);
+  try { if (store.bot(botId)?.workContinuity && workRuntime.isHeld(botId, canonical)) workRuntime.resume(botId, canonical, workHuman(canonical)?.id ?? ""); }
+  catch { console.error("Work hold could not be released; continuity stays fail-closed."); }
 }
 function holdWork(botId: string, threadId: string) {
   const canonical = store.canonicalThreadId(threadId);
@@ -11062,6 +11069,7 @@ async function executeGroupMemberTurn(
       const member = store.bot(id); return member && !member.hidden && member.id !== bot.id ? [member] : [];
     }), { kind: "mentions" })) {
       if (!isAddressedRoomReply(replyText, next.name, group.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member.name] : []; }))) continue;
+      releaseWorkHold(next.id, handoff.threadId);
       if (roomHandoffs.path(handoff).some(ancestor => ancestor.botId === next.id)) continue;
       try {
         roomHandoffs.enqueue(
@@ -11116,6 +11124,7 @@ async function executeGroupMemberTurn(
     for (const next of roomResponders(replyText, members, { kind: "mentions" })) {
       if (!isAddressedRoomReply(replyText, next.name, group.memberIds.flatMap(id => { const member = store.bot(id); return member ? [member.name] : []; }))) continue;
       if (isCancelled?.()) return false;
+      releaseWorkHold(next.id, threadId);
       // Dispatch after this execution releases its slot. All mentions in
       // the next wave may work together, including callbacks to a lead.
       // Equal routes within this user round are loops/retries, while new

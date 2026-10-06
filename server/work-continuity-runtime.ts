@@ -25,7 +25,8 @@ export class WorkRuntimeLedger {
     let row = this.rows.find(r => r.botId === botId && r.threadId === threadId);
     if (!row) { if (this.rows.length >= 2000) throw new Error("Too many work rounds"); row = { botId, threadId, chainId, held: false, preflight: false, assignments: {} }; this.rows.push(row); this.save(); }
     else if (row.chainId !== chainId) { row.chainId = chainId; row.preflight = false; this.save(); }
-    return structuredClone(row);
+    // A Stop holds only the chain it was pressed in; a newer human request is not starved by it.
+    return { ...structuredClone(row), held: row.held && (row.heldAtChain === undefined || row.heldAtChain === chainId) };
   }
   hold(botId: string, threadId: string, chainId: string) { this.round(botId, threadId, chainId); this.rows.find(r => r.botId === botId && r.threadId === threadId)!.held = true; this.rows.find(r => r.botId === botId && r.threadId === threadId)!.heldAtChain = chainId; this.save(); }
   resume(botId: string, threadId: string, chainId: string) { this.round(botId, threadId, chainId); this.rows.find(r => r.botId === botId && r.threadId === threadId)!.held = false; this.save(); }
