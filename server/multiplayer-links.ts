@@ -25,6 +25,16 @@ interface Snapshot { version: 1; links: RemoteLink[] }
 interface PrimaryRoomHome { homeId: string; actorId: string }
 
 const ROOM_ID = /^[\w-]{1,128}$/;
+const AVATAR_NAME = /^[\w-]{1,128}\.(?:png|jpg|jpeg|gif|webp)$/;
+const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+/** Canonical-home avatar paths mean nothing to this home's own server; point
+ * them at the guest-side relay for that room instead. */
+export function relayAvatars<T extends Record<string, unknown>>(group: T, groupId: string): T {
+  const relay = (url: unknown) => typeof url === "string" && url.startsWith("/api/attachments/") && AVATAR_NAME.test(url.slice(17))
+    ? `/api/groups/${groupId}/avatars/${url.slice(17)}` : typeof url === "string" ? null : url;
+  const bots = Array.isArray(group.memberBots) ? group.memberBots.map(bot => bot && typeof bot === "object" && "avatarUrl" in bot ? { ...bot, avatarUrl: relay(bot.avatarUrl) } : bot) : group.memberBots;
+  return { ...group, ...("avatarUrl" in group ? { avatarUrl: relay(group.avatarUrl) } : {}), ...(Array.isArray(group.memberBots) ? { memberBots: bots } : {}) };
+}
 /** The only canonical-home room routes a guest home relays. Each route is
  * membership-checked again by the canonical home; nothing else is reachable. */
 const GROUP_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
@@ -230,11 +240,11 @@ export class MultiplayerLinks {
       const home = { id: link.homeId, name: this.homeLabel(link.homeId), available: fresh[index] };
       const views = this.groupViews.get(link.homeId);
       const joined = new Set((link.joinedGroups ?? []).map(group => group.id));
-      if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...view, home }) as RemoteGroupView);
-      return (link.joinedGroups ?? []).map(group => ({
+      if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...relayAvatars(view, view.id as string), home }) as RemoteGroupView);
+      return (link.joinedGroups ?? []).map(group => relayAvatars({
         id: group.id, name: group.name, threadId: group.threadIds[0], memberIds: group.memberIds ?? [], memberBots: group.memberBots ?? [], avatarUrl: group.avatarUrl, defaultResponder: { kind: "mentions" },
         bulletin: "", unread: false, createdAt: 0, messages: [], home,
-      }));
+      }, group.id) as RemoteGroupView);
     });
   }
 
@@ -244,6 +254,24 @@ export class MultiplayerLinks {
     const link = this.links.get(homeId);
     if (!link) throw new Error("joined room home is unavailable");
     return this.forwardTo(link, path, method, body, GROUP_ROUTES);
+  }
+
+  /** One avatar image of a joined room, fetched from its canonical home with
+   * the link's chat-only token. Only names the home itself listed as the
+   * room's or a member bot's avatar are fetched; anything else is refused. */
+  async groupAvatar(homeId: string, groupId: string, name: string): Promise<{ mime: string; bytes: Buffer } | null> {
+    const link = this.links.get(homeId);
+    const group = link?.joinedGroups?.find(item => item.id === groupId);
+    if (!link || !group || !AVATAR_NAME.test(name)) return null;
+    const path = `/api/attachments/${name}`;
+    if (group.avatarUrl !== path && !group.memberBots?.some(bot => bot.avatarUrl === path)) return null;
+    const response = await this.fetcher(new URL(path, link.origin), {
+      redirect: "error", signal: AbortSignal.timeout(25_000), headers: { authorization: `Bearer ${link.token}` },
+    });
+    const mime = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+    if (!response.ok || !/^image\/(?:png|jpeg|gif|webp)$/.test(mime)) return null;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return bytes.byteLength <= MAX_AVATAR_BYTES ? { mime, bytes } : null;
   }
 
   /** The canonical home's person-scoped event stream for this guest. */

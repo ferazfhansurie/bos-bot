@@ -1,12 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { remoteGroupRouteAllowed, type MultiplayerLinks, type RemoteGroupView } from "./multiplayer-links.ts";
+import { relayAvatars, remoteGroupRouteAllowed, type MultiplayerLinks, type RemoteGroupView } from "./multiplayer-links.ts";
 
 /** A guest home shows rooms it joined on a canonical home next to its own
  * rooms and relays their reads, sends and events over the existing link.
  * Local rooms always win: an id or thread this home owns is never relayed. */
 export interface RemoteRoomContext {
-  links: Pick<MultiplayerLinks, "joinedGroupHomes" | "joinedThreadHome" | "homeLabel" | "remoteGroups" | "forwardGroup" | "openGroupEvents">;
+  links: Pick<MultiplayerLinks, "joinedGroupHomes" | "joinedThreadHome" | "homeLabel" | "remoteGroups" | "forwardGroup" | "openGroupEvents" | "groupAvatar">;
   isLocalGroup(id: string): boolean;
   isLocalThread(id: string): boolean;
   localGroups(): Array<{ id: string }>;
@@ -50,6 +50,16 @@ export async function handleRemoteRoom(
     await relayEvents(req, res, homeId, ctx);
     return true;
   }
+  const avatar = method === "GET" && /^\/api\/groups\/[\w-]+\/avatars\/([\w.-]+)$/.exec(path)?.[1];
+  if (avatar) {
+    req.resume();
+    const image = await ctx.links.groupAvatar(homeId, groupId!, avatar).catch(() => null);
+    if (!ctx.stillOwner()) { ctx.json(res, 403, { error: "owner session ended" }); return true; }
+    if (!image) { ctx.json(res, 404, { error: "no such avatar" }); return true; }
+    res.writeHead(200, { "content-type": image.mime, "content-length": String(image.bytes.byteLength), "cache-control": "private, max-age=300", "x-content-type-options": "nosniff" });
+    res.end(image.bytes);
+    return true;
+  }
   const route = path + search;
   if (!remoteGroupRouteAllowed(method, route)) {
     req.resume();
@@ -64,7 +74,7 @@ export async function handleRemoteRoom(
     let answer = forwarded.body;
     const group = (answer as { group?: unknown } | null)?.group;
     if (forwarded.status < 300 && group && typeof group === "object" && !Array.isArray(group)) {
-      answer = { ...(answer as object), group: { ...group, home: { id: homeId, name: ctx.links.homeLabel(homeId), available: true } } };
+      answer = { ...(answer as object), group: { ...relayAvatars(group as Record<string, unknown>, groupId!), home: { id: homeId, name: ctx.links.homeLabel(homeId), available: true } } };
     }
     ctx.json(res, forwarded.status, answer);
   } catch (error) {
