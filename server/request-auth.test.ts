@@ -30,6 +30,13 @@ function request(headers: Record<string, string>, method = "GET"): IncomingMessa
 }
 
 describe("loopback rules (moved from the server entry, behaviour unchanged)", () => {
+  it("grants clients only scoped resume while review remains admin-only", () => {
+    const path = "/api/bots/b/threads/t/recovery/r/resume";
+    expect(requiredScope("POST", path)).toBe("client");
+    expect(requiredScope("GET", path)).toBe("admin");
+    expect(requiredScope("POST", path.replace("/resume", "/review"))).toBe("admin");
+    expect(requiredScope("POST", "/api/recovery/resume-all")).toBe("admin");
+  });
   it("accepts localhost, 127.x and ::1 with or without a port", () => {
     for (const host of ["localhost", "localhost:8799", "127.0.0.1", "127.9.9.9:80", "[::1]", "[::1]:8799", "LOCALHOST"]) {
       expect(isLoopbackHost(host), host).toBe(true);

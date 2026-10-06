@@ -20014,6 +20014,46 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       });
       return json(res, 200, { message: patched });
     }
+    const privateResumeRoute = /^\/api\/bots\/([\w-]+)\/threads\/([\w-]+)\/recovery\/([\w-]+)\/resume$/.exec(path);
+    if (method === "POST" && privateResumeRoute) {
+      const botId = privateResumeRoute[1]!, threadId = privateResumeRoute[2]!, receiptId = privateResumeRoute[3]!;
+      // Only the owner's desktop or paired client can resume owner work.
+      if (peerSessionId || foreignClient) return json(res, 403, { error: "Owner access required" });
+      const saved = privateTurnDispatches.all().find(row => row.id === receiptId && row.botId === botId && store.canonicalThreadId(row.threadId) === threadId);
+      if (!saved || saved.groupId || !store.taskByThread(botId, threadId)) return json(res, 404, { error: "Recovery receipt scope does not match" });
+      if (saved.state !== "outcome-unknown") return json(res, 409, { error: "This request is still active" });
+      const replyTo = saved.sourceId ? resolveReplyTarget(threadId, saved.sourceId) : undefined;
+      const sendId = `recovery-resume-${createHash("sha256").update(receiptId).digest("hex")}`;
+      const text = "Continue the interrupted request in this conversation. Before taking further action, check what already happened and avoid repeating completed effects. If its outcome cannot be established safely, ask me before retrying it.";
+      const result = await withMessagePostLock(`bot:${botId}:${threadId}`, async () => {
+        const assertOwner = () => {
+          assertPrivateRequest();
+          if (auth.kind === "session") {
+            const actor = multiplayerActors.actorFor(auth.session.id);
+            if (actor && actor !== multiplayerActors.ownerId) throw Object.assign(new Error("Owner access required"), { status: 403 });
+          }
+        };
+        assertOwner();
+        const accepted = acceptedSendMatch(store.messagesFor(threadId), sendId, text, replyTo?.id);
+        if (accepted.kind === "match") return { ok: true, threadId, message: accepted.message };
+        if (accepted.kind === "conflict") throw Object.assign(new Error("Recovery continuation identity conflict"), { status: 409 });
+        // The persisted message is the retry receipt, including after a restart.
+        // The original unknown receipt stays unreviewed: resume does not attest
+        // that its external effects have been checked or stopped.
+        const admissionGuard = () => {
+          assertOwner();
+          const current = store.projectBotForTask(botId, threadId);
+          if (!current || current.busy || threadBusy(botId, threadId) || botAtThreadCapacity(botId) || parksBehindCoordination(botId, threadId) || activeGroupTurnForBot(botId)) {
+            throw Object.assign(new Error("This thread is busy; resume when it is free"), { status: 409 });
+          }
+        };
+        admissionGuard();
+        noteTurnTrigger(threadId, auth);
+        const message = await startTurn(botId, text, { threadId, sendId, replyTo, sender: messageSender(auth), requestGuard: assertOwner, admissionGuard });
+        return { ok: true, threadId, message };
+      });
+      return json(res, 202, result);
+    }
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages(?:\/(guarded))?$/);
     if (m && method === "POST") {
       const guarded = m[2] === "guarded";
