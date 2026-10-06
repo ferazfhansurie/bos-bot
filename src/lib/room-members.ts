@@ -43,13 +43,13 @@ function isRemoteRoomBot(value: unknown): value is RemoteRoomBot {
 /**
  * The room's member bots, in roster order. A room on this home looks its
  * members up among this home's bots. A room on another home names that
- * home's bots, so they come from `group.remoteBots`; a server that predates
+ * home's bots, so they come from `group.memberBots`; a server that predates
  * the field leaves the old local lookup in place.
  */
-export function roomMemberBots(group: Pick<Group, "memberIds" | "home" | "remoteBots">, bots: readonly Bot[]): Bot[] {
+export function roomMemberBots(group: Pick<Group, "memberIds" | "home" | "memberBots">, bots: readonly Bot[]): Bot[] {
   const home = group.home;
-  if (home && Array.isArray(group.remoteBots)) {
-    const listed = group.remoteBots.filter(isRemoteRoomBot);
+  if (home && Array.isArray(group.memberBots)) {
+    const listed = group.memberBots.filter(isRemoteRoomBot);
     const byId = new Map(listed.map((bot) => [bot.id, bot]));
     const ordered = group.memberIds?.length
       ? group.memberIds.flatMap((id) => {

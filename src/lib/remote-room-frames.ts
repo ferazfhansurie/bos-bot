@@ -37,9 +37,9 @@ export function remoteRoomFrame(groups: readonly RoomLike[], homeId: string, fra
 
 /** True when another home's stream mentions a room or member bot this home
  * has no listing for yet — a room it was just added to, or a bot that joined
- * one. Only a fresh GET /api/groups carries those (with `remoteBots`). */
+ * one. Only a fresh GET /api/groups carries those (with `memberBots`). */
 export function remoteRoomNeedsListing(
-  groups: readonly (RoomLike & { remoteBots?: Array<{ id: string }> })[],
+  groups: readonly (RoomLike & { memberBots?: Array<{ id: string }> })[],
   homeId: string,
   frame: ServerFrame,
 ): boolean {
@@ -48,13 +48,13 @@ export function remoteRoomNeedsListing(
   if (typeof incoming?.id !== "string") return false;
   const known = groups.find((group) => group.id === incoming.id);
   if (!known) return true;
-  if (known.home?.id !== homeId || !Array.isArray(known.remoteBots) || !Array.isArray(incoming.memberIds)) return false;
-  const listed = new Set(known.remoteBots.map((bot) => bot.id));
+  if (known.home?.id !== homeId || !Array.isArray(known.memberBots) || !Array.isArray(incoming.memberIds)) return false;
+  const listed = new Set(known.memberBots.map((bot) => bot.id));
   return incoming.memberIds.some((id) => typeof id === "string" && !listed.has(id));
 }
 
 type ListedRoom = RoomLike & {
-  remoteBots?: unknown;
+  memberBots?: unknown;
   memberIds?: string[];
   avatarUrl?: string | null;
   name?: string;
@@ -79,7 +79,7 @@ export function remoteRoomListPatches<T extends ListedRoom>(known: readonly List
     if (!current.home) continue;
     const patch: Partial<T> & { id: string } = { id: group.id } as Partial<T> & { id: string };
     let changed = false;
-    for (const key of ["home", "remoteBots", "memberIds", "avatarUrl", "name"] as const) {
+    for (const key of ["home", "memberBots", "memberIds", "avatarUrl", "name"] as const) {
       if (!Object.hasOwn(group, key)) continue;
       if (JSON.stringify(group[key]) === JSON.stringify(current[key])) continue;
       (patch as Record<string, unknown>)[key] = group[key];

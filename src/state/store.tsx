@@ -257,7 +257,7 @@ export interface Group {
   home?: { id: string; name: string; available?: boolean };
   /** With `home`: that home's member bots, keyed by its own bot ids. Absent
    * from older servers. Resolve members through roomMemberBots. */
-  remoteBots?: RemoteRoomBot[];
+  memberBots?: RemoteRoomBot[];
   avatarUrl?: string | null;
   memberReplyModes?: Record<string, "always" | "mentions">;
   notifications?: "all" | "mentions" | "muted";

@@ -44,7 +44,7 @@ import { remoteRoomListPatches, remoteRoomNeedsListing } from "./remote-room-fra
 describe("remoteRoomNeedsListing", () => {
   const listed = [
     { id: "room-local", threadId: "thread-local" },
-    { id: "room-partner", threadId: "thread-partner", home: partner, remoteBots: [{ id: "claude" }] },
+    { id: "room-partner", threadId: "thread-partner", home: partner, memberBots: [{ id: "claude" }] },
     { id: "room-old", threadId: "thread-old", home: partner },
   ];
 
@@ -67,7 +67,7 @@ describe("remoteRoomNeedsListing", () => {
 describe("remoteRoomListPatches", () => {
   const known = [
     { id: "room-local", threadId: "thread-local", name: "Local" },
-    { id: "room-partner", threadId: "thread-partner", name: "Team Inbox", home: partner, remoteBots: [{ id: "claude" }], messages: [{ id: "m1" }] },
+    { id: "room-partner", threadId: "thread-partner", name: "Team Inbox", home: partner, memberBots: [{ id: "claude" }], messages: [{ id: "m1" }] },
   ];
 
   it("adds a newly listed remote room whole and skips local rooms", () => {
@@ -76,8 +76,8 @@ describe("remoteRoomListPatches", () => {
   });
 
   it("patches only listing fields that changed, never the transcript", () => {
-    const listed = [{ id: "room-partner", threadId: "thread-partner", name: "Team Inbox", home: partner, remoteBots: [{ id: "claude" }, { id: "codex" }], messages: [], hasMore: true }];
-    expect(remoteRoomListPatches(known, listed)).toEqual([{ id: "room-partner", remoteBots: [{ id: "claude" }, { id: "codex" }] }]);
+    const listed = [{ id: "room-partner", threadId: "thread-partner", name: "Team Inbox", home: partner, memberBots: [{ id: "claude" }, { id: "codex" }], messages: [], hasMore: true }];
+    expect(remoteRoomListPatches(known, listed)).toEqual([{ id: "room-partner", memberBots: [{ id: "claude" }, { id: "codex" }] }]);
     expect(remoteRoomListPatches(known, [{ ...known[1]!, messages: [] }])).toEqual([]);
   });
 

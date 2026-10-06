@@ -1131,8 +1131,8 @@ export function GroupView({ group }: { group: Group }) {
   // anything else that drives a bot through this home's routes use only
   // this home's own members.
   const members = useMemo(
-    () => roomMemberBots({ memberIds: group.memberIds, home: group.home, remoteBots: group.remoteBots }, state.bots),
-    [group.memberIds, group.home, group.remoteBots, state.bots],
+    () => roomMemberBots({ memberIds: group.memberIds, home: group.home, memberBots: group.memberBots }, state.bots),
+    [group.memberIds, group.home, group.memberBots, state.bots],
   );
   const callMembers = useMemo(() => localRoomMembers(members), [members]);
   const setupPending = !readOnly && roomNeedsSetup(group);

@@ -40,7 +40,7 @@ const localBot = (id: string, name: string) => ({
 }) as Bot;
 
 const partner = { id: "home-partner", name: "Partner" };
-const remoteBots = [
+const memberBots = [
   { id: "partner-codex", name: "Codex", color: "green", title: "Engineer", mascotBody: "robot" },
   { id: "partner-claude", name: "Claude", color: "orange", avatarUrl: "/api/attachments/abc.png", avatarCrop: "circle" },
 ];
@@ -51,8 +51,8 @@ describe("roomMemberBots", () => {
     expect(roomMemberBots({ memberIds: ["b", "a", "gone"] }, bots).map((bot) => bot.id)).toEqual(["b", "a"]);
   });
 
-  it("maps another home's room from remoteBots, ordered by memberIds", () => {
-    const members = roomMemberBots({ memberIds: ["partner-claude", "partner-codex", "partner-hidden"], home: partner, remoteBots }, [localBot("a", "Alpha")]);
+  it("maps another home's room from memberBots, ordered by memberIds", () => {
+    const members = roomMemberBots({ memberIds: ["partner-claude", "partner-codex", "partner-hidden"], home: partner, memberBots }, [localBot("a", "Alpha")]);
     expect(members.map((bot) => bot.name)).toEqual(["Claude", "Codex"]);
     expect(members[0]).toMatchObject({ id: "partner-claude", color: "orange", avatarUrl: "/api/attachments/abc.png", avatarCrop: "circle", roomHome: { id: "home-partner", name: "Partner" }, threadId: "" });
     expect(members[1]).toMatchObject({ title: "Engineer", mascotBody: "robot" });
@@ -61,26 +61,26 @@ describe("roomMemberBots", () => {
 
   it("never resolves a remote room's ids against a local bot that shares one", () => {
     const clash = localBot("partner-codex", "Local Codex");
-    const members = roomMemberBots({ memberIds: ["partner-codex"], home: partner, remoteBots }, [clash]);
+    const members = roomMemberBots({ memberIds: ["partner-codex"], home: partner, memberBots }, [clash]);
     expect(members[0]?.name).toBe("Codex");
     expect(members[0]).not.toBe(clash);
     expect(localRoomMembers(members)).toEqual([]);
   });
 
   it("lists every remote bot when the room's roster isn't known yet", () => {
-    expect(roomMemberBots({ memberIds: [], home: partner, remoteBots }, []).map((bot) => bot.id)).toEqual(["partner-codex", "partner-claude"]);
+    expect(roomMemberBots({ memberIds: [], home: partner, memberBots }, []).map((bot) => bot.id)).toEqual(["partner-codex", "partner-claude"]);
   });
 
   it("sanitizes untrusted profile fields", () => {
     const [bot] = roomMemberBots({
       memberIds: ["x"], home: partner,
-      remoteBots: [{ id: "x", name: "", color: "#ff0000", mascotBody: "dragon" }, null as never, { name: "no id" } as never],
+      memberBots: [{ id: "x", name: "", color: "#ff0000", mascotBody: "dragon" }, null as never, { name: "no id" } as never],
     }, []);
     expect(bot).toMatchObject({ id: "x", name: "Bot", color: "gray", mascotBody: null });
     expect(bot).not.toHaveProperty("avatarUrl");
   });
 
-  it("falls back to the local lookup when an older server sends no remoteBots", () => {
+  it("falls back to the local lookup when an older server sends no memberBots", () => {
     expect(roomMemberBots({ memberIds: ["partner-codex"], home: partner }, [])).toEqual([]);
     const legacy = localBot("a", "Alpha");
     expect(roomMemberBots({ memberIds: ["a"], home: partner }, [legacy])).toEqual([legacy]);
@@ -88,7 +88,7 @@ describe("roomMemberBots", () => {
 });
 
 describe("roomMentionPool", () => {
-  const members = roomMemberBots({ memberIds: ["partner-claude", "partner-codex"], home: partner, remoteBots }, []);
+  const members = roomMemberBots({ memberIds: ["partner-claude", "partner-codex"], home: partner, memberBots }, []);
 
   it("offers @everyone then another home's bots in a remote room", () => {
     expect(roomMentionPool({ dm: false }, members).map((choice) => choice.name)).toEqual(["everyone", "Claude", "Codex"]);
