@@ -412,7 +412,7 @@ struct ChatView: View {
                         JumpToLatestButton(unseen: unseenBelow) {
                             Haptics.selection()
                             unseenBelow = false
-                            withAnimation(.snappy(duration: 0.3)) { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
+                            jumpToLatest(proxy)
                         }
                         .padding(.trailing, 16).padding(.bottom, 10)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
@@ -669,6 +669,20 @@ struct ChatView: View {
         .fullScreenCover(item: $filePreview) { preview in
             FilePreviewView(item: preview) {
                 filePreview = nil
+            }
+        }
+    }
+
+    /// Rows far above the end only have estimated heights in the lazy stack,
+    /// so a single animated jump in a long transcript stopped short or did
+    /// not move at all. Jump straight there, then settle again once the rows
+    /// near the end are built.
+    private func jumpToLatest(_ proxy: ScrollViewProxy) {
+        proxy.scrollTo(Self.bottomId, anchor: .bottom)
+        Task { @MainActor in
+            for _ in 0..<3 {
+                try? await Task.sleep(for: .milliseconds(60))
+                proxy.scrollTo(Self.bottomId, anchor: .bottom)
             }
         }
     }

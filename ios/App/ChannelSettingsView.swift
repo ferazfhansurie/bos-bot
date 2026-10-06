@@ -227,21 +227,24 @@ struct ChannelSettingsView: View {
         guard !saving, let context = openingContext, context.permits(session.roomSettingsContext) else { return }
         saving = true; defer { saving = false; photo = nil }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let mime = Self.imageMIME(data), !data.isEmpty, data.count <= 10 * 1_024 * 1_024
-            else { throw APIError.transport("Choose a PNG, JPEG, GIF, or WebP image up to 10 MB.") }
+            // The camera roll hands over HEIC, which the server refuses;
+            // a group photo is a small circle, so send a resized JPEG.
+            guard let picked = try await item.loadTransferable(type: Data.self),
+                  let data = Self.avatarJPEG(picked), data.count <= 10 * 1_024 * 1_024
+            else { throw APIError.transport("That photo couldn't be read. Try another one.") }
+            let mime = "image/jpeg"
             _ = try await session.uploadRoomAvatar(data, mime: mime, room: current, context: context)
             error = nil
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 
-    private static func imageMIME(_ data: Data) -> String? {
-        let bytes = [UInt8](data.prefix(12))
-        if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47]) { return "image/png" }
-        if bytes.starts(with: [0xff, 0xd8, 0xff]) { return "image/jpeg" }
-        if bytes.starts(with: Array("GIF8".utf8)) { return "image/gif" }
-        if bytes.count >= 12, String(bytes: bytes[0..<4], encoding: .ascii) == "RIFF",
-           String(bytes: bytes[8..<12], encoding: .ascii) == "WEBP" { return "image/webp" }
-        return nil
+    private static func avatarJPEG(_ data: Data, side: CGFloat = 1_024) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let scale = min(1, side / max(image.size.width, image.size.height))
+        let size = CGSize(width: (image.size.width * scale).rounded(), height: (image.size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }.jpegData(compressionQuality: 0.85)
     }
 }

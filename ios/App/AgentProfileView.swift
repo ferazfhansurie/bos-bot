@@ -641,9 +641,19 @@ struct AgentProfileView: View {
     private func upload(_ item: PhotosPickerItem) async {
         busy = true
         defer { busy = false; photo = nil }
-        guard let data = try? await item.loadTransferable(type: Data.self),
-              let mime = Self.imageMIME(data)
-        else {
+        guard let picked = try? await item.loadTransferable(type: Data.self) else {
+            session.actionError = "That photo couldn't be read. Try another one."
+            return
+        }
+        // The camera roll hands over HEIC, which the server refuses; send it
+        // as a JPEG rather than turning the photo away.
+        var data = picked
+        var mime = Self.imageMIME(picked)
+        if mime == nil, let jpeg = UIImage(data: picked)?.jpegData(compressionQuality: 0.85) {
+            data = jpeg
+            mime = "image/jpeg"
+        }
+        guard let mime else {
             session.actionError = "Choose a PNG, JPEG, GIF, or WebP image."
             return
         }
