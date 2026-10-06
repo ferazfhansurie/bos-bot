@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { launchVerificationServer } from "../scripts/control-omb.ts";
 
 it("adds a person to an existing bot room, isolates guest replies and revokes reads", async () => {
@@ -21,10 +22,13 @@ it("adds a person to an existing bot room, isolates guest replies and revokes re
     expect((await api("GET", "/api/groups", undefined, token)).status).toBe(403);
     const personId = "other-home:person:owner";
     expect((await api("POST", "/api/multiplayer/actor-bindings", { sessionId: paired.body.session.id, personId, name: "Guest" })).status).toBe(200);
+    expect((await api("PUT", `/api/multiplayer/members/${encodeURIComponent(personId)}`, { role: "client-guest" })).status).toBe(200);
     const bot = (await api("POST", "/api/bots", { name: "Room helper", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true })).body.bot;
     expect((await api("PATCH", `/api/bots/${bot.id}`, { soul: "PRIVATE_OWNER_SOUL_SENTINEL" })).status).toBe(200);
     const create = async (name: string) => (await api("POST", "/api/groups", { name, memberIds: [bot.id], setup: { bulletin: "", defaultResponder: { kind: "member", botId: bot.id } } })).body.group;
-    const group = await create("Existing room");
+    const second = (await api("POST", "/api/bots", { name: "Codex room helper", modelSelection: { instanceId: "claude", model: "claude-sonnet-5" }, requireAvailableModel: true })).body.bot;
+    const group = (await api("POST", "/api/groups", { name: "Legacy default room", memberIds: [bot.id, second.id], defaultResponderId: null })).body.group;
+    expect(group.defaultResponder).toEqual({ kind: "member", botId: bot.id });
     const privateRoom = await create("Not invited");
     expect(group.peopleIds).toEqual([me.actorId]);
     expect((await api("GET", "/api/groups", undefined, token)).body.groups).toEqual([]);
@@ -32,20 +36,32 @@ it("adds a person to an existing bot room, isolates guest replies and revokes re
     const added = await api("POST", `/api/groups/${group.id}/people`, { personId });
     expect(added.status, JSON.stringify(added.body)).toBe(200);
     expect(added.body.group.people).toContainEqual({ id: personId, name: "Guest", homeId: "other-home" });
-    expect(added.body.group.memberIds).toEqual([bot.id]);
+    expect(added.body.group.memberIds).toEqual([bot.id, second.id]);
+    expect(added.body.group.memberBots).toEqual([expect.objectContaining({ id: bot.id, name: bot.name, avatarUrl: null }), expect.objectContaining({ id: second.id, name: second.name, avatarUrl: null })]);
+    const view = (await api("GET", `/api/groups/${group.id}`, undefined, token)).body.group;
+    expect(view.memberBots).toEqual(added.body.group.memberBots);
+    expect(view.memberBots[0].soul).toBeUndefined();
     expect((await api("GET", "/api/groups", undefined, token)).body.groups.map((g: any) => g.id)).toEqual([group.id]);
     expect((await api("GET", `/api/groups/${privateRoom.id}`, undefined, token)).status).toBe(404);
     expect((await api("GET", `/api/threads/${privateRoom.threadId}/messages`, undefined, token)).status).toBe(404);
     expect((await api("POST", `/api/groups/${group.id}/messages`, { text: "@Room helper hello", sendId: "ungranted-1234567890" }, token)).status).toBe(403);
     const grantId = `${me.homeId}:bot:${bot.id}`;
     expect((await api("PUT", `/api/multiplayer/rooms/${group.id}/bot-grants`, { botIds: [grantId] })).status).toBe(200);
+    expect((await api("POST", `/api/groups/${group.id}/messages`, { text: "@Codex room helper hello", sendId: "ungranted-second-123456" }, token)).status).toBe(403);
     const ticket = await api("POST", "/api/auth/stream-ticket", {}, token);
     expect(ticket.status).toBe(200);
     const stream = await fetch(`${fixture.info.url}/api/events?since=999999&ticket=${encodeURIComponent(ticket.body.ticket)}`, { headers: { origin: fixture.info.url }, signal: streamAbort.signal });
     expect(stream.status).toBe(200);
     const reader = stream.body!.getReader();
     streamDone = (async () => { try { for (;;) { const chunk = await reader.read(); if (chunk.done) break; frames.push(new TextDecoder().decode(chunk.value)); } } catch { /* fixture cancellation */ } })();
-    const sent = await api("POST", `/api/groups/${group.id}/messages`, { text: "hello", sendId: "guest-once-1234567890", sender: { id: me.actorId, name: "Forged" } }, token);
+    const links = new MultiplayerLinks(join(fixture.info.dataDir, "guest-fixture-links.json"), "other-home", (input, init) => {
+      const target = new URL(String(input));
+      expect(target.origin).toBe("https://canonical-fixture.ts.net");
+      return fetch(new URL(target.pathname + target.search, fixture.info.url), init);
+    });
+    await links.addVerified("https://canonical-fixture.ts.net", token, { environmentId: me.homeId, multiplayerProtocol: 1 });
+    expect(await links.remoteGroups()).toEqual([expect.objectContaining({ id: group.id, memberIds: [bot.id, second.id], memberBots: view.memberBots })]);
+    const sent = await links.forwardGroup(me.homeId, `/api/groups/${group.id}/messages`, "POST", { text: "hello", sendId: "guest-once-1234567890", sender: { id: me.actorId, name: "Forged" } }) as { status: number; body: any };
     expect(sent.status, JSON.stringify(sent.body)).toBe(201);
     expect(sent.body.message.sender).toEqual({ id: personId, name: "Guest" });
     expect((await api("POST", `/api/groups/${group.id}/messages`, { text: "hello", sendId: "guest-once-1234567890" }, token)).status).toBe(200);
@@ -59,6 +75,11 @@ it("adds a person to an existing bot room, isolates guest replies and revokes re
     expect(capture.argv[capture.argv.indexOf("--tools") + 1]).toBe("");
     expect(capture.argv).toContain("--restricted");
     expect(capture.argv).toContain("--safe-mode");
+    const beforeMention = (await api("GET", `/api/threads/${group.threadId}/messages`, undefined, token)).body.messages.length;
+    expect((await api("PUT", `/api/multiplayer/rooms/${group.id}/bot-grants`, { botIds: [grantId, `${me.homeId}:bot:${second.id}`] })).status).toBe(200);
+    const mention = await api("POST", `/api/groups/${group.id}/messages`, { text: "@Codex room helper hello", sendId: "second-mention-12345678" }, token);
+    expect(mention.status).toBe(201);
+    await expect.poll(async () => (await api("GET", `/api/threads/${group.threadId}/messages`, undefined, token)).body.messages.slice(beforeMention).some((m: any) => m.role === "bot" && m.kind === "text" && m.from?.botId === second.id), { timeout: 20_000, interval: 200 }).toBe(true);
     const list = await api("GET", "/api/bots", undefined, token);
     expect(list.body.groups.map((g: any) => g.id)).toEqual([group.id]);
     expect(list.body.bots.every((b: any) => !b.messages?.length)).toBe(true);

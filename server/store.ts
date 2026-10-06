@@ -463,9 +463,10 @@ export function roomResponders<T extends { id: string; name: string; hidden?: bo
       (targets.has(member.id) && (memberReplyModes[member.id] !== "mentions" || mentioned.includes(member))));
   }
   if (mentioned.length) return mentioned;
-  if (defaultResponder.kind === "everyone") return available;
-  if (defaultResponder.kind === "member") {
-    const lead = available.find((member) => member.id === defaultResponder.botId);
+  const responder = defaultResponder ?? normalizeGroupDefaultResponder(null, available.map(member => member.id));
+  if (responder.kind === "everyone") return available;
+  if (responder.kind === "member") {
+    const lead = available.find((member) => member.id === responder.botId);
     return lead ? [lead] : [];
   }
   return [];

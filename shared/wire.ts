@@ -495,6 +495,8 @@ export interface WireGroup {
   tasks?: GroupTask[];
   name: string;
   memberIds: string[];
+  /** Room-scoped display records; no owner settings or private threads. */
+  memberBots?: Array<Pick<WireBot, "id" | "name" | "title" | "color" | "mascotBody" | "mascotEyes" | "avatarUrl" | "avatarCrop">>;
   /** Authenticated people sharing this existing room. Owner is implicit. */
   peopleIds?: string[];
   people?: { id: string; name: string; homeId: string; homeName?: string; avatar?: string | null; color?: string }[];

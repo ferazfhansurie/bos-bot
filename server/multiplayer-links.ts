@@ -18,7 +18,7 @@ interface RemoteLink {
    * reported by the home's own membership-checked GET /api/groups. */
   joinedGroups?: JoinedGroup[];
 }
-interface JoinedGroup { id: string; name: string; threadIds: string[] }
+interface JoinedGroup { id: string; name: string; threadIds: string[]; memberIds?: string[]; memberBots?: RemoteBot[]; avatarUrl?: string | null }
 /** A joined room exactly as the canonical home serves it, plus the home. */
 export type RemoteGroupView = Record<string, unknown> & { id: string; name: string; threadId: string; home: { id: string; name: string; available: boolean } };
 interface Snapshot { version: 1; links: RemoteLink[] }
@@ -44,7 +44,11 @@ const parseJoinedGroup = (value: unknown): JoinedGroup | null => {
   const tasks = Array.isArray(group.tasks) ? group.tasks : [];
   const threadIds = [group.threadId, ...tasks.map(task => (task as { threadId?: unknown })?.threadId)]
     .filter((id): id is string => typeof id === "string" && ROOM_ID.test(id));
-  return { id: group.id, name: group.name.slice(0, 200), threadIds: [...new Set(threadIds)].slice(0, 500) };
+  const memberIds = Array.isArray(group.memberIds) ? group.memberIds.filter((id): id is string => typeof id === "string" && ROOM_ID.test(id)).slice(0, 500) : undefined;
+  const memberBots = Array.isArray(group.memberBots) ? group.memberBots.map(parseBot).filter((bot): bot is RemoteBot => !!bot && !bot.hidden && !!memberIds?.includes(bot.id)).slice(0, 500).map(({ hidden: _hidden, ...bot }) => bot) : undefined;
+  return { id: group.id, name: group.name.slice(0, 200), threadIds: [...new Set(threadIds)].slice(0, 500),
+    ...(memberIds ? { memberIds } : {}), ...(memberBots ? { memberBots } : {}),
+    ...(typeof group.avatarUrl === "string" || group.avatarUrl === null ? { avatarUrl: group.avatarUrl } : {}) };
 };
 
 const parseBot = (value: unknown): RemoteBot | null => {
@@ -87,6 +91,7 @@ export class MultiplayerLinks {
       try {
         this.checkLink(link);
         if (this.links.has(link.homeId)) throw new Error("duplicate multiplayer link");
+        if (link.joinedGroups) link.joinedGroups = link.joinedGroups.map(group => parseJoinedGroup({ ...group, threadId: group.threadIds[0], tasks: group.threadIds.slice(1).map(threadId => ({ threadId })) })!);
         this.links.set(link.homeId, link);
       } catch { invalid = true; }
     }
@@ -227,7 +232,7 @@ export class MultiplayerLinks {
       const joined = new Set((link.joinedGroups ?? []).map(group => group.id));
       if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...view, home }) as RemoteGroupView);
       return (link.joinedGroups ?? []).map(group => ({
-        id: group.id, name: group.name, threadId: group.threadIds[0], memberIds: [], defaultResponder: { kind: "mentions" },
+        id: group.id, name: group.name, threadId: group.threadIds[0], memberIds: group.memberIds ?? [], memberBots: group.memberBots ?? [], avatarUrl: group.avatarUrl, defaultResponder: { kind: "mentions" },
         bulletin: "", unread: false, createdAt: 0, messages: [], home,
       }));
     });
