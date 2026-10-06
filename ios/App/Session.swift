@@ -2303,7 +2303,8 @@ final class Session: ObservableObject {
     }
 
     func resumeAll() async {
-        await perform { try await $0.resumeAllTurns() }
+        let turns = interruptedTurns
+        await perform { try await $0.resumeAllTurns(turns) }
         await refreshInterruptedTurns()
     }
 

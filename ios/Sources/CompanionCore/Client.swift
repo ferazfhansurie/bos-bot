@@ -1906,8 +1906,25 @@ public struct CompanionClient: Sendable {
         }
     }
 
-    public func resumeAllTurns() async throws {
-        try await send(try makeRequest("POST", "/api/recovery/resume-all"))
+    /// Run every interrupted turn again. `/api/recovery/resume-all` first; a
+    /// computer without it (404/405), or one that keeps it for admin tokens
+    /// only (403, as a paired phone is), gets each turn's own
+    /// `/recovery/:id/resume` instead. A turn that still fails is thrown after
+    /// the rest have been tried, so one bad receipt never strands the others.
+    public func resumeAllTurns(_ turns: [InterruptedTurn]) async throws {
+        do {
+            try await send(try makeRequest("POST", "/api/recovery/resume-all"))
+            return
+        } catch let APIError.status(code, _) where [403, 404, 405].contains(code) {}
+        var failure: Error?
+        for turn in turns {
+            do {
+                try await resumeTurn(TurnRecovery(id: turn.id, botId: turn.botId, threadId: turn.threadId))
+            } catch {
+                if failure == nil { failure = error }
+            }
+        }
+        if let failure { throw failure }
     }
 
     public func provideCredential(
