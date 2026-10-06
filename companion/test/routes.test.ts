@@ -33,6 +33,14 @@ describe("credentials", () => {
 });
 
 describe("what the app may do", () => {
+  it("allows an authenticated resume without opening review or unscoped replay", () => {
+    const path = "/api/bots/b/threads/t/recovery/r/resume";
+    expect(ask("POST", path)).toBeNull();
+    expect(ask("POST", path, false)?.status).toBe(401);
+    expect(allowed("GET", path)).toBe(false);
+    expect(allowed("POST", path.replace("/resume", "/review"))).toBe(false);
+    expect(allowed("POST", "/api/recovery/resume-all")).toBe(false);
+  });
   it("allows scoped request reads and stop commands only", () => {
     expect(ask("GET", "/api/multiplayer/rooms/r/requests")).toBeNull();
     expect(ask("POST", "/api/multiplayer/rooms/r/requests/q/cancel")).toBeNull();
