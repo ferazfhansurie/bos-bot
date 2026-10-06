@@ -4,6 +4,7 @@ import { roomMemberStreamKey } from "@/lib/runtime-stream";
 // does not become a wall of competing motion. Plain messages go to the room's
 // default responder; @mentions override that routing.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { localRoomMembers, roomMemberBots } from "@/lib/room-members";
 import { activeLocale, t } from "@/lib/i18n";
 import { ArrowDown, Check, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2, Settings2, ImagePlus, MessageSquareReply, Pin, PinOff, Search, Wrench, X } from "lucide-react";
 import {
@@ -1126,10 +1127,14 @@ export function GroupView({ group }: { group: Group }) {
     return () => window.removeEventListener("keydown", onFind);
   }, []);
 
+  // A room on another home lists that home's bots (display only); calls and
+  // anything else that drives a bot through this home's routes use only
+  // this home's own members.
   const members = useMemo(
-    () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
-    [group.memberIds, state.bots],
+    () => roomMemberBots({ memberIds: group.memberIds, home: group.home, remoteBots: group.remoteBots }, state.bots),
+    [group.memberIds, group.home, group.remoteBots, state.bots],
   );
+  const callMembers = useMemo(() => localRoomMembers(members), [members]);
   const setupPending = !readOnly && roomNeedsSetup(group);
 
   // One mascot per member working in THIS thread; each finished reply pops in
@@ -1355,7 +1360,7 @@ export function GroupView({ group }: { group: Group }) {
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      <GroupCallOverlay group={group} members={members} />
+      <GroupCallOverlay group={group} members={callMembers} />
       {membersOpen && !remoteClient && !group.dm && (
         <ManageMembersPanel group={group} onClose={closeMembers} triggerRef={membersTriggerRef} />
       )}
@@ -1418,7 +1423,7 @@ export function GroupView({ group }: { group: Group }) {
           </button>
           {!group.dm && <TerminalButton target={{ botId: group.id, threadId: group.threadId, name: group.name }} className="rounded-full" />}
           {!remoteClient && <ToolCallsToggle />}
-          <GroupCallButton group={group} members={members} />
+          <GroupCallButton group={group} members={callMembers} />
           <ExportTranscriptMenu
             title={group.name}
             messages={group.messages}

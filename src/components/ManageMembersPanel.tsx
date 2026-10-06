@@ -9,10 +9,10 @@ import { Link, UserPlus, X } from "lucide-react";
 import { track } from "@/lib/analytics";
 import { useMultiplayerMe } from "@/lib/room-sender";
 import { api, useStore, type Group, type RoomPerson } from "@/state/store";
-import { PersonFace } from "./Avatar";
+import { BotAvatar, PersonFace } from "./Avatar";
 import { BotPickerList } from "./BotPickerList";
 import { InviteLink } from "./SharedContactsSidebar";
-import { nextMemberIds } from "@/lib/room-members";
+import { nextMemberIds, roomMemberBots } from "@/lib/room-members";
 
 /** A `/api/multiplayer/contacts` row; only people can join a room's roster. */
 export interface RoomContact {
@@ -75,6 +75,11 @@ export function ManageMembersPanel({
   const bots = useMemo(
     () => state.bots.filter((b) => !b.hidden || group.memberIds.includes(b.id)),
     [state.bots, group.memberIds],
+  );
+  // Another home's room: its bots are listed to look at, never to pick.
+  const remoteMembers = useMemo(
+    () => (group.home ? roomMemberBots(group, state.bots) : []),
+    [group, state.bots],
   );
 
   useEffect(() => {
@@ -214,6 +219,20 @@ export function ManageMembersPanel({
         <div className="mb-1 text-[15px] font-semibold text-ink">Manage Members</div>
         <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
         {/* Another home's bots aren't this home's to add or remove. */}
+        {group.home && remoteMembers.length > 0 && (
+          <div className="mb-3 border-b border-hairline/40 pb-3" aria-label="Bots">
+            <div className="mb-1 text-[13px] font-semibold text-ink">Bots</div>
+            {remoteMembers.map((member) => (
+              <div key={member.id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+                <BotAvatar bot={member} state="happy" size={24} animated={false} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] text-ink">{member.name}</span>
+                  {member.title && <span className="block truncate text-[11px] text-ink-secondary">{member.title}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
         {!group.home && <>
           <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="Create a bot first — groups are made of bots." />
           {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}

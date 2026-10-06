@@ -34,3 +34,57 @@ export function remoteRoomFrame(groups: readonly RoomLike[], homeId: string, fra
       return null;
   }
 }
+
+/** True when another home's stream mentions a room or member bot this home
+ * has no listing for yet — a room it was just added to, or a bot that joined
+ * one. Only a fresh GET /api/groups carries those (with `remoteBots`). */
+export function remoteRoomNeedsListing(
+  groups: readonly (RoomLike & { remoteBots?: Array<{ id: string }> })[],
+  homeId: string,
+  frame: ServerFrame,
+): boolean {
+  if (frame.kind !== "group") return false;
+  const incoming = frame.group as { id?: unknown; memberIds?: unknown };
+  if (typeof incoming?.id !== "string") return false;
+  const known = groups.find((group) => group.id === incoming.id);
+  if (!known) return true;
+  if (known.home?.id !== homeId || !Array.isArray(known.remoteBots) || !Array.isArray(incoming.memberIds)) return false;
+  const listed = new Set(known.remoteBots.map((bot) => bot.id));
+  return incoming.memberIds.some((id) => typeof id === "string" && !listed.has(id));
+}
+
+type ListedRoom = RoomLike & {
+  remoteBots?: unknown;
+  avatarUrl?: string | null;
+  name?: string;
+  messages?: unknown;
+  hasMore?: unknown;
+};
+
+/** What a periodic GET /api/groups adds to the store: rooms on another home
+ * this client hasn't listed yet, whole, and for the ones it has only the
+ * listing-owned fields that changed (profiles, photo, name, availability) —
+ * never a transcript, which the live stream owns. Local rooms are skipped. */
+export function remoteRoomListPatches<T extends ListedRoom>(known: readonly ListedRoom[], listed: readonly T[]): Array<T | (Partial<T> & { id: string })> {
+  const byId = new Map(known.map((group) => [group.id, group]));
+  const patches: Array<T | (Partial<T> & { id: string })> = [];
+  for (const group of listed) {
+    if (!group?.home) continue;
+    const current = byId.get(group.id);
+    if (!current) {
+      patches.push(group);
+      continue;
+    }
+    if (!current.home) continue;
+    const patch: Partial<T> & { id: string } = { id: group.id } as Partial<T> & { id: string };
+    let changed = false;
+    for (const key of ["home", "remoteBots", "avatarUrl", "name"] as const) {
+      if (!Object.hasOwn(group, key)) continue;
+      if (JSON.stringify(group[key]) === JSON.stringify(current[key])) continue;
+      (patch as Record<string, unknown>)[key] = group[key];
+      changed = true;
+    }
+    if (changed) patches.push(patch);
+  }
+  return patches;
+}

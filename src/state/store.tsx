@@ -17,7 +17,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { CloudBackend, EffortLevel, RemoteBotOrigin, ServerFrame, ThreadState } from "../../shared/wire";
+import type { CloudBackend, EffortLevel, RemoteBotOrigin, RemoteRoomBot, ServerFrame, ThreadState } from "../../shared/wire";
 import type { TurnDigest } from "../../shared/digest";
 import type { ModelVariantOption, RuntimeEvent } from "../../shared/runtime-events";
 import type { MausColor, MausMotion } from "@/lib/mascot";
@@ -45,7 +45,7 @@ import { t } from "@/lib/i18n";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
-import { remoteRoomFrame } from "@/lib/remote-room-frames";
+import { remoteRoomFrame, remoteRoomListPatches, remoteRoomNeedsListing } from "@/lib/remote-room-frames";
 import { noteUpdateFrame } from "@/lib/bos-update";
 import { fetchInbox, inboxCountOf } from "@/lib/inbox";
 import { withSendPriority, type SendPriority } from "@/lib/composer-priority";
@@ -255,6 +255,9 @@ export interface Group {
   people?: RoomPerson[];
   /** Set when the room lives on another home and is opened through it. */
   home?: { id: string; name: string; available?: boolean };
+  /** With `home`: that home's member bots, keyed by its own bot ids. Absent
+   * from older servers. Resolve members through roomMemberBots. */
+  remoteBots?: RemoteRoomBot[];
   avatarUrl?: string | null;
   memberReplyModes?: Record<string, "always" | "mentions">;
   notifications?: "all" | "mentions" | "muted";
@@ -482,6 +485,10 @@ export interface Bot {
   activeLeafId?: string | null;
   /** Set when this bot lives on a linked Mac and the server relays it. */
   remote?: RemoteBotOrigin;
+  /** Renderer-only: a member of a room on another home, seen only through
+   * that room (roomMemberBots). Never in state.bots; its id is that home's,
+   * so no local bot route, DM or settings may use it. */
+  roomHome?: { id: string; name: string };
 }
 
 export interface BotProject {
@@ -2635,6 +2642,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   const remoteFrame = useRef<(homeId: string, frame: ServerFrame) => void>(() => {});
   const remoteSnapshot = useRef<(homeId: string) => Promise<boolean>>(async () => false);
+  /** Re-list rooms (GET /api/groups) to pick up rooms on another home this
+   * home was added to since the snapshot; see remoteRoomListPatches. */
+  const remoteRelist = useRef<() => void>(() => {});
   /** True for a room this home joined on another home (see `Group.home`). */
   const onAnotherHome = (groupId: string) => Boolean(stateRef.current.groups.find((g) => g.id === groupId)?.home);
   stateRef.current = state;
@@ -3848,9 +3858,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     remoteFrame.current = (homeId, frame) => {
-      const scoped = hydrated ? remoteRoomFrame(stateRef.current.groups, homeId, frame) : null;
+      if (!hydrated) return;
+      const scoped = remoteRoomFrame(stateRef.current.groups, homeId, frame);
       if (scoped) handleFrame(scoped);
+      if (remoteRoomNeedsListing(stateRef.current.groups, homeId, frame)) relistSoon();
     };
+    // One listing at a time, at most every 10s however many frames ask.
+    let relisting = false;
+    let lastRelist = 0;
+    let relistTimer: ReturnType<typeof setTimeout> | null = null;
+    const relist = async () => {
+      if (relisting || !alive || !hydrated) return;
+      relisting = true;
+      lastRelist = Date.now();
+      try {
+        const { groups } = await api<{ groups: Group[] }>("/api/groups");
+        if (!alive || !Array.isArray(groups)) return;
+        for (const group of remoteRoomListPatches(stateRef.current.groups, groups)) rawDispatch({ type: "groupPatched", group });
+      } catch {
+        /* offline — the next tick or frame asks again */
+      } finally {
+        relisting = false;
+      }
+    };
+    const relistSoon = () => {
+      if (relistTimer) return;
+      relistTimer = setTimeout(() => {
+        relistTimer = null;
+        void relist();
+      }, Math.max(1_000, lastRelist + 10_000 - Date.now()));
+    };
+    remoteRelist.current = () => void relist();
     remoteSnapshot.current = async (homeId) => {
       const { groups } = await api<{ groups: Group[] }>("/api/groups");
       for (const group of groups) if (group.home?.id === homeId) rawDispatch({ type: "groupPatched", group });
@@ -3879,7 +3917,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (refresh.timer) clearTimeout(refresh.timer);
       }
       stopLive();
+      if (relistTimer) clearTimeout(relistTimer);
       remoteFrame.current = () => {};
+      remoteRelist.current = () => {};
     };
   }, []);
 
@@ -3901,7 +3941,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         onSnapshotRequired: () => remoteSnapshot.current(homeId).catch(() => false),
       });
     });
-    return () => { for (const stop of stops) stop(); };
+    // A room this home was added to on a linked home arrives only through a
+    // fresh listing. Re-list every minute while the window is visible, and
+    // on coming back to it — cheap, and only while some home link is in use.
+    const RELIST_MS = 60_000;
+    let last = Date.now();
+    const tick = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < RELIST_MS - 1_000) return;
+      last = Date.now();
+      remoteRelist.current();
+    };
+    const timer = setInterval(tick, RELIST_MS);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      for (const stop of stops) stop();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, [remoteHomes]);
 
   // Re-probe the engines on demand. A CLI installed while the app is running

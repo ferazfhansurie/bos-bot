@@ -1,7 +1,8 @@
 import { botAvatarProfile } from "../../shared/bot-avatar";
 import { track } from "@/lib/analytics";
 import { OrganizationIdentity } from "./OrganizationIdentity";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { roomMemberBots } from "@/lib/room-members";
 import { createPortal } from "react-dom";
 import {
   Activity,
@@ -230,9 +231,7 @@ export function GroupListItem({
   const [threadsOpen, setThreadsOpen] = useState(selected || Boolean(query));
   useEffect(() => { if (selected || query) setThreadsOpen(true); }, [selected, query]);
   const expanded = !group.dm && threadsOpen && density !== "icons";
-  const members = group.memberIds
-    .map((id) => state.bots.find((b) => b.id === id))
-    .filter((b): b is Bot => Boolean(b));
+  const members = useMemo(() => roomMemberBots(group, state.bots), [group, state.bots]);
   const last = group.messages.at(-1);
   const roomPhoto = !group.dm ? botAvatarProfile({ avatarUrl: group.avatarUrl }).avatarUrl : undefined;
   return (
@@ -266,7 +265,9 @@ export function GroupListItem({
       title={density === "icons" ? group.name : undefined}
       aria-label={density === "icons" ? group.name : undefined}
     >
-      {roomPhoto ? <PersonPhoto src={roomPhoto} size={density === "icons" ? 32 : 24} /> : <StackedMauses members={members} density={density} />}
+      {roomPhoto
+        ? <PersonPhoto src={roomPhoto} size={density === "icons" ? 32 : 24} fallback={<StackedMauses members={members} density={density} />} />
+        : <StackedMauses members={members} density={density} />}
       <div className={cn("min-w-0 flex-1", density === "icons" && "hidden")}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-[14px] font-semibold text-ink">{group.name}</span>
@@ -275,7 +276,7 @@ export function GroupListItem({
           {expanded && group.unread && <span className="size-1.5 shrink-0 rounded-full bg-accent" aria-label={t("task.unreadMany")} />}
         </div>
         {!expanded && <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-[11px] text-ink-secondary">{groupPreview(group, state.bots, meId)}</span>
+          <span className="truncate text-[11px] text-ink-secondary">{groupPreview(group, group.home ? members : state.bots, meId)}</span>
           {group.unread && <span className="size-2 shrink-0 rounded-full bg-accent" />}
         </div>}
       </div>

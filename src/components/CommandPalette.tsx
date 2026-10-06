@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api, useStore, visibleMessages, type Bot, type Group } from "@/state/store";
+import { roomMemberBots } from "@/lib/room-members";
 import {
   bestTier,
   highlightRuns,
@@ -202,8 +203,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
 
   const currentId = state.activeView === "chat" ? state.selectedId : null;
   const visibleBots = state.bots.filter((b) => !b.hidden);
-  const membersOf = (group: Group) =>
-    group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b));
+  const membersOf = (group: Group) => roomMemberBots(group, state.bots);
 
   // only things the app already does from a shortcut or a menu; the palette
   // is another door to them, not a new feature surface
@@ -363,7 +363,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
     if (entry.kind === "room") {
       const { group, match } = entry;
       const members = membersOf(group);
-      const busyBot = group.busyBotId ? state.bots.find((b) => b.id === group.busyBotId) : undefined;
+      const busyBot = group.busyBotId ? (group.home ? members : state.bots).find((b) => b.id === group.busyBotId) : undefined;
       return row(
         entry,
         index,

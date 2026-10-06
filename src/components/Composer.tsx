@@ -62,6 +62,7 @@ import {
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
 import { composerPriorityVisible, effectiveSendPriority, type SendPriority } from "@/lib/composer-priority";
 import { mentionChoicesForQuery, mentionMatchRange } from "@/lib/mentions";
+import { roomMentionPool } from "@/lib/room-members";
 import { botControlAvailable, mentionableBots } from "@/lib/remote-bot";
 import { sharedAttachmentError, type SharedComposer } from "./shared-conversation";
 import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@/lib/thread-refs";
@@ -315,10 +316,7 @@ export function Composer({
     const pool: MentionChoice[] = shared
       ? [...(shared.mentionPeople ?? []).map(person => ({ ...person, searchText: "Person" })), ...shared.mentionBots.map(member => ({ id: member.id, name: member.name, bot: member, searchText: member.title }))]
       : group
-      ? [
-          ...(!group.dm ? [{ id: "__everyone__", name: "everyone" }] : []),
-          ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
-        ]
+      ? roomMentionPool(group, members ?? [])
       : mentionableBots(state.bots, bot?.id)
           .map((member) => ({ id: member.id, name: member.name, bot: member }));
     return mentionChoicesForQuery(pool, mention.query);

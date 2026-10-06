@@ -38,3 +38,46 @@ describe("remoteRoomFrame", () => {
     expect(remoteRoomFrame(groups, "partner", frame({ kind: "group", group: { id: "room-local", name: "x" } }))).toBeNull();
   });
 });
+
+import { remoteRoomListPatches, remoteRoomNeedsListing } from "./remote-room-frames";
+
+describe("remoteRoomNeedsListing", () => {
+  const listed = [
+    { id: "room-local", threadId: "thread-local" },
+    { id: "room-partner", threadId: "thread-partner", home: partner, remoteBots: [{ id: "claude" }] },
+    { id: "room-old", threadId: "thread-old", home: partner },
+  ];
+
+  it("asks for a listing when a room it was just added to shows up", () => {
+    expect(remoteRoomNeedsListing(listed, "partner", frame({ kind: "group", group: { id: "room-new", memberIds: [] } }))).toBe(true);
+  });
+
+  it("asks when a known room gains a bot it has no profile for", () => {
+    expect(remoteRoomNeedsListing(listed, "partner", frame({ kind: "group", group: { id: "room-partner", memberIds: ["claude", "codex"] } }))).toBe(true);
+    expect(remoteRoomNeedsListing(listed, "partner", frame({ kind: "group", group: { id: "room-partner", memberIds: ["claude"] } }))).toBe(false);
+  });
+
+  it("stays quiet for other frames, older servers and partial patches", () => {
+    expect(remoteRoomNeedsListing(listed, "partner", frame({ kind: "message", threadId: "thread-new", message: {} }))).toBe(false);
+    expect(remoteRoomNeedsListing(listed, "partner", frame({ kind: "group", group: { id: "room-old", memberIds: ["x"] } }))).toBe(false);
+    expect(remoteRoomNeedsListing(listed, "partner", frame({ kind: "group", group: { id: "room-partner", busyBotId: null } }))).toBe(false);
+  });
+});
+
+describe("remoteRoomListPatches", () => {
+  const known = [
+    { id: "room-local", threadId: "thread-local", name: "Local" },
+    { id: "room-partner", threadId: "thread-partner", name: "Team Inbox", home: partner, remoteBots: [{ id: "claude" }], messages: [{ id: "m1" }] },
+  ];
+
+  it("adds a newly listed remote room whole and skips local rooms", () => {
+    const fresh = { id: "room-new", threadId: "thread-new", name: "New", home: partner, messages: [] };
+    expect(remoteRoomListPatches(known, [{ id: "room-local", threadId: "thread-local", name: "Renamed" }, fresh])).toEqual([fresh]);
+  });
+
+  it("patches only listing fields that changed, never the transcript", () => {
+    const listed = [{ id: "room-partner", threadId: "thread-partner", name: "Team Inbox", home: partner, remoteBots: [{ id: "claude" }, { id: "codex" }], messages: [], hasMore: true }];
+    expect(remoteRoomListPatches(known, listed)).toEqual([{ id: "room-partner", remoteBots: [{ id: "claude" }, { id: "codex" }] }]);
+    expect(remoteRoomListPatches(known, [{ ...known[1]!, messages: [] }])).toEqual([]);
+  });
+});

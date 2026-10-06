@@ -485,6 +485,20 @@ export interface GroupTask {
   state?: ThreadState;
 }
 
+/** A bot in a room hosted on another home, as the guest's server lists it.
+ * `id` is the bot's id on that home (the one in memberIds, defaultResponder
+ * and message `from.botId`); it never names a bot on this home. Only bots the
+ * viewer may talk to are listed. `avatarUrl`, when present, is loadable as-is. */
+export interface RemoteRoomBot {
+  id: string;
+  name: string;
+  color: string;
+  avatarUrl?: string;
+  avatarCrop?: string;
+  mascotBody?: unknown;
+  title?: string;
+}
+
 /** A room as a client may see it: the record plus the computed working
  * flag (publicGroupState). */
 export interface WireGroup {
@@ -495,6 +509,8 @@ export interface WireGroup {
   tasks?: GroupTask[];
   name: string;
   memberIds: string[];
+  /** Rooms on another home only: profiles for that home's member bots. */
+  remoteBots?: RemoteRoomBot[];
   /** Authenticated people sharing this existing room. Owner is implicit. */
   peopleIds?: string[];
   people?: { id: string; name: string; homeId: string; homeName?: string; avatar?: string | null; color?: string }[];
