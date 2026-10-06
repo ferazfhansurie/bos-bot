@@ -96,6 +96,7 @@ describe("live events URL", () => {
   it("builds cold, resumable, and screen-free stream URLs", () => {
     expect(liveEventsUrl()).toBe("/api/events");
     expect(liveEventsUrl({ screens: true })).toBe("/api/events");
+    expect(liveEventsUrl({ path: "/api/groups/room-1/events", since: "7" })).toBe("/api/groups/room-1/events?since=7");
     expect(liveEventsUrl({ since: "ab12cd34:9" })).toBe("/api/events?since=ab12cd34%3A9");
     expect(liveEventsUrl({ since: "ab12cd34:9", screens: false })).toBe(
       "/api/events?since=ab12cd34%3A9&screens=off",

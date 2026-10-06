@@ -213,10 +213,13 @@ export function ManageMembersPanel({
       >
         <div className="mb-1 text-[15px] font-semibold text-ink">Manage Members</div>
         <div className="mb-3 truncate text-[13px] text-ink-secondary">{group.name}</div>
-        <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="Create a bot first — groups are made of bots." />
-        {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
-        {confirmRemoval && <p role="alert" className="mt-2 text-[12px] text-ink-secondary">Remove {removed.length} {removed.length === 1 ? "member" : "members"}? Their messages stay in this room.</p>}
-        <div className="mt-3 border-t border-hairline/40 pt-3">
+        {/* Another home's bots aren't this home's to add or remove. */}
+        {!group.home && <>
+          <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="Create a bot first — groups are made of bots." />
+          {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
+          {confirmRemoval && <p role="alert" className="mt-2 text-[12px] text-ink-secondary">Remove {removed.length} {removed.length === 1 ? "member" : "members"}? Their messages stay in this room.</p>}
+        </>}
+        <div className={group.home ? "" : "mt-3 border-t border-hairline/40 pt-3"}>
           <div className="mb-1 flex items-center gap-2">
             <span className="flex-1 text-[13px] font-semibold text-ink">People</span>
             {canManagePeople && multiplayer && (
@@ -327,15 +330,15 @@ export function ManageMembersPanel({
             onClick={onClose}
             className="flex-1 rounded-lg bg-raised py-2 text-[14px] font-medium text-ink hover:brightness-110"
           >
-            Cancel
+            {group.home ? "Close" : "Cancel"}
           </button>
-          <button
+          {!group.home && <button
             onClick={() => void save()}
             disabled={!memberIds.length || saving}
             className="flex-1 rounded-lg bg-accent py-2 text-[14px] font-medium text-white hover:brightness-110 disabled:opacity-40"
           >
             {saving ? "Saving…" : confirmRemoval ? "Confirm removal" : `Save${memberIds.length ? ` · ${memberIds.length} ${memberIds.length === 1 ? "bot" : "bots"}` : ""}`}
-          </button>
+          </button>}
         </div>
       </div>
     </div>
