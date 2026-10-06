@@ -3276,7 +3276,7 @@ function publicGroupState(group: GroupRecord): WireGroup {
   });
   const speakers = roomRuntimeSpeakers(group.id);
   const activeMemberTurns = publicRoomMemberTurns(speakers, runtimeId => store.canonicalThreadId(runtimeId), roomMemberTurnFacts);
-  return { ...group, memberBots, peopleIds: roomPeople(group, multiplayerActors.ownerId), people: roomPeople(group, multiplayerActors.ownerId).map(id => ({ id, name: id === multiplayerActors.ownerId ? cfg.profile?.name || "Owner" : multiplayerActors.nameFor(id) || id, homeId: parseContactId(id)!.homeId })), ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set(speakers.map(([, speaker]) => speaker.botId))], activeMemberTurns, working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
+  return { ...group, memberBots, peopleIds: roomPeople(group, multiplayerActors.ownerId), people: roomPeople(group, multiplayerActors.ownerId).map(id => ({ id, name: id === multiplayerActors.ownerId ? cfg.profile?.name || "Owner" : multiplayerActors.nameFor(id) || id, homeId: parseContactId(id)!.homeId })), ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set([...speakers.map(([, speaker]) => speaker.botId), ...personTurnBotIds(group.id)])], activeMemberTurns, working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
 }
 
 function beginGroupTurnOperation(
@@ -5254,6 +5254,13 @@ bus.subscribe((event: RuntimeEvent) => {
   // The durable message patch below is the public frame. Sending raw base64
   // through runtime SSE would multiply large bytes across every app window.
   if (!privateImageEvent) broadcast({ kind: "runtime", event: publicRoomRuntimeEvent(event) });
+  // A person's helper turn runs in a private execution thread; its live
+  // progress (not approvals) shows in the room as that member's turn.
+  const personTurn = privateImageEvent || event.type.startsWith("request.") ? undefined : personTurnRuntime.get(event.threadId);
+  if (personTurn) {
+    const { requestId: _requestId, raw: _raw, ...visible } = event as RuntimeEvent & { requestId?: string; raw?: unknown };
+    broadcast({ kind: "runtime", event: { ...visible, threadId: personTurn.threadId, roomRuntimeThreadId: event.threadId, roomBotId: personTurn.botId } });
+  }
   const routineRun = privateImageEvent ? null : (routines?.handleRuntimeEvent(event) ?? null);
   const ownerBot = store.botByThread(event.threadId);
   const bot = ownerBot ? botForThread(ownerBot.id, event.threadId) ?? undefined : undefined;
@@ -7114,7 +7121,7 @@ async function sharedRoomAttachmentPrompt(room: SharedRoom, source: SharedTextMe
 
 async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt: string, source: SharedTextMessage, senderName: string,
   _level: SharedRoomTrustLevel, progress: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void, deadline: number, shouldContinue: () => boolean, onDispatch: () => void,
-  requesterId = contactId(source.actor)): Promise<SharedBotReply> {
+  requesterId = contactId(source.actor), onThread?: (threadId: string) => void): Promise<SharedBotReply> {
   const bot = store.bot(target.key.localId);
   if (!bot || bot.hidden) throw new Error("local shared bot is unavailable");
   const taskKey = `${bot.id}-${createHash("sha256").update(`${requesterId}:${room.revision ?? 1}`).digest("hex").slice(0, 16)}`;
@@ -7125,6 +7132,7 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
     threadId = task.threadId;
     sharedBotTasks.set(room.id, taskKey, threadId);
   }
+  onThread?.(threadId);
   const sandbox = join(DATA_DIR, "shared-room-files", threadId);
   mkdirSync(sandbox, { recursive: true, mode: 0o700 });
   store.patchTask(bot.id, threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [], cwd: sandbox });
@@ -7180,6 +7188,12 @@ async function runLocalRoomTurn(room: SharedRoom, target: SharedRoomBot, prompt:
 
 /** Guest requests use the existing conversation-only provider isolation. Their
  * execution thread is private to the dispatcher; output joins the same room. */
+/** Private helper execution thread -> the room thread and member it speaks for. */
+const personTurnRuntime = new Map<string, { groupId: string; threadId: string; botId: string }>();
+function personTurnBotIds(groupId: string): string[] {
+  return [...personTurnRuntime.values()].filter(turn => turn.groupId === groupId).map(turn => turn.botId);
+}
+
 async function runPersonChannelTurn(groupId: string, threadId: string, message: Message, actorId: string, sessionId: string): Promise<void> {
   const group = store.group(groupId);
   if (!group) return;
@@ -7190,6 +7204,8 @@ async function runPersonChannelTurn(groupId: string, threadId: string, message: 
   const current = (botId: string) => !operation.cancelled && sessions.isLive(sessionId) && multiplayerActors.actorFor(sessionId) === actorId && canReadChannel(store.group(groupId), actorId) && store.group(groupId)!.memberIds.includes(botId) && allowed().some(bot => bot.id === botId);
   try {
     await Promise.all(responders.map(async bot => {
+      const execThreads: string[] = [];
+      try {
       const source: SharedTextMessage = { id: message.id, roomId: groupId, sequence: 0, actor: parseContactId(actorId)!, text: message.text ?? "", at: message.at, sendId: message.sendId ?? message.id };
       const room: SharedRoom = { id: group.id, homeId: ENVIRONMENT_ID, name: group.name, memberIds: roomPeople(group, multiplayerActors.ownerId), kind: "group", createdAt: 0 };
       const target: SharedRoomBot = { id: `${ENVIRONMENT_ID}:bot:${bot.id}`, key: { homeId: ENVIRONMENT_ID, kind: "bot", localId: bot.id }, name: bot.name, remote: false, ownerName: cfg.profile?.name ?? "Owner" };
@@ -7199,7 +7215,8 @@ async function runPersonChannelTurn(groupId: string, threadId: string, message: 
       try {
         const reply = await runLocalRoomTurn(room, target, prompt, source, message.sender?.name ?? "Person", "helper",
           (_id, tool) => { if (current(bot.id)) store.appendMessage(threadId, { role: "bot", kind: "activity", from: { botId: bot.id, name: bot.name, color: bot.color }, tool }); },
-          Date.now() + roomTurnTimeoutMinutes(cfg) * 60_000, () => current(bot.id), () => {});
+          Date.now() + roomTurnTimeoutMinutes(cfg) * 60_000, () => current(bot.id), () => {}, undefined,
+          runtimeId => { personTurnRuntime.set(runtimeId, { groupId, threadId, botId: bot.id }); execThreads.push(runtimeId); store.patchGroup(groupId, {}); });
         if (!current(bot.id) || !reply.reply) return;
         const sent = store.appendMessage(threadId, { role: "bot", kind: "text", text: reply.reply, from: { botId: bot.id, name: bot.name, color: bot.color }, sender: { id: target.id, name: bot.name }, replyToId: message.id });
         operation.completedBotIds.add(bot.id);
@@ -7210,6 +7227,10 @@ async function runPersonChannelTurn(groupId: string, threadId: string, message: 
         }
       } catch {
         if (current(bot.id)) store.appendMessage(threadId, { role: "bot", kind: "activity", from: { botId: bot.id, name: bot.name, color: bot.color }, tool: { name: `${bot.name} could not finish this helper reply.`, ok: false } });
+      }
+      } finally {
+        for (const id of execThreads) personTurnRuntime.delete(id);
+        if (execThreads.length && store.group(groupId)) store.patchGroup(groupId, {});
       }
     }));
   } finally { finishGroupTurnOperation(groupId, operation); }
