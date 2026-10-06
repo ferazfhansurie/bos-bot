@@ -725,7 +725,7 @@ struct ChatView: View {
 
     private var channelMembers: [Bot] {
         guard case let .room(room) = current else { return [] }
-        return room.memberIds.compactMap { session.state.bot($0) }
+        return room.members(from: session.state.bots)
     }
     private var hostLive: Bool { if case .live = session.status { return true }; return false }
     private var rosterAccessory: AnyView? {

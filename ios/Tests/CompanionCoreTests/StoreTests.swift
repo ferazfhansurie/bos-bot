@@ -24,6 +24,19 @@ final class StoreTests: XCTestCase {
         return state
     }
 
+    func testLinkedRoomMetadataFrameKeepsRoomScopedRoster() throws {
+        let raw = #"{"id":"partner-room","threadId":"t","name":"Team Inbox","memberIds":["claude"],"home":{"id":"partner","name":"Partner Mac"},"memberBots":[{"id":"claude","name":"Partner Claude","color":"orange"}],"defaultResponder":{"kind":"everyone"},"bulletin":"","unread":false,"createdAt":1}"#
+        let room = try JSONDecoder().decode(Room.self, from: Data(raw.utf8))
+        var state = CompanionState()
+        state.hydrate(Fleet(bots: [], groups: [room]))
+        var metadata = room
+        metadata.home = nil
+        metadata.memberBots = nil
+        state.apply(.room(metadata))
+        XCTAssertEqual(state.rooms.first?.members(from: []).map(\.name), ["Partner Claude"])
+        XCTAssertEqual(state.rooms.first?.home?.id, "partner")
+    }
+
     // MARK: - Hydration
 
     func testOnlyRuntimeEventsCountAsLiveTextOnly() {

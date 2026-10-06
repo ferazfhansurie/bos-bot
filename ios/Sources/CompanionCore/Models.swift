@@ -655,11 +655,46 @@ public struct RoomPerson: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+public struct RoomHome: Codable, Hashable, Sendable {
+    public var id: String
+    public var name: String
+    public var available: Bool?
+}
+
+/// Room-scoped display records never contain private threads or bot settings.
+public struct RoomMemberBot: Codable, Hashable, Sendable {
+    public var id: String
+    public var name: String?
+    public var title: String?
+    public var color: String?
+    public var mascotBody: String?
+    public var mascotEyes: String?
+    public var avatarUrl: String?
+    public var avatarCrop: AvatarCrop?
+    public var remote: BotRemote?
+
+    func displayBot(home: RoomHome? = nil) -> Bot {
+        let label = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var bot = Bot(id: id, threadId: "", name: label?.isEmpty == false ? label! : "Bot",
+                      title: title ?? "", description: "", notifications: false,
+                      color: color ?? "gray", unread: false,
+                      modelSelection: ModelSelection(instanceId: "", model: ""), createdAt: 0)
+        bot.avatarUrl = avatarUrl
+        bot.avatarCrop = avatarCrop
+        bot.mascotBody = mascotBody
+        bot.mascotEyes = mascotEyes
+        bot.remote = remote ?? home.map { BotRemote(homeId: $0.id, homeName: $0.name, online: $0.available) }
+        return bot
+    }
+}
+
 public struct Room: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var threadId: String
     public var name: String
     public var memberIds: [String]
+    public var home: RoomHome?
+    public var memberBots: [RoomMemberBot]?
     /// People sharing the room, owner first. Older computers omit both.
     public var peopleIds: [String]?
     public var people: [RoomPerson]?
@@ -680,6 +715,20 @@ public struct Room: Codable, Hashable, Identifiable, Sendable {
     public var tasks: [BotTask]?
     public var messages: [Message]?
     public var hasMore: Bool?
+
+    /// Remote room IDs belong to its home, so a coincident local ID must
+    /// never substitute for the room's own display record.
+    public func members(from bots: [Bot]) -> [Bot] {
+        if let home, let listed = memberBots {
+            let ordered = memberIds.isEmpty ? listed : memberIds.compactMap { id in listed.first { $0.id == id } }
+            return ordered.map { $0.displayBot(home: home) }
+        }
+        return memberIds.compactMap { id in
+            if let bot = bots.first(where: { $0.id == id }) { return bot }
+            guard id.hasPrefix("rb-"), let entry = memberBots?.first(where: { $0.id == id }), entry.remote != nil else { return nil }
+            return entry.displayBot()
+        }
+    }
 }
 
 // MARK: - Responses

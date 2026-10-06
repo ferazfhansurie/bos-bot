@@ -22,7 +22,8 @@ struct ChannelSettingsView: View {
     @State private var grants: Set<String>?
     private var contextIsCurrent: Bool { openingContext?.permits(session.roomSettingsContext) == true }
     private var current: Room { contextIsCurrent ? session.state.rooms.first { $0.id == room.id } ?? room : room }
-    private var members: [Bot] { current.memberIds.compactMap { session.state.bot($0) } }
+    private var canManage: Bool { session.canAdminister && current.home == nil }
+    private var members: [Bot] { current.members(from: session.state.bots) }
     private var selfID: String? { session.roomActorId ?? current.ownerPersonId }
     private var people: [RoomPerson] {
         current.people ?? (current.peopleIds ?? []).map { RoomPerson(id: $0, name: $0, homeId: $0.components(separatedBy: ":").first ?? "") }
@@ -41,17 +42,17 @@ struct ChannelSettingsView: View {
             Form {
                 Section {
                     ChannelAvatarView(room: current, size: 72).frame(maxWidth: .infinity)
-                    if session.canAdminister {
+                    if canManage {
                         PhotosPicker(selection: $photo, matching: .images) { Label("Choose group photo", systemImage: "photo") }
                         if current.avatarUrl != nil {
                             Button("Remove group photo") { Task { await save(RoomSettingsPatch(avatarUrl: .clear)) } }
                         }
                     }
-                    TextField("Group name", text: $name)
+                    TextField("Group name", text: $name).disabled(!canManage)
                     Button("Save name") { Task { await save(RoomSettingsPatch(name: name.trimmingCharacters(in: .whitespacesAndNewlines))) } }
-                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == current.name)
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == current.name || !canManage)
                 }
-                if session.canAdminister, current.dm != true {
+                if current.dm != true {
                     Section("Members") {
                         ForEach(members) { bot in
                             VStack(alignment: .leading, spacing: 8) {
@@ -59,12 +60,12 @@ struct ChannelSettingsView: View {
                                     BotAvatarView(bot: bot, size: 32)
                                     Text(bot.name)
                                     Spacer()
-                                    if current.memberIds.count > 1 {
+                                    if canManage, current.memberIds.count > 1 {
                                         Button(role: .destructive) { removing = bot } label: { Image(systemName: "minus.circle") }
                                             .accessibilityLabel("Remove \(bot.name)")
                                     }
                                 }
-                                Picker("When \(bot.name) replies", selection: Binding(
+                                if canManage { Picker("When \(bot.name) replies", selection: Binding(
                                     get: { current.replyMode(for: bot.id) },
                                     set: { value in Task {
                                         var modes = current.memberReplyModes ?? [:]
@@ -74,10 +75,10 @@ struct ChannelSettingsView: View {
                                 )) {
                                     Text("Always").tag("always")
                                     Text("Only when tagged").tag("mentions")
-                                }
+                                } }
                             }
                         }
-                        Text("Removing a bot stops future participation. The conversation history stays here.").font(.caption).foregroundStyle(.secondary)
+                        if canManage { Text("Removing a bot stops future participation. The conversation history stays here.").font(.caption).foregroundStyle(.secondary) }
                     }
                 }
                 if supportsPeople, current.dm != true {
@@ -92,14 +93,14 @@ struct ChannelSettingsView: View {
                                     }
                                 }
                                 Spacer()
-                                if session.canAdminister, person.id != current.ownerPersonId, person.id != selfID {
+                                if canManage, person.id != current.ownerPersonId, person.id != selfID {
                                     Button(role: .destructive) { removingPerson = person } label: { Image(systemName: "minus.circle") }
                                         .accessibilityLabel("Remove \(person.name)")
                                 }
                             }
                             .accessibilityIdentifier("room-person-" + person.id)
                         }
-                        if session.canAdminister {
+                        if canManage {
                             if !addable.isEmpty {
                                 Menu {
                                     ForEach(addable) { contact in
@@ -117,7 +118,7 @@ struct ChannelSettingsView: View {
                         }
                         Text("People see this room's conversation. Bots only answer them where allowed below.").font(.caption).foregroundStyle(.secondary)
                     }
-                    if session.canAdminister, current.hasGuests, let grants {
+                    if canManage, current.hasGuests, let grants {
                         Section("Bots that answer people") {
                             ForEach(members) { bot in
                                 if let id = grantId(bot) {
@@ -132,7 +133,7 @@ struct ChannelSettingsView: View {
                         }
                     }
                 }
-                if session.canAdminister {
+                if canManage {
                     Section("Notifications") {
                         Picker("Notify me", selection: Binding(
                             get: { current.notifications ?? "all" },

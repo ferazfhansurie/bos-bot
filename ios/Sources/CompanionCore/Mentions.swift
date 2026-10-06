@@ -59,10 +59,9 @@ public enum MentionPool {
     public static func targets(for chat: Chat, bots: [Bot]) -> [MentionTarget] {
         switch chat {
         case let .room(room):
-            let byID = Dictionary(bots.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             // Hidden members are not routed by the server's mention parser,
             // so a tag offered for one would land nowhere.
-            let members = room.memberIds.compactMap { byID[$0] }.filter { $0.hidden != true && !$0.name.isEmpty }
+            let members = room.members(from: bots).filter { $0.hidden != true && !$0.name.isEmpty }
             guard !members.isEmpty else { return [] }
             return (room.dm == true ? [] : [MentionTarget.everyone]) + members.map(MentionTarget.init(bot:))
         case let .bot(current):
@@ -79,8 +78,7 @@ public enum MentionPool {
     public static func peers(for chat: Chat, bots: [Bot]) -> (peers: [MentionPeer], everyone: Bool) {
         switch chat {
         case let .room(room):
-            let byID = Dictionary(bots.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            return (room.memberIds.compactMap { byID[$0] }.map(MentionPeer.init(bot:)), room.dm != true)
+            return (room.members(from: bots).map(MentionPeer.init(bot:)), room.dm != true)
         case let .bot(current):
             return (bots.filter { $0.id != current.id }.map(MentionPeer.init(bot:)), false)
         }

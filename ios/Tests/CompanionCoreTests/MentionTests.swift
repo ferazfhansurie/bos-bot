@@ -38,6 +38,20 @@ final class MentionTests: XCTestCase {
         XCTAssertEqual(MentionPool.targets(for: .bot(me), bots: bots).map(\.name), ["Pixel", "Forge"])
     }
 
+    func testLinkedRoomUsesItsOwnRosterInsteadOfLocalIdCollision() throws {
+        let data = Data(#"{"id":"partner-room","threadId":"t","name":"Team Inbox","memberIds":["claude"],"home":{"id":"partner","name":"Partner Mac"},"memberBots":[{"id":"claude","name":"Partner Claude","title":"Operations","color":"orange"}],"defaultResponder":{"kind":"everyone"},"bulletin":"","unread":false,"createdAt":1}"#.utf8)
+        let linked = try JSONDecoder().decode(Room.self, from: data)
+        let local = try bot("claude", "Local Claude")
+        XCTAssertEqual(MentionPool.targets(for: .room(linked), bots: [local]).map(\.name), ["everyone", "Partner Claude"])
+        XCTAssertEqual(MentionPool.peers(for: .room(linked), bots: [local]).peers.map(\.name), ["Partner Claude"])
+    }
+
+    func testRoomKeepsOfflineRelayedMemberWhenBridgeRosterDropsIt() throws {
+        let data = Data(#"{"id":"r","threadId":"t","name":"Team Inbox","memberIds":["rb-home-bos"],"memberBots":[{"id":"rb-home-bos","name":"bos","color":"blue","remote":{"homeId":"firaz","homeName":"Firaz Mac","online":false}}],"defaultResponder":{"kind":"everyone"},"bulletin":"","unread":false,"createdAt":1}"#.utf8)
+        let linked = try JSONDecoder().decode(Room.self, from: data)
+        XCTAssertEqual(MentionPool.targets(for: .room(linked), bots: []).map(\.name), ["everyone", "bos"])
+    }
+
     // MARK: ranking
 
     func testRankingPutsPrefixThenWordThenContainsThenRoleThenFuzzy() throws {

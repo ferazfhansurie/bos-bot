@@ -420,6 +420,10 @@ public struct CompanionState: Sendable {
             if let index = rooms.firstIndex(where: { $0.id == room.id }) {
                 var merged = room
                 let previous = rooms[index]
+                // Relayed metadata frames may omit the guest-side display
+                // roster. Keep it scoped here; memberIds still removes members.
+                merged.home = room.home ?? previous.home
+                merged.memberBots = room.memberBots ?? previous.memberBots
                 // Ordinary room frames are metadata-only and preserve the
                 // active transcript. A task switch includes messages and is
                 // authoritative, just like a bot task switch.

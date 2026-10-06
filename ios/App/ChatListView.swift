@@ -1337,7 +1337,7 @@ struct GroupTile: View {
     }
 
     private func memberBots(_ room: Room) -> [Bot] {
-        room.memberIds.compactMap { session.state.bot($0) }
+        room.members(from: session.state.bots)
     }
 }
 
