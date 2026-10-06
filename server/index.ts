@@ -1,4 +1,4 @@
-import { roomPeople, personCanReadRoom, checkedRoomPeople, roomForPerson } from "./room-people.ts";
+import { roomPeople, roomPushPeople, personCanReadRoom, checkedRoomPeople, roomForPerson } from "./room-people.ts";
 import { publicRoomMemberTurns } from "./room-member-turns.ts";
 import { WorkContinuity, assessTeamWork, workPlanInputSchema } from "./work-continuity.ts";
 import { WorkRuntimeLedger } from "./work-continuity-runtime.ts";
@@ -4062,8 +4062,7 @@ function notify(notification: Notification | null) {
     const room = notification.threadId ? store.groupByThread(notification.threadId) : null;
     if (room && notification.kind === "done" && !roomCompletionNotifies(room.notifications, notification.body, cfg.profile?.name ?? "")) return;
     broadcast({ kind: "notify", notification });
-    if (room) for (const personId of roomPeople(room, multiplayerActors.ownerId)) {
-      if (personId === multiplayerActors.ownerId) continue;
+    if (room) for (const personId of roomPushPeople(room, multiplayerActors.ownerId, id => canReadChannel(room, id), multiplayerActors.ownerId, notification.kind)) {
       void apnsPush.send(personId, notification.title, notification.body, { roomId: room.id, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(() => {});
     }
     // The digest is from no bot: no sender, so no communication-style push.
@@ -7189,8 +7188,9 @@ async function runPersonChannelTurn(groupId: string, threadId: string, message: 
         if (!current(bot.id) || !reply.reply) return;
         const sent = store.appendMessage(threadId, { role: "bot", kind: "text", text: reply.reply, from: { botId: bot.id, name: bot.name, color: bot.color }, sender: { id: target.id, name: bot.name }, replyToId: message.id });
         operation.completedBotIds.add(bot.id);
-        for (const personId of roomPeople(store.group(groupId)!, multiplayerActors.ownerId)) {
-          if (personId === actorId || store.group(groupId)?.notifications === "muted") continue;
+        const currentRoom = store.group(groupId);
+        if (!currentRoom) return;
+        for (const personId of roomPushPeople(currentRoom, multiplayerActors.ownerId, id => canReadChannel(currentRoom, id), actorId, "done")) {
           void apnsPush.send(personId, bot.name, reply.reply, { roomId: groupId, threadId, messageId: sent.id, senderId: target.id, senderName: bot.name }).catch(() => {});
         }
       } catch {
@@ -13787,7 +13787,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (named.some(bot => bot.hidden || bot.visibility === "private" || !workspaceMembers.grants(group!.id).includes(`${ENVIRONMENT_ID}:bot:${bot.id}`))) return json(res, 403, { error: "mentioned bot is not granted to this room" });
       const message = store.appendMessage(threadId, { role: "user", kind: "text", text: body.text.trim(), sendId, replyToId: replyTo?.id, sender: channelMessageSender(auth), channelMode: "chat" });
       void runPersonChannelTurn(group!.id, threadId, message, requestActor, auth.session.id).catch(error => console.warn("person room turn failed", error instanceof Error ? error.message : "unknown"));
-      for (const personId of roomPeople(group!, multiplayerActors.ownerId)) if (personId !== requestActor && group!.notifications !== "muted") {
+      for (const personId of roomPushPeople(group!, multiplayerActors.ownerId, id => canReadChannel(group!, id), requestActor)) {
         void apnsPush.send(personId, message.sender!.name, message.text!, { roomId: group!.id, threadId, senderId: requestActor, senderName: message.sender!.name, messageId: message.id }).catch(() => {});
       }
       return json(res, 201, { message });
