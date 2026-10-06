@@ -31,6 +31,14 @@ const LOCAL_ONLY_CONTROLS = new Set([
 export type LocalOnlyBotControl = typeof LOCAL_ONLY_CONTROLS extends Set<infer C> ? C : never;
 export type BotControl = LocalOnlyBotControl | "edit" | "versions";
 
+/** True while a relayed bot's own Mac cannot take work (offline, or needs an
+ * update/reconnect). Always false for local bots. */
+export function remoteBotUnavailable(bot: Pick<Bot, "remote"> | { remote?: { online?: boolean; availability?: string } } | null | undefined): boolean {
+  const remote = bot?.remote;
+  if (!remote) return false;
+  return remote.online === false || Boolean(remote.availability && remote.availability !== "ready");
+}
+
 /** Whether `control` may be offered for this bot. Local (or absent) bots get everything. */
 export function botControlAvailable(bot: Pick<Bot, "remote"> | null | undefined, control: BotControl): boolean {
   if (!bot?.remote) return true;

@@ -12,7 +12,7 @@ import { api, useStore, type Group, type RoomPerson } from "@/state/store";
 import { BotAvatar, PersonFace } from "./Avatar";
 import { BotPickerList } from "./BotPickerList";
 import { InviteLink } from "./SharedContactsSidebar";
-import { nextMemberIds, roomMemberBots } from "@/lib/room-members";
+import { nextMemberIds, roomCandidateBots, roomMemberBots } from "@/lib/room-members";
 
 /** A `/api/multiplayer/contacts` row; only people can join a room's roster. */
 export interface RoomContact {
@@ -73,7 +73,7 @@ export function ManageMembersPanel({
   // Archived bots stay listed while they are still members — otherwise a
   // room could keep a member you have no way to remove.
   const bots = useMemo(
-    () => state.bots.filter((b) => !b.hidden || group.memberIds.includes(b.id)),
+    () => roomCandidateBots(state.bots, group.memberIds),
     [state.bots, group.memberIds],
   );
   // Another home's room: its bots are listed to look at, never to pick.
@@ -234,7 +234,7 @@ export function ManageMembersPanel({
           </div>
         )}
         {!group.home && <>
-          <BotPickerList bots={bots} picked={picked} onToggle={toggle} emptyHint="Create a bot first — groups are made of bots." />
+          <BotPickerList bots={bots} picked={picked} onToggle={toggle} disableUnavailable emptyHint="Create a bot first — groups are made of bots." />
           {!memberIds.length && <div className="mt-2 text-[12px] text-ink-secondary">A group needs at least one bot.</div>}
           {confirmRemoval && <p role="alert" className="mt-2 text-[12px] text-ink-secondary">Remove {removed.length} {removed.length === 1 ? "member" : "members"}? Their messages stay in this room.</p>}
         </>}

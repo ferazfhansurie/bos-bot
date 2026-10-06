@@ -510,7 +510,8 @@ export interface WireGroup {
   name: string;
   memberIds: string[];
   /** Room-scoped display records; no owner settings or private threads. */
-  memberBots?: Array<Pick<WireBot, "id" | "name" | "title" | "color" | "mascotBody" | "mascotEyes" | "avatarUrl" | "avatarCrop">>;
+  /** `remote` is set for a member relayed from a linked Mac (`rb-` id). */
+  memberBots?: Array<Pick<WireBot, "id" | "name" | "title" | "color" | "mascotBody" | "mascotEyes" | "avatarUrl" | "avatarCrop" | "remote">>;
   /** Authenticated people sharing this existing room. Owner is implicit. */
   peopleIds?: string[];
   people?: { id: string; name: string; homeId: string; homeName?: string; avatar?: string | null; color?: string }[];

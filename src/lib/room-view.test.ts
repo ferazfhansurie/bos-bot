@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { roomMemberReplyMode, sameBubbleRun, roomMemberStatus, roomRosterPreview, shouldCollapseRoomReply } from "./room-view";
+import { roomMemberReplyMode, sameBubbleRun, roomMemberStatus, roomMemberStatusLabel, roomRosterPreview, shouldCollapseRoomReply } from "./room-view";
 
 describe("room view compatibility", () => {
   it("keeps legacy lead routing until a member gets an explicit override", () => {
@@ -43,5 +43,19 @@ describe("room view compatibility", () => {
     expect(sameBubbleRun(a, { ...a, comm: { to: "b" } })).toBe(false);
     expect(sameBubbleRun(a, { ...a, at: at + 24 * 3600_000 })).toBe(false);
     expect(sameBubbleRun(undefined, a)).toBe(false);
+  });
+});
+
+describe("roomMemberStatusLabel", () => {
+  const remote = { homeId: "h", homeName: "Studio", ownerName: "Putri" };
+  it("is the plain status for a local member", () => {
+    expect(roomMemberStatusLabel("working", {})).toBe("working");
+    expect(roomMemberStatusLabel("idle", {})).toBe("idle");
+  });
+  it("says where a relayed member runs, without repeating offline", () => {
+    expect(roomMemberStatusLabel("idle", { remote })).toBe("idle · on Putri's Mac");
+    expect(roomMemberStatusLabel("working", { remote })).toBe("working · on Putri's Mac");
+    expect(roomMemberStatusLabel("offline", { remote: { ...remote, online: false } })).toBe("offline · on Putri's Mac");
+    expect(roomMemberStatusLabel("offline", { remote: { ...remote, availability: "reconnect-required" } })).toBe("reconnect required · on Putri's Mac");
   });
 });

@@ -341,6 +341,104 @@ describe("RemoteBotBridge", () => {
     expect(fake.calls.some((call) => call.path === "/api/threads/bridge-1/messages" && call.search.includes("before="))).toBe(true);
   });
 
+  it("passes live runtime of the room thread to onRuntime only, without approvals, raw payloads or private threads", async () => {
+    await bridge.listBots(0);
+    const runtime: Array<Record<string, unknown>> = [];
+    const push = (event: Record<string, unknown>) => bridge.handleFrame(bridge.homeForTest(HOME)!, { kind: "runtime", event });
+    fake.afterRoomSent = () => {
+      push({ type: "content.delta", threadId: "bridge-1", payload: { delta: "thinking" }, raw: { secret: SECRET }, requestId: "req-secret" });
+      push({ type: "request.opened", threadId: "bridge-1", payload: { tool: SECRET } });
+      push({ type: "content.delta", threadId: "putri-thread", payload: { delta: SECRET } });
+      push({ type: "turn.completed", threadId: "bridge-1" });
+    };
+    frames = [];
+    const result = await bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-runtime",
+      onThread: () => {}, onActivity: () => {}, onRuntime: (event) => runtime.push(event), deadlineMs: Date.now() + 1000,
+    });
+    expect(result.reply).toBe("reply from pixie");
+    expect(runtime).toEqual([
+      { type: "content.delta", threadId: "bridge-1", payload: { delta: "thinking" } },
+      { type: "turn.completed", threadId: "bridge-1" },
+    ]);
+    expect(JSON.stringify(runtime)).not.toContain(SECRET);
+    expect(frames.some((frame) => frame.kind === "runtime")).toBe(false);
+    expect(JSON.stringify(frames)).not.toContain(SECRET);
+    // the listener is gone once the turn has resolved
+    push({ type: "content.delta", threadId: "bridge-1", payload: { delta: "late" } });
+    expect(runtime).toHaveLength(2);
+    expect(frames.some((frame) => frame.kind === "runtime")).toBe(false);
+  });
+
+  it("fails a room turn as unavailable with an unknown outcome when the Mac is unlinked mid-turn", async () => {
+    let linked = true;
+    bridge = make({ links: () => (linked ? [link] : []) });
+    await bridge.listBots(0);
+    fake.awaitingRoomApproval = true;
+    const started = Date.now();
+    const error = await bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-unlinked",
+      onThread: () => {}, onActivity: () => { linked = false; bridge.sync(); },
+      deadlineMs: Date.now() + 10_000, offlineGraceMs: 50, pollMs: 5,
+    }).then(() => null, (failure: unknown) => failure as Error & { outcomeUnknown?: boolean });
+    expect(error?.message).toBe(REMOTE_BOT_UNAVAILABLE);
+    expect(error?.outcomeUnknown).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("fails a room turn as unavailable once the Mac stays unreachable for the grace period", async () => {
+    let unreachable = false;
+    bridge = make({ fetcher: (async (input, init) => {
+      if (unreachable && new URL(String(input)).pathname === "/api/threads/bridge-1/messages") {
+        return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+      }
+      return fake.fetcher(input, init);
+    }) as typeof fetch });
+    await bridge.listBots(0);
+    fake.awaitingRoomApproval = true;
+    const started = Date.now();
+    const error = await bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-unreachable",
+      onThread: () => {}, onActivity: () => { unreachable = true; },
+      deadlineMs: Date.now() + 10_000, offlineGraceMs: 40, pollMs: 5,
+    }).then(() => null, (failure: unknown) => failure as Error & { outcomeUnknown?: boolean });
+    expect(error?.message).toBe(REMOTE_BOT_UNAVAILABLE);
+    expect(error?.outcomeUnknown).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("keeps a room thread out of the relayed thread list after a restart", async () => {
+    await bridge.listBots(0);
+    await bridge.roomTurn({
+      homeId: HOME, remoteBotId: "pixie", title: "Shared room", text: "hello", sendId: "room-persist",
+      onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000,
+    });
+    expect(bridge.homeForTest(HOME)!.state.threads["bridge-1"]?.room).toBe(true);
+    bridge.stop();
+    expect(JSON.parse(readFileSync(join(dir, "remote-bots.json"), "utf8"))).toMatchObject({ homes: { [HOME]: { threads: { "bridge-1": { room: true } } } } });
+    bridge = make();
+    const [bot] = await bridge.listBots(0);
+    expect(bridge.homeForTest(HOME)!.state.threads["bridge-1"]?.room).toBe(true);
+    expect(bot!.tasks).toEqual([]);
+    expect(bot!.threadId).toBe(pending);
+    expect((await route("GET", `/api/threads/rt-${KEY}-bridge-1/messages`)).status).toBe(404);
+    frames = [];
+    bridge.handleFrame(bridge.homeForTest(HOME)!, { kind: "message", threadId: "bridge-1", message: { id: "r1", role: "bot", kind: "text", text: "room reply", at: 3 } });
+    bridge.handleFrame(bridge.homeForTest(HOME)!, { kind: "runtime", event: { type: "content.delta", threadId: "bridge-1", payload: { delta: "x" } } });
+    expect(frames).toEqual([]);
+  });
+
+  it("resolves a room member by virtual id, and null for unknown ids", async () => {
+    await bridge.listBots(0);
+    expect(bridge.roomMember(botId)).toMatchObject({
+      virtualId: botId, name: "Pixie", color: "pink", homeId: HOME, remoteBotId: "pixie", ownerName: "Putri", homeName: "Putri's Mac",
+    });
+    expect(bridge.roomMember(`rb-${KEY}-nobody`)).toBeNull();
+    expect(bridge.roomMember(`rb-${homeKey("home-other")}-pixie`)).toBeNull();
+    expect(bridge.roomMember(`rt-${KEY}-bridge-1`)).toBeNull();
+    expect(bridge.roomMember("pixie")).toBeNull();
+  });
+
   it("lists a remote bot as an ordinary bot and opens a thread on B only on the first send", async () => {
     const [idle, ...rest] = await bridge.listBots(50);
     expect(rest).toHaveLength(0); // the hidden bot is not shared

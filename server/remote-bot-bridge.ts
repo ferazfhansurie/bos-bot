@@ -255,6 +255,9 @@ function cleanState(value: unknown): HomeState {
       state.threads[threadId] = {
         botId: entry.botId,
         createdAt: typeof entry.createdAt === "number" ? entry.createdAt : 0,
+        // A room thread must stay a room thread across restarts: losing the
+        // flag would list it as this bot's private linked chat.
+        ...(entry.room === true ? { room: true as const } : {}),
         ...(isObject(entry.task) ? { task: safeTask({ ...entry.task, threadId }) } : {}),
       };
     }
@@ -280,6 +283,9 @@ export class RemoteBotBridge {
   private readonly homes = new Map<string, Home>();
   private readonly saved = new Map<string, HomeState>();
   private readonly sends = new Map<string, Promise<BridgeResponse>>();
+  /** Live runtime listeners for room turns, keyed `${homeId}:${remoteThreadId}`.
+   * Only bridge-created room threads are ever registered here. */
+  private readonly roomRuntime = new Map<string, (event: Record<string, unknown>) => void>();
   private stopped = true;
 
   constructor(options: RemoteBotBridgeOptions) {
@@ -718,6 +724,16 @@ export class RemoteBotBridge {
     return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), color: bot.color, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop, availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
   }
 
+  /** A room member addressed by its virtual id (`rb-<homeKey>-<remoteBotId>`):
+   * the linked home, the bot's id there and its display fields, or null when
+   * that Mac is no longer linked or no longer shares the bot. */
+  roomMember(virtualId: string): (NonNullable<ReturnType<RemoteBotBridge["roomBot"]>> & { homeId: string; remoteBotId: string; ownerName: string | null; homeName: string }) | null {
+    const parsed = this.parse(virtualId, "rb");
+    if (!parsed) return null;
+    const bot = this.roomBot(parsed.home.link.homeId, parsed.remoteId);
+    return bot ? { ...bot, homeId: parsed.home.link.homeId, remoteBotId: parsed.remoteId, ownerName: parsed.home.link.ownerName, homeName: parsed.home.link.name } : null;
+  }
+
   /** Run one shared-room turn on a linked Mac's bot. The turn goes to a
    * bridge thread kept for that room, so the bot's owner sees it on their own
    * Mac under the bot, with the approval level their own side applies. */
@@ -728,6 +744,16 @@ export class RemoteBotBridge {
     deadlineMs: number;
     shouldContinue?: () => boolean;
     onDispatch?: () => void;
+    /** Live runtime events of this turn's bridge room thread (thinking,
+     * tool steps, turn start/end). Approval requests and raw provider
+     * payloads are never passed: approvals stay on the bot's own Mac. */
+    onRuntime?: (event: Record<string, unknown>) => void;
+    /** Fail with REMOTE_BOT_UNAVAILABLE once the linked Mac has been
+     * unreachable (or unlinked) this long mid-turn, instead of polling until
+     * the deadline. The error carries `outcomeUnknown` once dispatched. */
+    offlineGraceMs?: number;
+    /** Transcript poll cadence; tests shorten it. */
+    pollMs?: number;
   }): Promise<SharedBotReply> {
     const home = this.homes.get(input.homeId);
     if (!home || !home.state.bots[input.remoteBotId]) throw new BridgeError(404, "that bot is no longer shared");
@@ -741,63 +767,76 @@ export class RemoteBotBridge {
       this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, input.remoteBotId) });
       input.onThread(threadId);
     }
-    input.onDispatch?.();
-    const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true, input.shouldContinue);
-    if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
-    const delivered = new Map<string, string>();
-    while (Date.now() < input.deadlineMs) {
-      if (input.shouldContinue && !input.shouldContinue()) {
-        await this.call(home, "POST", `/api/bots/${input.remoteBotId}/interrupt`, { threadId }).catch(() => null);
-        throw new BridgeError(409, "shared request access changed");
-      }
-      let before: string | undefined;
-      let messages: Array<Record<string, any>> = [];
-      // The latest page can lose the initiating message during a long turn.
-      // Walk back to that sendId before deciding which reply belongs here.
-      for (let page = 0; page < 100 && Date.now() < input.deadlineMs; page += 1) {
-        const query = new URLSearchParams({ limit: "60" });
-        if (before) query.set("before", before);
-        const result = await this.call(home, "GET", `/api/threads/${threadId}/messages?${query}`).catch(() => null);
-        if (result?.status !== 200) break;
-        const batch = this.sanitizeAll(home, result.body?.messages) as Array<Record<string, any>>;
-        if (!batch.length) break;
-        messages = [...batch, ...messages];
-        if (messages.some((message) => message.sendId === input.sendId && message.role === "user") || result.body?.hasMore !== true) break;
-        const next = String(batch[0]?.id ?? "");
-        if (!next || next === before) break;
-        before = next;
-      }
-      const start = messages.findIndex((message) => message.sendId === input.sendId && message.role === "user");
-      if (start >= 0) {
-        const following = messages.slice(start + 1);
-        const nextUser = following.findIndex(message => message.role === "user");
-        const after = nextUser < 0 ? following : following.slice(0, nextUser);
-        for (const message of after) {
-          if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name) continue;
-          const state = JSON.stringify(message.tool);
-          if (delivered.get(message.id) === state) continue;
-          delivered.set(message.id, state);
-          input.onActivity(message.id, message.tool);
+    const runtimeKey = `${home.link.homeId}:${threadId}`;
+    const onRuntime = input.onRuntime;
+    if (onRuntime) this.roomRuntime.set(runtimeKey, onRuntime);
+    try {
+      input.onDispatch?.();
+      const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true, input.shouldContinue);
+      if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
+      const delivered = new Map<string, string>();
+      let unreachableSince: number | null = null;
+      while (Date.now() < input.deadlineMs) {
+        if (input.offlineGraceMs !== undefined && (this.homes.get(input.homeId) !== home ||
+          (unreachableSince !== null && Date.now() - unreachableSince >= input.offlineGraceMs))) {
+          throw Object.assign(new BridgeError(503, REMOTE_BOT_UNAVAILABLE), { outcomeUnknown: true });
         }
-        const failed = after.find((message) => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false);
-        if (failed) throw new BridgeError(502, "the shared bot could not finish its turn");
-        const settled = after.find((message) => message.role === "bot" && message.kind === "text" && message.turnTerminal);
-        if (settled) return collectSharedBotReply(after.slice(0, after.indexOf(settled) + 1) as any, async (message, href) => {
-          if (input.shouldContinue && !input.shouldContinue()) throw new BridgeError(409, "shared request access changed");
-          const result = await this.call(home, "POST", `/api/threads/${threadId}/messages/${encodeURIComponent(message.id)}/file`, { path: href, sharedRoom: true }, { bytes: true });
-          if (result.status !== 200 || !result.sharedFile || !result.bytes || !result.contentType) throw new Error("shared file unavailable; the owner's app may need updating");
-          return { name: basename(href.split(/[?#]/)[0]!), mime: result.contentType, data: result.bytes.toString("base64") };
-        });
-        const ask = after.find((message) => message.kind === "options" && message.card?.requestId && !message.card.answered && !message.card.dismissed);
-        if (ask && !delivered.has(`ask-${ask.id}`)) {
-          delivered.set(`ask-${ask.id}`, "waiting");
-          input.onActivity(`ask-${ask.id}`, { name: "waiting for approval", spoken: `Waiting for ${home.link.ownerName ?? "its owner"} to approve on their Mac.` });
+        if (input.shouldContinue && !input.shouldContinue()) {
+          await this.call(home, "POST", `/api/bots/${input.remoteBotId}/interrupt`, { threadId }).catch(() => null);
+          throw new BridgeError(409, "shared request access changed");
         }
+        let before: string | undefined;
+        let messages: Array<Record<string, any>> = [];
+        // The latest page can lose the initiating message during a long turn.
+        // Walk back to that sendId before deciding which reply belongs here.
+        for (let page = 0; page < 100 && Date.now() < input.deadlineMs; page += 1) {
+          const query = new URLSearchParams({ limit: "60" });
+          if (before) query.set("before", before);
+          const result = await this.call(home, "GET", `/api/threads/${threadId}/messages?${query}`).catch(() => null);
+          if (page === 0) unreachableSince = result && result.status < 500 ? null : unreachableSince ?? Date.now();
+          if (result?.status !== 200) break;
+          const batch = this.sanitizeAll(home, result.body?.messages) as Array<Record<string, any>>;
+          if (!batch.length) break;
+          messages = [...batch, ...messages];
+          if (messages.some((message) => message.sendId === input.sendId && message.role === "user") || result.body?.hasMore !== true) break;
+          const next = String(batch[0]?.id ?? "");
+          if (!next || next === before) break;
+          before = next;
+        }
+        const start = messages.findIndex((message) => message.sendId === input.sendId && message.role === "user");
+        if (start >= 0) {
+          const following = messages.slice(start + 1);
+          const nextUser = following.findIndex(message => message.role === "user");
+          const after = nextUser < 0 ? following : following.slice(0, nextUser);
+          for (const message of after) {
+            if (message.role !== "bot" || message.kind !== "activity" || !message.tool?.name) continue;
+            const state = JSON.stringify(message.tool);
+            if (delivered.get(message.id) === state) continue;
+            delivered.set(message.id, state);
+            input.onActivity(message.id, message.tool);
+          }
+          const failed = after.find((message) => message.role === "bot" && message.turnTerminal && message.turnOutcome?.ok === false);
+          if (failed) throw new BridgeError(502, "the shared bot could not finish its turn");
+          const settled = after.find((message) => message.role === "bot" && message.kind === "text" && message.turnTerminal);
+          if (settled) return collectSharedBotReply(after.slice(0, after.indexOf(settled) + 1) as any, async (message, href) => {
+            if (input.shouldContinue && !input.shouldContinue()) throw new BridgeError(409, "shared request access changed");
+            const result = await this.call(home, "POST", `/api/threads/${threadId}/messages/${encodeURIComponent(message.id)}/file`, { path: href, sharedRoom: true }, { bytes: true });
+            if (result.status !== 200 || !result.sharedFile || !result.bytes || !result.contentType) throw new Error("shared file unavailable; the owner's app may need updating");
+            return { name: basename(href.split(/[?#]/)[0]!), mime: result.contentType, data: result.bytes.toString("base64") };
+          });
+          const ask = after.find((message) => message.kind === "options" && message.card?.requestId && !message.card.answered && !message.card.dismissed);
+          if (ask && !delivered.has(`ask-${ask.id}`)) {
+            delivered.set(`ask-${ask.id}`, "waiting");
+            input.onActivity(`ask-${ask.id}`, { name: "waiting for approval", spoken: `Waiting for ${home.link.ownerName ?? "its owner"} to approve on their Mac.` });
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, input.pollMs ?? 2500));
       }
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await this.call(home, "POST", `/api/bots/${input.remoteBotId}/interrupt`, { threadId }).catch(() => null);
+      return { reply: "" };
+    } finally {
+      if (onRuntime && this.roomRuntime.get(runtimeKey) === onRuntime) this.roomRuntime.delete(runtimeKey);
     }
-    await this.call(home, "POST", `/api/bots/${input.remoteBotId}/interrupt`, { threadId }).catch(() => null);
-    return { reply: "" };
   }
 
   // ── attachments ───────────────────────────────────────────────────────
@@ -1317,7 +1356,17 @@ export class RemoteBotBridge {
         const event = frame.event;
         if (!isObject(event)) return;
         const virtual = this.mapped(home, event.threadId);
-        if (!virtual) return;
+        if (!virtual) {
+          // A bridge-created room thread with a live room turn: its progress
+          // goes to that room only. Approvals stay on B; anything not on the
+          // bridge's own thread list never reaches here.
+          const entry = typeof event.threadId === "string" ? home.state.threads[event.threadId] : undefined;
+          const listener = entry && this.isRoomThread(entry) ? this.roomRuntime.get(`${home.link.homeId}:${event.threadId}`) : undefined;
+          if (!listener || typeof event.type !== "string" || event.type.startsWith("request.")) return;
+          const { raw: _raw, requestId: _requestId, ...visible } = event;
+          try { listener(visible); } catch { /* a progress frame is best effort */ }
+          return;
+        }
         const { raw: _raw, ...rest } = event;
         this.options.broadcast({ kind: "runtime", event: { ...rest, threadId: virtual } });
         return;

@@ -30,7 +30,8 @@ describe("nextMemberIds", () => {
   });
 });
 
-import { localRoomMembers, roomMemberBots, roomMentionPool, isRoomGuestBot } from "./room-members";
+import { localRoomMembers, roomCandidateBots, roomMemberBots, roomMentionPool, isRoomGuestBot } from "./room-members";
+import { mentionableBots } from "./remote-bot";
 import { mentionChoicesForQuery } from "./mentions";
 import type { Bot } from "@/state/store";
 
@@ -102,5 +103,53 @@ describe("roomMentionPool", () => {
   it("is only @everyone when an older server leaves the remote room unresolved", () => {
     const unresolved = roomMemberBots({ memberIds: ["partner-claude"], home: partner }, []);
     expect(roomMentionPool({}, unresolved).map((choice) => choice.id)).toEqual(["__everyone__"]);
+  });
+});
+
+describe("relayed (rb-) members of a room on this home", () => {
+  const origin = { homeId: "home-putri", homeName: "Studio", ownerName: "Putri", online: true, availability: "ready" as const };
+  const relayed = { ...localBot("rb-0123456789ab-scout", "Scout"), remote: origin } as Bot;
+  const archived = { ...localBot("old", "Old"), hidden: true } as Bot;
+
+  it("offers visible local and relayed bots in the room picker, never hidden ones", () => {
+    const bots = [localBot("a", "Alpha"), relayed, archived];
+    expect(roomCandidateBots(bots).map((bot) => bot.id)).toEqual(["a", relayed.id]);
+  });
+
+  it("keeps a hidden bot that is already a member so it can be removed", () => {
+    expect(roomCandidateBots([archived, relayed], ["old"]).map((bot) => bot.id)).toEqual(["old", relayed.id]);
+  });
+
+  it("resolves an rb- member from the store's bots like any member", () => {
+    const members = roomMemberBots({ memberIds: [relayed.id, "a"] }, [localBot("a", "Alpha"), relayed]);
+    expect(members.map((bot) => bot.id)).toEqual([relayed.id, "a"]);
+    expect(members[0]).toBe(relayed);
+    expect(isRoomGuestBot(members[0])).toBe(false);
+  });
+
+  it("draws an rb- member from memberBots while the bridge has no bot record for it", () => {
+    const members = roomMemberBots({
+      memberIds: ["a", relayed.id],
+      memberBots: [{ id: relayed.id, name: "Scout", color: "green", remote: { ...origin, online: false } } as never],
+    }, [localBot("a", "Alpha")]);
+    expect(members.map((bot) => bot.id)).toEqual(["a", relayed.id]);
+    expect(members[1]).toMatchObject({ name: "Scout", color: "green", threadId: "", remote: { homeId: "home-putri", ownerName: "Putri", online: false } });
+    expect(members[1]).not.toHaveProperty("roomHome");
+    // display-only: never driven through this home's bot routes (calls)
+    expect(localRoomMembers(members).map((bot) => bot.id)).toEqual(["a"]);
+  });
+
+  it("ignores memberBots fallbacks that are not relayed or carry no valid origin", () => {
+    expect(roomMemberBots({ memberIds: ["gone"], memberBots: [{ id: "gone", name: "Gone", color: "blue", remote: origin } as never] }, [])).toEqual([]);
+    expect(roomMemberBots({ memberIds: ["rb-x-y"], memberBots: [{ id: "rb-x-y", name: "Y", color: "blue" }] }, [])).toEqual([]);
+    expect(roomMemberBots({ memberIds: ["rb-x-y"], memberBots: [{ id: "rb-x-y", name: "Y", color: "blue", remote: { homeId: 1 } } as never] }, [])).toEqual([]);
+  });
+
+  it("makes a relayed member @mentionable in the room, while the 1:1 picker still leaves it out", () => {
+    const alpha = localBot("a", "Alpha");
+    const members = roomMemberBots({ memberIds: ["a", relayed.id] }, [alpha, relayed]);
+    expect(roomMentionPool({ dm: false }, members).map((choice) => choice.id)).toEqual(["__everyone__", "a", relayed.id]);
+    expect(mentionChoicesForQuery(roomMentionPool({}, members), "sc").map((choice) => choice.id)).toEqual([relayed.id]);
+    expect(mentionableBots([alpha, relayed], "z").map((bot) => bot.id)).toEqual(["a"]);
   });
 });

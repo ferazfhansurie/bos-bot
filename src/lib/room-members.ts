@@ -1,7 +1,7 @@
 import { MAUS_COLOR_NAMES, type MausColor } from "@/lib/mascot";
 import type { Bot, Group } from "@/state/store";
 import { mascotBodySchema } from "../../shared/mascot-bodies";
-import type { RemoteRoomBot } from "../../shared/wire";
+import type { RemoteBotOrigin, RemoteRoomBot } from "../../shared/wire";
 
 // Turning a set of ticked bots back into a room's ordered roster. Existing
 // members keep their order, so the room's lead does not move when someone new
@@ -59,10 +59,46 @@ export function roomMemberBots(group: Pick<Group, "memberIds" | "home" | "member
       : listed;
     return ordered.map((bot) => remoteRoomBot(bot, home));
   }
+  // A member relayed from a linked Mac (`rb-…`) is normally in `bots`; while
+  // the bridge has dropped it, the room's own display record keeps it drawn.
+  const listed = Array.isArray(group.memberBots) ? group.memberBots.filter(isRemoteRoomBot) : [];
   return (group.memberIds ?? []).flatMap((id) => {
     const bot = bots.find((candidate) => candidate.id === id);
-    return bot ? [bot] : [];
+    if (bot) return [bot];
+    const entry = id.startsWith("rb-") ? listed.find((candidate) => candidate.id === id) : undefined;
+    const remote = entry ? remoteOrigin((entry as { remote?: unknown }).remote) : null;
+    return entry && remote ? [relayedRoomBot(entry, remote)] : [];
   });
+}
+
+function remoteOrigin(value: unknown): RemoteBotOrigin | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.homeId !== "string" || typeof raw.homeName !== "string") return null;
+  const availability = ["ready", "offline", "update-required", "reconnect-required"].includes(raw.availability as string)
+    ? (raw.availability as RemoteBotOrigin["availability"])
+    : undefined;
+  return {
+    homeId: raw.homeId,
+    homeName: raw.homeName,
+    ownerName: typeof raw.ownerName === "string" ? raw.ownerName : null,
+    ...(typeof raw.online === "boolean" ? { online: raw.online } : {}),
+    ...(availability ? { availability } : {}),
+  };
+}
+
+/** A relayed member this client has no bot record for: display-only, like a
+ * guest bot, but marked `remote` (not `roomHome`) since the room is ours. */
+function relayedRoomBot(entry: RemoteRoomBot, remote: RemoteBotOrigin): Bot {
+  const { roomHome: _roomHome, ...bot } = remoteRoomBot(entry, { id: remote.homeId, name: remote.homeName });
+  return { ...bot, remote };
+}
+
+/** Bots a room on this home may offer in its member picker: visible bots —
+ * local or relayed from a linked Mac — plus any hidden bot already in the
+ * room, so a member can always be removed. */
+export function roomCandidateBots<T extends Pick<Bot, "id" | "hidden" | "roomHome">>(bots: readonly T[], memberIds: readonly string[] = []): T[] {
+  return bots.filter((bot) => !bot.roomHome && (!bot.hidden || memberIds.includes(bot.id)));
 }
 
 /** True for a member seen only through a room on another home. */
@@ -73,7 +109,8 @@ export function isRoomGuestBot(bot: Pick<Bot, "roomHome"> | undefined): boolean 
 /** The members that are this home's own bots — the only ones local bot
  * routes, DMs, settings and calls may use. */
 export function localRoomMembers(members: readonly Bot[]): Bot[] {
-  return members.filter((member) => !member.roomHome);
+  // A display-only stand-in (no thread on this home) is never drivable here.
+  return members.filter((member) => !member.roomHome && member.threadId !== "");
 }
 
 /** The @ picker's room choices: @everyone (not in a bot⇄bot channel), then

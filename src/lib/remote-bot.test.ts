@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botControlAvailable, mentionableBots, remoteBotHint, remoteBotNotice, type BotControl } from "./remote-bot";
+import { botControlAvailable, mentionableBots, remoteBotHint, remoteBotNotice, remoteBotUnavailable, type BotControl } from "./remote-bot";
 
 const remote = { homeId: "home-1", homeName: "Studio", ownerName: "Putri" };
 
@@ -50,5 +50,19 @@ describe("remote bot controls", () => {
     expect(remoteBotHint({ remote: { ...remote, ownerName: null } })).toBe("on Studio's Mac");
     expect(remoteBotHint({ remote: { ...remote, online: false } })).toBe("offline · on Putri's Mac");
     expect(remoteBotHint({})).toBeNull();
+  });
+});
+
+describe("remoteBotUnavailable", () => {
+  it("is false for local bots and ready relayed bots", () => {
+    expect(remoteBotUnavailable({})).toBe(false);
+    expect(remoteBotUnavailable(null)).toBe(false);
+    expect(remoteBotUnavailable({ remote })).toBe(false);
+    expect(remoteBotUnavailable({ remote: { ...remote, online: true, availability: "ready" } })).toBe(false);
+  });
+  it("is true while the relayed bot's Mac is offline or needs attention", () => {
+    expect(remoteBotUnavailable({ remote: { ...remote, online: false } })).toBe(true);
+    expect(remoteBotUnavailable({ remote: { ...remote, availability: "update-required" } })).toBe(true);
+    expect(remoteBotUnavailable({ remote: { ...remote, availability: "reconnect-required" } })).toBe(true);
   });
 });

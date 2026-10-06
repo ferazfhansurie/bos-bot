@@ -2,7 +2,7 @@ import { botAvatarProfile } from "../../shared/bot-avatar";
 import { track } from "@/lib/analytics";
 import { OrganizationIdentity } from "./OrganizationIdentity";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { roomMemberBots } from "@/lib/room-members";
+import { roomCandidateBots, roomMemberBots } from "@/lib/room-members";
 import { createPortal } from "react-dom";
 import {
   Activity,
@@ -507,8 +507,8 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
   const [memberMode, setMemberMode] = useState<"people" | "bots">("people");
   const [loadingPeople, setLoadingPeople] = useState(true);
-  // A bot relayed from a linked Mac has a virtual id the room APIs do not know.
-  const bots = state.bots.filter((b) => !b.hidden && !b.remote);
+  // Bots relayed from a linked Mac (`rb-…`) can join a room on this home too.
+  const bots = roomCandidateBots(state.bots);
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -591,6 +591,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
           bots={bots}
           picked={picked}
           onToggle={toggle}
+          disableUnavailable
           emptyHint={t("sidebar.newChannel.emptyHint")}
         />}
         {memberMode === "people" && <p className="mb-2 text-xs leading-relaxed text-ink-secondary">@mention your bots here — no need to add them</p>}

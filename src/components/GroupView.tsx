@@ -73,7 +73,8 @@ import {
 import { useReplyDraft } from "@/lib/drafts";
 import { imageAttachmentFromFile } from "@/lib/composer-attachments";
 import { botAvatarUrlFromStoredPath, botAvatarUrlSchema } from "../../shared/bot-avatar";
-import { roomMemberReplyMode, roomMemberStatus, sameBubbleRun, shouldCollapseRoomReply, type RoomViewFields } from "@/lib/room-view";
+import { roomMemberReplyMode, roomMemberStatus, roomMemberStatusLabel, sameBubbleRun, shouldCollapseRoomReply, type RoomViewFields } from "@/lib/room-view";
+import { remoteBotHint } from "@/lib/remote-bot";
 import { isArriving, trackArrivals, type ArrivalState } from "@/lib/message-arrivals";
 import { roomSender, roomSenderName, useMultiplayerMe } from "@/lib/room-sender";
 
@@ -143,7 +144,7 @@ function RoomSettings({ group, members, setupPending, onToggleFolder, onClose }:
     <div className="space-y-2">{members.map(member => {
       const status = roomMemberStatus(group, member);
       return <div key={member.id} className="flex items-center justify-between gap-3">
-        <span className="flex min-w-0 items-center gap-2"><BotAvatar bot={member} size={24} animated={false} /><span className="truncate text-sm text-ink">{member.name}</span><span className="text-xs text-ink-secondary">{status}</span></span>
+        <span className="flex min-w-0 items-center gap-2"><BotAvatar bot={member} size={24} animated={false} /><span className="truncate text-sm text-ink">{member.name}</span><span className="truncate text-xs text-ink-secondary">{roomMemberStatusLabel(status, member)}</span></span>
         <select aria-label={`${member.name} reply mode`} disabled={saving} value={roomMemberReplyMode({ ...group, defaultResponder: effectiveDefaultResponder(group, members) }, member.id)} onChange={event => void change({ memberReplyModes: { ...group.memberReplyModes, [member.id]: event.target.value as "always" | "mentions" } })} className="rounded-lg border border-hairline/40 bg-raised px-3 py-2 text-sm"><option value="always">Always</option><option value="mentions">When tagged</option></select>
       </div>;
     })}</div>
@@ -951,7 +952,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-[13px] font-medium text-ink">{member.name}</span>
-                            <span className="block truncate text-[11px] text-ink-secondary">{member.title}</span>
+                            <span className="block truncate text-[11px] text-ink-secondary">{[member.title, remoteBotHint(member)].filter(Boolean).join(" · ")}</span>
                           </span>
                           {selected && <Check size={15} className="shrink-0 text-accent" />}
                         </button>

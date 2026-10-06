@@ -1,4 +1,6 @@
 import type { GroupDefaultResponder } from "@/state/store";
+import { remoteBotHint, remoteBotUnavailable } from "@/lib/remote-bot";
+import type { RemoteBotOrigin } from "../../shared/wire";
 
 export interface RoomViewFields {
   avatarUrl?: string | null;
@@ -14,9 +16,18 @@ export function roomMemberReplyMode(room: RoomViewFields & { defaultResponder: G
 }
 
 export function roomMemberStatus(room: Pick<RoomViewFields, "activeBotIds"> & { busyBotId?: string | null }, bot: { id: string; remote?: { online?: boolean; availability?: string } }): "working" | "idle" | "offline" {
-  if (bot.remote?.online === false || (bot.remote?.availability && bot.remote.availability !== "ready")) return "offline";
+  if (remoteBotUnavailable(bot)) return "offline";
   if (room.activeBotIds?.includes(bot.id) || room.busyBotId === bot.id) return "working";
   return "idle";
+}
+
+/** A member's status line in room UI: "working", or for a bot relayed from a
+ * linked Mac, where it runs ("idle · on Putri's Mac", "offline · on …"). */
+export function roomMemberStatusLabel(status: "working" | "idle" | "offline", bot: { remote?: RemoteBotOrigin }): string {
+  const hint = remoteBotHint(bot);
+  if (!hint) return status;
+  // The hint already leads with the offline reason.
+  return status === "offline" ? hint : `${status} · ${hint}`;
 }
 
 // Header roster for big rooms: working bots first, then the rest in room
