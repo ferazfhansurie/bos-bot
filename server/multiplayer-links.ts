@@ -18,13 +18,23 @@ interface RemoteLink {
    * reported by the home's own membership-checked GET /api/groups. */
   joinedGroups?: JoinedGroup[];
 }
-interface JoinedGroup { id: string; name: string; threadIds: string[] }
+interface JoinedGroup { id: string; name: string; threadIds: string[]; memberIds?: string[]; memberBots?: RemoteBot[]; avatarUrl?: string | null }
 /** A joined room exactly as the canonical home serves it, plus the home. */
 export type RemoteGroupView = Record<string, unknown> & { id: string; name: string; threadId: string; home: { id: string; name: string; available: boolean } };
 interface Snapshot { version: 1; links: RemoteLink[] }
 interface PrimaryRoomHome { homeId: string; actorId: string }
 
 const ROOM_ID = /^[\w-]{1,128}$/;
+const AVATAR_NAME = /^[\w-]{1,128}\.(?:png|jpg|jpeg|gif|webp)$/;
+const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+/** Canonical-home avatar paths mean nothing to this home's own server; point
+ * them at the guest-side relay for that room instead. */
+export function relayAvatars<T extends Record<string, unknown>>(group: T, groupId: string): T {
+  const relay = (url: unknown) => typeof url === "string" && url.startsWith("/api/attachments/") && AVATAR_NAME.test(url.slice(17))
+    ? `/api/groups/${groupId}/avatars/${url.slice(17)}` : typeof url === "string" ? null : url;
+  const bots = Array.isArray(group.memberBots) ? group.memberBots.map(bot => bot && typeof bot === "object" && "avatarUrl" in bot ? { ...bot, avatarUrl: relay(bot.avatarUrl) } : bot) : group.memberBots;
+  return { ...group, ...("avatarUrl" in group ? { avatarUrl: relay(group.avatarUrl) } : {}), ...(Array.isArray(group.memberBots) ? { memberBots: bots } : {}) };
+}
 /** The only canonical-home room routes a guest home relays. Each route is
  * membership-checked again by the canonical home; nothing else is reachable. */
 const GROUP_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
@@ -44,7 +54,11 @@ const parseJoinedGroup = (value: unknown): JoinedGroup | null => {
   const tasks = Array.isArray(group.tasks) ? group.tasks : [];
   const threadIds = [group.threadId, ...tasks.map(task => (task as { threadId?: unknown })?.threadId)]
     .filter((id): id is string => typeof id === "string" && ROOM_ID.test(id));
-  return { id: group.id, name: group.name.slice(0, 200), threadIds: [...new Set(threadIds)].slice(0, 500) };
+  const memberIds = Array.isArray(group.memberIds) ? group.memberIds.filter((id): id is string => typeof id === "string" && ROOM_ID.test(id)).slice(0, 500) : undefined;
+  const memberBots = Array.isArray(group.memberBots) ? group.memberBots.map(parseBot).filter((bot): bot is RemoteBot => !!bot && !bot.hidden && !!memberIds?.includes(bot.id)).slice(0, 500).map(({ hidden: _hidden, ...bot }) => bot) : undefined;
+  return { id: group.id, name: group.name.slice(0, 200), threadIds: [...new Set(threadIds)].slice(0, 500),
+    ...(memberIds ? { memberIds } : {}), ...(memberBots ? { memberBots } : {}),
+    ...(typeof group.avatarUrl === "string" || group.avatarUrl === null ? { avatarUrl: group.avatarUrl } : {}) };
 };
 
 const parseBot = (value: unknown): RemoteBot | null => {
@@ -87,6 +101,7 @@ export class MultiplayerLinks {
       try {
         this.checkLink(link);
         if (this.links.has(link.homeId)) throw new Error("duplicate multiplayer link");
+        if (link.joinedGroups) link.joinedGroups = link.joinedGroups.map(group => parseJoinedGroup({ ...group, threadId: group.threadIds[0], tasks: group.threadIds.slice(1).map(threadId => ({ threadId })) })!);
         this.links.set(link.homeId, link);
       } catch { invalid = true; }
     }
@@ -225,11 +240,11 @@ export class MultiplayerLinks {
       const home = { id: link.homeId, name: this.homeLabel(link.homeId), available: fresh[index] };
       const views = this.groupViews.get(link.homeId);
       const joined = new Set((link.joinedGroups ?? []).map(group => group.id));
-      if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...view, home }) as RemoteGroupView);
-      return (link.joinedGroups ?? []).map(group => ({
-        id: group.id, name: group.name, threadId: group.threadIds[0], memberIds: [], defaultResponder: { kind: "mentions" },
+      if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...relayAvatars(view, view.id as string), home }) as RemoteGroupView);
+      return (link.joinedGroups ?? []).map(group => relayAvatars({
+        id: group.id, name: group.name, threadId: group.threadIds[0], memberIds: group.memberIds ?? [], memberBots: group.memberBots ?? [], avatarUrl: group.avatarUrl, defaultResponder: { kind: "mentions" },
         bulletin: "", unread: false, createdAt: 0, messages: [], home,
-      }));
+      }, group.id) as RemoteGroupView);
     });
   }
 
@@ -239,6 +254,24 @@ export class MultiplayerLinks {
     const link = this.links.get(homeId);
     if (!link) throw new Error("joined room home is unavailable");
     return this.forwardTo(link, path, method, body, GROUP_ROUTES);
+  }
+
+  /** One avatar image of a joined room, fetched from its canonical home with
+   * the link's chat-only token. Only names the home itself listed as the
+   * room's or a member bot's avatar are fetched; anything else is refused. */
+  async groupAvatar(homeId: string, groupId: string, name: string): Promise<{ mime: string; bytes: Buffer } | null> {
+    const link = this.links.get(homeId);
+    const group = link?.joinedGroups?.find(item => item.id === groupId);
+    if (!link || !group || !AVATAR_NAME.test(name)) return null;
+    const path = `/api/attachments/${name}`;
+    if (group.avatarUrl !== path && !group.memberBots?.some(bot => bot.avatarUrl === path)) return null;
+    const response = await this.fetcher(new URL(path, link.origin), {
+      redirect: "error", signal: AbortSignal.timeout(25_000), headers: { authorization: `Bearer ${link.token}` },
+    });
+    const mime = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+    if (!response.ok || !/^image\/(?:png|jpeg|gif|webp)$/.test(mime)) return null;
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return bytes.byteLength <= MAX_AVATAR_BYTES ? { mime, bytes } : null;
   }
 
   /** The canonical home's person-scoped event stream for this guest. */

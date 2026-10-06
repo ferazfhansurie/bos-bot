@@ -10,9 +10,11 @@ import { handleRemoteRoom, type RemoteRoomContext } from "./remote-rooms.ts";
 const TOKEN = `omb_sess_${"p".repeat(43)}`;
 const ORIGIN = "https://partner-fixture.ts.net";
 const remoteGroup = {
-  id: "room-remote", threadId: "thread-remote", name: "Launch room", memberIds: ["pixie"], peopleIds: ["firaz-home:person:owner"],
+  id: "room-remote", threadId: "thread-remote", name: "Launch room", memberIds: ["pixie", "claude"],
+  memberBots: [{ id: "pixie", name: "Pixie", title: "helper", color: "blue", mascotBody: "cat", mascotEyes: "round", avatarUrl: null }, { id: "claude", name: "Claude", title: "helper", mascotBody: null, mascotEyes: null, avatarUrl: "/api/attachments/claude.png" }], avatarUrl: "/api/attachments/room.png", peopleIds: ["firaz-home:person:owner"],
   tasks: [{ threadId: "thread-remote-2", title: "second" }], defaultResponder: { kind: "mentions" }, bulletin: "", unread: false, createdAt: 1, messages: [],
 };
+const relayedBots = remoteGroup.memberBots.map(bot => ({ ...bot, avatarUrl: bot.avatarUrl && bot.avatarUrl.replace("/api/attachments/", "/api/groups/room-remote/avatars/") }));
 const collidingGroup = { ...remoteGroup, id: "room-local", threadId: "thread-colliding", tasks: [] };
 
 let canonical: Server;
@@ -45,6 +47,7 @@ beforeEach(async () => {
     if (req.url === "/api/groups/room-remote/messages" && req.method === "POST") {
       return send(res, 201, { message: { id: "m1", text: JSON.parse(body).text, sender: { id: "firaz-home:person:owner", name: "Firaz" } } });
     }
+    if (req.url === "/api/attachments/claude.png" || req.url === "/api/attachments/secret.png") { res.writeHead(200, { "content-type": "image/png" }); return res.end(Buffer.from("png-bytes")); }
     if (req.url?.startsWith("/api/threads/thread-remote-2/messages")) return send(res, 200, { messages: [{ id: "old" }], hasMore: false });
     if (req.url === "/api/events") {
       res.writeHead(200, { "content-type": "text/event-stream" });
@@ -84,17 +87,18 @@ it("records joined rooms from the canonical home and lists them with their home"
   expect(links.joinedThreadHome("thread-elsewhere")).toBeNull();
   const saved = JSON.parse(readFileSync(join(folder, "links.json"), "utf8"));
   expect(saved.links[0].joinedGroups).toEqual([
-    { id: "room-remote", name: "Launch room", threadIds: ["thread-remote", "thread-remote-2"] },
-    { id: "room-local", name: "Launch room", threadIds: ["thread-colliding"] },
+    { id: "room-remote", name: "Launch room", threadIds: ["thread-remote", "thread-remote-2"], memberIds: remoteGroup.memberIds, memberBots: remoteGroup.memberBots, avatarUrl: remoteGroup.avatarUrl },
+    { id: "room-local", name: "Launch room", threadIds: ["thread-colliding"], memberIds: remoteGroup.memberIds, memberBots: remoteGroup.memberBots, avatarUrl: remoteGroup.avatarUrl },
   ]);
   expect(await links.remoteGroups()).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: "room-remote", peopleIds: remoteGroup.peopleIds, home: { id: "partner-home", name: "Partner", available: true } }),
   ]));
 
-  // After a restart with the home offline, the joined rooms stay listed.
+  expect(JSON.stringify(saved)).not.toContain('"messages"');
+  // After a restart with the home offline, the joined rooms keep display metadata.
   const restarted = new MultiplayerLinks(join(folder, "links.json"), "firaz-home", () => Promise.reject(new Error("offline")));
   expect(await restarted.remoteGroups(500)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: "room-remote", threadId: "thread-remote", name: "Launch room", home: { id: "partner-home", name: "Partner", available: false } }),
+    expect.objectContaining({ id: "room-remote", threadId: "thread-remote", name: "Launch room", memberIds: remoteGroup.memberIds, avatarUrl: "/api/groups/room-remote/avatars/room.png", home: { id: "partner-home", name: "Partner", available: false } }),
   ]));
 });
 
@@ -169,4 +173,55 @@ it("serves joined rooms beside local rooms and relays their routes for the owner
   owner = false;
   expect(await call("GET", "/api/groups/room-remote")).toMatchObject({ status: 418 });
   expect(await call("GET", "/api/groups")).toMatchObject({ status: 418 });
+});
+
+it("clears cached bot records when the canonical room changes membership", async () => {
+  const links = await linked();
+  await links.refreshJoinedGroups("partner-home");
+  const answer = await links.remoteGroups();
+  expect(answer.find(group => group.id === "room-remote")?.memberBots).toEqual(relayedBots);
+  // A successful empty list is authoritative, even after restarting offline.
+  canonical.removeAllListeners("request");
+  canonical.on("request", (req, res) => { req.resume(); send(res, 200, { groups: [] }); });
+  expect(await links.remoteGroups()).toEqual([]);
+  const restarted = new MultiplayerLinks(join(folder, "links.json"), "firaz-home", () => Promise.reject(new Error("offline")));
+  expect(await restarted.remoteGroups()).toEqual([]);
+});
+
+it("persists only room bot display fields, never private bot settings", async () => {
+  const scopedFetcher: typeof fetch = async (input, init) => {
+    if (new URL(String(input)).pathname !== "/api/groups") return fetcher(input, init);
+    return Response.json({ groups: [{ ...remoteGroup, memberBots: [
+      { ...remoteGroup.memberBots[0], soul: "PRIVATE_SENTINEL", messages: [{ text: "PRIVATE_SENTINEL" }], cwd: "/private/project" },
+      remoteGroup.memberBots[1],
+      { id: "not-a-room-member", name: "Other bot", title: "helper" },
+    ] }] });
+  };
+  const links = new MultiplayerLinks(join(folder, "links.json"), "firaz-home", scopedFetcher);
+  await links.addVerified(ORIGIN, TOKEN, { environmentId: "partner-home", multiplayerProtocol: 1 });
+  await links.refreshJoinedGroups("partner-home");
+  const saved = readFileSync(join(folder, "links.json"), "utf8");
+  expect(saved).not.toContain("PRIVATE_SENTINEL");
+  expect(saved).not.toContain("/private/project");
+  expect(saved).not.toContain("not-a-room-member");
+  const offline = new MultiplayerLinks(join(folder, "links.json"), "firaz-home", () => Promise.reject(new Error("offline")));
+  expect((await offline.remoteGroups())[0].memberBots).toEqual(relayedBots);
+});
+
+it("relays a joined room's own avatars from its home and nothing else", async () => {
+  const links = await linked();
+  await links.refreshJoinedGroups("partner-home");
+  const [room] = (await links.remoteGroups()).filter(group => group.id === "room-remote");
+  expect(room.avatarUrl).toBe("/api/groups/room-remote/avatars/room.png");
+  expect((room.memberBots as Array<{ avatarUrl: string | null }>).map(bot => bot.avatarUrl)).toEqual([null, "/api/groups/room-remote/avatars/claude.png"]);
+  const image = await links.groupAvatar("partner-home", "room-remote", "claude.png");
+  expect(image?.mime).toBe("image/png");
+  expect(image?.bytes.toString()).toBe("png-bytes");
+  expect(seen.find(request => request.url === "/api/attachments/claude.png")?.authorization).toBe(`Bearer ${TOKEN}`);
+  // Names the room does not list, unknown rooms and path tricks are never fetched.
+  seen = [];
+  expect(await links.groupAvatar("partner-home", "room-remote", "secret.png")).toBeNull();
+  expect(await links.groupAvatar("partner-home", "room-other", "claude.png")).toBeNull();
+  expect(await links.groupAvatar("partner-home", "room-remote", "../claude.png")).toBeNull();
+  expect(seen).toEqual([]);
 });

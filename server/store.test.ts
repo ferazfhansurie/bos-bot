@@ -14,7 +14,7 @@ import type { ModelSelection } from "./contracts.ts";
 import * as mdb from "./message-db.ts";
 import { peerAllowKey } from "./peer-approval-key.ts";
 import { canAccessTeam } from "./peer-roster.ts";
-import { Store, toWireTask, type BotRecord } from "./store.ts";
+import { Store, roomResponders, toWireTask, type BotRecord } from "./store.ts";
 import type { TeamSetupRequest } from "../shared/team-setup.ts";
 import { SECTION_CONTEXTS_FILE } from "./section-context.ts";
 
@@ -428,6 +428,15 @@ describe("Store", () => {
       defaultResponder: { kind: "mentions" },
       setupCompletedAt: channel.setupCompletedAt,
     });
+  });
+
+  it("routes a null legacy responder to the first available bot and preserves mentions", () => {
+    const bots = [{ id: "a", name: "Claude" }, { id: "b", name: "Codex" }];
+    expect(roomResponders("hello", bots, null as any)).toEqual([bots[0]]);
+    expect(roomResponders("@Codex hello", bots, null as any)).toEqual([bots[1]]);
+    expect(roomResponders("@everyone hello", bots, null as any)).toEqual(bots);
+    expect(roomResponders("hello", bots, { kind: "mentions" })).toEqual([]);
+    expect(roomResponders("hello", bots, { kind: "member", botId: "not-granted" })).toEqual([]);
   });
 
   it("migrates old rooms without routing to their first member", () => {

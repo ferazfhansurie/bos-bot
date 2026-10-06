@@ -3259,9 +3259,17 @@ function wireGroupTasks(group: GroupRecord): GroupTask[] {
   return store.groupTasks(group.id).map(task => wireGroupTask(group, task));
 }
 function publicGroupState(group: GroupRecord): WireGroup {
+  const memberBots = group.memberIds.flatMap(id => {
+    const bot = store.bot(id);
+    return bot && !bot.hidden && bot.visibility !== "private" ? [{
+      id: bot.id, name: bot.name, title: bot.title, color: bot.color,
+      mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes,
+      avatarUrl: bot.avatarUrl ?? null, avatarCrop: bot.avatarCrop,
+    }] : [];
+  });
   const speakers = roomRuntimeSpeakers(group.id);
   const activeMemberTurns = publicRoomMemberTurns(speakers, runtimeId => store.canonicalThreadId(runtimeId), roomMemberTurnFacts);
-  return { ...group, peopleIds: roomPeople(group, multiplayerActors.ownerId), people: roomPeople(group, multiplayerActors.ownerId).map(id => ({ id, name: id === multiplayerActors.ownerId ? cfg.profile?.name || "Owner" : multiplayerActors.nameFor(id) || id, homeId: parseContactId(id)!.homeId })), ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set(speakers.map(([, speaker]) => speaker.botId))], activeMemberTurns, working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
+  return { ...group, memberBots, peopleIds: roomPeople(group, multiplayerActors.ownerId), people: roomPeople(group, multiplayerActors.ownerId).map(id => ({ id, name: id === multiplayerActors.ownerId ? cfg.profile?.name || "Owner" : multiplayerActors.nameFor(id) || id, homeId: parseContactId(id)!.homeId })), ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set(speakers.map(([, speaker]) => speaker.botId))], activeMemberTurns, working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
 }
 
 function beginGroupTurnOperation(
