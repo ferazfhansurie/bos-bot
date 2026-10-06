@@ -7404,12 +7404,27 @@ async function runPersonChannelTurn(groupId: string, threadId: string, message: 
   const group = store.group(groupId);
   if (!group) return;
   const grants = () => workspaceMembers.grants(groupId);
-  const allowed = () => group.memberIds.map(id => store.bot(id)).filter((bot): bot is BotRecord => !!bot && !bot.hidden && bot.visibility !== "private" && grants().includes(`${ENVIRONMENT_ID}:bot:${bot.id}`));
-  const responders = roomResponders(message.text ?? "", allowed(), group.defaultResponder, group.memberReplyModes);
+  const allowedLocal = () => group.memberIds.map(id => store.bot(id)).filter((bot): bot is BotRecord => !!bot && !bot.hidden && bot.visibility !== "private" && grants().includes(`${ENVIRONMENT_ID}:bot:${bot.id}`));
+  // A remote member (a bot on a linked Mac) answers a person who was granted
+  // it, or the person who owns that Mac: Firaz can @mention his own bot in a
+  // room he joined, but another guest cannot run it without a grant.
+  const actorHome = parseContactId(actorId)?.homeId;
+  const allowedRemote = () => remoteRoomResponders(store.group(groupId) ?? group).filter(member =>
+    grants().includes(`${ENVIRONMENT_ID}:bot:${member.id}`) || (actorHome && remoteRoomMember(member.id)?.homeId === actorHome));
+  const allowed = (): Array<BotRecord | RemoteRoomResponder> => [...allowedLocal(), ...allowedRemote()];
+  const responders = roomResponders<BotRecord | RemoteRoomResponder>(message.text ?? "", allowed(), group.defaultResponder, group.memberReplyModes);
   const operation = beginGroupTurnOperation(groupId, threadId, responders.map(bot => bot.id));
   const current = (botId: string) => !operation.cancelled && sessions.isLive(sessionId) && multiplayerActors.actorFor(sessionId) === actorId && canReadChannel(store.group(groupId), actorId) && store.group(groupId)!.memberIds.includes(botId) && allowed().some(bot => bot.id === botId);
   try {
     await Promise.all(responders.map(async bot => {
+      if (isRemoteRoomResponder(bot)) {
+        const result = await runRemoteRoomMemberTurn({
+          groupId, threadId, botId: bot.id, text: message.text ?? "", from: message.sender?.name ?? "Person",
+          sourceMessageId: message.id, sendId: message.sendId ?? message.id, isCancelled: () => !current(bot.id),
+        });
+        if (result.ok) operation.completedBotIds.add(bot.id);
+        return;
+      }
       const execThreads: string[] = [];
       try {
       const source: SharedTextMessage = { id: message.id, roomId: groupId, sequence: 0, actor: parseContactId(actorId)!, text: message.text ?? "", at: message.at, sendId: message.sendId ?? message.id };
