@@ -39,6 +39,7 @@ import { SharedComputers, sharedComputerOperation, sharedComputerRegistration } 
 import { admitSharedWorkComputer, assertSharedWorkComputerOperation, sharedWorkComputerSchema } from "./shared-work-computer.ts";
 import { MultiplayerActors } from "./multiplayer-actors.ts";
 import { PeerThreads, type PeerThread } from "./peer-threads.ts";
+import { TrustedPeers } from "./peer-trust.ts";
 import { peerEvent } from "./peer-events.ts";
 import { privateRoomForViewer } from "./private-room-visibility.ts";
 import { PeerHandoffs } from "./peer-handoffs.ts";
@@ -609,6 +610,7 @@ function workspaceActor(auth: RequestAuth): string | null {
     ? multiplayerActors.ownerId : null;
 }
 const peerThreads = new PeerThreads(join(DATA_DIR, "peer-threads.json"));
+const trustedPeers = new TrustedPeers(join(DATA_DIR, "trusted-peers.json"));
 const peerHandoffs = new PeerHandoffs(join(DATA_DIR, "peer-handoffs.json"));
 // A phone paired through the companion sidecar has no harness session; its
 // push registration is bound to the sidecar's device id instead, and lives
@@ -8070,11 +8072,18 @@ async function startTurn(
   if (peerThreads.hasThread(threadId) && !peerThreads.hasLiveGrant(threadId, id => sessions.isLive(id))) {
     throw Object.assign(new Error("shared conversation access has ended"), { status: 403 });
   }
-  const sharedContext = sharedBotTasks.hasThread(threadId) || peerThreads.hasThread(threadId);
+  // A peer link the owner marked trusted runs the bot exactly as it runs at
+  // home: soul, memory, recent work, tools and its own approval settings.
+  const trustedPeer = !sharedBotTasks.hasThread(threadId) && peerThreads.hasThread(threadId) &&
+    peerThreads.liveSessionsFor(threadId, id => sessions.isLive(id)).some(id => trustedPeers.has(id));
+  const sharedContext = !trustedPeer && (sharedBotTasks.hasThread(threadId) || peerThreads.hasThread(threadId));
   if (sharedContext && projectedBot.sharedWorkComputer) throw Object.assign(new Error("This bot is pinned to a private work computer. Shared conversations pause rather than use native host tools."), { status: 409 });
+  const homeBot = trustedPeer ? store.bot(botId) : null;
   const bot = sharedContext ? { ...projectedBot, soul: "", description: "", section: undefined,
     chiefOfStaff: false, computer: "off" as const, sharedWorkComputer: undefined, browser: false, composio: false,
-    mcpServers: [], playbooks: [], approvalMode: "ask" as const, autoApprove: false, alwaysAllow: [] } : projectedBot;
+    mcpServers: [], playbooks: [], approvalMode: "ask" as const, autoApprove: false, alwaysAllow: [] }
+    : homeBot ? { ...projectedBot, approvalMode: homeBot.approvalMode, autoApprove: homeBot.autoApprove, alwaysAllow: structuredClone(homeBot.alwaysAllow) }
+    : projectedBot;
   // Routines and legacy peer delivery already have their own completion
   // owners. Only ordinary chats opt into this scheduler; its child turns
   // carry an exact node id rather than inheriting a routine's lifetime.
@@ -14374,6 +14383,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, forwarded.status, forwarded.body);
         } catch { return json(res, 502, { error: "joined server is unavailable" }); }
       }
+      if (path === "/api/multiplayer/peer-trust" && (method === "GET" || method === "POST")) {
+        if (!auth.scopes.includes("admin") || peerSessionId) return json(res, 403, { error: "owner access required" });
+        if (method === "POST") {
+          const body = await readBody(req, 4_000);
+          if (typeof body?.sessionId !== "string" || typeof body?.trusted !== "boolean") return json(res, 400, { error: "sessionId and trusted are required" });
+          if (!peerThreads.list(body.sessionId).length && body.trusted) return json(res, 404, { error: "no peer link with that session" });
+          trustedPeers.set(body.sessionId, body.trusted);
+        }
+        const peers = sessions.list().filter(entry => entry.scopes.includes("peer") && peerThreads.list(entry.id).length).map(entry => ({
+          sessionId: entry.id, label: entry.label, trusted: trustedPeers.has(entry.id),
+          threads: peerThreads.list(entry.id).map(grant => ({ ...grant, title: store.taskByThread(grant.botId, grant.threadId)?.title ?? "" })),
+        }));
+        return json(res, 200, { peers });
+      }
       if (path === "/api/multiplayer/servers" && method === "GET") {
         if (actorId !== multiplayerActors.ownerId || peerSessionId) return json(res, 403, { error: "home owner access required" });
         const joined = await Promise.all(multiplayerLinks.bridgeLinks().map(async link => {
@@ -14458,6 +14481,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         try {
           peerThreads.grant(issued.session.id, threads);
           if (binding) multiplayerActors.bind(issued.session.id, binding.personId, binding.name);
+          trustedPeers.carry(auth.session.id, issued.session.id);
         } catch (error) {
           sessions.revoke(issued.session.id);
           throw error;
@@ -14474,6 +14498,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const issued = sessions.issue({ label: "BOS peer bridge", scopes: ["peer"] });
         try {
           peerThreads.grant(issued.session.id, peerThreads.list(auth.session.id));
+          trustedPeers.carry(auth.session.id, issued.session.id);
           const binding = multiplayerActors.bindingFor(auth.session.id);
           if (binding) multiplayerActors.bind(issued.session.id, binding.personId, binding.name);
         } catch (error) {

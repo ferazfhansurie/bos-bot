@@ -68,6 +68,10 @@ export class PeerThreads {
     return [...this.sessions].some(([sessionId, threads]) => threads.has(threadId) && isLive(sessionId));
   }
 
+  liveSessionsFor(threadId: string, isLive: (sessionId: string) => boolean): string[] {
+    return [...this.sessions].filter(([sessionId, threads]) => threads.has(threadId) && isLive(sessionId)).map(([sessionId]) => sessionId);
+  }
+
   owns(sessionId: string, botId: string, threadId: string): boolean {
     return this.sessions.get(sessionId)?.get(threadId) === botId;
   }
