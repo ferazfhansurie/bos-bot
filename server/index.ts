@@ -654,6 +654,16 @@ const remoteBots = new RemoteBotBridge({
   attachmentsDir: ATTACHMENTS_DIR,
   fileMime: fileMimeForExtension,
 });
+/** A room person's photo bytes: the owner's saved photo, or a linked home's owner photo. */
+function personPhoto(id: string): { mime: string; bytes: Buffer } | null {
+  const data = id === multiplayerActors.ownerId ? ownerPhotoData() : multiplayerLinks.avatarForPerson(multiplayerActors.nameFor(id) ?? "");
+  const match = data?.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
+  return match ? { mime: match[1], bytes: Buffer.from(match[2], "base64") } : null;
+}
+function personPhotoUrl(id: string): string | null {
+  const has = id === multiplayerActors.ownerId ? Boolean(cfg.profile?.avatarUrl) : Boolean(multiplayerLinks.avatarForPerson(multiplayerActors.nameFor(id) ?? ""));
+  return has ? `/api/multiplayer/people/${encodeURIComponent(id)}/photo` : null;
+}
 function ownerPhotoData(): string | null {
   const name = cfg.profile?.avatarUrl?.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(?:png|jpg|gif|webp))$/)?.[1];
   if (!name) return null;
@@ -3324,7 +3334,7 @@ function publicGroupState(group: GroupRecord): WireGroup {
   });
   const speakers = roomRuntimeSpeakers(group.id);
   const activeMemberTurns = publicRoomMemberTurns(speakers, runtimeId => store.canonicalThreadId(runtimeId), roomMemberTurnFacts);
-  return { ...group, memberBots, peopleIds: roomPeople(group, multiplayerActors.ownerId), people: roomPeople(group, multiplayerActors.ownerId).map(id => ({ id, name: id === multiplayerActors.ownerId ? cfg.profile?.name || "Owner" : multiplayerActors.nameFor(id) || id, homeId: parseContactId(id)!.homeId })), ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set([...speakers.map(([, speaker]) => speaker.botId), ...personTurnBotIds(group.id)])], activeMemberTurns, working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
+  return { ...group, memberBots, peopleIds: roomPeople(group, multiplayerActors.ownerId), people: roomPeople(group, multiplayerActors.ownerId).map(id => ({ id, name: id === multiplayerActors.ownerId ? cfg.profile?.name || "Owner" : multiplayerActors.nameFor(id) || id, homeId: parseContactId(id)!.homeId, avatar: personPhotoUrl(id) })), ...(group.tasks ? { tasks: group.dm ? group.tasks : group.tasks.map(task => wireGroupTask(group, task)) } : {}), activeBotIds: [...new Set([...speakers.map(([, speaker]) => speaker.botId), ...personTurnBotIds(group.id)])], activeMemberTurns, working: groupIsWorking(group) || [...roomHandoffs.nodes.values()].some(n => n.groupId === group.id && !["completed", "failed", "cancelled"].includes(n.status)) };
 }
 
 function beginGroupTurnOperation(
@@ -14489,6 +14499,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (updated) remoteBots.sync();
           return json(res, updated ? 200 : 404, updated ? { ok: true } : { error: "link unavailable" });
         } catch (error) { return json(res, 409, { error: error instanceof Error ? error.message : "address could not be verified" }); }
+      }
+      const personPhotoId = method === "GET" ? /^\/api\/multiplayer\/people\/([^/]+)\/photo$/.exec(path)?.[1] : undefined;
+      if (personPhotoId) {
+        if (!actorId) return json(res, 403, { error: "this device has not been assigned to a person" });
+        const photo = personPhoto(decodeURIComponent(personPhotoId));
+        if (!photo) return json(res, 404, { error: "no photo" });
+        res.writeHead(200, { "content-type": photo.mime, "content-length": String(photo.bytes.byteLength), "cache-control": "private, max-age=300", "x-content-type-options": "nosniff" });
+        res.end(photo.bytes);
+        return;
       }
       if (method === "GET" && path === "/api/multiplayer/home") {
         return json(res, 200, { homeId: ENVIRONMENT_ID, name: cfg.profile?.name ?? "Owner", avatar: ownerPhotoData() });
