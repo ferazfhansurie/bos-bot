@@ -80,4 +80,9 @@ describe("remoteRoomListPatches", () => {
     expect(remoteRoomListPatches(known, listed)).toEqual([{ id: "room-partner", remoteBots: [{ id: "claude" }, { id: "codex" }] }]);
     expect(remoteRoomListPatches(known, [{ ...known[1]!, messages: [] }])).toEqual([]);
   });
+
+  it("fills in a roster first listed empty while the home was cold", () => {
+    const cold = [{ ...known[1]!, memberIds: [] as string[] }];
+    expect(remoteRoomListPatches(cold, [{ ...known[1]!, memberIds: ["claude", "codex"] }])).toEqual([{ id: "room-partner", memberIds: ["claude", "codex"] }]);
+  });
 });

@@ -55,6 +55,7 @@ export function remoteRoomNeedsListing(
 
 type ListedRoom = RoomLike & {
   remoteBots?: unknown;
+  memberIds?: string[];
   avatarUrl?: string | null;
   name?: string;
   messages?: unknown;
@@ -78,7 +79,7 @@ export function remoteRoomListPatches<T extends ListedRoom>(known: readonly List
     if (!current.home) continue;
     const patch: Partial<T> & { id: string } = { id: group.id } as Partial<T> & { id: string };
     let changed = false;
-    for (const key of ["home", "remoteBots", "avatarUrl", "name"] as const) {
+    for (const key of ["home", "remoteBots", "memberIds", "avatarUrl", "name"] as const) {
       if (!Object.hasOwn(group, key)) continue;
       if (JSON.stringify(group[key]) === JSON.stringify(current[key])) continue;
       (patch as Record<string, unknown>)[key] = group[key];

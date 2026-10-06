@@ -3942,8 +3942,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     });
     // A room this home was added to on a linked home arrives only through a
-    // fresh listing. Re-list every minute while the window is visible, and
-    // on coming back to it — cheap, and only while some home link is in use.
+    // fresh listing. Re-list every minute while the window is visible —
+    // cheap, and only while some home link is in use.
     const RELIST_MS = 60_000;
     let last = Date.now();
     const tick = () => {
@@ -3952,13 +3952,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       remoteRelist.current();
     };
     const timer = setInterval(tick, RELIST_MS);
-    document.addEventListener("visibilitychange", tick);
     return () => {
       for (const stop of stops) stop();
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", tick);
     };
   }, [remoteHomes]);
+
+  // The first room on a home this one has no rooms with yet has no stream to
+  // announce it, so coming back to the window re-lists too (at most every
+  // 10s), with or without any remote room open.
+  useEffect(() => {
+    let last = 0;
+    const back = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < 10_000) return;
+      last = Date.now();
+      remoteRelist.current();
+    };
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", back);
+    };
+  }, []);
 
   // Re-probe the engines on demand. A CLI installed while the app is running
   // is invisible until something asks again — the setup screens expose this
