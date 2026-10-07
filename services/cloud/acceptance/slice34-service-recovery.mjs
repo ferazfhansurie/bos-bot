@@ -126,7 +126,9 @@ export async function createRecovery(c) {
         const gate = c.gate(point + '.before_admission', { workspace_id: h.w, account_id: actor.account_id });
         const abort = new AbortController();
         const request = fetch(c.f.url + root(h) + '/messages', { method: 'POST', signal: abort.signal,
-          headers: { authorization: 'Bearer ' + actor.bearer, 'content-type': 'application/json' }, body: JSON.stringify(e) }).catch(error => ({ aborted: error.name }));
+          headers: { authorization: 'Bearer ' + actor.bearer, 'content-type': 'application/json' }, body: JSON.stringify(e) })
+          .then(async response => ({ status: response.status, body: await response.json() }))
+          .catch(error => ({ aborted: error.name }));
         try {
           await gate.waitUntilReached(); abort.abort();
           const atLoss = await c.sql('SELECT * FROM cloud.operations WHERE workspace_id=$1 AND client_operation_id=$2', [h.w, e.client_operation_id]);
@@ -134,7 +136,13 @@ export async function createRecovery(c) {
           faultArtifact = c.artifact('actual-response-loss', { fault: intent.fault, barrier: gate.artifact(), atLoss });
           await gate.release(); await request;
           await c.until(async () => (await c.lookup(h, actor, e)).status === 'accepted', 'lost-response actual commit');
-        } finally { await gate.cleanup(); await request; }
+        } finally {
+          await gate.cleanup();
+          const response = await request;
+          // A pre-admission rejection must be visible rather than becoming a
+          // generic hook deadline. Consume any response body to release its socket.
+          c.log({ type: 'loss_request_outcome', id: intent.id, fault: intent.fault, response });
+        }
       } else {
         if (intent.fault === 'dropped-wakeup') { c.f.hooks.dropNotify = true; c.f.hooks.pausedWorker = true; }
         try { await c.send(h, actor, e); if (intent.fault === 'duplicate-delivery') await c.send(h, actor, e); }
