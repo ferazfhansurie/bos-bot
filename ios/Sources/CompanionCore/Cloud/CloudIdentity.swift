@@ -30,7 +30,20 @@ public struct CloudIssuerClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    /// Native auth is bearer only. The shared session would keep the
+    /// issuer's sign-in cookie, and the issuer refuses cookie-bearing
+    /// requests without a browser Origin, so sign-out and the next sign-in
+    /// would fail with 403. No cookies, no cache, ever.
+    public static let cookieless: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
+
+    public init(baseURL: URL, session: URLSession = CloudIssuerClient.cookieless) {
         self.baseURL = baseURL; self.session = session
     }
 
@@ -225,7 +238,7 @@ public actor CloudIdentityCoordinator {
 
     static let currentKey = "cloud.currentIdentity"
 
-    public init(issuer: CloudIssuerClient, roomsURL: URL, store: CloudCredentialStore, defaults: UserDefaults = .standard, urlSession: URLSession = .shared) {
+    public init(issuer: CloudIssuerClient, roomsURL: URL, store: CloudCredentialStore, defaults: UserDefaults = .standard, urlSession: URLSession = CloudIssuerClient.cookieless) {
         self.issuer = issuer; self.roomsURL = roomsURL; self.store = store
         self.defaults = defaults; self.urlSession = urlSession
     }
