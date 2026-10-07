@@ -311,6 +311,53 @@ final class CloudOutboxTests: XCTestCase {
 
     // MARK: - Room and audience changes
 
+    func testAuthorityChangedHoldsOldEpochDraftsWithoutBlockingTheRoom() throws {
+        var box = outbox()
+        let sent = F.envelope(1)
+        let queued = F.envelope(2)
+        var otherWorkspace = F.envelope(3, room: "r9")
+        otherWorkspace.namespace.workspaceId = "w9"
+        try enqueue(&box, sent)
+        try enqueue(&box, queued)
+        try enqueue(&box, otherWorkspace)
+        XCTAssertEqual(box.entry(queued.clientOperationId)?.status, .draft)
+
+        XCTAssertEqual(box.authorityChanged(workspaceId: "w1", epoch: "e2"), [.persist])
+        // A send that left the device keeps reconciling as before.
+        XCTAssertEqual(box.entry(sent.clientOperationId)?.status, .sending)
+        XCTAssertEqual(box.entry(queued.clientOperationId)?.status, .held(.authorityChanged))
+        XCTAssertEqual(box.entry(otherWorkspace.clientOperationId)?.status, .sending)
+        XCTAssertEqual(box.authorityChanged(workspaceId: "w1", epoch: "e2"), [], "already held")
+
+        // Never released as is, and audience changes don't relabel it.
+        XCTAssertEqual(box.release(queued.clientOperationId, now: now), [])
+        XCTAssertEqual(box.audienceChanged(roomId: "r1"), [])
+        XCTAssertEqual(box.recoverAfterLaunch(now: now).contains(.submit(queued)), false)
+        XCTAssertEqual(box.entry(queued.clientOperationId)?.status, .held(.authorityChanged))
+
+        // Once the first send resolves, a new-epoch send in the same room goes straight out.
+        _ = box.answered(sent.clientOperationId, result: .outcome(.accepted(F.acceptance(for: sent, messageId: "m1", sequence: 1))), generation: box.generation, now: now)
+        var fresh = F.envelope(4)
+        fresh.namespace.epoch = "e2"
+        XCTAssertEqual(try enqueue(&box, fresh).last, .submit(fresh))
+        XCTAssertEqual(box.entry(queued.clientOperationId)?.status, .held(.authorityChanged))
+
+        // The person can drop it.
+        XCTAssertEqual(box.discard(queued.clientOperationId), [.persist])
+        XCTAssertNil(box.entry(queued.clientOperationId))
+    }
+
+    func testAuthorityChangedLeavesSameEpochDraftsAlone() throws {
+        var box = outbox()
+        let first = F.envelope(1)
+        var second = F.envelope(2)
+        second.namespace.epoch = "e2"
+        try enqueue(&box, first)
+        try enqueue(&box, second)
+        XCTAssertEqual(box.authorityChanged(workspaceId: "w1", epoch: "e2"), [])
+        XCTAssertEqual(box.entry(second.clientOperationId)?.status, .draft)
+    }
+
     func testAudienceChangedHoldsOnlyNeverDispatchedDrafts() throws {
         var box = outbox()
         let sent = F.envelope(1)

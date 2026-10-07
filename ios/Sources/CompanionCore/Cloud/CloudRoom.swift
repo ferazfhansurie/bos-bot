@@ -17,6 +17,10 @@ public enum CloudRoomEffect: Hashable, Sendable {
     case resyncDiscovery
     /// The server moved one of this account's attachments.
     case attachmentUpdated(CloudAttachment)
+    /// The workspace moved to a new authority epoch. The cursor is gone:
+    /// re-discover, hold the old epoch's drafts, drop its send window and
+    /// resubscribe for a fresh snapshot.
+    case authorityChanged(epoch: String)
 }
 
 /// A bot's not-yet-committed reply. Memory only; final.commit replaces it.
@@ -60,12 +64,15 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
     /// so caches from before slice 3 still decode.
     private var runStore: [String: CloudInvocation]?
     private var cardStore: [String: CloudApprovalCard]?
+    /// Epoch announced by the last authority_changed. Old cursors, windows
+    /// and drafts don't cross it.
+    public private(set) var authorityEpoch: String?
     /// Provisional bot text by invocation. Never persisted.
     public private(set) var streaming: [String: CloudStreamText] = [:]
 
     enum CodingKeys: String, CodingKey {
         case workspaceId, roomId, threadId, me, role, cursor, snapshotId, watermark, applied, policyRevision
-        case members, messages, read, live, resetRequired, upgradeRequired, runStore, cardStore
+        case members, messages, read, live, resetRequired, upgradeRequired, runStore, cardStore, authorityEpoch
     }
 
     public init(workspaceId: String, roomId: String, threadId: String, me: String, role: CloudRole = .member) {
@@ -94,6 +101,10 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
         cardStore = (cardStore ?? [:]).merging([card.approvalId: card]) { $1 }
         return [.persist]
     }
+
+    /// After authority_changed and before the new snapshot, nothing on the
+    /// old cursor is applied.
+    public var awaitingAuthoritySnapshot: Bool { resetRequired && cursor == nil && authorityEpoch != nil }
 
     /// Foreground resubscribe from the acknowledged cursor.
     public mutating func resubscribe() -> [CloudRoomEffect] {
@@ -178,6 +189,7 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
         case stop(CloudRunBinding, revision: CloudSequence, observed: Bool)
         case card(CloudApprovalCard)
         case attachment(CloudAttachment)
+        case authority(epoch: String)
         case presence(hostId: String, online: Bool)
         case skip
     }
@@ -186,7 +198,7 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
     /// required event blocks all of it, keeping the old projection and
     /// cursor.
     private mutating func apply(_ batch: CloudEventBatch) -> [CloudRoomEffect] {
-        guard batch.workspaceId == workspaceId, batch.roomId == roomId, !upgradeRequired else { return [] }
+        guard batch.workspaceId == workspaceId, batch.roomId == roomId, !upgradeRequired, !awaitingAuthoritySnapshot else { return [] }
         var floor = applied
         var steps: [(CloudSequence, Step)] = []
         for event in batch.events {
@@ -244,6 +256,9 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
                 apply(card: card)
             case .attachment(let attachment):
                 effects.append(.attachmentUpdated(attachment))
+            case .authority(let epoch):
+                if epoch == authorityEpoch { continue }
+                return authorityChanged(epoch, effects: effects, audience: audience)
             case .presence(let hostId, let online):
                 for (id, run) in runStore ?? [:] where run.hostId == hostId { runStore?[id]?.hostOnline = online }
             case .audience(let needsResync, let policy):
@@ -301,6 +316,10 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
             guard let attachment = try? event.payload["attachment"]?.decode(CloudAttachment.self),
                   attachment.workspaceId == event.workspaceId, attachment.roomId == event.roomId else { return event.required ? nil : .skip }
             return .attachment(attachment)
+        case CloudEventKind.authorityChanged:
+            guard let p = Self.payload(event, AuthorityPayload.self), p.workspaceId == event.workspaceId,
+                  p.reason == "migration_cutover", !p.epoch.isEmpty else { return event.required ? nil : .skip }
+            return .authority(epoch: p.epoch)
         case CloudEventKind.presence:
             guard let p = Self.payload(event, PresencePayload.self) else { return .skip }
             return .presence(hostId: p.hostId, online: p.online)
@@ -339,9 +358,34 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
         enum CodingKeys: String, CodingKey { case invocationId = "invocation_id", attempt, fenceGen = "fence_gen", controlRevision = "control_revision" }
     }
 
+    private struct AuthorityPayload: Decodable {
+        var workspaceId: String, epoch: String, reason: String
+        enum CodingKeys: String, CodingKey { case workspaceId = "workspace_id", epoch, reason }
+    }
+
     private struct PresencePayload: Decodable {
         var hostId: String, online: Bool
         enum CodingKeys: String, CodingKey { case hostId = "host_id", online }
+    }
+
+    /// Nothing from the old epoch carries over: cursor, snapshot pin and
+    /// watermark go, so the next subscribe asks for a reset with a fresh
+    /// snapshot. The rest of the batch belongs to the old cursor and is not
+    /// applied. The cached messages stay on screen until that snapshot
+    /// replaces them.
+    private mutating func authorityChanged(_ epoch: String, effects: [CloudRoomEffect], audience: Bool) -> [CloudRoomEffect] {
+        authorityEpoch = epoch
+        cursor = nil
+        snapshotId = nil
+        watermark = nil
+        applied = nil
+        streaming = [:]
+        live = false
+        resetRequired = true
+        var effects = effects
+        if audience { effects.append(.audienceChanged) }
+        effects.append(.authorityChanged(epoch: epoch))
+        return effects
     }
 
     private mutating func upsert(_ message: CloudMessage) {
