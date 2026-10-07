@@ -338,7 +338,9 @@ const appConfigSchema = z.object({
     publicUrl: z.string().url().optional(),
     phone: z.enum(["ios", "android"]).optional(),
   }).optional(),
-  xai: z.object({ key: optionalText, url: optionalText }).optional(),
+  /** `managementKey` reads prepaid credits (management-api.x.ai) for
+   * Settings → Usage; it is never handed to an engine. */
+  xai: z.object({ key: optionalText, url: optionalText, managementKey: optionalText }).optional(),
   /** Anthropic API key for Claude Code billed per token, handed only to
    * Claude instances; `url` only for a proxy or a test double. Never a
    * personal-login OAuth token. */
@@ -472,7 +474,7 @@ export interface AppConfig {
   };
   mcpServers?: Record<string, unknown>;
   language?: string;
-  xai?: { key?: string; url?: string };
+  xai?: { key?: string; url?: string; managementKey?: string };
   anthropic?: { key?: string; url?: string };
   budgets?: { monthlyUsd?: number; warnAtPercent?: number };
   billing?: { currency?: string; prices?: Record<string, { inputPerMillion: number; outputPerMillion: number; cachedInputPerMillion?: number }> };
@@ -819,6 +821,7 @@ export function loadConfig(): AppConfig {
   // shadow the save until the next launch.
   cfg.xai = { ...cfg.xai };
   if (process.env.XAI_API_KEY !== undefined) cfg.xai.key = process.env.XAI_API_KEY;
+  if (process.env.OMB_XAI_MANAGEMENT_KEY !== undefined) cfg.xai.managementKey = process.env.OMB_XAI_MANAGEMENT_KEY;
   // Deliberately not ANTHROPIC_API_KEY: a key in the server's own env is
   // never the workspace key, so an operator's stray variable cannot flip
   // every Claude bot onto pay-as-you-go billing.
@@ -863,6 +866,7 @@ export function loadConfig(): AppConfig {
 export function syncCredentialEnv(patch: Partial<AppConfig>): void {
   const secrets: Array<[value: string | undefined, name: string]> = [
     [patch.xai?.key, "XAI_API_KEY"],
+    [patch.xai?.managementKey, "OMB_XAI_MANAGEMENT_KEY"],
     [patch.anthropic?.key, "OMB_ANTHROPIC_API_KEY"],
     [patch.openaiCompat?.key, "OPENAI_COMPAT_API_KEY"],
     [patch.composio?.apiKey, "COMPOSIO_API_KEY"],
@@ -900,6 +904,7 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
  * child these are someone else's keys riding along in `...process.env`. */
 export const WORKSPACE_CREDENTIAL_ENV = [
   "XAI_API_KEY",
+  "OMB_XAI_MANAGEMENT_KEY",
   "OMB_ANTHROPIC_API_KEY",
   "OMB_ANTHROPIC_API_URL",
   "OPENAI_COMPAT_API_KEY",

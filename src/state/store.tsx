@@ -569,7 +569,7 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
-  xai?: { configured: boolean };
+  xai?: { configured: boolean; managementConfigured?: boolean };
   anthropic?: { configured: boolean };
   openaiCompat?: { configured: boolean; url?: string };
   /** what this server is entitled to; Settings shows only what works here */
