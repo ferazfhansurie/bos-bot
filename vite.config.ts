@@ -15,6 +15,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: {
     __APP_VERSION__: JSON.stringify(version),
+    // Cloud rooms (bos 2.0) stay off unless the build opts in.
+    __BOS_CLOUD_ROOMS__: JSON.stringify(process.env.BOS_CLOUD_ROOMS === "1"),
   },
   test: {
     environment: "node",
@@ -61,6 +63,10 @@ export default defineConfig({
       "/.well-known/openmausbot/environment": {
         target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
       },
+      // the local cloud room test server, only when cloud rooms are on
+      ...(process.env.BOS_CLOUD_ROOMS === "1"
+        ? { "/v2": { target: process.env.BOS_CLOUD_URL || "http://127.0.0.1:8790", ws: true } }
+        : {}),
     },
   },
 });
