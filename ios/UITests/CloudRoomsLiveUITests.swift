@@ -67,7 +67,72 @@ final class CloudRoomsLiveUITests: XCTestCase {
         signOut(app)
     }
 
+    /// One side of a cross-client exchange, driven from outside. Skipped
+    /// unless the runner gets TEST_RUNNER_CLOUD_SCRIPT_B64: base64 of
+    /// `{"email": ..., "invite"?: ..., "timeout"?: seconds, "steps": [{"expect": text} | {"send": text}]}`.
+    /// With an invite it redeems and joins that room; without one it creates
+    /// its own. Texts are exact (unicode and newlines kept). Each step logs a
+    /// `CLOUD_INTEROP {json}` line for the driver.
+    @MainActor
+    func testScriptedExchange() async throws {
+        guard let encoded = ProcessInfo.processInfo.environment["CLOUD_SCRIPT_B64"],
+              let data = Data(base64Encoded: encoded)
+        else { throw XCTSkip("no exchange script") }
+        struct Step: Decodable { var expect: String?; var send: String? }
+        struct Script: Decodable { var email: String; var invite: String?; var timeout: Double?; var steps: [Step] }
+        let script = try JSONDecoder().decode(Script.self, from: data)
+        let wait = script.timeout ?? 120
+        let app = launch()
+
+        try await signIn(script.email, in: app)
+        log(["event": "signedIn", "subject": app.staticTexts["cloud.subject"].label])
+        if let invite = script.invite, !invite.isEmpty {
+            type(invite, into: app.textFields["cloud.inviteToken"])
+            app.buttons["cloud.redeem"].tap()
+        } else {
+            app.buttons["cloud.createRoom"].tap()
+            XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+        }
+        openRoom(in: app)
+        log(["event": "joined", "room": app.navigationBars.firstMatch.identifier])
+
+        for (index, step) in script.steps.enumerated() {
+            if let text = step.expect {
+                let got = message(text, in: app)
+                XCTAssertTrue(got.waitForExistence(timeout: wait), "step \(index): expected text never arrived")
+                log(["event": "received", "step": "\(index)", "messageId": messageId(got), "text": text])
+            } else if let text = step.send {
+                let composer = app.textFields["cloud.composer"]
+                type(text, into: composer)
+                XCTAssertEqual(composer.value as? String, text, "step \(index): composer changed the text")
+                app.buttons["cloud.send"].tap()
+                let got = message(text, in: app)
+                XCTAssertTrue(got.waitForExistence(timeout: 15), "step \(index): not committed: \(problem(app))")
+                log(["event": "sent", "step": "\(index)", "messageId": messageId(got), "text": text])
+            }
+            shot("step \(index)", app)
+        }
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+    }
+
     // MARK: - steps
+
+    @MainActor
+    private func message(_ text: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'cloud.message.'"))
+            .containing(NSPredicate(format: "label == %@", text)).firstMatch
+    }
+
+    private func messageId(_ element: XCUIElement) -> String {
+        String(element.identifier.dropFirst("cloud.message.".count))
+    }
+
+    private func log(_ fields: [String: String]) {
+        let data = try! JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+        print("CLOUD_INTEROP " + String(decoding: data, as: UTF8.self))
+    }
 
     @MainActor
     private func launch() -> XCUIApplication {
