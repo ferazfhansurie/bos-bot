@@ -148,6 +148,10 @@ function SignedIn(props: { session: CloudSession; unavailable: boolean; onIdenti
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api]);
+  // A stable handle so a room's controller can ask for discovery again after authority_changed.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const rediscover = useCallback(() => void refreshRef.current(), []);
 
   const act = async (run: () => Promise<{ ok: true } | { ok: false; failure: { error: string } | { transport: true } }>, done?: string) => {
     const result = await run();
@@ -187,7 +191,7 @@ function SignedIn(props: { session: CloudSession; unavailable: boolean; onIdenti
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
         {room ? (
-          <RoomView key={`${room.workspace_id}/${room.room_id}`} session={session} api={api} room={room} onIdentity={onIdentity} />
+          <RoomView key={`${room.workspace_id}/${room.room_id}`} session={session} api={api} room={room} onIdentity={onIdentity} onAuthorityChanged={rediscover} />
         ) : (
           <p className="p-6 text-neutral-500">pick a room.</p>
         )}
@@ -240,10 +244,11 @@ function WorkspaceItem(props: {
   );
 }
 
-function RoomView({ session, api, room, onIdentity }: { session: CloudSession; api: CloudApi; room: CloudRoomRef; onIdentity: OnIdentity }) {
+function RoomView(props: { session: CloudSession; api: CloudApi; room: CloudRoomRef; onIdentity: OnIdentity; onAuthorityChanged: () => void }) {
+  const { session, api, room, onIdentity, onAuthorityChanged } = props;
   const controller = useMemo(
-    () => new CloudRoomController(session, api, room, window.localStorage, WebSocket, onIdentity),
-    [session, api, room, onIdentity],
+    () => new CloudRoomController(session, api, room, window.localStorage, WebSocket, onIdentity, undefined, onAuthorityChanged),
+    [session, api, room, onIdentity, onAuthorityChanged],
   );
   useEffect(() => {
     controller.start();
@@ -283,7 +288,9 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
       : state.upgrade_required
       ? "update needed to keep reading this room"
       : state.reset_required
-        ? "catching up"
+        ? state.reset_reason === "authority_changed"
+          ? "this room moved · reloading"
+          : "catching up"
         : state.live
           ? "live"
           : "connecting";
@@ -322,7 +329,15 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
               <span className="text-neutral-500">you</span> <span className="whitespace-pre-wrap">{item.entry.envelope.text}</span>
               <span className="text-xs text-neutral-400">{outboxLabel(item.entry)}</span>
               {item.entry.review_required && (
-                <button className={button} onClick={() => controller.confirmReview(item.entry.envelope.client_operation_id)}>send anyway</button>
+                <button
+                  className={button}
+                  onClick={async () => {
+                    const result = await controller.confirmReview(item.entry.envelope.client_operation_id);
+                    if (result) setProblem(result === "no_window" ? "couldn't open a send window" : result.replace(/_/g, " "));
+                  }}
+                >
+                  {item.entry.legacy_epoch ? "send again" : "send anyway"}
+                </button>
               )}
               {(item.entry.state === "rejected" || (item.entry.state === "draft" && !item.entry.dispatched)) && (
                 <button className={button} onClick={() => controller.discard(item.entry.envelope.client_operation_id)}>discard</button>

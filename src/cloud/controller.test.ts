@@ -113,6 +113,54 @@ describe("cloud room controller", () => {
     controller.stop();
   });
 
+  it("on authority_changed re-discovers, drops the old window, reloads and resends a reviewed legacy draft under the new epoch", async () => {
+    const storage = memoryStorage();
+    const moved = { ...window, window_id: "window2", window_token: "token2", namespace: { ...window.namespace, epoch: "e2" } };
+    const openWindow = vi.fn(async () => ({ ok: true as const, value: openWindow.mock.calls.length > 1 ? moved : window }));
+    const send = vi.fn(async (envelope: { client_operation_id: string }) => ({ ok: true as const, value: { status: "accepted" as const, client_operation_id: envelope.client_operation_id, digest: "a".repeat(64), message_id: "m20", room_id: "r1", thread_id: "t1", sequence: "20", redacted: false, retry: "none" as const } }));
+    const offline: NetworkSource = { online: () => false, subscribe: () => () => {} };
+    const rediscover = vi.fn();
+    // Queue a draft offline under epoch e1 so it never leaves the device.
+    const first = new CloudRoomController(session, fakeApi({ openWindow, send } as Partial<CloudApi>), room, storage, FakeSocket as unknown as typeof WebSocket, undefined, offline);
+    first.start();
+    (first as unknown as { state: { online: boolean } }).state.online = true;
+    await (first as unknown as { ensureWindow(): Promise<unknown> }).ensureWindow();
+    (first as unknown as { state: { online: boolean } }).state.online = false;
+    expect(await first.send("drafted before the move")).toBeNull();
+    first.stop();
+
+    const api = fakeApi({ openWindow, send } as Partial<CloudApi>);
+    const net: NetworkSource = { online: () => true, subscribe: () => () => {} };
+    const controller = new CloudRoomController(session, api, room, storage, FakeSocket as unknown as typeof WebSocket, undefined, net, rediscover);
+    // Hold the replay so the cutover lands before the old draft is sent.
+    (controller as unknown as { pumping: boolean }).pumping = true;
+    controller.start();
+    const socket = FakeSocket.last;
+    socket.open();
+    socket.receive({
+      type: "event_batch", workspace_id: "w1", room_id: "r1", cursor: "c9", scanned_sequence: "9", frontier: "9", live: true,
+      events: [{ schema_version: 1, workspace_id: "w1", room_id: "r1", event_id: "ev9", sequence: "9", kind: "authority_changed", required: true, payload: { workspace_id: "w1", epoch: "e2", reason: "migration_cutover" } }],
+    });
+    await flush();
+    expect(rediscover).toHaveBeenCalledTimes(1);
+    expect(api.snapshot).toHaveBeenCalledWith("w1", "r1", "t1");
+    expect(controller.getState()).toMatchObject({ authority_epoch: "e2", reset_required: false, cursor: snapshot.cursor, upgrade_required: false });
+    expect(socket.sent.at(-1)).toMatchObject({ type: "subscribe", cursor: snapshot.cursor, snapshot_id: snapshot.snapshot_id });
+    const legacy = controller.getState().outbox[0];
+    expect(legacy).toMatchObject({ legacy_epoch: "e1", review_required: true, state: "draft" });
+    (controller as unknown as { pumping: boolean }).pumping = false;
+    await (controller as unknown as { pump(): Promise<void> }).pump();
+    expect(send).not.toHaveBeenCalled();
+
+    expect(await controller.confirmReview(legacy.envelope.client_operation_id)).toBeNull();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const resent = send.mock.calls[0][0] as unknown as { text: string; namespace: { epoch: string }; client_operation_id: string };
+    expect(resent).toMatchObject({ text: "drafted before the move", namespace: { epoch: "e2" } });
+    expect(resent.client_operation_id).not.toBe(legacy.envelope.client_operation_id);
+    expect(controller.getState().outbox.map((entry) => entry.envelope.client_operation_id)).toEqual([resent.client_operation_id]);
+    controller.stop();
+  });
+
   it("restarts after StrictMode's start, stop, start and ignores the old socket closing late", async () => {
     vi.useFakeTimers();
     const controller = new CloudRoomController(session, fakeApi({}), room, null, FakeSocket as unknown as typeof WebSocket);

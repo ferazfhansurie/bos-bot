@@ -138,4 +138,26 @@ describe("cloud outbox", () => {
     entries = outboxReducer(entries, { type: "stream_accepted", operation_id: id, message_id: "m", sequence: "3" });
     expect(outboxReducer(entries, { type: "discard", id })).toHaveLength(0);
   });
+
+  it("holds never-sent drafts from the old epoch for review without blocking new sends", async () => {
+    const draft = await frozen("before the move", "aaaaaaaaaaaaaaaa");
+    const checking = { ...(await frozen("in flight", "bbbbbbbbbbbbbbbb", "r2")), state: "checking" as const, dispatched: true };
+    const other = { ...(await frozen("other workspace", "cccccccccccccccc", "r3")), envelope: { ...(await frozen("x", "dddddddddddddddd", "r3")).envelope, namespace: { ...alice, workspace_id: "w2" } } };
+    let entries = outboxReducer([draft, checking, other], { type: "authority_changed", workspace_id: "w1", epoch: "e2" });
+    expect(entries[0]).toMatchObject({ review_required: true, legacy_epoch: "e1", state: "draft" });
+    // Anything that may have left the device keeps reconciling; another workspace is untouched.
+    expect(entries[1]).toBe(checking);
+    expect(entries[2]).toBe(other);
+    expect(outboxLabel(entries[0])).toBe("not sent · written before this room moved");
+    // A repeat is a no-op and a review confirm never releases the old envelope.
+    expect(outboxReducer(entries, { type: "authority_changed", workspace_id: "w1", epoch: "e2" })).toBe(entries);
+    expect(outboxReducer(entries, { type: "review_confirmed", id: draft.envelope.client_operation_id, now: 2_000 })).toBe(entries);
+    const fresh = { ...(await frozen("after the move", "eeeeeeeeeeeeeeee")), envelope: { ...(await frozen("after the move", "eeeeeeeeeeeeeeee")).envelope, namespace: { ...alice, epoch: "e2" } } };
+    entries = [...entries, fresh];
+    expect(nextWork(entries, alice, 2_000).map((work) => [work.kind, work.entry.envelope.text])).toEqual([
+      ["lookup", "in flight"],
+      ["send", "x"],
+      ["send", "after the move"],
+    ]);
+  });
 });

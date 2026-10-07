@@ -5,6 +5,7 @@
 // keep the outbox; batches then catch up strictly after H.
 import {
   ApprovalCardSchema,
+  AuthorityChangedSchema,
   EVENT_KINDS,
   InvocationSchema,
   MessageSchema,
@@ -53,6 +54,8 @@ export interface CloudRoomState {
   runs: RunProjection;
   /** The device reports a network connection. */
   online: boolean;
+  /** Epoch announced by the last authority_changed; old cursors, windows and drafts don't cross it. */
+  authority_epoch?: string;
 }
 
 export type CloudRoomAction =
@@ -204,6 +207,11 @@ function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "e
       }
       case "attachment.updated":
         break;
+      case "authority_changed": {
+        const moved = AuthorityChangedSchema.safeParse(event.payload);
+        if (!moved.success || moved.data.workspace_id !== next.workspace_id) return { ...state, reset_required: true, reset_reason: "invalid_batch", live: false };
+        return authorityChanged(next, moved.data.epoch);
+      }
     }
   }
   return { ...next, cursor: frame.cursor, head: maxSequence(next.head, frame.scanned_sequence), live: frame.live };
@@ -309,6 +317,19 @@ function revokeRoom(state: CloudRoomState): CloudRoomState {
     entry.envelope.room_id === state.selected_room_id && entry.state === "draft" && !entry.dispatched ? { ...entry, state: "rejected" as const, rejection: "forbidden" } : entry,
   );
   return { ...state, removed: true, live: false, messages: [], members: [], read: EMPTY_COVERAGE, runs: EMPTY_RUNS, outbox };
+}
+
+/**
+ * The workspace moved to a new authority epoch. Nothing from the old epoch
+ * carries over: the cursor and snapshot are dropped so the client re-discovers
+ * and reloads, and never-sent drafts are held for review. The rest of the
+ * batch belongs to the old cursor and is not applied.
+ */
+function authorityChanged(state: CloudRoomState, epoch: string): CloudRoomState {
+  return withOutbox(
+    { ...state, authority_epoch: epoch, cursor: null, snapshot_id: undefined, live: false, reset_required: true, reset_reason: "authority_changed" },
+    outboxReducer(state.outbox, { type: "authority_changed", workspace_id: state.workspace_id, epoch }),
+  );
 }
 
 function withOutbox(state: CloudRoomState, outbox: OutboxEntry[]): CloudRoomState {

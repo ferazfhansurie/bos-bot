@@ -31,6 +31,11 @@ export interface OutboxEntry {
   recovery_required?: boolean;
   /** A never-dispatched draft that aged out needs explicit review first. */
   review_required?: boolean;
+  /**
+   * Frozen under an epoch the workspace has since left (authority_changed).
+   * The envelope can never be sent; review re-freezes the text as a new send.
+   */
+  legacy_epoch?: string;
   message_id?: string;
   sequence?: Sequence;
   rejection?: string;
@@ -48,6 +53,7 @@ export type OutboxAction =
   | { type: "lookup_failed"; id: string; now: number; retry_after?: number }
   | { type: "operation_result"; now: number; result: OperationResult }
   | { type: "stream_accepted"; operation_id: string; message_id: string; sequence: Sequence }
+  | { type: "authority_changed"; workspace_id: string; epoch: string }
   | { type: "discard"; id: string };
 
 const UNRESOLVED: ReadonlySet<OutboxState> = new Set(["draft", "sending", "checking"]);
@@ -180,8 +186,9 @@ export function outboxReducer(entries: OutboxEntry[], action: OutboxAction): Out
           : entry,
       );
     case "review_confirmed":
+      // A legacy envelope stays held; only a re-freeze under the new epoch can send its text.
       return update(entries, action.id, (entry) =>
-        entry.state === "draft" && entry.review_required ? { ...entry, review_required: false, created_at: action.now } : entry,
+        entry.state === "draft" && entry.review_required && !entry.legacy_epoch ? { ...entry, review_required: false, created_at: action.now } : entry,
       );
     case "dispatching":
       return update(entries, action.id, (entry) => {
@@ -221,6 +228,19 @@ export function outboxReducer(entries: OutboxEntry[], action: OutboxAction): Out
       });
     case "stream_accepted":
       return update(entries, action.operation_id, (entry) => accept(entry, action.message_id, action.sequence));
+    case "authority_changed": {
+      // Never-sent drafts from the old epoch are kept for a human to review, never replayed.
+      // Anything that may have left the device keeps reconciling by lookup as before.
+      let changed = false;
+      const next = entries.map((entry) => {
+        const namespace = entry.envelope.namespace;
+        if (namespace.workspace_id !== action.workspace_id || namespace.epoch === action.epoch) return entry;
+        if (entry.state !== "draft" || entry.dispatched || entry.legacy_epoch !== undefined) return entry;
+        changed = true;
+        return { ...entry, review_required: true, legacy_epoch: namespace.epoch, retry_at: undefined };
+      });
+      return changed ? next : entries;
+    }
     case "discard":
       // Only a never-sent draft or a terminal entry can leave the outbox.
       return entries.filter((entry) => {
@@ -240,7 +260,8 @@ export function nextWork(entries: readonly OutboxEntry[], namespace: Namespace, 
   const blockedRooms = new Set<string>();
   const work: OutboxWork[] = [];
   for (const entry of entries) {
-    if (!isUnresolved(entry)) continue;
+    // A legacy draft waits for review and never holds up the room's new sends.
+    if (!isUnresolved(entry) || entry.legacy_epoch !== undefined) continue;
     const room = `${entry.envelope.namespace.workspace_id}/${entry.envelope.room_id}`;
     if (blockedRooms.has(room)) continue;
     blockedRooms.add(room);
@@ -268,7 +289,7 @@ export function sameNamespace(a: Namespace, b: Namespace, anyWorkspace = false):
 
 /** User-visible label for an outbox entry. */
 export function outboxLabel(entry: OutboxEntry): string {
-  if (entry.state === "draft") return entry.review_required ? "needs review" : "waiting";
+  if (entry.state === "draft") return entry.legacy_epoch ? "not sent · written before this room moved" : entry.review_required ? "needs review" : "waiting";
   if (entry.state === "sending") return "sending";
   if (entry.state === "checking") return entry.recovery_required ? "can't confirm yet" : "checking whether sent";
   if (entry.state === "accepted") return "sent";

@@ -77,6 +77,36 @@ describe("cloud room reducer", () => {
   });
 });
 
+describe("cloud room reducer: authority_changed", () => {
+  const moved = (sequence: string, payload: Record<string, unknown> = { workspace_id: "w1", epoch: "e2", reason: "migration_cutover" }): CloudEvent => ({
+    schema_version: 1,
+    workspace_id: "w1",
+    room_id: "r1",
+    event_id: `ev${sequence}`,
+    sequence,
+    kind: "authority_changed",
+    required: true,
+    payload,
+  });
+
+  it("resets the cursor and snapshot, keeps legacy drafts for review and skips the rest of the batch", async () => {
+    const namespace = { service: "cloud-local", issuer: "stub", subject: "alice", account_id: "alice", workspace_id: "w1", epoch: "e1" };
+    const draft = (await freezeSend({ namespace, window_id: "window1", window_token: "t", room_id: "r1", thread_id: "t1", text: "drafted", mentions: [], expected_policy_revision: "1", now: 0, nonce: "aaaaaaaaaaaaaaaa" })) as OutboxEntry;
+    let state: CloudRoomState = { ...initialCloudRoomState({ namespace: "alice", account_id: "alice", workspace_id: "w1", room_id: "r1", thread_id: "t1", outbox: [draft] }), snapshot_id: "s1" };
+    state = run(state, [batch([created("1", "m1")], "1"), batch([moved("2"), created("3", "m3")], "3")]);
+    expect(state).toMatchObject({ authority_epoch: "e2", cursor: null, snapshot_id: undefined, live: false, reset_required: true, reset_reason: "authority_changed", upgrade_required: false });
+    expect(state.messages.map((message) => message.message_id)).toEqual(["m1"]);
+    expect(state.outbox[0]).toMatchObject({ legacy_epoch: "e1", review_required: true });
+    expect(timeline(state).map((item) => item.kind)).toEqual(["message", "pending"]);
+  });
+
+  it("treats a malformed authority event as an invalid batch", () => {
+    const state = run(start(), [batch([moved("1", { workspace_id: "w9", epoch: "e2", reason: "migration_cutover" })], "1")]);
+    expect(state).toMatchObject({ reset_required: true, reset_reason: "invalid_batch" });
+    expect(state.authority_epoch).toBeUndefined();
+  });
+});
+
 describe("cloud room reducer: bot runs, cards and revocation", () => {
   const hex = "a".repeat(64);
   const event = (sequence: string, kind: string, payload: Record<string, unknown>): CloudEvent => ({ schema_version: 1, workspace_id: "w1", room_id: "r1", event_id: `ev${sequence}`, sequence, kind, required: true, payload });

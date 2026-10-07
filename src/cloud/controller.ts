@@ -113,6 +113,8 @@ export class CloudRoomController {
     private readonly Socket: typeof WebSocket = WebSocket,
     private readonly onIdentity: (problem: IdentityProblem) => void = () => {},
     private readonly network: NetworkSource = browserNetwork,
+    /** The workspace moved authority epochs; the caller re-runs discovery. */
+    private readonly onAuthorityChanged: () => void = () => {},
   ) {
     // Workspace and epoch are not compared when matching an identity.
     this.identity = { service: session.service, issuer: session.issuer, subject: session.subject, account_id: session.account_id, workspace_id: room.workspace_id, epoch: "" };
@@ -187,6 +189,12 @@ export class CloudRoomController {
       this.uploads = [];
       this.releaseDownloads();
     }
+    // The saved operation window is bound to the old epoch; the next send opens a fresh one.
+    if (this.state.authority_epoch !== undefined && this.state.authority_epoch !== previous.authority_epoch) {
+      this.window = null;
+      this.windows.save(null);
+      this.onAuthorityChanged();
+    }
     this.emit();
   }
 
@@ -199,7 +207,9 @@ export class CloudRoomController {
    * so the send can queue; the server rechecks it when the outbox replays.
    */
   private async ensureWindow(): Promise<Pick<OperationWindow, "namespace" | "window_id" | "window_token" | "expires_at"> | null> {
-    const fresh = (window: { expires_at: string } | null) => window !== null && Date.parse(window.expires_at) - Date.now() > 60_000;
+    const epoch = this.state.authority_epoch;
+    const fresh = (window: Pick<OperationWindow, "expires_at" | "namespace"> | null) =>
+      window !== null && Date.parse(window.expires_at) - Date.now() > 60_000 && (epoch === undefined || window.namespace.epoch === epoch);
     if (this.window && fresh(this.window)) return this.window;
     const saved = this.windows.load();
     if (!this.state.online) return fresh(saved) ? saved : null;
@@ -344,9 +354,21 @@ export class CloudRoomController {
     this.downloads.clear();
   }
 
-  confirmReview(operationId: string): void {
+  /**
+   * Send a reviewed draft. A legacy draft's envelope belongs to the old epoch,
+   * so its text is frozen again as a new send and the old entry is dropped.
+   */
+  async confirmReview(operationId: string): Promise<EnvelopeProblem | "no_window" | "removed" | null> {
+    const entry = this.state.outbox.find((item) => item.envelope.client_operation_id === operationId);
+    if (entry?.legacy_epoch !== undefined && entry.state === "draft" && !entry.dispatched) {
+      const { text, mentions, attachment_ids } = entry.envelope;
+      const problem = await this.send(text, mentions, attachment_ids);
+      if (!problem) this.discard(operationId);
+      return problem;
+    }
     this.dispatch({ type: "outbox", action: { type: "review_confirmed", id: operationId, now: Date.now() } });
     void this.pump();
+    return null;
   }
 
   discard(operationId: string): void {
