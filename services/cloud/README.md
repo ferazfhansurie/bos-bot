@@ -133,10 +133,13 @@ node --experimental-strip-types --test services/cloud/test/server.test.ts
 ./node_modules/.bin/tsc -p services/cloud/tsconfig.json
 ```
 
-Server tests launch and clean up their own fresh cluster. They include real
+Server tests launch and clean up their own fresh cluster, advancing the real SQL
+worker explicitly so its fault assertions cannot race the automatic timer.
+The normal fixture launcher keeps the automatic worker enabled. Tests include real
 HTTP/WS two-human exchange, direct non-owner RLS/FK checks, send/seal both orders
 x100, lock-wait expiry, invite/owner races, revocation, pinned snapshots,
-filtered/large-decimal replay, private sparse read bounds, queue faults and
+filtered/large-decimal replay, a fixed signed catch-up frontier across new writes,
+private sparse read bounds, queue faults and
 socket overflow. They are API-owned checks; check's external intent manifest
 and independent a01/a03–a08/a13–a16 results remain separate. Web/Swift reducers,
 optimized iOS compilation, real D1 and the final auth/data review are their own

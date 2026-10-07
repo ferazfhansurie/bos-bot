@@ -161,7 +161,9 @@ export class CloudService {
         account_id: i.account_id,
         ...details,
       });
-      return fn(q, i, { workspace, member, room });
+      const result = await fn(q, i, { workspace, member, room });
+      this.fresh(i);
+      return result;
     });
   }
   fresh(i: Identity) {
@@ -215,6 +217,7 @@ export class CloudService {
         w,
         i.account_id,
       ]);
+      this.fresh(i);
       return { workspace_id: w, role: "owner" };
     });
   }
@@ -883,7 +886,13 @@ export class CloudService {
       },
     );
   }
-  cursor(i: Identity, a: Authority, t: string, sequence: string) {
+  cursor(
+    i: Identity,
+    a: Authority,
+    t: string,
+    sequence: string,
+    frontier?: string,
+  ) {
     return this.sign({
       kind: "cursor",
       service: this.service,
@@ -894,6 +903,7 @@ export class CloudService {
       epoch: a.workspace.epoch,
       revision: a.room.policy_revision,
       sequence,
+      ...(frontier === undefined ? {} : { frontier }),
       expires_at: Date.now() + LIMITS.snapshotMs,
     });
   }
@@ -1062,6 +1072,14 @@ export class CloudService {
         }
         SequenceSchema.parse(c.sequence);
         if (BigInt(c.sequence) > BigInt(a.room.head)) throw 0;
+        if (c.frontier !== undefined) {
+          SequenceSchema.parse(c.frontier);
+          if (
+            BigInt(c.frontier) > BigInt(a.room.head) ||
+            BigInt(c.frontier) < BigInt(c.sequence)
+          )
+            throw 0;
+        }
         if (b.snapshot_id) {
           const s = await this.snapshotRow(q, i, a, b.snapshot_id);
           if (
@@ -1086,10 +1104,11 @@ export class CloudService {
         reason,
         snapshot: await this.makeSnapshot(q, i, a, b.thread_id),
       };
+    const frontier = c.frontier ?? a.room.head;
     const rows = (
       await q.query(
         "SELECT * FROM cloud.room_events WHERE workspace_id=$1 AND room_id=$2 AND sequence>$3 AND sequence<=$4 ORDER BY sequence LIMIT 100",
-        [w, r, c.sequence, a.room.head],
+        [w, r, c.sequence, frontier],
       )
     ).rows;
     const events: CloudEvent[] = [];
@@ -1115,17 +1134,23 @@ export class CloudService {
       }
       scanned = e.sequence;
     }
-    if (rows.length === 0) scanned = a.room.head;
+    if (rows.length === 0) scanned = frontier;
     await this.acknowledged(q, w, r, b.thread_id, i.account_id, scanned);
     return {
       type: "event_batch",
       workspace_id: w,
       room_id: r,
       events,
-      cursor: this.cursor(i, a, b.thread_id, scanned),
+      cursor: this.cursor(
+        i,
+        a,
+        b.thread_id,
+        scanned,
+        scanned === frontier ? undefined : frontier,
+      ),
       scanned_sequence: scanned,
-      frontier: a.room.head,
-      live: scanned === a.room.head,
+      frontier,
+      live: scanned === frontier,
     };
   }
   async replay(

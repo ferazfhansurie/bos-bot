@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
@@ -57,6 +58,7 @@ export async function startCloud(
   port = 0,
   host = "127.0.0.1",
   hookSecret?: string,
+  automaticWorker = true,
 ) {
   if (host !== "127.0.0.1" || !(service.issuer instanceof StubIssuer))
     throw new Error("slice one only: loopback fictional issuer");
@@ -119,10 +121,16 @@ export async function startCloud(
       }
       if (path[0] !== "v2") throw new CloudError("not_found", 404);
       if (path[1] === "test" && path[2] === "hooks") {
+        const suppliedSecret = req.headers["x-cloud-fixture-secret"];
+        const actual = Buffer.from(
+          typeof suppliedSecret === "string" ? suppliedSecret : "",
+        );
+        const expected = Buffer.from(hookSecret ?? "");
         if (
           !service.hooks ||
           !hookSecret ||
-          req.headers["x-cloud-fixture-secret"] !== hookSecret
+          actual.length !== expected.length ||
+          !timingSafeEqual(actual, expected)
         )
           throw new CloudError("forbidden");
         const hooks = service.hooks,
@@ -587,17 +595,19 @@ export async function startCloud(
     ws.on("error", () => {});
   });
   let workerBusy = false;
-  const worker = setInterval(async () => {
-    if (workerBusy) return;
-    workerBusy = true;
-    try {
-      await service.tickWorker();
-    } catch {
-      /* Durable rows survive faults; next tick retries. */
-    } finally {
-      workerBusy = false;
-    }
-  }, 200);
+  const worker = automaticWorker
+    ? setInterval(async () => {
+        if (workerBusy) return;
+        workerBusy = true;
+        try {
+          await service.tickWorker();
+        } catch {
+          /* Durable rows survive faults; next tick retries. */
+        } finally {
+          workerBusy = false;
+        }
+      }, 200)
+    : undefined;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolve);

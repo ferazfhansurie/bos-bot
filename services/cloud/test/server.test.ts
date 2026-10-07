@@ -15,7 +15,8 @@ import {
 } from "../../../shared/cloud-protocol/index.ts";
 let f: Awaited<ReturnType<typeof fixture>>;
 before(async () => {
-  f = await fixture();
+  // Fault tests advance the real SQL worker explicitly, without a competing timer.
+  f = await fixture(false);
 });
 after(async () => {
   if (f) await f.stop();
@@ -724,8 +725,8 @@ test("private coverage merges, preserves unseen gaps, rejects unacknowledged mar
   );
 });
 test("durable outbox/SQL queue commits once; rollback and after-commit faults recover; lost NOTIFY cannot lose stream", async () => {
-  const h = await humans();
   f.hooks.pausedWorker = true;
+  const h = await humans();
   const e = await envelope(h);
   await ok("POST", `/v2/workspaces/${h.w}/messages`, h.a.bearer, e);
   const before = (
@@ -786,6 +787,12 @@ test("identity outage/revoked session fail closed, ignored actor headers and bou
     401,
   );
   assert.equal((await request("GET", "/v2/test/hooks")).status, 403);
+  for (const value of ["wrong", "x".repeat(f.hook_secret.length)]) {
+    const response = await fetch(f.url + "/v2/test/hooks", {
+      headers: { "X-Cloud-Fixture-Secret": value },
+    });
+    assert.equal(response.status, 403);
+  }
   const response = await fetch(f.url + `/v2/workspaces/${h.w}/messages`, {
     method: "POST",
     headers: {
@@ -1182,5 +1189,139 @@ test("protected publication cannot outlive the validated identity assertion", as
   } finally {
     f.issuer.assertion = original;
     f.hooks.release("assertion_deadline");
+  }
+});
+
+test("catch-up frontier stays pinned while new writes arrive between replay pages", async () => {
+  const h = await humans(),
+    s = await f.service.snapshot(h.b.bearer, h.w, h.r.room_id, {
+      thread_id: h.r.thread_id,
+    }),
+    e = await envelope(h);
+  const send = () =>
+    f.service.operation(h.a.bearer, h.w, {
+      ...e,
+      client_operation_id:
+        e.client_operation_id.split(".")[0] +
+        "." +
+        randomBytes(16).toString("hex"),
+    });
+  for (let n = 0; n < 101; n++) await send();
+  const first = await f.service.replay(h.b.bearer, h.w, h.r.room_id, {
+    thread_id: h.r.thread_id,
+    cursor: s.cursor,
+    snapshot_id: s.snapshot_id,
+  });
+  assert.equal(first.live, false);
+  assert.equal(first.events?.length, 100);
+  for (let n = 0; n < 20; n++) await send();
+  const last = await f.service.replay(h.b.bearer, h.w, h.r.room_id, {
+    thread_id: h.r.thread_id,
+    cursor: first.cursor!,
+    snapshot_id: s.snapshot_id,
+  });
+  assert.equal(last.frontier, first.frontier);
+  assert.equal(last.events?.length, 1);
+  assert.equal(last.live, true);
+  const live = await f.service.replay(h.b.bearer, h.w, h.r.room_id, {
+    thread_id: h.r.thread_id,
+    cursor: last.cursor!,
+  });
+  assert.equal(live.events?.length, 20);
+  assert.equal(live.live, true);
+});
+
+test("expired assertion rolls back a protected mutation before commit", async () => {
+  const h = await humans(),
+    original = f.issuer.assertion.bind(f.issuer);
+  f.issuer.assertion = (subject) => {
+    const value = original(subject);
+    return { ...value, expires_at: value.validated_at + 50 };
+  };
+  try {
+    await assert.rejects(
+      f.service.protect(
+        h.a.bearer,
+        h.w,
+        undefined,
+        "room.create",
+        {},
+        async (q) => {
+          await q.query(
+            "INSERT INTO cloud.rooms(workspace_id,room_id,name) VALUES($1,$2,$3)",
+            [h.w, "fictional_expired_room", "expired assertion"],
+          );
+          await pause(80);
+          return { room_id: "fictional_expired_room" };
+        },
+      ),
+      (e: any) => e.code === "identity_unavailable",
+    );
+    assert.equal(
+      (
+        await sqlAdmin(
+          "SELECT 1 FROM cloud.rooms WHERE workspace_id=$1 AND room_id=$2",
+          [h.w, "fictional_expired_room"],
+        )
+      ).rowCount,
+      0,
+    );
+  } finally {
+    f.issuer.assertion = original;
+  }
+});
+
+test("normal fixture automatically completes persisted queue work", async () => {
+  const automatic = await fixture();
+  try {
+    const actor = automatic.issuer.signin("fictional_automatic_worker");
+    const workspace = await automatic.service.createWorkspace(actor.bearer, {
+      name: "fictional automatic worker",
+    });
+    const room = await automatic.service.createRoom(
+      actor.bearer,
+      workspace.workspace_id,
+      { name: "fictional room" },
+    );
+    const window = await automatic.service.window(
+      actor.bearer,
+      workspace.workspace_id,
+    );
+    const receipt = await automatic.service.operation(
+      actor.bearer,
+      workspace.workspace_id,
+      {
+        kind: "message.send",
+        namespace: window.namespace,
+        client_operation_id:
+          window.window_id + "." + randomBytes(16).toString("hex"),
+        window_token: window.window_token,
+        room_id: room.room_id,
+        thread_id: room.thread_id,
+        text: "fictional automatic queue work",
+        mentions: [],
+        attachment_ids: [],
+        reply_to_message_id: null,
+        expected_policy_revision: room.policy_revision,
+      },
+    );
+    assert.equal(receipt.status, "accepted");
+    let complete = false;
+    for (let n = 0; n < 100; n++) {
+      const state = await automatic.service.db.tx(
+        "worker",
+        workspace.workspace_id,
+        async (q) =>
+          (await q.query("SELECT completed_at FROM cloud.work_queue")).rows,
+      );
+      if (state.length > 0 && state.every((row) => row.completed_at !== null)) {
+        complete = true;
+        break;
+      }
+      await pause(50);
+    }
+    assert.equal(complete, true);
+  } finally {
+    await automatic.stop();
   }
 });
