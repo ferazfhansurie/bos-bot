@@ -65,3 +65,53 @@ on account return or recovery_unknown.
 
 Run wire checks: `node --experimental-strip-types --test shared/cloud-protocol/corpus.test.ts`.
 UI and Swift independently run every reducer case; these wire checks are not reducer proof.
+
+## slices 3/4 frozen additions
+
+`RUN_STATES`, `InvocationSchema`, `InvocationWireEventSchema`, `ApprovalCardSchema` and
+`AttachmentSchema` in index.ts are authoritative. Fence/control generations remain decimal
+strings. Snapshot `active_runs` and `cards` carry those schemas. Room event kinds include
+`invocation.offered`, `invocation.claimed`, `stream.delta`, `final.commit`, `stop.requested`,
+`stop.observed`, `run.updated`, `approval.updated`, `attachment.updated`. Wire event binding
+is `invocation_id`, integer `attempt`, decimal `fence_gen`; provisional deltas are keyed by
+`delta_id`. Ordinary message history never includes provisional text.
+
+All additions require current issuer bearer/cookie and workspace/room authority. Host
+routes additionally require `X-Cloud-Host-Credential` from registration; credentials bind
+account, host, workspace, expiry and server service, and never transfer model secrets.
+
+- POST `/v2/workspaces/{w}/bots` `BotRegistrationSchema` -> `{bot_id}` (admin; registered explicit room grants/model pin)
+- POST `/v2/workspaces/{w}/hosts` `HostRegistrationSchema` -> `HostCredentialSchema` (admin; 7d scoped credential)
+- GET `/v2/workspaces/{w}/hosts/{h}/invocations` -> `{invocations:InvocationSchema[]}` (offered current host grants; <=100)
+- POST `/v2/workspaces/{w}/hosts/{h}/claim` `HostClaimSchema` -> `InvocationSchema`
+- POST `/v2/workspaces/{w}/hosts/{h}/heartbeat` `HostHeartbeatSchema` -> `InvocationSchema`
+- POST `/v2/workspaces/{w}/hosts/{h}/events` `HostAppendSchema` -> `InvocationSchema` (or card for approval.create)
+- POST `/v2/workspaces/{w}/hosts/{h}/context` `RunBindingSchema` -> `ContextSchema`
+- DELETE `/v2/workspaces/{w}/hosts/{h}` -> `{revoked:true}` (admin; holds pending work)
+- POST `/v2/workspaces/{w}/rooms/{r}/invocations/{i}/stop` `RunControlSchema` -> `InvocationSchema`
+- POST `/v2/workspaces/{w}/rooms/{r}/invocations/{i}/resume` `RunControlSchema` -> `InvocationSchema`
+- GET `/v2/workspaces/{w}/rooms/{r}/approvals/{a}` -> `ApprovalCardSchema`
+- POST `/v2/workspaces/{w}/rooms/{r}/approvals/{a}/decision` `ApprovalDecisionSchema` -> `ApprovalCardSchema`
+- POST `/v2/workspaces/{w}/attachments` `AttachmentPrepareSchema` -> `AttachmentUploadSchema`
+- PUT returned `upload_url`, raw bytes + current bearer -> `AttachmentSchema` (quarantined uploading)
+- POST `/v2/workspaces/{w}/attachments/{a}/complete` `{}` -> `AttachmentSchema` (scan/checksum/size verified before ready)
+- GET `/v2/workspaces/{w}/attachments/{a}` -> `AttachmentSchema` (owner or attached in authorized room)
+- GET `/v2/workspaces/{w}/attachments/{a}/download` -> raw bytes (same grants rechecked on every range request)
+
+Host lease: 30s / heartbeat 10s, server clock. Queued expiry: 24h. Lease expiry alone is
+never stopped evidence; only a replay_safe checkpoint may be reclaimed. No external effect
+adapter is authorized. Host ingress must pass native typed `InvocationSchema` and pinned
+model to its provider, returning same-room final exactly once; actual provider parity is
+an independent host acceptance gate. `stop.requested` is receipt; `stop.observed` is host
+attempt/control evidence. Opposite approval decisions serialize on card/run/version/digest;
+actor alone can decide, members can view. Approval is a human gate, never a tool permit.
+Controls and decisions require explicit online action and must not enter offline send replay.
+
+Attachment namespace is `workspace_id|room_id|attachment_id`, constructed server-side.
+Local fs only; 10 MiB/object, 32/message, allowed PNG/JPEG/PDF/plain text, no multipart,
+5min upload URL, 24h orphan expiry. Filename is display metadata, never a filesystem path.
+Bytes remain quarantined through verifying; unsafe scanner verdict rejects, scanner outage
+fails closed. Registered attachment IDs and ready/current-owner checks are part of atomic
+send validation. Private/guest downloads use authenticated range proxy, no permanent URL.
+PushHintSchema is a generic `New activity` hint, deduped by committed event + recipient;
+no APNS transport runs in these slices.
