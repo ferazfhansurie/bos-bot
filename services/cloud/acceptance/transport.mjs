@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-const privateKeys = /^(authorization|cookie|set-cookie|token|access_token|refresh_token|bearer|session|session_token|secret|invite_token)$/i;
+const privateKeys = /^(authorization|cookie|set-cookie|token|window_token|access_token|refresh_token|bearer|session|session_token|secret|invite_token)$/i;
 export function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, data]) => [key, privateKeys.test(key) ? '[redacted]' : redact(data)]));
@@ -21,12 +21,24 @@ export class Transport {
     const url = localURL(new URL(path, this.base));
     assert.equal(url.origin, this.base.origin, 'request must stay on explicit fixture origin');
     const started = performance.now();
-    const response = await fetch(url, {
+    this.record({ type: 'http_request', method, path: url.pathname,
+      query: redact(Object.fromEntries(url.searchParams)), body: redact(body ?? null) });
+    let response;
+    try { response = await fetch(url, {
       method, redirect: 'error', signal: AbortSignal.timeout(10_000),
       headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    const raw = await response.text();
+    }); } catch (error) {
+      this.record({ type: 'http_transport_unknown', method, path: url.pathname,
+        duration_ms: performance.now() - started, error: error.name });
+      throw error;
+    }
+    let raw;
+    try { raw = await response.text(); } catch (error) {
+      this.record({ type: 'http_transport_unknown', method, path: url.pathname,
+        duration_ms: performance.now() - started, error: error.name });
+      throw error;
+    }
     let data;
     try { data = JSON.parse(raw); } catch { data = { non_json: true, bytes: Buffer.byteLength(raw) }; }
     this.record({ type: 'http', method, path: url.pathname, status: response.status,

@@ -5,8 +5,11 @@ installation, restart, provisioning or production mutation. This directory must
 not be imported by the cloud service. No server digest/reducer/DB implementation
 may compute the expected answers.
 
-Current state: **foundation committed; server scenarios unrun**. Protocol binding,
-HTTP driver and real admission barriers depend on api's first interface commit.
+Current state: **protocol bound; server scenarios unrun**. Source protocol commit:
+`ffd3a022d56485a11363a49c2e070d6cb075bbb8` (local cherry-pick `8ab9ea4c`).
+The HTTP driver uses contract schemas but independently computes intent digests;
+it never imports the service digest, reducer or DB code. Actual fixture launch,
+HTTP/realtime integration and real admission barriers remain api dependencies.
 An oracle/scheduler self-test is not server, client or recipient acceptance.
 
 The oracle freezes exact intended envelopes and expected message fields to an
@@ -22,6 +25,43 @@ Run foundation checks (Node 24, no dependencies):
 ```sh
 node --test services/cloud/acceptance/oracle.test.mjs
 ```
+
+Run the binding and wire checks (Node 24 plus the repository's existing `zod`):
+
+```sh
+node --experimental-strip-types --test services/cloud/acceptance/oracle.test.mjs services/cloud/acceptance/protocol.test.mjs shared/cloud-protocol/corpus.test.ts
+```
+
+`protocol.mjs` exposes `operationEnvelope`, `frozenOperation`, `CloudDriver` and
+`recipientMessages`. Create every planned envelope and expected message, then
+`freezeManifest` **before** dispatch. Construct each account driver with its own
+credential and the external `Oracle`; call `operation(id)` explicitly. Lookup and
+seal require `mode: 'lookup'` / `'seal'`. Lost responses do not establish a receipt
+and there is no implicit retry. HTTP errors are recorded without inventing a
+terminal rejected outcome. Receipts bind the independently frozen digest, key,
+room and thread. Recipient messages must match canonical receipt ID and exact
+decimal sequence before the oracle checks text, actor and scope.
+
+The driver captures redacted request bodies before transmission and observations
+afterward; transport failures retain an unknown trace. Bearer, invite and signed
+window credentials are redacted. Private manifest files preserve the original
+signed envelope, remain outside service storage, and must not be pasted in chat.
+
+These 15 acceptance self-checks plus 27 wire checks are **not** a01–a16 passes.
+The 19 wire fixture cases validate schema shapes only; actual UI/Swift reducer
+behavior belongs to those owners. No PG migration, RLS role, server race,
+realtime recipient, installed app or physical device is verified by this run.
+
+## Remaining interface gates
+
+- api's committed candidate and exact throwaway-PG start/migrate/stop recipe;
+  fixture identity, non-owner app role and actual runtime must be recorded.
+- api's protected-admission barrier and worker/NOTIFY fault-control APIs, with
+  actual lock boundaries; prior hook request remains pending.
+- the published routes allow member removal but contain no role-change endpoint.
+  Concurrent last-owner **demotion** cannot be exercised through this contract;
+  api must identify its real fixture surface or record an explicit unimplemented
+  a16 gate. Do not substitute removal and call demotion covered.
 
 ## Required server coverage
 

@@ -76,7 +76,7 @@ test('fixture transport rejects nonloopback, credentials, redirects and cross-po
   t.after(() => new Promise(resolve => server.close(resolve)));
   const transport = new Transport(`http://127.0.0.1:${server.address().port}`, x => records.push(x));
   assert.equal((await transport.request('/send', { discardResponse: true })).status, 'transport_unknown');
-  assert.equal(records[0].response.token, '[redacted]');
+  assert.equal(records.find(x => x.type === 'http').response.token, '[redacted]');
   await assert.rejects(transport.request('/redirect'));
   await assert.rejects(transport.request('http://127.0.0.1:1/route'), /fixture origin/);
   assert.deepEqual(redact({ nested: { session_token: 'secret' } }), { nested: { session_token: '[redacted]' } });
