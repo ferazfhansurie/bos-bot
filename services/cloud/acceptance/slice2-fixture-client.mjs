@@ -21,7 +21,7 @@ export async function connectFixture(serverArg, stateArg, evidenceArg) {
   assert.ok(!evidence.startsWith(server + sep), 'oracle must be outside SUT storage');
   mkdirSync(evidence, { recursive: false, mode: 0o700 });
   const git = args => execFileSync('git', args, { cwd: server, encoding: 'utf8' }).trim();
-  const source = '3aa1f8a1f66ddd08a13cc4cd4d71bdb0b7c573e8';
+  const source = 'fefeafa7981d9d1c9fad2aa03688a2d5e704affe';
   const protocol = source;
   assert.equal(git(['diff', source, '--', 'services/cloud', ':!services/cloud/acceptance']), '', 'candidate drift');
   assert.equal(git(['status', '--porcelain', '--', 'services/cloud', ':!services/cloud/acceptance']), '', 'dirty SUT');
