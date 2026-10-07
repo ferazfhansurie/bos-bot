@@ -32,6 +32,8 @@ export class CloudRoomController {
   private pumping = false;
   private pumpAgain = false;
   private stopped = false;
+  // Bumped on every connect and stop so a closed socket's late callbacks are ignored.
+  private generation = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
@@ -71,6 +73,8 @@ export class CloudRoomController {
   };
 
   start(): void {
+    // StrictMode runs start, stop, start on one controller.
+    this.stopped = false;
     this.dispatch({ type: "outbox", action: { type: "restored", now: Date.now() } });
     this.dispatch({ type: "outbox", action: { type: "tick", now: Date.now() } });
     this.connect();
@@ -79,6 +83,7 @@ export class CloudRoomController {
 
   stop(): void {
     this.stopped = true;
+    this.generation++;
     this.connection?.close();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -174,16 +179,20 @@ export class CloudRoomController {
 
   private connect(): void {
     if (this.stopped) return;
+    const generation = ++this.generation;
+    const current = () => generation === this.generation;
     this.connection = connectRealtime(
       this.session,
       {
         onOpen: () => {
+          if (!current()) return;
           this.reconnectAttempts = 0;
           this.resubscribe();
           // A new connection is a good moment to recheck anything unresolved.
           void this.pump();
         },
         onFrame: (frame) => {
+          if (!current()) return;
           if (frame.type === "reset_required" && frame.snapshot) this.threadStartLoaded = frame.snapshot.messages.length < LIMITS.snapshotMessages;
           this.dispatch({ type: "frame", frame });
           // A server reset or a batch that failed validation both recover from a snapshot.
@@ -191,6 +200,7 @@ export class CloudRoomController {
           else if (frame.type === "reset_required") this.resubscribe();
         },
         onClose: () => {
+          if (!current()) return;
           this.dispatch({ type: "disconnected" });
           if (this.stopped) return;
           this.reconnectTimer = setTimeout(() => this.connect(), backoffMs(this.reconnectAttempts++));

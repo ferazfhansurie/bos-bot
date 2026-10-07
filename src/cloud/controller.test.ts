@@ -21,12 +21,14 @@ const window = {
 
 class FakeSocket {
   static last: FakeSocket;
+  static created = 0;
   readonly OPEN = 1;
   readyState = 0;
   sent: unknown[] = [];
   private listeners: Record<string, Array<(event: unknown) => void>> = {};
   constructor(readonly url: string) {
     FakeSocket.last = this;
+    FakeSocket.created++;
   }
   addEventListener(type: string, listener: (event: unknown) => void) {
     (this.listeners[type] ??= []).push(listener);
@@ -40,6 +42,9 @@ class FakeSocket {
   open() {
     this.readyState = 1;
     for (const listener of this.listeners.open ?? []) listener({});
+  }
+  closed() {
+    for (const listener of this.listeners.close ?? []) listener({});
   }
   receive(frame: unknown) {
     for (const listener of this.listeners.message ?? []) listener({ data: JSON.stringify(frame) });
@@ -105,6 +110,25 @@ describe("cloud room controller", () => {
     expect(controller.getState()).toMatchObject({ reset_required: false, cursor: snapshot.cursor, head: snapshot.watermark });
     expect(socket.sent.at(-1)).toMatchObject({ type: "subscribe", cursor: snapshot.cursor, snapshot_id: snapshot.snapshot_id });
     controller.stop();
+  });
+
+  it("restarts after StrictMode's start, stop, start and ignores the old socket closing late", async () => {
+    vi.useFakeTimers();
+    const controller = new CloudRoomController(session, fakeApi({}), room, null, FakeSocket as unknown as typeof WebSocket);
+    controller.start();
+    const first = FakeSocket.last;
+    controller.stop();
+    controller.start();
+    const second = FakeSocket.last;
+    expect(second).not.toBe(first);
+    const created = FakeSocket.created;
+    first.closed();
+    vi.runOnlyPendingTimers();
+    expect(FakeSocket.created).toBe(created);
+    second.open();
+    expect(second.sent[1]).toMatchObject({ type: "subscribe", room_id: "r1" });
+    controller.stop();
+    vi.useRealTimers();
   });
 
   it("keeps a guest outbox out of persistent storage", async () => {

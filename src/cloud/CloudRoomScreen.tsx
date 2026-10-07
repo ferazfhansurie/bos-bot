@@ -155,7 +155,11 @@ function RoomView({ session, api, room }: { session: CloudSession; api: CloudApi
   const [problem, setProblem] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
-  useEffect(() => bottom.current?.scrollIntoView({ block: "end" }), [items.length]);
+  // Braces matter: scrollIntoView returns a promise in current Chrome, and an
+  // effect may only return a cleanup function.
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [items.length]);
 
   // Only messages actually on screen while the window is in the foreground count as read.
   useEffect(() => {
