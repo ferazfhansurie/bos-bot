@@ -1771,6 +1771,30 @@ final class Session: ObservableObject {
         }
     }
 
+    // MARK: Voice calls
+
+    /// Mint a realtime voice call for a bot. Throws the server's own message
+    /// (409 means no xAI key on the computer).
+    func startVoiceCall(botId: String, language: String?) async throws -> VoiceCallStart {
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        return try await client.voiceCall(botId: botId, language: language)
+    }
+
+    /// A `send_task` from a voice call, posted into the bot's thread like a
+    /// typed message. Returns nil on success or the failure text; it never
+    /// touches `actionError`, because the call reports failures out loud.
+    func sendFromVoiceCall(_ text: String, botId: String, threadId: String) async -> String? {
+        guard let client else { return "This computer is offline." }
+        let connectionID = client.connection.id
+        do {
+            let receipt = try await client.send(text: text, toBot: botId, threadId: threadId)
+            if self.client?.connection.id == connectionID { rememberQueuedSend(from: receipt, text: text) }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     /// The harness's answer to a send, when it held the message instead of
     /// delivering it. This is wire state, not optimism: the row exists
     /// because the computer said it does, identified by its queueId.

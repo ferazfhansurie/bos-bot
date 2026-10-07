@@ -1607,6 +1607,15 @@ public struct CompanionClient: Sendable {
         ).bots
     }
 
+    /// Mint a realtime voice call for a bot: a short-lived xAI secret plus
+    /// the call plan. Called again for every reconnect. 409 means the
+    /// computer has no xAI key; its message says where to add one.
+    public func voiceCall(botId: String, language: String?) async throws -> VoiceCallStart {
+        var body: [String: Any] = ["botId": botId]
+        if let language, !language.isEmpty { body["language"] = language }
+        return try await send(try makeRequest("POST", "/api/voice/call", body: body), as: VoiceCallStart.self)
+    }
+
     @discardableResult
     public func send(text: String, toBot botId: String, threadId: String? = nil) async throws -> SendReceipt {
         var body = ["text": text]

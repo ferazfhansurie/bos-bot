@@ -1628,3 +1628,16 @@ button:disabled.bg-danger {
   .mention-editor textarea { transition: none; }
   .ui-button:active, .ui-icon-button:active, .press:active { transform: none; }
 }
+
+/* Realtime voice call: the pending waveform's indeterminate segment (34%
+   wide) sweeps the track while the call connects. */
+@keyframes voice-call-indeterminate {
+  from { transform: translateX(0%); }
+  to { transform: translateX(194%); }
+}
+.voice-call-indeterminate {
+  animation: voice-call-indeterminate 1.4s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-call-indeterminate { animation: none; transform: translateX(97%); }
+}

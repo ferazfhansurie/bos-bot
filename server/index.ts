@@ -347,6 +347,7 @@ import {
 } from "./store.ts";
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
+import { mintVoiceCallCredential, NoVoiceCallKey, VOICE_CALL_LANGUAGES, VOICE_CALL_SPEEDS, VOICE_CALL_VOICES, voiceCallPlan } from "./voice-call.ts";
 import { buildRecoveryText, buildTurnContext, engineIsFresh, peerMessageText } from "./turn-context.ts";
 import { Handoffs, handedStateUsable, recordHanded, renderUnseen, sessionStart, unseenMessages, withUnseenMessages, type ContextMessage } from "./delta-context.ts";
 import { extractTurnImages, rejectedTurnImages } from "./turn-images.ts";
@@ -22142,6 +22143,30 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, { voices: await tts.listVoices(cfg) });
       } catch (e) {
         return json(res, 200, { voices: [], error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    // Realtime voice call: a fresh short-lived xAI secret plus the call plan.
+    // Clients call this again for every (re)dial; the key itself never leaves.
+    if (method === "POST" && path === "/api/voice/call") {
+      const body = await readBody(req);
+      const bot = typeof body.botId === "string" ? store.bot(body.botId) : undefined;
+      if (typeof body.botId === "string" && !bot) return json(res, 404, { error: "no such bot" });
+      try {
+        const credential = await mintVoiceCallCredential(cfg);
+        const plan = voiceCallPlan({
+          agentName: bot?.name,
+          userName: cfg.profile?.name,
+          description: bot?.description,
+          language: typeof body.language === "string" ? body.language : undefined,
+        });
+        return json(res, 200, {
+          credential,
+          plan,
+          options: { voices: VOICE_CALL_VOICES, speeds: VOICE_CALL_SPEEDS, languages: VOICE_CALL_LANGUAGES },
+        });
+      } catch (e) {
+        if (e instanceof NoVoiceCallKey) return json(res, 409, { error: e.message });
+        return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
       }
     }
     if (method === "POST" && path === "/api/tts/speak") {

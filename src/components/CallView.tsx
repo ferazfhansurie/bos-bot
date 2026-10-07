@@ -29,6 +29,7 @@ import { usePushToTalk } from "@/lib/push-to-talk";
 import { BotAvatar } from "./Avatar";
 import { isRoutineApproval, isSkillApproval, pendingApprovals, spokenApprovalPrompt } from "./PendingApproval";
 import { cn } from "@/lib/cn";
+import { useRealtimeCall } from "@/lib/voice-call/session";
 import { track } from "@/lib/analytics";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { callCapabilityHelp } from "@/lib/call-capability";
@@ -212,7 +213,9 @@ export function CallTargetButton({
 
 export function CallOverlay({ bot }: { bot: Bot }) {
   const active = useOnCall() === bot.id;
-  if (!active) return null;
+  // A realtime voice call owns the line under the same id; it draws its own UI.
+  const realtime = useRealtimeCall();
+  if (!active || realtime?.botId === bot.id) return null;
   return <Call bot={bot} />;
 }
 

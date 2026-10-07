@@ -74,6 +74,14 @@ struct CompanionApp: App {
                 // resolve once; the appearance screen commits a new one on
                 // the way out, and re-identifying here repaints everything.
                 .id("\(language)|\(themeApplied)")
+                // A voice call outlives the screen it started on: the
+                // full-screen call and its pill float above the whole app,
+                // outside the re-identified tree so a theme change keeps it.
+                .overlay {
+                    VoiceCallOverlay()
+                        .session(session)
+                        .environment(\.locale, AppLanguage.resolved(language).locale ?? .autoupdatingCurrent)
+                }
                 .overlay {
                     if showingLaunchSplash {
                         LaunchSplashView { showingLaunchSplash = false }

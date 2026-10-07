@@ -9,6 +9,7 @@ import { ThreadRefsProvider } from "@/components/ThreadRefs";
 import { emailGateDone, initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
+import { VoiceCallHost } from "@/components/voice-call/VoiceCallHost";
 import { GroupView } from "@/components/GroupView";
 import { SplitWorkspace } from "@/components/SplitView";
 import { SplitViewProvider } from "@/components/SplitViewContext";
@@ -385,6 +386,8 @@ function Application() {
             <Shell />
           </SplitViewProvider>
         </ThreadRefsProvider>
+        {/* The realtime voice call outlives any one chat view. */}
+        <VoiceCallHost />
         <WelcomeGate />
         <GuidedTour />
         <FirstConversationTour />
