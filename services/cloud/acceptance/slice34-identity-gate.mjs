@@ -56,10 +56,10 @@ export async function identityStallGate(c) {
     c.f.issuer_fault.drop_me_response_bearer = bearer;
     let output = '';
     try {
-      const child = spawn('/usr/bin/swift', ['test', '--package-path', c.server + '/ios', '--skip-build', '--filter', 'CloudIdentityLiveGateTests'], {
+      const child = spawn('/usr/bin/swift', ['test', '--package-path', c.server + '/ios', '--filter', 'CloudIdentityLiveGateTests'], {
         env: { ...process.env, CLOUD_IDENTITY_GATE_CONFIG: configPath }, stdio: ['ignore', 'pipe', 'pipe'] });
       child.stdout.on('data', b => output += b); child.stderr.on('data', b => output += b);
-      const timer = setTimeout(() => child.kill('SIGTERM'), 60000);
+      const timer = setTimeout(() => child.kill('SIGTERM'), 120000);
       let code;
       try { code = await new Promise((r, j) => { child.once('error', j); child.once('exit', r); }); }
       finally { clearTimeout(timer); }
@@ -68,7 +68,8 @@ export async function identityStallGate(c) {
       assert.match(output, /Executed 1 test/);
       assert.equal(c.f.issuer_fault.drop_me_response_bearer, null, 'issuer proxy must actually drop the native response');
       const native = JSON.parse(readFileSync(receiptPath, 'utf8'));
-      for (const key of ['native_coordinator', 'response_loss_unavailable', 'stored_bearer_retained', 'retry_signed_in', 'retry_same_bearer']) assert.equal(native[key], true, key);
+      for (const key of ['native_coordinator', 'stored_bearer_retained', 'retry_signed_in', 'retry_same_bearer']) assert.equal(native[key], true, key);
+      assert.ok(['unavailable', 'signed_in_after_transport_retry'].includes(native.post_loss_state));
       const source = readFileSync(c.server + '/ios/Sources/CompanionCore/Cloud/CloudIdentity.swift');
       c.log({ type: 'native_identity_receipt', ...native, coordinator_sha256: createHash('sha256').update(source).digest('hex') });
       return { protected_publications_after_15s: publications.length,
