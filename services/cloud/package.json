@@ -6,7 +6,7 @@
     "start": "node --experimental-strip-types app.ts",
     "fixture": "node --experimental-strip-types fixture.ts",
     "local": "node --experimental-strip-types local.ts",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts test/*.test.mjs",
     "migrate": "node --experimental-strip-types migrate.ts"
   },
   "dependencies": {

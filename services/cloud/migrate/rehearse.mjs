@@ -5,6 +5,9 @@ import {
   stat,
   rm,
   mkdir,
+  readdir,
+  lstat,
+  cp,
 } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +56,7 @@ try {
       "multiplayer-actors.json",
       "multiplayer-links.json",
       "shared-rooms.json",
+      "shared-rooms.json.events",
       "workspace-membership.json",
       "trusted-peers.json",
       "work-runtime.json",
@@ -61,6 +65,40 @@ try {
         if (e.code !== "ENOENT") throw e;
       });
     }
+    // Include the complete legacy transcript/attachment inventory, not just
+    // SQLite's already-touched threads. Abort instead of silently truncating
+    // a rehearsal that cannot fit the frozen local disk budget.
+    let budget = (await stat(join(source, "messages.db"))).size;
+    async function extra(rel) {
+      const st = await lstat(join(live, rel));
+      if (st.isDirectory()) {
+        await mkdir(join(source, rel), { recursive: true, mode: 0o700 });
+        for (const name of (await readdir(join(live, rel))).sort())
+          await extra(join(rel, name));
+        return;
+      }
+      budget += st.size;
+      if (budget >= 1024 ** 3)
+        throw new Error("complete rehearsal copy exceeds 1Gi budget");
+      if (st.isSymbolicLink())
+        await cp(join(live, rel), join(source, rel), {
+          dereference: false,
+          verbatimSymlinks: true,
+        });
+      else if (st.isFile()) await copyFile(join(live, rel), join(source, rel));
+      else throw new Error("non-regular source cannot be copied");
+    }
+    for (const name of (await readdir(live))
+      .filter((n) => /^messages-.+\.json$/.test(n))
+      .sort())
+      await extra(name);
+    if (
+      await lstat(join(live, "attachments")).catch((e) => {
+        if (e.code === "ENOENT") return null;
+        throw e;
+      })
+    )
+      await extra("attachments");
   } else {
     const db = new DatabaseSync(join(source, "messages.db"));
     db.exec(
@@ -85,7 +123,10 @@ try {
       JSON.stringify([{ id: "room", name: "fictional" }]),
     );
   }
-  const copyBytes = (await stat(join(source, "messages.db"))).size;
+  const measuredCopy = spawnSync("/usr/bin/du", ["-sk", source], {
+    encoding: "utf8",
+  });
+  const copyBytes = Number(measuredCopy.stdout.trim().split(/\s+/)[0]) * 1024;
   evidence.copy_bytes = copyBytes;
   assert.ok(copyBytes < 1024 * 1024 * 1024, "copy below 1Gi");
   const s = createServer();
