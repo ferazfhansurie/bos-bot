@@ -5,11 +5,12 @@ installation, restart, provisioning or production mutation. This directory must
 not be imported by the cloud service. No server digest/reducer/DB implementation
 may compute the expected answers.
 
-Current state: **protocol bound; server scenarios unrun**. Source protocol commit:
+Current state: **partial live acceptance; full matrix pending**. Source protocol commit:
 `ffd3a022d56485a11363a49c2e070d6cb075bbb8` (local cherry-pick `8ab9ea4c`).
 The HTTP driver uses contract schemas but independently computes intent digests;
-it never imports the service digest, reducer or DB code. Actual fixture launch,
-HTTP/realtime integration and real admission barriers remain api dependencies.
+it never imports the service digest, reducer or DB code. The fixture and real
+admission barriers are bound to api's `7883a6f34`; same-key changed-envelope
+scheduling still requires a digest selector in the send/seal hook details.
 An oracle/scheduler self-test is not server, client or recipient acceptance.
 
 The oracle freezes exact intended envelopes and expected message fields to an
@@ -54,10 +55,10 @@ realtime recipient, installed app or physical device is verified by this run.
 
 ## Remaining interface gates
 
-- api's committed candidate and exact throwaway-PG start/migrate/stop recipe;
-  fixture identity, non-owner app role and actual runtime must be recorded.
-- api's protected-admission barrier and worker/NOTIFY fault-control APIs, with
-  actual lock boundaries; prior hook request remains pending.
+- full a01/a03–a08/a13–a16 independent matrix; do not infer it from API-owned tests.
+- same-key changed-envelope races: match `digest` in send/seal admission hooks.
+  The live probe on `7883a6f34` armed that selector but the send escaped with the
+  gate unentered, because the operation hook supplies only the key.
 - a16 uses the existing member-removal route: two owners remove each other,
   with both admission orders repeated 100 times. Bos resolved this scope in the
   room on 2026-10-07; no role-change endpoint is required for slice 1.
@@ -101,8 +102,17 @@ node services/cloud/acceptance/run-last-owner.mjs \
 The runner rejects uncommitted server files and nonfixture state paths, records
 the candidate and actual PG app role, and keeps credentials out of the journal.
 The fixture launcher remains owned by its caller and must be stopped separately
-using its documented exact PID/signal. This scenario is **unrun** until a real
-committed candidate produces the 200-race journal.
+using its documented exact PID/signal. This scenario passed 200/200 on both
+`6c70f022` and `7883a6f34`; see the dated verification reports. This result covers
+owner removal only, not all of a16.
+
+`run-slice1.mjs` is an external HTTP/WS/PG runner with private manifests and
+redacted append-only journals. Node 24 requires `--experimental-strip-types`.
+Pass a new evidence directory outside the server checkout, and optional case
+names. It pins the exact API source and protocol trees before any mutation.
+The current committed report lists which selected cases actually ran; other
+implemented schedules remain unrun, and a13/a15/invite races still need binding.
+Do not use a selected smoke run as the full slice completion gate.
 
 `bothOrders` requires a test-only pause **before actual protected admission**,
 waits for the held request to reach it, admits the other request, then releases

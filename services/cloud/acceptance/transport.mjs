@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-const privateKeys = /^(authorization|cookie|set-cookie|token|window_token|access_token|refresh_token|bearer|session|session_token|secret|invite_token)$/i;
+const privateKeys = /^(authorization|cookie|set-cookie|token|window_token|access_token|refresh_token|bearer|revoke_bearer|session|session_token|secret|hook_secret|invite_token)$/i;
 export function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, data]) => [key, privateKeys.test(key) ? '[redacted]' : redact(data)]));
