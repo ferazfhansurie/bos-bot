@@ -19,11 +19,14 @@ export async function identityStallGate(c) {
     c.f.issuer_fault.stall_ms = 15000;
     c.log({ type: 'identity_stall_start', sockets: sockets.length, stall_ms: 15000 });
     const denied = c.request(root(h) + '/messages', h.b, 'POST', stalledEnvelope);
-    const committed = await c.send(h, h.a, envelope);
-    assert.equal(committed.status, 'accepted');
     const response = await denied;
     assert.equal(response.status, 503); assert.equal(response.data.error, 'identity_unavailable');
     await c.until(() => sockets.every(s => s.code !== null), 'all 20 sockets fail closed', 10000);
+    // The bounded DB pool may be occupied until the 20 failing validation
+    // requests release it. Commit with the unaffected owner after that drain,
+    // while the subscriber's issuer is still stalled for the full 15 seconds.
+    const committed = await c.send(h, h.a, envelope);
+    assert.equal(committed.status, 'accepted');
     await c.pause(Math.max(0, started + 16000 - Date.now()));
     const frames = sockets.flatMap((s, index) => s.frames.slice(offsets[index]));
     const publications = sockets.flatMap(s => s.timed_frames).filter(({frame, received_at}) =>
