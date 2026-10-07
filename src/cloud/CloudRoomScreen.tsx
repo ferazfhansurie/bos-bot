@@ -4,13 +4,13 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { cloudApi, currentSession, type CloudApi, type CloudSession, type SyncWorkspace } from "./api";
 import { authReducer, identityProblem, type IdentityProblem } from "./auth-state";
-import type { CardDecision, CloudAttachment, CloudCard } from "../../shared/cloud-run-draft";
-import { CloudRoomController, type CloudRoomRef, type DecisionOutcome, type PendingUpload } from "./controller";
+import type { ApprovalCard as CloudCard } from "../../shared/cloud-protocol/index";
+import { CloudRoomController, type CardDecision, type CloudRoomRef, type DecisionOutcome, type DownloadedAttachment, type PendingUpload } from "./controller";
 import { issuer } from "./issuer";
 import { outboxLabel } from "./outbox";
 import { isRead } from "./read-coverage";
 import { timeline } from "./room-reducer";
-import { decidable, visibleRuns, type RunView } from "./runs";
+import { decidable, roomBots, visibleRuns, type RunView } from "./runs";
 
 const field = "rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900";
 const button = "rounded border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800";
@@ -253,8 +253,7 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
   const uploads = useSyncExternalStore(controller.subscribe, controller.getUploads);
   const items = timeline(state);
   const runs = visibleRuns(state.runs, Date.now());
-  const bots = state.runs.bots;
-  const botName = (id: string) => bots.find((bot) => bot.bot_id === id)?.name;
+  const bots = useMemo(() => roomBots(state.runs, state.messages), [state.runs, state.messages]);
   const [draft, setDraft] = useState("");
   /** Bots picked from the strip; spans are found in the final text at send time. */
   const [picked, setPicked] = useState<string[]>([]);
@@ -298,14 +297,14 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
             <button
               key={bot.bot_id}
               className={button}
-              title={bot.host_online ? "mention" : "its host is offline; a mention waits up to 24h"}
+              title={bot.host_online === false ? "its host is offline; a mention waits up to 24h" : "mention"}
               onClick={() => {
                 setDraft((text) => `${text}${text && !text.endsWith(" ") ? " " : ""}@${bot.name} `);
                 setPicked((ids) => (ids.includes(bot.bot_id) ? ids : [...ids, bot.bot_id]));
               }}
             >
               <span className={bot.host_online ? "text-green-600" : "text-neutral-400"}>●</span> @{bot.name}
-              {!bot.host_online && <span className="text-xs text-neutral-400"> host offline</span>}
+              {bot.host_online === false && <span className="text-xs text-neutral-400"> host offline</span>}
             </button>
           ))}
       </header>
@@ -313,10 +312,10 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
         {items.map((item) =>
           item.kind === "message" ? (
             <div key={item.message.message_id} className="whitespace-pre-wrap py-1">
-              <span className="text-neutral-500">{item.message.actor_id === session.account_id ? "you" : (botName(item.message.actor_id) ?? item.message.actor_id)}</span>{" "}
+              <span className="text-neutral-500">{item.message.bot_id ? `@${item.message.bot_id}` : item.message.actor_id === session.account_id ? "you" : item.message.actor_id}</span>{" "}
               {item.message.deleted ? <em className="text-neutral-400">deleted</em> : item.message.text}
               {!item.message.deleted &&
-                item.message.attachments?.map((attachment) => <AttachmentView key={attachment.attachment_id} controller={controller} attachment={attachment} />)}
+                item.message.attachment_ids?.map((id) => <AttachmentView key={id} controller={controller} attachmentId={id} />)}
             </div>
           ) : (
             <div key={item.entry.envelope.client_operation_id} className="flex items-center gap-2 py-1 opacity-70">
@@ -332,7 +331,7 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
           ),
         )}
         {!state.removed &&
-          runs.map((view) => <RunRow key={view.run.invocation_id} view={view} name={botName(view.run.bot_id) ?? view.run.bot_id} controller={controller} />)}
+          runs.map((view) => <RunRow key={view.run.invocation_id} view={view} name={`@${view.run.bot_id}`} controller={controller} accountId={session.account_id} />)}
         <div ref={bottom} />
       </div>
       {uploads.length > 0 && !state.removed && (
@@ -412,21 +411,18 @@ export function mentionSpans(text: string, picked: readonly string[], bots: Read
   return spans.sort((a, b) => a.start - b.start);
 }
 
-function RunRow({ view, name, controller }: { view: RunView; name: string; controller: CloudRoomController }) {
+function RunRow({ view, name, controller, accountId }: { view: RunView; name: string; controller: CloudRoomController; accountId: string }) {
   const { stream, card, label } = view;
   return (
     <div className="flex flex-col gap-1 py-1">
       <div>
         <span className="text-neutral-500">{name}</span> <span className="text-xs text-neutral-400">{label}</span>
       </div>
-      {stream && (stream.text || stream.gap) && (
+      {stream?.text && (
         // Provisional: replaced by the committed reply, never counted as read or sent.
-        <div className="whitespace-pre-wrap italic text-neutral-500">
-          {stream.text}
-          {stream.gap && " …"}
-        </div>
+        <div className="whitespace-pre-wrap italic text-neutral-500">{stream.text}</div>
       )}
-      {card && <ApprovalCard card={card} controller={controller} />}
+      {card && <ApprovalCard card={card} controller={controller} accountId={accountId} />}
     </div>
   );
 }
@@ -439,30 +435,30 @@ const DECISION_TEXT: Record<DecisionOutcome, string | null> = {
   failed: "couldn't confirm the decision. it may still have gone through; the card updates when the room catches up.",
 };
 
-function ApprovalCard({ card, controller }: { card: CloudCard; controller: CloudRoomController }) {
+function ApprovalCard({ card, controller, accountId }: { card: CloudCard; controller: CloudRoomController; accountId: string }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const open = decidable(card, Date.now());
+  const open = decidable(card, accountId, Date.now());
   const decide = async (decision: CardDecision) => {
     setBusy(true);
     const outcome = await controller.decide(card, decision);
     setBusy(false);
     setNotice(DECISION_TEXT[outcome]);
   };
+  // View and decide are separate: everyone in the room sees the card, only the person who asked decides.
   const settled =
-    card.state === "pending"
-      ? card.can_decide
-        ? Date.parse(card.expires_at) <= Date.now()
-          ? "expired"
-          : null
-        : "waiting for someone who can decide"
-      : card.state === "approved" || card.state === "denied"
-        ? `${card.state}${card.decided_by ? ` by ${card.decided_by}` : ""}`
-        : card.state;
+    card.status === "pending"
+      ? Date.parse(card.expires_at) <= Date.now()
+        ? "expired"
+        : card.actor_id === accountId
+          ? null
+          : `waiting for ${card.actor_id} to decide`
+      : card.status === "approved" || card.status === "denied"
+        ? `${card.status} by ${card.actor_id === accountId ? "you" : card.actor_id}`
+        : card.status;
   return (
     <div className="flex max-w-xl flex-col gap-1 rounded border border-amber-300 p-2 dark:border-amber-700">
       <div className="font-medium">{card.title}</div>
-      <div className="whitespace-pre-wrap text-neutral-600 dark:text-neutral-300">{card.summary}</div>
       {open ? (
         <div className="flex gap-2">
           <button className={button} disabled={busy} onClick={() => void decide("approve")}>approve</button>
@@ -476,38 +472,27 @@ function ApprovalCard({ card, controller }: { card: CloudCard; controller: Cloud
   );
 }
 
-function AttachmentView({ controller, attachment }: { controller: CloudRoomController; attachment: CloudAttachment }) {
-  const [url, setUrl] = useState<string | null>(null);
+/** Opened on demand: every open goes through the reauthorizing download proxy, images show inline. */
+function AttachmentView({ controller, attachmentId }: { controller: CloudRoomController; attachmentId: string }) {
+  const [viewed, setViewed] = useState<DownloadedAttachment | null>(null);
   const [failed, setFailed] = useState(false);
-  const image = attachment.content_type.startsWith("image/") && attachment.state === "ready";
-  useEffect(() => {
-    if (!image) return;
-    let live = true;
-    void controller.download(attachment.attachment_id).then((value) => {
-      if (!live) return;
-      setUrl(value);
-      setFailed(value === null);
-    });
-    return () => {
-      live = false;
-    };
-  }, [controller, attachment.attachment_id, image]);
-  if (attachment.state !== "ready") return <div className="text-xs text-neutral-400">{attachment.name} · {attachment.state}</div>;
-  if (failed) return <div className="text-xs text-neutral-400">{attachment.name} · can't open</div>;
-  if (image && url) return <img src={url} alt={attachment.name} className="mt-1 max-h-64 max-w-sm rounded" />;
+  const name = controller.attachmentName(attachmentId) ?? "attachment";
+  if (failed) return <div className="text-xs text-neutral-400">{name} · can't open</div>;
+  if (viewed?.type.startsWith("image/")) return <img src={viewed.url} alt={name} className="mt-1 max-h-64 max-w-sm rounded" />;
   return (
     <button
       className={`${button} mt-1 block text-xs`}
       onClick={async () => {
-        const link = await controller.download(attachment.attachment_id);
-        if (!link) return setFailed(true);
+        const result = await controller.download(attachmentId);
+        if (!result) return setFailed(true);
+        if (result.type.startsWith("image/")) return setViewed(result);
         const anchor = document.createElement("a");
-        anchor.href = link;
-        anchor.download = attachment.name;
+        anchor.href = result.url;
+        anchor.download = name;
         anchor.click();
       }}
     >
-      {attachment.name} · {formatBytes(attachment.size)}
+      {name} · open
     </button>
   );
 }

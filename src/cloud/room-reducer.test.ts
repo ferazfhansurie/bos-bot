@@ -78,47 +78,74 @@ describe("cloud room reducer", () => {
 });
 
 describe("cloud room reducer: bot runs, cards and revocation", () => {
-  const runEvent = (sequence: string, patch: Record<string, unknown>): CloudEvent => ({
-    schema_version: 1,
+  const hex = "a".repeat(64);
+  const event = (sequence: string, kind: string, payload: Record<string, unknown>): CloudEvent => ({ schema_version: 1, workspace_id: "w1", room_id: "r1", event_id: `ev${sequence}`, sequence, kind, required: true, payload });
+  const binding = { invocation_id: "inv1", attempt: 1, fence_gen: "1" };
+  const invocation = (patch: Record<string, unknown> = {}) => ({
+    ...binding,
     workspace_id: "w1",
     room_id: "r1",
-    event_id: `ev${sequence}`,
-    sequence,
-    kind: "run.updated",
-    required: false,
-    payload: { run: { invocation_id: "inv1", room_id: "r1", thread_id: "t1", bot_id: "bot1", source_message_id: "m1", state: "running", attempt: 1, revision: Number(sequence), host_online: true, ...patch } },
+    thread_id: "t1",
+    bot_id: "bot1",
+    state: "queued",
+    model: { provider: "local", model: "m", config_revision: "1" },
+    source: { message_id: "m1", version: 1, digest: hex, actor_id: "alice", text: "@bot1 hi", mentions: [], attachment_ids: [] },
+    control_revision: "0",
+    host_id: null,
+    lease_expires_at: null,
+    queued_expires_at: "2099-01-01T00:00:00.000Z",
+    result_message_id: null,
+    stop_requested: false,
+    stopped_observed: false,
+    replay_safe: true,
+    host_online: true,
+    ...patch,
   });
-  const stream = (seq: number, text: string): CloudRoomAction => ({
-    type: "frame",
-    frame: { type: "stream.delta", workspace_id: "w1", room_id: "r1", thread_id: "t1", invocation_id: "inv1", attempt: 1, fence_gen: 1, seq, text },
-  });
-  const finalReply = (sequence: string): CloudEvent => {
-    const event = created(sequence, "reply1", "bot1", "", "t1");
-    (event.payload.message as Record<string, unknown>).invocation_id = "inv1";
-    return event;
+  const offered = (sequence: string) => event(sequence, "invocation.offered", { kind: "invocation.offered", ...binding, invocation: invocation() });
+  const delta = (sequence: string, delta_id: string, text: string) => event(sequence, "stream.delta", { kind: "stream.delta", ...binding, delta_id, text });
+  const finalReply = (sequence: string) => {
+    const message = created(sequence, "reply1", "owner", "hello", "t1").payload.message as Record<string, unknown>;
+    return event(sequence, "final.commit", { kind: "final.commit", ...binding, message: { ...message, bot_id: "bot1", client_operation_id: "invocation.inv1" } });
   };
+  const stream = (sequence: string, text: string): CloudRoomAction => batch([delta(sequence, `d${sequence}`, text)], sequence);
 
   it("streams provisional text, then shows the committed reply exactly once", () => {
-    let state = run(start(), [batch([created("1", "m1"), runEvent("2", {})], "2"), stream(0, "hel"), stream(1, "lo")]);
+    let state = run(start(), [
+      batch([created("1", "m1"), offered("2"), event("3", "invocation.claimed", { kind: "invocation.claimed", ...binding, host_id: "h1", model: invocation().model, lease_expires_at: "2099-01-01T00:00:00.000Z" })], "3"),
+      batch([delta("4", "d1", "hel"), delta("5", "d2", "lo")], "5"),
+    ]);
+    expect(state.runs.runs.inv1).toMatchObject({ state: "leased", host_id: "h1" });
     expect(state.runs.streams.inv1.text).toBe("hello");
-    state = run(state, [batch([finalReply("3"), runEvent("4", { state: "completed" })], "4"), stream(2, " late")]);
+    state = run(state, [batch([finalReply("6"), delta("7", "d3", " late")], "7")]);
     expect(state.runs.streams.inv1).toBeUndefined();
+    expect(state.runs.runs.inv1.state).toBe("completed");
     expect(state.messages.map((message) => message.message_id)).toEqual(["m1", "reply1"]);
     // The same final replayed after a reconnect does not duplicate it.
-    state = run(state, [batch([finalReply("3")], "4")]);
+    state = run(state, [batch([finalReply("6")], "7")]);
     expect(state.messages.filter((message) => message.message_id === "reply1")).toHaveLength(1);
+  });
+
+  it("shows stop progress and approval cards from room events", () => {
+    const control = { kind: "stop.requested", ...binding, control_revision: "1" };
+    let state = run(start(), [batch([offered("1"), event("2", "stop.requested", control)], "2")]);
+    expect(state.runs.runs.inv1).toMatchObject({ state: "held", stop_requested: true });
+    state = run(state, [batch([event("3", "stop.observed", { ...control, kind: "stop.observed" })], "3")]);
+    expect(state.runs.runs.inv1).toMatchObject({ state: "cancelled", stopped_observed: true });
+    const card = { ...binding, approval_id: "ap1", workspace_id: "w1", room_id: "r1", thread_id: "t1", actor_id: "alice", version: 1, effect_id: "e1", digest: hex, title: "t", expires_at: "2099-01-01T00:00:00.000Z", status: "pending", can_view: true, can_decide: true };
+    state = run(state, [batch([event("4", "approval.updated", { actor_id: "alice", card }), event("5", "approval.updated", { actor_id: "alice", card: { ...card, version: 2, status: "revoked", can_decide: false } })], "5")]);
+    expect(state.runs.cards.ap1).toMatchObject({ version: 2, status: "revoked" });
   });
 
   it("removal drops content, streams, cards and runs at once; unsent drafts become not sent", async () => {
     const draft = await freezeSend({ namespace: { service: "bos", issuer: "i", subject: "alice", account_id: "alice", workspace_id: "w1", epoch: "e" }, window_id: "window1", window_token: "t", room_id: "r1", thread_id: "t1", text: "hi", mentions: [], expected_policy_revision: "1", now: 0 });
     if ("problem" in draft) throw new Error("bad draft");
     const sent: OutboxEntry = { ...draft, envelope: { ...draft.envelope, client_operation_id: "window1.sentsentsentsent1" }, state: "checking", dispatched: true };
-    let state = run({ ...start(), outbox: [draft, sent] }, [batch([created("1", "m1"), runEvent("2", {})], "2"), stream(0, "secret")]);
+    let state = run({ ...start(), outbox: [draft, sent] }, [batch([created("1", "m1"), offered("2")], "2"), stream("3", "secret")]);
     state = run(state, [{ type: "frame", frame: { type: "error", error: "forbidden" } }]);
     expect(state).toMatchObject({ removed: true, messages: [], runs: { runs: {}, cards: {}, streams: {} } });
     expect(state.outbox.map((entry) => entry.state)).toEqual(["rejected", "checking"]);
     // Nothing more arrives for a room this account lost.
-    state = run(state, [stream(1, " more"), batch([created("3", "m3")], "3")]);
+    state = run(state, [stream("4", " more"), batch([created("5", "m5")], "5")]);
     expect(state.runs.streams).toEqual({});
     expect(state.messages).toEqual([]);
   });

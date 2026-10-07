@@ -1,8 +1,7 @@
 // Drives one cloud room: owns the reducer state, persists the outbox before
 // any network I/O, works the outbox sequentially and keeps the realtime
 // subscription caught up through resets and reconnects.
-import { LIMITS, type SendEnvelope } from "../../shared/cloud-protocol/index";
-import { ATTACHMENT_LIMITS, type CardDecision, type CloudAttachment, type CloudCard } from "../../shared/cloud-run-draft";
+import { ATTACHMENT_LIMITS, LIMITS, type ApprovalCard, type CloudAttachment, type SendEnvelope } from "../../shared/cloud-protocol/index";
 import { identityProblem, type IdentityProblem } from "./auth-state";
 import { connectRealtime, type CloudApi, type CloudSession, type OperationWindow, type RealtimeConnection } from "./api";
 import {
@@ -57,6 +56,15 @@ export interface PendingUpload {
   problem?: string;
 }
 
+export type CardDecision = "approve" | "deny";
+/** A viewed attachment: a session-local object URL plus the type the server served it as. */
+export interface DownloadedAttachment {
+  url: string;
+  type: string;
+}
+type AllowedType = (typeof ATTACHMENT_LIMITS.types)[number];
+const ALLOWED_TYPES: ReadonlySet<string> = new Set(ATTACHMENT_LIMITS.types);
+
 export type DecisionOutcome = "decided" | "offline" | "not_decidable" | "already_decided" | "failed";
 
 export interface CloudRoomRef {
@@ -93,7 +101,9 @@ export class CloudRoomController {
   private readonly windows: WindowStore;
   private unsubscribeNetwork: (() => void) | null = null;
   private uploads: PendingUpload[] = [];
-  private readonly downloads = new Map<string, Promise<string | null>>();
+  private readonly downloads = new Map<string, Promise<DownloadedAttachment | null>>();
+  /** Display names for this device's own uploads; the room wire carries attachment ids only. */
+  private readonly attachmentNames = new Map<string, string>();
 
   constructor(
     private readonly session: CloudSession,
@@ -233,29 +243,24 @@ export class CloudRoomController {
    * offline outbox; a lost response retries the same operation while the
    * card is still pending, and the server lets one valid decision win.
    */
-  async decide(card: CloudCard, decision: CardDecision): Promise<DecisionOutcome> {
+  async decide(card: ApprovalCard, decision: CardDecision): Promise<DecisionOutcome> {
     if (!this.state.online) return "offline";
-    if (this.state.removed || !decidable(card, Date.now())) return "not_decidable";
-    const body = {
-      kind: "card.decide" as const,
-      client_operation_id: `${card.card_id}.${randomHex(16)}`,
-      card_id: card.card_id,
-      version: card.version,
-      digest: card.digest,
-      decision,
-    };
+    if (this.state.removed || !decidable(card, this.session.account_id, Date.now())) return "not_decidable";
+    // Bound to the exact card version, effect digest and run generation; a stale card fails closed.
+    const body = { invocation_id: card.invocation_id, attempt: card.attempt, fence_gen: card.fence_gen, version: card.version, effect_id: card.effect_id, digest: card.digest, decision };
     for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await this.api.decideCard(this.room.workspace_id, body);
+      const result = await this.api.decideCard(this.room.workspace_id, card.room_id, card.approval_id, body);
       if (result.ok) {
         this.dispatch({ type: "card", card: result.value });
-        return result.value.state === (decision === "approve" ? "approved" : "denied") ? "decided" : "already_decided";
+        return result.value.status === (decision === "approve" ? "approved" : "denied") ? "decided" : "already_decided";
       }
       if ("error" in result.failure) {
-        if (result.failure.error === "operation_conflict" || result.failure.error === "operation_expired") return "already_decided";
+        // A retry after a lost response lands here too: the first attempt already won.
+        if (["approval_decided", "approval_expired", "control_conflict"].includes(result.failure.error)) return "already_decided";
         return "failed";
       }
-      const current = this.state.runs.cards[card.card_id];
-      if (this.stopped || !this.state.online || (current && !decidable(current, Date.now()))) break;
+      const current = this.state.runs.cards[card.approval_id];
+      if (this.stopped || !this.state.online || (current && !decidable(current, this.session.account_id, Date.now()))) break;
       await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
     }
     return "failed";
@@ -271,30 +276,46 @@ export class CloudRoomController {
     this.setUploads(this.uploads.map((upload) => (upload.local_id === localId ? { ...upload, ...patch } : upload)));
   }
 
-  /** Upload one file: allocate, PUT the bytes, then wait for the server to verify it. */
+  /** Upload one file: prepare, PUT the bytes, then let the server verify (checksum + scan) it. */
   async attach(file: Blob & { name?: string }): Promise<void> {
     const localId = randomHex(8);
-    const upload: PendingUpload = { local_id: localId, name: file.name || "file", size: file.size, content_type: file.type || "application/octet-stream", state: "preparing" };
+    const upload: PendingUpload = { local_id: localId, name: (file.name || "file").slice(0, 256), size: file.size, content_type: file.type, state: "preparing" };
     if (this.state.removed) return;
-    if (file.size > ATTACHMENT_LIMITS.bytes) return this.setUploads([...this.uploads, { ...upload, state: "failed", problem: "too large" }]);
-    if (!this.state.online) return this.setUploads([...this.uploads, { ...upload, state: "failed", problem: "offline" }]);
+    const refuse = (problem: string) => this.setUploads([...this.uploads, { ...upload, state: "failed", problem }]);
+    if (file.size > ATTACHMENT_LIMITS.bytes) return refuse("too large");
+    if (file.size === 0) return refuse("empty file");
+    if (!ALLOWED_TYPES.has(file.type)) return refuse("only png, jpeg, pdf or plain text");
+    if (this.uploads.filter((item) => item.state !== "failed").length >= MAX_ATTACHMENTS_PER_MESSAGE) return refuse("too many files");
+    if (!this.state.online) return refuse("offline");
     this.setUploads([...this.uploads, upload]);
-    const sha256 = await sha256Hex(file);
-    const allocation = await this.api.allocateAttachment(this.room.workspace_id, { room_id: this.room.room_id, name: upload.name, content_type: upload.content_type, size: file.size, sha256 });
+    const checksum = await sha256Hex(file);
+    const allocation = await this.api.allocateAttachment(this.room.workspace_id, {
+      room_id: this.room.room_id,
+      thread_id: this.room.thread_id,
+      name: upload.name,
+      size: file.size,
+      type: file.type as AllowedType,
+      checksum,
+    });
     if (!allocation.ok) return this.patchUpload(localId, { state: "failed", problem: problemText(allocation.failure) });
     const attachmentId = allocation.value.attachment.attachment_id;
     this.patchUpload(localId, { state: "uploading", attachment_id: attachmentId });
-    const put = await this.api.upload(allocation.value.upload_url, file, upload.content_type);
+    const put = await this.api.upload(allocation.value.upload_url, file, file.type);
     if (!put.ok) return this.patchUpload(localId, { state: "failed", problem: problemText(put.failure) });
     this.patchUpload(localId, { state: "verifying" });
+    // Completion verifies and scans before answering; a scanner outage stays quarantined, so retry briefly.
     let status = await this.api.completeAttachment(this.room.workspace_id, attachmentId);
-    // Verification (bytes + scan) can take a moment; poll briefly, never forever.
-    for (let attempt = 0; attempt < 20 && status.ok && status.value.state === "verifying" && !this.stopped; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, Math.min(2000, 250 * 2 ** attempt)));
-      status = await this.api.attachment(this.room.workspace_id, attachmentId);
+    for (let attempt = 0; attempt < 4 && !status.ok && !this.stopped && retryable(status.failure); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
+      status = await this.api.completeAttachment(this.room.workspace_id, attachmentId);
     }
     if (!status.ok) return this.patchUpload(localId, { state: "failed", problem: problemText(status.failure) });
+    if (status.value.state === "ready") this.attachmentNames.set(attachmentId, status.value.name);
     this.patchUpload(localId, { state: status.value.state, problem: status.value.state === "ready" ? undefined : status.value.state });
+  }
+
+  attachmentName(attachmentId: string): string | undefined {
+    return this.attachmentNames.get(attachmentId);
   }
 
   removeUpload(localId: string): void {
@@ -302,7 +323,7 @@ export class CloudRoomController {
   }
 
   /** An object URL for a committed attachment, fetched through the reauthorizing proxy. */
-  download(attachmentId: string): Promise<string | null> {
+  download(attachmentId: string): Promise<DownloadedAttachment | null> {
     if (this.state.removed) return Promise.resolve(null);
     let pending = this.downloads.get(attachmentId);
     if (!pending) {
@@ -311,7 +332,7 @@ export class CloudRoomController {
           this.downloads.delete(attachmentId);
           return null;
         }
-        return URL.createObjectURL(result.value);
+        return { url: URL.createObjectURL(result.value), type: result.value.type };
       });
       this.downloads.set(attachmentId, pending);
     }
@@ -319,7 +340,7 @@ export class CloudRoomController {
   }
 
   private releaseDownloads(): void {
-    for (const pending of this.downloads.values()) void pending.then((url) => url && URL.revokeObjectURL(url));
+    for (const pending of this.downloads.values()) void pending.then((viewed) => viewed && URL.revokeObjectURL(viewed.url));
     this.downloads.clear();
   }
 
@@ -469,4 +490,11 @@ async function sha256Hex(blob: Blob): Promise<string> {
 
 function problemText(failure: { error: string } | { transport: true }): string {
   return "error" in failure ? failure.error.replace(/_/g, " ") : "couldn't reach the server";
+}
+
+/** Per-message cap from the slice 4 freeze; the server enforces it again at send. */
+const MAX_ATTACHMENTS_PER_MESSAGE = 32;
+
+function retryable(failure: { error: string; status?: number } | { transport: true }): boolean {
+  return "transport" in failure || failure.error === "unavailable" || failure.error === "rate_limited";
 }

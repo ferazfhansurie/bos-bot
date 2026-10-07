@@ -2,24 +2,26 @@
 // send the issuer bearer; the web client sends nothing and relies on the
 // same-site session cookie. The server derives the actor and membership.
 import {
+  ApprovalCardSchema,
+  AttachmentSchema,
+  ApprovalDecisionSchema,
+  AttachmentPrepareSchema,
+  AttachmentUploadSchema,
+  FrameSchema,
   LIMITS,
   LookupSchema,
+  SnapshotSchema,
+  type ApprovalCard,
+  type CloudAttachment,
+  type CloudFrame,
   type CloudMessage,
+  type CloudSnapshot,
   type OperationResult,
   type ReadCoverage,
   type SendEnvelope,
 } from "../../shared/cloud-protocol/index";
-import {
-  AttachmentSchema,
-  CardDecisionSchema,
-  CardSchema,
-  UploadAllocationSchema,
-  type CloudAttachment,
-  type CloudCard,
-} from "../../shared/cloud-run-draft";
 import type { z } from "zod";
 import { identityProblem, type IdentityProblem } from "./auth-state";
-import { RoomFrameSchema, RoomSnapshotSchema, type RoomFrame, type RoomSnapshot } from "./run-schema";
 
 export interface CloudIdentity {
   account_id: string;
@@ -131,8 +133,8 @@ export function cloudApi(session: CloudSession, onIdentity: (problem: IdentityPr
       const parsed = LookupSchema.safeParse(result.value);
       return parsed.success ? { ok: true, value: parsed.data } : { ok: false, failure: { transport: true } };
     },
-    snapshot: async (workspaceId: string, roomId: string, threadId: string): Promise<CloudResult<RoomSnapshot>> =>
-      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/snapshot`, { thread_id: threadId }), RoomSnapshotSchema),
+    snapshot: async (workspaceId: string, roomId: string, threadId: string): Promise<CloudResult<CloudSnapshot>> =>
+      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/snapshot`, { thread_id: threadId }), SnapshotSchema),
     history: (workspaceId: string, roomId: string, threadId: string, before: string) =>
       call<{ messages: CloudMessage[]; next_before: string | null }>(
         "GET",
@@ -140,42 +142,55 @@ export function cloudApi(session: CloudSession, onIdentity: (problem: IdentityPr
       ),
     postRead: (workspaceId: string, roomId: string, body: { thread_id: string; intervals: Array<[string, string]>; mark_read_through?: string }) =>
       call<ReadCoverage>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/read`, body),
-    /** One decision per card version; never queued for offline replay. */
-    decideCard: async (workspaceId: string, decision: z.infer<typeof CardDecisionSchema>): Promise<CloudResult<CloudCard>> =>
-      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/cards/${enc(decision.card_id)}/decisions`, decision), CardSchema),
+    /** One decision per card version; never queued for offline replay. Only the card's actor may decide. */
+    decideCard: async (workspaceId: string, roomId: string, approvalId: string, decision: ApprovalDecision): Promise<CloudResult<ApprovalCard>> =>
+      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/approvals/${enc(approvalId)}/decision`, decision), ApprovalCardSchema),
     /** The server picks the object key (workspace|room|attachment_id); the client never supplies a path. */
-    allocateAttachment: async (workspaceId: string, input: { room_id: string; name: string; content_type: string; size: number; sha256: string }) =>
-      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/attachments`, input), UploadAllocationSchema),
+    allocateAttachment: async (workspaceId: string, input: AttachmentPrepare) =>
+      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/attachments`, input), AttachmentUploadSchema),
     completeAttachment: async (workspaceId: string, attachmentId: string): Promise<CloudResult<CloudAttachment>> =>
       parsed(await call<unknown>("POST", `${attachmentPath(workspaceId, attachmentId)}/complete`, {}), AttachmentSchema),
-    attachment: async (workspaceId: string, attachmentId: string): Promise<CloudResult<CloudAttachment>> =>
-      parsed(await call<unknown>("GET", attachmentPath(workspaceId, attachmentId)), AttachmentSchema),
     /** Every download is reauthorized against current room access. */
     download: async (workspaceId: string, attachmentId: string): Promise<CloudResult<Blob>> => {
-      const result = await rawRequest(session, "GET", `${attachmentPath(workspaceId, attachmentId)}/content`);
+      const result = await rawRequest(session, "GET", `${attachmentPath(workspaceId, attachmentId)}/download`);
       if (!result.ok) {
         const problem = identityProblem(result.failure);
         if (problem) onIdentity(problem);
       }
       return result;
     },
-    /** PUT the bytes to the short-lived upload URL the allocation returned. */
-    upload: (uploadUrl: string, body: Blob, contentType: string) => rawRequest(session, "PUT", uploadUrl, body, contentType),
+    /** PUT the raw bytes to the short-lived upload URL the allocation returned (room service only). */
+    upload: async (uploadUrl: string, body: Blob, contentType: string): Promise<CloudResult<CloudAttachment>> => {
+      if (!sameService(session, uploadUrl)) return { ok: false, failure: { error: "forbidden", status: 403 } };
+      const result = await rawRequest(session, "PUT", uploadUrl, body, contentType);
+      if (!result.ok) return result;
+      return parsed({ ok: true, value: JSON.parse(await result.value.text().catch(() => "null")) as unknown }, AttachmentSchema);
+    },
   };
 }
 
 export type CloudApi = ReturnType<typeof cloudApi>;
+export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
+export type AttachmentPrepare = z.infer<typeof AttachmentPrepareSchema>;
+
+function sameService(session: CloudSession, url: string): boolean {
+  try {
+    return new URL(url).origin === new URL(session.baseUrl, globalThis.location?.href).origin;
+  } catch {
+    return false;
+  }
+}
 
 /** Binary request: an absolute URL (upload) or a service path (download). */
 async function rawRequest(session: CloudSession, method: string, target: string, body?: Blob, contentType?: string): Promise<CloudResult<Blob>> {
   const url = /^https?:/.test(target) ? target : `${session.baseUrl.replace(/\/$/, "")}${target}`;
-  const sameService = url.startsWith(session.baseUrl.replace(/\/$/, ""));
+  const service = sameService(session, url);
   try {
     const response = await fetch(url, {
       method,
       // Only the room service ever sees the session; an upload URL is its own short-lived grant.
-      credentials: sameService ? "same-origin" : "omit",
-      headers: { ...(contentType ? { "content-type": contentType } : {}), ...(sameService && session.bearer ? { authorization: `Bearer ${session.bearer}` } : {}) },
+      credentials: service ? "same-origin" : "omit",
+      headers: { ...(contentType ? { "content-type": contentType } : {}), ...(service && session.bearer ? { authorization: `Bearer ${session.bearer}` } : {}) },
       body,
     });
     if (response.ok) return { ok: true, value: await response.blob() };
@@ -191,7 +206,7 @@ async function rawRequest(session: CloudSession, method: string, target: string,
 
 export interface RealtimeHandlers {
   onOpen(): void;
-  onFrame(frame: RoomFrame, bytes: number): void;
+  onFrame(frame: CloudFrame, bytes: number): void;
   onClose(reason: "closed" | "invalid_frame"): void;
 }
 
@@ -220,7 +235,7 @@ export function connectRealtime(session: CloudSession, handlers: RealtimeHandler
     } catch {
       parsed = null;
     }
-    const frame = RoomFrameSchema.safeParse(parsed);
+    const frame = FrameSchema.safeParse(parsed);
     if (!frame.success) {
       closed = true;
       socket.close();

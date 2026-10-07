@@ -4,7 +4,12 @@
 // nothing. Resets replace the projection from a snapshot at watermark H and
 // keep the outbox; batches then catch up strictly after H.
 import {
+  ApprovalCardSchema,
   EVENT_KINDS,
+  InvocationSchema,
+  MessageSchema,
+  RunBindingSchema,
+  type ApprovalCard,
   SCHEMA_VERSION,
   type CloudEvent,
   type CloudFrame,
@@ -13,10 +18,9 @@ import {
   type OperationResult,
   type ReadCoverage,
 } from "../../shared/cloud-protocol/index";
-import { CardSchema, RUN_EVENT_KINDS, RunSchema, type CloudCard, type StreamDeltaFrame } from "../../shared/cloud-run-draft";
 import { isUnresolved, operationIdOf, outboxReducer, type OutboxAction, type OutboxEntry, type OutboxState } from "./outbox";
-import { RoomMessageSchema, type RoomFrame, type RoomMessage, type RoomSnapshot } from "./run-schema";
-import { applyCard, applyDelta, applyFinal, applyHostStatus, applyRun, EMPTY_RUNS, runsFromSnapshot, type RunProjection } from "./runs";
+import { applyCard, applyDelta, applyFinal, applyHostPresence, applyRun, EMPTY_RUNS, finalInvocationId, patchRun, runsFromSnapshot, StreamDeltaSchema, type RunProjection } from "./runs";
+import { z } from "zod";
 import { EMPTY_COVERAGE } from "./read-coverage";
 import { compareSequence, isSequence, maxSequence, type Sequence } from "./sequence";
 
@@ -28,7 +32,7 @@ export interface CloudRoomState {
   selected_room_id: string;
   selected_thread_id: string;
   /** Selected-thread messages in sequence order. */
-  messages: RoomMessage[];
+  messages: CloudMessage[];
   /** Opaque server cursor the subscription resumes from. */
   cursor: string | null;
   /** Highest sequence covered by the projection (applied, scanned or snapshot H). */
@@ -52,11 +56,10 @@ export interface CloudRoomState {
 }
 
 export type CloudRoomAction =
-  | { type: "frame"; frame: CloudFrame | RoomFrame }
-  | { type: "snapshot"; snapshot: CloudSnapshot | RoomSnapshot }
-  | { type: "stream"; frame: StreamDeltaFrame }
+  | { type: "frame"; frame: CloudFrame }
+  | { type: "snapshot"; snapshot: CloudSnapshot }
   | { type: "network"; online: boolean }
-  | { type: "card"; card: CloudCard }
+  | { type: "card"; card: ApprovalCard }
   | { type: "read"; coverage: ReadCoverage }
   | { type: "account_switch"; namespace: string; account_id: string }
   | { type: "select"; workspace_id: string; room_id: string; thread_id: string }
@@ -96,13 +99,16 @@ export function initialCloudRoomState(input: {
   };
 }
 
-const KNOWN_KINDS: ReadonlySet<string> = new Set<string>([...EVENT_KINDS, ...RUN_EVENT_KINDS]);
+const KNOWN_KINDS: ReadonlySet<string> = new Set<string>(EVENT_KINDS);
+// Event payloads also carry `kind` and extras, so read the binding shape without strictness.
+const ClaimedSchema = z.object({ ...RunBindingSchema.shape, host_id: z.string(), lease_expires_at: z.string() });
+const ControlSchema = z.object({ ...RunBindingSchema.shape, control_revision: z.string() });
 
 function understood(event: CloudEvent): boolean {
   return KNOWN_KINDS.has(event.kind) && event.schema_version <= SCHEMA_VERSION;
 }
 
-function upsertMessage(messages: RoomMessage[], message: RoomMessage): RoomMessage[] {
+function upsertMessage(messages: CloudMessage[], message: CloudMessage): CloudMessage[] {
   const index = messages.findIndex((existing) => existing.message_id === message.message_id);
   if (index >= 0) {
     if (messages[index].version > message.version) return messages;
@@ -133,12 +139,14 @@ function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "e
     switch (event.kind) {
       case "message.created":
       case "message.updated":
-      case "message.deleted": {
-        const parsed = RoomMessageSchema.safeParse((event.payload as { message?: unknown }).message);
+      case "message.deleted":
+      case "final.commit": {
+        const parsed = MessageSchema.safeParse((event.payload as { message?: unknown }).message);
         if (!parsed.success) break;
         const message = parsed.data;
-        // The committed final replaces the bot's provisional text.
-        if (message.invocation_id) next = { ...next, runs: applyFinal(next.runs, message.invocation_id) };
+        // The committed final replaces the bot's provisional text, exactly once.
+        const invocation = finalInvocationId(message);
+        if (invocation) next = { ...next, runs: applyFinal(next.runs, invocation, message.message_id) };
         if (message.actor_id === next.account_id && message.client_operation_id) {
           next = { ...next, outbox: outboxReducer(next.outbox, { type: "stream_accepted", operation_id: message.client_operation_id, message_id: message.message_id, sequence: message.sequence }) };
         }
@@ -157,32 +165,54 @@ function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "e
         if (isSequence(revision)) next = { ...next, policy_revision: revision };
         break;
       }
+      case "invocation.offered":
       case "run.updated": {
-        const run = RunSchema.safeParse((event.payload as { run?: unknown }).run);
+        const run = InvocationSchema.safeParse((event.payload as { invocation?: unknown }).invocation);
         if (run.success) next = { ...next, runs: applyRun(next.runs, run.data, next.selected_thread_id) };
         break;
       }
-      case "card.updated": {
-        const card = CardSchema.safeParse((event.payload as { card?: unknown }).card);
+      case "invocation.claimed": {
+        const claimed = ClaimedSchema.safeParse(event.payload);
+        if (claimed.success) next = { ...next, runs: patchRun(next.runs, claimed.data, { state: "leased", host_id: claimed.data.host_id, lease_expires_at: claimed.data.lease_expires_at }) };
+        break;
+      }
+      case "stop.requested": {
+        const stop = ControlSchema.safeParse(event.payload);
+        if (stop.success) next = { ...next, runs: patchRun(next.runs, stop.data, { state: "held", stop_requested: true, control_revision: stop.data.control_revision }) };
+        break;
+      }
+      case "stop.observed": {
+        const stop = ControlSchema.safeParse(event.payload);
+        if (stop.success) next = { ...next, runs: patchRun(next.runs, stop.data, { state: "cancelled", stopped_observed: true, control_revision: stop.data.control_revision }) };
+        break;
+      }
+      case "stream.delta": {
+        const delta = StreamDeltaSchema.safeParse(event.payload);
+        // Deltas carry no thread; only runs of the selected thread are in the projection.
+        if (delta.success && next.runs.runs[delta.data.invocation_id]) next = { ...next, runs: applyDelta(next.runs, delta.data) };
+        break;
+      }
+      case "approval.updated": {
+        const card = ApprovalCardSchema.safeParse((event.payload as { card?: unknown }).card);
         if (card.success) next = { ...next, runs: applyCard(next.runs, card.data, next.selected_thread_id) };
         break;
       }
-      case "bot.host_status": {
-        const { bot_id, host_online } = event.payload as { bot_id?: unknown; host_online?: unknown };
-        if (typeof bot_id === "string" && typeof host_online === "boolean") next = { ...next, runs: applyHostStatus(next.runs, bot_id, host_online) };
+      case "presence": {
+        const { host_id, online } = event.payload as { host_id?: unknown; online?: unknown };
+        if (typeof host_id === "string" && typeof online === "boolean") next = { ...next, runs: applyHostPresence(next.runs, host_id, online) };
         break;
       }
-      case "presence":
+      case "attachment.updated":
         break;
     }
   }
   return { ...next, cursor: frame.cursor, head: maxSequence(next.head, frame.scanned_sequence), live: frame.live };
 }
 
-function applySnapshot(state: CloudRoomState, snapshot: CloudSnapshot | RoomSnapshot): CloudRoomState {
+function applySnapshot(state: CloudRoomState, snapshot: CloudSnapshot): CloudRoomState {
   if (snapshot.workspace_id !== state.workspace_id || snapshot.room_id !== state.selected_room_id) return state;
   if (snapshot.thread_id !== state.selected_thread_id || state.removed) return state;
-  const messages = (snapshot.messages as RoomMessage[])
+  const messages = snapshot.messages
     .filter((message) => message.thread_id === state.selected_thread_id)
     .sort((a, b) => compareSequence(a.sequence, b.sequence));
   // Atomic projection replacement; the outbox is independent and survives.
@@ -208,7 +238,6 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
     case "frame": {
       const frame = action.frame;
       if (frame.type === "event_batch") return applyBatch(state, frame);
-      if (frame.type === "stream.delta") return applyStream(state, frame);
       if (frame.type === "reset_required") {
         if (frame.workspace_id !== state.workspace_id || frame.room_id !== state.selected_room_id) return state;
         if (frame.snapshot) return applySnapshot({ ...state, reset_required: true }, frame.snapshot);
@@ -221,8 +250,6 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
     }
     case "snapshot":
       return applySnapshot(state, action.snapshot);
-    case "stream":
-      return applyStream(state, action.frame);
     case "card": {
       if (state.removed) return state;
       const runs = applyCard(state.runs, action.card, state.selected_thread_id);
@@ -272,12 +299,6 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
   }
 }
 
-function applyStream(state: CloudRoomState, frame: StreamDeltaFrame): CloudRoomState {
-  if (state.removed || frame.workspace_id !== state.workspace_id || frame.room_id !== state.selected_room_id) return state;
-  const runs = applyDelta(state.runs, frame, state.selected_thread_id);
-  return runs === state.runs ? state : { ...state, runs };
-}
-
 /**
  * Losing the room drops everything at once: content, provisional streams,
  * cards and runs. Sends that never left the device become "not sent";
@@ -294,7 +315,7 @@ function withOutbox(state: CloudRoomState, outbox: OutboxEntry[]): CloudRoomStat
   return outbox === state.outbox ? state : { ...state, outbox };
 }
 
-export type TimelineItem = { kind: "message"; message: RoomMessage } | { kind: "pending"; entry: OutboxEntry };
+export type TimelineItem = { kind: "message"; message: CloudMessage } | { kind: "pending"; entry: OutboxEntry };
 
 /** Committed messages in server order, then this device's unresolved or failed sends for the thread. */
 export function timeline(state: CloudRoomState): TimelineItem[] {

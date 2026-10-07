@@ -23009,8 +23009,9 @@ server.listen(PORT, "127.0.0.1", () => {
   setInterval(expireDelegationsNow, DELEGATION_SWEEP_MS).unref();
   // One event stream per linked Mac; relays only threads the bridge opened.
   remoteBots.start();
-  // BOS 2.0 slice 3, dev build only: host this Mac's bots in cloud rooms
-  // (outbound only; both OMB_CLOUD_HOST_URL and OMB_CLOUD_HOST_TOKEN required).
+  // BOS 2.0 slices 3/4, dev build only: host this Mac's bots in cloud rooms
+  // (outbound HTTPS polling; OMB_CLOUD_HOST_URL, _WORKSPACE, _ID, _CREDENTIAL
+  // and _BEARER all required, see server/cloud-host-runtime.ts).
   startCloudHostFromEnv(process.env, {
     store, sharedBotTasks, bus, interruptDirectThread, shouldIgnoreProviderEvent,
     startTurn: (botId, text, opts) => startTurn(botId, text, opts as Parameters<typeof startTurn>[2]),

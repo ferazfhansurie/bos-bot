@@ -1,451 +1,517 @@
 import { createHash } from "node:crypto";
-import { HostInboundSchema, LEASE, type HostInbound, type HostOutbound, type Invocation } from "../shared/cloud-run-draft.ts";
+import { z } from "zod";
+import { ContextSchema, InvocationSchema, LIMITS, type CloudInvocation } from "../shared/cloud-protocol/index.ts";
 
-/** The mac side of the cloud room host contract (spec: "Bot execution and
- * host contract", D06/D07). One outbound socket to the room service; the
- * host claims offered invocations, runs the native bot turn only after the
- * server confirms the claim with a fencing generation, streams provisional
- * text, and commits one logical final per invocation. A host that lost its
- * claim (fenced, lease expired, stopped) never publishes for that attempt. */
+/** The mac side of the slice 3/4 room host contract (shared/cloud-protocol
+ * README "slices 3/4 frozen additions", services/cloud/SLICE34.md). Plain
+ * HTTPS polling, JSON, no socket. Every request carries the issuer bearer in
+ * `Authorization` and the host credential in `X-Cloud-Host-Credential`;
+ * neither ever appears in a URL, a body or a log line.
+ *
+ * Per invocation: claim -> context (validates the binding) -> checkpoint
+ * {replay_safe:false} -> native turn -> coalesced stream.delta -> exactly one
+ * final.commit. Heartbeat every 10s holds the 30s lease. The host learns
+ * about a human stop, a fence, lease expiry or removed access only because
+ * heartbeat/events start failing: lease_lost or forbidden aborts the turn and
+ * nothing is ever published for that attempt again. After lease_lost (and once
+ * the turn has settled) the host offers stop.observed at control_revision + 1,
+ * which the server accepts only when the loss was a human stop.
+ *
+ * fence_gen and control_revision are decimal strings end to end (BigInt only
+ * for the +1); they are never converted to Number. */
 
-export interface HostSocket {
-  send(data: string): void;
-  close(code?: number, reason?: string): void;
-  onopen: ((event: unknown) => void) | null;
-  onmessage: ((event: { data: unknown }) => void) | null;
-  onclose: ((event: unknown) => void) | null;
-  onerror: ((event: unknown) => void) | null;
+export type CloudContext = z.infer<typeof ContextSchema>;
+export type RunBinding = { invocation_id: string; attempt: number; fence_gen: string };
+
+export interface HostFetchInit {
+  method: "GET" | "POST";
+  headers: Record<string, string>;
+  body?: string;
+  signal: AbortSignal;
 }
-export type HostSocketCtor = new (url: string) => HostSocket;
+export interface HostFetchResponse { status: number; text(): Promise<string> }
+export type HostFetch = (url: string, init: HostFetchInit) => Promise<HostFetchResponse>;
 
 export type TurnResult = { ok: true; text: string; model: string | null } | { ok: false; failure: string; model: string | null };
 
-export interface CloudHostTimers {
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-  setInterval(fn: () => void, ms: number): unknown;
-  clearInterval(handle: unknown): void;
-}
+/** What the native turn runs: the leased invocation and the exact source text.
+ * `context.messages` is untrusted room history; this host does not feed it to
+ * the provider (the prompt is `source.text` only). */
+export interface CloudTurn { invocation: CloudInvocation; prompt: string; context: CloudContext }
 
 export interface CloudRoomHostDeps {
-  /** ws(s) or http(s) base of the room service. */
-  url: string;
-  hostToken: string;
-  Socket: HostSocketCtor;
+  /** http(s) base of the room service, no trailing slash needed. */
+  baseUrl: string;
+  workspaceId: string;
+  hostId: string;
+  /** X-Cloud-Host-Credential from host registration. */
+  credential: string;
+  /** Current issuer bearer. */
+  bearer: string;
+  fetch: HostFetch;
   /** Run the native bot turn. Resolve only once the turn has actually settled. */
-  runTurn(invocation: Invocation, io: { onDelta(text: string): void; signal: AbortSignal }): Promise<TurnResult>;
+  runTurn(turn: CloudTurn, io: { onDelta(text: string): void; signal: AbortSignal }): Promise<TurnResult>;
   /** Ask the native turn to stop; runTurn still resolves when it settles. */
   stopTurn(invocationId: string): void | Promise<void>;
   canHost(botId: string): boolean;
-  now?: () => number;
-  timers?: CloudHostTimers;
   random?: () => number;
   log?: (message: string) => void;
-  /** Provisional text coalescing window. */
-  deltaCoalesceMs?: number;
-  reconnectBaseMs?: number;
-  reconnectCapMs?: number;
+  maxConcurrent?: number;
+  pollMs?: number;
+  heartbeatMs?: number;
+  leaseMs?: number;
+  deltaFlushMs?: number;
+  requestTimeoutMs?: number;
+  backoffBaseMs?: number;
+  backoffCapMs?: number;
 }
 
-type Final = Extract<HostOutbound, { type: "final.commit" }>;
-type Failed = Extract<HostOutbound, { type: "invocation.failed" }>;
+export const HOST_DEFAULTS = Object.freeze({
+  maxConcurrent: 2, pollMs: 5_000, heartbeatMs: 10_000, leaseMs: 30_000, deltaFlushMs: 250,
+  requestTimeoutMs: LIMITS.requestMs, backoffBaseMs: 500, backoffCapMs: 30_000,
+});
+/** Server caps are 1 MiB / 1000 deltas per invocation; stop a little short. */
+export const DELTA_BUDGET = Object.freeze({ bytes: 1_000_000, count: 990 });
+export const EMPTY_FINAL_TEXT = "(no reply)";
+export const TRUNCATION_MARKER = "\n\n[reply truncated]";
 
-interface Held {
-  invocation: Invocation;
-  attempt: number;
-  phase: "claiming" | "running" | "settled";
-  fenceGen?: number;
-  /** Local deadline after which this host no longer believes it holds the lease. */
-  leaseDeadline?: number;
-  leaseTimer?: unknown;
-  abort?: AbortController;
-  seq: number;
-  buffer: string;
-  flushTimer?: unknown;
-  /** Stop requested by the server; the control revision to observe. */
-  stopRevision?: number;
-  stopObservedPending?: boolean;
-  final?: { frame: Final; sent: boolean; resends: number };
-  failed?: Failed;
+const RETRYABLE = new Set(["rate_limited", "unavailable", "deadline_exceeded", "identity_unavailable", "transport", "bad_response"]);
+const OffersSchema = z.object({ invocations: z.array(z.unknown()) });
+
+type Reply = { ok: true; body: unknown } | { ok: false; code: string; status: number; retryable: boolean; retryAfterMs?: number };
+
+const utf8 = (text: string) => Buffer.byteLength(text, "utf8");
+
+/** Split text into pieces of at most maxBytes UTF-8 bytes, never inside a code point. */
+export function utf8Chunks(text: string, maxBytes: number): string[] {
+  const bytes = Buffer.from(text, "utf8");
+  const out: string[] = [];
+  let start = 0;
+  while (start < bytes.length) {
+    let end = Math.min(bytes.length, start + maxBytes);
+    if (end < bytes.length) while (end > start && (bytes[end]! & 0xc0) === 0x80) end--;
+    out.push(bytes.subarray(start, end).toString("utf8"));
+    start = end;
+  }
+  return out;
 }
 
-const MAX_FINAL_RESENDS = 3;
-
-/** One logical final per invocation, stable across attempts and reconnects. */
-export function finalResultId(invocationId: string): string {
-  const plain = `${invocationId}-final`;
-  return plain.length <= 128 ? plain : `final-${createHash("sha256").update(invocationId).digest("hex").slice(0, 48)}`;
+/** The committed final: never empty, never over the 64 KiB text budget. A
+ * successful turn with no assistant text commits a short placeholder rather
+ * than nothing, so the run completes instead of sitting held forever. */
+export function finalText(text: string): string {
+  if (!text.trim()) return EMPTY_FINAL_TEXT;
+  if (utf8(text) <= LIMITS.textBytes) return text;
+  return utf8Chunks(text, LIMITS.textBytes - utf8(TRUNCATION_MARKER))[0]! + TRUNCATION_MARKER;
 }
 
-export function hostRealtimeUrl(base: string): string {
-  const trimmed = base.trim().replace(/\/+$/, "");
-  const ws = trimmed.replace(/^http(s?):\/\//i, (_m, s: string) => `ws${s}://`);
-  if (!/^wss?:\/\//i.test(ws)) throw new Error("cloud host url must be ws(s):// or http(s)://");
-  return `${ws}/v2/hosts/realtime`;
+/** Unique per delta within an attempt and identical on every retry of that delta. */
+export function deltaId(invocationId: string, attempt: number, n: number): string {
+  const plain = `${invocationId}-${attempt}-${n}`;
+  if (plain.length <= 128) return plain;
+  return `d-${createHash("sha256").update(invocationId).digest("hex").slice(0, 48)}-${attempt}-${n}`;
 }
 
-/** Full-jitter backoff: uniform in [0, min(cap, base * 2^n)]. */
-export function reconnectDelay(failures: number, random: () => number, baseMs = 500, capMs = 30_000): number {
+export function nextControlRevision(revision: string): string {
+  return (BigInt(revision) + 1n).toString();
+}
+
+/** Equal-jitter exponential backoff: [ceiling/2, ceiling], ceiling = min(cap, base * 2^n). */
+export function backoffDelay(failures: number, random: () => number, baseMs: number = HOST_DEFAULTS.backoffBaseMs, capMs: number = HOST_DEFAULTS.backoffCapMs): number {
   const ceiling = Math.min(capMs, baseMs * 2 ** Math.min(failures, 30));
-  return Math.floor(random() * ceiling);
+  return Math.floor(ceiling / 2 + random() * ceiling / 2);
+}
+
+const finished = (run: { phase: string }) => run.phase === "done";
+
+type Loss = "lease_lost" | "forbidden" | "expired";
+
+interface Run {
+  id: string;
+  phase: "claiming" | "preparing" | "running" | "finalizing" | "done";
+  binding?: RunBinding;
+  /** Last control_revision seen from claim/heartbeat (decimal string). */
+  controlRevision?: string;
+  abort: AbortController;
+  lost?: Loss;
+  heartbeatTimer?: ReturnType<typeof setInterval>;
+  beating: boolean;
+  /** Start time of the last request that renewed the lease. */
+  renewedAt: number;
+  buffer: string;
+  flushTimer?: ReturnType<typeof setTimeout>;
+  deltasOpen: boolean;
+  deltaCount: number;
+  deltaBytes: number;
+  deltaChain: Promise<void>;
 }
 
 export class CloudRoomHost {
   private readonly deps: CloudRoomHostDeps;
-  private readonly now: () => number;
-  private readonly timers: CloudHostTimers;
+  private readonly opts: Record<keyof typeof HOST_DEFAULTS, number>;
   private readonly random: () => number;
   private readonly log: (message: string) => void;
-  private readonly url: string;
-  private socket: HostSocket | null = null;
-  private ready = false;
+  private readonly base: string;
+  private readonly runs = new Map<string, Run>();
+  private started = false;
   private closed = false;
-  private failures = 0;
-  private reconnectTimer: unknown = null;
-  private heartbeatTimer: unknown = null;
-  private readonly held = new Map<string, Held>();
-  /** Highest fenced generation per invocation: a late claimed at or below it never runs. */
-  private readonly fencedGen = new Map<string, number>();
+  private online = false;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollFailures = 0;
+  private lastPollError = "";
+  private readonly sleepers = new Set<() => void>();
 
   constructor(deps: CloudRoomHostDeps) {
     this.deps = deps;
-    this.now = deps.now ?? Date.now;
-    this.timers = deps.timers ?? {
-      setTimeout: (fn, ms) => setTimeout(fn, ms),
-      clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
-      setInterval: (fn, ms) => setInterval(fn, ms),
-      clearInterval: handle => clearInterval(handle as ReturnType<typeof setInterval>),
+    this.opts = {
+      maxConcurrent: deps.maxConcurrent ?? HOST_DEFAULTS.maxConcurrent,
+      pollMs: deps.pollMs ?? HOST_DEFAULTS.pollMs,
+      heartbeatMs: deps.heartbeatMs ?? HOST_DEFAULTS.heartbeatMs,
+      leaseMs: deps.leaseMs ?? HOST_DEFAULTS.leaseMs,
+      deltaFlushMs: deps.deltaFlushMs ?? HOST_DEFAULTS.deltaFlushMs,
+      requestTimeoutMs: deps.requestTimeoutMs ?? HOST_DEFAULTS.requestTimeoutMs,
+      backoffBaseMs: deps.backoffBaseMs ?? HOST_DEFAULTS.backoffBaseMs,
+      backoffCapMs: deps.backoffCapMs ?? HOST_DEFAULTS.backoffCapMs,
     };
     this.random = deps.random ?? Math.random;
     this.log = deps.log ?? (() => {});
-    this.url = hostRealtimeUrl(deps.url);
+    this.base = `${deps.baseUrl.trim().replace(/\/+$/, "")}/v2/workspaces/${encodeURIComponent(deps.workspaceId)}/hosts/${encodeURIComponent(deps.hostId)}`;
   }
 
   start(): void {
-    if (this.closed || this.socket) return;
-    this.heartbeatTimer ??= this.timers.setInterval(() => this.heartbeat(), LEASE.heartbeatMs);
-    this.connect();
+    if (this.closed || this.started) return;
+    this.started = true;
+    this.schedulePoll(0);
   }
 
+  /** Stops polling and aborts every local turn. Nothing is published afterwards;
+   * the server holds whatever was running once its lease lapses. */
   stop(): void {
     this.closed = true;
-    if (this.reconnectTimer !== null) this.timers.clearTimeout(this.reconnectTimer);
-    if (this.heartbeatTimer !== null) this.timers.clearInterval(this.heartbeatTimer);
-    this.reconnectTimer = this.heartbeatTimer = null;
-    for (const [id, entry] of this.held) if (entry.phase === "running") this.abandon(id, entry, "host stopped");
-    for (const [id, entry] of this.held) this.drop(id, entry);
-    const socket = this.socket;
-    this.socket = null;
-    this.ready = false;
-    if (socket) { this.detach(socket); try { socket.close(1000, "host stopped"); } catch { /* already closed */ } }
+    this.online = false;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    for (const wake of this.sleepers) wake();
+    for (const run of this.runs.values()) {
+      const wasRunning = run.phase === "running";
+      this.quiet(run);
+      run.abort.abort();
+      if (wasRunning) this.interrupt(run, "host stopped");
+    }
   }
 
-  status(): { connected: boolean; running: string[] } {
-    return { connected: this.ready, running: [...this.held].filter(([, entry]) => entry.phase === "running").map(([id]) => id) };
+  status(): { online: boolean; running: string[] } {
+    return { online: this.online, running: [...this.runs.keys()] };
   }
 
-  // ── connection ────────────────────────────────────────────────────
+  // ── transport ─────────────────────────────────────────────────────
 
-  private connect(): void {
-    this.reconnectTimer = null;
+  private async call(method: "GET" | "POST", path: string, body?: unknown): Promise<Reply> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.opts.requestTimeoutMs);
+    try {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${this.deps.bearer}`,
+        "X-Cloud-Host-Credential": this.deps.credential,
+        Accept: "application/json",
+      };
+      if (body !== undefined) headers["Content-Type"] = "application/json";
+      const response = await this.deps.fetch(`${this.base}/${path}`, {
+        method, headers, signal: controller.signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const raw = await response.text();
+      let parsed: unknown = undefined;
+      try { parsed = raw ? JSON.parse(raw) : undefined; } catch { parsed = undefined; }
+      const error = parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string"
+        ? (parsed as { error: string }).error : undefined;
+      if (response.status >= 200 && response.status < 300 && !error) {
+        if (parsed === undefined) return { ok: false, code: "bad_response", status: response.status, retryable: true };
+        return { ok: true, body: parsed };
+      }
+      const code = error ?? (response.status === 429 ? "rate_limited" : response.status >= 500 ? "unavailable" : `http_${response.status}`);
+      const retryAfter = (parsed as { retry_after?: unknown } | undefined)?.retry_after;
+      return {
+        ok: false, code, status: response.status, retryable: RETRYABLE.has(code) || (!error && response.status >= 500),
+        ...(typeof retryAfter === "number" && retryAfter > 0 ? { retryAfterMs: Math.min(retryAfter * 1000, 60_000) } : {}),
+      };
+    } catch {
+      return { ok: false, code: "transport", status: 0, retryable: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Retries transient failures with backoff while `alive()` holds; returns the last reply. */
+  private async callRetrying(method: "GET" | "POST", path: string, body: unknown, opts: { attempts: number; alive: () => boolean; noRetry?: string[] }): Promise<Reply> {
+    for (let n = 0; ; n++) {
+      const reply = await this.call(method, path, body);
+      if (reply.ok || !reply.retryable || opts.noRetry?.includes(reply.code)) return reply;
+      if (n + 1 >= opts.attempts || !opts.alive()) return reply;
+      await this.sleep(Math.max(reply.retryAfterMs ?? 0, backoffDelay(n, this.random, this.opts.backoffBaseMs, this.opts.backoffCapMs)));
+      if (!opts.alive()) return reply;
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => {
+      const wake = () => { clearTimeout(timer); this.sleepers.delete(wake); resolve(); };
+      const timer = setTimeout(wake, ms);
+      this.sleepers.add(wake);
+    });
+  }
+
+  // ── idle polling (also renews host liveness) ──────────────────────
+
+  private schedulePoll(ms: number): void {
     if (this.closed) return;
-    let socket: HostSocket;
-    try { socket = new this.deps.Socket(this.url); }
-    catch (error) { this.log(`cloud host: connect failed: ${error instanceof Error ? error.message : "unknown"}`); this.scheduleReconnect(); return; }
-    this.socket = socket;
-    socket.onopen = () => {
-      if (this.socket !== socket) return;
-      // The credential rides in the first frame, never in the URL.
-      socket.send(JSON.stringify({ type: "host.authenticate", host_token: this.deps.hostToken } satisfies HostOutbound));
-    };
-    socket.onmessage = event => { if (this.socket === socket) this.receive(event.data); };
-    socket.onclose = () => { if (this.socket === socket) this.disconnected(); };
-    socket.onerror = () => { /* close follows */ };
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = setTimeout(() => { this.pollTimer = null; void this.poll(); }, ms);
   }
 
-  private detach(socket: HostSocket): void {
-    socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
-  }
-
-  private disconnected(): void {
-    const socket = this.socket;
-    if (socket) this.detach(socket);
-    this.socket = null;
-    this.ready = false;
-    // An unanswered claim is void; the server re-offers queued work on reconnect.
-    for (const [id, entry] of this.held) if (entry.phase === "claiming") this.drop(id, entry);
-    this.scheduleReconnect();
-  }
-
-  private scheduleReconnect(): void {
-    if (this.closed || this.reconnectTimer !== null) return;
-    const delay = reconnectDelay(this.failures++, this.random, this.deps.reconnectBaseMs, this.deps.reconnectCapMs);
-    this.reconnectTimer = this.timers.setTimeout(() => this.connect(), delay);
-  }
-
-  private send(frame: HostOutbound): boolean {
-    if (!this.ready || !this.socket) return false;
-    try { this.socket.send(JSON.stringify(frame)); return true; }
-    catch { return false; }
-  }
-
-  private onReady(): void {
-    this.ready = true;
-    this.failures = 0;
-    for (const [id, entry] of this.held) {
-      if (entry.phase === "running") {
-        // Re-establish the lease right away; the server answers lease or fenced.
-        this.send({ type: "invocation.heartbeat", invocation_id: id, attempt: entry.attempt, fence_gen: entry.fenceGen! });
-        this.flush(id, entry);
-        continue;
-      }
-      if (entry.phase !== "settled") continue;
-      if (entry.stopObservedPending) this.observeStop(id, entry);
-      if (entry.final) {
-        if (!entry.final.sent) {
-          if (this.leaseValid(entry)) { entry.final.sent = this.send(entry.final.frame); }
-          else { this.drop(id, entry); continue; }
-        } else if (entry.final.resends < MAX_FINAL_RESENDS) {
-          // Same result_id and fence_gen: the server dedupes or fences it.
-          entry.final.resends++;
-          this.send(entry.final.frame);
-        } else {
-          this.log(`cloud host: final for ${id} never acknowledged; leaving recovery to the server`);
-          this.drop(id, entry);
-          continue;
-        }
-      }
-      if (entry.failed) {
-        if (this.leaseValid(entry)) this.send(entry.failed);
-        entry.failed = undefined;
-      }
-      this.reapIfDone(id, entry);
+  private async poll(): Promise<void> {
+    if (this.closed) return;
+    const reply = await this.call("GET", "invocations");
+    if (this.closed) return;
+    if (!reply.ok) {
+      this.online = false;
+      if (reply.code !== this.lastPollError) this.log(`cloud host: polling failed (${reply.code}); backing off`);
+      this.lastPollError = reply.code;
+      const delay = backoffDelay(this.pollFailures++, this.random, this.opts.backoffBaseMs, this.opts.backoffCapMs);
+      this.schedulePoll(Math.max(reply.retryAfterMs ?? 0, delay));
+      return;
     }
+    if (!this.online) this.log("cloud host: online");
+    this.online = true;
+    this.pollFailures = 0;
+    this.lastPollError = "";
+    const offers = OffersSchema.safeParse(reply.body);
+    if (offers.success) for (const raw of offers.data.invocations) this.consider(raw);
+    else this.log("cloud host: ignored a malformed offer list");
+    // ±20% jitter so a fleet of hosts does not poll in lockstep.
+    this.schedulePoll(Math.round(this.opts.pollMs * (0.8 + 0.4 * this.random())));
   }
 
-  // ── inbound ───────────────────────────────────────────────────────
-
-  private receive(data: unknown): void {
-    let raw: unknown;
-    try { raw = JSON.parse(typeof data === "string" ? data : Buffer.isBuffer(data) ? data.toString("utf8") : String(data)); }
-    catch { this.log("cloud host: ignored a frame that is not JSON"); return; }
-    const parsed = HostInboundSchema.safeParse(raw);
-    if (!parsed.success) { this.log("cloud host: ignored an unknown frame"); return; }
-    this.handle(parsed.data);
-  }
-
-  private handle(frame: HostInbound): void {
-    switch (frame.type) {
-      case "host.ready": this.onReady(); return;
-      case "invocation.offered": this.onOffered(frame.invocation, frame.attempt); return;
-      case "invocation.claimed": this.onClaimed(frame); return;
-      case "invocation.lease": this.onLease(frame); return;
-      case "invocation.fenced": this.onFenced(frame); return;
-      case "final.committed": this.onCommitted(frame); return;
-      case "stop.requested": this.onStop(frame.invocation_id, frame.control_revision); return;
-      case "error": {
-        this.log(`cloud host: server error${frame.invocation_id ? ` for ${frame.invocation_id}` : ""}: ${frame.error.slice(0, 200)}`);
-        const entry = frame.invocation_id ? this.held.get(frame.invocation_id) : undefined;
-        if (entry?.phase === "claiming") this.drop(frame.invocation_id!, entry);
-        return;
-      }
-    }
-  }
-
-  private onOffered(invocation: Invocation, attempt: number): void {
-    const id = invocation.invocation_id;
-    if (this.held.has(id) || !this.ready) return;
+  private consider(raw: unknown): void {
+    const parsed = InvocationSchema.safeParse(raw);
+    if (!parsed.success) { this.log("cloud host: ignored a malformed offer"); return; }
+    const offer = parsed.data;
+    // Never claim the same invocation twice locally, and respect the slot limit.
+    if (this.runs.has(offer.invocation_id) || this.runs.size >= this.opts.maxConcurrent || offer.stop_requested) return;
     let eligible = false;
-    try { eligible = this.deps.canHost(invocation.bot_id); } catch { eligible = false; }
+    try { eligible = this.deps.canHost(offer.bot_id); } catch { eligible = false; }
     if (!eligible) return;
-    this.held.set(id, { invocation, attempt, phase: "claiming", seq: 0, buffer: "" });
-    if (!this.send({ type: "invocation.claim", invocation_id: id, attempt })) this.held.delete(id);
-  }
-
-  private onClaimed(frame: Extract<HostInbound, { type: "invocation.claimed" }>): void {
-    const id = frame.invocation_id;
-    const entry = this.held.get(id);
-    if (!entry || entry.attempt !== frame.attempt) return;
-    if ((this.fencedGen.get(id) ?? -1) >= frame.fence_gen) return;
-    if (entry.phase !== "claiming") {
-      if (entry.fenceGen === frame.fence_gen) this.renewLease(id, entry, frame.lease_expires_at);
-      return;
-    }
-    entry.fenceGen = frame.fence_gen;
-    entry.phase = "running";
-    this.renewLease(id, entry, frame.lease_expires_at);
-    if (entry.stopRevision !== undefined) {
-      // Stopped before the turn started: nothing runs, nothing publishes.
-      entry.phase = "settled";
-      this.observeStop(id, entry);
-      this.reapIfDone(id, entry);
-      return;
-    }
-    this.run(id, entry);
-  }
-
-  private onLease(frame: Extract<HostInbound, { type: "invocation.lease" }>): void {
-    const entry = this.held.get(frame.invocation_id);
-    if (!entry || entry.attempt !== frame.attempt || entry.fenceGen !== frame.fence_gen) return;
-    this.renewLease(frame.invocation_id, entry, frame.lease_expires_at);
-  }
-
-  private onFenced(frame: Extract<HostInbound, { type: "invocation.fenced" }>): void {
-    const id = frame.invocation_id;
-    this.fencedGen.set(id, Math.max(this.fencedGen.get(id) ?? -1, frame.fence_gen));
-    const entry = this.held.get(id);
-    if (!entry) return;
-    // A fence for an older generation than the one we hold is stale news.
-    if (entry.fenceGen !== undefined && frame.fence_gen < entry.fenceGen) return;
-    this.log(`cloud host: ${id} attempt ${entry.attempt} fenced`);
-    if (entry.phase === "running") this.abandon(id, entry, "fenced");
-    this.drop(id, entry);
-  }
-
-  private onCommitted(frame: Extract<HostInbound, { type: "final.committed" }>): void {
-    const entry = this.held.get(frame.invocation_id);
-    if (!entry?.final || entry.final.frame.result_id !== frame.result_id) return;
-    entry.final = undefined;
-    this.reapIfDone(frame.invocation_id, entry);
-  }
-
-  private onStop(id: string, controlRevision: number): void {
-    const entry = this.held.get(id);
-    if (!entry) return;
-    entry.stopRevision = Math.max(entry.stopRevision ?? -1, controlRevision);
-    if (entry.phase === "claiming") return; // observed once the claim resolves
-    if (entry.phase === "settled") {
-      // The turn already settled; a final produced before the stop stays.
-      this.observeStop(id, entry);
-      this.reapIfDone(id, entry);
-      return;
-    }
-    entry.abort?.abort();
-    void Promise.resolve().then(() => this.deps.stopTurn(id)).catch(error =>
-      this.log(`cloud host: stop for ${id} failed: ${error instanceof Error ? error.message : "unknown"}`));
-    // stop.observed waits for runTurn to settle (see run()).
-  }
-
-  // ── running a turn ────────────────────────────────────────────────
-
-  private run(id: string, entry: Held): void {
-    const abort = new AbortController();
-    entry.abort = abort;
-    const onDelta = (text: string) => {
-      if (abort.signal.aborted || this.held.get(id) !== entry || !text) return;
-      entry.buffer += text;
-      entry.flushTimer ??= this.timers.setTimeout(() => { entry.flushTimer = undefined; this.flush(id, entry); }, this.deps.deltaCoalesceMs ?? 50);
+    const run: Run = {
+      id: offer.invocation_id, phase: "claiming", abort: new AbortController(), beating: false, renewedAt: Date.now(),
+      buffer: "", deltasOpen: true, deltaCount: 0, deltaBytes: 0, deltaChain: Promise.resolve(),
     };
-    let result: Promise<TurnResult>;
-    try { result = this.deps.runTurn(entry.invocation, { onDelta, signal: abort.signal }); }
-    catch (error) { result = Promise.reject(error); }
-    result.then(outcome => outcome, error => ({ ok: false as const, failure: error instanceof Error ? error.message : String(error), model: null }))
-      .then(outcome => this.settle(id, entry, outcome));
+    this.runs.set(run.id, run);
+    void this.execute(run).catch(error =>
+      this.log(`cloud host: ${run.id} failed locally: ${error instanceof Error ? error.message : "unknown"}`)
+    ).finally(() => this.finish(run));
   }
 
-  private flush(id: string, entry: Held): void {
-    if (entry.flushTimer !== undefined) { this.timers.clearTimeout(entry.flushTimer); entry.flushTimer = undefined; }
-    if (!entry.buffer || entry.phase !== "running" || entry.abort?.signal.aborted || this.held.get(id) !== entry) return;
-    if (!this.leaseValid(entry)) return;
-    // Held across a disconnect and flushed on reconnect; provisional only.
-    if (this.send({ type: "stream.delta", invocation_id: id, attempt: entry.attempt, fence_gen: entry.fenceGen!, seq: entry.seq, text: entry.buffer })) {
-      entry.seq++;
-      entry.buffer = "";
-    }
+  // ── one invocation ────────────────────────────────────────────────
+
+  private live(run: Run): boolean {
+    return !this.closed && !run.lost;
   }
 
-  private settle(id: string, entry: Held, outcome: TurnResult): void {
-    // Dropped (fenced, lease lost, host stopped): the attempt publishes nothing.
-    if (this.held.get(id) !== entry) return;
-    if (entry.stopRevision !== undefined) {
-      entry.phase = "settled";
-      entry.buffer = "";
-      this.observeStop(id, entry);
-      this.reapIfDone(id, entry);
+  private async execute(run: Run): Promise<void> {
+    const alive = () => this.live(run);
+    const claimStartedAt = Date.now();
+    const claimed = await this.callRetrying("POST", "claim", { invocation_id: run.id }, { attempts: 3, alive });
+    if (!claimed.ok) {
+      // lease_lost: another host has it, or it was stopped; not ours to observe.
+      if (claimed.code !== "lease_lost") this.log(`cloud host: claim for ${run.id} failed (${claimed.code})`);
       return;
     }
-    if (entry.abort?.signal.aborted || !this.leaseValid(entry)) { this.drop(id, entry); return; }
-    this.flush(id, entry);
-    entry.phase = "settled";
-    entry.buffer = "";
-    const base = { invocation_id: id, attempt: entry.attempt, fence_gen: entry.fenceGen! };
-    if (outcome.ok) {
-      const frame: Final = { type: "final.commit", ...base, result_id: finalResultId(id), text: outcome.text, model: outcome.model ?? null };
-      entry.final = { frame, sent: this.send(frame), resends: 0 };
-    } else {
-      const frame: Failed = { type: "invocation.failed", ...base, failure: outcome.failure.slice(0, 1000), model: outcome.model ?? null };
-      if (!this.send(frame)) entry.failed = frame;
+    const leased = InvocationSchema.safeParse(claimed.body);
+    if (!leased.success || leased.data.invocation_id !== run.id || leased.data.host_id !== this.deps.hostId || !["leased", "running"].includes(leased.data.state)) {
+      this.log(`cloud host: claim for ${run.id} returned an unexpected run; skipping`);
+      return;
     }
-    this.reapIfDone(id, entry);
+    const invocation = leased.data;
+    const binding: RunBinding = { invocation_id: invocation.invocation_id, attempt: invocation.attempt, fence_gen: invocation.fence_gen };
+    run.binding = binding;
+    run.controlRevision = invocation.control_revision;
+    run.renewedAt = claimStartedAt;
+    run.phase = "preparing";
+    run.heartbeatTimer = setInterval(() => void this.beat(run), this.opts.heartbeatMs);
+
+    const context = await this.callRetrying("POST", "context", binding, { attempts: 3, alive });
+    if (!context.ok) return this.rejected(run, "context", context);
+    const parsedContext = ContextSchema.safeParse(context.body);
+    if (!parsedContext.success || parsedContext.data.invocation_id !== run.id || parsedContext.data.source.digest !== invocation.source.digest) {
+      // Released unstarted: the lease lapses and the server may safely re-offer it.
+      this.log(`cloud host: context for ${run.id} did not match the claimed source; releasing`);
+      return;
+    }
+    if (!this.live(run)) return this.afterLoss(run);
+
+    // The checkpoint must be recorded before the provider is entered; without
+    // it the turn never starts.
+    const checkpoint = await this.callRetrying("POST", "events", { kind: "checkpoint", ...binding, replay_safe: false }, { attempts: 3, alive });
+    if (!checkpoint.ok) return this.rejected(run, "checkpoint", checkpoint);
+    if (!this.live(run)) return this.afterLoss(run);
+
+    run.phase = "running";
+    const onDelta = (text: string) => this.buffer(run, text);
+    let pending: Promise<TurnResult>;
+    // Prompt is the exact source text. Room history from /context is untrusted
+    // and is deliberately not passed to the provider as instructions.
+    try { pending = this.deps.runTurn({ invocation, prompt: parsedContext.data.source.text, context: parsedContext.data }, { onDelta, signal: run.abort.signal }); }
+    catch (error) { pending = Promise.reject(error); }
+    const outcome = await pending.catch((error: unknown): TurnResult => ({ ok: false, failure: error instanceof Error ? error.message : String(error), model: null }));
+
+    // The turn has settled. A lost lease means nothing is published, ever.
+    if (run.lost) return this.afterLoss(run);
+    if (this.closed) return;
+    if (outcome.model && outcome.model !== invocation.model.model) {
+      this.log(`cloud host: ${run.id} ran on ${outcome.model}, pinned ${invocation.model.provider}/${invocation.model.model}`);
+    }
+    if (!outcome.ok) {
+      // There is no host "failed" event in the contract. Publishing a failure
+      // text as the bot's final would be a lie in the room, so the host posts
+      // nothing, stops heartbeating and lets the server hold the run when the
+      // lease lapses (checkpointed work is never auto-replayed).
+      this.log(`cloud host: ${run.id} turn failed (${outcome.failure.slice(0, 200)}); leaving it to the server to hold`);
+      return;
+    }
+
+    run.phase = "finalizing";
+    await this.closeDeltas(run);
+    // Identical body on every retry: the server dedupes by digest even after completion.
+    const final = { kind: "final.commit" as const, ...binding, text: finalText(outcome.text) };
+    const committed = await this.callRetrying("POST", "events", final, { attempts: Number.POSITIVE_INFINITY, alive: () => !this.closed });
+    if (committed.ok) return;
+    if (committed.code === "lease_lost") {
+      // A stop (or fence) landed before the final; the final is not ours to publish.
+      this.lose(run, "lease_lost");
+      return this.afterLoss(run);
+    }
+    this.log(`cloud host: final for ${run.id} was not accepted (${committed.code})`);
   }
 
-  private observeStop(id: string, entry: Held): void {
-    if (entry.stopRevision === undefined || entry.fenceGen === undefined) return;
-    entry.stopObservedPending = !this.send({ type: "stop.observed", invocation_id: id, attempt: entry.attempt, fence_gen: entry.fenceGen, control_revision: entry.stopRevision });
+  private rejected(run: Run, step: string, reply: Extract<Reply, { ok: false }>): Promise<void> | void {
+    if (reply.code === "lease_lost" || reply.code === "forbidden") {
+      this.lose(run, reply.code);
+      return this.afterLoss(run);
+    }
+    if (run.lost) return this.afterLoss(run);
+    this.log(`cloud host: ${step} for ${run.id} failed (${reply.code}); releasing`);
   }
 
-  /** Stop the native turn for an attempt this host no longer owns. */
-  private abandon(id: string, entry: Held, reason: string): void {
-    entry.abort?.abort();
-    void Promise.resolve().then(() => this.deps.stopTurn(id)).catch(error =>
-      this.log(`cloud host: stop after ${reason} for ${id} failed: ${error instanceof Error ? error.message : "unknown"}`));
+  /** Called only after the turn (if any) has settled. */
+  private async afterLoss(run: Run): Promise<void> {
+    if (this.closed || !run.lost || run.lost === "forbidden" || !run.binding || run.controlRevision === undefined) return;
+    // A human stop increments control_revision by exactly one and leaves the
+    // fence alone; a fence/expiry hold bumps both, so this is refused then.
+    const observed = { kind: "stop.observed" as const, ...run.binding, control_revision: nextControlRevision(run.controlRevision) };
+    const reply = await this.callRetrying("POST", "events", observed, { attempts: 5, alive: () => !this.closed });
+    if (reply.ok) this.log(`cloud host: stop observed for ${run.id}`);
   }
 
   // ── lease ─────────────────────────────────────────────────────────
 
-  private heartbeat(): void {
-    for (const [id, entry] of this.held) {
-      if (entry.phase !== "running" || entry.fenceGen === undefined) continue;
-      this.send({ type: "invocation.heartbeat", invocation_id: id, attempt: entry.attempt, fence_gen: entry.fenceGen });
-    }
-  }
-
-  private renewLease(id: string, entry: Held, leaseExpiresAt: string): void {
-    // Never believe a lease longer than one TTL from now, whatever the clocks say.
-    const now = this.now();
-    const absolute = Date.parse(leaseExpiresAt);
-    const deadline = Math.min(Number.isFinite(absolute) ? absolute : Infinity, now + LEASE.ttlMs);
-    entry.leaseDeadline = deadline;
-    if (entry.leaseTimer !== undefined) this.timers.clearTimeout(entry.leaseTimer);
-    entry.leaseTimer = this.timers.setTimeout(() => this.leaseCheck(id, entry), Math.max(0, deadline - now));
-  }
-
-  private leaseValid(entry: Held): boolean {
-    return entry.leaseDeadline !== undefined && this.now() < entry.leaseDeadline;
-  }
-
-  private leaseCheck(id: string, entry: Held): void {
-    entry.leaseTimer = undefined;
-    if (this.held.get(id) !== entry || entry.leaseDeadline === undefined) return;
-    if (this.now() < entry.leaseDeadline) {
-      entry.leaseTimer = this.timers.setTimeout(() => this.leaseCheck(id, entry), entry.leaseDeadline - this.now());
+  private async beat(run: Run): Promise<void> {
+    if (run.beating || run.lost || run.phase === "done" || !run.binding || this.closed) return;
+    // A final in flight is retried on its own; it decides the outcome then.
+    if (run.phase !== "finalizing" && Date.now() - run.renewedAt >= this.opts.leaseMs) {
+      this.log(`cloud host: lease for ${run.id} lapsed without a heartbeat; stopping locally`);
+      this.lose(run, "expired");
       return;
     }
-    if (entry.phase === "running") {
-      this.log(`cloud host: lease for ${id} attempt ${entry.attempt} expired; stopping locally`);
-      this.abandon(id, entry, "lease expiry");
-      this.drop(id, entry);
+    run.beating = true;
+    const startedAt = Date.now();
+    const reply = await this.call("POST", "heartbeat", run.binding);
+    run.beating = false;
+    // Re-read after the await: the run may have finished or been lost meanwhile.
+    if (run.lost || finished(run)) return;
+    if (reply.ok) {
+      const lease = InvocationSchema.safeParse(reply.body);
+      if (lease.success && lease.data.invocation_id === run.id && lease.data.fence_gen === run.binding.fence_gen) {
+        run.renewedAt = startedAt;
+        run.controlRevision = lease.data.control_revision;
+      }
       return;
     }
-    // A final already sent may still be resent (server dedupes or fences);
-    // anything not yet published is dropped.
-    if (entry.final?.sent || entry.stopObservedPending) { entry.failed = undefined; return; }
-    this.drop(id, entry);
+    if (run.phase === "finalizing") return;
+    if (reply.code === "lease_lost" || reply.code === "forbidden") this.lose(run, reply.code);
+    // Anything else: try again next tick; the local lease check bounds it.
+  }
+
+  private lose(run: Run, why: Loss): void {
+    if (run.lost) return;
+    run.lost = why;
+    const wasRunning = run.phase === "running";
+    this.quiet(run);
+    run.abort.abort();
+    if (why !== "expired") this.log(`cloud host: ${run.id} ${why === "forbidden" ? "access removed" : "lease lost"}; aborting`);
+    if (wasRunning) this.interrupt(run, why);
+  }
+
+  private interrupt(run: Run, reason: string): void {
+    void Promise.resolve().then(() => this.deps.stopTurn(run.id)).catch(error =>
+      this.log(`cloud host: stop after ${reason} for ${run.id} failed: ${error instanceof Error ? error.message : "unknown"}`));
+  }
+
+  // ── provisional text ──────────────────────────────────────────────
+
+  private buffer(run: Run, text: string): void {
+    if (!text || run.phase !== "running" || !run.deltasOpen || !this.live(run)) return;
+    run.buffer += text;
+    run.flushTimer ??= setTimeout(() => { run.flushTimer = undefined; this.flush(run); }, this.opts.deltaFlushMs);
+  }
+
+  private flush(run: Run): void {
+    if (!run.buffer) return;
+    const text = run.buffer;
+    run.buffer = "";
+    run.deltaChain = run.deltaChain.then(() => this.sendDeltas(run, text));
+  }
+
+  private async sendDeltas(run: Run, text: string): Promise<void> {
+    const alive = () => run.deltasOpen && this.live(run);
+    for (const chunk of utf8Chunks(text, LIMITS.textBytes)) {
+      if (!alive() || !run.binding) return;
+      const bytes = utf8(chunk);
+      if (run.deltaCount >= DELTA_BUDGET.count || run.deltaBytes + bytes > DELTA_BUDGET.bytes) {
+        this.log(`cloud host: ${run.id} reached the streaming budget; the final still commits`);
+        run.deltasOpen = false;
+        return;
+      }
+      const body = { kind: "stream.delta" as const, ...run.binding, delta_id: deltaId(run.id, run.binding.attempt, run.deltaCount), text: chunk };
+      // rate_limited here is the per-invocation stream cap: stop streaming, do not retry.
+      const reply = await this.callRetrying("POST", "events", body, { attempts: 3, alive, noRetry: ["rate_limited"] });
+      if (reply.ok) { run.deltaCount++; run.deltaBytes += bytes; continue; }
+      if ((reply.code === "lease_lost" || reply.code === "forbidden") && run.phase === "running") { this.lose(run, reply.code); return; }
+      // Provisional text is optional; anything else just ends streaming.
+      run.deltasOpen = false;
+      return;
+    }
+  }
+
+  private async closeDeltas(run: Run): Promise<void> {
+    if (run.flushTimer !== undefined) clearTimeout(run.flushTimer);
+    run.flushTimer = undefined;
+    run.buffer = "";
+    run.deltasOpen = false;
+    await run.deltaChain;
   }
 
   // ── bookkeeping ───────────────────────────────────────────────────
 
-  private reapIfDone(id: string, entry: Held): void {
-    if (entry.phase !== "settled" || entry.final || entry.failed || entry.stopObservedPending) return;
-    this.drop(id, entry);
+  private quiet(run: Run): void {
+    if (run.heartbeatTimer !== undefined) clearInterval(run.heartbeatTimer);
+    if (run.flushTimer !== undefined) clearTimeout(run.flushTimer);
+    run.heartbeatTimer = run.flushTimer = undefined;
+    run.buffer = "";
+    run.deltasOpen = false;
   }
 
-  private drop(id: string, entry: Held): void {
-    if (entry.flushTimer !== undefined) this.timers.clearTimeout(entry.flushTimer);
-    if (entry.leaseTimer !== undefined) this.timers.clearTimeout(entry.leaseTimer);
-    entry.flushTimer = entry.leaseTimer = undefined;
-    entry.buffer = "";
-    if (this.held.get(id) === entry) this.held.delete(id);
-    if (this.fencedGen.size > 1000) this.fencedGen.delete(this.fencedGen.keys().next().value!);
+  private finish(run: Run): void {
+    this.quiet(run);
+    run.phase = "done";
+    if (this.runs.get(run.id) === run) this.runs.delete(run.id);
   }
 }

@@ -193,7 +193,7 @@ describe("cloud room controller", () => {
       return { source, set(next: boolean) { online = next; for (const listener of listeners) listener(next); } };
     };
     const accepted = (id: string, n: number) => ({ ok: true as const, value: { status: "accepted" as const, client_operation_id: id, digest: "a".repeat(64), message_id: `m${n}`, room_id: "r1", thread_id: "t1", sequence: String(n), redacted: false, retry: "none" as const } });
-    const card = { card_id: "c1", invocation_id: "inv1", room_id: "r1", thread_id: "t1", bot_id: "bot1", version: 1, state: "pending" as const, title: "t", summary: "s", digest: "d1", expires_at: "2099-01-01T00:00:00.000Z", can_decide: true };
+    const card = { invocation_id: "inv1", attempt: 1, fence_gen: "7", approval_id: "ap1", workspace_id: "w1", room_id: "r1", thread_id: "t1", actor_id: session.account_id, version: 1, effect_id: "e1", digest: "d".repeat(64), title: "t", expires_at: "2099-01-01T00:00:00.000Z", status: "pending" as const, can_view: true, can_decide: true };
 
     it("queues a send while offline with the saved window and replays it exactly once on reconnect", async () => {
       const net = network(true);
@@ -244,7 +244,7 @@ describe("cloud room controller", () => {
       const decideCard = vi
         .fn()
         .mockResolvedValueOnce({ ok: false, failure: { transport: true } })
-        .mockResolvedValueOnce({ ok: true, value: { ...card, state: "approved", decided_by: "alice" } });
+        .mockResolvedValueOnce({ ok: true, value: { ...card, version: 2, status: "approved", can_decide: false } });
       const controller = new CloudRoomController(session, fakeApi({ decideCard } as Partial<CloudApi>), room, null, FakeSocket as unknown as typeof WebSocket, undefined, net.source);
       controller.start();
       expect(await controller.decide(card, "approve")).toBe("offline");
@@ -252,37 +252,43 @@ describe("cloud room controller", () => {
       net.set(true);
       expect(await controller.decide(card, "approve")).toBe("decided");
       expect(decideCard).toHaveBeenCalledTimes(2);
-      expect(decideCard.mock.calls[0][1]).toEqual(decideCard.mock.calls[1][1]);
-      expect(decideCard.mock.calls[0][1]).toMatchObject({ card_id: "c1", version: 1, digest: "d1", decision: "approve" });
-      expect(controller.getState().runs.cards.c1.state).toBe("approved");
-      expect(await controller.decide({ ...card, state: "approved" }, "deny")).toBe("not_decidable");
+      expect(decideCard.mock.calls[0]).toEqual(decideCard.mock.calls[1]);
+      expect(decideCard.mock.calls[0]).toEqual(["w1", "r1", "ap1", { invocation_id: "inv1", attempt: 1, fence_gen: "7", version: 1, effect_id: "e1", digest: "d".repeat(64), decision: "approve" }]);
+      expect(controller.getState().runs.cards.ap1.status).toBe("approved");
+      expect(await controller.decide({ ...card, status: "approved" }, "deny")).toBe("not_decidable");
+      // Members can view a card, but only its bound actor decides.
+      expect(await controller.decide({ ...card, actor_id: "someone-else" }, "deny")).toBe("not_decidable");
       controller.stop();
       vi.restoreAllMocks();
     });
 
     it("reports a lost race as already decided", async () => {
-      const decideCard = vi.fn(async () => ({ ok: false as const, failure: { error: "operation_conflict", status: 409 } }));
+      const decideCard = vi.fn(async () => ({ ok: false as const, failure: { error: "approval_decided", status: 409 } }));
       const controller = new CloudRoomController(session, fakeApi({ decideCard } as Partial<CloudApi>), room, null, FakeSocket as unknown as typeof WebSocket, undefined, network().source);
       controller.start();
       expect(await controller.decide(card, "deny")).toBe("already_decided");
       controller.stop();
     });
 
-    it("uploads to the server-chosen URL, waits for verification and sends only ready attachments", async () => {
-      const attachment = { attachment_id: "a1", room_id: "r1", name: "notes.txt", content_type: "text/plain", size: 5, state: "preparing" as const };
-      const allocateAttachment = vi.fn(async () => ({ ok: true as const, value: { attachment, upload_url: "http://127.0.0.1:9/upload/a1?sig=x", upload_expires_at: "2099-01-01T00:00:00Z" } }));
-      const upload = vi.fn(async () => ({ ok: true as const, value: new Blob() }));
-      const completeAttachment = vi.fn(async () => ({ ok: true as const, value: { ...attachment, state: "verifying" as const } }));
-      const attachmentGet = vi.fn(async () => ({ ok: true as const, value: { ...attachment, state: "ready" as const } }));
+    it("uploads to the server-chosen URL, lets the server verify it and sends only ready attachments", async () => {
+      const attachment = { attachment_id: "a1", workspace_id: "w1", room_id: "r1", thread_id: "t1", owner_id: session.account_id, object_key: "w1|r1|a1", name: "notes.txt", size: 5, type: "text/plain" as const, checksum: "c".repeat(64), state: "preparing" as const, expires_at: "2099-01-01T00:00:00Z" };
+      const allocateAttachment = vi.fn(async () => ({ ok: true as const, value: { attachment, upload_url: "http://127.0.0.1:9/v2/workspaces/w1/attachments/a1/upload?token=x", expires_at: "2099-01-01T00:00:00Z" } }));
+      const upload = vi.fn(async () => ({ ok: true as const, value: { ...attachment, state: "uploading" as const } }));
+      const completeAttachment = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, failure: { error: "unavailable", status: 503 } })
+        .mockResolvedValueOnce({ ok: true, value: { ...attachment, state: "ready" } });
       const send = vi.fn(async (envelope: { client_operation_id: string }) => accepted(envelope.client_operation_id, 20));
-      const api = fakeApi({ allocateAttachment, upload, completeAttachment, attachment: attachmentGet, send } as Partial<CloudApi>);
+      const api = fakeApi({ allocateAttachment, upload, completeAttachment, send } as unknown as Partial<CloudApi>);
       const controller = new CloudRoomController(session, api, room, null, FakeSocket as unknown as typeof WebSocket, undefined, network().source);
       controller.start();
       await controller.attach(new File(["hello"], "notes.txt", { type: "text/plain" }));
-      expect(allocateAttachment).toHaveBeenCalledWith("w1", expect.objectContaining({ room_id: "r1", name: "notes.txt", size: 5, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }));
-      expect(allocateAttachment.mock.calls[0]).not.toContainEqual(expect.objectContaining({ path: expect.anything() }));
-      expect(upload).toHaveBeenCalledWith("http://127.0.0.1:9/upload/a1?sig=x", expect.any(Blob), "text/plain");
+      // The client names the room/thread and declares size, type and checksum; the server picks the object key.
+      expect(allocateAttachment).toHaveBeenCalledWith("w1", { room_id: "r1", thread_id: "t1", name: "notes.txt", size: 5, type: "text/plain", checksum: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" });
+      expect(upload).toHaveBeenCalledWith("http://127.0.0.1:9/v2/workspaces/w1/attachments/a1/upload?token=x", expect.any(Blob), "text/plain");
+      expect(completeAttachment).toHaveBeenCalledTimes(2);
       expect(controller.getUploads()).toMatchObject([{ state: "ready", attachment_id: "a1" }]);
+      expect(controller.attachmentName("a1")).toBe("notes.txt");
       expect(await controller.send("", [], ["a1"])).toBeNull();
       await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
       expect(send.mock.calls[0][0]).toMatchObject({ attachment_ids: ["a1"], text: "" });
@@ -290,15 +296,17 @@ describe("cloud room controller", () => {
       controller.stop();
     });
 
-    it("refuses oversized files before any upload", async () => {
+    it("refuses oversized, empty and disallowed files before any upload", async () => {
       const allocateAttachment = vi.fn();
       const controller = new CloudRoomController(session, fakeApi({ allocateAttachment } as Partial<CloudApi>), room, null, FakeSocket as unknown as typeof WebSocket, undefined, network().source);
       controller.start();
-      const big = new File([], "big.bin");
-      Object.defineProperty(big, "size", { value: 26 * 1024 * 1024 });
+      const big = new File([], "big.png", { type: "image/png" });
+      Object.defineProperty(big, "size", { value: 10 * 1024 * 1024 + 1 });
       await controller.attach(big);
+      await controller.attach(new File([], "empty.txt", { type: "text/plain" }));
+      await controller.attach(new File(["x"], "run.sh", { type: "application/x-sh" }));
       expect(allocateAttachment).not.toHaveBeenCalled();
-      expect(controller.getUploads()).toMatchObject([{ state: "failed", problem: "too large" }]);
+      expect(controller.getUploads().map((upload) => upload.problem)).toEqual(["too large", "empty file", "only png, jpeg, pdf or plain text"]);
       controller.stop();
     });
 
@@ -309,7 +317,7 @@ describe("cloud room controller", () => {
       const controller = new CloudRoomController(session, fakeApi({ download } as Partial<CloudApi>), room, null, FakeSocket as unknown as typeof WebSocket, undefined, network().source);
       controller.start();
       FakeSocket.last.open();
-      expect(await controller.download("a1")).toBe("blob:one");
+      expect(await controller.download("a1")).toEqual({ url: "blob:one", type: "" });
       FakeSocket.last.receive({ type: "error", error: "forbidden" });
       await flush();
       expect(revoke).toHaveBeenCalledWith("blob:one");
