@@ -55,7 +55,7 @@ export async function runtimeRoute(s: CloudService, req: IncomingMessage, res: S
         else if (path[4]) {
             const a = IdSchema.parse(path[4]);
             if (path.length === 5 && method === 'GET') {
-                value = await s.attachments.admitUpload(token,w,a,url.searchParams.get('token')??'');
+                value = await s.attachments.metadata(token, w, a);
                 room = value.room_id;
             }
             else if (path.length === 6 && path[5] === 'upload' && method === 'PUT') {

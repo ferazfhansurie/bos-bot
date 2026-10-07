@@ -167,6 +167,7 @@ test('attachments quarantine until verified, explicit send grants range access, 
     const download = await fetch(f.url + `/v2/workspaces/${h.w}/attachments/${a.attachment_id}/download`, { headers: { authorization: 'Bearer ' + h.b.bearer, range: 'bytes=0-8' } });
     assert.equal(download.status, 206);
     assert.equal(await download.text(), 'fictional');
+    assert.equal((await ok('GET', `/v2/workspaces/${h.w}/attachments/${a.attachment_id}`, h.b.bearer)).state, 'ready');
     await admin("UPDATE cloud.attachment_objects SET expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND attachment_id=$2", [h.w, a.attachment_id]);
     await f.service.tickWorker();
     assert.equal((await f.service.attachments.metadata(h.b.bearer, h.w, a.attachment_id)).state, 'ready');
