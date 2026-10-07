@@ -115,3 +115,25 @@ fails closed. Registered attachment IDs and ready/current-owner checks are part 
 send validation. Private/guest downloads use authenticated range proxy, no permanent URL.
 PushHintSchema is a generic `New activity` hint, deduped by committed event + recipient;
 no APNS transport runs in these slices.
+
+Backend completion adds optional `bot_id` and `attachment_ids` to `MessageSchema` (existing
+messages parse unchanged); finals identify the registered bot using `bot_id`, with the
+host owner as audit actor. Optional run `host_online` reports eligible host freshness.
+Idle hosts poll offers to renew liveness; transitions publish optional `presence` events.
+Host credential is an opaque random secret with only a hash in PG, so service key rotation
+and restarts do not invalidate it. Each use still requires the original account's current
+issuer session, host expiry, bot grants and room authority. Stop observation retries and
+approval creation retries retain their original identities.
+
+POST `/v2/workspaces/{w}/push-registrations` accepts
+`{installation_id,generation,token_version,provider:"apns",environment:"sandbox",muted}`;
+returns `{registration_id,expires_at}`. DELETE `.../push-registrations/{id}` revokes.
+Generation/token versions are decimal strings. Authenticated foreground renewal only;
+no token, client text or push provider credential is accepted/stored. `service.push.build`
+is the local redacted payload assertion seam; no public dispatch endpoint or APNS sender.
+
+Attachment byte-buffer operations (upload, scan/complete, range/download) share a maximum
+of four per service; overflow is `rate_limited`/429. Each buffer is <=10MiB. Push registration
+can also set optional `mentions_only` (default false). Hint dedupe survives registration/token
+renewal for the same account+installation+committed event; muted/self/non-mentioned recipients
+when mentions_only is enabled receive no hint.
