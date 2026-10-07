@@ -1,0 +1,10 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { SendEnvelopeSchema, LookupSchema, SnapshotSchema, EventSchema, FrameSchema, canonicalJson } from './index.ts';
+const corpus = JSON.parse(readFileSync(new URL('./fixtures.json',import.meta.url),'utf8'));
+const schemas = {send:SendEnvelopeSchema,lookup:LookupSchema,snapshot:SnapshotSchema,event:EventSchema};
+for (const v of corpus.digest_vectors) test(`digest ${v.sha256.slice(0,8)}`,()=>assert.equal(createHash('sha256').update(canonicalJson(v.envelope)).digest('hex'),v.sha256));
+for (const c of corpus.schema_cases) test(`schema ${c.id}`,()=>assert.equal(schemas[c.schema as keyof typeof schemas].safeParse(c.value).success,c.valid));
+for (const c of corpus.reducer_cases) test(`wire ${c.id}`,()=>{ for(const s of c.steps) { if(s.type==='frame') FrameSchema.parse(s.frame); if(s.type==='snapshot') SnapshotSchema.parse(s.snapshot); if(s.envelope) SendEnvelopeSchema.parse(s.envelope); if(s.result) LookupSchema.parse(s.result); } });
