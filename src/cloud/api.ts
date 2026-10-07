@@ -2,18 +2,24 @@
 // send the issuer bearer; the web client sends nothing and relies on the
 // same-site session cookie. The server derives the actor and membership.
 import {
-  FrameSchema,
   LIMITS,
   LookupSchema,
-  SnapshotSchema,
-  type CloudFrame,
   type CloudMessage,
-  type CloudSnapshot,
   type OperationResult,
   type ReadCoverage,
   type SendEnvelope,
 } from "../../shared/cloud-protocol/index";
+import {
+  AttachmentSchema,
+  CardDecisionSchema,
+  CardSchema,
+  UploadAllocationSchema,
+  type CloudAttachment,
+  type CloudCard,
+} from "../../shared/cloud-run-draft";
+import type { z } from "zod";
 import { identityProblem, type IdentityProblem } from "./auth-state";
+import { RoomFrameSchema, RoomSnapshotSchema, type RoomFrame, type RoomSnapshot } from "./run-schema";
 
 export interface CloudIdentity {
   account_id: string;
@@ -98,6 +104,12 @@ export function cloudApi(session: CloudSession, onIdentity: (problem: IdentityPr
     }
     return result;
   };
+  const parsed = async <T>(result: CloudResult<unknown>, schema: z.ZodType<T>): Promise<CloudResult<T>> => {
+    if (!result.ok) return result;
+    const value = schema.safeParse(result.value);
+    return value.success ? { ok: true, value: value.data } : { ok: false, failure: { transport: true } };
+  };
+  const attachmentPath = (workspaceId: string, attachmentId: string) => `/v2/workspaces/${enc(workspaceId)}/attachments/${enc(attachmentId)}`;
   return {
     me: () => call<CloudIdentity>("GET", "/v2/me"),
     sync: () => call<{ workspaces: SyncWorkspace[] }>("GET", "/v2/discovery/sync"),
@@ -119,12 +131,8 @@ export function cloudApi(session: CloudSession, onIdentity: (problem: IdentityPr
       const parsed = LookupSchema.safeParse(result.value);
       return parsed.success ? { ok: true, value: parsed.data } : { ok: false, failure: { transport: true } };
     },
-    snapshot: async (workspaceId: string, roomId: string, threadId: string): Promise<CloudResult<CloudSnapshot>> => {
-      const result = await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/snapshot`, { thread_id: threadId });
-      if (!result.ok) return result;
-      const parsed = SnapshotSchema.safeParse(result.value);
-      return parsed.success ? { ok: true, value: parsed.data } : { ok: false, failure: { transport: true } };
-    },
+    snapshot: async (workspaceId: string, roomId: string, threadId: string): Promise<CloudResult<RoomSnapshot>> =>
+      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/snapshot`, { thread_id: threadId }), RoomSnapshotSchema),
     history: (workspaceId: string, roomId: string, threadId: string, before: string) =>
       call<{ messages: CloudMessage[]; next_before: string | null }>(
         "GET",
@@ -132,14 +140,58 @@ export function cloudApi(session: CloudSession, onIdentity: (problem: IdentityPr
       ),
     postRead: (workspaceId: string, roomId: string, body: { thread_id: string; intervals: Array<[string, string]>; mark_read_through?: string }) =>
       call<ReadCoverage>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/read`, body),
+    /** One decision per card version; never queued for offline replay. */
+    decideCard: async (workspaceId: string, decision: z.infer<typeof CardDecisionSchema>): Promise<CloudResult<CloudCard>> =>
+      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/cards/${enc(decision.card_id)}/decisions`, decision), CardSchema),
+    /** The server picks the object key (workspace|room|attachment_id); the client never supplies a path. */
+    allocateAttachment: async (workspaceId: string, input: { room_id: string; name: string; content_type: string; size: number; sha256: string }) =>
+      parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/attachments`, input), UploadAllocationSchema),
+    completeAttachment: async (workspaceId: string, attachmentId: string): Promise<CloudResult<CloudAttachment>> =>
+      parsed(await call<unknown>("POST", `${attachmentPath(workspaceId, attachmentId)}/complete`, {}), AttachmentSchema),
+    attachment: async (workspaceId: string, attachmentId: string): Promise<CloudResult<CloudAttachment>> =>
+      parsed(await call<unknown>("GET", attachmentPath(workspaceId, attachmentId)), AttachmentSchema),
+    /** Every download is reauthorized against current room access. */
+    download: async (workspaceId: string, attachmentId: string): Promise<CloudResult<Blob>> => {
+      const result = await rawRequest(session, "GET", `${attachmentPath(workspaceId, attachmentId)}/content`);
+      if (!result.ok) {
+        const problem = identityProblem(result.failure);
+        if (problem) onIdentity(problem);
+      }
+      return result;
+    },
+    /** PUT the bytes to the short-lived upload URL the allocation returned. */
+    upload: (uploadUrl: string, body: Blob, contentType: string) => rawRequest(session, "PUT", uploadUrl, body, contentType),
   };
 }
 
 export type CloudApi = ReturnType<typeof cloudApi>;
 
+/** Binary request: an absolute URL (upload) or a service path (download). */
+async function rawRequest(session: CloudSession, method: string, target: string, body?: Blob, contentType?: string): Promise<CloudResult<Blob>> {
+  const url = /^https?:/.test(target) ? target : `${session.baseUrl.replace(/\/$/, "")}${target}`;
+  const sameService = url.startsWith(session.baseUrl.replace(/\/$/, ""));
+  try {
+    const response = await fetch(url, {
+      method,
+      // Only the room service ever sees the session; an upload URL is its own short-lived grant.
+      credentials: sameService ? "same-origin" : "omit",
+      headers: { ...(contentType ? { "content-type": contentType } : {}), ...(sameService && session.bearer ? { authorization: `Bearer ${session.bearer}` } : {}) },
+      body,
+    });
+    if (response.ok) return { ok: true, value: await response.blob() };
+    const error = (await response.json().catch(() => null)) as { error?: unknown; retry_after?: unknown } | null;
+    if (typeof error?.error === "string") {
+      return { ok: false, failure: { error: error.error, status: response.status, retry_after: typeof error.retry_after === "number" ? error.retry_after : undefined } };
+    }
+    return { ok: false, failure: { transport: true, status: response.status } };
+  } catch {
+    return { ok: false, failure: { transport: true } };
+  }
+}
+
 export interface RealtimeHandlers {
   onOpen(): void;
-  onFrame(frame: CloudFrame, bytes: number): void;
+  onFrame(frame: RoomFrame, bytes: number): void;
   onClose(reason: "closed" | "invalid_frame"): void;
 }
 
@@ -168,7 +220,7 @@ export function connectRealtime(session: CloudSession, handlers: RealtimeHandler
     } catch {
       parsed = null;
     }
-    const frame = FrameSchema.safeParse(parsed);
+    const frame = RoomFrameSchema.safeParse(parsed);
     if (!frame.success) {
       closed = true;
       socket.close();

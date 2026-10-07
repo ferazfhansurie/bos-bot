@@ -4,11 +4,13 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { cloudApi, currentSession, type CloudApi, type CloudSession, type SyncWorkspace } from "./api";
 import { authReducer, identityProblem, type IdentityProblem } from "./auth-state";
-import { CloudRoomController, type CloudRoomRef } from "./controller";
+import type { CardDecision, CloudAttachment, CloudCard } from "../../shared/cloud-run-draft";
+import { CloudRoomController, type CloudRoomRef, type DecisionOutcome, type PendingUpload } from "./controller";
 import { issuer } from "./issuer";
 import { outboxLabel } from "./outbox";
 import { isRead } from "./read-coverage";
 import { timeline } from "./room-reducer";
+import { decidable, visibleRuns, type RunView } from "./runs";
 
 const field = "rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900";
 const button = "rounded border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800";
@@ -248,8 +250,17 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
     return () => controller.stop();
   }, [controller]);
   const state = useSyncExternalStore(controller.subscribe, controller.getState);
+  const uploads = useSyncExternalStore(controller.subscribe, controller.getUploads);
   const items = timeline(state);
+  const runs = visibleRuns(state.runs, Date.now());
+  const bots = state.runs.bots;
+  const botName = (id: string) => bots.find((bot) => bot.bot_id === id)?.name;
   const [draft, setDraft] = useState("");
+  /** Bots picked from the strip; spans are found in the final text at send time. */
+  const [picked, setPicked] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const uploading = uploads.some((upload) => upload.state !== "ready" && upload.state !== "failed" && upload.state !== "rejected" && upload.state !== "expired");
+  const readyIds = uploads.filter((upload) => upload.state === "ready" && upload.attachment_id).map((upload) => upload.attachment_id!);
   const [problem, setProblem] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -257,7 +268,7 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
   // effect may only return a cleanup function.
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [items.length]);
+  }, [items.length, runs.length]);
 
   // Only messages actually on screen while the window is in the foreground count as read.
   useEffect(() => {
@@ -268,7 +279,9 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
 
   const status = state.removed
     ? "you no longer have access to this room"
-    : state.upgrade_required
+    : !state.online
+      ? "offline · messages wait here and send when you reconnect"
+      : state.upgrade_required
       ? "update needed to keep reading this room"
       : state.reset_required
         ? "catching up"
@@ -278,15 +291,32 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
 
   return (
     <>
-      <header className="border-b border-neutral-200 px-4 py-2 text-neutral-500 dark:border-neutral-800">
-        {room.room_id} · {status}
+      <header className="flex flex-wrap items-center gap-2 border-b border-neutral-200 px-4 py-2 text-neutral-500 dark:border-neutral-800">
+        <span>{room.room_id} · {status}</span>
+        {!state.removed &&
+          bots.map((bot) => (
+            <button
+              key={bot.bot_id}
+              className={button}
+              title={bot.host_online ? "mention" : "its host is offline; a mention waits up to 24h"}
+              onClick={() => {
+                setDraft((text) => `${text}${text && !text.endsWith(" ") ? " " : ""}@${bot.name} `);
+                setPicked((ids) => (ids.includes(bot.bot_id) ? ids : [...ids, bot.bot_id]));
+              }}
+            >
+              <span className={bot.host_online ? "text-green-600" : "text-neutral-400"}>●</span> @{bot.name}
+              {!bot.host_online && <span className="text-xs text-neutral-400"> host offline</span>}
+            </button>
+          ))}
       </header>
       <div className="flex-1 overflow-y-auto px-4 py-2">
         {items.map((item) =>
           item.kind === "message" ? (
             <div key={item.message.message_id} className="whitespace-pre-wrap py-1">
-              <span className="text-neutral-500">{item.message.actor_id === session.account_id ? "you" : item.message.actor_id}</span>{" "}
+              <span className="text-neutral-500">{item.message.actor_id === session.account_id ? "you" : (botName(item.message.actor_id) ?? item.message.actor_id)}</span>{" "}
               {item.message.deleted ? <em className="text-neutral-400">deleted</em> : item.message.text}
+              {!item.message.deleted &&
+                item.message.attachments?.map((attachment) => <AttachmentView key={attachment.attachment_id} controller={controller} attachment={attachment} />)}
             </div>
           ) : (
             <div key={item.entry.envelope.client_operation_id} className="flex items-center gap-2 py-1 opacity-70">
@@ -301,18 +331,27 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
             </div>
           ),
         )}
+        {!state.removed &&
+          runs.map((view) => <RunRow key={view.run.invocation_id} view={view} name={botName(view.run.bot_id) ?? view.run.bot_id} controller={controller} />)}
         <div ref={bottom} />
       </div>
+      {uploads.length > 0 && !state.removed && (
+        <div className="flex flex-wrap gap-2 border-t border-neutral-200 px-3 pt-2 dark:border-neutral-800">
+          {uploads.map((upload) => <UploadChip key={upload.local_id} upload={upload} onRemove={() => controller.removeUpload(upload.local_id)} />)}
+        </div>
+      )}
       <form
         className="flex gap-2 border-t border-neutral-200 p-3 dark:border-neutral-800"
         onSubmit={async (event) => {
           event.preventDefault();
           const text = draft;
-          const result = await controller.send(text);
-          if (result) setProblem(result === "no_window" ? "couldn't open a send window" : result.replace(/_/g, " "));
+          if (uploading) return setProblem("wait for files to finish");
+          const result = await controller.send(text, mentionSpans(text, picked, bots), readyIds);
+          if (result) setProblem(result === "no_window" ? (state.online ? "couldn't open a send window" : "offline, and this room has no saved send window yet") : result.replace(/_/g, " "));
           else {
             setProblem(null);
             setDraft("");
+            setPicked([]);
           }
         }}
       >
@@ -325,14 +364,167 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
           onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
-            if (draft.trim() && !state.removed) event.currentTarget.form?.requestSubmit();
+            if ((draft.trim() || readyIds.length > 0) && !state.removed) event.currentTarget.form?.requestSubmit();
           }}
           placeholder="message"
           disabled={state.removed}
         />
-        <button className={button} disabled={!draft.trim() || state.removed}>send</button>
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            for (const file of Array.from(event.target.files ?? [])) void controller.attach(file);
+            event.target.value = "";
+          }}
+        />
+        <button type="button" className={button} disabled={state.removed || !state.online} title={state.online ? "attach files" : "files can't upload offline"} onClick={() => fileInput.current?.click()}>
+          attach
+        </button>
+        <button className={button} disabled={(!draft.trim() && readyIds.length === 0) || uploading || state.removed}>send</button>
         {problem && <span className="self-center text-red-600">{problem}</span>}
       </form>
     </>
   );
+}
+
+/** Mention spans for picked bots whose @name is still in the text; plain typed @text stays plain. */
+export function mentionSpans(text: string, picked: readonly string[], bots: ReadonlyArray<{ bot_id: string; name: string }>) {
+  const spans: Array<{ kind: "bot"; id: string; start: number; end: number }> = [];
+  for (const id of picked) {
+    const bot = bots.find((candidate) => candidate.bot_id === id);
+    if (!bot) continue;
+    const token = `@${bot.name}`;
+    let from = 0;
+    for (;;) {
+      const start = text.indexOf(token, from);
+      if (start < 0) break;
+      const end = start + token.length;
+      from = end;
+      // Whole-token only, so "@ana" never claims part of "@anabot".
+      if (end < text.length && /[\p{L}\p{N}_-]/u.test(text[end])) continue;
+      if (spans.some((span) => start < span.end && span.start < end)) continue;
+      spans.push({ kind: "bot", id, start, end });
+      break;
+    }
+  }
+  return spans.sort((a, b) => a.start - b.start);
+}
+
+function RunRow({ view, name, controller }: { view: RunView; name: string; controller: CloudRoomController }) {
+  const { stream, card, label } = view;
+  return (
+    <div className="flex flex-col gap-1 py-1">
+      <div>
+        <span className="text-neutral-500">{name}</span> <span className="text-xs text-neutral-400">{label}</span>
+      </div>
+      {stream && (stream.text || stream.gap) && (
+        // Provisional: replaced by the committed reply, never counted as read or sent.
+        <div className="whitespace-pre-wrap italic text-neutral-500">
+          {stream.text}
+          {stream.gap && " …"}
+        </div>
+      )}
+      {card && <ApprovalCard card={card} controller={controller} />}
+    </div>
+  );
+}
+
+const DECISION_TEXT: Record<DecisionOutcome, string | null> = {
+  decided: null,
+  offline: "you're offline. decisions are never queued; try again when you're back.",
+  not_decidable: "this can't be decided anymore.",
+  already_decided: "someone else decided first.",
+  failed: "couldn't confirm the decision. it may still have gone through; the card updates when the room catches up.",
+};
+
+function ApprovalCard({ card, controller }: { card: CloudCard; controller: CloudRoomController }) {
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const open = decidable(card, Date.now());
+  const decide = async (decision: CardDecision) => {
+    setBusy(true);
+    const outcome = await controller.decide(card, decision);
+    setBusy(false);
+    setNotice(DECISION_TEXT[outcome]);
+  };
+  const settled =
+    card.state === "pending"
+      ? card.can_decide
+        ? Date.parse(card.expires_at) <= Date.now()
+          ? "expired"
+          : null
+        : "waiting for someone who can decide"
+      : card.state === "approved" || card.state === "denied"
+        ? `${card.state}${card.decided_by ? ` by ${card.decided_by}` : ""}`
+        : card.state;
+  return (
+    <div className="flex max-w-xl flex-col gap-1 rounded border border-amber-300 p-2 dark:border-amber-700">
+      <div className="font-medium">{card.title}</div>
+      <div className="whitespace-pre-wrap text-neutral-600 dark:text-neutral-300">{card.summary}</div>
+      {open ? (
+        <div className="flex gap-2">
+          <button className={button} disabled={busy} onClick={() => void decide("approve")}>approve</button>
+          <button className={button} disabled={busy} onClick={() => void decide("deny")}>deny</button>
+        </div>
+      ) : (
+        <div className="text-xs text-neutral-500">{settled}</div>
+      )}
+      {notice && <div className="text-xs text-amber-700">{notice}</div>}
+    </div>
+  );
+}
+
+function AttachmentView({ controller, attachment }: { controller: CloudRoomController; attachment: CloudAttachment }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const image = attachment.content_type.startsWith("image/") && attachment.state === "ready";
+  useEffect(() => {
+    if (!image) return;
+    let live = true;
+    void controller.download(attachment.attachment_id).then((value) => {
+      if (!live) return;
+      setUrl(value);
+      setFailed(value === null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [controller, attachment.attachment_id, image]);
+  if (attachment.state !== "ready") return <div className="text-xs text-neutral-400">{attachment.name} · {attachment.state}</div>;
+  if (failed) return <div className="text-xs text-neutral-400">{attachment.name} · can't open</div>;
+  if (image && url) return <img src={url} alt={attachment.name} className="mt-1 max-h-64 max-w-sm rounded" />;
+  return (
+    <button
+      className={`${button} mt-1 block text-xs`}
+      onClick={async () => {
+        const link = await controller.download(attachment.attachment_id);
+        if (!link) return setFailed(true);
+        const anchor = document.createElement("a");
+        anchor.href = link;
+        anchor.download = attachment.name;
+        anchor.click();
+      }}
+    >
+      {attachment.name} · {formatBytes(attachment.size)}
+    </button>
+  );
+}
+
+function UploadChip({ upload, onRemove }: { upload: PendingUpload; onRemove: () => void }) {
+  const done = upload.state === "ready";
+  const failed = upload.state === "failed" || upload.state === "rejected" || upload.state === "expired";
+  return (
+    <span className={`flex items-center gap-1 rounded border px-2 py-0.5 text-xs ${failed ? "border-red-300 text-red-600" : "border-neutral-300 dark:border-neutral-700"}`}>
+      {upload.name} · {failed ? `not attached: ${upload.problem ?? upload.state}` : done ? formatBytes(upload.size) : `${upload.state}...`}
+      <button type="button" aria-label={`remove ${upload.name}`} onClick={onRemove}>×</button>
+    </span>
+  );
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(0)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }

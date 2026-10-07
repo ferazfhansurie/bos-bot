@@ -102,6 +102,8 @@ export interface NewSend {
   thread_id: string;
   text: string;
   mentions: Mention[];
+  /** Only attachments that finished verification (state ready). */
+  attachment_ids?: string[];
   reply_to_message_id?: string | null;
   expected_policy_revision: Sequence;
   now: number;
@@ -110,7 +112,9 @@ export interface NewSend {
 
 /** Freeze a send. Invalid text or spans keep the draft in the composer instead. */
 export async function freezeSend(input: NewSend): Promise<OutboxEntry | { problem: EnvelopeProblem }> {
-  const problem = envelopeProblem(input.text, input.mentions);
+  const attachments = input.attachment_ids ?? [];
+  // A message may be attachments only.
+  const problem = attachments.length > 0 && input.text.trim().length === 0 ? null : envelopeProblem(input.text, input.mentions);
   if (problem) return { problem };
   const envelope: SendEnvelope = {
     kind: "message.send",
@@ -121,7 +125,7 @@ export async function freezeSend(input: NewSend): Promise<OutboxEntry | { proble
     thread_id: input.thread_id,
     text: input.text,
     mentions: input.mentions.map((span) => ({ ...span })),
-    attachment_ids: [],
+    attachment_ids: [...attachments],
     reply_to_message_id: input.reply_to_message_id ?? null,
     expected_policy_revision: input.expected_policy_revision,
   };
@@ -295,6 +299,42 @@ export function localOutboxStore(storage: Pick<Storage, "getItem" | "setItem">, 
     },
     save(entries) {
       storage.setItem(key, JSON.stringify(entries));
+    },
+  };
+}
+
+/**
+ * The signed operation window, kept with the outbox so a member can queue a
+ * send while offline. It is actor- and epoch-bound; the server rechecks it.
+ */
+export interface WindowStore {
+  load(): { window_id: string; window_token: string; expires_at: string; namespace: Namespace } | null;
+  save(window: { window_id: string; window_token: string; expires_at: string; namespace: Namespace } | null): void;
+}
+
+export function localWindowStore(storage: Pick<Storage, "getItem" | "setItem">, namespace: Namespace): WindowStore {
+  const key = `${outboxStorageKey(namespace).replace(".outbox:", ".window:")}:${encodeURIComponent(namespace.workspace_id)}`;
+  return {
+    load() {
+      try {
+        const parsed = JSON.parse(storage.getItem(key) ?? "null") as ReturnType<WindowStore["load"]>;
+        return parsed?.namespace && sameNamespace(parsed.namespace, namespace, true) && parsed.namespace.workspace_id === namespace.workspace_id ? parsed : null;
+      } catch {
+        return null;
+      }
+    },
+    save(window) {
+      storage.setItem(key, JSON.stringify(window));
+    },
+  };
+}
+
+export function memoryWindowStore(): WindowStore {
+  let saved: ReturnType<WindowStore["load"]> = null;
+  return {
+    load: () => saved,
+    save(window) {
+      saved = window;
     },
   };
 }

@@ -5,7 +5,6 @@
 // keep the outbox; batches then catch up strictly after H.
 import {
   EVENT_KINDS,
-  MessageSchema,
   SCHEMA_VERSION,
   type CloudEvent,
   type CloudFrame,
@@ -14,7 +13,10 @@ import {
   type OperationResult,
   type ReadCoverage,
 } from "../../shared/cloud-protocol/index";
+import { CardSchema, RUN_EVENT_KINDS, RunSchema, type CloudCard, type StreamDeltaFrame } from "../../shared/cloud-run-draft";
 import { isUnresolved, operationIdOf, outboxReducer, type OutboxAction, type OutboxEntry, type OutboxState } from "./outbox";
+import { RoomMessageSchema, type RoomFrame, type RoomMessage, type RoomSnapshot } from "./run-schema";
+import { applyCard, applyDelta, applyFinal, applyHostStatus, applyRun, EMPTY_RUNS, runsFromSnapshot, type RunProjection } from "./runs";
 import { EMPTY_COVERAGE } from "./read-coverage";
 import { compareSequence, isSequence, maxSequence, type Sequence } from "./sequence";
 
@@ -26,7 +28,7 @@ export interface CloudRoomState {
   selected_room_id: string;
   selected_thread_id: string;
   /** Selected-thread messages in sequence order. */
-  messages: CloudMessage[];
+  messages: RoomMessage[];
   /** Opaque server cursor the subscription resumes from. */
   cursor: string | null;
   /** Highest sequence covered by the projection (applied, scanned or snapshot H). */
@@ -43,11 +45,18 @@ export interface CloudRoomState {
   capabilities: string[];
   read: ReadCoverage;
   outbox: OutboxEntry[];
+  /** Bot runs, approval cards and provisional stream text for the selected thread. */
+  runs: RunProjection;
+  /** The device reports a network connection. */
+  online: boolean;
 }
 
 export type CloudRoomAction =
-  | { type: "frame"; frame: CloudFrame }
-  | { type: "snapshot"; snapshot: CloudSnapshot }
+  | { type: "frame"; frame: CloudFrame | RoomFrame }
+  | { type: "snapshot"; snapshot: CloudSnapshot | RoomSnapshot }
+  | { type: "stream"; frame: StreamDeltaFrame }
+  | { type: "network"; online: boolean }
+  | { type: "card"; card: CloudCard }
   | { type: "read"; coverage: ReadCoverage }
   | { type: "account_switch"; namespace: string; account_id: string }
   | { type: "select"; workspace_id: string; room_id: string; thread_id: string }
@@ -82,16 +91,18 @@ export function initialCloudRoomState(input: {
     capabilities: [],
     read: EMPTY_COVERAGE,
     outbox: input.outbox ?? [],
+    runs: EMPTY_RUNS,
+    online: true,
   };
 }
 
-const KNOWN_KINDS: ReadonlySet<string> = new Set(EVENT_KINDS);
+const KNOWN_KINDS: ReadonlySet<string> = new Set<string>([...EVENT_KINDS, ...RUN_EVENT_KINDS]);
 
 function understood(event: CloudEvent): boolean {
   return KNOWN_KINDS.has(event.kind) && event.schema_version <= SCHEMA_VERSION;
 }
 
-function upsertMessage(messages: CloudMessage[], message: CloudMessage): CloudMessage[] {
+function upsertMessage(messages: RoomMessage[], message: RoomMessage): RoomMessage[] {
   const index = messages.findIndex((existing) => existing.message_id === message.message_id);
   if (index >= 0) {
     if (messages[index].version > message.version) return messages;
@@ -123,9 +134,11 @@ function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "e
       case "message.created":
       case "message.updated":
       case "message.deleted": {
-        const parsed = MessageSchema.safeParse((event.payload as { message?: unknown }).message);
+        const parsed = RoomMessageSchema.safeParse((event.payload as { message?: unknown }).message);
         if (!parsed.success) break;
         const message = parsed.data;
+        // The committed final replaces the bot's provisional text.
+        if (message.invocation_id) next = { ...next, runs: applyFinal(next.runs, message.invocation_id) };
         if (message.actor_id === next.account_id && message.client_operation_id) {
           next = { ...next, outbox: outboxReducer(next.outbox, { type: "stream_accepted", operation_id: message.client_operation_id, message_id: message.message_id, sequence: message.sequence }) };
         }
@@ -144,6 +157,21 @@ function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "e
         if (isSequence(revision)) next = { ...next, policy_revision: revision };
         break;
       }
+      case "run.updated": {
+        const run = RunSchema.safeParse((event.payload as { run?: unknown }).run);
+        if (run.success) next = { ...next, runs: applyRun(next.runs, run.data, next.selected_thread_id) };
+        break;
+      }
+      case "card.updated": {
+        const card = CardSchema.safeParse((event.payload as { card?: unknown }).card);
+        if (card.success) next = { ...next, runs: applyCard(next.runs, card.data, next.selected_thread_id) };
+        break;
+      }
+      case "bot.host_status": {
+        const { bot_id, host_online } = event.payload as { bot_id?: unknown; host_online?: unknown };
+        if (typeof bot_id === "string" && typeof host_online === "boolean") next = { ...next, runs: applyHostStatus(next.runs, bot_id, host_online) };
+        break;
+      }
       case "presence":
         break;
     }
@@ -151,10 +179,10 @@ function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "e
   return { ...next, cursor: frame.cursor, head: maxSequence(next.head, frame.scanned_sequence), live: frame.live };
 }
 
-function applySnapshot(state: CloudRoomState, snapshot: CloudSnapshot): CloudRoomState {
+function applySnapshot(state: CloudRoomState, snapshot: CloudSnapshot | RoomSnapshot): CloudRoomState {
   if (snapshot.workspace_id !== state.workspace_id || snapshot.room_id !== state.selected_room_id) return state;
   if (snapshot.thread_id !== state.selected_thread_id || state.removed) return state;
-  const messages = snapshot.messages
+  const messages = (snapshot.messages as RoomMessage[])
     .filter((message) => message.thread_id === state.selected_thread_id)
     .sort((a, b) => compareSequence(a.sequence, b.sequence));
   // Atomic projection replacement; the outbox is independent and survives.
@@ -171,6 +199,7 @@ function applySnapshot(state: CloudRoomState, snapshot: CloudSnapshot): CloudRoo
     members: snapshot.members,
     capabilities: snapshot.capabilities,
     read: snapshot.read,
+    runs: runsFromSnapshot(state.runs, { ...snapshot, messages }, state.selected_thread_id),
   };
 }
 
@@ -179,6 +208,7 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
     case "frame": {
       const frame = action.frame;
       if (frame.type === "event_batch") return applyBatch(state, frame);
+      if (frame.type === "stream.delta") return applyStream(state, frame);
       if (frame.type === "reset_required") {
         if (frame.workspace_id !== state.workspace_id || frame.room_id !== state.selected_room_id) return state;
         if (frame.snapshot) return applySnapshot({ ...state, reset_required: true }, frame.snapshot);
@@ -186,11 +216,21 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
       }
       if (frame.type === "error" && frame.error === "upgrade_required") return { ...state, upgrade_required: true, live: false };
       // The server re-authorizes every publication; forbidden means this account lost room access.
-      if (frame.type === "error" && frame.error === "forbidden") return { ...state, removed: true, live: false, messages: [], members: [], read: EMPTY_COVERAGE };
+      if (frame.type === "error" && frame.error === "forbidden") return revokeRoom(state);
       return state;
     }
     case "snapshot":
       return applySnapshot(state, action.snapshot);
+    case "stream":
+      return applyStream(state, action.frame);
+    case "card": {
+      if (state.removed) return state;
+      const runs = applyCard(state.runs, action.card, state.selected_thread_id);
+      return runs === state.runs ? state : { ...state, runs };
+    }
+    case "network":
+      if (action.online === state.online) return state;
+      return { ...state, online: action.online, live: action.online ? state.live : false };
     case "read":
       return { ...state, read: action.coverage };
     case "account_switch":
@@ -232,11 +272,29 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
   }
 }
 
+function applyStream(state: CloudRoomState, frame: StreamDeltaFrame): CloudRoomState {
+  if (state.removed || frame.workspace_id !== state.workspace_id || frame.room_id !== state.selected_room_id) return state;
+  const runs = applyDelta(state.runs, frame, state.selected_thread_id);
+  return runs === state.runs ? state : { ...state, runs };
+}
+
+/**
+ * Losing the room drops everything at once: content, provisional streams,
+ * cards and runs. Sends that never left the device become "not sent";
+ * anything that may have left stays unresolved rather than claiming either way.
+ */
+function revokeRoom(state: CloudRoomState): CloudRoomState {
+  const outbox = state.outbox.map((entry) =>
+    entry.envelope.room_id === state.selected_room_id && entry.state === "draft" && !entry.dispatched ? { ...entry, state: "rejected" as const, rejection: "forbidden" } : entry,
+  );
+  return { ...state, removed: true, live: false, messages: [], members: [], read: EMPTY_COVERAGE, runs: EMPTY_RUNS, outbox };
+}
+
 function withOutbox(state: CloudRoomState, outbox: OutboxEntry[]): CloudRoomState {
   return outbox === state.outbox ? state : { ...state, outbox };
 }
 
-export type TimelineItem = { kind: "message"; message: CloudMessage } | { kind: "pending"; entry: OutboxEntry };
+export type TimelineItem = { kind: "message"; message: RoomMessage } | { kind: "pending"; entry: OutboxEntry };
 
 /** Committed messages in server order, then this device's unresolved or failed sends for the thread. */
 export function timeline(state: CloudRoomState): TimelineItem[] {
