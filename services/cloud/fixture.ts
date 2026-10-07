@@ -28,7 +28,7 @@ async function command(bin: string, args: string[]) {
   if (code !== 0) throw new Error(bin + " failed: " + out);
   return out;
 }
-export async function fixture() {
+export async function fixture(automaticWorker = true) {
   const root = resolve(new URL("./.fixture/", import.meta.url).pathname);
   await mkdir(root, { recursive: true });
   const dir = await mkdtemp(root + "/run-");
@@ -137,7 +137,13 @@ export async function fixture() {
       key,
       hooks,
     );
-    app = await startCloud(service, httpPort, "127.0.0.1", hookSecret);
+    app = await startCloud(
+      service,
+      httpPort,
+      "127.0.0.1",
+      hookSecret,
+      automaticWorker,
+    );
     const state = {
       url,
       ws_url: url.replace("http:", "ws:") + "/v2/realtime",
