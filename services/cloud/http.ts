@@ -64,8 +64,9 @@ export async function startCloud(
   fixtureRoute?: (req: IncomingMessage,res: ServerResponse,path: string[],write: (res: ServerResponse,value:unknown,status?:number)=>void) => Promise<boolean>,
   automaticWorker = true,
   allowedOrigins: ReadonlySet<string> = new Set([service.service]),
+  options: { selfHost?: boolean } = {},
 ) {
-  if (host !== "127.0.0.1") throw new Error("local slices only: loopback service");
+  if (host !== "127.0.0.1" && !options.selfHost) throw new Error("local slices only: loopback service");
   await service.db.assertRole();
   const rates = new Map<string, { until: number; n: number }>();
   let active = 0;

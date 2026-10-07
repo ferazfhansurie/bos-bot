@@ -54,13 +54,23 @@ export async function currentIdentity(
 export class ControlPlaneIssuer implements IssuerAdapter {
   readonly issuer: string;
   readonly service: string;
-  constructor(issuer: string, service: string) {
+  /** Where /v1/me is fetched. Defaults to the issuer origin; a private deployment may
+   * reach the same issuer over its internal network while identity stays bound to `issuer`. */
+  readonly fetchOrigin: string;
+  constructor(issuer: string, service: string, fetchOrigin?: string) {
     const url = new URL(issuer);
     if (url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
         (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1','localhost','[::1]'].includes(url.hostname))))
       throw new Error('issuer requires HTTPS or local loopback origin');
     this.issuer = url.origin;
     this.service = service;
+    if (fetchOrigin === undefined) this.fetchOrigin = this.issuer;
+    else {
+      const f = new URL(fetchOrigin);
+      if (f.username || f.password || f.pathname !== '/' || f.search || f.hash || !['http:','https:'].includes(f.protocol))
+        throw new Error('issuer fetch origin must be a bare http(s) origin');
+      this.fetchOrigin = f.origin;
+    }
   }
   async validate(credential: string, {signal}: {fresh:true;signal:AbortSignal}): Promise<Identity> {
     const headers = new Headers({'cache-control':'no-cache, no-store','pragma':'no-cache'});
@@ -68,7 +78,7 @@ export class ControlPlaneIssuer implements IssuerAdapter {
     else headers.set('authorization','Bearer '+credential);
     let response: Response;
     try {
-      response = await fetch(this.issuer+'/v1/me',{headers,signal,redirect:'error',cache:'no-store'});
+      response = await fetch(this.fetchOrigin+'/v1/me',{headers,signal,redirect:'error',cache:'no-store'});
     } catch { throw new CloudError('identity_unavailable',503); }
     if (response.status === 401) throw new CloudError('session_invalid',401);
     if (!response.ok) throw new CloudError('identity_unavailable',503);

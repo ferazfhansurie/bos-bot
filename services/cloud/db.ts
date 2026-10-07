@@ -2,12 +2,14 @@ import pg from "pg";
 export type Sql = pg.PoolClient;
 export class Database {
   pool: pg.Pool;
-  constructor(url: string) {
+  /** selfHost: operator-configured private deployment (deploy/selfhost). Still requires cloud_app. */
+  constructor(url: string, options: { selfHost?: boolean } = {}) {
     const u = new URL(url);
     if (
-      !["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) ||
-      !u.pathname.startsWith("/cloud_slice1_") ||
-      u.username !== "cloud_app"
+      u.username !== "cloud_app" ||
+      (!options.selfHost &&
+        (!["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) ||
+          !u.pathname.startsWith("/cloud_slice1_")))
     )
       throw new Error(
         "slice one requires throwaway loopback postgres and non-owner cloud_app",
