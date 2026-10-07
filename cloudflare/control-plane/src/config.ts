@@ -55,7 +55,8 @@ function hostnameSuffix(value: string): string {
   return value;
 }
 
-export function readConfig(env: Env): ControlPlaneConfig {
+type ConfigEnv = { [K in keyof Pick<Env,"BETTER_AUTH_SECRET"|"EMAIL_FROM"|"BETTER_AUTH_URL"|"ALLOWED_ORIGINS"|"CLOUDFLARE_ACCOUNT_ID"|"CLOUDFLARE_ZONE_ID"|"CLOUDFLARE_API_TOKEN"|"COMPANION_HOST_SUFFIX">]: string };
+export function readConfig(env: ConfigEnv): ControlPlaneConfig {
   if (!secretSchema.safeParse(env.BETTER_AUTH_SECRET).success) {
     throw new Error("BETTER_AUTH_SECRET must contain at least 32 characters");
   }
