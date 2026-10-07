@@ -58,10 +58,9 @@ realtime recipient, installed app or physical device is verified by this run.
   fixture identity, non-owner app role and actual runtime must be recorded.
 - api's protected-admission barrier and worker/NOTIFY fault-control APIs, with
   actual lock boundaries; prior hook request remains pending.
-- the published routes allow member removal but contain no role-change endpoint.
-  Concurrent last-owner **demotion** cannot be exercised through this contract;
-  api must identify its real fixture surface or record an explicit unimplemented
-  a16 gate. Do not substitute removal and call demotion covered.
+- a16 uses the existing member-removal route: two owners remove each other,
+  with both admission orders repeated 100 times. Bos resolved this scope in the
+  room on 2026-10-07; no role-change endpoint is required for slice 1.
 
 ## Required server coverage
 
@@ -77,12 +76,33 @@ realtime recipient, installed app or physical device is verified by this run.
 | a13 | Member/guest removal vs send, replay, snapshot and publication; no newly authorized bytes | deterministic protected admission/delivery both orders x100 |
 | a14 | Stub issuer outage/revoke/stalled validation; fresh mutations fail closed; established publication deadline <=15s | bounded-clock receipts; real D1/host gates excluded |
 | a15 | Every slice-1 direct/indirect HTTP and realtime route with tenant IDs substituted; compound-FK violation; RLS app role unset/wrong context and pool reuse; private read coverage | deny matrix plus sentinel scan; cross-tenant rows inaccessible |
-| a16 | Invite expiry/replay/revoke/concurrent redemption; parallel removal/demotion of last owners | redeem/revoke, double redemption and last-owner both orders x100 |
+| a16 | Invite expiry/replay/revoke/concurrent redemption; two owners concurrently remove each other | redeem/revoke, double redemption and last-owner both orders x100 |
 
 The HTTP driver must record actual requests/responses and candidate/protocol/base
 commits, schema, fixture DB identity and app role. Session/invite credentials are
 redacted from journals; only explicitly pinned loopback origin is accepted and
 redirects are refused. No automatic retry of an uncertain submission.
+
+`last-owner.mjs` runs only the a16 owner invariant, not the invite scenarios.
+It creates two fictional identities and 200 fresh workspaces through HTTP;
+each starts with two owners. It holds the losing mutual removal at api's
+`member.remove.before_admission` barrier, admits the winner, and then releases
+the loser. Each iteration checks committed PG owner rows independently, the
+survivor's room snapshot, the removed actor's discovery, and denial of the
+survivor removing itself. No service algorithms compute expected results.
+
+After api's server commit, launch its documented fresh fixture and run:
+
+```sh
+node services/cloud/acceptance/run-last-owner.mjs \
+  /absolute/server-worktree /absolute/printed/state.json /absolute/new-evidence.jsonl
+```
+
+The runner rejects uncommitted server files and nonfixture state paths, records
+the candidate and actual PG app role, and keeps credentials out of the journal.
+The fixture launcher remains owned by its caller and must be stopped separately
+using its documented exact PID/signal. This scenario is **unrun** until a real
+committed candidate produces the 200-race journal.
 
 `bothOrders` requires a test-only pause **before actual protected admission**,
 waits for the held request to reach it, admits the other request, then releases
