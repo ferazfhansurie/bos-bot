@@ -65,6 +65,11 @@ export function restoreMentionCallback(spoken: Set<string>, botId: string, hop: 
   entry?.pending.set(JSON.stringify([botId, sourceKey]), { botId, hop, ...(sourceBotId ? { sourceBotId } : {}) });
 }
 
+/** True while a deferred delivery is still waiting to be dispatched. */
+export function hasMentionCallbacks(spoken: Set<string>): boolean {
+  return (mentionCallbacks.get(spoken)?.pending.size ?? 0) > 0;
+}
+
 /** Remove one delivery before dispatch so it cannot run twice. */
 export function takeMentionCallback(spoken: Set<string>): { botId: string; hop: number; sourceBotId?: string } | null {
   const entry = mentionCallbacks.get(spoken);

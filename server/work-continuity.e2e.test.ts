@@ -587,6 +587,31 @@ describe("work continuity real server", () => {
     await api("DELETE", `/api/groups/${room.id}`); await cleanup([lead.id]);
   }, 45000);
 
+  it("an @name in a room auto-continue reply wakes that teammate after the human round has drained", async () => {
+    const lead = await optIn("DrainLead"); const worker = await createBot("DrainHelper");
+    const room = (await api("POST", "/api/groups", { name: "Late mention", memberIds: [lead.id, worker.id], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } })).body.group;
+    try {
+      // The fixture echoes its prompt, so every lead reply carries the
+      // person's "@DrainHelper" line at a line start and addresses it.
+      expect((await api("POST", `/api/groups/${room.id}/messages`, { text: "@DrainLead begin\n\n@DrainHelper wait for the lead", threadId: room.threadId })).status).toBe(202);
+      const workerRuntime = await roomRuntime(worker.id, room.threadId); await liveToken(workerRuntime);
+      const runtime = await roomRuntime(lead.id, room.threadId); const h = await liveToken(runtime);
+      expect((await api("POST", "/api/internal/work-plan", { plan: ownPlan(lead, await rosterCheck(h)) }, h)).status).toBe(200);
+      release(workerRuntime); release("peer"); release(runtime);
+      // The human round drains the helper's own turn and the lead's first
+      // mention. Each continuation reply is a new route after that drain
+      // ended; before the fix it was deferred onto a ledger nobody read.
+      await expect.poll(() => promptsOf(runtime).length, { timeout: 20000 }).toBe(3);
+      await idle(lead); await idle(worker); await new Promise(r => setTimeout(r, 1000));
+      const replies = (await messages(room.threadId)).filter(m => m.role === "bot" && m.kind === "text" && m.text.startsWith("reply to:"));
+      const continued = (botId: string) => replies.filter(m => m.from?.botId === botId && m.text.includes("Continue your independently runnable")).length;
+      expect(continued(lead.id)).toBe(2);
+      // The helper answered each continuation's @DrainHelper, so its echo
+      // carries that continuation prompt.
+      expect(continued(worker.id)).toBe(2);
+    } finally { await api("DELETE", `/api/groups/${room.id}`); await cleanup([lead.id, worker.id]); }
+  }, 60000);
+
   it("human-reserved work and a paused plan stay idle", async () => {
     for (const paused of [false, true]) {
       const lead = await optIn(paused ? "Pause" : "HumanGate"); const h = await heldTurn(lead, "Human fixture gate");

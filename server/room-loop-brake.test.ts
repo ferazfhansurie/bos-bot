@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deferMentionCallback, isAddressedRoomReply, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
+import { deferMentionCallback, hasMentionCallbacks, isAddressedRoomReply, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
 
 describe("room stop and mention routing", () => {
   it("recognises a bare stop and nothing longer", () => {
@@ -57,4 +57,16 @@ it("addresses every recipient in a leading room mention list without waking late
   expect(isAddressedRoomReply("@api checked; @bos is context", "bos", names)).toBe(false);
   expect(isAddressedRoomReply("> @api @bos verify", "bos", names)).toBe(false);
   expect(isAddressedRoomReply("@api @boss verify", "bos", names)).toBe(false);
+
+});
+
+describe("mention ledger", () => {
+  it("reports a pending delivery until it is taken", () => {
+    const spoken = new Set(["bos"]);
+    expect(hasMentionCallbacks(spoken)).toBe(false);
+    deferMentionCallback(spoken, "mobile", 1, "bos:pick up ios onboarding");
+    expect(hasMentionCallbacks(spoken)).toBe(true);
+    expect(takeMentionCallback(spoken)?.botId).toBe("mobile");
+    expect(hasMentionCallbacks(spoken)).toBe(false);
+  });
 });
