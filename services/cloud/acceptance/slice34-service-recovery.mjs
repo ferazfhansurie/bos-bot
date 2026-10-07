@@ -23,6 +23,7 @@ export async function createRecovery(c) {
     namespace: windows[i].namespace.subject, account_id: windows[i].namespace.account_id,
     workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id }), { type: 'snapshot', snapshot: s }));
   let slowPrepared = false;
+  let pressureCursor = snapshots[1].cursor, pressureIssued = Date.now();
   const recipientFrame = async (i, { crash = false, duplicate = false } = {}) => {
     const actor = i ? h.b : h.a;
     let frame = await c.ok(room(h) + '/replay', actor, 'POST', { thread_id: h.r.thread_id, cursor: projections[i].cursor });
@@ -45,8 +46,17 @@ export async function createRecovery(c) {
       // Committed fictional filler is explicitly outside the independent intent
       // corpus. It saturates an actual TCP write queue without inventing events.
       const template = await c.envelope(h, h.a, { text: 'fictional-backpressure:' + 'x'.repeat(65000), window: windows[0] });
-      for (let i = 0; i < 24; i++) await c.send(h, h.a, { ...template, client_operation_id: windows[0].window_id + '.fictional_filler_' + String(i).padStart(16, '0') });
+      // Enough real pressure events remain after bounded cursor renewal. A
+      // signed cursor expires in five minutes; never let expiry substitute a
+      // small reset snapshot for the intended backpressure experiment.
+      for (let i = 0; i < 128; i++) await c.send(h, h.a, { ...template, client_operation_id: windows[0].window_id + '.fictional_filler_' + String(i).padStart(16, '0') });
       slowPrepared = true;
+    }
+    if (Date.now() - pressureIssued > 240000) {
+      const renewed = await c.ok(room(h) + '/replay', h.b, 'POST', { thread_id: h.r.thread_id, cursor: pressureCursor });
+      assert.equal(renewed.type, 'event_batch', 'pressure cursor must renew before expiry');
+      pressureCursor = renewed.cursor; pressureIssued = Date.now();
+      c.log({ type: 'pressure_cursor_renewed_by_actual_replay', scanned_sequence: renewed.scanned_sequence });
     }
     const socket = await c.socket(h.b);
     const peer = [...c.f.app.wsServer.clients].find(ws => ws._socket?.remotePort === socket.ws._socket.localPort);
@@ -56,7 +66,7 @@ export async function createRecovery(c) {
     peer._socket.cork();
     try {
       socket.ws.send(JSON.stringify({ type: 'subscribe', workspace_id: h.w, room_id: h.r.room_id,
-        thread_id: h.r.thread_id, cursor: snapshots[1].cursor }));
+        thread_id: h.r.thread_id, cursor: pressureCursor }));
       await c.until(() => peer.readyState === c.WebSocket.CLOSING || peer.readyState === c.WebSocket.CLOSED, 'actual slow-consumer overflow', 6000);
     } finally { peer._socket?.uncork(); }
     await c.until(() => socket.code !== null, 'actual overflow close', 6000); assert.equal(socket.code, 1013);

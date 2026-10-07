@@ -292,7 +292,7 @@ export function serviceScenarios(c) {
       let online = true, networkListener;
       const offline = { online: () => online, subscribe: fn => { networkListener = fn; return () => { networkListener = undefined; }; } };
       const api = c.client.cloudApi(session);
-      const make = () => new c.client.CloudRoomController(session, api, { workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id, policy_revision: s.policy_revision, guest: true }, storage, c.WebSocket, () => {}, offline);
+      const make = () => new c.client.CloudRoomController(session, api, { workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id, policy_revision: s.policy_revision, guest: true }, storage, c.BrowserSocket, () => {}, offline);
       const guest = make(); guest.start();
       assert.equal(await guest.send('fictional guest recorded online'), null);
       await c.until(() => guest.getState().outbox.some(e => e.state === 'accepted'), 'real guest send recorded');
@@ -370,7 +370,7 @@ export function serviceScenarios(c) {
       const session = { ...h.a, baseUrl: c.f.url }, s = await c.snapshot(h, h.a);
       const controller = new c.client.CloudRoomController(session, c.client.cloudApi(session),
         { workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id, policy_revision: s.policy_revision }, null,
-        c.WebSocket, () => {}, { online: () => false, subscribe: () => () => {} });
+        c.BrowserSocket, () => {}, { online: () => false, subscribe: () => () => {} });
       controller.start(); assert.equal(await controller.decide(card, 'approve'), 'offline');
       const replayedControls = controller.getState().outbox.filter(e => e.envelope.kind !== 'message.send').length; controller.stop();
       c.log({ type: 'approval_actor_pin', card, revoked, wrongActor, expired, denied });

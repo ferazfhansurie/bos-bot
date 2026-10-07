@@ -43,6 +43,7 @@ export async function ownedFixture(server) {
   const issuer = 'http://127.0.0.1:' + proxy.address().port;
   const children = new Set();
   let fixture;
+  let stopping;
   const launch = args => {
     const p = spawn(process.execPath, [wrangler, ...args], { cwd: cp,
       env: { PATH: process.env.PATH, HOME: dir, TMPDIR: tmpdir(), LC_ALL: 'en_US.UTF-8', WRANGLER_SEND_METRICS: 'false' },
@@ -52,12 +53,15 @@ export async function ownedFixture(server) {
     p.done = new Promise((r, j) => { p.once('error', j); p.once('exit', code => { children.delete(p); r(code); }); });
     return p;
   };
-  const stop = async () => {
+  const interrupted = () => { void stop().then(() => process.exit(130)); };
+  const stop = () => stopping ??= (async () => {
+    process.off('SIGINT', interrupted); process.off('SIGTERM', interrupted);
     if (fixture) { await fixture.stop(); fixture = undefined; }
     for (const p of [...children]) { p.kill('SIGTERM'); await p.done; }
     proxy.closeAllConnections(); await new Promise(r => proxy.close(r));
     await rm(dir, { recursive: true, force: true });
-  };
+  })();
+  process.once('SIGINT', interrupted); process.once('SIGTERM', interrupted);
   try {
     const names = ['0001_better_auth_1_7_1.sql', '0002_installations.sql', '0003_otp_recipient_rate_limits.sql', '0004_managed_companion_endpoints.sql', '0005_endpoint_cleanup_backoff.sql'];
     await writeFile(dir + '/migrations.sql', (await Promise.all(names.map(n => readFile(cp + '/migrations/' + n, 'utf8')))).join('\n'), { mode: 0o600 });

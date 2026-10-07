@@ -33,6 +33,11 @@ export async function connect({ server, candidate, schema, evidence, record }) {
     return { path, sha256: bytesDigest(raw) };
   };
   const c = { f, admin, evidence, log, artifact, digest, pause, until, sockets, WebSocket, candidate, schema };
+  // Browser WebSocket errors are DOM events. Node ws additionally throws when
+  // no EventEmitter error listener exists (e.g. stop before the TCP handshake).
+  c.BrowserSocket = class extends WebSocket {
+    constructor(...args) { super(...args); this.on('error', e => log({ type: 'browser_socket_error', message: e.message })); }
+  };
   c.transport = new Transport(f.url, log);
   c.request = (path, actor, method = 'GET', body, hostCredential) => c.transport.request(path,
     { method, body, token: actor?.bearer, hostCredential });
@@ -153,6 +158,7 @@ export async function connect({ server, candidate, schema, evidence, record }) {
   let recovery;
   try {
     await admin.connect();
+    artifact('owned-fixture-pointer', { fixture_directory: f.fixture_directory, fixture_pid: f.fixture_pid, postgres_pid: f.postgres_pid, issuer_pid: f.owned_issuer_pid, issuer_directory: f.owned_issuer_directory });
     c.actors = [await c.actor('alice'), await c.actor('bob'), await c.actor('foreign'), await c.actor('spare')];
     const cpRequire = createRequire(server + '/cloudflare/control-plane/package.json');
     const bundle = resolve(evidence, 'actual-web-client.mjs');
