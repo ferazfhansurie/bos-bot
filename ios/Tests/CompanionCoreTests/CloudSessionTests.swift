@@ -152,4 +152,17 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertTrue(session.known.isEmpty)
         XCTAssertEqual(session.reduce(.signedOut), [])
     }
+
+    func testSessionInvalidRequiresSignInWithoutErasing() {
+        var session = CloudSession(account: alice)
+        recover(&session, with: F.discovery(["r1"]))
+        XCTAssertEqual(session.reduce(.sessionInvalid(generation: 7)), [], "stale generation")
+        XCTAssertEqual(session.reduce(.sessionInvalid(generation: 0)), [.closeSocket, .clearVisibleState(previousGeneration: 0), .requireSignIn(alice)])
+        XCTAssertNil(session.account)
+        XCTAssertTrue(session.known.isEmpty)
+        XCTAssertEqual(session.reduce(.foreground), [], "nothing recovers without an account")
+        XCTAssertEqual(session.reduce(.sessionInvalid(generation: 1)), [])
+        // The same person signing back in reopens their own store.
+        XCTAssertEqual(session.reduce(.accountChanged(alice)), [.closeSocket, .clearVisibleState(previousGeneration: 1), .openStore(alice), .refreshAuth(generation: 2)])
+    }
 }

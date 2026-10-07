@@ -35,6 +35,20 @@ struct CompanionApp: App {
 
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            if CloudRoomsConfig.enabled, let rooms = CloudRoomsConfig.roomsURL, let issuer = CloudRoomsConfig.issuerURL {
+                CloudRoomsRoot(roomsURL: rooms, issuerURL: issuer)
+            } else {
+                companionRoot
+            }
+            #else
+            companionRoot
+            #endif
+        }
+        .defaultSize(CompanionLayout.defaultWindowSize)
+    }
+
+    private var companionRoot: some View {
             RootView()
                 .session(session)
                 .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
@@ -89,8 +103,6 @@ struct CompanionApp: App {
                     @unknown default: break
                     }
                 }
-        }
-        .defaultSize(CompanionLayout.defaultWindowSize)
     }
 }
 
