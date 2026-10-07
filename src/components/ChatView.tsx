@@ -122,7 +122,7 @@ import { TerminalButton } from "./TerminalPanel";
 import { botControlAvailable, remoteBotHint, remoteBotNotice } from "@/lib/remote-bot";
 
 import { SpeakButton } from "./SpeakButton";
-import { CallButton, CallOverlay } from "./CallView";
+import { BotCallButton, BotCallOverlay } from "./voice-call/BotCall";
 import { effectivePlace, toolPlace, type EffectivePlace } from "@/lib/place";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
@@ -1349,7 +1349,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
         confirmLabel={removePending ? "Removing…" : "Remove message"}
         onCancel={() => { if (!removePending) setRemoveTarget(null); }} onConfirm={removeSharedMessage} />
       {/* Call mode covers the thread while the bot is on the line */}
-      <CallOverlay bot={bot} />
+      <BotCallOverlay bot={bot} />
       {/* Header */}
       <ConversationHeader style={headerDragStyle}>
         <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1" style={headerNoDragStyle}>
@@ -1440,7 +1440,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           {!shared && <TaskPicker bot={bot} />}
           {local && <div className="@max-3xl/chathead:hidden"><UsageChip bot={bot} /></div>}
           {local && !remoteClient && <div className="@max-3xl/chathead:hidden"><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}
-          {!shared && <CallButton bot={bot} />}
+          {!shared && <BotCallButton bot={bot} />}
           {local && <button
             data-tour="computer"
             onClick={() => dispatch({ type: "toggleComputer" })}

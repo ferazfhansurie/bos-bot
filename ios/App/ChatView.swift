@@ -45,6 +45,9 @@ struct ChatView: View {
     @State private var mentionPicks: [MentionTarget] = []
     @State private var showingTasks = false
     @State private var showingWalkie = false
+    /// Realtime voice calls live app-wide; this chat starts one and shows
+    /// the rows a call leaves behind.
+    @ObservedObject private var voiceCalls = VoiceCallCenter.shared
     @State private var showingComputer = false
     @State private var showingPlus = false
     @State private var showingProfile = false
@@ -330,6 +333,9 @@ struct ChatView: View {
                                     .arrivalSpring(arrives(message), fromTrailing: message.role == .user && !message.isFromAnotherPerson(selfID: roomSelfID), reduceMotion: reduceMotion)
                                 case let .activityRun(items):
                                     ActivityRunChip(items: items, openThread: openThread)
+                                }
+                                ForEach(voiceRecords(after: index, in: transcript)) { record in
+                                    VoiceCallEndedRow(record: record)
                                 }
                             }
                             .id(row.id)
@@ -861,6 +867,10 @@ struct ChatView: View {
             }
         })
         }
+        out.append(PlusAction(
+            id: "walkie", systemImage: "waveform.circle", title: "Walkie-talkie",
+            subtitle: "Hold to talk, hear the reply read back"
+        ) { openWalkie() })
         if current.busy, case let .bot(bot) = current {
             out.append(PlusAction(
                 id: "stop", systemImage: "stop.fill", title: "Interrupt",
@@ -868,6 +878,33 @@ struct ChatView: View {
             ) { Task { await session.interrupt(bot: bot) } })
         }
         return out
+    }
+
+    /// Finished voice calls in this thread that ended after this row and
+    /// before the next one. Calls older than the loaded history sit after
+    /// the first row rather than vanishing.
+    private func voiceRecords(after index: Int, in rows: [TranscriptRow]) -> [VoiceCallRecord] {
+        guard case let .bot(bot) = current else { return [] }
+        let records = voiceCalls.records(botId: bot.id, threadId: threadId)
+        guard !records.isEmpty else { return [] }
+        let from = index == 0 ? -Double.infinity : rows[index].at
+        let until = index + 1 < rows.count ? rows[index + 1].at : Double.infinity
+        return records.filter { $0.endedAt >= from && $0.endedAt < until }
+    }
+
+    /// Voice is a realtime call for a bot on this computer; rooms and bots
+    /// on another Mac keep the walkie-talkie.
+    private func startVoice() {
+        if case let .bot(bot) = current, bot.remote == nil {
+            voiceCalls.start(bot: bot, threadId: threadId, session: session)
+        } else {
+            openWalkie()
+        }
+    }
+
+    private func openWalkie() {
+        UserDefaults.standard.set(current.id, forKey: "walkie.target")
+        showingWalkie = true
     }
 
     /// True when this message opens a fresh stretch of conversation — the
@@ -1332,6 +1369,15 @@ struct ChatView: View {
 
     // MARK: - Composer
 
+    /// The composer's stop square, while a bot is working.
+    private var stopAction: (() -> Void)? {
+        guard current.busy, case let .bot(bot) = current else { return nil }
+        return {
+            Haptics.impact(.light)
+            Task { await session.interrupt(bot: bot) }
+        }
+    }
+
     /// A round + and a glass pill with dictation and send inside it.
     private var composer: some View {
         VStack(spacing: 6) {
@@ -1485,6 +1531,13 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            // Work a call handed to this bot, still running.
+            if current.busy, case let .bot(bot) = current, voiceCalls.call?.bot.id == bot.id,
+               voiceCalls.call?.handedWork == true {
+                VoiceWorkingRow(bot: bot)
+                    .transition(.opacity)
+            }
+
             if current.busy, !sendingMessage {
                 SendPriorityToggle(priority: $sendPriority, color: MausPalette.color(current.color))
                     .transition(.opacity)
@@ -1509,10 +1562,9 @@ struct ChatView: View {
                         }
                     },
                     onSend: { submit() },
-                    onVoice: {
-                        UserDefaults.standard.set(current.id, forKey: "walkie.target")
-                        showingWalkie = true
-                    }
+                    onVoice: { startVoice() },
+                    onStop: stopAction,
+                    onLongVoice: { openWalkie() }
                 )
             }
         }
@@ -1867,6 +1919,10 @@ struct ChatComposerBar: View {
     let onDraftChange: (String) -> Void
     let onSend: () -> Void
     let onVoice: () -> Void
+    /// The stop square left of the voice button, while the bot is working.
+    var onStop: (() -> Void)? = nil
+    /// Long-pressing the voice button: the walkie-talkie.
+    var onLongVoice: (() -> Void)? = nil
 
     private var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments) && !busy
@@ -1917,19 +1973,59 @@ struct ChatComposerBar: View {
                     }
                     .buttonStyle(.plain).disabled(busy).padding(.bottom, 6)
                     .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
-                    Button {
-                        if canSend { onSend() }
-                        else if supportsVoiceChat { dictation.stop(); onVoice() }
-                    } label: {
-                        Image(systemName: canSend ? "arrow.up" : supportsVoiceChat ? "waveform" : "arrow.up")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(canSend ? Color.white : Color.secondary)
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(canSend ? BubbleColor.mine : Color.secondary.opacity(0.18)))
+                    if !canSend, let onStop {
+                        Button(action: onStop) {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Color.white)
+                                .frame(width: 36, height: 36)
+                                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color(hex: "#2c2c2e")))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop")
+                        .padding(.bottom, 4)
+                        .transition(.scale.combined(with: .opacity))
                     }
-                    .buttonStyle(.plain).disabled(busy || (!canSend && !supportsVoiceChat))
-                    .accessibilityLabel(canSend || !supportsVoiceChat ? "Send message" : "Voice chat")
-                    .padding(.trailing, 6).padding(.bottom, 6)
+                    if !canSend, supportsVoiceChat {
+                        // Grok's voice button: a solid circle with the
+                        // waveform glyph. Tap calls; hold opens the walkie.
+                        Image(systemName: "waveform")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color(uiColor: .systemBackground))
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(Color.primary))
+                            .contentShape(Circle())
+                            .opacity(busy ? 0.4 : 1)
+                            .onTapGesture {
+                                guard !busy else { return }
+                                dictation.stop(); onVoice()
+                            }
+                            .onLongPressGesture(minimumDuration: 0.5) {
+                                guard !busy, let onLongVoice else { return }
+                                Haptics.impact(.medium)
+                                dictation.stop(); onLongVoice()
+                            }
+                            .accessibilityElement()
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityLabel("Voice call")
+                            .accessibilityAction { if !busy { dictation.stop(); onVoice() } }
+                            .accessibilityAction(named: "Walkie-talkie") { if !busy { dictation.stop(); onLongVoice?() } }
+                            .padding(.trailing, 4).padding(.bottom, 4)
+                    } else {
+                        Button {
+                            if canSend { onSend() }
+                        } label: {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(canSend ? Color.white : Color.secondary)
+                                .frame(width: 32, height: 32)
+                                .background(Circle().fill(canSend ? BubbleColor.mine : Color.secondary.opacity(0.18)))
+                        }
+                        .buttonStyle(.plain).disabled(busy || !canSend)
+                        .accessibilityLabel("Send message")
+                        .padding(.trailing, 6).padding(.bottom, 6)
+                    }
                 }
                 .frame(minHeight: 44).glassSheet(cornerRadius: 22)
             }

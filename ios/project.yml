@@ -112,8 +112,11 @@ targets:
         NSCameraUsageDescription: >-
           BOS uses the camera only to scan a pairing QR code shown on
           your computer.
+        # a voice call keeps talking with the screen locked, like a phone call
+        UIBackgroundModes: [audio]
         NSMicrophoneUsageDescription: >-
-          BOS listens while you dictate a message to a bot.
+          BOS listens while you dictate a message to a bot or talk
+          to one on a voice call.
         NSSpeechRecognitionUsageDescription: >-
           BOS converts your speech into text so you can send it
           to a bot. Recognition runs on this phone when it can.
