@@ -62,6 +62,10 @@ public enum CloudResponseClassifier {
         }
     }
 
+    /// Transport failures that mean no byte left the device. Timeouts and
+    /// dropped connections are not here: those may have reached the server.
+    public static let neverSent: Set<URLError.Code> = [.notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff]
+
     /// Error bodies that prove the send was refused before admission.
     static let definitiveRejections: Set<CloudErrorCode> = [
         .invalidRequest, .invalidMention, .unsupportedAttachment, .invalidReply, .operationExpired, .policyChanged,
@@ -125,9 +129,12 @@ public final class CloudClient: @unchecked Sendable {
     public let baseURL: URL
     private let session: URLSession
     private let bearer: @Sendable () async throws -> String
+    /// False fails every call as offline before any I/O; debug builds use it
+    /// to take the room service away without touching the device network.
+    private let reachable: @Sendable () -> Bool
 
-    public init(baseURL: URL, session: URLSession = CloudIssuerClient.cookieless, bearer: @escaping @Sendable () async throws -> String) {
-        self.baseURL = baseURL; self.session = session; self.bearer = bearer
+    public init(baseURL: URL, session: URLSession = CloudIssuerClient.cookieless, reachable: @escaping @Sendable () -> Bool = { true }, bearer: @escaping @Sendable () async throws -> String) {
+        self.baseURL = baseURL; self.session = session; self.reachable = reachable; self.bearer = bearer
     }
 
     public func me() async throws -> CloudIdentity {
@@ -190,6 +197,7 @@ public final class CloudClient: @unchecked Sendable {
     /// then one subscribe per room. Frames arrive in order with their own
     /// room ids; the stream ends on close, error or cancellation.
     public func realtime(subscriptions: [CloudOutboundFrame]) async throws -> AsyncThrowingStream<CloudFrame, Error> {
+        guard reachable() else { throw URLError(.notConnectedToInternet) }
         var components = URLComponents(url: baseURL.appendingPathComponent(String(CloudRoute.realtime.dropFirst())), resolvingAgainstBaseURL: false)!
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         let task = session.webSocketTask(with: components.url!)
@@ -229,6 +237,8 @@ public final class CloudClient: @unchecked Sendable {
             let (data, response) = try await session.data(for: request)
             let http = response as? HTTPURLResponse
             return classify(http?.statusCode ?? 0, data, http?.value(forHTTPHeaderField: "Retry-After"))
+        } catch let error as URLError where CloudResponseClassifier.neverSent.contains(error.code) {
+            return .offline
         } catch {
             return .indeterminate
         }
@@ -246,6 +256,7 @@ public final class CloudClient: @unchecked Sendable {
     }
 
     private func request(_ path: String, method: String) async throws -> URLRequest {
+        guard reachable() else { throw URLError(.notConnectedToInternet) }
         var request = URLRequest(url: baseURL.appendingPathComponent(String(path.dropFirst())), timeoutInterval: CloudLimits.requestSeconds)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

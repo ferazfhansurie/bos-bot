@@ -118,4 +118,66 @@ final class CloudStorageTests: XCTestCase {
         let attributes = try FileManager.default.attributesOfItem(atPath: alice.folder.path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
+
+    func testDiscoveryRoundTripKeepsMemberWorkspacesOnly() throws {
+        let alice = store("alice")
+        XCTAssertNil(try alice.loadDiscovery())
+        var discovery = F.discovery(["r1", "r2"])
+        discovery.workspaces.append(CloudDiscovery.Workspace(workspaceId: "w2", role: .guest, rooms: [CloudDiscovery.Room(roomId: "g1", threadId: "t1", policyRevision: CloudSequence(1))]))
+        try alice.save(discovery)
+        XCTAssertEqual(try alice.loadDiscovery(), F.discovery(["r1", "r2"]), "guest workspace never written")
+    }
+
+    func testWindowsRoundTripDropsGuestAndForeignWindows() throws {
+        let alice = store("alice")
+        XCTAssertEqual(try alice.loadWindows(), [:])
+        let guest = CloudSendWindow(namespace: F.namespace("alice", workspaceId: "w2"), windowId: "window2", windowToken: "t", issuedAt: "2026-10-07T00:00:00Z", expiresAt: "2026-11-06T00:00:00Z")
+        try alice.save(windows: ["w1": F.window("alice"), "w2": guest], guestWorkspaces: ["w2"])
+        XCTAssertEqual(try alice.loadWindows(), ["w1": F.window("alice")])
+
+        // A window filed under the wrong workspace, or for bob, never loads.
+        try alice.save(windows: ["w9": F.window("alice"), "w1": F.window("bob")], guestWorkspaces: [])
+        XCTAssertEqual(try alice.loadWindows(), [:])
+    }
+
+    func testWipeCacheKeepsOnlyTheQuarantinedOutbox() throws {
+        let alice = store("alice")
+        try alice.save(try outbox(for: "alice"))
+        try alice.save(CloudRoomState(workspaceId: "w1", roomId: "r1", threadId: "t1", me: "alice"))
+        try alice.save(F.discovery(["r1"]))
+        try alice.save(windows: ["w1": F.window("alice")], guestWorkspaces: [])
+        try FileManager.default.createDirectory(at: alice.attachmentsFolder, withIntermediateDirectories: true)
+        try Data("bytes".utf8).write(to: alice.attachmentsFolder.appendingPathComponent("a1"))
+
+        try alice.wipeCache()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: alice.folder.path), ["outbox.json"])
+        XCTAssertNil(try alice.loadRoom(workspaceId: "w1", roomId: "r1"))
+        XCTAssertNil(try alice.loadDiscovery())
+        XCTAssertEqual(try alice.loadWindows(), [:])
+        XCTAssertEqual(try alice.loadOutbox()?.entries.count, 2, "unresolved sends survive for reconciliation")
+        XCTAssertNoThrow(try alice.wipeCache(), "wiping twice is fine")
+    }
+
+    func testWipeCacheWithNoOutboxRemovesTheFolder() throws {
+        let alice = store("alice")
+        try alice.save(F.discovery(["r1"]))
+        try alice.wipeCache()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: alice.folder.path))
+        XCTAssertNoThrow(try store("nobody").wipeCache())
+    }
+
+    func testOpeningOneAccountWipesEveryOtherAccountsCache() throws {
+        let alice = store("alice"), bob = store("bob"), carol = store("carol")
+        try alice.save(try outbox(for: "alice"))
+        try alice.save(F.discovery(["r1"]))
+        try bob.save(CloudRoomState(workspaceId: "w1", roomId: "r1", threadId: "t1", me: "bob"))
+        try carol.save(F.discovery(["r1"]))
+        try carol.save(try outbox(for: "carol"))
+
+        try CloudAccountStore.wipeOtherAccounts(root: root, except: F.account("carol"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: alice.folder.path), ["outbox.json"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bob.folder.path), "nothing left to quarantine")
+        XCTAssertNotNil(try carol.loadDiscovery(), "the opening account keeps its cache")
+        XCTAssertEqual(try alice.loadOutbox()?.account, F.account("alice"))
+    }
 }

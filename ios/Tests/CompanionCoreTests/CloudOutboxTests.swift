@@ -485,4 +485,63 @@ final class CloudOutboxTests: XCTestCase {
         XCTAssertTrue(CloudOperationID.isValid("w_1-x.ABCDEFGHIJ_klmn-"))
         XCTAssertTrue(CloudOperationID.isValid(CloudOperationID(windowId: "window1").rawValue))
     }
+
+    // MARK: - Offline
+
+    func testOfflineSendWaitsFrozenAndReplaysOnceInOrderWhenOnline() throws {
+        var box = outbox()
+        let first = F.envelope(1, text: "one"), second = F.envelope(2, text: "two")
+        try enqueue(&box, first)
+        try enqueue(&box, second)
+        XCTAssertEqual(box.entry(second.clientOperationId)?.status, .draft, "one send at a time per room")
+
+        // No network: the request never left the device.
+        let offline = box.answered(first.clientOperationId, result: .offline, generation: box.generation, now: now)
+        XCTAssertEqual(offline, [.persist, .scheduleWake(after: CloudBackoff.cap)], "no immediate retry loop while offline")
+        let waiting = try XCTUnwrap(box.entry(first.clientOperationId))
+        XCTAssertEqual(waiting.status.label, .waiting)
+        XCTAssertTrue(waiting.dispatched, "still frozen: never edited, re-keyed or dropped")
+        XCTAssertEqual(waiting.digest, first.digest)
+        XCTAssertEqual(box.discard(first.clientOperationId), [], "a frozen send cannot be discarded")
+
+        // Still offline on a wake: the same envelope goes again, same key.
+        XCTAssertEqual(box.wake(now: now.addingTimeInterval(1)), [.persist, .submit(first)])
+        _ = box.answered(first.clientOperationId, result: .offline, generation: box.generation, now: now)
+
+        // Network back: the same envelope, then the next, each exactly once.
+        let online = box.wake(now: now.addingTimeInterval(2))
+        XCTAssertEqual(online.submitted, [first])
+        XCTAssertEqual(box.entry(first.clientOperationId)?.attempts, 3)
+        let accepted = box.answered(first.clientOperationId, result: .outcome(.accepted(F.acceptance(for: first, messageId: "m1", sequence: 1))), generation: box.generation, now: now)
+        XCTAssertEqual(accepted.submitted, [second])
+        _ = box.answered(second.clientOperationId, result: .outcome(.accepted(F.acceptance(for: second, messageId: "m2", sequence: 2))), generation: box.generation, now: now)
+        XCTAssertEqual(box.entries.map(\.status.label), [.accepted, .accepted])
+        XCTAssertEqual(box.wake(now: now.addingTimeInterval(3)), [], "nothing left to send")
+    }
+
+    func testOfflineLookupKeepsCheckingAndRetriesLater() throws {
+        var box = outbox()
+        let envelope = F.envelope(1)
+        try enqueue(&box, envelope)
+        _ = box.answered(envelope.clientOperationId, result: .indeterminate, generation: box.generation, now: now)
+        XCTAssertEqual(box.entry(envelope.clientOperationId)?.status, .checking)
+        XCTAssertEqual(box.answered(envelope.clientOperationId, result: .offline, generation: box.generation, now: now), [.scheduleWake(after: CloudBackoff.cap)])
+        XCTAssertEqual(box.entry(envelope.clientOperationId)?.status, .checking, "an offline lookup proves nothing")
+    }
+
+    func testOfflineSendAfterRelaunchIsLookedUpNotReplayed() throws {
+        var box = outbox()
+        let envelope = F.envelope(1)
+        try enqueue(&box, envelope)
+        _ = box.answered(envelope.clientOperationId, result: .offline, generation: box.generation, now: now)
+        var relaunched = try JSONDecoder().decode(CloudOutbox.self, from: JSONEncoder().encode(box.persisted))
+        XCTAssertEqual(relaunched.recoverAfterLaunch(now: now), [.persist, .lookup(envelope.clientOperationId, workspaceId: "w1")])
+        XCTAssertEqual(relaunched.entry(envelope.clientOperationId)?.autoReplay, false)
+    }
+
+    func testNeverSentTransportCodesExcludeTimeouts() {
+        XCTAssertTrue(CloudResponseClassifier.neverSent.contains(.notConnectedToInternet))
+        XCTAssertFalse(CloudResponseClassifier.neverSent.contains(.timedOut))
+        XCTAssertFalse(CloudResponseClassifier.neverSent.contains(.networkConnectionLost))
+    }
 }

@@ -116,6 +116,109 @@ final class CloudRoomsLiveUITests: XCTestCase {
         signOut(app)
     }
 
+    /// Slice 4 offline replay: the room service drops (debug toggle, the
+    /// Mac's network stays up), two sends wait in the durable outbox, the app
+    /// goes to the background and back, and coming online commits each send
+    /// exactly once, in order.
+    @MainActor
+    func testOfflineSendBackgroundAndReplay() async throws {
+        let run = String(UUID().uuidString.prefix(8)).lowercased()
+        let app = launch()
+        try await signIn("offline-\(run)@example.test", in: app)
+        app.buttons["cloud.createRoom"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+        openRoom(in: app)
+        send("online first \(run)", in: app)
+
+        app.buttons["cloud.offlineToggle"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.connecting"].waitForExistence(timeout: 10), "offline drops realtime")
+        let first = "offline one \(run)", second = "offline two \(run)"
+        for text in [first, second] {
+            type(text, into: app.textFields["cloud.composer"])
+            app.buttons["cloud.send"].tap()
+            XCTAssertTrue(pending(text, in: app).waitForExistence(timeout: 10), "offline send should wait in the outbox: \(problem(app))")
+        }
+        XCTAssertEqual(messages(first, in: app).count, 0, "nothing commits while offline")
+        shot("two sends waiting offline", app)
+
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 2)
+        app.activate()
+        XCTAssertTrue(app.textFields["cloud.composer"].waitForExistence(timeout: 10), "room stays open after background")
+        XCTAssertTrue(pending(second, in: app).exists, "waiting sends survive the background")
+
+        app.buttons["cloud.offlineToggle"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.live"].waitForExistence(timeout: 20), "realtime reconnects")
+        for text in [first, second] {
+            XCTAssertTrue(message(text, in: app).waitForExistence(timeout: 20), "replayed send should commit: \(problem(app))")
+        }
+        XCTAssertTrue(waitGone(pendingRows(in: app).firstMatch, timeout: 10), "outbox drains")
+        XCTAssertEqual(messages(first, in: app).count, 1, "committed exactly once")
+        XCTAssertEqual(messages(second, in: app).count, 1, "committed exactly once")
+        XCTAssertLessThan(message(first, in: app).frame.minY, message(second, in: app).frame.minY, "replay keeps send order")
+        shot("replayed in order", app)
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+    }
+
+    /// A send that was in flight when the app died is looked up after
+    /// relaunch and never replayed on its own; the person chooses to resend.
+    @MainActor
+    func testOfflineSendAfterRelaunchNeedsReview() async throws {
+        let run = String(UUID().uuidString.prefix(8)).lowercased()
+        let app = launch()
+        try await signIn("relaunch-\(run)@example.test", in: app)
+        app.buttons["cloud.createRoom"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+        openRoom(in: app)
+
+        app.buttons["cloud.offlineToggle"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.connecting"].waitForExistence(timeout: 10))
+        let text = "before relaunch \(run)"
+        type(text, into: app.textFields["cloud.composer"])
+        app.buttons["cloud.send"].tap()
+        XCTAssertTrue(pending(text, in: app).waitForExistence(timeout: 10), problem(app))
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["cloud.subject"].waitForExistence(timeout: 20), "account survives relaunch")
+        openRoom(in: app)
+        let resend = app.buttons["cloud.pending.resend"]
+        XCTAssertTrue(resend.waitForExistence(timeout: 20), "uncommitted send waits for review: \(problem(app))")
+        XCTAssertEqual(messages(text, in: app).count, 0, "never replayed without the person")
+        shot("send waiting for review after relaunch", app)
+        resend.tap()
+        XCTAssertTrue(message(text, in: app).waitForExistence(timeout: 20), problem(app))
+        XCTAssertTrue(waitGone(pendingRows(in: app).firstMatch, timeout: 10))
+        XCTAssertEqual(messages(text, in: app).count, 1)
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+    }
+
+    @MainActor
+    private func messages(_ text: String, in app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'cloud.message.'"))
+            .containing(NSPredicate(format: "label == %@", text))
+    }
+
+    @MainActor
+    private func pendingRows(in app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH 'cloud.pending.' AND NOT (identifier IN %@)",
+            ["cloud.pending.release", "cloud.pending.discard", "cloud.pending.resend", "cloud.pending.giveUp"]))
+    }
+
+    @MainActor
+    private func pending(_ text: String, in app: XCUIApplication) -> XCUIElement {
+        pendingRows(in: app).containing(NSPredicate(format: "label == %@", text)).firstMatch
+    }
+
+    private func waitGone(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        return XCTWaiter().wait(for: [gone], timeout: timeout) == .completed
+    }
+
     // MARK: - steps
 
     /// Independent check-owned fault proxy forwards to the real local issuer.

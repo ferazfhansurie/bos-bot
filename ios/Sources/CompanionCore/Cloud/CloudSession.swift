@@ -16,6 +16,9 @@ public enum CloudSessionInput: Hashable, Sendable {
     /// The issuer or room service refused the bearer.
     case sessionInvalid(generation: Int)
     case signedOut
+    /// The device's network came back: recover now instead of waiting out
+    /// a backoff scheduled while offline.
+    case networkRestored
 }
 
 public enum CloudSessionEffect: Hashable, Sendable {
@@ -37,8 +40,11 @@ public enum CloudSessionEffect: Hashable, Sendable {
     case openStore(CloudAccountKey)
     /// Explicit logout: erase local payload, outbox, tokens and previews.
     case eraseStore(CloudAccountKey)
-    /// The bearer is gone: show sign-in. The store stays scoped on disk and
-    /// nothing dispatches until the same account signs in again.
+    /// Revocation or account switch: drop this account's cached content,
+    /// discovery, windows and attachments; its outbox stays quarantined.
+    case wipeCache(CloudAccountKey)
+    /// The bearer is gone: show sign-in. Only the quarantined outbox stays
+    /// on disk, and nothing dispatches until the same account signs in again.
     case requireSignIn(CloudAccountKey)
 }
 
@@ -123,9 +129,11 @@ public struct CloudSession: Hashable, Sendable {
         case .accountChanged(let next):
             guard next != account else { return [] }
             let previous = generation
+            let leaving = account
             reset()
             account = next
             var effects: [CloudSessionEffect] = [.closeSocket, .clearVisibleState(previousGeneration: previous)]
+            if let leaving { effects.append(.wipeCache(leaving)) }
             if let next { effects.append(.openStore(next)) }
             if isForeground { effects += startRecovery() }
             return effects
@@ -135,7 +143,7 @@ public struct CloudSession: Hashable, Sendable {
             let previous = self.generation
             reset()
             self.account = nil
-            return [.closeSocket, .clearVisibleState(previousGeneration: previous), .requireSignIn(account)]
+            return [.closeSocket, .clearVisibleState(previousGeneration: previous), .wipeCache(account), .requireSignIn(account)]
 
         case .signedOut:
             guard let account else { return [] }
@@ -143,6 +151,11 @@ public struct CloudSession: Hashable, Sendable {
             reset()
             self.account = nil
             return [.closeSocket, .clearVisibleState(previousGeneration: previous), .eraseStore(account)]
+
+        case .networkRestored:
+            recoveryAttempt = 0
+            socketAttempt = 0
+            return startRecovery()
         }
     }
 

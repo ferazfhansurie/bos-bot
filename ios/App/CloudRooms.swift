@@ -1,6 +1,8 @@
 #if DEBUG
 import CompanionCore
+import Network
 import SwiftUI
+import UIKit
 
 /// BOS 2.0 cloud rooms, slice 2: email-OTP sign-in against a local issuer
 /// and two-person chat over /v2. Debug builds only, and only when launched
@@ -14,6 +16,38 @@ enum CloudRoomsConfig {
     static var enabled: Bool { value("BOS_CLOUD_ROOMS") == "1" && roomsURL != nil && issuerURL != nil }
     static var roomsURL: URL? { value("CLOUD_ROOMS_URL").flatMap(URL.init(string:)) }
     static var issuerURL: URL? { value("CLOUD_ISSUER_URL").flatMap(URL.init(string:)) }
+}
+
+/// Whether the room service is reachable: the device path, plus a debug
+/// switch that takes the service away without touching the network.
+final class CloudConnectivity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pathUp = true
+    private var simulatedOffline = CloudRoomsConfig.value("CLOUD_SIMULATE_OFFLINE") == "1"
+    private let monitor = NWPathMonitor()
+    /// Called on the main actor whenever reachability flips.
+    var onChange: (@MainActor (Bool) -> Void)?
+
+    var reachable: Bool { lock.withLock { pathUp && !simulatedOffline } }
+
+    func start() {
+        monitor.pathUpdateHandler = { [weak self] path in self?.update { $0.pathUp = path.status == .satisfied } }
+        monitor.start(queue: DispatchQueue(label: "cloud.connectivity"))
+    }
+
+    func simulateOffline(_ offline: Bool) { update { $0.simulatedOffline = offline } }
+
+    private func update(_ change: (CloudConnectivity) -> Void) {
+        let (before, after) = lock.withLock { () -> (Bool, Bool) in
+            let before = pathUp && !simulatedOffline
+            change(self)
+            return (before, pathUp && !simulatedOffline)
+        }
+        guard before != after else { return }
+        Task { @MainActor in self.onChange?(after) }
+    }
+
+    deinit { monitor.cancel() }
 }
 
 @MainActor
@@ -45,6 +79,8 @@ final class CloudRoomsModel: ObservableObject {
     @Published private(set) var unavailable = false
     @Published private(set) var lastInvite: String?
     @Published private(set) var live = false
+    /// The room service can't be reached; sends wait on the device.
+    @Published private(set) var offline = false
 
     let identityCoordinator: CloudIdentityCoordinator
     private let client: CloudClient
@@ -53,12 +89,18 @@ final class CloudRoomsModel: ObservableObject {
     private var store: CloudAccountStore?
     private var socket: Task<Void, Never>?
     private var windows: [String: CloudSendWindow] = [:]
+    private let connectivity: CloudConnectivity
 
     init(roomsURL: URL, issuerURL: URL) {
         let coordinator = CloudIdentityCoordinator(issuer: CloudIssuerClient(baseURL: issuerURL), roomsURL: roomsURL, store: CloudKeychainStore())
         identityCoordinator = coordinator
-        client = CloudClient(baseURL: roomsURL) { try await coordinator.bearer() }
+        let connectivity = CloudConnectivity()
+        self.connectivity = connectivity
+        client = CloudClient(baseURL: roomsURL, reachable: { connectivity.reachable }) { try await coordinator.bearer() }
         storageRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        offline = !connectivity.reachable
+        connectivity.onChange = { [weak self] reachable in self?.reachabilityChanged(reachable) }
+        connectivity.start()
     }
 
     // MARK: - lifecycle
@@ -78,6 +120,29 @@ final class CloudRoomsModel: ObservableObject {
     }
 
     func foreground() { run(session.reduce(.foreground)) }
+
+    /// Debug: take the room service away (or give it back) without
+    /// touching the simulator's network.
+    func simulateOffline(_ offline: Bool) { connectivity.simulateOffline(offline) }
+
+    private func reachabilityChanged(_ reachable: Bool) {
+        offline = !reachable
+        if reachable {
+            run(session.reduce(.networkRestored))
+            wakeOutbox()
+        } else if socket != nil {
+            // The socket is as good as gone; let the session schedule its return.
+            socket?.cancel(); socket = nil; live = false
+            run(session.reduce(.socketEnded(generation: session.generation, retryAfter: nil)))
+        }
+    }
+
+    private func wakeOutbox() {
+        guard var outbox else { return }
+        let effects = outbox.wake(now: Date())
+        self.outbox = outbox
+        runOutbox(effects)
+    }
 
     func background() {
         for key in rooms.keys { _ = rooms[key]?.background() }
@@ -124,20 +189,49 @@ final class CloudRoomsModel: ObservableObject {
     func select(_ ref: CloudRoomRef?) {
         session.selected = ref
         selected = ref
+        // Show the cached projection straight away, online or not.
+        if let ref { _ = roomState(ref) }
         if ref != nil { run(session.reduce(.retryDue(.recovery, generation: session.generation))) }
     }
 
-    func send(_ text: String, in ref: CloudRoomRef) async {
+    /// Freezes and queues a send. Offline it still goes in the outbox as
+    /// long as a signed window is cached; false means nothing was queued
+    /// and the composer keeps the text.
+    @discardableResult
+    func send(_ text: String, in ref: CloudRoomRef) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return }
+        guard !trimmed.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
+        var queued = false
         await work {
             let window = try await self.window(for: ref.workspaceId)
             let envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: trimmed, expectedPolicyRevision: policy)
             guard var outbox = self.outbox, let expiry = window.expiryDate else { return }
-            let effects = try outbox.enqueue(envelope, windowExpiresAt: expiry, now: Date())
+            // Guest drafts are session memory only.
+            let effects = try outbox.enqueue(envelope, windowExpiresAt: expiry, ephemeral: ref.role == .guest, now: Date())
             self.outbox = outbox
+            queued = true
             self.runOutbox(effects)
         }
+        return queued
+    }
+
+    /// A held draft, reviewed: send it as written.
+    func release(_ id: CloudOperationID) { mutateOutbox { $0.release(id, now: Date()) } }
+
+    /// A held draft, or a send the server never committed, dropped by the person.
+    func discard(_ id: CloudOperationID) { mutateOutbox { $0.discard(id) } }
+
+    /// A send the server has no record of, sent again unchanged under its key.
+    func resend(_ id: CloudOperationID) { mutateOutbox { $0.resend(id, now: Date()) } }
+
+    /// A send the server has no record of, sealed as not accepted.
+    func giveUp(_ id: CloudOperationID) { mutateOutbox { $0.giveUp(id) } }
+
+    private func mutateOutbox(_ change: (inout CloudOutbox) -> [CloudOutboxEffect]) {
+        guard var outbox else { return }
+        let effects = change(&outbox)
+        self.outbox = outbox
+        runOutbox(effects)
     }
 
     func redeem(_ token: String) async {
@@ -168,6 +262,7 @@ final class CloudRoomsModel: ObservableObject {
 
     func room(_ ref: CloudRoomRef) -> CloudRoomState? { rooms[key(ref)] }
 
+    /// Every unresolved send in the room, in queue order.
     func pending(in ref: CloudRoomRef) -> [CloudOutboxEntry] {
         (outbox?.entries ?? []).filter { $0.envelope.roomId == ref.roomId && $0.envelope.namespace.workspaceId == ref.workspaceId && !$0.status.isResolved }
     }
@@ -195,7 +290,7 @@ final class CloudRoomsModel: ObservableObject {
             case .closeSocket:
                 socket?.cancel(); socket = nil; live = false
             case .recoverOperations:
-                if var outbox { let effects = outbox.wake(now: Date()); self.outbox = outbox; runOutbox(effects) }
+                wakeOutbox()
             case .schedule(let timer, let after, let generation):
                 Task {
                     try? await Task.sleep(for: .seconds(after))
@@ -204,8 +299,13 @@ final class CloudRoomsModel: ObservableObject {
             case .clearVisibleState:
                 rooms = [:]; rows = []; selected = nil; outbox = nil; windows = [:]; lastInvite = nil; live = false
             case .openStore(let account):
+                // Whoever used the phone before keeps only a quarantined outbox.
+                try? CloudAccountStore.wipeOtherAccounts(root: storageRoot, except: account)
                 let store = CloudAccountStore(root: storageRoot, account: account)
                 self.store = store
+                // Last known rooms and windows, so the list and sends work offline.
+                if let discovery = try? store.loadDiscovery() { rows = Self.rows(discovery) }
+                windows = (try? store.loadWindows()) ?? [:]
                 var outbox = (try? store.loadOutbox()) ?? CloudOutbox(account: account)
                 let effects = outbox.recoverAfterLaunch(now: Date())
                 self.outbox = outbox
@@ -213,6 +313,9 @@ final class CloudRoomsModel: ObservableObject {
             case .eraseStore(let account):
                 try? CloudAccountStore(root: storageRoot, account: account).erase()
                 store = nil
+            case .wipeCache(let account):
+                try? CloudAccountStore(root: storageRoot, account: account).wipeCache()
+                if store?.account == account { store = nil }
             case .requireSignIn:
                 store = nil
                 identity = nil
@@ -238,16 +341,43 @@ final class CloudRoomsModel: ObservableObject {
     private func syncDiscovery(_ generation: Int) async {
         do {
             let discovery = try await client.discovery()
-            rows = discovery.workspaces.flatMap { workspace in
-                workspace.rooms.map { RoomRow(ref: CloudRoomRef(workspaceId: workspace.workspaceId, roomId: $0.roomId, threadId: $0.threadId, role: workspace.role), policyRevision: $0.policyRevision) }
-            }
+            guard generation == session.generation else { return }
+            rows = Self.rows(discovery)
+            try? store?.save(discovery)
             run(session.reduce(.discoverySynced(generation: generation, discovery)))
+            await prefetchWindows(discovery, generation: generation)
         } catch let error as CloudError {
             if await rejected(error.error, generation: generation) { return }
             run(session.reduce(.discoveryFailed(generation: generation, retryAfter: error.retryAfter)))
         } catch {
             run(session.reduce(.discoveryFailed(generation: generation, retryAfter: nil)))
         }
+    }
+
+    private static func rows(_ discovery: CloudDiscovery) -> [RoomRow] {
+        discovery.workspaces.flatMap { workspace in
+            workspace.rooms.map { RoomRow(ref: CloudRoomRef(workspaceId: workspace.workspaceId, roomId: $0.roomId, threadId: $0.threadId, role: workspace.role), policyRevision: $0.policyRevision) }
+        }
+    }
+
+    /// Fetches a signed window for each workspace that lacks a fresh one,
+    /// so a send made after the network drops can still be frozen.
+    private func prefetchWindows(_ discovery: CloudDiscovery, generation: Int) async {
+        for workspace in discovery.workspaces where windows[workspace.workspaceId].map(Self.fresh) != true {
+            guard generation == session.generation, let window = try? await client.operationWindow(workspaceId: workspace.workspaceId) else { continue }
+            guard generation == session.generation else { return }
+            windows[workspace.workspaceId] = window
+        }
+        saveWindows()
+    }
+
+    private static func fresh(_ window: CloudSendWindow) -> Bool {
+        (window.expiryDate ?? .distantPast) > Date().addingTimeInterval(60)
+    }
+
+    private func saveWindows() {
+        let guests = Set(rows.filter { $0.ref.role == .guest }.map(\.ref.workspaceId))
+        try? store?.save(windows: windows, guestWorkspaces: guests)
     }
 
     /// session_invalid from the room service fails closed like a 401.
@@ -286,6 +416,11 @@ final class CloudRoomsModel: ObservableObject {
         case .reset(let reset): target = (reset.workspaceId, reset.roomId)
         case .error(let code):
             if await rejected(code, generation: generation) { return }
+            // Access to something on this socket ended: discovery says what
+            // is left, and removals run before anything reopens.
+            if code == .forbidden || code == .notFound || code == .visibilityChanged {
+                run(session.reduce(.retryDue(.recovery, generation: generation)))
+            }
             target = nil
         case .heartbeat: return
         }
@@ -352,7 +487,11 @@ final class CloudRoomsModel: ObservableObject {
 
     private func answer(_ id: CloudOperationID, _ account: CloudAccountKey, _ call: @escaping () async -> CloudSubmitResult) {
         let generation = outbox?.generation ?? 0
+        // A send in flight when the app backgrounds gets to finish; if iOS
+        // ends it anyway, the next foreground looks it up.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "cloud.send")
         Task {
+            defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
             let result = await call()
             // An answer for an account that is no longer on screen is dropped.
             guard var outbox = self.outbox, outbox.account == account else { return }
@@ -363,9 +502,10 @@ final class CloudRoomsModel: ObservableObject {
     }
 
     private func window(for workspaceId: String) async throws -> CloudSendWindow {
-        if let window = windows[workspaceId], let expiry = window.expiryDate, expiry > Date().addingTimeInterval(60) { return window }
+        if let window = windows[workspaceId], Self.fresh(window) { return window }
         let window = try await client.operationWindow(workspaceId: workspaceId)
         windows[workspaceId] = window
+        saveWindows()
         return window
     }
 
@@ -424,7 +564,12 @@ struct CloudRoomsRoot: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                if model.unavailable {
+                if model.offline {
+                    Text("offline. sends wait on this phone and go when you're back.")
+                        .font(.footnote).padding(6).frame(maxWidth: .infinity)
+                        .background(.orange.opacity(0.3))
+                        .accessibilityIdentifier("cloud.offline")
+                } else if model.unavailable {
                     Text("sign-in service unavailable, retrying")
                         .font(.footnote).padding(6).frame(maxWidth: .infinity)
                         .background(.yellow.opacity(0.3))
@@ -565,12 +710,7 @@ struct CloudRoomChatView: View {
                         .id(message.messageId)
                     }
                     ForEach(model.pending(in: ref)) { entry in
-                        HStack {
-                            Spacer()
-                            Text(entry.envelope.text).foregroundStyle(.secondary)
-                            Text(entry.status.label.rawValue).font(.caption2).foregroundStyle(.secondary)
-                        }
-                        .accessibilityIdentifier("cloud.pending.\(entry.status.label.rawValue)")
+                        CloudPendingRow(model: model, entry: entry)
                     }
                 }
                 .listStyle(.plain)
@@ -588,7 +728,7 @@ struct CloudRoomChatView: View {
                 Button("send") {
                     let text = draft
                     draft = ""
-                    Task { await model.send(text, in: ref) }
+                    Task { if await !model.send(text, in: ref), draft.isEmpty { draft = text } }
                 }
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("cloud.send")
@@ -601,12 +741,55 @@ struct CloudRoomChatView: View {
             if ref.role == .owner || ref.role == .admin {
                 Button("invite") { Task { await model.invite(to: ref) } }.accessibilityIdentifier("cloud.invite")
             }
+            // Debug fixture control: drop the room service, keep the network.
+            Button(model.offline ? "go online" : "go offline") { model.simulateOffline(!model.offline) }
+                .accessibilityIdentifier("cloud.offlineToggle")
         }
         .onAppear { model.select(ref) }
         .onDisappear { if model.selected == ref { model.select(nil) } }
         .overlay(alignment: .top) {
             Text(model.live ? "live" : "connecting").font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier(model.live ? "cloud.live" : "cloud.connecting")
+        }
+    }
+}
+/// One unresolved send. Held drafts and sends the server never committed
+/// wait for the person; nothing here edits or re-keys a frozen envelope.
+struct CloudPendingRow: View {
+    @ObservedObject var model: CloudRoomsModel
+    let entry: CloudOutboxEntry
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Spacer()
+                Text(entry.envelope.text).foregroundStyle(.secondary)
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
+                Spacer()
+                if case .held = entry.status, !entry.dispatched {
+                    Button("send") { model.release(entry.id) }.accessibilityIdentifier("cloud.pending.release")
+                    Button("discard", role: .destructive) { model.discard(entry.id) }.accessibilityIdentifier("cloud.pending.discard")
+                } else if entry.status == .checking, entry.notCommitted, !entry.autoReplay {
+                    Button("send again") { model.resend(entry.id) }.accessibilityIdentifier("cloud.pending.resend")
+                    Button("don't send", role: .destructive) { model.giveUp(entry.id) }.accessibilityIdentifier("cloud.pending.giveUp")
+                }
+            }
+            .buttonStyle(.borderless).font(.caption)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.pending.\(entry.status.label.rawValue)")
+    }
+
+    private var label: String {
+        switch entry.status {
+        case .held(.stale): "older than a day, check before sending"
+        case .held(.relaunched): "not sent yet, check before sending"
+        case .held(.audienceChanged): "room changed, check before sending"
+        case .held(.parentRejected): "reply target wasn't sent"
+        case .recoveryUnknown: "can't confirm, checking"
+        default: entry.status.label.rawValue
         }
     }
 }

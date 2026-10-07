@@ -131,6 +131,9 @@ public enum CloudSubmitResult: Hashable, Sendable {
     case rateLimited(retryAfter: TimeInterval)
     /// Timeout, dropped connection, 5xx, identity outage: no definitive answer.
     case indeterminate
+    /// The device had no network, so the request never left it. Not an
+    /// outcome either: the frozen envelope waits for the network.
+    case offline
 }
 
 /// The durable, per-account queue of sends. Pure: every change returns the
@@ -389,6 +392,16 @@ public struct CloudOutbox: Hashable, Codable, Sendable {
                 return [.persist, .scheduleWake(after: retryAfter)]
             }
             return [.scheduleWake(after: retryAfter)]
+        case .offline:
+            // Nothing reached the server. A send waits, unchanged and still
+            // frozen, for the network; a lookup just asks again later. The
+            // app wakes the outbox when the network returns; the long wake
+            // is only a backstop.
+            if entries[index].status == .sending {
+                entries[index].status = .waiting(retryAt: nil)
+                return [.persist, .scheduleWake(after: CloudBackoff.cap)]
+            }
+            return [.scheduleWake(after: CloudBackoff.cap)]
         case .indeterminate:
             let wasChecking = entries[index].status == .checking
             entries[index].status = .checking
