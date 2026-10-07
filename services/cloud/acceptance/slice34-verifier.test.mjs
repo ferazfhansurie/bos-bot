@@ -53,26 +53,26 @@ test('scenario oracle uses frozen expectations and refuses missing evidence or u
   }
 });
 const fence = () => ({ boundary: 'before-protected-admission', barrier_artifact: 'test-only', durable_readback_artifact: 'test-only',
-  current_fence_gen: 2, stale_fence_gen: 1, stale_admitted_after_reclaim: false, canonical_finals: [{ text: 'final' }],
+  current_fence_gen: '10', stale_fence_gen: '9', stale_admitted_after_reclaim: false, canonical_finals: [{ text: 'final' }],
   pinned_model: 'test-model', new_attempt_model: 'test-model', unresolved_provider_replayed: false,
-  events: [{ type: 'final.commit', invocation_id: 'test-id', attempt: 2, fence_gen: 2, admitted_after_reclaim: true }] });
+  events: [{ type: 'final.commit', invocation_id: 'test-id', attempt: 2, fence_gen: '10', admitted_after_reclaim: true }] });
 test('fencing rejects stale publish, missing actual barrier and unsafe provider replay', () => {
   verifyRace('stale-host-final', fence());
-  for (const mutate of [r => r.stale_admitted_after_reclaim = true, r => r.events[0].fence_gen = 1,
-    r => r.boundary = 'sequential', r => r.unresolved_provider_replayed = true, r => r.canonical_finals.push({ text: 'dup' })]) {
+  for (const mutate of [r => r.stale_admitted_after_reclaim = true, r => r.events[0].fence_gen = '9',
+    r => r.boundary = 'sequential', r => r.events[0].fence_gen = 10, r => r.current_fence_gen = '09', r => r.unresolved_provider_replayed = true, r => r.canonical_finals.push({ text: 'dup' })]) {
     const r = fence(); mutate(r); assert.throws(() => verifyRace('stale-host-final', r));
   }
 });
 const approval = () => {
-  const card = { approval_id: 'test-card', version: 1, effect_id: 'test-effect', digest: 'test-digest', run_generation: 1, expiry: 'test-expiry' };
+  const card = { approval_id: 'test-card', version: 1, effect_id: 'test-effect', digest: 'test-digest', invocation_id: 'test-run', attempt: 1, fence_gen: '9007199254740993', expires_at: 'test-expiry' };
   return { boundary: 'before-protected-admission', barrier_artifact: 'test-only', durable_readback_artifact: 'test-only',
-    card, authorized_actor_id: 'test-actor', valid_decisions: [{ ...card, actor_id: 'test-actor', decision: 'approved' }], loser_side_effects: 0 };
+    card, authorized_actor_id: 'test-actor', valid_decisions: [{ ...card, actor_id: 'test-actor', status: 'approved' }], loser_side_effects: 0 };
 };
 test('approval oracle rejects double decision, wrong actor/version/digest and loser effect', () => {
   verifyRace('approval-double-decision', approval());
-  for (const mutate of [r => r.valid_decisions.push({ ...r.valid_decisions[0], decision: 'rejected' }),
+  for (const mutate of [r => r.valid_decisions.push({ ...r.valid_decisions[0], status: 'denied' }),
     r => r.valid_decisions[0].actor_id = 'foreign', r => r.valid_decisions[0].version++,
-    r => r.valid_decisions[0].digest = 'changed', r => r.loser_side_effects = 1]) {
+    r => r.valid_decisions[0].digest = 'changed', r => r.valid_decisions[0].fence_gen = '9007199254740992', r => r.loser_side_effects = 1]) {
     const r = approval(); mutate(r); assert.throws(() => verifyRace('approval-double-decision', r));
   }
 });

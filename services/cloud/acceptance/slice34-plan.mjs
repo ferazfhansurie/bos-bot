@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { digest } from './oracle.mjs';
 
 export const BASE = '06036613d';
-export const WIRE = ['invocation.offered', 'claimed', 'stream.delta', 'final.commit', 'stop.requested', 'stop.observed'];
+export const WIRE = ['invocation.offered', 'invocation.claimed', 'stream.delta', 'final.commit', 'stop.requested', 'stop.observed'];
 // These are verifier adapter names, not invented HTTP routes or additional wire names.
 const rows = [
   ['a02', 'two-human-native', 'source,ingress,provider,recipients'],

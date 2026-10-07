@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-const privateKeys = /^(authorization|cookie|set-cookie|token|window_token|access_token|refresh_token|bearer|revoke_bearer|session|session_token|secret|hook_secret|invite_token)$/i;
+const privateKeys = /^(host_credential|x-cloud-host-credential|authorization|cookie|set-cookie|token|window_token|access_token|refresh_token|bearer|revoke_bearer|session|session_token|secret|hook_secret|invite_token)$/i;
 export function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, data]) => [key, privateKeys.test(key) ? '[redacted]' : redact(data)]));
@@ -17,7 +17,7 @@ export class Transport {
     this.base = localURL(baseURL);
     this.record = record;
   }
-  async request(path, { method = 'GET', token, body, discardResponse = false } = {}) {
+  async request(path, { method = 'GET', token, hostCredential, body, discardResponse = false } = {}) {
     const url = localURL(new URL(path, this.base));
     assert.equal(url.origin, this.base.origin, 'request must stay on explicit fixture origin');
     const started = performance.now();
@@ -26,7 +26,7 @@ export class Transport {
     let response;
     try { response = await fetch(url, {
       method, redirect: 'error', signal: AbortSignal.timeout(10_000),
-      headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}), ...(hostCredential ? { 'X-Cloud-Host-Credential': hostCredential } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     }); } catch (error) {
       this.record({ type: 'http_transport_unknown', method, path: url.pathname,

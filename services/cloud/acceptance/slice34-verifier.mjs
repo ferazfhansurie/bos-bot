@@ -25,7 +25,7 @@ export function verifyNative(n, intents) {
     assert.ok(t.invocation_id && !ids.has(t.invocation_id)); ids.add(t.invocation_id);
     assert.equal(t.ingress_digest, digest(t.source));
     assert.equal(t.provider_input_digest, t.ingress_digest);
-    assert.equal(t.actual_model, intent.envelope.pinned_model); assert.equal(t.actual_model, t.pinned_model); assert.ok(t.actual_model);
+    assert.deepEqual(t.actual_model, intent.envelope.pinned_model); assert.deepEqual(t.actual_model, t.pinned_model); assert.ok(t.actual_model);
     assert.ok(t.provider_receipt && t.host_build && t.provider_transcript_artifact);
     assert.equal(t.final_room_id, t.source.room_id);
     assert.equal(t.canonical_finals.length, 1);
@@ -39,21 +39,23 @@ export function verifyRace(name, r) {
   assert.equal(r.boundary, 'before-protected-admission');
   assert.ok(r.barrier_artifact && r.durable_readback_artifact);
   if (name.startsWith('stale-host-')) {
-    assert.ok(r.current_fence_gen > r.stale_fence_gen);
+    for (const gen of [r.current_fence_gen, r.stale_fence_gen]) assert.match(gen, /^(0|[1-9][0-9]*)$/);
+    assert.ok(BigInt(r.current_fence_gen) > BigInt(r.stale_fence_gen));
     assert.equal(r.stale_admitted_after_reclaim, false);
     assert.ok(r.canonical_finals.length <= 1);
-    assert.equal(r.new_attempt_model, r.pinned_model);
+    assert.deepEqual(r.new_attempt_model, r.pinned_model);
     assert.equal(r.unresolved_provider_replayed, false);
     for (const e of r.events) {
       assert.ok(WIRE.includes(e.type)); assert.ok(e.invocation_id);
-      assert.ok(Number.isInteger(e.attempt) && Number.isInteger(e.fence_gen));
+      assert.ok(Number.isInteger(e.attempt) && e.attempt >= 0);
+      assert.match(e.fence_gen, /^(0|[1-9][0-9]*)$/);
       if (e.admitted_after_reclaim) assert.equal(e.fence_gen, r.current_fence_gen);
     }
   } else if (name === 'approval-double-decision') {
     assert.equal(r.valid_decisions.length, 1);
-    assert.ok(['approved', 'rejected'].includes(r.valid_decisions[0].decision));
+    assert.ok(['approved', 'denied'].includes(r.valid_decisions[0].status));
     assert.equal(r.valid_decisions[0].actor_id, r.authorized_actor_id);
-    for (const key of ['approval_id', 'version', 'effect_id', 'digest', 'run_generation', 'expiry']) {
+    for (const key of ['approval_id', 'version', 'effect_id', 'digest', 'invocation_id', 'attempt', 'fence_gen', 'expires_at']) {
       assert.ok(r.card[key] !== undefined); assert.deepEqual(r.valid_decisions[0][key], r.card[key]);
     }
     assert.equal(r.loser_side_effects, 0);

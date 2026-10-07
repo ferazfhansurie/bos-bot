@@ -8,6 +8,7 @@ import { freezeManifest, digest } from './oracle.mjs';
 import { redact, localURL } from './transport.mjs';
 import { bothOrders } from './schedules.mjs';
 import { plan, planDigest, RACES, FIXTURES } from './slice34-plan.mjs';
+import { BINDING, ROUTES, SCHEMA_COMMIT } from './slice34-binding.mjs';
 import { verifyScenario, verifyRace, verifyRecovery } from './slice34-verifier.mjs';
 
 export function verifyArtifact(artifact, evidence) {
@@ -17,11 +18,17 @@ export function verifyArtifact(artifact, evidence) {
   assert.equal(createHash('sha256').update(readFileSync(path)).digest('hex'), artifact.sha256, 'artifact digest mismatch');
 }
 
-// Adapter binding is intentionally deferred until bos supplies the schema SHA.
+// Schema binding is pinned; actual service adapter awaits the backend commit.
 // No modeled adapter is shipped as an acceptance target.
 export function prepare(evidence, pins, count = 1000) {
   mkdirSync(evidence, { mode: 0o700 });
   const p = plan(count);
+  const scope = { workspace_id: 'fictional-workspace', room_id: 'fictional-room', host_id: 'fictional-host',
+    invocation_id: 'fictional-invocation', approval_id: 'fictional-card', attachment_id: 'fictional-attachment' };
+  const routes = Object.fromEntries(Object.entries(ROUTES).map(([name, [method, path, , , host]]) =>
+    [name, { method, path: path(scope), host }]));
+  writeFileSync(evidence + '/binding.json', JSON.stringify({ ...BINDING, routes }, null, 2) + '\n',
+    { flag: 'wx', mode: 0o600, flush: true });
   writeFileSync(evidence + '/schedule.json', JSON.stringify({ ...p, pins, plan_digest: planDigest(p) }, null, 2) + '\n', { flag: 'wx', mode: 0o600, flush: true });
   freezeManifest(evidence + '/recovery-intents.manifest.json', { candidate: pins.candidate, protocol: pins.schema, scope: { fictional: true }, operations: p.recovery });
   return p;
@@ -32,6 +39,7 @@ export async function run({ server, evidence, candidate, schema, adapterPath }) 
   const git = args => execFileSync('git', args, { cwd: server, encoding: 'utf8' }).trim();
   const candidateSHA = git(['rev-parse', candidate + '^{commit}']);
   const schemaSHA = git(['rev-parse', schema + '^{commit}']);
+  assert.equal(schemaSHA, SCHEMA_COMMIT, 'adapter binding targets frozen schema');
   assert.equal(git(['rev-parse', 'HEAD']), candidateSHA);
   assert.equal(git(['status', '--porcelain', '--', 'services/cloud', 'shared/cloud-protocol', ':!services/cloud/acceptance']), '', 'dirty SUT');
   git(['merge-base', '--is-ancestor', schemaSHA, candidateSHA]);
@@ -122,7 +130,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const [mode, ...args] = process.argv.slice(2);
   if (mode === '--prepare') {
     assert.equal(args.length, 1, 'usage: --prepare NEW_EXTERNAL_EVIDENCE_DIR');
-    prepare(resolve(args[0]), { candidate: '06036613d', schema: 'pending-bos-schema-sha' });
+    const git = args => execFileSync('git', args, { encoding: 'utf8' }).trim();
+    git(['merge-base', '--is-ancestor', SCHEMA_COMMIT, 'HEAD']);
+    assert.equal(git(['status', '--porcelain', '--', 'shared/cloud-protocol']), '', 'dirty protocol');
+    prepare(resolve(args[0]), { candidate: git(['rev-parse', 'HEAD']), schema: SCHEMA_COMMIT, protocolTree: git(['rev-parse', 'HEAD:shared/cloud-protocol']) });
     console.log('prepared; product acceptance unrun');
   } else {
     assert.equal(mode, '--run'); assert.equal(args.length, 5, 'usage: --run SERVER CANDIDATE SCHEMA ADAPTER NEW_EXTERNAL_EVIDENCE_DIR');
