@@ -32,7 +32,7 @@ export async function connect({ server, candidate, schema, evidence, record, nat
     writeFileSync(path, raw, { mode: 0o600, flag: 'wx', flush: true });
     return { path, sha256: bytesDigest(raw) };
   };
-  const c = { f, admin, evidence, log, artifact, digest, pause, until, sockets, WebSocket, candidate, schema };
+  const c = { f, admin, server, evidence, log, artifact, digest, pause, until, sockets, WebSocket, candidate, schema };
   // Browser WebSocket errors are DOM events. Node ws additionally throws when
   // no EventEmitter error listener exists (e.g. stop before the TCP handshake).
   c.BrowserSocket = class extends WebSocket {
@@ -137,8 +137,8 @@ export async function connect({ server, candidate, schema, evidence, record, nat
     return { allocation: a, value: ready, bytes };
   };
   c.socket = async actor => {
-    const ws = new WebSocket(f.ws_url); sockets.add(ws); const trace = { ws, frames: [], code: null };
-    ws.on('message', b => { const frame = JSON.parse(b.toString()); trace.frames.push(frame); log({ type: 'ws_frame', account_id: actor.account_id, frame }); });
+    const ws = new WebSocket(f.ws_url); sockets.add(ws); const trace = { ws, frames: [], timed_frames: [], code: null };
+    ws.on('message', b => { const frame = JSON.parse(b.toString()); trace.frames.push(frame); trace.timed_frames.push({ frame, received_at: Date.now() }); log({ type: 'ws_frame', account_id: actor.account_id, frame }); });
     ws.on('error', e => log({ type: 'ws_error', message: e.message }));
     ws.on('close', code => { trace.code = code; sockets.delete(ws); log({ type: 'ws_close', code }); });
     await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
@@ -183,7 +183,6 @@ export async function connect({ server, candidate, schema, evidence, record, nat
           'model-pinned-no-fallback': 'actual native provider model/fallback receipts unavailable; fixture model metadata is not provider evidence',
           'explicit-steer-and-two-bot-no-loop': 'native explicit-steer/two-bot provider transcripts unavailable; no provider execution is modeled',
           'stream-reorder-duplicate-edit-delete': 'candidate has replay wire types but no HTTP edit/delete mutation driver; the complete edit/delete service scenario cannot execute',
-          'identity-stall-15s-renewal-loss-20-concurrent': 'native bearer renewal response-loss receipt unavailable; issuer validation alone does not prove renewal semantics',
           'late-old-account-callback-push-deeplink': 'native late callback/push/deeplink lifecycle driver unavailable; local hint construction is not device receipt',
           'web-ios-offline-background-replay': 'real browser and iOS offline/background lifecycle receipts are not available in this service-only run',
         };

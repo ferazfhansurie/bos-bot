@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { root, room, binding, digest } from './slice34-service-adapter.mjs';
+import { identityStallGate } from './slice34-identity-gate.mjs';
 
 export function serviceScenarios(c) {
   const counted = rows => rows.length;
@@ -14,6 +15,7 @@ export function serviceScenarios(c) {
   const readRows = h => c.sql('SELECT * FROM cloud.operations WHERE workspace_id=$1', [h.w]);
 
   return {
+    'identity-stall-15s-renewal-loss-20-concurrent': () => identityStallGate(c),
     'host-crash-mid-stream': async () => {
       const h = await c.humans('uncertain-host', { runtime: true }); const { run } = await c.invoke(h);
       await c.append(h, run, { kind: 'checkpoint', replay_safe: false });
