@@ -68,6 +68,7 @@ async function route(
   config: ControlPlaneConfig,
   requestId: string,
   cloudflareFetch: CloudflareFetch,
+  authFactory: typeof createAuth,
 ) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return preflight(request, config);
@@ -75,15 +76,15 @@ async function route(
   if (url.pathname.startsWith("/api/auth/")) {
     const limited = await limitedOTPResponse(request, env);
     if (limited) return limited;
-    const response = await createAuth(env, ctx, config, requestId).handler(request);
+    const response = await authFactory(env, ctx, config, requestId).handler(request);
     return canonicalAuthResponse(response);
   }
 
-  const auth = createAuth(env, ctx, config, requestId);
+  const auth = authFactory(env, ctx, config, requestId);
   const remoteGrant = /^\/v1\/remote-full\/(enroll|status|prepare|authorize|verify)$/.exec(url.pathname);
   if (request.method === "POST" && remoteGrant) return remoteFull(request, env, auth, remoteGrant[1]);
   if (request.method === "GET" && url.pathname === "/v1/me") {
-    const session = await accountSession(request, auth);
+    const session = await accountSession(request, auth, true);
     if (!session) throw new HTTPError(401, "unauthorized");
     return json({
       user: {
@@ -138,14 +139,14 @@ async function route(
   return errorResponse(404, "not_found");
 }
 
-export function createWorker(cloudflareFetch: CloudflareFetch = fetch) {
+export function createWorker(cloudflareFetch: CloudflareFetch = fetch, authFactory: typeof createAuth = createAuth, configReader: (env: Env) => ControlPlaneConfig = readConfig) {
   return {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const requestId = crypto.randomUUID();
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/healthz") {
         try {
-          readConfig(env);
+          configReader(env);
         } catch {
           return secureResponse(errorResponse(503, "misconfigured"), request, null, requestId);
         }
@@ -154,14 +155,14 @@ export function createWorker(cloudflareFetch: CloudflareFetch = fetch) {
 
       let config: ControlPlaneConfig | null = null;
       try {
-        config = readConfig(env);
+        config = configReader(env);
         const origin = request.headers.get("origin");
         if (origin && !config.allowedOrigins.has(origin)) {
           return secureResponse(errorResponse(403, "origin_not_allowed"), request, config, requestId);
         }
         const boundedRequest = await withBoundedRequestBody(request);
         return secureResponse(
-          await route(boundedRequest, env, ctx, config, requestId, cloudflareFetch),
+          await route(boundedRequest, env, ctx, config, requestId, cloudflareFetch, authFactory),
           request,
           config,
           requestId,
@@ -178,7 +179,7 @@ export function createWorker(cloudflareFetch: CloudflareFetch = fetch) {
       const requestId = crypto.randomUUID();
       ctx.waitUntil((async () => {
         try {
-          const config = readConfig(env);
+          const config = configReader(env);
           await sweepManagedEndpointCleanup(env, config, cloudflareFetch, requestId);
         } catch {
           console.error(JSON.stringify({

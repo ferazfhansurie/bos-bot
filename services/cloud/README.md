@@ -1,4 +1,8 @@
-# isolated cloud rooms — slice 1
+# isolated cloud rooms — local slices
+
+Slice 2 real-issuer setup and contracts are in [SLICE2.md](SLICE2.md).
+`npm start` now selects the real entrypoint. The slice-1 stub below is available
+only through the explicit fixture entrypoint.
 
 Protocol is `shared/cloud-protocol/index.ts`, `README.md`, and `fixtures.json`
 from interface commit `ffd3a022d56485a11363a49c2e070d6cb075bbb8`. HTTP/WS route,
@@ -27,7 +31,7 @@ builders' worktrees already do. Service dependencies install separately (~10 MiB
 
 The launcher invokes `/opt/homebrew/bin/initdb` and `/opt/homebrew/bin/postgres`,
 binds a fresh cluster to `127.0.0.1` on a free port, creates a random
-`cloud_slice1_*` database, and applies `migrations/001.sql` before HTTP starts.
+`cloud_slice1_*` database, and applies service migrations 001–002 before HTTP starts.
 WAL/fsync and synchronous_commit remain enabled. It never starts a Homebrew daemon.
 The printed JSON includes `url`, `ws_url`, `database_url`, `migration_url`,
 `fixture_pid`, `postgres_pid`, and `state_path`; use those exact targets.

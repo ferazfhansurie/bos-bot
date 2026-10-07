@@ -1414,3 +1414,47 @@ test("normal fixture automatically completes persisted queue work", async () => 
     await automatic.stop();
   }
 });
+
+test('invite publication failure reaps invite, grants and transactional publication outbox', async () => {
+  const h = await humans();
+  const before = (await sqlAdmin('SELECT count(*)::int AS n FROM cloud.invites WHERE workspace_id=$1',[h.w])).rows[0].n;
+  await assert.rejects(f.service.invite(h.a.bearer,h.w,{role:'member',room_ids:[h.r.room_id]},()=>{throw new Error('publication failed');}), /publication failed/);
+  const after = (await sqlAdmin('SELECT count(*)::int AS n FROM cloud.invites WHERE workspace_id=$1',[h.w])).rows[0].n;
+  assert.equal(after,before);
+  assert.equal((await sqlAdmin("SELECT count(*)::int AS n FROM cloud.invite_outbox WHERE workspace_id=$1 AND publication_state='pending'",[h.w])).rows[0].n,0);
+});
+
+test('revocation between invite insertion and publication reaps pending intent without granting access', async () => {
+  const h=await humans();
+  f.hooks.arm('invite_publish_revoke','http.publication.before_admission',{workspace_id:h.w});
+  let delivered=false;
+  const pending=f.service.invite(h.a.bearer,h.w,{role:'member',room_ids:[h.r.room_id]},()=>{delivered=true;});
+  const rejection=assert.rejects(pending,{code:'unauthenticated'});
+  await entered('invite_publish_revoke');
+  f.issuer.revoked.add(h.a.bearer);
+  f.hooks.release('invite_publish_revoke');
+  await rejection;
+  assert.equal(delivered,false);
+  assert.equal((await sqlAdmin("SELECT count(*)::int AS n FROM cloud.invite_outbox WHERE workspace_id=$1 AND publication_state='pending'",[h.w])).rows[0].n,0);
+});
+
+test('crashed invite publication is unusable and reaped by durable worker; published invites survive', async () => {
+  const h=await humans();
+  const invite=await f.service.invite(h.a.bearer,h.w,{role:'member',room_ids:[h.r.room_id]});
+  await sqlAdmin("UPDATE cloud.invite_outbox SET publication_state='pending',created_at=clock_timestamp()-interval '16 seconds' WHERE workspace_id=$1 AND invite_id=$2",[h.w,invite.invite_id]);
+  await assert.rejects(f.service.inviteAction(h.b.bearer,{token:invite.token},false),{code:'unavailable'});
+  await f.service.tickWorker();
+  assert.equal((await sqlAdmin('SELECT count(*)::int AS n FROM cloud.invites WHERE workspace_id=$1 AND invite_id=$2',[h.w,invite.invite_id])).rows[0].n,0);
+  assert.equal((await sqlAdmin("SELECT count(*)::int AS n FROM cloud.invite_outbox WHERE workspace_id=$1 AND publication_state='published'",[h.w])).rows[0].n,1);
+});
+
+test('native bearer websocket can authenticate with ambient cookies and no browser Origin', async () => {
+  const h=await humans();
+  const ws=new WebSocket(f.ws_url,{headers:{cookie:'unrelated=ambient'}});
+  try {
+    await new Promise<void>((r,j)=>{ws.once('open',r);ws.once('error',j);});
+    const response=new Promise<any>((r,j)=>{ws.once('message',raw=>r(JSON.parse(raw.toString())));ws.once('error',j);});
+    ws.send(JSON.stringify({type:'authenticate',bearer:h.b.bearer}));
+    assert.equal((await response).type,'heartbeat');
+  } finally {ws.terminate();}
+});

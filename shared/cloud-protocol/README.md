@@ -1,5 +1,9 @@
 # cloud room v1 / slice 1
 
+Slice 2 adds real issuer cookie/native authentication and `session_invalid`; see
+[the local issuer contract](../../services/cloud/SLICE2.md). The explicit slice-1
+fixture keeps its fictional issuer for existing acceptance tests.
+
 Normative slice: D03/D04/D05 + `slice-1-freeze.md`. Decimal sequences are strings;
 never convert to JS Number. All IDs in examples are fictional. No legacy routes changed.
 
