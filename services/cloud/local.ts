@@ -6,6 +6,13 @@ import { resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { realFixture } from './fixture.ts';
 const cp = resolve(new URL('../../cloudflare/control-plane/',import.meta.url).pathname);
+// Use the worker package's declared pin. A root/symlinked older binary can
+// silently run a workerd that cannot honor the frozen compatibility date.
+const requiredWrangler = JSON.parse(await readFile(resolve(cp,'package.json'),'utf8')).devDependencies.wrangler;
+let installedWrangler: string | undefined;
+try { installedWrangler = JSON.parse(await readFile(resolve(cp,'node_modules/wrangler/package.json'),'utf8')).version; } catch {}
+if(requiredWrangler!=='4.125.0'||installedWrangler!==requiredWrangler)
+  throw new Error('local issuer requires control-plane Wrangler 4.125.0; restore its pinned workspace dependencies');
 const root = await mkdtemp(resolve(tmpdir(),'bos-slice2-'));
 const wrangler = resolve(cp,'node_modules/wrangler/bin/wrangler.js');
 const net = createServer();
