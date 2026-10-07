@@ -18,7 +18,7 @@ export const root = h => `/v2/workspaces/${h.w}`;
 export const room = h => `${root(h)}/rooms/${h.r.room_id}`;
 export const binding = v => ({ invocation_id: v.invocation_id, attempt: v.attempt, fence_gen: v.fence_gen });
 
-export async function connect({ server, candidate, schema, evidence, record }) {
+export async function connect({ server, candidate, schema, evidence, record, nativeProvider }) {
   const f = await ownedFixture(server, { evidence, record });
   const require = createRequire(server + '/services/cloud/package.json');
   const pg = require('pg'), WebSocket = require('ws').WebSocket;
@@ -155,7 +155,7 @@ export async function connect({ server, candidate, schema, evidence, record }) {
     return { name: spec.name, status: 'observed', observed, artifacts,
       evidence: Object.fromEntries(spec.evidence.map(key => [key, [raw]])) };
   };
-  let recovery;
+  let recovery, native;
   try {
     await admin.connect();
     artifact('owned-fixture-pointer', { fixture_directory: f.fixture_directory, fixture_pid: f.fixture_pid, postgres_pid: f.postgres_pid, issuer_pid: f.owned_issuer_pid, issuer_directory: f.owned_issuer_directory });
@@ -169,12 +169,15 @@ export async function connect({ server, candidate, schema, evidence, record }) {
     c.clientArtifact = { path: bundle, sha256: bytesDigest(readFileSync(bundle)) };
     const scope = await c.humans('adapter-home');
     const scenarios = serviceScenarios(c);
+    if (nativeProvider) native = await (await import('./slice34-native-host.mjs')).nativeHostScenarios(c, { server, ...nativeProvider });
     return {
       describe: async () => ({ url: f.url, isolated: true, real_issuer: true, acceptance_hooks: true, modeled: false,
         candidate, schema, scope: { workspace_id: scope.w, room_id: scope.r.room_id, fictional: true },
-        native_provider_available: false, limitations: ['fictional scanner is not malware certification', 'web reducers run in Node; browser and native lifecycle receipts remain separate'], client_artifact: c.clientArtifact }),
+        native_provider_available: false, limitations: ['fictional scanner is not malware certification', 'web reducers run in Node; browser and native lifecycle receipts remain separate'], client_artifact: c.clientArtifact, ...(native?.descriptor ?? {}) }),
       scenario: async spec => {
-        trace = []; const fn = scenarios[spec.name];
+        trace = [];
+        if (native && ['two-human-native', 'explicit-steer-and-two-bot-no-loop'].includes(spec.name)) return native.scenario(spec);
+        const fn = scenarios[spec.name];
         const missing = {
           'two-human-native': 'two human native host/provider transcripts and recipient receipts are unavailable; no provider is configured or called',
           'model-pinned-no-fallback': 'actual native provider model/fallback receipts unavailable; fixture model metadata is not provider evidence',
@@ -195,12 +198,13 @@ export async function connect({ server, candidate, schema, evidence, record }) {
       submitRecovery: (intent, envelope) => recovery.submit(intent, envelope),
       reconcileRecovery: intents => recovery.reconcile(intents),
       close: async () => {
+        await native?.close();
         for (const ws of sockets) ws.terminate(); f.hooks.close();
         await admin.end(); await f.stop();
         artifact('cleanup', { fixture_removed: !existsSync(f.fixture_directory), issuer_removed: !existsSync(f.owned_issuer_directory), sockets_remaining: sockets.size });
       },
     };
-  } catch (e) { for (const ws of sockets) ws.terminate(); await admin.end().catch(() => {}); await f.stop(); throw e; }
+  } catch (e) { await native?.close(); for (const ws of sockets) ws.terminate(); await admin.end().catch(() => {}); await f.stop(); throw e; }
 }
 
 async function prepareRace(c, name, context) {
