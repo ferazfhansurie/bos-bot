@@ -1,6 +1,12 @@
 #if DEBUG
 import CompanionCore
+import CryptoKit
+import Network
+import PDFKit
+import PhotosUI
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 /// BOS 2.0 cloud rooms, slice 2: email-OTP sign-in against a local issuer
 /// and two-person chat over /v2. Debug builds only, and only when launched
@@ -14,6 +20,38 @@ enum CloudRoomsConfig {
     static var enabled: Bool { value("BOS_CLOUD_ROOMS") == "1" && roomsURL != nil && issuerURL != nil }
     static var roomsURL: URL? { value("CLOUD_ROOMS_URL").flatMap(URL.init(string:)) }
     static var issuerURL: URL? { value("CLOUD_ISSUER_URL").flatMap(URL.init(string:)) }
+}
+
+/// Whether the room service is reachable: the device path, plus a debug
+/// switch that takes the service away without touching the network.
+final class CloudConnectivity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pathUp = true
+    private var simulatedOffline = CloudRoomsConfig.value("CLOUD_SIMULATE_OFFLINE") == "1"
+    private let monitor = NWPathMonitor()
+    /// Called on the main actor whenever reachability flips.
+    var onChange: (@MainActor (Bool) -> Void)?
+
+    var reachable: Bool { lock.withLock { pathUp && !simulatedOffline } }
+
+    func start() {
+        monitor.pathUpdateHandler = { [weak self] path in self?.update { $0.pathUp = path.status == .satisfied } }
+        monitor.start(queue: DispatchQueue(label: "cloud.connectivity"))
+    }
+
+    func simulateOffline(_ offline: Bool) { update { $0.simulatedOffline = offline } }
+
+    private func update(_ change: (CloudConnectivity) -> Void) {
+        let (before, after) = lock.withLock { () -> (Bool, Bool) in
+            let before = pathUp && !simulatedOffline
+            change(self)
+            return (before, pathUp && !simulatedOffline)
+        }
+        guard before != after else { return }
+        Task { @MainActor in self.onChange?(after) }
+    }
+
+    deinit { monitor.cancel() }
 }
 
 @MainActor
@@ -45,6 +83,10 @@ final class CloudRoomsModel: ObservableObject {
     @Published private(set) var unavailable = false
     @Published private(set) var lastInvite: String?
     @Published private(set) var live = false
+    /// The room service can't be reached; sends wait on the device.
+    @Published private(set) var offline = false
+    /// Attachments on their way to `ready`, by room. Memory only.
+    @Published private(set) var drafts: [String: [CloudAttachmentDraft]] = [:]
 
     let identityCoordinator: CloudIdentityCoordinator
     private let client: CloudClient
@@ -53,12 +95,18 @@ final class CloudRoomsModel: ObservableObject {
     private var store: CloudAccountStore?
     private var socket: Task<Void, Never>?
     private var windows: [String: CloudSendWindow] = [:]
+    private let connectivity: CloudConnectivity
 
     init(roomsURL: URL, issuerURL: URL) {
         let coordinator = CloudIdentityCoordinator(issuer: CloudIssuerClient(baseURL: issuerURL), roomsURL: roomsURL, store: CloudKeychainStore())
         identityCoordinator = coordinator
-        client = CloudClient(baseURL: roomsURL) { try await coordinator.bearer() }
+        let connectivity = CloudConnectivity()
+        self.connectivity = connectivity
+        client = CloudClient(baseURL: roomsURL, reachable: { connectivity.reachable }) { try await coordinator.bearer() }
         storageRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        offline = !connectivity.reachable
+        connectivity.onChange = { [weak self] reachable in self?.reachabilityChanged(reachable) }
+        connectivity.start()
     }
 
     // MARK: - lifecycle
@@ -78,6 +126,29 @@ final class CloudRoomsModel: ObservableObject {
     }
 
     func foreground() { run(session.reduce(.foreground)) }
+
+    /// Debug: take the room service away (or give it back) without
+    /// touching the simulator's network.
+    func simulateOffline(_ offline: Bool) { connectivity.simulateOffline(offline) }
+
+    private func reachabilityChanged(_ reachable: Bool) {
+        offline = !reachable
+        if reachable {
+            run(session.reduce(.networkRestored))
+            wakeOutbox()
+        } else if socket != nil {
+            // The socket is as good as gone; let the session schedule its return.
+            socket?.cancel(); socket = nil; live = false
+            run(session.reduce(.socketEnded(generation: session.generation, retryAfter: nil)))
+        }
+    }
+
+    private func wakeOutbox() {
+        guard var outbox else { return }
+        let effects = outbox.wake(now: Date())
+        self.outbox = outbox
+        runOutbox(effects)
+    }
 
     func background() {
         for key in rooms.keys { _ = rooms[key]?.background() }
@@ -124,20 +195,130 @@ final class CloudRoomsModel: ObservableObject {
     func select(_ ref: CloudRoomRef?) {
         session.selected = ref
         selected = ref
+        // Show the cached projection straight away, online or not.
+        if let ref { _ = roomState(ref) }
         if ref != nil { run(session.reduce(.retryDue(.recovery, generation: session.generation))) }
     }
 
-    func send(_ text: String, in ref: CloudRoomRef) async {
+    /// Freezes and queues a send. Offline it still goes in the outbox as
+    /// long as a signed window is cached; false means nothing was queued
+    /// and the composer keeps the text.
+    @discardableResult
+    func send(_ text: String, in ref: CloudRoomRef) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return }
+        let attached = drafts[key(ref)] ?? []
+        // Nothing goes out while an attachment is still on its way.
+        guard attached.allSatisfy({ $0.state == .ready }) else { return false }
+        let attachmentIds = attached.compactMap(\.attachment?.attachmentId)
+        guard !trimmed.isEmpty || !attachmentIds.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
+        var queued = false
         await work {
             let window = try await self.window(for: ref.workspaceId)
-            let envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: trimmed, expectedPolicyRevision: policy)
+            var envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: trimmed, expectedPolicyRevision: policy)
+            envelope.attachmentIds = attachmentIds
             guard var outbox = self.outbox, let expiry = window.expiryDate else { return }
-            let effects = try outbox.enqueue(envelope, windowExpiresAt: expiry, now: Date())
+            // Guest drafts are session memory only.
+            let effects = try outbox.enqueue(envelope, windowExpiresAt: expiry, ephemeral: ref.role == .guest, now: Date())
             self.outbox = outbox
+            queued = true
+            self.drafts[self.key(ref)] = nil
             self.runOutbox(effects)
         }
+        return queued
+    }
+
+    // MARK: - attachments
+
+    func drafts(in ref: CloudRoomRef) -> [CloudAttachmentDraft] { drafts[key(ref)] ?? [] }
+
+    /// Checks size and type on the phone, then prepare, upload and scan.
+    /// Online only; the bytes stay in memory until the draft is sent or dropped.
+    func attach(name: String, type: String?, bytes: Data, in ref: CloudRoomRef) {
+        problem = nil
+        if let reason = CloudAttachmentDraft.validate(name: name, type: type, size: bytes.count) { problem = reason; return }
+        guard let type else { return }
+        if drafts(in: ref).count >= CloudLimits.attachments { problem = "at most \(CloudLimits.attachments) attachments"; return }
+        let draft = CloudAttachmentDraft(name: name, type: type, bytes: bytes)
+        drafts[key(ref), default: []].append(draft)
+        let account = identity?.key
+        Task {
+            do {
+                let checksum = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                let upload = try await client.prepareAttachment(workspaceId: ref.workspaceId, CloudAttachmentPrepare(roomId: ref.roomId, threadId: ref.threadId, name: name, size: bytes.count, type: type, checksum: checksum))
+                guard updateDraft(draft.id, ref, account, { $0.attachment = upload.attachment; $0.state = .uploading }) else { return }
+                try await client.upload(upload, bytes: bytes)
+                guard updateDraft(draft.id, ref, account, { $0.state = .verifying }) else { return }
+                let done = try await client.completeAttachment(upload.attachment)
+                updateDraft(draft.id, ref, account) { $0.attachment = done; $0.state = done.state; if done.state == .rejected { $0.problem = "rejected by the scan" } }
+            } catch {
+                let code = (error as? CloudError)?.error
+                updateDraft(draft.id, ref, account) {
+                    $0.state = .rejected
+                    $0.problem = code == .unavailable ? "scan unavailable, remove and try again" : (code?.rawValue.replacingOccurrences(of: "_", with: " ") ?? "upload failed")
+                }
+            }
+        }
+    }
+
+    func refuse(_ reason: String) { problem = reason }
+
+    func removeDraft(_ id: UUID, in ref: CloudRoomRef) {
+        drafts[key(ref)]?.removeAll { $0.id == id }
+    }
+
+    /// False when the account changed or the draft is gone.
+    @discardableResult
+    private func updateDraft(_ id: UUID, _ ref: CloudRoomRef, _ account: CloudAccountKey?, _ change: (inout CloudAttachmentDraft) -> Void) -> Bool {
+        guard identity?.key == account, let index = drafts[key(ref)]?.firstIndex(where: { $0.id == id }) else { return false }
+        change(&drafts[key(ref)]![index])
+        return true
+    }
+
+    /// Bytes for the viewer, never written to disk.
+    func download(_ attachmentId: String, in ref: CloudRoomRef) async throws -> (data: Data, type: String) {
+        try await client.download(workspaceId: ref.workspaceId, attachmentId: attachmentId)
+    }
+
+    // MARK: - approvals
+
+    /// Online only. A refused decision refetches the card so the screen shows
+    /// what the server holds.
+    func decide(_ card: CloudApprovalCard, _ choice: CloudApprovalChoice, in ref: CloudRoomRef) async {
+        guard !offline else { problem = "offline, decide when back online"; return }
+        await work {
+            do {
+                self.applyCard(try await self.client.decide(card, choice), ref)
+            } catch let error as CloudError where [.approvalDecided, .approvalExpired, .controlConflict].contains(error.error) {
+                if let current = try? await self.client.approval(ref, approvalId: card.approvalId) { self.applyCard(current, ref) }
+                throw error
+            }
+        }
+    }
+
+    private func applyCard(_ card: CloudApprovalCard, _ ref: CloudRoomRef) {
+        guard var state = rooms[key(ref)] else { return }
+        let effects = state.apply(card: card)
+        rooms[key(ref)] = state
+        runRoom(effects, ref)
+    }
+
+    /// A held draft, reviewed: send it as written.
+    func release(_ id: CloudOperationID) { mutateOutbox { $0.release(id, now: Date()) } }
+
+    /// A held draft, or a send the server never committed, dropped by the person.
+    func discard(_ id: CloudOperationID) { mutateOutbox { $0.discard(id) } }
+
+    /// A send the server has no record of, sent again unchanged under its key.
+    func resend(_ id: CloudOperationID) { mutateOutbox { $0.resend(id, now: Date()) } }
+
+    /// A send the server has no record of, sealed as not accepted.
+    func giveUp(_ id: CloudOperationID) { mutateOutbox { $0.giveUp(id) } }
+
+    private func mutateOutbox(_ change: (inout CloudOutbox) -> [CloudOutboxEffect]) {
+        guard var outbox else { return }
+        let effects = change(&outbox)
+        self.outbox = outbox
+        runOutbox(effects)
     }
 
     func redeem(_ token: String) async {
@@ -168,6 +349,7 @@ final class CloudRoomsModel: ObservableObject {
 
     func room(_ ref: CloudRoomRef) -> CloudRoomState? { rooms[key(ref)] }
 
+    /// Every unresolved send in the room, in queue order.
     func pending(in ref: CloudRoomRef) -> [CloudOutboxEntry] {
         (outbox?.entries ?? []).filter { $0.envelope.roomId == ref.roomId && $0.envelope.namespace.workspaceId == ref.workspaceId && !$0.status.isResolved }
     }
@@ -195,17 +377,22 @@ final class CloudRoomsModel: ObservableObject {
             case .closeSocket:
                 socket?.cancel(); socket = nil; live = false
             case .recoverOperations:
-                if var outbox { let effects = outbox.wake(now: Date()); self.outbox = outbox; runOutbox(effects) }
+                wakeOutbox()
             case .schedule(let timer, let after, let generation):
                 Task {
                     try? await Task.sleep(for: .seconds(after))
                     self.run(self.session.reduce(.retryDue(timer, generation: generation)))
                 }
             case .clearVisibleState:
-                rooms = [:]; rows = []; selected = nil; outbox = nil; windows = [:]; lastInvite = nil; live = false
+                rooms = [:]; rows = []; selected = nil; outbox = nil; windows = [:]; lastInvite = nil; live = false; drafts = [:]
             case .openStore(let account):
+                // Whoever used the phone before keeps only a quarantined outbox.
+                try? CloudAccountStore.wipeOtherAccounts(root: storageRoot, except: account)
                 let store = CloudAccountStore(root: storageRoot, account: account)
                 self.store = store
+                // Last known rooms and windows, so the list and sends work offline.
+                if let discovery = try? store.loadDiscovery() { rows = Self.rows(discovery) }
+                windows = (try? store.loadWindows()) ?? [:]
                 var outbox = (try? store.loadOutbox()) ?? CloudOutbox(account: account)
                 let effects = outbox.recoverAfterLaunch(now: Date())
                 self.outbox = outbox
@@ -213,6 +400,9 @@ final class CloudRoomsModel: ObservableObject {
             case .eraseStore(let account):
                 try? CloudAccountStore(root: storageRoot, account: account).erase()
                 store = nil
+            case .wipeCache(let account):
+                try? CloudAccountStore(root: storageRoot, account: account).wipeCache()
+                if store?.account == account { store = nil }
             case .requireSignIn:
                 store = nil
                 identity = nil
@@ -238,16 +428,43 @@ final class CloudRoomsModel: ObservableObject {
     private func syncDiscovery(_ generation: Int) async {
         do {
             let discovery = try await client.discovery()
-            rows = discovery.workspaces.flatMap { workspace in
-                workspace.rooms.map { RoomRow(ref: CloudRoomRef(workspaceId: workspace.workspaceId, roomId: $0.roomId, threadId: $0.threadId, role: workspace.role), policyRevision: $0.policyRevision) }
-            }
+            guard generation == session.generation else { return }
+            rows = Self.rows(discovery)
+            try? store?.save(discovery)
             run(session.reduce(.discoverySynced(generation: generation, discovery)))
+            await prefetchWindows(discovery, generation: generation)
         } catch let error as CloudError {
             if await rejected(error.error, generation: generation) { return }
             run(session.reduce(.discoveryFailed(generation: generation, retryAfter: error.retryAfter)))
         } catch {
             run(session.reduce(.discoveryFailed(generation: generation, retryAfter: nil)))
         }
+    }
+
+    private static func rows(_ discovery: CloudDiscovery) -> [RoomRow] {
+        discovery.workspaces.flatMap { workspace in
+            workspace.rooms.map { RoomRow(ref: CloudRoomRef(workspaceId: workspace.workspaceId, roomId: $0.roomId, threadId: $0.threadId, role: workspace.role), policyRevision: $0.policyRevision) }
+        }
+    }
+
+    /// Fetches a signed window for each workspace that lacks a fresh one,
+    /// so a send made after the network drops can still be frozen.
+    private func prefetchWindows(_ discovery: CloudDiscovery, generation: Int) async {
+        for workspace in discovery.workspaces where windows[workspace.workspaceId].map(Self.fresh) != true {
+            guard generation == session.generation, let window = try? await client.operationWindow(workspaceId: workspace.workspaceId) else { continue }
+            guard generation == session.generation else { return }
+            windows[workspace.workspaceId] = window
+        }
+        saveWindows()
+    }
+
+    private static func fresh(_ window: CloudSendWindow) -> Bool {
+        (window.expiryDate ?? .distantPast) > Date().addingTimeInterval(60)
+    }
+
+    private func saveWindows() {
+        let guests = Set(rows.filter { $0.ref.role == .guest }.map(\.ref.workspaceId))
+        try? store?.save(windows: windows, guestWorkspaces: guests)
     }
 
     /// session_invalid from the room service fails closed like a 401.
@@ -286,6 +503,11 @@ final class CloudRoomsModel: ObservableObject {
         case .reset(let reset): target = (reset.workspaceId, reset.roomId)
         case .error(let code):
             if await rejected(code, generation: generation) { return }
+            // Access to something on this socket ended: discovery says what
+            // is left, and removals run before anything reopens.
+            if code == .forbidden || code == .notFound || code == .visibilityChanged {
+                run(session.reduce(.retryDue(.recovery, generation: generation)))
+            }
             target = nil
         case .heartbeat: return
         }
@@ -322,6 +544,12 @@ final class CloudRoomsModel: ObservableObject {
                 if var outbox { let effects = outbox.audienceChanged(roomId: ref.roomId); self.outbox = outbox; runOutbox(effects) }
             case .resyncDiscovery:
                 run(session.reduce(.retryDue(.recovery, generation: session.generation)))
+            case .attachmentUpdated(let attachment):
+                // Only a terminal answer moves a draft; the upload path owns the rest.
+                guard [.ready, .rejected, .expired].contains(attachment.state),
+                      let index = drafts[key(ref)]?.firstIndex(where: { $0.attachment?.attachmentId == attachment.attachmentId }) else { continue }
+                drafts[key(ref)]![index].attachment = attachment
+                drafts[key(ref)]![index].state = attachment.state
             }
         }
     }
@@ -352,7 +580,11 @@ final class CloudRoomsModel: ObservableObject {
 
     private func answer(_ id: CloudOperationID, _ account: CloudAccountKey, _ call: @escaping () async -> CloudSubmitResult) {
         let generation = outbox?.generation ?? 0
+        // A send in flight when the app backgrounds gets to finish; if iOS
+        // ends it anyway, the next foreground looks it up.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "cloud.send")
         Task {
+            defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
             let result = await call()
             // An answer for an account that is no longer on screen is dropped.
             guard var outbox = self.outbox, outbox.account == account else { return }
@@ -363,9 +595,10 @@ final class CloudRoomsModel: ObservableObject {
     }
 
     private func window(for workspaceId: String) async throws -> CloudSendWindow {
-        if let window = windows[workspaceId], let expiry = window.expiryDate, expiry > Date().addingTimeInterval(60) { return window }
+        if let window = windows[workspaceId], Self.fresh(window) { return window }
         let window = try await client.operationWindow(workspaceId: workspaceId)
         windows[workspaceId] = window
+        saveWindows()
         return window
     }
 
@@ -424,7 +657,12 @@ struct CloudRoomsRoot: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                if model.unavailable {
+                if model.offline {
+                    Text("offline. sends wait on this phone and go when you're back.")
+                        .font(.footnote).padding(6).frame(maxWidth: .infinity)
+                        .background(.orange.opacity(0.3))
+                        .accessibilityIdentifier("cloud.offline")
+                } else if model.unavailable {
                     Text("sign-in service unavailable, retrying")
                         .font(.footnote).padding(6).frame(maxWidth: .infinity)
                         .background(.yellow.opacity(0.3))
@@ -549,28 +787,42 @@ struct CloudRoomChatView: View {
     @ObservedObject var model: CloudRoomsModel
     let ref: CloudRoomRef
     @State private var draft = ""
+    @State private var photo: PhotosPickerItem?
+    @State private var picking = false
+    @State private var importing = false
+    @State private var choosing = false
+    @State private var viewing: CloudViewedAttachment?
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 List {
                     ForEach(model.room(ref)?.messages ?? [], id: \.messageId) { message in
-                        let mine = message.actorId == model.identity?.accountId
+                        let mine = message.actorId == model.identity?.accountId && message.botId == nil
                         VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
-                            Text(message.text)
-                            Text(mine ? "you" : message.actorId).font(.caption2).foregroundStyle(.secondary)
+                            if !message.text.isEmpty { Text(message.text) }
+                            ForEach(message.attachments, id: \.self) { id in
+                                Button { viewing = CloudViewedAttachment(id: id) } label: {
+                                    Label("attachment", systemImage: "paperclip").font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("cloud.attachment.\(id)")
+                            }
+                            Text(message.botId.map { "bot \($0)" } ?? (mine ? "you" : message.actorId)).font(.caption2).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("cloud.message.\(message.messageId)")
                         .id(message.messageId)
                     }
+                    ForEach(model.room(ref)?.runs.filter { !$0.state.finished } ?? [], id: \.invocationId) { run in
+                        CloudRunRow(run: run, text: model.room(ref)?.streaming[run.invocationId]?.text)
+                    }
+                    ForEach(model.room(ref)?.cards ?? [], id: \.approvalId) { card in
+                        CloudApprovalCardView(model: model, ref: ref, card: card)
+                    }
                     ForEach(model.pending(in: ref)) { entry in
-                        HStack {
-                            Spacer()
-                            Text(entry.envelope.text).foregroundStyle(.secondary)
-                            Text(entry.status.label.rawValue).font(.caption2).foregroundStyle(.secondary)
-                        }
-                        .accessibilityIdentifier("cloud.pending.\(entry.status.label.rawValue)")
+                        CloudPendingRow(model: model, entry: entry)
                     }
                 }
                 .listStyle(.plain)
@@ -581,32 +833,277 @@ struct CloudRoomChatView: View {
             if let problem = model.problem {
                 Text(problem).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("cloud.problem")
             }
+            let attached = model.drafts(in: ref)
+            if !attached.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(attached) { item in CloudDraftChip(model: model, ref: ref, item: item) }
+                    }
+                    .padding(.horizontal)
+                }
+            }
             HStack {
+                // A sheet, not a Menu: the ios 26 menu never reports idle to ui tests.
+                Button { choosing = true } label: { Image(systemName: "paperclip") }
+                .disabled(model.offline)
+                .accessibilityIdentifier("cloud.attach")
                 TextField("message", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("cloud.composer")
                 Button("send") {
                     let text = draft
                     draft = ""
-                    Task { await model.send(text, in: ref) }
+                    Task { if await !model.send(text, in: ref), draft.isEmpty { draft = text } }
                 }
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attached.isEmpty) || !attached.allSatisfy { $0.state == .ready })
                 .accessibilityIdentifier("cloud.send")
             }
             .padding()
         }
+        .sheet(isPresented: $choosing) {
+            List {
+                Button("photo") { choosing = false; picking = true }.accessibilityIdentifier("cloud.attach.photo")
+                Button("file") { choosing = false; importing = true }.accessibilityIdentifier("cloud.attach.file")
+                // Debug fixture samples for the ui tests.
+                Button("sample text") { choosing = false; model.attach(name: "note.txt", type: "text/plain", bytes: Data("fictional attachment text".utf8), in: ref) }
+                    .accessibilityIdentifier("cloud.attach.sampleText")
+                Button("sample png") { choosing = false; model.attach(name: "dot.png", type: "image/png", bytes: CloudSamples.png, in: ref) }
+                    .accessibilityIdentifier("cloud.attach.samplePNG")
+                Button("scan test file") { choosing = false; model.attach(name: "eicar.txt", type: "text/plain", bytes: Data("EICAR fictional scanner test".utf8), in: ref) }
+                    .accessibilityIdentifier("cloud.attach.eicar")
+            }
+            .presentationDetents([.medium])
+        }
+        .photosPicker(isPresented: $picking, selection: $photo, matching: .images)
+        .onChange(of: photo) { _, item in
+            guard let item else { return }
+            photo = nil
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+                let (bytes, type, name) = CloudSamples.photo(data)
+                model.attach(name: name, type: type, bytes: bytes, in: ref)
+            }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.png, .jpeg, .pdf, .plainText]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let type = CloudAttachmentLimits.type(forName: url.lastPathComponent)
+            // Size is checked before the file is read into memory.
+            if let reason = CloudAttachmentDraft.validate(name: url.lastPathComponent, type: type, size: size) { model.refuse(reason); return }
+            guard let data = try? Data(contentsOf: url) else { return }
+            model.attach(name: url.lastPathComponent, type: type, bytes: data, in: ref)
+        }
+        .sheet(item: $viewing) { item in CloudAttachmentViewer(model: model, ref: ref, attachmentId: item.id) }
         .navigationTitle(ref.roomId)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if ref.role == .owner || ref.role == .admin {
                 Button("invite") { Task { await model.invite(to: ref) } }.accessibilityIdentifier("cloud.invite")
             }
+            // Debug fixture control: drop the room service, keep the network.
+            Button(model.offline ? "go online" : "go offline") { model.simulateOffline(!model.offline) }
+                .accessibilityIdentifier("cloud.offlineToggle")
         }
         .onAppear { model.select(ref) }
         .onDisappear { if model.selected == ref { model.select(nil) } }
         .overlay(alignment: .top) {
             Text(model.live ? "live" : "connecting").font(.caption2).foregroundStyle(.secondary)
                 .accessibilityIdentifier(model.live ? "cloud.live" : "cloud.connecting")
+        }
+    }
+}
+struct CloudViewedAttachment: Identifiable { let id: String }
+
+/// A bot run still in progress, with its provisional text.
+struct CloudRunRow: View {
+    let run: CloudInvocation
+    let text: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let text, !text.isEmpty { Text(text).foregroundStyle(.secondary).accessibilityIdentifier("cloud.run.stream") }
+            Text("bot \(run.botId) · \(label)").font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("cloud.run.state.\(run.state.rawValue)")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.run.\(run.invocationId)")
+    }
+
+    private var label: String {
+        if run.stopRequested, !run.stoppedObserved { return "stopping" }
+        if run.hostOnline == false { return "host offline" }
+        return switch run.state {
+        case .queued: "queued"
+        case .leased, .running: "working"
+        case .waitingForHuman: "waiting for you"
+        case .held: "held"
+        case .completed: "done"
+        case .failed: "failed"
+        case .cancelled: "stopped"
+        }
+    }
+}
+
+/// An approval gate. Buttons only while the server says this account can
+/// decide, the card has not expired and the room service is reachable.
+struct CloudApprovalCardView: View {
+    @ObservedObject var model: CloudRoomsModel
+    let ref: CloudRoomRef
+    let card: CloudApprovalCard
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let status = card.shownStatus(now: context.date)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(card.title).font(.subheadline)
+                Text(status.rawValue).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("cloud.card.status.\(status.rawValue)")
+                if card.decidable(now: context.date), !model.offline {
+                    HStack(spacing: 16) {
+                        Button("approve") { Task { await model.decide(card, .approve, in: ref) } }
+                            .accessibilityIdentifier("cloud.card.approve")
+                        Button("deny", role: .destructive) { Task { await model.decide(card, .deny, in: ref) } }
+                            .accessibilityIdentifier("cloud.card.deny")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.busy)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.card.\(card.approvalId)")
+    }
+}
+
+/// One attachment in the composer: its state and a remove button.
+struct CloudDraftChip: View {
+    @ObservedObject var model: CloudRoomsModel
+    let ref: CloudRoomRef
+    let item: CloudAttachmentDraft
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: item.state == .rejected ? "exclamationmark.triangle" : item.state == .ready ? "checkmark.circle" : "arrow.up.circle")
+            VStack(alignment: .leading) {
+                Text(item.name).font(.caption)
+                Text(item.problem ?? item.state.rawValue).font(.caption2).foregroundStyle(item.state == .rejected ? .red : .secondary)
+            }
+            Button { model.removeDraft(item.id, in: ref) } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("cloud.draft.remove")
+        }
+        .padding(6)
+        .background(.quaternary, in: Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.draft.\(item.state.rawValue)")
+    }
+}
+
+/// Downloads into memory and shows the bytes. Nothing is written to disk.
+struct CloudAttachmentViewer: View {
+    @ObservedObject var model: CloudRoomsModel
+    let ref: CloudRoomRef
+    let attachmentId: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var loaded: (data: Data, type: String)?
+    @State private var failed: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let loaded {
+                    switch loaded.type {
+                    case "image/png", "image/jpeg":
+                        if let image = UIImage(data: loaded.data) {
+                            Image(uiImage: image).resizable().scaledToFit().accessibilityIdentifier("cloud.viewer.image")
+                        } else { Text("can't show this image") }
+                    case "application/pdf":
+                        CloudPDFView(data: loaded.data).accessibilityIdentifier("cloud.viewer.pdf")
+                    default:
+                        ScrollView { Text(String(decoding: loaded.data, as: UTF8.self)).textSelection(.enabled).padding().accessibilityIdentifier("cloud.viewer.text") }
+                    }
+                } else if let failed {
+                    Text(failed).foregroundStyle(.red).accessibilityIdentifier("cloud.viewer.problem")
+                } else {
+                    ProgressView()
+                }
+            }
+            .toolbar { Button("done") { dismiss() }.accessibilityIdentifier("cloud.viewer.done") }
+        }
+        .task {
+            do { loaded = try await model.download(attachmentId, in: ref) }
+            catch { failed = (error as? CloudError)?.error.rawValue.replacingOccurrences(of: "_", with: " ") ?? "download failed" }
+        }
+    }
+}
+
+struct CloudPDFView: UIViewRepresentable {
+    let data: Data
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.document = PDFDocument(data: data)
+        return view
+    }
+    func updateUIView(_ view: PDFView, context: Context) {}
+}
+
+enum CloudSamples {
+    /// A fictional 1x1 png.
+    static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
+
+    /// Library photos go up as png when they are png, otherwise as jpeg.
+    static func photo(_ data: Data) -> (Data, String?, String) {
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return (data, "image/png", "photo.png") }
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return (data, "image/jpeg", "photo.jpg") }
+        guard let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.85) else { return (data, nil, "photo") }
+        return (jpeg, "image/jpeg", "photo.jpg")
+    }
+}
+
+/// One unresolved send. Held drafts and sends the server never committed
+/// wait for the person; nothing here edits or re-keys a frozen envelope.
+struct CloudPendingRow: View {
+    @ObservedObject var model: CloudRoomsModel
+    let entry: CloudOutboxEntry
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Spacer()
+                Text(entry.envelope.text).foregroundStyle(.secondary)
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
+                Spacer()
+                if case .held = entry.status, !entry.dispatched {
+                    Button("send") { model.release(entry.id) }.accessibilityIdentifier("cloud.pending.release")
+                    Button("discard", role: .destructive) { model.discard(entry.id) }.accessibilityIdentifier("cloud.pending.discard")
+                } else if entry.status == .checking, entry.notCommitted, !entry.autoReplay {
+                    Button("send again") { model.resend(entry.id) }.accessibilityIdentifier("cloud.pending.resend")
+                    Button("don't send", role: .destructive) { model.giveUp(entry.id) }.accessibilityIdentifier("cloud.pending.giveUp")
+                }
+            }
+            .buttonStyle(.borderless).font(.caption)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.pending.\(entry.status.label.rawValue)")
+    }
+
+    private var label: String {
+        switch entry.status {
+        case .held(.stale): "older than a day, check before sending"
+        case .held(.relaunched): "not sent yet, check before sending"
+        case .held(.audienceChanged): "room changed, check before sending"
+        case .held(.parentRejected): "reply target wasn't sent"
+        case .recoveryUnknown: "can't confirm, checking"
+        default: entry.status.label.rawValue
         }
     }
 }

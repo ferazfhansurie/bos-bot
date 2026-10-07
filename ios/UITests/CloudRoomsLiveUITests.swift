@@ -116,6 +116,236 @@ final class CloudRoomsLiveUITests: XCTestCase {
         signOut(app)
     }
 
+    /// Slice 4 offline replay: the room service drops (debug toggle, the
+    /// Mac's network stays up), two sends wait in the durable outbox, the app
+    /// goes to the background and back, and coming online commits each send
+    /// exactly once, in order.
+    @MainActor
+    func testOfflineSendBackgroundAndReplay() async throws {
+        let run = String(UUID().uuidString.prefix(8)).lowercased()
+        let app = launch()
+        try await signIn("offline-\(run)@example.test", in: app)
+        app.buttons["cloud.createRoom"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+        openRoom(in: app)
+        send("online first \(run)", in: app)
+
+        app.buttons["cloud.offlineToggle"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.connecting"].waitForExistence(timeout: 10), "offline drops realtime")
+        let first = "offline one \(run)", second = "offline two \(run)"
+        for text in [first, second] {
+            type(text, into: app.textFields["cloud.composer"])
+            app.buttons["cloud.send"].tap()
+            XCTAssertTrue(pending(text, in: app).waitForExistence(timeout: 10), "offline send should wait in the outbox: \(problem(app))")
+        }
+        XCTAssertEqual(messages(first, in: app).count, 0, "nothing commits while offline")
+        shot("two sends waiting offline", app)
+
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 2)
+        app.activate()
+        XCTAssertTrue(app.textFields["cloud.composer"].waitForExistence(timeout: 10), "room stays open after background")
+        XCTAssertTrue(pending(second, in: app).exists, "waiting sends survive the background")
+
+        app.buttons["cloud.offlineToggle"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.live"].waitForExistence(timeout: 20), "realtime reconnects")
+        for text in [first, second] {
+            XCTAssertTrue(message(text, in: app).waitForExistence(timeout: 20), "replayed send should commit: \(problem(app))")
+        }
+        XCTAssertTrue(waitGone(pendingRows(in: app).firstMatch, timeout: 10), "outbox drains")
+        XCTAssertEqual(messages(first, in: app).count, 1, "committed exactly once")
+        XCTAssertEqual(messages(second, in: app).count, 1, "committed exactly once")
+        XCTAssertLessThan(message(first, in: app).frame.minY, message(second, in: app).frame.minY, "replay keeps send order")
+        shot("replayed in order", app)
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+    }
+
+    /// A send that was in flight when the app died is looked up after
+    /// relaunch and never replayed on its own; the person chooses to resend.
+    @MainActor
+    func testOfflineSendAfterRelaunchNeedsReview() async throws {
+        let run = String(UUID().uuidString.prefix(8)).lowercased()
+        let app = launch()
+        try await signIn("relaunch-\(run)@example.test", in: app)
+        app.buttons["cloud.createRoom"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+        openRoom(in: app)
+
+        app.buttons["cloud.offlineToggle"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.connecting"].waitForExistence(timeout: 10))
+        let text = "before relaunch \(run)"
+        type(text, into: app.textFields["cloud.composer"])
+        app.buttons["cloud.send"].tap()
+        XCTAssertTrue(pending(text, in: app).waitForExistence(timeout: 10), problem(app))
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["cloud.subject"].waitForExistence(timeout: 20), "account survives relaunch")
+        openRoom(in: app)
+        let resend = app.buttons["cloud.pending.resend"]
+        XCTAssertTrue(resend.waitForExistence(timeout: 20), "uncommitted send waits for review: \(problem(app))")
+        XCTAssertEqual(messages(text, in: app).count, 0, "never replayed without the person")
+        shot("send waiting for review after relaunch", app)
+        resend.tap()
+        XCTAssertTrue(message(text, in: app).waitForExistence(timeout: 20), problem(app))
+        XCTAssertTrue(waitGone(pendingRows(in: app).firstMatch, timeout: 10))
+        XCTAssertEqual(messages(text, in: app).count, 1)
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+    }
+
+    /// Owner attaches a text file and a png, sees the scan reject a test
+    /// file, sends; the invitee signs in, redeems and opens the text from
+    /// the message. Bytes come back from the server, never from disk.
+    @MainActor
+    func testAttachmentsUploadScanSendAndRecipientDownloads() async throws {
+        let run = String(UUID().uuidString.prefix(8)).lowercased()
+        let app = launch()
+        try await signIn("files-\(run)@example.test", in: app)
+        app.buttons["cloud.createRoom"].tap()
+        let invite = app.staticTexts["cloud.lastInvite"]
+        XCTAssertTrue(invite.waitForExistence(timeout: 15), problem(app))
+        let token = invite.label
+        openRoom(in: app)
+
+        attach("cloud.attach.eicar", "scan test file", in: app)
+        let rejected = app.descendants(matching: .any)["cloud.draft.rejected"]
+        XCTAssertTrue(rejected.waitForExistence(timeout: 15), "the fixture scanner rejects the test file: \(problem(app))")
+        XCTAssertFalse(app.buttons["cloud.send"].isEnabled, "a rejected attachment blocks send")
+        shot("scan rejected", app)
+        rejected.buttons["cloud.draft.remove"].tap()
+        XCTAssertTrue(waitGone(rejected, timeout: 5))
+
+        attach("cloud.attach.sampleText", "sample text", in: app)
+        attach("cloud.attach.samplePNG", "sample png", in: app)
+        let ready = app.descendants(matching: .any).matching(identifier: "cloud.draft.ready")
+        let deadline = Date().addingTimeInterval(20)
+        while ready.count < 2, Date() < deadline { Thread.sleep(forTimeInterval: 0.3) }
+        XCTAssertEqual(ready.count, 2, "both attachments reach ready: \(problem(app))")
+        shot("two attachments ready", app)
+        send("with files \(run)", in: app)
+        XCTAssertTrue(waitGone(ready.firstMatch, timeout: 5), "drafts clear after send")
+        let chips = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'cloud.attachment.'"))
+        XCTAssertEqual(chips.count, 2, "the message carries both attachments")
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+
+        try await signIn("files-b-\(run)@example.test", in: app)
+        type(token, into: app.textFields["cloud.inviteToken"])
+        app.buttons["cloud.redeem"].tap()
+        openRoom(in: app)
+        XCTAssertTrue(message("with files \(run)", in: app).waitForExistence(timeout: 15))
+        XCTAssertTrue(chips.firstMatch.waitForExistence(timeout: 10))
+        var sawText = false, sawImage = false
+        for index in 0..<chips.count {
+            chips.element(boundBy: index).tap()
+            let text = app.staticTexts["cloud.viewer.text"], image = app.images["cloud.viewer.image"]
+            let deadline = Date().addingTimeInterval(15)
+            while !text.exists, !image.exists, !app.staticTexts["cloud.viewer.problem"].exists, Date() < deadline { Thread.sleep(forTimeInterval: 0.3) }
+            if text.exists { XCTAssertEqual(text.label, "fictional attachment text"); sawText = true }
+            if image.exists { sawImage = true }
+            XCTAssertFalse(app.staticTexts["cloud.viewer.problem"].exists, app.staticTexts["cloud.viewer.problem"].exists ? app.staticTexts["cloud.viewer.problem"].label : "")
+            shot("recipient opened attachment \(index)", app)
+            app.buttons["cloud.viewer.done"].tap()
+            XCTAssertTrue(waitGone(app.buttons["cloud.viewer.done"], timeout: 5))
+        }
+        XCTAssertTrue(sawText && sawImage, "recipient downloads the text and the image")
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+    }
+
+    /// A second session of the same account registers a bot and its host,
+    /// mentions the bot and plays the host up to an approval card. The app
+    /// shows the card, approves it once; a second decision is refused, and
+    /// a card that runs out shows expired with no buttons.
+    @MainActor
+    func testApprovalCardApproveOnceAndExpiry() async throws {
+        let run = String(UUID().uuidString.prefix(8)).lowercased()
+        let email = "gate-\(run)@example.test"
+        let app = launch()
+        try await signIn(email, in: app)
+        app.buttons["cloud.createRoom"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+
+        let host = try await CloudHostDriver.signIn(email: email, issuer: issuer, rooms: rooms, otp: otp(for:))
+        let room = try await host.firstRoom()
+        let bot = "bot\(run)"
+        try await host.registerBot(workspace: room.workspace, room: room.room, botId: bot, name: "gate bot")
+        let (hostId, credential) = try await host.registerHost(workspace: room.workspace, botIds: [bot])
+        let fresh = try await host.firstRoom()
+        let mention = try await host.sendMention(workspace: fresh.workspace, room: fresh.room, thread: fresh.thread, policyRevision: fresh.policyRevision, text: "@\(bot) send it", botId: bot)
+        let (_, approvalId) = try await host.claimAndRequestApproval(workspace: fresh.workspace, hostId: hostId, credential: credential, title: "send the fictional report \(run)", expiresIn: 300, messageId: mention)
+
+        openRoom(in: app)
+        let card = app.descendants(matching: .any)["cloud.card.\(approvalId)"]
+        XCTAssertTrue(card.waitForExistence(timeout: 15), "the approval card shows: \(problem(app))")
+        XCTAssertTrue(card.staticTexts["send the fictional report \(run)"].exists)
+        XCTAssertTrue(card.staticTexts["cloud.card.status.pending"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["cloud.run.state.waiting_for_human"].waitForExistence(timeout: 10), "the run waits for the person")
+        shot("approval card pending", app)
+        card.buttons["cloud.card.approve"].tap()
+        XCTAssertTrue(card.staticTexts["cloud.card.status.approved"].waitForExistence(timeout: 15), "approved: \(problem(app))")
+        XCTAssertFalse(card.buttons["cloud.card.approve"].exists, "a decided card has no buttons")
+        XCTAssertTrue(app.descendants(matching: .any)["cloud.run.state.running"].waitForExistence(timeout: 10), "approval resumes the run")
+        shot("approved once", app)
+
+        let again = try await host.decide(workspace: fresh.workspace, room: fresh.room, approvalId: approvalId, decision: "deny")
+        XCTAssertEqual(again.status, 409)
+        XCTAssertEqual(again.body["error"] as? String, "approval_decided", "the second decision is refused")
+        XCTAssertTrue(card.staticTexts["cloud.card.status.approved"].exists, "the card stays approved")
+
+        // A short card runs out on screen before anyone decides.
+        let second = try await host.sendMention(workspace: fresh.workspace, room: fresh.room, thread: fresh.thread, policyRevision: fresh.policyRevision, text: "@\(bot) and this", botId: bot)
+        let (_, shortId) = try await host.claimAndRequestApproval(workspace: fresh.workspace, hostId: hostId, credential: credential, title: "short card \(run)", expiresIn: 4, messageId: second)
+        let short = app.descendants(matching: .any)["cloud.card.\(shortId)"]
+        XCTAssertTrue(short.waitForExistence(timeout: 15), "the second card shows")
+        XCTAssertTrue(short.staticTexts["cloud.card.status.expired"].waitForExistence(timeout: 15), "an expired card reads expired")
+        XCTAssertFalse(short.buttons["cloud.card.approve"].exists, "an expired card has no buttons")
+        let late = try await host.decide(workspace: fresh.workspace, room: fresh.room, approvalId: shortId, decision: "approve")
+        XCTAssertEqual(late.status, 409)
+        XCTAssertEqual(late.body["error"] as? String, "approval_expired")
+        shot("short card expired", app)
+        app.navigationBars.buttons.firstMatch.tap()
+        signOut(app)
+    }
+
+    @MainActor
+    private func attach(_ identifier: String, _ label: String, in app: XCUIApplication) {
+        // The sheet can still be closing from the last pick; reopen until it shows.
+        for _ in 0..<4 {
+            app.buttons["cloud.attach"].tap()
+            if app.buttons[identifier].waitForExistence(timeout: 3) { break }
+        }
+        XCTAssertTrue(app.buttons[identifier].exists, "attach sheet shows \(label)")
+        app.buttons[identifier].tap()
+        XCTAssertTrue(waitGone(app.buttons[identifier], timeout: 5), "attach sheet closes")
+    }
+
+    @MainActor
+    private func messages(_ text: String, in app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'cloud.message.'"))
+            .containing(NSPredicate(format: "label == %@", text))
+    }
+
+    @MainActor
+    private func pendingRows(in app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH 'cloud.pending.' AND NOT (identifier IN %@)",
+            ["cloud.pending.release", "cloud.pending.discard", "cloud.pending.resend", "cloud.pending.giveUp"]))
+    }
+
+    @MainActor
+    private func pending(_ text: String, in app: XCUIApplication) -> XCUIElement {
+        pendingRows(in: app).containing(NSPredicate(format: "label == %@", text)).firstMatch
+    }
+
+    private func waitGone(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        return XCTWaiter().wait(for: [gone], timeout: timeout) == .completed
+    }
+
     // MARK: - steps
 
     /// Independent check-owned fault proxy forwards to the real local issuer.
@@ -223,6 +453,12 @@ final class CloudRoomsLiveUITests: XCTestCase {
         type(address, into: email)
         app.buttons["cloud.sendCode"].tap()
         let codeField = app.textFields["cloud.code"]
+        // The local issuer allows 5 code sends a minute per ip; a full suite
+        // signs in more often than that, so wait out one window and resend.
+        if !codeField.waitForExistence(timeout: 15), problem(app).contains("unavailable") {
+            try await Task.sleep(for: .seconds(61))
+            app.buttons["cloud.sendCode"].tap()
+        }
         XCTAssertTrue(codeField.waitForExistence(timeout: 15), problem(app))
         let code = try await otp(for: address)
         type(code, into: codeField)

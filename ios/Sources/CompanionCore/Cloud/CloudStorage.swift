@@ -15,11 +15,15 @@ public struct CloudAccountStore: Sendable {
     }
 
     var outboxFile: URL { folder.appendingPathComponent("outbox.json") }
+    var discoveryFile: URL { folder.appendingPathComponent("discovery.json") }
+    var windowsFile: URL { folder.appendingPathComponent("windows.json") }
+    var roomsFolder: URL { folder.appendingPathComponent("rooms", isDirectory: true) }
+    public var attachmentsFolder: URL { folder.appendingPathComponent("attachments", isDirectory: true) }
 
     func roomFile(workspaceId: String, roomId: String) -> URL {
         let scope = (try? JSONEncoder().encode([workspaceId, roomId])) ?? Data()
         let key = SHA256.hash(data: scope).map { String(format: "%02x", $0) }.joined()
-        return folder.appendingPathComponent("rooms", isDirectory: true).appendingPathComponent(key + ".json")
+        return roomsFolder.appendingPathComponent(key + ".json")
     }
 
     public func loadOutbox() throws -> CloudOutbox? {
@@ -49,6 +53,55 @@ public struct CloudAccountStore: Sendable {
     public func removeRoom(workspaceId: String, roomId: String) throws {
         let file = roomFile(workspaceId: workspaceId, roomId: roomId)
         if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+    }
+
+    /// The last discovery, so rooms list offline. Guest workspaces are
+    /// session-only and never written.
+    public func loadDiscovery() throws -> CloudDiscovery? {
+        try load(CloudDiscovery.self, from: discoveryFile)
+    }
+
+    public func save(_ discovery: CloudDiscovery) throws {
+        var members = discovery
+        members.workspaces.removeAll { $0.role == .guest }
+        try write(members, to: discoveryFile)
+    }
+
+    /// Signed send windows by workspace, so a send can be frozen offline.
+    /// Windows for another account's namespace are dropped on load.
+    public func loadWindows() throws -> [String: CloudSendWindow] {
+        guard let windows = try load([String: CloudSendWindow].self, from: windowsFile) else { return [:] }
+        return windows.filter { account.owns($0.value.namespace) && $0.value.namespace.workspaceId == $0.key }
+    }
+
+    public func save(windows: [String: CloudSendWindow], guestWorkspaces: Set<String>) throws {
+        try write(windows.filter { !guestWorkspaces.contains($0.key) }, to: windowsFile)
+    }
+
+    /// Revocation or account switch: drops cached room content, discovery,
+    /// windows and attachment bytes. The outbox stays, quarantined in this
+    /// folder, so the same account can reconcile its sends on return.
+    public func wipeCache() throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: folder.path) else { return }
+        for item in try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) where item.lastPathComponent != outboxFile.lastPathComponent {
+            try fm.removeItem(at: item)
+        }
+        if try fm.contentsOfDirectory(atPath: folder.path).isEmpty { try fm.removeItem(at: folder) }
+    }
+
+    /// Wipes every other account's cache under `root`, keeping only their
+    /// quarantined outboxes. Run when an account's store opens.
+    public static func wipeOtherAccounts(root: URL, except account: CloudAccountKey) throws {
+        let cloud = root.appendingPathComponent("cloud", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: cloud.path) else { return }
+        for item in try FileManager.default.contentsOfDirectory(at: cloud, includingPropertiesForKeys: nil) where item.lastPathComponent != account.namespace {
+            try CloudAccountStore(folder: item, account: account).wipeCache()
+        }
+    }
+
+    private init(folder: URL, account: CloudAccountKey) {
+        self.folder = folder; self.account = account
     }
 
     /// Explicit logout: erases every app-managed byte for this account.

@@ -118,7 +118,7 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertEqual(session.reduce(.foreground), [.refreshAuth(generation: 0)])
 
         let effects = session.reduce(.accountChanged(bob))
-        XCTAssertEqual(effects, [.closeSocket, .clearVisibleState(previousGeneration: 0), .openStore(bob), .refreshAuth(generation: 1)])
+        XCTAssertEqual(effects, [.closeSocket, .clearVisibleState(previousGeneration: 0), .wipeCache(alice), .openStore(bob), .refreshAuth(generation: 1)])
         XCTAssertEqual(session.generation, 1)
         XCTAssertEqual(session.account, bob)
         XCTAssertTrue(session.known.isEmpty)
@@ -138,8 +138,8 @@ final class CloudSessionTests: XCTestCase {
 
     func testAccountChangedInBackgroundDoesNotStartRecovery() {
         var session = CloudSession(account: alice)
-        XCTAssertEqual(session.reduce(.accountChanged(bob)), [.closeSocket, .clearVisibleState(previousGeneration: 0), .openStore(bob)])
-        XCTAssertEqual(session.reduce(.accountChanged(nil)), [.closeSocket, .clearVisibleState(previousGeneration: 1)])
+        XCTAssertEqual(session.reduce(.accountChanged(bob)), [.closeSocket, .clearVisibleState(previousGeneration: 0), .wipeCache(alice), .openStore(bob)])
+        XCTAssertEqual(session.reduce(.accountChanged(nil)), [.closeSocket, .clearVisibleState(previousGeneration: 1), .wipeCache(bob)])
         XCTAssertEqual(session.reduce(.foreground), [], "no account, no recovery")
     }
 
@@ -153,16 +153,50 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertEqual(session.reduce(.signedOut), [])
     }
 
-    func testSessionInvalidRequiresSignInWithoutErasing() {
+    func testSessionInvalidWipesCacheAndRequiresSignInWithoutErasingOutbox() {
         var session = CloudSession(account: alice)
         recover(&session, with: F.discovery(["r1"]))
         XCTAssertEqual(session.reduce(.sessionInvalid(generation: 7)), [], "stale generation")
-        XCTAssertEqual(session.reduce(.sessionInvalid(generation: 0)), [.closeSocket, .clearVisibleState(previousGeneration: 0), .requireSignIn(alice)])
+        XCTAssertEqual(session.reduce(.sessionInvalid(generation: 0)), [.closeSocket, .clearVisibleState(previousGeneration: 0), .wipeCache(alice), .requireSignIn(alice)])
         XCTAssertNil(session.account)
         XCTAssertTrue(session.known.isEmpty)
         XCTAssertEqual(session.reduce(.foreground), [], "nothing recovers without an account")
         XCTAssertEqual(session.reduce(.sessionInvalid(generation: 1)), [])
         // The same person signing back in reopens their own store.
         XCTAssertEqual(session.reduce(.accountChanged(alice)), [.closeSocket, .clearVisibleState(previousGeneration: 1), .openStore(alice), .refreshAuth(generation: 2)])
+    }
+
+    func testFirstSignInWipesNothing() {
+        var session = CloudSession(account: nil)
+        XCTAssertEqual(session.reduce(.accountChanged(alice)), [.closeSocket, .clearVisibleState(previousGeneration: 0), .openStore(alice)])
+    }
+
+    func testNetworkRestoredRecoversNowAndResetsBackoff() {
+        var session = CloudSession(account: alice)
+        XCTAssertEqual(session.reduce(.networkRestored), [], "background: nothing")
+        XCTAssertEqual(session.reduce(.foreground), [.refreshAuth(generation: 0)])
+        XCTAssertEqual(session.reduce(.networkRestored), [], "already recovering")
+        // Offline: auth fails a few times and backs off.
+        for _ in 0..<4 {
+            _ = session.reduce(.authFailed(generation: 0, retryAfter: nil))
+            XCTAssertEqual(session.reduce(.retryDue(.recovery, generation: 0)), [.refreshAuth(generation: 0)])
+        }
+        _ = session.reduce(.discoveryFailed(generation: 0, retryAfter: nil))
+        // The network comes back: recover immediately, not at the scheduled time.
+        XCTAssertEqual(session.reduce(.networkRestored), [.refreshAuth(generation: 0)])
+        XCTAssertEqual(session.reduce(.authRefreshed(generation: 0)), [.syncDiscovery(generation: 0)])
+        let effects = session.reduce(.discoverySynced(generation: 0, F.discovery(["r1"])))
+        XCTAssertEqual(effects, [.closeSocket, .openSocket(generation: 0), .subscribe(F.room("r1")), .recoverOperations])
+        // The backoff starts over after a fresh failure.
+        let ended = session.reduce(.socketEnded(generation: 0, retryAfter: nil))
+        guard case .schedule(.reconnect, after: let after, generation: 0)? = ended.first else { return XCTFail("\(ended)") }
+        XCTAssertLessThanOrEqual(after, CloudBackoff.ceiling(attempt: 1))
+    }
+
+    func testNetworkRestoredWithoutAccountDoesNothing() {
+        var session = CloudSession(account: alice)
+        _ = session.reduce(.foreground)
+        _ = session.reduce(.sessionInvalid(generation: 0))
+        XCTAssertEqual(session.reduce(.networkRestored), [])
     }
 }
