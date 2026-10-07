@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createServer as httpServer } from 'node:http';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -15,8 +16,10 @@ export async function until(fn, label, ms = 6000) {
 }
 
 /** Only an owned local D1 issuer and throwaway PostgreSQL. No inherited auth. */
-export async function ownedFixture(server) {
+export async function ownedFixture(server, { evidence, record = () => {} } = {}) {
   const cp = resolve(server, 'cloudflare/control-plane');
+  const issuerLog = evidence ? resolve(evidence, 'issuer-worker.private.log') : null;
+  if (issuerLog) writeFileSync(issuerLog, '', { flag: 'wx', mode: 0o600 });
   const wrangler = resolve(cp, 'node_modules/wrangler/bin/wrangler.js');
   const dir = await mkdtemp(resolve(tmpdir(), 'bos-slice34-issuer-'));
   const net = createServer();
@@ -26,18 +29,21 @@ export async function ownedFixture(server) {
   const upstream = 'http://127.0.0.1:' + port;
   const issuerFault = { outage: false, stall_ms: 0 };
   const proxy = httpServer(async (req, res) => {
+    const started = performance.now();
+    const info = { type: 'issuer_proxy', method: req.method, path: req.url.split('?')[0] };
     try {
-      if (req.url === '/v1/me' && issuerFault.outage) { res.writeHead(503); res.end('{}'); return; }
+      if (req.url === '/v1/me' && issuerFault.outage) { record({ ...info, status: 503, injected_outage: true }); res.writeHead(503); res.end('{}'); return; }
       if (req.url === '/v1/me' && issuerFault.stall_ms) await pause(issuerFault.stall_ms);
       if (res.destroyed) return;
       const chunks = []; for await (const b of req) chunks.push(b);
       const headers = { ...req.headers }; delete headers.host; delete headers.connection; delete headers['content-length'];
       const response = await fetch(upstream + req.url, { method: req.method, headers,
         ...(!['GET', 'HEAD'].includes(req.method) ? { body: Buffer.concat(chunks) } : {}), redirect: 'manual' });
+      record({ ...info, upstream_status: response.status, duration_ms: performance.now() - started });
       const outHeaders = Object.fromEntries(response.headers); delete outHeaders['content-encoding']; delete outHeaders['content-length'];
       if (response.headers.getSetCookie().length) outHeaders['set-cookie'] = response.headers.getSetCookie();
       res.writeHead(response.status, outHeaders); res.end(Buffer.from(await response.arrayBuffer()));
-    } catch { if (!res.destroyed) { res.writeHead(503); res.end('{}'); } }
+    } catch (error) { record({ ...info, status: 503, transport_error: error.name, duration_ms: performance.now() - started }); if (!res.destroyed) { res.writeHead(503); res.end('{}'); } }
   });
   await new Promise(r => proxy.listen(0, '127.0.0.1', r));
   const issuer = 'http://127.0.0.1:' + proxy.address().port;
@@ -49,7 +55,8 @@ export async function ownedFixture(server) {
       env: { PATH: process.env.PATH, HOME: dir, TMPDIR: tmpdir(), LC_ALL: 'en_US.UTF-8', WRANGLER_SEND_METRICS: 'false' },
       stdio: ['ignore', 'pipe', 'pipe'] });
     children.add(p); p.logs = '';
-    p.stdout.on('data', v => p.logs += v); p.stderr.on('data', v => p.logs += v);
+    const retain = v => { p.logs += v; if (issuerLog) appendFileSync(issuerLog, v); };
+    p.stdout.on('data', retain); p.stderr.on('data', retain);
     p.done = new Promise((r, j) => { p.once('error', j); p.once('exit', code => { children.delete(p); r(code); }); });
     return p;
   };

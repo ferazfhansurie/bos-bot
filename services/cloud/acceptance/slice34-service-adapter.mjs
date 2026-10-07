@@ -19,7 +19,7 @@ export const room = h => `${root(h)}/rooms/${h.r.room_id}`;
 export const binding = v => ({ invocation_id: v.invocation_id, attempt: v.attempt, fence_gen: v.fence_gen });
 
 export async function connect({ server, candidate, schema, evidence, record }) {
-  const f = await ownedFixture(server);
+  const f = await ownedFixture(server, { evidence, record });
   const require = createRequire(server + '/services/cloud/package.json');
   const pg = require('pg'), WebSocket = require('ws').WebSocket;
   const admin = new pg.Client({ connectionString: f.migration_url, query_timeout: 5000 });

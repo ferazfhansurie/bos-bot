@@ -3,6 +3,22 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { root, room, digest } from './slice34-service-adapter.mjs';
 
+// Read-only replay honors the service's explicit temporary identity outage hint.
+// A new authenticated 200 response is required; rejected credentials never retry.
+export async function recoveryReplay(c, h, actor, body) {
+  const path = room(h) + '/replay';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await c.request(path, actor, 'POST', body);
+    if (response.status === 200) return response.data;
+    if (response.status !== 503 || response.data?.error !== 'identity_unavailable' || attempt === 3) {
+      assert.equal(response.status, 200, `${path}: ${JSON.stringify(response.data)}`);
+    }
+    const seconds = Math.min(2, Math.max(1, Number(response.data.retry_after) || 1));
+    c.log({ type: 'recovery_read_retry', path, status: response.status, error: response.data.error, attempt, retry_after: seconds });
+    await c.pause(seconds * 1000);
+  }
+}
+
 export async function createRecovery(c) {
   c.f.hooks.pausedWorker = true;
   const h = await c.humans('recovery-corpus', { role: 'member' });
@@ -27,13 +43,13 @@ export async function createRecovery(c) {
   let pressureCursor = snapshots[1].cursor, pressureIssued = Date.now();
   const recipientFrame = async (i, { crash = false, duplicate = false } = {}) => {
     const actor = i ? h.b : h.a;
-    let frame = await c.ok(room(h) + '/replay', actor, 'POST', { thread_id: h.r.thread_id, cursor: projections[i].cursor });
+    let frame = await recoveryReplay(c, h, actor, { thread_id: h.r.thread_id, cursor: projections[i].cursor });
     const checkpoint = crash ? c.artifact('recipient-before-apply', projections[i]) : null;
     const apply = c.client.cloudRoomReducer(projections[i], { type: 'frame', frame });
     if (crash) {
       c.log({ type: 'crash_after_actual_reducer_apply_before_checkpoint', recipient: i, applied_cursor: apply.cursor, checkpoint });
       projections[i] = JSON.parse(readFileSync(checkpoint.path, 'utf8'));
-      frame = await c.ok(room(h) + '/replay', actor, 'POST', { thread_id: h.r.thread_id, cursor: projections[i].cursor });
+      frame = await recoveryReplay(c, h, actor, { thread_id: h.r.thread_id, cursor: projections[i].cursor });
     }
     projections[i] = c.client.cloudRoomReducer(projections[i], { type: 'frame', frame });
     if (duplicate) {
@@ -54,7 +70,7 @@ export async function createRecovery(c) {
       slowPrepared = true;
     }
     if (Date.now() - pressureIssued > 240000) {
-      const renewed = await c.ok(room(h) + '/replay', h.b, 'POST', { thread_id: h.r.thread_id, cursor: pressureCursor });
+      const renewed = await recoveryReplay(c, h, h.b, { thread_id: h.r.thread_id, cursor: pressureCursor });
       assert.equal(renewed.type, 'event_batch', 'pressure cursor must renew before expiry');
       pressureCursor = renewed.cursor; pressureIssued = Date.now();
       c.log({ type: 'pressure_cursor_renewed_by_actual_replay', scanned_sequence: renewed.scanned_sequence });
