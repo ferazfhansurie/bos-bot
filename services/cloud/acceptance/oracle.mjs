@@ -45,7 +45,7 @@ export class Oracle {
     this.record({ type: 'manifest', digest: this.manifest.manifest_digest });
   }
   record(entry) {
-    appendFileSync(this.journalPath, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', { flush: true });
+    appendFileSync(this.journalPath, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', { flush: entry.type === 'projection_verified' });
   }
   submitted(id, envelope) {
     const intent = this.intents.get(id);

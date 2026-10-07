@@ -21,7 +21,7 @@ export async function connectFixture(serverArg, stateArg, evidenceArg) {
   assert.ok(!evidence.startsWith(server + sep), 'oracle must be outside SUT storage');
   mkdirSync(evidence, { recursive: false, mode: 0o700 });
   const git = args => execFileSync('git', args, { cwd: server, encoding: 'utf8' }).trim();
-  const source = '7883a6f34a76d21a9f8ef7fed0536b41f8a944e3';
+  const source = 'a9f79d24eb41a3aae6765009577515920704661d';
   assert.equal(git(['diff', source, '--', 'services/cloud', ':!services/cloud/acceptance']), '', 'candidate drift');
   assert.equal(git(['status', '--porcelain', '--', 'services/cloud', ':!services/cloud/acceptance']), '', 'dirty SUT');
   assert.equal(git(['diff', PROTOCOL_COMMIT, '--', 'shared/cloud-protocol']), '', 'protocol drift');
@@ -39,7 +39,7 @@ export async function connectFixture(serverArg, stateArg, evidenceArg) {
   const app = new pg.Client({ connectionString: state.database_url, query_timeout: 5000 });
   await admin.connect(); await app.connect();
   const journal = evidence + '/raw.jsonl'; writeFileSync(journal, '', { flag: 'wx', mode: 0o600 });
-  const record = item => appendFileSync(journal, JSON.stringify({ at: new Date().toISOString(), ...redact(item) }) + '\n', { flush: true });
+  const record = item => appendFileSync(journal, JSON.stringify({ at: new Date().toISOString(), ...redact(item) }) + '\n', { flush: ['case_complete','complete'].includes(item.type) });
   const role = (await app.query('SELECT current_user,current_database(),rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=current_user')).rows[0];
   assert.equal(role.current_user, 'cloud_app');
   for (const key of ['rolsuper','rolbypassrls','rolinherit']) assert.equal(role[key], false);

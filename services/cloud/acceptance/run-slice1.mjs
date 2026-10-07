@@ -88,16 +88,17 @@ try {
   for(const fault of ['paused','before_complete','after_commit','lost-notify'])await scenario('a05-'+fault,async()=> {
     const h=await c.humans('a05_'+fault.replaceAll('-','_')),p=await c.plan(h,'a05-'+fault,1000);
     await c.hooks('control',{worker_paused:true,drop_notify:true,worker_fault:fault==='before_complete'||fault==='after_commit'?fault:'none'});
+    const baseline=new Set((await c.hooks('queue-state',{workspace_id:h.w})).map(q=>q.event_id));
     const socket=await c.socket(h.b);socket.subscribe(h);
     try {
       await deliverySchedule({name:'a05-'+fault,record:c.record,operation:async i=>assert.equal((await send(h,p,i)).status,'accepted'),verify:async()=> {
-        const queue=await c.hooks('queue-state',{workspace_id:h.w});assert.equal(queue.filter(q=>q.completed_at===null).length,queue.length);
+        const queue=await c.hooks('queue-state',{workspace_id:h.w});const added=queue.filter(q=>!baseline.has(q.event_id));assert.equal(added.length,1000);assert.ok(added.every(q=>baseline.has(q.event_id)||q.completed_at===null));
         const counts=(await c.admin.query(`SELECT (SELECT count(*)::int FROM cloud.messages WHERE workspace_id=$1) messages,(SELECT count(*)::int FROM cloud.operations WHERE workspace_id=$1) operations,(SELECT count(*)::int FROM cloud.room_events WHERE workspace_id=$1) events,(SELECT count(*)::int FROM cloud.outbox WHERE workspace_id=$1) outbox,(SELECT count(*)::int FROM cloud.work_queue WHERE workspace_id=$1) queue`,[h.w])).rows[0];
         assert.equal(counts.messages,1000);assert.equal(counts.operations,1000);assert.equal(counts.events,counts.outbox);assert.equal(counts.outbox,counts.queue);c.record({type:'durable_atomic_ledger',fault,counts});
         await waitForMessages(socket,p.operations.map(x=>x.id));
         await c.hooks('control',{worker_paused:false});
         if(fault==='before_complete') {
-          await pause(450);assert.ok((await c.hooks('queue-state',{workspace_id:h.w})).every(q=>q.completed_at===null));
+          await pause(450);assert.ok((await c.hooks('queue-state',{workspace_id:h.w})).every(q=>baseline.has(q.event_id)||q.completed_at===null));
         }
         await c.hooks('control',{worker_fault:'none'});
         await until(async()=> (await c.hooks('queue-state',{workspace_id:h.w})).every(q=>q.completed_at!==null),'automatic durable worker',30000);

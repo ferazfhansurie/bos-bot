@@ -5,12 +5,12 @@ installation, restart, provisioning or production mutation. This directory must
 not be imported by the cloud service. No server digest/reducer/DB implementation
 may compute the expected answers.
 
-Current state: **partial live acceptance; full matrix pending**. Source protocol commit:
+Current state: **independent local slice-1 matrix passed on a9f79d24e**. Source protocol commit:
 `ffd3a022d56485a11363a49c2e070d6cb075bbb8` (local cherry-pick `8ab9ea4c`).
 The HTTP driver uses contract schemas but independently computes intent digests;
 it never imports the service digest, reducer or DB code. The fixture and real
-admission barriers are bound to api's `7883a6f34`; same-key changed-envelope
-scheduling still requires a digest selector in the send/seal hook details.
+admission barriers are bound to api's `a9f79d24e`, including digest-selected
+same-key changed-envelope scheduling. See the committed final verification report.
 An oracle/scheduler self-test is not server, client or recipient acceptance.
 
 The oracle freezes exact intended envelopes and expected message fields to an
@@ -53,15 +53,20 @@ The 19 wire fixture cases validate schema shapes only; actual UI/Swift reducer
 behavior belongs to those owners. No PG migration, RLS role, server race,
 realtime recipient, installed app or physical device is verified by this run.
 
-## Remaining interface gates
+## Verified scope and remaining platform gates
 
-- full a01/a03–a08/a13–a16 independent matrix; do not infer it from API-owned tests.
-- same-key changed-envelope races: match `digest` in send/seal admission hooks.
-  The live probe on `7883a6f34` armed that selector but the send escaped with the
-  gate unentered, because the operation hook supplies only the key.
-- a16 uses the existing member-removal route: two owners remove each other,
-  with both admission orders repeated 100 times. Bos resolved this scope in the
-  room on 2026-10-07; no role-change endpoint is required for slice 1.
+The independent local server matrix passed a01/a03–a08/a13–a16, including 4,200
+race trials (100 per order), 12 recovery delivery schedules, 4,224 private intent
+manifests and 13,254 manifested envelope intents. The earlier 400 expiry boundary trials with a sequential winning order are
+excluded from the race count. The final expiry runners identify the exact PG lock holder
+and hold committed responses during concurrent expiry, covering both orders. API-owned tests and peer reports
+were not counted as these independent passes.
+
+This is local fictional/stub-issuer acceptance. Real D1, production durability,
+installed/native/device interaction, and actual UI/Swift reducer acceptance stay
+with their owners. Projection fault schedules here use the independent oracle;
+they are not client process-crash or UI evidence. Slice 1 has no edit/delete,
+upload, bot execution or host control routes. No install/restart is authorized.
 
 ## Required server coverage
 
@@ -110,9 +115,28 @@ owner removal only, not all of a16.
 redacted append-only journals. Node 24 requires `--experimental-strip-types`.
 Pass a new evidence directory outside the server checkout, and optional case
 names. It pins the exact API source and protocol trees before any mutation.
-The current committed report lists which selected cases actually ran; other
-implemented schedules remain unrun, and a13/a15/invite races still need binding.
-Do not use a selected smoke run as the full slice completion gate.
+All runners below must pass for the full local gate; a selected smoke run is
+insufficient. Launch the documented API fixture with `LC_ALL=C` and Node 24, then
+run each command sequentially using its printed state path and new evidence paths:
+
+```sh
+node --experimental-strip-types services/cloud/acceptance/run-slice1.mjs SERVER STATE NEW_CORE_DIR
+node --experimental-strip-types services/cloud/acceptance/run-security.mjs SERVER STATE NEW_SECURITY_DIR
+node --experimental-strip-types services/cloud/acceptance/run-tenancy.mjs SERVER STATE NEW_TENANCY_DIR
+node --experimental-strip-types services/cloud/acceptance/run-boundaries.mjs SERVER STATE NEW_BOUNDARY_DIR
+node --experimental-strip-types services/cloud/acceptance/run-operation-expiry.mjs SERVER STATE NEW_EXPIRY_DIR
+node --experimental-strip-types services/cloud/acceptance/run-invite-expiry.mjs SERVER STATE NEW_INVITE_EXPIRY_DIR
+node services/cloud/acceptance/run-last-owner.mjs SERVER STATE NEW_OWNER_JSONL
+```
+
+The observation journals are synchronous append-only writes, flushed at case
+completion (and projection verification for oracle journals). Exact intent
+manifests are exclusively created and flushed before dispatch. This avoids a
+separate disk flush per HTTP observation while retaining independent evidence
+outside the service faults; host power loss is outside this slice's fault model.
+`audit-evidence.mjs EVIDENCE_ROOT SERVER` checks the dated candidate's final-run
+paths, manifest integrity/permissions, credential redaction, source/protocol trees,
+raw case results, every race order/iteration, and journal SHA-256 hashes.
 
 `bothOrders` requires a test-only pause **before actual protected admission**,
 waits for the held request to reach it, admits the other request, then releases

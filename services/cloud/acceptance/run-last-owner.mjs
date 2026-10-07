@@ -42,7 +42,7 @@ const app = new pg.Client({ connectionString: state.database_url, connectionTime
   query_timeout: 5000 });
 writeFileSync(journalPath, '', { flag: 'wx', mode: 0o600 });
 const record = entry => appendFileSync(journalPath,
-  JSON.stringify({ at: new Date().toISOString(), ...redact(entry) }) + '\n', { flush: true });
+  JSON.stringify({ at: new Date().toISOString(), ...redact(entry) }) + '\n', { flush: entry.type === 'complete' });
 const transport = new Transport(base.href, record);
 async function hooks(action, body) {
   const path = '/v2/test/hooks' + (action ? '/' + action : '');
