@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {Transport,redact,localURL} from './transport.mjs';
 import {operationEnvelope,frozenOperation,PROTOCOL_COMMIT} from './protocol.mjs';
 import {freezeManifest} from './oracle.mjs';
-import {until,pause} from './slice2-fixture-client.mjs';
+import {until} from './slice2-fixture-client.mjs';
 const [server,statePath,targetPath,out]=process.argv.slice(2),state=JSON.parse(readFileSync(statePath)),target=JSON.parse(readFileSync(targetPath));
 for(const url of [state.url,state.issuer_url,target.url,target.issuer_url])localURL(url);
 const source='fefeafa7981d9d1c9fad2aa03688a2d5e704affe';

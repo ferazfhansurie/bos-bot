@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {randomUUID,createHash} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {writeFileSync} from 'node:fs';
 import {connectFixture,pause,until} from './slice2-fixture-client.mjs';
 import {bothOrders} from './schedules.mjs';
