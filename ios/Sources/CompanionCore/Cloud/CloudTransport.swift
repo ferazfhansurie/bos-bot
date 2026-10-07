@@ -3,6 +3,16 @@ import Foundation
 /// The /v2 routes the phone calls, as shared/cloud-protocol/README.md lists them.
 public enum CloudRoute {
     public static let discovery = "/v2/discovery/sync"
+    public static let me = "/v2/me"
+    public static let workspaces = "/v2/workspaces"
+    public static let redeemInvite = "/v2/invites/redeem"
+
+    public static func rooms(workspaceId: String) -> String {
+        "/v2/workspaces/\(escape(workspaceId))/rooms"
+    }
+    public static func invites(workspaceId: String) -> String {
+        "/v2/workspaces/\(escape(workspaceId))/invites"
+    }
     public static let realtime = "/v2/realtime"
 
     public static func operationWindows(workspaceId: String) -> String {
@@ -81,6 +91,33 @@ public enum CloudResponseClassifier {
     }
 }
 
+public struct CloudCreatedWorkspace: Hashable, Decodable, Sendable {
+    public var workspaceId: String
+    public var role: CloudRole
+    enum CodingKeys: String, CodingKey { case workspaceId = "workspace_id", role }
+}
+
+public struct CloudCreatedRoom: Hashable, Decodable, Sendable {
+    public var roomId: String
+    public var threadId: String
+    public var policyRevision: CloudSequence
+    enum CodingKeys: String, CodingKey { case roomId = "room_id", threadId = "thread_id", policyRevision = "policy_revision" }
+}
+
+public struct CloudInvite: Hashable, Decodable, Sendable {
+    public var inviteId: String
+    public var token: String
+    public var expiresAt: String
+    enum CodingKeys: String, CodingKey { case inviteId = "invite_id", token, expiresAt = "expires_at" }
+}
+
+public struct CloudRedeemed: Hashable, Decodable, Sendable {
+    public var workspaceId: String
+    public var role: CloudRole
+    public var roomIds: [String]
+    enum CodingKeys: String, CodingKey { case workspaceId = "workspace_id", role, roomIds = "room_ids" }
+}
+
 /// HTTP and realtime calls for one signed-in account. Requests carry a 10
 /// second deadline; the bearer comes from the session, never from storage
 /// shared with another account.
@@ -91,6 +128,28 @@ public final class CloudClient: @unchecked Sendable {
 
     public init(baseURL: URL, session: URLSession = .shared, bearer: @escaping @Sendable () async throws -> String) {
         self.baseURL = baseURL; self.session = session; self.bearer = bearer
+    }
+
+    public func me() async throws -> CloudIdentity {
+        try await json(CloudRoute.me, method: "GET", body: nil as String?)
+    }
+
+    public func createWorkspace(name: String) async throws -> CloudCreatedWorkspace {
+        try await json(CloudRoute.workspaces, method: "POST", body: ["name": name])
+    }
+
+    public func createRoom(workspaceId: String, name: String) async throws -> CloudCreatedRoom {
+        try await json(CloudRoute.rooms(workspaceId: workspaceId), method: "POST", body: ["name": name])
+    }
+
+    public func createInvite(workspaceId: String, role: CloudRole, roomIds: [String]) async throws -> CloudInvite {
+        struct Body: Encodable { var role: CloudRole; var room_ids: [String] }
+        return try await json(CloudRoute.invites(workspaceId: workspaceId), method: "POST", body: Body(role: role, room_ids: roomIds))
+    }
+
+    /// Explicit action only; never called from a link preview.
+    public func redeemInvite(token: String) async throws -> CloudRedeemed {
+        try await json(CloudRoute.redeemInvite, method: "POST", body: ["token": token])
     }
 
     public func discovery() async throws -> CloudDiscovery {

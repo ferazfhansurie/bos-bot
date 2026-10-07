@@ -13,6 +13,8 @@ public enum CloudSessionInput: Hashable, Sendable {
     case socketLive(generation: Int)
     case retryDue(CloudSessionTimer, generation: Int)
     case accountChanged(CloudAccountKey?)
+    /// The issuer or room service refused the bearer.
+    case sessionInvalid(generation: Int)
     case signedOut
 }
 
@@ -35,6 +37,9 @@ public enum CloudSessionEffect: Hashable, Sendable {
     case openStore(CloudAccountKey)
     /// Explicit logout: erase local payload, outbox, tokens and previews.
     case eraseStore(CloudAccountKey)
+    /// The bearer is gone: show sign-in. The store stays scoped on disk and
+    /// nothing dispatches until the same account signs in again.
+    case requireSignIn(CloudAccountKey)
 }
 
 public enum CloudSessionTimer: Hashable, Sendable {
@@ -124,6 +129,13 @@ public struct CloudSession: Hashable, Sendable {
             if let next { effects.append(.openStore(next)) }
             if isForeground { effects += startRecovery() }
             return effects
+
+        case .sessionInvalid(let generation):
+            guard current(generation), let account else { return [] }
+            let previous = self.generation
+            reset()
+            self.account = nil
+            return [.closeSocket, .clearVisibleState(previousGeneration: previous), .requireSignIn(account)]
 
         case .signedOut:
             guard let account else { return [] }
