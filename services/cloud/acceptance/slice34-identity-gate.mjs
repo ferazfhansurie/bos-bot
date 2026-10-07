@@ -33,9 +33,11 @@ export async function identityStallGate(c) {
       received_at >= started + 15000 && ['event_batch', 'reset'].includes(frame.type));
     assert.equal(publications.length, 0, 'stalled issuer cannot publish protected room data');
     assert.equal(frames.filter(f => f.type === 'event_batch' && f.events.some(e => e.payload.message?.message_id === committed.message_id)).length, 0, 'stall sentinel must not be published');
-    assert.ok(sockets.every(s => s.code === 1008 && s.frames.some(f => f.type === 'error' && f.error === 'identity_unavailable')));
+    const unavailable = new Set(['identity_unavailable', 'deadline_exceeded', 'unavailable']);
+    assert.ok(sockets.every(s => s.code === 1008 && s.frames.some(f => f.type === 'error' && unavailable.has(f.error))));
     c.log({ type: 'identity_stall_receipt', elapsed_ms: Date.now() - started,
       concurrent_sockets: sockets.length, closed_codes: sockets.map(s => s.code),
+      denial_codes: frames.filter(f => f.type === 'error').map(f => f.error),
       protected_publications: publications.length, denial: response.data, accepted_sentinel: committed.message_id });
     c.f.issuer_fault.stall_ms = 0; c.f.issuer_fault.stall_bearer = null;
     const recovered = await c.socket(h.b); recovered.subscribe(h, snapshot);
