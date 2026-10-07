@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { createServer as httpServer } from 'node:http';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+export const pause = ms => new Promise(r => setTimeout(r, ms));
+export async function until(fn, label, ms = 6000) {
+  const deadline = Date.now() + ms;
+  do { const value = await fn(); if (value) return value; await pause(10); } while (Date.now() < deadline);
+  throw new Error('acceptance deadline: ' + label);
+}
+
+/** Only an owned local D1 issuer and throwaway PostgreSQL. No inherited auth. */
+export async function ownedFixture(server) {
+  const cp = resolve(server, 'cloudflare/control-plane');
+  const wrangler = resolve(cp, 'node_modules/wrangler/bin/wrangler.js');
+  const dir = await mkdtemp(resolve(tmpdir(), 'bos-slice34-issuer-'));
+  const net = createServer();
+  await new Promise(r => net.listen(0, '127.0.0.1', r));
+  const port = net.address().port;
+  await new Promise(r => net.close(r));
+  const upstream = 'http://127.0.0.1:' + port;
+  const issuerFault = { outage: false, stall_ms: 0 };
+  const proxy = httpServer(async (req, res) => {
+    try {
+      if (req.url === '/v1/me' && issuerFault.outage) { res.writeHead(503); res.end('{}'); return; }
+      if (req.url === '/v1/me' && issuerFault.stall_ms) await pause(issuerFault.stall_ms);
+      if (res.destroyed) return;
+      const chunks = []; for await (const b of req) chunks.push(b);
+      const headers = { ...req.headers }; delete headers.host; delete headers.connection; delete headers['content-length'];
+      const response = await fetch(upstream + req.url, { method: req.method, headers,
+        ...(!['GET', 'HEAD'].includes(req.method) ? { body: Buffer.concat(chunks) } : {}), redirect: 'manual' });
+      const outHeaders = Object.fromEntries(response.headers); delete outHeaders['content-encoding']; delete outHeaders['content-length'];
+      if (response.headers.getSetCookie().length) outHeaders['set-cookie'] = response.headers.getSetCookie();
+      res.writeHead(response.status, outHeaders); res.end(Buffer.from(await response.arrayBuffer()));
+    } catch { if (!res.destroyed) { res.writeHead(503); res.end('{}'); } }
+  });
+  await new Promise(r => proxy.listen(0, '127.0.0.1', r));
+  const issuer = 'http://127.0.0.1:' + proxy.address().port;
+  const children = new Set();
+  let fixture;
+  const launch = args => {
+    const p = spawn(process.execPath, [wrangler, ...args], { cwd: cp,
+      env: { PATH: process.env.PATH, HOME: dir, TMPDIR: tmpdir(), LC_ALL: 'en_US.UTF-8', WRANGLER_SEND_METRICS: 'false' },
+      stdio: ['ignore', 'pipe', 'pipe'] });
+    children.add(p); p.logs = '';
+    p.stdout.on('data', v => p.logs += v); p.stderr.on('data', v => p.logs += v);
+    p.done = new Promise((r, j) => { p.once('error', j); p.once('exit', code => { children.delete(p); r(code); }); });
+    return p;
+  };
+  const stop = async () => {
+    if (fixture) { await fixture.stop(); fixture = undefined; }
+    for (const p of [...children]) { p.kill('SIGTERM'); await p.done; }
+    proxy.closeAllConnections(); await new Promise(r => proxy.close(r));
+    await rm(dir, { recursive: true, force: true });
+  };
+  try {
+    const names = ['0001_better_auth_1_7_1.sql', '0002_installations.sql', '0003_otp_recipient_rate_limits.sql', '0004_managed_companion_endpoints.sql', '0005_endpoint_cleanup_backoff.sql'];
+    await writeFile(dir + '/migrations.sql', (await Promise.all(names.map(n => readFile(cp + '/migrations/' + n, 'utf8')))).join('\n'), { mode: 0o600 });
+    const migration = launch(['d1', 'execute', 'bos-slice2-local', '--local', '--config', 'wrangler.local.jsonc', '--persist-to', dir + '/d1', '--file', dir + '/migrations.sql']);
+    assert.equal(await migration.done, 0, 'owned local D1 migration failed');
+    const worker = launch(['dev', '--local', '--config', 'wrangler.local.jsonc', '--persist-to', dir + '/d1', '--ip', '127.0.0.1', '--port', String(port), '--var', 'BETTER_AUTH_URL:' + issuer, '--var', 'ALLOWED_ORIGINS:http://127.0.0.1:5199']);
+    await until(async () => {
+      assert.equal(worker.exitCode, null, 'owned local issuer exited');
+      try { return (await fetch(upstream + '/healthz', { signal: AbortSignal.timeout(500) })).ok; } catch { return false; }
+    }, 'real issuer startup', 35000);
+    const { realFixture } = await import(pathToFileURL(server + '/services/cloud/fixture.ts').href);
+    fixture = await realFixture(issuer, true);
+    return { ...fixture, issuer_url: issuer, issuer_fault: issuerFault, owned_issuer_pid: worker.pid, owned_issuer_directory: dir, stop };
+  } catch (e) { await stop(); throw e; }
+}
