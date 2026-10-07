@@ -408,13 +408,14 @@ final class CloudRoomsModel: ObservableObject {
 struct CloudRoomsRoot: View {
     @StateObject private var model: CloudRoomsModel
     @Environment(\.scenePhase) private var scenePhase
+    @State private var path: [CloudRoomRef] = []
 
     init(roomsURL: URL, issuerURL: URL) {
         _model = StateObject(wrappedValue: CloudRoomsModel(roomsURL: roomsURL, issuerURL: issuerURL))
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 switch model.phase {
                 case .starting: ProgressView().accessibilityIdentifier("cloud.starting")
@@ -432,6 +433,11 @@ struct CloudRoomsRoot: View {
             }
         }
         .task { await model.start() }
+        // Leaving .ready swaps the stack root to sign-in, which has no room
+        // destination; a pushed room would otherwise render a blank warning.
+        .onChange(of: model.phase) { _, phase in
+            if phase != .ready { path = [] }
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active: model.foreground()
