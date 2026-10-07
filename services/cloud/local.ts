@@ -1,6 +1,6 @@
 /** Owned throwaway PG + wrangler local D1. No production configuration or secrets. */
 import { spawn } from 'node:child_process';
-import { mkdtemp,rm,writeFile } from 'node:fs/promises';
+import { mkdtemp,rm,writeFile,readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createServer } from 'node:net';
@@ -36,13 +36,21 @@ async function cleanup() {
   await rm(root,{recursive:true,force:true});
 }
 try {
-  for(const name of ['0001_better_auth_1_7_1.sql','0002_installations.sql','0003_otp_recipient_rate_limits.sql','0004_managed_companion_endpoints.sql','0005_endpoint_cleanup_backoff.sql'])
-    await run(['d1','execute','bos-slice2-local','--local','--config','wrangler.local.jsonc','--persist-to',root+'/d1','--file','migrations/'+name]);
+  // Share the launch budget between migration and worker startup, leaving
+  // time for PostgreSQL before the caller's existing 40-second readiness gate.
+  const startupDeadline=Date.now()+35000;
+  // One local D1 execution preserves migration order without paying Wrangler's
+  // process/workerd startup cost once for each file in this throwaway database.
+  const names=['0001_better_auth_1_7_1.sql','0002_installations.sql','0003_otp_recipient_rate_limits.sql','0004_managed_companion_endpoints.sql','0005_endpoint_cleanup_backoff.sql'];
+  const sql=await Promise.all(names.map(name=>readFile(resolve(cp,'migrations',name),'utf8')));
+  const migrationFile=resolve(root,'migrations.sql');
+  await writeFile(migrationFile,sql.join('\n'),{mode:0o600});
+  await run(['d1','execute','bos-slice2-local','--local','--config','wrangler.local.jsonc','--persist-to',root+'/d1','--file',migrationFile]);
   worker=spawn(process.execPath,[wrangler,'dev','--local','--config','wrangler.local.jsonc','--persist-to',root+'/d1','--ip','127.0.0.1','--port',String(port),'--var','BETTER_AUTH_URL:'+issuer,'--var','ALLOWED_ORIGINS:'+origins],{cwd:cp,stdio:['ignore','pipe','pipe'],env:{...process.env,WRANGLER_SEND_METRICS:'false'}});
   let logs='';worker.stdout!.on('data',v=>logs+=v);worker.stderr!.on('data',v=>logs+=v);
   worker.on('error',()=>{});
   let ready=false;
-  for(let n=0;n<100;n++) {
+  while(Date.now()<startupDeadline) {
     if(worker.exitCode!==null) throw new Error('local issuer exited: '+logs);
     try {const r=await fetch(issuer+'/healthz',{signal:AbortSignal.timeout(500)});if(r.ok){ready=true;break;}} catch {}
     await new Promise(r=>setTimeout(r,100));
