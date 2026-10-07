@@ -16,6 +16,7 @@ import { PROVIDER_ICON_PRESETS, providerIconError } from "../shared/provider-ico
 import type { McpServerSpec } from "./contracts.ts";
 import { isRemoteMcpServer, parseStoredMcpServer } from "./mcp-registry.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
+import { onboardingChatStateSchema } from "./onboarding-chat.ts";
 
 const optionalText = z.string().optional();
 const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -303,6 +304,10 @@ const onboardingConfigSchema = z.object({
   version: z.number().int().min(0).max(1000).optional(),
   reelSeen: z.boolean().optional(),
   hintsSeen: z.array(z.string().trim().min(1).max(60)).max(100).optional(),
+  /** 2.0 chat onboarding record. Written only by POST /api/onboarding/chat
+   * and its server hooks, never by a config PUT. A record this build cannot
+   * read degrades to absent rather than discarding the whole config file. */
+  chat: onboardingChatStateSchema.optional().catch(undefined),
 }).strict();
 const instanceConfigSchema = z.object({
   driver: z.string().min(1),
@@ -457,7 +462,10 @@ const appConfigSchema = z.object({
 const storedAppConfigSchema = appConfigSchema.extend({
   browserProfiles: storedBrowserProfilesSchema.optional(),
 });
-const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true, customDomain: true });
+const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true, customDomain: true }).extend({
+  // the chat onboarding record moves only through its own event route
+  onboarding: onboardingConfigSchema.omit({ chat: true }).optional(),
+});
 const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig {
@@ -497,7 +505,7 @@ export interface AppConfig {
   /** Opt-in product experiments. Every flag defaults to disabled. */
   features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean };
   /** First-run progress; see onboardingConfigSchema. */
-  onboarding?: { firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[] };
+  onboarding?: { firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; chat?: import("../shared/onboarding-chat.ts").OnboardingChatState };
   /** Named browser sessions any bot can be pointed at. */
   browserProfiles?: BrowserProfile[];
   /** CDP target of a Chrome the operator already has running (a bare port,

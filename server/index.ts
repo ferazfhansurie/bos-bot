@@ -58,6 +58,8 @@ async function federationOrigin(peer?: string): Promise<string | null> {
   return tailnetOrigin(peer);
 }
 import { onboardingChief } from "./onboarding-chief.ts";
+import { applyOnboardingChatEvent, ONBOARDING_CONNECT_APPS, parseOnboardingChatEvent } from "./onboarding-chat.ts";
+import { initialOnboardingState, type OnboardingChatEvent, type OnboardingChatState } from "../shared/onboarding-chat.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
 import { BOS_FREE_API, BOS_FREE_MODEL, BOS_FREE_NAME } from "./drivers/openrouter-free.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
@@ -336,6 +338,7 @@ import {
   mentionedBots,
   roomResponders,
   sectionKey,
+  BOS_SEED_GREETING,
   Store,
   titleFromLlm,
   type BotRecord,
@@ -3684,6 +3687,12 @@ store.onChange((change) => {
     case "message": {
       broadcast({ kind: "message", threadId: change.threadId, message: change.message });
       const message = change.message;
+      // 2.0 onboarding: whatever the person types first in that conversation
+      // is their first task. Setup ends; the turn runs as normal.
+      if (message.role === "user" && message.kind === "text" && !message.peerAsk && !message.discordImport && !message.roomRequest &&
+          cfg.onboarding?.chat?.threadId === change.threadId && message.text?.trim()) {
+        noteOnboardingChat({ type: "first-task", prompt: message.text });
+      }
       const group = store.groupByThread(change.threadId);
       if (group && !group.dm && message.role === "bot" && message.kind === "text" && message.from?.botId && message.turnId && !message.leadAction) {
         const members = group.memberIds.flatMap(id => { const bot = store.bot(id); return bot ? [{ id, name: bot.name }] : []; });
@@ -13254,6 +13263,8 @@ function configStatus() {
       version: cfg.onboarding?.version ?? 0,
       reelSeen: cfg.onboarding?.reelSeen === true,
       hintsSeen: cfg.onboarding?.hintsSeen ?? [],
+      // 2.0 chat onboarding; absent until POST /api/onboarding/chat starts it
+      ...(cfg.onboarding?.chat ? { chat: cfg.onboarding.chat } : {}),
     },
     // Which browser this server can give bots: the desktop app's surface,
     // the agent-browser engine, or nothing yet (with the reason).
@@ -13274,12 +13285,82 @@ function configForAccess(status: ReturnType<typeof configStatus>, admin: boolean
   // source objects.
   return {
     ...status,
-    onboarding: { completedAt: status.onboarding.completedAt, version: status.onboarding.version, reelSeen: status.onboarding.reelSeen, hintsSeen: status.onboarding.hintsSeen },
+    onboarding: {
+      completedAt: status.onboarding.completedAt, version: status.onboarding.version, reelSeen: status.onboarding.reelSeen, hintsSeen: status.onboarding.hintsSeen,
+      // ids, a step and a bot name: every client renders the same cards
+      ...(status.onboarding.chat ? { chat: status.onboarding.chat } : {}),
+    },
     signIn: { admins: [], members: [] },
     vps: { configured: status.vps.configured, sshAlias: "" },
     profile: { name: status.profile.name, email: "", avatarUrl: status.profile.avatarUrl },
     browserProfiles: status.browserProfiles.map((profile) => Object.fromEntries(Object.entries(profile).filter(([key]) => key !== "partitionId"))),
   };
+}
+
+// ── 2.0 chat onboarding (shared/onboarding-chat.ts, server/onboarding-chat.ts) ──
+
+/** Same test as the desktop's engineReady(): a running engine that is not
+ * known to be signed out. */
+function instanceEngineReady(instance: { snapshot: { state: string; authenticated?: boolean }; access?: string }): boolean {
+  return instance.snapshot.state === "available" && (instance.access === "custom" || instance.snapshot.authenticated !== false);
+}
+
+/** The first bot's conversation onboarding runs in: the visible coordinator,
+ * else the oldest visible local bot, else a new BOS coordinator. */
+function onboardingChatBot(): BotRecord {
+  const visible = store.bots.filter((bot) => !bot.hidden && !bot.remote);
+  return visible.find((bot) => bot.chiefOfStaff)
+    ?? [...visible].sort((a, b) => a.createdAt - b.createdAt)[0]
+    ?? onboardingChief(store, MAX_WORKSPACE_BOTS);
+}
+
+function saveOnboardingChat(state: OnboardingChatState): void {
+  saveConfig({ onboarding: { chat: state } });
+  cfg.onboarding = { ...cfg.onboarding, chat: state };
+}
+
+/** Apply one event to the stored record. Null when onboarding never started
+ * or its conversation is gone; the caller decides whether that is an error. */
+function applyOnboardingChat(event: OnboardingChatEvent): OnboardingChatState | null {
+  const current = cfg.onboarding?.chat;
+  if (!current || !store.botByThread(current.threadId)) return null;
+  const next = applyOnboardingChatEvent({
+    personName: cfg.profile?.name ?? "",
+    messages: (threadId) => store.messagesFor(threadId),
+    append: (threadId, line) => { store.appendMessage(threadId, { role: "bot", kind: "text", text: line.text, onboarding: line }); },
+    patch: (threadId, messageId, line) => { store.patchMessage(threadId, messageId, { text: line.text, onboarding: line }); },
+    seedGreeting: (threadId) => {
+      const rows = store.messagesFor(threadId);
+      return rows.length === 1 && rows[0].role === "bot" && rows[0].text === BOS_SEED_GREETING && !rows[0].onboarding ? rows[0].id : null;
+    },
+    rename: (botId, name) => {
+      const bot = store.bot(botId);
+      if (!bot || bot.name === name) return;
+      const before = profileSnapshot(bot);
+      const renamed = store.patchBotProfile(botId, { name });
+      if (renamed) recordProfileChange(botId, "user", "api", before, profileSnapshot(renamed));
+    },
+    save: saveOnboardingChat,
+  }, current, event);
+  if (next !== current) broadcast({ kind: "config", ...configStatus() });
+  return next;
+}
+
+/** Server-observed progress (an engine answering, an app connecting, the
+ * person typing) must never fail the request that noticed it. */
+function noteOnboardingChat(event: OnboardingChatEvent): void {
+  const chat = cfg.onboarding?.chat;
+  if (!chat || chat.step === "done") return;
+  if (event.type === "engine-ready" && chat.engineReady) return;
+  if (event.type === "connected" && chat.connected.includes(event.app)) return;
+  try { applyOnboardingChat(event); }
+  catch (error) { console.warn("[onboarding] could not record progress", error instanceof Error ? error.message : String(error)); }
+}
+
+function noteOnboardingConnections(services: Record<string, { connected?: boolean; pending?: boolean } | undefined>): void {
+  for (const app of ONBOARDING_CONNECT_APPS) {
+    if (services[app]?.connected && !services[app]?.pending) noteOnboardingChat({ type: "connected", app });
+  }
 }
 
 function mcpServerResponse() {
@@ -13320,6 +13401,9 @@ const REMOVED_DRIVER_KINDS: ReadonlySet<string> = new Set([
 async function describeInstances() {
   const configs = instanceConfigs(cfg);
   const shipped = (await registry.describe()).filter((instance) => !REMOVED_DRIVER_KINDS.has(instance.driverKind));
+  // every "what can I run?" answer passes here, so this is where onboarding
+  // learns an engine became ready
+  if (shipped.some(instanceEngineReady)) noteOnboardingChat({ type: "engine-ready" });
   return shipped.map((instance) => {
     const entry = configs[instance.instanceId];
     // hosted BOS Free set up before it carried an icon still shows the model it runs
@@ -21263,6 +21347,31 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { bot: { ...wireBot(bot), messages: store.messagesFor(bot.threadId), activeLeafId: store.activeLeaf(bot.threadId) } });
     }
 
+    // 2.0 chat onboarding: one event in, the stored record out. Lines post
+    // once per (thread, step), so a retried tap or a second window is harmless.
+    if (method === "POST" && path === "/api/onboarding/chat") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      const body = await readBody(req, 64 * 1024);
+      const parsed = parseOnboardingChatEvent(body && typeof body === "object" ? body.event : undefined);
+      if (!parsed.ok) return json(res, 400, { error: parsed.error });
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "Session ended" });
+      const event = parsed.event;
+      const existing = cfg.onboarding?.chat;
+      if ((!existing || !store.botByThread(existing.threadId)) && event.type === "start") {
+        const engineReady = (await describeInstances()).some(instanceEngineReady);
+        // re-read after the await: a concurrent start may have created it
+        if (!cfg.onboarding?.chat || !store.botByThread(cfg.onboarding.chat.threadId)) {
+          const bot = onboardingChatBot();
+          saveOnboardingChat(initialOnboardingState(bot.id, bot.threadId, bot.name, engineReady));
+        }
+      }
+      if (!cfg.onboarding?.chat) return json(res, 409, { error: "Chat onboarding has not started." });
+      const state = applyOnboardingChat(event);
+      if (!state) return json(res, 409, { error: "The onboarding conversation no longer exists." });
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, { state });
+    }
+
     if (method === "POST" && path === "/api/onboarding/free-model") {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
       if (providerConfigBusy) return json(res, 409, { error: "Provider settings are already being updated." });
@@ -22245,7 +22354,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           services: whatsapp.withNativeState({}),
         });
       }
-      return json(res, 200, { configured: true, credentialStore: "ok", services: whatsapp.withNativeState(await composio.connectedServices(cfg)) });
+      const connected = await composio.connectedServices(cfg);
+      noteOnboardingConnections(connected);
+      return json(res, 200, { configured: true, credentialStore: "ok", services: whatsapp.withNativeState(connected) });
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
@@ -22258,6 +22369,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         });
       }
       const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
+      noteOnboardingConnections(status);
       return json(res, 200, { configured: true, services: whatsapp.withNativeState(status) });
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/authorize$/);
@@ -22394,6 +22506,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         };
         store.patchMessage(threadId, message.id, { connector: next });
         if (state?.connected) maybeResumeConnectors(m[1], threadId, connector.resumeKey);
+        if (state?.connected && !connector.alias) noteOnboardingConnections({ [connector.slug]: state });
         return json(res, 200, { connected: Boolean(state?.connected), pending: Boolean(state?.pending), status: state?.status });
       }
       if (m[3] === "resume" && method === "POST") {

@@ -333,6 +333,8 @@ export interface WireMessage {
   attachments?: Array<{ kind: "image"; path: string; mime: string }>;
   card?: OptionCardData;
   connector?: ConnectorCardData;
+  /** 2.0 chat onboarding: a scripted line from the first bot, with its card. */
+  onboarding?: import("./onboarding-chat.ts").OnboardingChatMessage;
   secret?: SecretRequestCardData;
   /** One idempotently updated status card for a routine run. */
   routineRun?: RoutineRunCardData;
