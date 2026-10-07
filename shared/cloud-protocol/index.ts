@@ -49,9 +49,16 @@ export const HostCredentialSchema = z.object({host_id:IdSchema, host_credential:
 export const BotRegistrationSchema = z.object({bot_id:IdSchema, name:z.string().min(1).max(128), room_ids:z.array(IdSchema).min(1).max(100), model:ModelSchema}).strict();
 export const HostClaimSchema = z.object({invocation_id:IdSchema}).strict();
 export const HostHeartbeatSchema = RunBindingSchema;
-export const HostAppendSchema = RunBindingSchema.extend({kind:z.enum(['stream.delta','final.commit','stop.observed','checkpoint','approval.create']), delta_id:IdSchema.optional(), text:z.string().refine(v=>new TextEncoder().encode(v).length<=65536).optional(), control_revision:SequenceSchema.optional(), replay_safe:z.boolean().optional(), approval:z.unknown().optional()});
 export const RunControlSchema = RunBindingSchema.extend({control_revision:SequenceSchema});
 export const ApprovalCreateSchema = z.object({ actor_id:IdSchema, effect_id:IdSchema, digest:z.string().regex(/^[a-f0-9]{64}$/), title:z.string().min(1).max(256), expires_in_seconds:z.number().int().min(1).max(3600) }).strict();
+const HostTextSchema = z.string().refine(v=>new TextEncoder().encode(v).length<=LIMITS.textBytes);
+export const HostAppendSchema = z.discriminatedUnion('kind', [
+ RunBindingSchema.extend({kind:z.literal('stream.delta'),delta_id:IdSchema,text:HostTextSchema}).strict(),
+ RunBindingSchema.extend({kind:z.literal('final.commit'),text:HostTextSchema}).strict(),
+ RunBindingSchema.extend({kind:z.literal('stop.observed'),control_revision:SequenceSchema}).strict(),
+ RunBindingSchema.extend({kind:z.literal('checkpoint'),replay_safe:z.literal(false)}).strict(),
+ RunBindingSchema.extend({kind:z.literal('approval.create'),approval:ApprovalCreateSchema}).strict(),
+]);
 export const ApprovalCardSchema = RunBindingSchema.extend({ approval_id:IdSchema, workspace_id:IdSchema, room_id:IdSchema, thread_id:IdSchema, actor_id:IdSchema, version:z.number().int().positive(), effect_id:IdSchema, digest:z.string().regex(/^[a-f0-9]{64}$/), title:z.string(), expires_at:z.string(), status:z.enum(['pending','approved','denied','expired','revoked']), can_view:z.boolean(), can_decide:z.boolean() });
 export const ApprovalDecisionSchema = RunBindingSchema.extend({ version:z.number().int().positive(), effect_id:IdSchema, digest:z.string().regex(/^[a-f0-9]{64}$/), decision:z.enum(['approve','deny']) });
 export const ATTACHMENT_LIMITS = Object.freeze({ bytes:10485760, uploadSeconds:300, orphanSeconds:86400, types:['image/png','image/jpeg','application/pdf','text/plain'] as const, multipart:false });
@@ -59,7 +66,7 @@ export const AttachmentStateSchema = z.enum(['preparing','uploading','verifying'
 export const AttachmentKeySchema = z.string().regex(/^[A-Za-z0-9_-]+\|[A-Za-z0-9_-]+\|[A-Za-z0-9_-]+$/);
 export function attachmentObjectKey(workspace_id:string,room_id:string,attachment_id:string):string { return [workspace_id,room_id,attachment_id].map(v=>IdSchema.parse(v)).join('|'); }
 export const AttachmentPrepareSchema = z.object({room_id:IdSchema,thread_id:IdSchema,name:z.string().min(1).max(256),size:z.number().int().positive().max(ATTACHMENT_LIMITS.bytes),type:z.enum(ATTACHMENT_LIMITS.types),checksum:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
-export const AttachmentSchema = z.object({attachment_id:IdSchema,workspace_id:IdSchema,room_id:IdSchema,thread_id:IdSchema,owner_id:IdSchema,object_key:AttachmentKeySchema,name:z.string(),size:z.number().int().positive(),type:z.string(),checksum:z.string(),state:AttachmentStateSchema,expires_at:z.string()}).strict();
+export const AttachmentSchema = z.object({attachment_id:IdSchema,workspace_id:IdSchema,room_id:IdSchema,thread_id:IdSchema,owner_id:IdSchema,object_key:AttachmentKeySchema,name:z.string(),size:z.number().int().positive(),type:z.enum(ATTACHMENT_LIMITS.types),checksum:z.string().regex(/^[a-f0-9]{64}$/),state:AttachmentStateSchema,expires_at:z.string()}).strict();
 export const AttachmentUploadSchema = z.object({attachment:AttachmentSchema,upload_url:z.string(),expires_at:z.string()}).strict();
 export const PushHintSchema = z.object({kind:z.literal('room_sync'),event_id:IdSchema,workspace_id:IdSchema,room_id:IdSchema,preview:z.literal('New activity')}).strict();
 export type CloudInvocation = z.infer<typeof InvocationSchema>;

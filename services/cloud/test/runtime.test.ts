@@ -214,13 +214,36 @@ test('runtime RLS denies cross-tenant bot, run, card, attachment and hint reads'
     await f.service.db.tx(h.a.account_id, h.w, async (q) => { for (const table of ['bots', 'hosts', 'invocations', 'run_attempts', 'approvals', 'attachment_objects', 'push_hints'])
         assert.equal((await q.query(`SELECT * FROM cloud.${table} WHERE workspace_id=$1`, [other.w])).rowCount, 0); });
 });
-test('removing a separate approval actor holds the source run and streams revoke the card', async () => {
-    const h = await setup(), c = await ok('POST', '/v2/test/sign-in', undefined, { subject: 'fictional_approver_' + ++seq });
-    const invite = await ok('POST', `/v2/workspaces/${h.w}/invites`, h.a.bearer, { role: 'guest', room_ids: [h.r.room_id] });
-    await ok('POST', '/v2/invites/redeem', c.bearer, { token: invite.token });
+test('removing the source approval actor holds the run and revokes the card', async () => {
+    const h = await setup();
     const { run } = await invoke(h);
-    const card = await append(h, run, { kind: 'approval.create', approval: { actor_id: c.account_id, effect_id: 'separate_actor', digest: 'c'.repeat(64), title: 'fictional separate approver', expires_in_seconds: 60 } });
-    await ok('DELETE', `/v2/workspaces/${h.w}/members/${c.account_id}`, h.a.bearer);
+    const card = await append(h, run, { kind: 'approval.create', approval: { actor_id: h.b.account_id, effect_id: 'source_actor', digest: 'c'.repeat(64), title: 'fictional source approver', expires_in_seconds: 60 } });
+    await ok('DELETE', `/v2/workspaces/${h.w}/members/${h.b.account_id}`, h.a.bearer);
     assert.equal((await admin('SELECT state FROM cloud.invocations WHERE workspace_id=$1 AND invocation_id=$2', [h.w, run.invocation_id])).rows[0].state, 'held');
     assert.equal((await admin('SELECT status FROM cloud.approvals WHERE workspace_id=$1 AND approval_id=$2', [h.w, card.approval_id])).rows[0].status, 'revoked');
+});
+test('host cannot select another room member or outsider as approval decider', async () => {
+    const h = await setup(), {run} = await invoke(h);
+    const outsider = await ok('POST', '/v2/test/sign-in', undefined, {subject:'fictional_outsider_'+ ++seq});
+    const approval = {actor_id:h.b.account_id,effect_id:'source_only',digest:'d'.repeat(64),title:'fictional source gate',expires_in_seconds:60};
+    for(const actor_id of [h.a.account_id,outsider.account_id]) {
+        const rejected = await call('POST', `/v2/workspaces/${h.w}/hosts/${h.host.host_id}/events`,h.a.bearer,{...binding(run),kind:'approval.create',approval:{...approval,actor_id}},h.host.host_credential);
+        assert.equal(rejected.status,403);
+        assert.equal(rejected.body.error,'forbidden');
+        assert.equal((await admin('SELECT * FROM cloud.approvals WHERE workspace_id=$1',[h.w])).rowCount,0);
+    }
+    const card = await append(h,run,{kind:'approval.create',approval});
+    assert.equal(card.actor_id,run.source.actor_id);
+    assert.equal((await append(h,run,{kind:'approval.create',approval})).approval_id,card.approval_id);
+});
+test('malformed host payloads fail before mutating the run', async () => {
+    const h = await setup(), {run} = await invoke(h);
+    for(const event of [{kind:'final.commit'},{kind:'stream.delta',text:'x'},{kind:'approval.create',approval:{junk:true}},{kind:'final.commit',text:'x',approval:{}}]) {
+        const rejected = await call('POST', `/v2/workspaces/${h.w}/hosts/${h.host.host_id}/events`,h.a.bearer,{...binding(run),...event},h.host.host_credential);
+        assert.equal(rejected.status,400);
+        assert.equal(rejected.body.error,'invalid_request');
+    }
+    assert.equal((await admin('SELECT state FROM cloud.invocations WHERE workspace_id=$1',[h.w])).rows[0].state,'leased');
+    assert.equal((await admin('SELECT * FROM cloud.run_events WHERE workspace_id=$1',[h.w])).rowCount,0);
+    assert.equal((await admin('SELECT * FROM cloud.approvals WHERE workspace_id=$1',[h.w])).rowCount,0);
 });

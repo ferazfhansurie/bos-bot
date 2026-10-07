@@ -98,6 +98,16 @@ account, host, workspace, expiry and server service, and never transfer model se
 - GET `/v2/workspaces/{w}/attachments/{a}` -> `AttachmentSchema` (owner or attached in authorized room)
 - GET `/v2/workspaces/{w}/attachments/{a}/download` -> raw bytes (same grants rechecked on every range request)
 
+Host events are strict variants: `stream.delta` requires `delta_id` and `text`,
+`final.commit` requires `text`, `stop.observed` requires `control_revision`,
+`checkpoint` requires `replay_safe: false`, and `approval.create` requires a
+validated `ApprovalCreateSchema` payload. Fields from another variant are rejected.
+An approval's `actor_id` must echo the invocation's pinned `source.actor_id`;
+the service derives the stored decider from that source and rejects any other
+actor, including other room members. Current source room grants are rechecked.
+Attachment readers enforce the same allowed content types and 64-hex checksum
+as upload preparation.
+
 Host lease: 30s / heartbeat 10s, server clock. Queued expiry: 24h. Lease expiry alone is
 never stopped evidence; only a replay_safe checkpoint may be reclaimed. No external effect
 adapter is authorized. Host ingress must pass native typed `InvocationSchema` and pinned

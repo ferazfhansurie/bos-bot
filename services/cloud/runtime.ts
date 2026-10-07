@@ -174,6 +174,9 @@ export class RoomRuntime {
             let v = await this.row(q, w, b.invocation_id);
             if (!await this.granted(q, w, v.room_id, i.account_id) || !await this.authority(q, v))
                 throw new CloudError('forbidden');
+            // The host may only echo the pinned source actor, never choose the decider.
+            if (b.kind === 'approval.create' && b.approval.actor_id !== v.source_actor_id)
+                throw new CloudError('forbidden');
             // A final response retry has no publication and no second result, even after lease expires.
             if (b.kind === 'final.commit' && v.state === 'completed' && v.host_id === h && v.attempt === b.attempt && String(v.fence_gen) === b.fence_gen) {
                 const old = (await q.query("SELECT digest FROM cloud.run_events WHERE workspace_id=$1 AND invocation_id=$2 AND attempt=$3 AND event_key='final.commit'", [w, v.invocation_id, v.attempt])).rows[0];
@@ -211,8 +214,6 @@ export class RoomRuntime {
                 await this.s.event(q, w, v.room_id, v.thread_id, 'run.updated', { invocation: this.run(v) });
                 return this.run(v);
             }
-            if (b.text === undefined || (b.kind === 'stream.delta' && !b.delta_id))
-                throw new CloudError('invalid_request', 400);
             const event_key = b.kind === 'stream.delta' ? 'delta.' + b.delta_id : 'final.commit', digest = hash(canonicalJson(b));
             const old = (await q.query('SELECT digest FROM cloud.run_events WHERE workspace_id=$1 AND invocation_id=$2 AND attempt=$3 AND event_key=$4', [w, v.invocation_id, v.attempt, event_key])).rows[0];
             if (old) {
@@ -291,9 +292,10 @@ export class RoomRuntime {
     card(v: any, account: string) { return ApprovalCardSchema.parse({ ...this.binding(v), approval_id: v.approval_id, workspace_id: v.workspace_id, room_id: v.room_id, thread_id: v.thread_id, actor_id: v.actor_id, version: v.version, effect_id: v.effect_id, digest: v.digest, title: v.title, expires_at: v.expires_at.toISOString(), status: v.status, can_view: true, can_decide: v.actor_id === account && v.status === 'pending' && v.expires_at.getTime() > Date.now() }); }
     async createApproval(q: Sql, v: any, body: unknown) {
         const b = ApprovalCreateSchema.parse(body);
-        if (!await this.granted(q, v.workspace_id, v.room_id, b.actor_id))
+        const actor = v.source_actor_id;
+        if (b.actor_id !== actor || !await this.granted(q, v.workspace_id, v.room_id, actor))
             throw new CloudError('forbidden');
-        const card = (await q.query("INSERT INTO cloud.approvals(workspace_id,room_id,thread_id,invocation_id,approval_id,actor_id,attempt,fence_gen,effect_id,digest,title,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,clock_timestamp()+$12*interval '1 second') RETURNING *", [v.workspace_id, v.room_id, v.thread_id, v.invocation_id, id(), b.actor_id, v.attempt, v.fence_gen, b.effect_id, b.digest, b.title, b.expires_in_seconds])).rows[0];
+        const card = (await q.query("INSERT INTO cloud.approvals(workspace_id,room_id,thread_id,invocation_id,approval_id,actor_id,attempt,fence_gen,effect_id,digest,title,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,clock_timestamp()+$12*interval '1 second') RETURNING *", [v.workspace_id, v.room_id, v.thread_id, v.invocation_id, id(), actor, v.attempt, v.fence_gen, b.effect_id, b.digest, b.title, b.expires_in_seconds])).rows[0];
         v = (await q.query("UPDATE cloud.invocations SET state='waiting_for_human',lease_expires_at=NULL,replay_safe=false WHERE workspace_id=$1 AND invocation_id=$2 RETURNING *", [v.workspace_id, v.invocation_id])).rows[0];
         await this.s.event(q, v.workspace_id, v.room_id, v.thread_id, 'approval.updated', { actor_id: card.actor_id, card: this.card(card, card.actor_id) });
         await this.s.event(q, v.workspace_id, v.room_id, v.thread_id, 'run.updated', { invocation: this.run(v) });
