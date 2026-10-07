@@ -1,4 +1,5 @@
 import {runtimeRoute} from './runtime-http.ts';
+import * as Sentry from '@sentry/node';
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -48,6 +49,7 @@ function error(e: unknown) {
     };
   if (["57014", "55P03"].includes((e as any)?.code))
     return { status: 503, value: { error: "deadline_exceeded" } };
+  Sentry.captureException(e);
   return { status: 503, value: { error: "unavailable" } };
 }
 type Subscription = {

@@ -9,6 +9,7 @@
  * No fixture, stub issuer or test route is in this module graph.
  */
 import pg from 'pg';
+import * as Sentry from '@sentry/node';
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Database } from './db.ts';
@@ -77,7 +78,7 @@ export function startWorker(config: SelfHostConfig, intervalMs = 200) {
     if (busy || stopped) return;
     busy = true;
     try { await s.tickWorker(); if (failures) console.log(JSON.stringify({worker:'recovered',after_failures:failures})); failures = 0; }
-    catch (e) { if (failures++ % 50 === 0) console.error(JSON.stringify({worker:'tick_failed',error:(e as Error).message})); }
+    catch (e) { if (failures++ % 50 === 0) { Sentry.captureException(e); console.error(JSON.stringify({worker:'tick_failed',error:(e as Error).message})); } }
     finally { busy = false; }
   }, intervalMs);
   return {async close(){ stopped = true; clearInterval(timer); while(busy) await new Promise(r=>setTimeout(r,20)); await s.db.close(); }};

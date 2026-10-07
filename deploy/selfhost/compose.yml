@@ -12,6 +12,10 @@ x-room: &room
     CLOUD_ISSUER_INTERNAL_URL: http://issuer:8787
     CLOUD_SERVICE_KEY: ${CLOUD_SERVICE_KEY:?required}
     CLOUD_OBJECT_STORE_PATH: /objects
+    SENTRY_DSN: ${SENTRY_SERVER_DSN:-}
+    SENTRY_RELEASE: bos@${RELEASE_TAG:-2.0.0-dev}
+    SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-pilot}
+    SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
   volumes:
     - objects:/objects
   restart: unless-stopped
@@ -66,6 +70,10 @@ services:
       ISSUER_OTP_DELIVERY: ${ISSUER_OTP_DELIVERY:-log}
       ISSUER_SMTP_URL: ${ISSUER_SMTP_URL:-}
       ISSUER_EMAIL_FROM: ${ISSUER_EMAIL_FROM:-}
+      SENTRY_DSN: ${SENTRY_SERVER_DSN:-}
+      SENTRY_RELEASE: bos@${RELEASE_TAG:-2.0.0-dev}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-pilot}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,7 +91,7 @@ services:
       retries: 20
   worker:
     <<: *room
-    command: [node, --experimental-strip-types, selfhost.ts, worker]
+    command: [node, --import, ./instrument.mjs, --experimental-strip-types, selfhost.ts, worker]
   caddy:
     image: caddy:2
     restart: unless-stopped

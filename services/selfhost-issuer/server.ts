@@ -11,6 +11,7 @@ import { betterAuth } from 'better-auth';
 import { bearer, emailOTP } from 'better-auth/plugins';
 import { getMigrations } from 'better-auth/db/migration';
 import pg from 'pg';
+import * as Sentry from '@sentry/node';
 
 const HOSTED = /(^|\.)openmausbot\.com$/i;
 const MAX_BODY = 16 * 1024;
@@ -195,6 +196,7 @@ export async function startIssuer(config: IssuerConfig) {
       res.writeHead(response.status, out);
       res.end(Buffer.from(await response.arrayBuffer()));
     } catch (e) {
+      Sentry.captureException(e);
       console.error(JSON.stringify({ message: 'request failed', error: (e as Error).message }));
       if (!res.headersSent) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":"internal_error"}'); }
     }

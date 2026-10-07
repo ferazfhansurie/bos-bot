@@ -22,6 +22,15 @@ address, then verify actual delivery before claiming invites work. Keep SMTP
 credentials and OTP logs private. Uploads remain quarantined until a scanner is
 configured; this profile does not claim ready attachments.
 
+Sentry is optional until SENTRY_SERVER_DSN is configured for the designated
+aihlete/bos-server project. Room, worker and issuer preload the SDK, record release
+and environment, capture unexpected errors, and sample traces at 10%. The allowlist
+in shared/telemetry/privacy.mjs removes user identity, requests, message/exception
+text, arbitrary metadata, breadcrumbs, source context and span data. Prompts,
+OTP/auth data and client conversations must never be sent. Logs, replay and metrics
+are disabled. A real startup fault was confirmed in Sentry; deployed events still
+need independent verification after installation. Desktop/mobile are separate gates.
+
 From the repository root:
 
 ```sh

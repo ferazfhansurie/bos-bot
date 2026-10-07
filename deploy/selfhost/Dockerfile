@@ -4,14 +4,16 @@ COPY services/cloud/package*.json ./
 RUN npm ci --omit=dev && ln -s /app/services/cloud/node_modules /app/node_modules
 COPY services/cloud/ ./
 COPY shared/cloud-protocol/ /app/shared/cloud-protocol/
+COPY shared/telemetry/ /app/shared/telemetry/
 RUN mkdir -p /objects && chown node:node /objects
 USER node
-CMD ["node", "--experimental-strip-types", "selfhost.ts", "room"]
+CMD ["node", "--import", "./instrument.mjs", "--experimental-strip-types", "selfhost.ts", "room"]
 
 FROM node:24-bookworm-slim AS issuer
 WORKDIR /app/services/selfhost-issuer
 COPY services/selfhost-issuer/package*.json ./
 RUN npm ci --omit=dev
 COPY services/selfhost-issuer/ ./
+COPY shared/telemetry/ /app/shared/telemetry/
 USER node
-CMD ["node", "--experimental-strip-types", "server.ts"]
+CMD ["node", "--import", "./instrument.mjs", "--experimental-strip-types", "server.ts"]
