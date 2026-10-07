@@ -1,13 +1,15 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, writeFile, rm, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm, mkdir, readdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import pg from "pg";
 import { Database } from "./db.ts";
 import { CloudService } from "./service.ts";
-import { StubIssuer } from "./identity.ts";
+import { ControlPlaneIssuer } from "./identity.ts";
+import { StubIssuer } from "./stub-issuer.ts";
 import { FixtureHooks } from "./hooks.ts";
+import { fixtureRoutes } from "./fixture-http.ts";
 import { startCloud } from "./http.ts";
 async function freePort() {
   const s = createServer();
@@ -28,7 +30,7 @@ async function command(bin: string, args: string[]) {
   if (code !== 0) throw new Error(bin + " failed: " + out);
   return out;
 }
-export async function fixture(automaticWorker = true) {
+async function createFixture(automaticWorker = true, options?: {issuerURL: string; acceptanceHooks?: boolean}) {
   const root = resolve(new URL("./.fixture/", import.meta.url).pathname);
   await mkdir(root, { recursive: true });
   const dir = await mkdtemp(root + "/run-");
@@ -115,19 +117,16 @@ export async function fixture(automaticWorker = true) {
     const c = new pg.Client({ connectionString: migrationUrl });
     await c.connect();
     try {
-      await c.query(
-        await readFile(
-          new URL("./migrations/001.sql", import.meta.url),
-          "utf8",
-        ),
-      );
+      const migrations = new URL("./migrations/",import.meta.url);
+      for (const name of (await readdir(migrations)).filter(v=>v.endsWith('.sql')).sort())
+        await c.query(await readFile(new URL(name,migrations),'utf8'));
     } finally {
       await c.end();
     }
     const databaseUrl = `postgres://cloud_app@127.0.0.1:${pgPort}/${name}`;
     const url = `http://127.0.0.1:${httpPort}`;
     const hooks = new FixtureHooks();
-    const issuer = new StubIssuer(url);
+    const issuer = options ? new ControlPlaneIssuer(options.issuerURL,url) : new StubIssuer(url);
     const key = randomBytes(32);
     const hookSecret = randomBytes(24).toString("base64url");
     const service = new CloudService(
@@ -141,8 +140,9 @@ export async function fixture(automaticWorker = true) {
       service,
       httpPort,
       "127.0.0.1",
-      hookSecret,
+      (!options || options.acceptanceHooks) ? fixtureRoutes(service, hookSecret) : undefined,
       automaticWorker,
+      new Set([url,...(process.env.CLOUD_ALLOWED_ORIGINS ?? "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5199").split(",")]),
     );
     const state = {
       url,
@@ -163,6 +163,16 @@ export async function fixture(automaticWorker = true) {
     await stop();
     throw e;
   }
+}
+export async function fixture(automaticWorker = true) {
+  const f = await createFixture(automaticWorker);
+  if (!(f.issuer instanceof StubIssuer)) throw new Error('fixture issuer mismatch');
+  return {...f,issuer:f.issuer};
+}
+export async function realFixture(issuerURL: string, acceptanceHooks = false) {
+  const f = await createFixture(true,{issuerURL,acceptanceHooks});
+  if (!(f.issuer instanceof ControlPlaneIssuer)) throw new Error('real issuer mismatch');
+  return {...f,issuer:f.issuer};
 }
 if (
   process.argv[1] &&

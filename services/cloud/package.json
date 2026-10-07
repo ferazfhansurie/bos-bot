@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --experimental-strip-types fixture.ts",
+    "start": "node --experimental-strip-types app.ts",
+    "fixture": "node --experimental-strip-types fixture.ts",
+    "local": "node --experimental-strip-types local.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "migrate": "node --experimental-strip-types migrate.ts"
   },

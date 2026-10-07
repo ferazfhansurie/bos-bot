@@ -1,0 +1,20 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "bos-slice2-local-issuer",
+  "main": "src/local.ts",
+  "compatibility_date": "2026-08-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "vars": {
+    "BETTER_AUTH_URL": "http://127.0.0.1:8787",
+    "BETTER_AUTH_SECRET": "local-fictional-only-issuer-secret-no-deployment",
+    "EMAIL_FROM": "noreply@example.test",
+    "ALLOWED_ORIGINS": "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5199",
+    "CLOUDFLARE_ACCOUNT_ID": "00000000000000000000000000000000",
+    "CLOUDFLARE_ZONE_ID": "00000000000000000000000000000000",
+    "CLOUDFLARE_API_TOKEN": "local-only-no-external-effects-token",
+    "COMPANION_HOST_SUFFIX": "example.test"
+  },
+  "d1_databases": [{"binding":"DB","database_name":"bos-slice2-local","database_id":"00000000-0000-0000-0000-000000000002"}],
+  "observability": {"enabled":false}
+}

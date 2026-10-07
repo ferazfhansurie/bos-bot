@@ -1,4 +1,4 @@
-import { randomBytes, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 export class CloudError extends Error {
   status: number;
   code: string;
@@ -21,64 +21,6 @@ export interface IssuerAdapter {
     bearer: string,
     options: { fresh: true; signal: AbortSignal },
   ): Promise<Identity>;
-}
-/** Fictional test issuer: immutable subject, audience-bound <=15s assertion, no grants. */
-export class StubIssuer implements IssuerAdapter {
-  issuer = "http://stub-issuer.invalid";
-  service: string;
-  sessions = new Map<string, string>();
-  revoked = new Set<string>();
-  unavailable = false;
-  stallMs = 0;
-  constructor(service: string) {
-    this.service = service;
-  }
-  signin(subject: string) {
-    if (!/^fictional_[a-zA-Z0-9_-]{1,80}$/.test(subject))
-      throw new CloudError("invalid_request", 400);
-    const bearer = randomBytes(32).toString("base64url");
-    this.sessions.set(bearer, subject);
-    return { bearer, ...this.assertion(subject) };
-  }
-  assertion(subject: string): Identity {
-    const now = Date.now();
-    return {
-      account_id:
-        "a_" +
-        createHash("sha256")
-          .update(this.issuer + "\0" + subject)
-          .digest("hex")
-          .slice(0, 40),
-      issuer: this.issuer,
-      subject,
-      service: this.service,
-      validated_at: now,
-      expires_at: now + 15000,
-    };
-  }
-  async validate(
-    bearer: string,
-    { signal }: { fresh: true; signal: AbortSignal },
-  ): Promise<Identity> {
-    if (this.stallMs)
-      await new Promise<void>((resolve, reject) => {
-        const t = setTimeout(resolve, this.stallMs);
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(t);
-            reject(new CloudError("identity_unavailable", 503));
-          },
-          { once: true },
-        );
-      });
-    if (signal.aborted || this.unavailable)
-      throw new CloudError("identity_unavailable", 503);
-    const subject = this.sessions.get(bearer);
-    if (!subject || this.revoked.has(bearer))
-      throw new CloudError("unauthenticated", 401);
-    return this.assertion(subject);
-  }
 }
 export async function currentIdentity(
   adapter: IssuerAdapter,
@@ -106,4 +48,35 @@ export async function currentIdentity(
   )
     throw new CloudError("identity_unavailable", 503);
   return i;
+}
+
+/** Only the configured issuer can establish identity. PG owns every grant. */
+export class ControlPlaneIssuer implements IssuerAdapter {
+  readonly issuer: string;
+  readonly service: string;
+  constructor(issuer: string, service: string) {
+    const url = new URL(issuer);
+    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
+        (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1','localhost','[::1]'].includes(url.hostname))))
+      throw new Error('issuer requires HTTPS or local loopback origin');
+    this.issuer = url.origin;
+    this.service = service;
+  }
+  async validate(credential: string, {signal}: {fresh:true;signal:AbortSignal}): Promise<Identity> {
+    const headers = new Headers({'cache-control':'no-cache, no-store','pragma':'no-cache'});
+    if (credential.startsWith('cookie\0')) headers.set('cookie',credential.slice(7));
+    else headers.set('authorization','Bearer '+credential);
+    let response: Response;
+    try {
+      response = await fetch(this.issuer+'/v1/me',{headers,signal,redirect:'error',cache:'no-store'});
+    } catch { throw new CloudError('identity_unavailable',503); }
+    if (response.status === 401) throw new CloudError('session_invalid',401);
+    if (!response.ok) throw new CloudError('identity_unavailable',503);
+    let payload: any;
+    try { payload = await response.json(); } catch { throw new CloudError('identity_unavailable',503); }
+    const subject = payload?.user?.id;
+    if (typeof subject !== 'string' || !subject || subject.length>128) throw new CloudError('identity_unavailable',503);
+    const now = Date.now();
+    return {account_id:'a_'+createHash('sha256').update(this.issuer+'\0'+subject).digest('hex').slice(0,40),issuer:this.issuer,subject,service:this.service,validated_at:now,expires_at:now+15000};
+  }
 }

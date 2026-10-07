@@ -667,7 +667,7 @@ describe("HTTP boundary hardening", () => {
 
 describe("remote Full installation owner authority", () => {
   const serverKeys = generateKeyPairSync("ed25519");
-  const prepared = (challenge: unknown) => ({ challenge, serverSignature: sign(null, Buffer.from(canonical(challenge)), serverKeys.privateKey).toString("base64url") });
+  const prepared = (challenge: unknown) => ({ challenge, serverSignature: Buffer.from(sign(null, Buffer.from(canonical(challenge)), serverKeys.privateKey)).toString("base64url") });
   const challenge = (installationId: string) => ({ protocol: "bos.remote-full.v1", nonce: "a".repeat(64), environmentId: "00000000-0000-4000-8000-000000000001", installationId,
     serverKey: serverKeys.publicKey.export({ format: "jwk" }).x!, audience: "https://fixture.invalid", expiresAt: Date.now() + 110_000,
     operations: [{ botId: "sol", threadId: "task", name: "Sol", title: "Exact task", modelSelection: { instanceId: "codex", model: "fixture" }, revision: "b".repeat(64), mode: "full", updateBotDefault: true }] });
@@ -676,7 +676,7 @@ describe("remote Full installation owner authority", () => {
   const enroll = (c: ReturnType<typeof challenge>, token: string, credential: string, ownerUserId: string) => {
     const binding = scope(c, ownerUserId);
     return call("/v1/remote-full/enroll", { method: "POST", token, headers: { "x-installation-credential": credential },
-      body: { binding, serverSignature: sign(null, Buffer.from(canonical(binding)), serverKeys.privateKey).toString("base64url") } });
+      body: { binding, serverSignature: Buffer.from(sign(null, Buffer.from(canonical(binding)), serverKeys.privateKey)).toString("base64url") } });
   };
   const permit = async (c: ReturnType<typeof challenge>, ownerUserId: string) => {
     // Test-only operator provisioning. There is deliberately no HTTP issuer.
@@ -777,7 +777,7 @@ describe("remote Full installation owner authority", () => {
       environmentId: input.environmentId, serverKey: input.serverKey, audience: input.audience, nonce: "e".repeat(64), expiresAt: Date.now() + 110_000 });
     const status = async (input = c, credential = installed.credential) => {
       const probe = probeFor(input);
-      return call("/v1/remote-full/status", { method: "POST", token: credential, body: { probe, serverSignature: sign(null, Buffer.from(canonical(probe)), serverKeys.privateKey).toString("base64url") } });
+      return call("/v1/remote-full/status", { method: "POST", token: credential, body: { probe, serverSignature: Buffer.from(sign(null, Buffer.from(canonical(probe)), serverKeys.privateKey)).toString("base64url") } });
     };
     const pending = await status(); expect(pending.status).toBe(200); expect(await pending.json()).toMatchObject({ enrolled: false });
     expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared(c) })).status).toBe(403);
@@ -810,7 +810,7 @@ describe("remote Full installation owner authority", () => {
     const owner = await signIn("probe-full@example.com"), installed = await createInstall(owner.token), c = challenge(installed.installation.id);
     const good = { protocol: "bos.remote-full.status.v1", installationId: c.installationId, environmentId: c.environmentId, serverKey: c.serverKey, audience: c.audience, nonce: "a".repeat(64), expiresAt: Date.now() + 110_000 };
     for (const probe of [{ ...good, expiresAt: 1 }, { ...good, installationId: crypto.randomUUID() }, { ...good, serverKey: generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }).x! }]) {
-      expect((await call("/v1/remote-full/status", { method: "POST", token: installed.credential, body: { probe, serverSignature: sign(null, Buffer.from(canonical(probe)), serverKeys.privateKey).toString("base64url") } })).status).toBe(403);
+      expect((await call("/v1/remote-full/status", { method: "POST", token: installed.credential, body: { probe, serverSignature: Buffer.from(sign(null, Buffer.from(canonical(probe)), serverKeys.privateKey)).toString("base64url") } })).status).toBe(403);
     }
   });
   it("rejects unregistered, expired and oversized-window challenges", async () => {
@@ -818,4 +818,14 @@ describe("remote Full installation owner authority", () => {
     for (const expiresAt of [Date.now()-1, Date.now()+180_000]) expect((await call("/v1/remote-full/prepare", { method: "POST", token: installed.credential, body: prepared({ ...c, expiresAt }) })).status).toBe(403);
     expect((await call("/v1/remote-full/authorize", { method: "POST", token: owner.token, body: { installationId: c.installationId, nonce: c.nonce, challenge: c, signer: "a".repeat(43) } })).status).toBe(403);
   });
+});
+
+it('fresh /v1/me accepts protected cookies and revocation cannot be restored by cookie cache', async () => {
+  const account = await signIn('slice2-cookie@example.test');
+  const cookie = '__Secure-better-auth.session_token='+encodeURIComponent(account.token);
+  const first = await call('/v1/me',{headers:{cookie}});
+  expect(first.status).toBe(200);
+  await env.DB.prepare('DELETE FROM "session" WHERE "userId"=?').bind(account.userId).run();
+  expect((await call('/v1/me',{headers:{cookie}})).status).toBe(401);
+  expect((await call('/v1/me',{token:account.token})).status).toBe(401);
 });

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const SCHEMA_VERSION = 1 as const;
 export const LIMITS = Object.freeze({ textBytes: 65536, replayEvents: 100, replayBytes: 1048576, socketBytes: 1048576, socketFrames: 1000, snapshotMessages: 50, historyMessages: 100, sparseIntervals: 256, subscriptions: 50, requestMs: 10000, snapshotMs: 300000, assertionMs: 15000, windowMs: 2592000000 });
-export const ERROR_CODES = ['invalid_request','identity_unavailable','unauthenticated','forbidden','not_found','operation_conflict','operation_expired','policy_changed','invalid_mention','unsupported_attachment','invalid_reply','recovery_unknown','cursor_invalid','snapshot_expired','visibility_changed','upgrade_required','read_coverage_limit','rate_limited','invite_expired','invite_revoked','invite_used','last_owner','unavailable','deadline_exceeded'] as const;
+export const ERROR_CODES = ['invalid_request','identity_unavailable','session_invalid','unauthenticated','forbidden','not_found','operation_conflict','operation_expired','policy_changed','invalid_mention','unsupported_attachment','invalid_reply','recovery_unknown','cursor_invalid','snapshot_expired','visibility_changed','upgrade_required','read_coverage_limit','rate_limited','invite_expired','invite_revoked','invite_used','last_owner','unavailable','deadline_exceeded'] as const;
 export const ErrorCodeSchema = z.enum(ERROR_CODES);
 export const IdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 export const SequenceSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);

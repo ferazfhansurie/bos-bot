@@ -132,6 +132,7 @@ export function preflight(request: Request, config: ControlPlaneConfig): Respons
       "access-control-allow-origin": origin,
       "access-control-allow-methods": "GET, POST, DELETE",
       "access-control-allow-headers": "authorization, content-type",
+      "access-control-allow-credentials": "true",
       "vary": "Origin",
     },
   });
@@ -154,6 +155,8 @@ export function secureResponse(
     const origin = requestOriginAllowed(request, config);
     if (origin) {
       headers.set("access-control-allow-origin", origin);
+      headers.set("access-control-allow-credentials", "true");
+      headers.set("access-control-expose-headers", "set-auth-token");
       appendVary(headers, "Origin");
     }
   }

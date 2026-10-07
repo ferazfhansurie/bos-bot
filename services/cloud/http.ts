@@ -1,17 +1,16 @@
 import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { CloudService } from "./service.ts";
-import { StubIssuer, CloudError } from "./identity.ts";
+import { CloudError } from "./identity.ts";
 import {
   SubscribeSchema,
   LIMITS,
   IdSchema,
 } from "../../shared/cloud-protocol/index.ts";
 const bytesLimit = 524288;
-async function body(req: IncomingMessage) {
+export async function body(req: IncomingMessage) {
   let bytes = 0;
   const parts: Buffer[] = [];
   for await (const part of req) {
@@ -26,10 +25,14 @@ async function body(req: IncomingMessage) {
   }
 }
 function bearer(req: IncomingMessage) {
-  const v = req.headers.authorization ?? "";
-  if (!v.startsWith("Bearer ") || v.length > 4096)
-    throw new CloudError("unauthenticated", 401);
-  return v.slice(7);
+  const v = req.headers.authorization;
+  if (v !== undefined) {
+    if (!/^Bearer [^\s\0]+$/.test(v) || v.length>4096) throw new CloudError("session_invalid",401);
+    return v.slice(7);
+  }
+  const cookie = req.headers.cookie;
+  if (cookie && cookie.length<=8192) return "cookie\0"+cookie;
+  throw new CloudError("session_invalid",401);
 }
 function error(e: unknown) {
   if (e instanceof z.ZodError)
@@ -39,7 +42,7 @@ function error(e: unknown) {
       status: e.status,
       value: {
         error: e.code,
-        ...(e.code === "rate_limited" ? { retry_after: 1 } : {}),
+        ...(["rate_limited", "identity_unavailable"].includes(e.code) ? { retry_after: 1 } : {}),
       },
     };
   if (["57014", "55P03"].includes((e as any)?.code))
@@ -57,11 +60,11 @@ export async function startCloud(
   service: CloudService,
   port = 0,
   host = "127.0.0.1",
-  hookSecret?: string,
+  fixtureRoute?: (req: IncomingMessage,res: ServerResponse,path: string[],write: (res: ServerResponse,value:unknown,status?:number)=>void) => Promise<boolean>,
   automaticWorker = true,
+  allowedOrigins: ReadonlySet<string> = new Set([service.service]),
 ) {
-  if (host !== "127.0.0.1" || !(service.issuer instanceof StubIssuer))
-    throw new Error("slice one only: loopback fictional issuer");
+  if (host !== "127.0.0.1") throw new Error("local slices only: loopback service");
   await service.db.assertRole();
   const rates = new Map<string, { until: number; n: number }>();
   let active = 0;
@@ -85,16 +88,10 @@ export async function startCloud(
       if (active > 128) throw new CloudError("rate_limited", 429);
       const origin = req.headers.origin;
       if (origin) {
-        let o;
-        try {
-          o = new URL(origin);
-        } catch {
-          throw new CloudError("forbidden");
-        }
-        if (!["127.0.0.1", "localhost", "[::1]"].includes(o.hostname))
-          throw new CloudError("forbidden");
+        if (!URL.canParse(origin) || !allowedOrigins.has(origin)) throw new CloudError("forbidden");
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Vary", "Origin");
+        res.setHeader("Access-Control-Allow-Credentials", "true");
         res.setHeader(
           "Access-Control-Allow-Headers",
           "Authorization,Content-Type,X-Cloud-Fixture-Secret",
@@ -116,155 +113,14 @@ export async function startCloud(
         .map(decodeURIComponent);
       const method = req.method ?? "GET";
       if (path.join("/") === "v2/health" && method === "GET") {
-        write(res, { slice: 1, fixture: true });
+        write(res, { slice: fixtureRoute ? 1 : 2, fixture: !!fixtureRoute });
         return;
       }
       if (path[0] !== "v2") throw new CloudError("not_found", 404);
-      if (path[1] === "test" && path[2] === "hooks") {
-        const suppliedSecret = req.headers["x-cloud-fixture-secret"];
-        const actual = Buffer.from(
-          typeof suppliedSecret === "string" ? suppliedSecret : "",
-        );
-        const expected = Buffer.from(hookSecret ?? "");
-        if (
-          !service.hooks ||
-          !hookSecret ||
-          actual.length !== expected.length ||
-          !timingSafeEqual(actual, expected)
-        )
-          throw new CloudError("forbidden");
-        const hooks = service.hooks,
-          stub = service.issuer as StubIssuer;
-        if (method === "GET" && path.length === 3) {
-          write(res, {
-            gates: hooks.state(),
-            worker_paused: hooks.pausedWorker,
-            drop_notify: hooks.dropNotify,
-            worker_fault: hooks.workerFault,
-          });
-          return;
-        }
-        if (method !== "POST") throw new CloudError("not_found", 404);
-        const b = await body(req);
-        if (path[3] === "arm") {
-          const v = z
-            .object({
-              id: IdSchema,
-              point: z
-                .string()
-                .regex(
-                  /^(message\.send|operation\.seal|operation\.lookup|operation\.list|invite\.redeem|invite\.revoke|member\.remove|snapshot\.create|snapshot\.page|realtime\.publication|http\.publication|replay|history|read)\.(before_admission|after_admission)$/,
-                ),
-              match: z.record(z.string(), z.string()).default({}),
-            })
-            .strict()
-            .parse(b);
-          hooks.arm(v.id, v.point, v.match);
-        } else if (path[3] === "release") {
-          hooks.release(z.object({ id: IdSchema }).strict().parse(b).id);
-        } else if (path[3] === "control") {
-          const v = z
-            .object({
-              worker_paused: z.boolean().optional(),
-              drop_notify: z.boolean().optional(),
-              worker_fault: z
-                .enum(["none", "before_complete", "after_commit"])
-                .optional(),
-              issuer_unavailable: z.boolean().optional(),
-              issuer_stall_ms: z.number().int().min(0).max(16000).optional(),
-              revoke_bearer: z.string().max(4096).optional(),
-            })
-            .strict()
-            .parse(b);
-          if (v.worker_paused !== undefined)
-            hooks.pausedWorker = v.worker_paused;
-          if (v.drop_notify !== undefined) hooks.dropNotify = v.drop_notify;
-          if (v.worker_fault !== undefined) hooks.workerFault = v.worker_fault;
-          if (v.issuer_unavailable !== undefined)
-            stub.unavailable = v.issuer_unavailable;
-          if (v.issuer_stall_ms !== undefined) stub.stallMs = v.issuer_stall_ms;
-          if (v.revoke_bearer) stub.revoked.add(v.revoke_bearer);
-        } else if (
-          path[3] === "expire-window" ||
-          path[3] === "rotate-epoch" ||
-          path[3] === "expire-snapshot" ||
-          path[3] === "queue-state" ||
-          path[3] === "redeliver"
-        ) {
-          const v = z
-            .object({
-              workspace_id: IdSchema,
-              account_id: IdSchema.optional(),
-              window_id: IdSchema.optional(),
-              snapshot_id: IdSchema.optional(),
-              room_id: IdSchema.optional(),
-              event_id: IdSchema.optional(),
-              after_ms: z.number().int().min(0).max(5000).optional(),
-            })
-            .strict()
-            .parse(b);
-          const value = await service.db.tx(
-            v.account_id ?? "worker",
-            v.workspace_id,
-            async (q) => {
-              await q.query(
-                "SELECT 1 FROM cloud.workspaces WHERE workspace_id=$1 FOR UPDATE",
-                [v.workspace_id],
-              );
-              if (path[3] === "expire-window") {
-                if (!v.window_id || !v.account_id)
-                  throw new CloudError("invalid_request", 400);
-                await q.query(
-                  "UPDATE cloud.windows SET expires_at=clock_timestamp()+($3::int * interval '1 millisecond') WHERE workspace_id=$1 AND window_id=$2",
-                  [v.workspace_id, v.window_id, v.after_ms ?? 0],
-                );
-              }
-              if (path[3] === "rotate-epoch") {
-                await q.query(
-                  "UPDATE cloud.workspaces SET epoch=md5(random()::text||clock_timestamp()::text) WHERE workspace_id=$1",
-                  [v.workspace_id],
-                );
-              }
-              if (path[3] === "expire-snapshot") {
-                if (!v.snapshot_id || !v.account_id)
-                  throw new CloudError("invalid_request", 400);
-                await q.query(
-                  "UPDATE cloud.snapshots SET expires_at=clock_timestamp()+($3::int * interval '1 millisecond') WHERE workspace_id=$1 AND snapshot_id=$2",
-                  [v.workspace_id, v.snapshot_id, v.after_ms ?? 0],
-                );
-              }
-              if (path[3] === "redeliver") {
-                if (!v.room_id || !v.event_id)
-                  throw new CloudError("invalid_request", 400);
-                await q.query(
-                  "UPDATE cloud.work_queue SET completed_at=NULL WHERE workspace_id=$1 AND room_id=$2 AND event_id=$3",
-                  [v.workspace_id, v.room_id, v.event_id],
-                );
-              }
-              if (path[3] === "queue-state")
-                return (
-                  await q.query(
-                    "SELECT room_id,event_id,attempts,completed_at FROM cloud.work_queue WHERE workspace_id=$1 ORDER BY room_id,event_id",
-                    [v.workspace_id],
-                  )
-                ).rows;
-              return { ok: true };
-            },
-          );
-          write(res, value);
-          return;
-        } else throw new CloudError("not_found", 404);
-        write(res, { ok: true });
-        return;
-      }
-      if (path.join("/") === "v2/test/sign-in" && method === "POST") {
-        const b = z
-          .object({ subject: z.string() })
-          .strict()
-          .parse(await body(req));
-        write(res, (service.issuer as StubIssuer).signin(b.subject));
-        return;
-      }
+      if (fixtureRoute && await fixtureRoute(req,res,path,write)) return;
+      if (path[1] === "test") throw new CloudError("not_found",404);
+      if (req.headers.cookie && !req.headers.authorization && !["GET","HEAD"].includes(method) && !allowedOrigins.has(req.headers.origin ?? ""))
+        throw new CloudError("forbidden");
       const token = bearer(req);
       const rateKey = token;
       const now = Date.now();
@@ -313,7 +169,20 @@ export async function startCloud(
           path.length === 4 &&
           method === "POST"
         )
-          value = await service.invite(token, w, await body(req));
+          {
+            await service.invite(token,w,await body(req), (v) => new Promise<void>((resolve,reject) => {
+              if (res.destroyed || res.writableEnded) return reject(new CloudError("unavailable",503));
+              const cleanup = () => {
+                res.off("finish",finish);res.off("close",close);res.off("error",fail);
+              };
+              const finish = () => {cleanup();resolve();};
+              const fail = () => {cleanup();reject(new CloudError("unavailable",503));};
+              const close = () => {if(res.writableFinished) finish(); else fail();};
+              res.once("finish",finish);res.once("close",close);res.once("error",fail);
+              try {write(res,v);} catch {fail();}
+            }));
+            return;
+          }
         else if (
           path[3] === "invites" &&
           path.length === 5 &&
@@ -421,6 +290,8 @@ export async function startCloud(
   });
   server.on("upgrade", (req, socket, head) => {
     const u = new URL(req.url ?? "/", service.service);
+    const origin = req.headers.origin;
+    if ((origin && !allowedOrigins.has(origin))) {socket.destroy();return;}
     if (
       u.pathname !== "/v2/realtime" ||
       u.search ||
@@ -442,7 +313,7 @@ export async function startCloud(
   listener.on("notification", onNotify);
   listener.on("error", () => {});
   const accountCounts = new Map<string, number>();
-  wsServer.on("connection", (ws) => {
+  wsServer.on("connection", (ws, req) => {
     let token = "",
       account = "",
       busy = false,
@@ -549,13 +420,15 @@ export async function startCloud(
             const b = z
               .object({
                 type: z.literal("authenticate"),
-                bearer: z.string().min(1).max(4096),
+                bearer: z.string().min(1).max(4096).regex(/^[^\s\0]+$/).optional(),
               })
               .strict()
               .parse(v);
-            const i = await service.identify(b.bearer);
+            if (!b.bearer && !allowedOrigins.has(req.headers.origin ?? "")) throw new CloudError("forbidden");
+            const credential = b.bearer ?? bearer(req);
+            const i = await service.identify(credential);
             if (closed) return;
-            token = b.bearer;
+            token = credential;
             account = i.account_id;
             authenticated = true;
             clearTimeout(authTimeout);

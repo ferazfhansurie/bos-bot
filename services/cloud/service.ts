@@ -295,7 +295,7 @@ export class CloudService {
       },
     );
   }
-  async invite(bearer: string, w: string, body: unknown) {
+  async invite(bearer: string, w: string, body: unknown, deliver?: (value: any) => void | Promise<void>) {
     const b = z
       .object({
         role: RoleSchema,
@@ -305,7 +305,7 @@ export class CloudService {
       })
       .strict()
       .parse(body);
-    return this.protect(
+    const value = await this.protect(
       bearer,
       w,
       undefined,
@@ -346,9 +346,35 @@ export class CloudService {
             invite_id,
             r,
           ]);
-        return { invite_id, token, expires_at: expires.toISOString() };
+        await q.query("INSERT INTO cloud.invite_outbox(workspace_id,invite_id,publication_state) VALUES($1,$2,$3)",[w,invite_id,deliver ? "pending" : "published"]);
+        const value = {invite_id,token,expires_at:expires.toISOString()};
+        this.fresh(i);
+
+        return value;
       },
     );
+    if (deliver) {
+      try {
+        await this.protect(bearer,w,undefined,"http.publication",{invite_id:value.invite_id},async(q,i)=>{
+          this.fresh(i);
+          await deliver(value);
+          await q.query("UPDATE cloud.invite_outbox SET publication_state='published' WHERE workspace_id=$1 AND invite_id=$2",[w,value.invite_id]);
+        });
+      } catch(e) {
+        await this.reapInvite(w,value.invite_id);
+        throw e;
+      }
+    }
+    return value;
+  }
+  async reapInvite(w: string,invite: string) {
+    await this.db.tx("worker",w,async q=>{
+      await q.query("SELECT 1 FROM cloud.workspaces WHERE workspace_id=$1 FOR UPDATE",[w]);
+      const pending=(await q.query("SELECT 1 FROM cloud.invite_outbox WHERE workspace_id=$1 AND invite_id=$2 AND publication_state='pending'",[w,invite])).rowCount;
+      if (!pending) return;
+      await q.query("DELETE FROM cloud.invite_rooms WHERE workspace_id=$1 AND invite_id=$2",[w,invite]);
+      await q.query("DELETE FROM cloud.invites WHERE workspace_id=$1 AND invite_id=$2",[w,invite]);
+    });
   }
   async inviteAction(
     bearer: string,
@@ -404,6 +430,8 @@ export class CloudService {
         token_hash: h,
         invite_id: inv.invite_id,
       });
+      if (!(await q.query("SELECT 1 FROM cloud.invite_outbox WHERE workspace_id=$1 AND invite_id=$2 AND publication_state='published'",[w,inv.invite_id])).rowCount)
+        throw new CloudError("unavailable",503);
       if (inv.revoked) throw new CloudError("invite_revoked");
       if (inv.redeemed_by) throw new CloudError("invite_used");
       if (inv.expires_at.getTime() <= Date.now())
@@ -1289,6 +1317,8 @@ export class CloudService {
   }
   async tickWorker() {
     if (this.hooks?.pausedWorker) return;
+    const stale=await this.db.tx("worker","",async q=>(await q.query("SELECT * FROM cloud.pending_invite_publications()" )).rows);
+    for(const row of stale) await this.reapInvite(row.workspace_id,row.invite_id);
     const workspaces = await this.db.tx(
       "worker",
       "",

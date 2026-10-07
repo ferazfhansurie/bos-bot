@@ -2003,5 +2003,28 @@
         "live": false
       }
     }
+  ],
+  "identity_error_cases": [
+    {
+      "id": "session-invalid",
+      "http": {
+        "error": "session_invalid"
+      },
+      "frame": {
+        "type": "error",
+        "error": "session_invalid"
+      }
+    },
+    {
+      "id": "identity-unavailable",
+      "http": {
+        "error": "identity_unavailable",
+        "retry_after": 1
+      },
+      "frame": {
+        "type": "error",
+        "error": "identity_unavailable"
+      }
+    }
   ]
 }
