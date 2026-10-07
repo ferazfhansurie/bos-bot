@@ -68,7 +68,7 @@ test('migrate is ledgered and idempotent; room validates through the private iss
   await new Promise<void>(r=>issuer.listen(issuerPort,'127.0.0.1',r));
   try {
     const first = await migrate(c.owner,'app-password-0123456789');
-    assert.deepEqual(first,['001.sql','002_invite_outbox.sql','003_runtime.sql','004_push_revoke.sql']);
+    assert.deepEqual(first,['001.sql','002_invite_outbox.sql','003_runtime.sql','004_push_revoke.sql','005_migration_authority.sql']);
     assert.deepEqual(await migrate(c.owner,'app-password-0123456789'),[]);
     await assert.rejects(migrate(c.owner,'short'),/16 characters/);
     const port = await freePort();
