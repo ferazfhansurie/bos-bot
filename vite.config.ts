@@ -55,6 +55,12 @@ export default defineConfig({
     // the harness server owns every provider process; the app only ever
     // talks to /api — clients hold no transports
     proxy: {
+      // cloud rooms sign in against the local control-plane issuer on this
+      // origin, so its session cookie is same-site with /v2. Listed before
+      // /api because the first matching prefix wins.
+      ...(process.env.BOS_CLOUD_ROOMS === "1"
+        ? { "/api/auth": { target: process.env.CLOUD_ISSUER_URL || "http://127.0.0.1:8787" } }
+        : {}),
       "/api": {
         target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
         // the built-in terminal speaks a websocket on /api/terminal

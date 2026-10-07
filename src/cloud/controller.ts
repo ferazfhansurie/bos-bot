@@ -2,6 +2,7 @@
 // any network I/O, works the outbox sequentially and keeps the realtime
 // subscription caught up through resets and reconnects.
 import { LIMITS, type SendEnvelope } from "../../shared/cloud-protocol/index";
+import { identityProblem, type IdentityProblem } from "./auth-state";
 import { connectRealtime, type CloudApi, type CloudSession, type OperationWindow, type RealtimeConnection } from "./api";
 import { backoffMs, freezeSend, localOutboxStore, memoryOutboxStore, nextWork, type EnvelopeProblem, type OutboxStore } from "./outbox";
 import { isEligible, markViewed } from "./read-coverage";
@@ -48,6 +49,7 @@ export class CloudRoomController {
     private readonly room: CloudRoomRef,
     storage: Pick<Storage, "getItem" | "setItem"> | null,
     private readonly Socket: typeof WebSocket = WebSocket,
+    private readonly onIdentity: (problem: IdentityProblem) => void = () => {},
   ) {
     // Workspace and epoch are not compared when matching an identity.
     this.identity = { service: session.service, issuer: session.issuer, subject: session.subject, account_id: session.account_id, workspace_id: room.workspace_id, epoch: "" };
@@ -193,6 +195,13 @@ export class CloudRoomController {
         },
         onFrame: (frame) => {
           if (!current()) return;
+          const problem = frame.type === "error" ? identityProblem({ error: frame.error, status: 0 }) : null;
+          if (problem) {
+            this.onIdentity(problem);
+            // A revoked session can't reconnect; identity_unavailable retries on close as usual.
+            if (problem.kind === "session_invalid") this.stop();
+            return;
+          }
           if (frame.type === "reset_required" && frame.snapshot) this.threadStartLoaded = frame.snapshot.messages.length < LIMITS.snapshotMessages;
           this.dispatch({ type: "frame", frame });
           // A server reset or a batch that failed validation both recover from a snapshot.
