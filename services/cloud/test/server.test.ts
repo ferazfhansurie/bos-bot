@@ -311,6 +311,95 @@ test("identical retries/lookup survive replaced service object; changed digest c
   );
   assert.equal(history.messages.length, 1);
 });
+for (const action of ["message.send", "operation.seal"]) {
+  test(`digest-selected ${action} hooks isolate changed envelopes with the same key`, async () => {
+    const h = await humans(),
+      loser = await envelope(h),
+      winner = { ...loser, text: loser.text + "!" };
+    const digest = (e: unknown) =>
+      createHash("sha256").update(canonicalJson(e)).digest("hex");
+    const control = async (name: string, body?: unknown, method = "POST") => {
+      const response = await fetch(f.url + "/v2/test/hooks" + name, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cloud-Fixture-Secret": f.hook_secret,
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const result = await response.json();
+      assert.equal(response.status, 200, JSON.stringify(result));
+      return result;
+    };
+    const match = {
+      workspace_id: h.w,
+      room_id: h.r.room_id,
+      account_id: h.a.account_id,
+      client_operation_id: loser.client_operation_id,
+    };
+    const before = "digest_loser",
+      after = "digest_winner";
+    await control("/arm", {
+      id: before,
+      point: action + ".before_admission",
+      match: { ...match, digest: digest(loser) },
+    });
+    await control("/arm", {
+      id: after,
+      point: action + ".after_admission",
+      match: { ...match, digest: digest(winner) },
+    });
+    const path =
+      action === "message.send"
+        ? `/v2/workspaces/${h.w}/messages`
+        : `/v2/workspaces/${h.w}/operations/${loser.client_operation_id}/resolve-not-accepted`;
+    const pending = [request("POST", path, h.a.bearer, loser)];
+    try {
+      await entered(before);
+      pending.push(request("POST", path, h.a.bearer, winner));
+      await entered(after);
+      const state = await control("", undefined, "GET");
+      for (const id of [before, after]) {
+        assert.deepEqual(
+          state.gates.find((g: any) => g.id === id),
+          {
+            id,
+            point:
+              action +
+              (id === before ? ".before_admission" : ".after_admission"),
+            entered: true,
+            waiting: 1,
+          },
+        );
+      }
+      await control("/release", { id: after });
+      const accepted = await pending[1];
+      assert.equal(accepted.status, 200);
+      assert.equal(accepted.body.digest, digest(winner));
+      assert.equal(
+        accepted.body.status,
+        action === "message.send" ? "accepted" : "rejected",
+      );
+      assert.equal((await control("", undefined, "GET")).gates[0].waiting, 1);
+      await control("/release", { id: before });
+      const conflict = await pending[0];
+      assert.equal(conflict.status, 409);
+      assert.equal(conflict.body.error, "operation_conflict");
+      assert.deepEqual(
+        await ok(
+          "GET",
+          `/v2/workspaces/${h.w}/operations/${loser.client_operation_id}`,
+          h.a.bearer,
+        ),
+        accepted.body,
+      );
+    } finally {
+      await control("/release", { id: before });
+      await control("/release", { id: after });
+      await Promise.allSettled(pending);
+    }
+  });
+}
 test("send vs seal uses the same real admission lock in both orders x100", async () => {
   const h = await humans();
   for (const winner of ["message.send", "operation.seal"])
