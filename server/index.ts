@@ -45,6 +45,7 @@ import { privateRoomForViewer } from "./private-room-visibility.ts";
 import { PeerHandoffs } from "./peer-handoffs.ts";
 import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { handleRemoteRoom, withRemoteGroups, type RemoteRoomContext } from "./remote-rooms.ts";
+import { startCloudHostFromEnv } from "./cloud-host-runtime.ts";
 import { RemoteBotBridge, isRemoteBotPath, homeKey } from "./remote-bot-bridge.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
 /** Self-hosts may advertise a public HTTPS origin; private hosts use Tailscale. */
@@ -23008,6 +23009,15 @@ server.listen(PORT, "127.0.0.1", () => {
   setInterval(expireDelegationsNow, DELEGATION_SWEEP_MS).unref();
   // One event stream per linked Mac; relays only threads the bridge opened.
   remoteBots.start();
+  // BOS 2.0 slice 3, dev build only: host this Mac's bots in cloud rooms
+  // (outbound only; both OMB_CLOUD_HOST_URL and OMB_CLOUD_HOST_TOKEN required).
+  startCloudHostFromEnv(process.env, {
+    store, sharedBotTasks, bus, interruptDirectThread, shouldIgnoreProviderEvent,
+    startTurn: (botId, text, opts) => startTurn(botId, text, opts as Parameters<typeof startTurn>[2]),
+    admissionBlocked: (botId, threadId) => threadBusy(botId, threadId) || botAtThreadCapacity(botId) ||
+      parksBehindCoordination(botId, threadId) || Boolean(activeGroupTurnForBot(botId)),
+    sandboxFor: threadId => { const dir = join(DATA_DIR, "cloud-room-files", threadId); mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; },
+  });
   void recoverSharedRoomTurns().catch(error =>
     console.warn(`room recovery could not start: ${error instanceof Error ? error.message : "unknown"}`));
   // Resume a linked WhatsApp session (no QR) if one was saved.
