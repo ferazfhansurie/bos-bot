@@ -34,9 +34,14 @@ describe("cloud room reducer", () => {
     expect(state).toMatchObject({ reset_required: true, live: false, messages: [] });
   });
 
-  it("drops the projection when this account is removed", () => {
-    const removal: CloudEvent = { schema_version: 1, workspace_id: "w1", room_id: "r1", event_id: "ev2", sequence: "2", kind: "room.membership_changed", required: true, payload: { account_id: "alice", removed: true } };
-    const state = run(start(), [batch([created("1", "m1"), removal], "2"), batch([created("3", "m3")], "3")]);
+  it("tracks the policy revision on membership changes", () => {
+    const change: CloudEvent = { schema_version: 1, workspace_id: "w1", room_id: "r1", event_id: "ev2", sequence: "2", kind: "room.membership_changed", required: true, payload: { policy_revision: "7" } };
+    const state = run(start(), [batch([created("1", "m1"), change], "2")]);
+    expect(state).toMatchObject({ policy_revision: "7", removed: false, messages: [{ message_id: "m1" }] });
+  });
+
+  it("drops the projection when the server reports this account lost access", () => {
+    const state = run(start(), [batch([created("1", "m1")], "1"), { type: "frame", frame: { type: "error", error: "forbidden" } }, batch([created("2", "m2")], "2")]);
     expect(state).toMatchObject({ removed: true, messages: [], live: false });
   });
 

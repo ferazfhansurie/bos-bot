@@ -103,11 +103,6 @@ function upsertMessage(messages: CloudMessage[], message: CloudMessage): CloudMe
   return [...messages, message].sort((a, b) => compareSequence(a.sequence, b.sequence));
 }
 
-function membershipRemovesMe(event: CloudEvent, accountId: string): boolean {
-  const payload = event.payload as { account_id?: unknown; removed?: unknown; change?: unknown };
-  return payload.account_id === accountId && (payload.removed === true || payload.change === "removed");
-}
-
 function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "event_batch" }>): CloudRoomState {
   if (state.upgrade_required || state.reset_required || state.removed) return state;
   if (frame.workspace_id !== state.workspace_id || frame.room_id !== state.selected_room_id) return state;
@@ -143,12 +138,12 @@ function applyBatch(state: CloudRoomState, frame: Extract<CloudFrame, { type: "e
         if (isSequence(revision)) next = { ...next, policy_revision: revision };
         break;
       }
-      case "room.membership_changed":
-        if (membershipRemovesMe(event, next.account_id)) {
-          // Removal is processed before any further content: drop the projection.
-          return { ...next, removed: true, live: false, messages: [], members: [], read: EMPTY_COVERAGE, cursor: frame.cursor };
-        }
+      case "room.membership_changed": {
+        // Membership changes bump the room policy; our own removal arrives as a forbidden error frame.
+        const revision = (event.payload as { policy_revision?: unknown }).policy_revision;
+        if (isSequence(revision)) next = { ...next, policy_revision: revision };
         break;
+      }
       case "presence":
         break;
     }
@@ -190,6 +185,8 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
         return { ...state, reset_required: true, reset_reason: frame.reason, live: false };
       }
       if (frame.type === "error" && frame.error === "upgrade_required") return { ...state, upgrade_required: true, live: false };
+      // The server re-authorizes every publication; forbidden means this account lost room access.
+      if (frame.type === "error" && frame.error === "forbidden") return { ...state, removed: true, live: false, messages: [], members: [], read: EMPTY_COVERAGE };
       return state;
     }
     case "snapshot":
