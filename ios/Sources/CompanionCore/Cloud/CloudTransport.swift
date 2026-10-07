@@ -34,6 +34,19 @@ public enum CloudRoute {
         "/v2/workspaces/\(escape(workspaceId))/rooms/\(escape(roomId))/read"
     }
 
+    public static func approval(workspaceId: String, roomId: String, approvalId: String) -> String {
+        "/v2/workspaces/\(escape(workspaceId))/rooms/\(escape(roomId))/approvals/\(escape(approvalId))"
+    }
+    public static func decision(workspaceId: String, roomId: String, approvalId: String) -> String {
+        approval(workspaceId: workspaceId, roomId: roomId, approvalId: approvalId) + "/decision"
+    }
+    public static func attachments(workspaceId: String) -> String {
+        "/v2/workspaces/\(escape(workspaceId))/attachments"
+    }
+    public static func attachment(workspaceId: String, attachmentId: String, _ action: String) -> String {
+        attachments(workspaceId: workspaceId) + "/\(escape(attachmentId))/\(action)"
+    }
+
     static func escape(_ segment: String) -> String {
         segment.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? segment
     }
@@ -191,6 +204,62 @@ public final class CloudClient: @unchecked Sendable {
             var attention: Bool?
         }
         return try await json(CloudRoute.read(workspaceId: room.workspaceId, roomId: room.roomId), method: "POST", body: Body(thread_id: room.threadId, intervals: intervals, mark_read_through: markReadThrough, attention: attention))
+    }
+
+    /// Online only: a decision is never queued or replayed.
+    public func approval(_ room: CloudRoomRef, approvalId: String) async throws -> CloudApprovalCard {
+        try await json(CloudRoute.approval(workspaceId: room.workspaceId, roomId: room.roomId, approvalId: approvalId), method: "GET", body: nil as String?)
+    }
+
+    public func decide(_ card: CloudApprovalCard, _ choice: CloudApprovalChoice) async throws -> CloudApprovalCard {
+        try await json(CloudRoute.decision(workspaceId: card.workspaceId, roomId: card.roomId, approvalId: card.approvalId), method: "POST", body: card.decision(choice))
+    }
+
+    public func prepareAttachment(workspaceId: String, _ prepare: CloudAttachmentPrepare) async throws -> CloudAttachmentUpload {
+        try await json(CloudRoute.attachments(workspaceId: workspaceId), method: "POST", body: prepare)
+    }
+
+    /// PUTs the bytes to the scoped upload URL. The bearer only ever goes to
+    /// this client's own origin.
+    public func upload(_ upload: CloudAttachmentUpload, bytes: Data) async throws {
+        guard let url = URL(string: upload.uploadURL), Self.sameOrigin(url, baseURL) else { throw CloudError(.forbidden) }
+        guard reachable() else { throw URLError(.notConnectedToInternet) }
+        var request = URLRequest(url: url, timeoutInterval: 60)
+        request.httpMethod = "PUT"
+        request.setValue(upload.attachment.type, forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(try await bearer())", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.upload(for: request, from: bytes)
+        try Self.check(response, data)
+    }
+
+    /// Server-side scan; ready or rejected. A scanner outage stays quarantined (503).
+    public func completeAttachment(_ attachment: CloudAttachment) async throws -> CloudAttachment {
+        try await json(CloudRoute.attachment(workspaceId: attachment.workspaceId, attachmentId: attachment.attachmentId, "complete"), method: "POST", body: [String: String]())
+    }
+
+    /// Raw bytes and the server's content type. Callers keep them in memory.
+    public func download(workspaceId: String, attachmentId: String) async throws -> (data: Data, type: String) {
+        var request = try await request(CloudRoute.attachment(workspaceId: workspaceId, attachmentId: attachmentId, "download"), method: "GET")
+        request.timeoutInterval = 60
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response, data)
+        let type = ((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? "").split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        guard CloudAttachmentLimits.types.contains(type) else { throw CloudError(.unsupportedAttachment) }
+        return (data, type)
+    }
+
+    static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        a.scheme?.lowercased() == b.scheme?.lowercased() && a.host?.lowercased() == b.host?.lowercased() && (a.port ?? defaultPort(a)) == (b.port ?? defaultPort(b))
+    }
+
+    private static func defaultPort(_ url: URL) -> Int { url.scheme?.lowercased() == "https" ? 443 : 80 }
+
+    private static func check(_ response: URLResponse, _ data: Data) throws {
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200...299).contains(status) else {
+            throw CloudResponseClassifier.decodeError(data) ?? CloudError(status >= 500 ? .unavailable : .invalidRequest)
+        }
     }
 
     /// Opens the one multiplexed /v2/realtime socket: authenticate first,

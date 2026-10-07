@@ -465,12 +465,18 @@ final class CloudOutboxTests: XCTestCase {
         XCTAssertThrowsError(try CloudSendValidation.validate(F.envelope(1, text: "@bob\u{1F44B}", mentions: [CloudMention(kind: .human, id: "bob", start: 0, end: 5)])))
     }
 
-    func testValidationRejectsAttachments() {
+    func testValidationBoundsAttachments() {
         var envelope = F.envelope(1)
-        envelope.attachmentIds = ["a1"]
-        XCTAssertThrowsError(try CloudSendValidation.validate(envelope)) {
-            XCTAssertEqual($0 as? CloudSendValidationError, .unsupportedAttachment)
+        envelope.attachmentIds = ["a1", "a_2-x"]
+        XCTAssertNoThrow(try CloudSendValidation.validate(envelope))
+        for ids in [["a1", "a1"], ["a 1"], [""], [String(repeating: "a", count: 129)], (0...32).map { "a\($0)" }] {
+            envelope.attachmentIds = ids
+            XCTAssertThrowsError(try CloudSendValidation.validate(envelope), "\(ids)") {
+                XCTAssertEqual($0 as? CloudSendValidationError, .unsupportedAttachment)
+            }
         }
+        envelope.attachmentIds = (0..<32).map { "a\($0)" }
+        XCTAssertNoThrow(try CloudSendValidation.validate(envelope))
     }
 
     func testValidationRejectsBadOperationId() {

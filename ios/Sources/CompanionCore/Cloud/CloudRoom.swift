@@ -15,6 +15,15 @@ public enum CloudRoomEffect: Hashable, Sendable {
     case audienceChanged
     /// Membership changed: discovery is the authority on what remains.
     case resyncDiscovery
+    /// The server moved one of this account's attachments.
+    case attachmentUpdated(CloudAttachment)
+}
+
+/// A bot's not-yet-committed reply. Memory only; final.commit replaces it.
+public struct CloudStreamText: Hashable, Sendable {
+    public var binding: CloudRunBinding
+    public var deltaIds: Set<String> = []
+    public var text = ""
 }
 
 /// One room's cache and stream position for the selected thread. Pure:
@@ -47,12 +56,44 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
     public private(set) var resetRequired = false
     /// A required event this build cannot read; the cursor stays before it.
     public private(set) var upgradeRequired = false
+    /// The selected thread's runs and this account's cards, by id. Optional
+    /// so caches from before slice 3 still decode.
+    private var runStore: [String: CloudInvocation]?
+    private var cardStore: [String: CloudApprovalCard]?
+    /// Provisional bot text by invocation. Never persisted.
+    public private(set) var streaming: [String: CloudStreamText] = [:]
+
+    enum CodingKeys: String, CodingKey {
+        case workspaceId, roomId, threadId, me, role, cursor, snapshotId, watermark, applied, policyRevision
+        case members, messages, read, live, resetRequired, upgradeRequired, runStore, cardStore
+    }
 
     public init(workspaceId: String, roomId: String, threadId: String, me: String, role: CloudRole = .member) {
         self.workspaceId = workspaceId; self.roomId = roomId; self.threadId = threadId; self.me = me; self.role = role
     }
 
     public var messageIds: [String] { messages.map(\.messageId) }
+
+    /// Runs oldest source first.
+    public var runs: [CloudInvocation] {
+        (runStore ?? [:]).values.sorted { ($0.queuedExpiresAt, $0.invocationId) < ($1.queuedExpiresAt, $1.invocationId) }
+    }
+
+    public var cards: [CloudApprovalCard] {
+        (cardStore ?? [:]).values.sorted { ($0.expiresAt, $0.approvalId) < ($1.expiresAt, $1.approvalId) }
+    }
+
+    public func run(_ invocationId: String) -> CloudInvocation? { runStore?[invocationId] }
+    public func card(_ approvalId: String) -> CloudApprovalCard? { cardStore?[approvalId] }
+
+    /// A decision or GET answer. Older versions never replace newer ones.
+    @discardableResult
+    public mutating func apply(card: CloudApprovalCard) -> [CloudRoomEffect] {
+        guard card.workspaceId == workspaceId, card.roomId == roomId, card.threadId == threadId, card.actorId == me else { return [] }
+        if let old = cardStore?[card.approvalId], old.version > card.version || old == card { return [] }
+        cardStore = (cardStore ?? [:]).merging([card.approvalId: card]) { $1 }
+        return [.persist]
+    }
 
     /// Foreground resubscribe from the acknowledged cursor.
     public mutating func resubscribe() -> [CloudRoomEffect] {
@@ -102,6 +143,9 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
         messages = Self.capped(snapshot.messages.filter { $0.threadId == threadId }.sorted { $0.sequence < $1.sequence })
         members = snapshot.members
         read = snapshot.read
+        runStore = Dictionary(snapshot.activeRuns.filter { $0.threadId == threadId }.map { ($0.invocationId, $0) }) { $1 }
+        cardStore = Dictionary(snapshot.cards.filter { $0.threadId == threadId && $0.actorId == me }.map { ($0.approvalId, $0) }) { $1 }
+        streaming = [:]
         policyRevision = snapshot.policyRevision
         cursor = snapshot.cursor
         snapshotId = snapshot.snapshotId
@@ -127,6 +171,14 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
     private enum Step {
         case upsert(CloudMessage)
         case audience(resync: Bool, policy: CloudSequence?)
+        case run(CloudInvocation)
+        case claimed(CloudRunBinding, hostId: String, lease: String, model: CloudModel)
+        case delta(CloudRunBinding, id: String, text: String)
+        case final(CloudRunBinding, CloudMessage)
+        case stop(CloudRunBinding, revision: CloudSequence, observed: Bool)
+        case card(CloudApprovalCard)
+        case attachment(CloudAttachment)
+        case presence(hostId: String, online: Bool)
         case skip
     }
 
@@ -155,9 +207,45 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
             applied = sequence
             switch step {
             case .upsert(let message):
-                if message.actorId == me { effects.append(.observedOwnSend(message)) }
+                if message.actorId == me, message.botId == nil { effects.append(.observedOwnSend(message)) }
                 guard message.threadId == threadId else { continue }
                 upsert(message)
+            case .run(let run):
+                guard run.threadId == threadId else { continue }
+                if let old = runStore?[run.invocationId], old.fenceGen > run.fenceGen { continue }
+                runStore = (runStore ?? [:]).merging([run.invocationId: run]) { $1 }
+                if run.state.finished || streaming[run.invocationId]?.binding != run.binding { streaming[run.invocationId] = nil }
+            case .claimed(let binding, let hostId, let lease, let model):
+                guard var run = runStore?[binding.invocationId], binding.fenceGen > run.fenceGen else { continue }
+                run.attempt = binding.attempt; run.fenceGen = binding.fenceGen
+                run.hostId = hostId; run.leaseExpiresAt = lease; run.model = model; run.state = .leased
+                runStore?[binding.invocationId] = run
+                streaming[binding.invocationId] = nil
+            case .delta(let binding, let id, let text):
+                guard let run = runStore?[binding.invocationId], run.binding == binding, !run.state.finished else { continue }
+                var stream = streaming[binding.invocationId].flatMap { $0.binding == binding ? $0 : nil } ?? CloudStreamText(binding: binding)
+                guard stream.deltaIds.insert(id).inserted else { continue }
+                stream.text += text
+                streaming[binding.invocationId] = stream
+            case .final(let binding, let message):
+                streaming[binding.invocationId] = nil
+                guard message.threadId == threadId else { continue }
+                upsert(message)
+                if var run = runStore?[binding.invocationId], run.binding == binding {
+                    run.resultMessageId = message.messageId
+                    runStore?[binding.invocationId] = run
+                }
+            case .stop(let binding, let revision, let observed):
+                guard var run = runStore?[binding.invocationId], run.binding == binding else { continue }
+                if observed { run.stoppedObserved = true } else { run.stopRequested = true }
+                if revision > run.controlRevision { run.controlRevision = revision }
+                runStore?[binding.invocationId] = run
+            case .card(let card):
+                apply(card: card)
+            case .attachment(let attachment):
+                effects.append(.attachmentUpdated(attachment))
+            case .presence(let hostId, let online):
+                for (id, run) in runStore ?? [:] where run.hostId == hostId { runStore?[id]?.hostOnline = online }
             case .audience(let needsResync, let policy):
                 audience = true
                 resync = resync || needsResync
@@ -188,11 +276,72 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
             return .audience(resync: false, policy: event.payload["policy_revision"]?.stringValue.flatMap(CloudSequence.init))
         case CloudEventKind.membershipChanged:
             return .audience(resync: true, policy: nil)
+        case CloudEventKind.invocationOffered, CloudEventKind.runUpdated:
+            guard let run = try? event.payload["invocation"]?.decode(CloudInvocation.self),
+                  run.workspaceId == event.workspaceId, run.roomId == event.roomId else { return event.required ? nil : .skip }
+            return .run(run)
+        case CloudEventKind.invocationClaimed:
+            guard let p = Self.payload(event, ClaimedPayload.self) else { return event.required ? nil : .skip }
+            return .claimed(p.binding, hostId: p.hostId, lease: p.leaseExpiresAt, model: p.model)
+        case CloudEventKind.streamDelta:
+            guard let p = Self.payload(event, DeltaPayload.self) else { return event.required ? nil : .skip }
+            return .delta(p.binding, id: p.deltaId, text: p.text)
+        case CloudEventKind.finalCommit:
+            guard let p = Self.payload(event, FinalPayload.self),
+                  p.message.workspaceId == event.workspaceId, p.message.roomId == event.roomId else { return event.required ? nil : .skip }
+            return .final(p.binding, p.message)
+        case CloudEventKind.stopRequested, CloudEventKind.stopObserved:
+            guard let p = Self.payload(event, StopPayload.self) else { return event.required ? nil : .skip }
+            return .stop(p.binding, revision: p.controlRevision, observed: event.kind == CloudEventKind.stopObserved)
+        case CloudEventKind.approvalUpdated:
+            guard let card = try? event.payload["card"]?.decode(CloudApprovalCard.self),
+                  card.workspaceId == event.workspaceId, card.roomId == event.roomId else { return event.required ? nil : .skip }
+            return .card(card)
+        case CloudEventKind.attachmentUpdated:
+            guard let attachment = try? event.payload["attachment"]?.decode(CloudAttachment.self),
+                  attachment.workspaceId == event.workspaceId, attachment.roomId == event.roomId else { return event.required ? nil : .skip }
+            return .attachment(attachment)
         case CloudEventKind.presence:
-            return .skip
+            guard let p = Self.payload(event, PresencePayload.self) else { return .skip }
+            return .presence(hostId: p.hostId, online: p.online)
         default:
             return event.required ? nil : .skip
         }
+    }
+
+    private static func payload<T: Decodable>(_ event: CloudEvent, _ type: T.Type) -> T? {
+        try? CloudJSON.object(event.payload).decode(T.self)
+    }
+
+    private struct ClaimedPayload: Decodable {
+        var invocationId: String, attempt: Int, fenceGen: CloudSequence, hostId: String, model: CloudModel, leaseExpiresAt: String
+        var binding: CloudRunBinding { CloudRunBinding(invocationId: invocationId, attempt: attempt, fenceGen: fenceGen) }
+        enum CodingKeys: String, CodingKey {
+            case invocationId = "invocation_id", attempt, fenceGen = "fence_gen", hostId = "host_id", model, leaseExpiresAt = "lease_expires_at"
+        }
+    }
+
+    private struct DeltaPayload: Decodable {
+        var invocationId: String, attempt: Int, fenceGen: CloudSequence, deltaId: String, text: String
+        var binding: CloudRunBinding { CloudRunBinding(invocationId: invocationId, attempt: attempt, fenceGen: fenceGen) }
+        enum CodingKeys: String, CodingKey { case invocationId = "invocation_id", attempt, fenceGen = "fence_gen", deltaId = "delta_id", text }
+    }
+
+    private struct FinalPayload: Decodable {
+        var invocationId: String, attempt: Int, fenceGen: CloudSequence, message: CloudMessage
+        var binding: CloudRunBinding { CloudRunBinding(invocationId: invocationId, attempt: attempt, fenceGen: fenceGen) }
+        enum CodingKeys: String, CodingKey { case invocationId = "invocation_id", attempt, fenceGen = "fence_gen", message }
+    }
+
+    private struct StopPayload: Decodable {
+        var invocationId: String, attempt: Int, fenceGen: CloudSequence, controlRevision: CloudSequence
+        var binding: CloudRunBinding { CloudRunBinding(invocationId: invocationId, attempt: attempt, fenceGen: fenceGen) }
+        enum CodingKeys: String, CodingKey { case invocationId = "invocation_id", attempt, fenceGen = "fence_gen", controlRevision = "control_revision" }
+    }
+
+    private struct PresencePayload: Decodable {
+        var hostId: String, online: Bool
+        enum CodingKeys: String, CodingKey { case hostId = "host_id", online }
     }
 
     private mutating func upsert(_ message: CloudMessage) {

@@ -9,6 +9,7 @@ public enum CloudLimits {
     public static let schemaVersion = 1
     public static let textBytes = 65536
     public static let mentions = 256
+    public static let attachments = 32
     public static let snapshotMessages = 50
     public static let sparseIntervals = 256
     public static let subscriptions = 50
@@ -201,6 +202,13 @@ public struct CloudErrorCode: RawRepresentable, Hashable, Codable, Sendable, Cus
     public static let deadlineExceeded = Self(rawValue: "deadline_exceeded")
     /// The issuer refused the bearer: sign in again, never retry it.
     public static let sessionInvalid = Self(rawValue: "session_invalid")
+    public static let hostInvalid = Self(rawValue: "host_invalid")
+    public static let leaseLost = Self(rawValue: "lease_lost")
+    public static let controlConflict = Self(rawValue: "control_conflict")
+    public static let approvalExpired = Self(rawValue: "approval_expired")
+    public static let approvalDecided = Self(rawValue: "approval_decided")
+    public static let attachmentUnready = Self(rawValue: "attachment_unready")
+    public static let attachmentRejected = Self(rawValue: "attachment_rejected")
 
     /// Codes that say nothing about whether a send committed.
     public var isIndeterminate: Bool {
@@ -381,12 +389,13 @@ public enum CloudSendValidationError: Error, Hashable, Sendable {
 public enum CloudSendValidation {
     /// The send schema's checks, run before anything is queued: text within
     /// 64 KiB, mention spans in bounds, ordered without overlap, never
-    /// splitting a surrogate pair, and no attachments in slice 1.
+    /// splitting a surrogate pair, and at most 32 distinct attachment ids.
     public static func validate(_ envelope: CloudSendEnvelope) throws {
         let bytes = envelope.text.utf8.count
         if bytes > CloudLimits.textBytes { throw CloudSendValidationError.textTooLarge(bytes: bytes) }
         if envelope.mentions.count > CloudLimits.mentions { throw CloudSendValidationError.tooManyMentions }
-        if !envelope.attachmentIds.isEmpty { throw CloudSendValidationError.unsupportedAttachment }
+        if envelope.attachmentIds.count > CloudLimits.attachments || Set(envelope.attachmentIds).count != envelope.attachmentIds.count
+            || !envelope.attachmentIds.allSatisfy(CloudID.isValid) { throw CloudSendValidationError.unsupportedAttachment }
         if !CloudOperationID.isValid(envelope.clientOperationId.rawValue) { throw CloudSendValidationError.invalidOperationId }
         if let bad = firstInvalidMention(text: envelope.text, mentions: envelope.mentions) {
             throw CloudSendValidationError.invalidMention(id: bad.id)
@@ -423,19 +432,25 @@ public struct CloudMessage: Hashable, Codable, Sendable {
     public var mentions: [CloudMention]
     public var replyToMessageId: String?
     public var deleted: Bool
+    /// Set on a bot's final; `actorId` is then the host owner, for audit.
+    public var botId: String?
+    /// Absent on messages from before slice 4.
+    public var attachmentIds: [String]?
     public var createdAt: String
 
-    public init(workspaceId: String, roomId: String, threadId: String, messageId: String, actorId: String, clientOperationId: String, sequence: CloudSequence, version: Int = 1, text: String, mentions: [CloudMention] = [], replyToMessageId: String? = nil, deleted: Bool = false, createdAt: String) {
+    public init(workspaceId: String, roomId: String, threadId: String, messageId: String, actorId: String, clientOperationId: String, sequence: CloudSequence, version: Int = 1, text: String, mentions: [CloudMention] = [], replyToMessageId: String? = nil, deleted: Bool = false, botId: String? = nil, attachmentIds: [String]? = nil, createdAt: String) {
         self.workspaceId = workspaceId; self.roomId = roomId; self.threadId = threadId; self.messageId = messageId
         self.actorId = actorId; self.clientOperationId = clientOperationId; self.sequence = sequence; self.version = version
         self.text = text; self.mentions = mentions; self.replyToMessageId = replyToMessageId
-        self.deleted = deleted; self.createdAt = createdAt
+        self.deleted = deleted; self.botId = botId; self.attachmentIds = attachmentIds; self.createdAt = createdAt
     }
+
+    public var attachments: [String] { attachmentIds ?? [] }
 
     enum CodingKeys: String, CodingKey {
         case workspaceId = "workspace_id", roomId = "room_id", threadId = "thread_id", messageId = "message_id"
         case actorId = "actor_id", clientOperationId = "client_operation_id", sequence, version, text, mentions
-        case replyToMessageId = "reply_to_message_id", deleted, createdAt = "created_at"
+        case replyToMessageId = "reply_to_message_id", deleted, botId = "bot_id", attachmentIds = "attachment_ids", createdAt = "created_at"
     }
 }
 
@@ -468,7 +483,18 @@ public enum CloudEventKind {
     public static let policyChanged = "room.policy_changed"
     public static let membershipChanged = "room.membership_changed"
     public static let presence = "presence"
-    public static let all: Set<String> = [messageCreated, messageUpdated, messageDeleted, policyChanged, membershipChanged, presence]
+    public static let invocationOffered = "invocation.offered"
+    public static let invocationClaimed = "invocation.claimed"
+    public static let streamDelta = "stream.delta"
+    public static let finalCommit = "final.commit"
+    public static let stopRequested = "stop.requested"
+    public static let stopObserved = "stop.observed"
+    public static let runUpdated = "run.updated"
+    public static let approvalUpdated = "approval.updated"
+    public static let attachmentUpdated = "attachment.updated"
+    public static let all: Set<String> = [messageCreated, messageUpdated, messageDeleted, policyChanged, membershipChanged, presence,
+                                          invocationOffered, invocationClaimed, streamDelta, finalCommit, stopRequested, stopObserved,
+                                          runUpdated, approvalUpdated, attachmentUpdated]
 }
 
 public struct CloudMember: Hashable, Codable, Sendable {
@@ -582,8 +608,8 @@ public struct CloudSnapshot: Hashable, Codable, Sendable {
     public var threads: [CloudThreadSummary]
     public var capabilities: [String]
     public var read: CloudReadCoverage
-    public var activeRuns: [CloudJSON]
-    public var cards: [CloudJSON]
+    public var activeRuns: [CloudInvocation]
+    public var cards: [CloudApprovalCard]
 
     enum CodingKeys: String, CodingKey {
         case snapshotId = "snapshot_id", expiresAt = "expires_at", workspaceId = "workspace_id", roomId = "room_id"

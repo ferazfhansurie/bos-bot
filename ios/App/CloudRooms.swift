@@ -1,8 +1,12 @@
 #if DEBUG
 import CompanionCore
+import CryptoKit
 import Network
+import PDFKit
+import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// BOS 2.0 cloud rooms, slice 2: email-OTP sign-in against a local issuer
 /// and two-person chat over /v2. Debug builds only, and only when launched
@@ -81,6 +85,8 @@ final class CloudRoomsModel: ObservableObject {
     @Published private(set) var live = false
     /// The room service can't be reached; sends wait on the device.
     @Published private(set) var offline = false
+    /// Attachments on their way to `ready`, by room. Memory only.
+    @Published private(set) var drafts: [String: [CloudAttachmentDraft]] = [:]
 
     let identityCoordinator: CloudIdentityCoordinator
     private let client: CloudClient
@@ -200,19 +206,100 @@ final class CloudRoomsModel: ObservableObject {
     @discardableResult
     func send(_ text: String, in ref: CloudRoomRef) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
+        let attached = drafts[key(ref)] ?? []
+        // Nothing goes out while an attachment is still on its way.
+        guard attached.allSatisfy({ $0.state == .ready }) else { return false }
+        let attachmentIds = attached.compactMap(\.attachment?.attachmentId)
+        guard !trimmed.isEmpty || !attachmentIds.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
         var queued = false
         await work {
             let window = try await self.window(for: ref.workspaceId)
-            let envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: trimmed, expectedPolicyRevision: policy)
+            var envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: trimmed, expectedPolicyRevision: policy)
+            envelope.attachmentIds = attachmentIds
             guard var outbox = self.outbox, let expiry = window.expiryDate else { return }
             // Guest drafts are session memory only.
             let effects = try outbox.enqueue(envelope, windowExpiresAt: expiry, ephemeral: ref.role == .guest, now: Date())
             self.outbox = outbox
             queued = true
+            self.drafts[self.key(ref)] = nil
             self.runOutbox(effects)
         }
         return queued
+    }
+
+    // MARK: - attachments
+
+    func drafts(in ref: CloudRoomRef) -> [CloudAttachmentDraft] { drafts[key(ref)] ?? [] }
+
+    /// Checks size and type on the phone, then prepare, upload and scan.
+    /// Online only; the bytes stay in memory until the draft is sent or dropped.
+    func attach(name: String, type: String?, bytes: Data, in ref: CloudRoomRef) {
+        problem = nil
+        if let reason = CloudAttachmentDraft.validate(name: name, type: type, size: bytes.count) { problem = reason; return }
+        guard let type else { return }
+        if drafts(in: ref).count >= CloudLimits.attachments { problem = "at most \(CloudLimits.attachments) attachments"; return }
+        let draft = CloudAttachmentDraft(name: name, type: type, bytes: bytes)
+        drafts[key(ref), default: []].append(draft)
+        let account = identity?.key
+        Task {
+            do {
+                let checksum = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                let upload = try await client.prepareAttachment(workspaceId: ref.workspaceId, CloudAttachmentPrepare(roomId: ref.roomId, threadId: ref.threadId, name: name, size: bytes.count, type: type, checksum: checksum))
+                guard updateDraft(draft.id, ref, account, { $0.attachment = upload.attachment; $0.state = .uploading }) else { return }
+                try await client.upload(upload, bytes: bytes)
+                guard updateDraft(draft.id, ref, account, { $0.state = .verifying }) else { return }
+                let done = try await client.completeAttachment(upload.attachment)
+                updateDraft(draft.id, ref, account) { $0.attachment = done; $0.state = done.state; if done.state == .rejected { $0.problem = "rejected by the scan" } }
+            } catch {
+                let code = (error as? CloudError)?.error
+                updateDraft(draft.id, ref, account) {
+                    $0.state = .rejected
+                    $0.problem = code == .unavailable ? "scan unavailable, remove and try again" : (code?.rawValue.replacingOccurrences(of: "_", with: " ") ?? "upload failed")
+                }
+            }
+        }
+    }
+
+    func refuse(_ reason: String) { problem = reason }
+
+    func removeDraft(_ id: UUID, in ref: CloudRoomRef) {
+        drafts[key(ref)]?.removeAll { $0.id == id }
+    }
+
+    /// False when the account changed or the draft is gone.
+    @discardableResult
+    private func updateDraft(_ id: UUID, _ ref: CloudRoomRef, _ account: CloudAccountKey?, _ change: (inout CloudAttachmentDraft) -> Void) -> Bool {
+        guard identity?.key == account, let index = drafts[key(ref)]?.firstIndex(where: { $0.id == id }) else { return false }
+        change(&drafts[key(ref)]![index])
+        return true
+    }
+
+    /// Bytes for the viewer, never written to disk.
+    func download(_ attachmentId: String, in ref: CloudRoomRef) async throws -> (data: Data, type: String) {
+        try await client.download(workspaceId: ref.workspaceId, attachmentId: attachmentId)
+    }
+
+    // MARK: - approvals
+
+    /// Online only. A refused decision refetches the card so the screen shows
+    /// what the server holds.
+    func decide(_ card: CloudApprovalCard, _ choice: CloudApprovalChoice, in ref: CloudRoomRef) async {
+        guard !offline else { problem = "offline, decide when back online"; return }
+        await work {
+            do {
+                self.applyCard(try await self.client.decide(card, choice), ref)
+            } catch let error as CloudError where [.approvalDecided, .approvalExpired, .controlConflict].contains(error.error) {
+                if let current = try? await self.client.approval(ref, approvalId: card.approvalId) { self.applyCard(current, ref) }
+                throw error
+            }
+        }
+    }
+
+    private func applyCard(_ card: CloudApprovalCard, _ ref: CloudRoomRef) {
+        guard var state = rooms[key(ref)] else { return }
+        let effects = state.apply(card: card)
+        rooms[key(ref)] = state
+        runRoom(effects, ref)
     }
 
     /// A held draft, reviewed: send it as written.
@@ -297,7 +384,7 @@ final class CloudRoomsModel: ObservableObject {
                     self.run(self.session.reduce(.retryDue(timer, generation: generation)))
                 }
             case .clearVisibleState:
-                rooms = [:]; rows = []; selected = nil; outbox = nil; windows = [:]; lastInvite = nil; live = false
+                rooms = [:]; rows = []; selected = nil; outbox = nil; windows = [:]; lastInvite = nil; live = false; drafts = [:]
             case .openStore(let account):
                 // Whoever used the phone before keeps only a quarantined outbox.
                 try? CloudAccountStore.wipeOtherAccounts(root: storageRoot, except: account)
@@ -457,6 +544,12 @@ final class CloudRoomsModel: ObservableObject {
                 if var outbox { let effects = outbox.audienceChanged(roomId: ref.roomId); self.outbox = outbox; runOutbox(effects) }
             case .resyncDiscovery:
                 run(session.reduce(.retryDue(.recovery, generation: session.generation)))
+            case .attachmentUpdated(let attachment):
+                // Only a terminal answer moves a draft; the upload path owns the rest.
+                guard [.ready, .rejected, .expired].contains(attachment.state),
+                      let index = drafts[key(ref)]?.firstIndex(where: { $0.attachment?.attachmentId == attachment.attachmentId }) else { continue }
+                drafts[key(ref)]![index].attachment = attachment
+                drafts[key(ref)]![index].state = attachment.state
             }
         }
     }
@@ -694,20 +787,39 @@ struct CloudRoomChatView: View {
     @ObservedObject var model: CloudRoomsModel
     let ref: CloudRoomRef
     @State private var draft = ""
+    @State private var photo: PhotosPickerItem?
+    @State private var picking = false
+    @State private var importing = false
+    @State private var choosing = false
+    @State private var viewing: CloudViewedAttachment?
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 List {
                     ForEach(model.room(ref)?.messages ?? [], id: \.messageId) { message in
-                        let mine = message.actorId == model.identity?.accountId
+                        let mine = message.actorId == model.identity?.accountId && message.botId == nil
                         VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
-                            Text(message.text)
-                            Text(mine ? "you" : message.actorId).font(.caption2).foregroundStyle(.secondary)
+                            if !message.text.isEmpty { Text(message.text) }
+                            ForEach(message.attachments, id: \.self) { id in
+                                Button { viewing = CloudViewedAttachment(id: id) } label: {
+                                    Label("attachment", systemImage: "paperclip").font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("cloud.attachment.\(id)")
+                            }
+                            Text(message.botId.map { "bot \($0)" } ?? (mine ? "you" : message.actorId)).font(.caption2).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("cloud.message.\(message.messageId)")
                         .id(message.messageId)
+                    }
+                    ForEach(model.room(ref)?.runs.filter { !$0.state.finished } ?? [], id: \.invocationId) { run in
+                        CloudRunRow(run: run, text: model.room(ref)?.streaming[run.invocationId]?.text)
+                    }
+                    ForEach(model.room(ref)?.cards ?? [], id: \.approvalId) { card in
+                        CloudApprovalCardView(model: model, ref: ref, card: card)
                     }
                     ForEach(model.pending(in: ref)) { entry in
                         CloudPendingRow(model: model, entry: entry)
@@ -721,7 +833,20 @@ struct CloudRoomChatView: View {
             if let problem = model.problem {
                 Text(problem).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("cloud.problem")
             }
+            let attached = model.drafts(in: ref)
+            if !attached.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(attached) { item in CloudDraftChip(model: model, ref: ref, item: item) }
+                    }
+                    .padding(.horizontal)
+                }
+            }
             HStack {
+                // A sheet, not a Menu: the ios 26 menu never reports idle to ui tests.
+                Button { choosing = true } label: { Image(systemName: "paperclip") }
+                .disabled(model.offline)
+                .accessibilityIdentifier("cloud.attach")
                 TextField("message", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("cloud.composer")
@@ -730,11 +855,47 @@ struct CloudRoomChatView: View {
                     draft = ""
                     Task { if await !model.send(text, in: ref), draft.isEmpty { draft = text } }
                 }
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attached.isEmpty) || !attached.allSatisfy { $0.state == .ready })
                 .accessibilityIdentifier("cloud.send")
             }
             .padding()
         }
+        .sheet(isPresented: $choosing) {
+            List {
+                Button("photo") { choosing = false; picking = true }.accessibilityIdentifier("cloud.attach.photo")
+                Button("file") { choosing = false; importing = true }.accessibilityIdentifier("cloud.attach.file")
+                // Debug fixture samples for the ui tests.
+                Button("sample text") { choosing = false; model.attach(name: "note.txt", type: "text/plain", bytes: Data("fictional attachment text".utf8), in: ref) }
+                    .accessibilityIdentifier("cloud.attach.sampleText")
+                Button("sample png") { choosing = false; model.attach(name: "dot.png", type: "image/png", bytes: CloudSamples.png, in: ref) }
+                    .accessibilityIdentifier("cloud.attach.samplePNG")
+                Button("scan test file") { choosing = false; model.attach(name: "eicar.txt", type: "text/plain", bytes: Data("EICAR fictional scanner test".utf8), in: ref) }
+                    .accessibilityIdentifier("cloud.attach.eicar")
+            }
+            .presentationDetents([.medium])
+        }
+        .photosPicker(isPresented: $picking, selection: $photo, matching: .images)
+        .onChange(of: photo) { _, item in
+            guard let item else { return }
+            photo = nil
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+                let (bytes, type, name) = CloudSamples.photo(data)
+                model.attach(name: name, type: type, bytes: bytes, in: ref)
+            }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.png, .jpeg, .pdf, .plainText]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let type = CloudAttachmentLimits.type(forName: url.lastPathComponent)
+            // Size is checked before the file is read into memory.
+            if let reason = CloudAttachmentDraft.validate(name: url.lastPathComponent, type: type, size: size) { model.refuse(reason); return }
+            guard let data = try? Data(contentsOf: url) else { return }
+            model.attach(name: url.lastPathComponent, type: type, bytes: data, in: ref)
+        }
+        .sheet(item: $viewing) { item in CloudAttachmentViewer(model: model, ref: ref, attachmentId: item.id) }
         .navigationTitle(ref.roomId)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -753,6 +914,159 @@ struct CloudRoomChatView: View {
         }
     }
 }
+struct CloudViewedAttachment: Identifiable { let id: String }
+
+/// A bot run still in progress, with its provisional text.
+struct CloudRunRow: View {
+    let run: CloudInvocation
+    let text: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let text, !text.isEmpty { Text(text).foregroundStyle(.secondary).accessibilityIdentifier("cloud.run.stream") }
+            Text("bot \(run.botId) · \(label)").font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("cloud.run.state.\(run.state.rawValue)")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.run.\(run.invocationId)")
+    }
+
+    private var label: String {
+        if run.stopRequested, !run.stoppedObserved { return "stopping" }
+        if run.hostOnline == false { return "host offline" }
+        return switch run.state {
+        case .queued: "queued"
+        case .leased, .running: "working"
+        case .waitingForHuman: "waiting for you"
+        case .held: "held"
+        case .completed: "done"
+        case .failed: "failed"
+        case .cancelled: "stopped"
+        }
+    }
+}
+
+/// An approval gate. Buttons only while the server says this account can
+/// decide, the card has not expired and the room service is reachable.
+struct CloudApprovalCardView: View {
+    @ObservedObject var model: CloudRoomsModel
+    let ref: CloudRoomRef
+    let card: CloudApprovalCard
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let status = card.shownStatus(now: context.date)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(card.title).font(.subheadline)
+                Text(status.rawValue).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("cloud.card.status.\(status.rawValue)")
+                if card.decidable(now: context.date), !model.offline {
+                    HStack(spacing: 16) {
+                        Button("approve") { Task { await model.decide(card, .approve, in: ref) } }
+                            .accessibilityIdentifier("cloud.card.approve")
+                        Button("deny", role: .destructive) { Task { await model.decide(card, .deny, in: ref) } }
+                            .accessibilityIdentifier("cloud.card.deny")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.busy)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.card.\(card.approvalId)")
+    }
+}
+
+/// One attachment in the composer: its state and a remove button.
+struct CloudDraftChip: View {
+    @ObservedObject var model: CloudRoomsModel
+    let ref: CloudRoomRef
+    let item: CloudAttachmentDraft
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: item.state == .rejected ? "exclamationmark.triangle" : item.state == .ready ? "checkmark.circle" : "arrow.up.circle")
+            VStack(alignment: .leading) {
+                Text(item.name).font(.caption)
+                Text(item.problem ?? item.state.rawValue).font(.caption2).foregroundStyle(item.state == .rejected ? .red : .secondary)
+            }
+            Button { model.removeDraft(item.id, in: ref) } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("cloud.draft.remove")
+        }
+        .padding(6)
+        .background(.quaternary, in: Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.draft.\(item.state.rawValue)")
+    }
+}
+
+/// Downloads into memory and shows the bytes. Nothing is written to disk.
+struct CloudAttachmentViewer: View {
+    @ObservedObject var model: CloudRoomsModel
+    let ref: CloudRoomRef
+    let attachmentId: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var loaded: (data: Data, type: String)?
+    @State private var failed: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let loaded {
+                    switch loaded.type {
+                    case "image/png", "image/jpeg":
+                        if let image = UIImage(data: loaded.data) {
+                            Image(uiImage: image).resizable().scaledToFit().accessibilityIdentifier("cloud.viewer.image")
+                        } else { Text("can't show this image") }
+                    case "application/pdf":
+                        CloudPDFView(data: loaded.data).accessibilityIdentifier("cloud.viewer.pdf")
+                    default:
+                        ScrollView { Text(String(decoding: loaded.data, as: UTF8.self)).textSelection(.enabled).padding().accessibilityIdentifier("cloud.viewer.text") }
+                    }
+                } else if let failed {
+                    Text(failed).foregroundStyle(.red).accessibilityIdentifier("cloud.viewer.problem")
+                } else {
+                    ProgressView()
+                }
+            }
+            .toolbar { Button("done") { dismiss() }.accessibilityIdentifier("cloud.viewer.done") }
+        }
+        .task {
+            do { loaded = try await model.download(attachmentId, in: ref) }
+            catch { failed = (error as? CloudError)?.error.rawValue.replacingOccurrences(of: "_", with: " ") ?? "download failed" }
+        }
+    }
+}
+
+struct CloudPDFView: UIViewRepresentable {
+    let data: Data
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.document = PDFDocument(data: data)
+        return view
+    }
+    func updateUIView(_ view: PDFView, context: Context) {}
+}
+
+enum CloudSamples {
+    /// A fictional 1x1 png.
+    static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")!
+
+    /// Library photos go up as png when they are png, otherwise as jpeg.
+    static func photo(_ data: Data) -> (Data, String?, String) {
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return (data, "image/png", "photo.png") }
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return (data, "image/jpeg", "photo.jpg") }
+        guard let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.85) else { return (data, nil, "photo") }
+        return (jpeg, "image/jpeg", "photo.jpg")
+    }
+}
+
 /// One unresolved send. Held drafts and sends the server never committed
 /// wait for the person; nothing here edits or re-keys a frozen envelope.
 struct CloudPendingRow: View {
