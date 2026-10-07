@@ -244,6 +244,9 @@ export function connectRealtime(session: CloudSession, handlers: RealtimeHandler
     }
     handlers.onFrame(frame.data, raw.length);
   });
+  // Every socket error is followed by close, which reports it; without a listener,
+  // node's ws throws when close() lands on a socket that is still connecting.
+  socket.addEventListener("error", () => {});
   socket.addEventListener("close", () => {
     if (closed) return;
     closed = true;
