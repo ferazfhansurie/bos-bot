@@ -126,7 +126,7 @@ public final class CloudClient: @unchecked Sendable {
     private let session: URLSession
     private let bearer: @Sendable () async throws -> String
 
-    public init(baseURL: URL, session: URLSession = .shared, bearer: @escaping @Sendable () async throws -> String) {
+    public init(baseURL: URL, session: URLSession = CloudIssuerClient.cookieless, bearer: @escaping @Sendable () async throws -> String) {
         self.baseURL = baseURL; self.session = session; self.bearer = bearer
     }
 

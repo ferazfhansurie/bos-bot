@@ -247,6 +247,15 @@ final class CloudIdentityTests: XCTestCase {
 
     // MARK: - restore and sign-out
 
+    /// The issuer 403s cookie-bearing requests without a browser Origin, so
+    /// a stored sign-in cookie would break native sign-out and re-sign-in.
+    func testNativeCloudCallsNeverCarryCookies() {
+        let config = CloudIssuerClient.cookieless.configuration
+        XCTAssertNil(config.httpCookieStorage)
+        XCTAssertFalse(config.httpShouldSetCookies)
+        XCTAssertEqual(config.httpCookieAcceptPolicy, .never)
+    }
+
     func testRestoreReadsTheScopedBearer() async throws {
         CloudStubProtocol.handler = happyIssuer
         let store = MemoryCredentialStore()
