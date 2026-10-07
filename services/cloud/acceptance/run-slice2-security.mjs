@@ -6,8 +6,10 @@ import {bothOrders} from './schedules.mjs';
 import {digest} from './oracle.mjs';
 const [server,state,evidence,...selected]=process.argv.slice(2);
 const c=await connectFixture(server,state,evidence),results=[];
+const roles=selected.find(x=>x.startsWith('--roles='))?.slice(8).split(',')??['member','guest'];
+assert.ok(roles.every(x=>['member','guest'].includes(x)));
 const root=h=>`/v2/workspaces/${h.w}`,room=h=>`${root(h)}/rooms/${h.r.room_id}`;
-async function scenario(name,fn){if(selected.length&&!selected.includes(name))return;const start=performance.now();c.record({type:'case_start',name});try{await fn();const r={name,state:'passed',duration_ms:performance.now()-start};results.push(r);c.record({type:'case_complete',...r});console.log(JSON.stringify(r));}catch(e){c.record({type:'case_complete',name,state:'failed',error:e.message});throw e;}}
+async function scenario(name,fn){if(selected.length&&!selected.includes(name))return;const start=performance.now();c.record({type:'case_start',name});try{await fn();const r={name,state:'passed',...(name==='a13-a07-revocation-races'?{roles}:{}),duration_ms:performance.now()-start};results.push(r);c.record({type:'case_complete',...r});console.log(JSON.stringify(r));}catch(e){c.record({type:'case_complete',name,state:'failed',error:e.message});throw e;}}
 const send=(p,mode='submit')=>p.driver.operation(p.operations[0].id,{mode});
 try {
 await scenario('a04-changed-envelope-races',async()=>{
@@ -24,7 +26,7 @@ await scenario('a04-expiry-lock-races',async()=>{
  }
 });
 await scenario('a13-a07-revocation-races',async()=>{
- for(const role of ['member','guest'])for(const action of ['message.send','read','replay','snapshot.page','http.publication','realtime.publication'])await bothOrders({name:'a13-'+role+'-'+action,record:c.record,
+ for(const role of roles){await c.humans('revocation',role);for(const action of ['message.send','read','replay','snapshot.page','http.publication','realtime.publication'])await bothOrders({name:'a13-'+role+'-'+action,record:c.record,
  prepare:async({order,iteration})=>{
  const h=await c.humans('revocation',role),p=await c.plan(h,`revoke-${role}-${action}-${order}-${iteration}`,1,{actor:action==='message.send'?h.b:h.a,expected:action==='message.send'&&order==='first-before-second'?'denied':'accepted'});
  if(action!=='message.send')assert.equal((await send(p)).status,'accepted');const s=await c.snapshot(h);let gate,socket;
@@ -43,14 +45,17 @@ await scenario('a13-a07-revocation-races',async()=>{
  else {assert.equal(protectedResult.status,order==='first-before-second'?403:200);await c.verify(f.h,[f.p],f.h.a);}
  assert.equal((await c.request(room(f.h)+'/snapshot',f.h.b,'POST',{thread_id:f.h.r.thread_id})).status,403);const discovery=await c.ok('/v2/discovery/sync',f.h.b);assert.ok(!discovery.workspaces.some(w=>w.workspace_id===f.h.w));assert.equal((await c.admin.query('SELECT 1 FROM cloud.members WHERE workspace_id=$1 AND account_id=$2',[f.h.w,f.h.b.account_id])).rowCount,0);
  }});
+}
 });
 await scenario('a16-invite-races',async()=>{
+ const inviteActors=[await c.actor('invite_x'),await c.actor('invite_y')];
+ await c.humans('invite');
  for(const kind of ['redeem-revoke','double-redeem'])await bothOrders({name:'a16-'+kind,record:c.record,
- prepare:async()=>{const h=await c.humans('invite'),x=await c.actor('invite_x'),y=await c.actor('invite_y'),inv=await c.ok(root(h)+'/invites',h.a,'POST',{role:'guest',room_ids:[h.r.room_id]});let gate;return{h,x,y,inv,pauseBeforeAdmission:async side=>gate=await c.gate((kind==='redeem-revoke'&&side==='second'?'invite.revoke':'invite.redeem')+'.before_admission',{workspace_id:h.w,account_id:side==='first'?x.account_id:kind==='redeem-revoke'?h.a.account_id:y.account_id,...(kind==='redeem-revoke'&&side==='second'?{invite_id:inv.invite_id}:{token_hash:createHash('sha256').update(inv.token).digest('hex')})}),cleanup:async()=>{if(gate)await gate.cleanup();}};},
+ prepare:async()=>{const h=await c.humans('invite'),x=inviteActors[0],y=inviteActors[1],inv=await c.ok(root(h)+'/invites',h.a,'POST',{role:'guest',room_ids:[h.r.room_id]});let gate;return{h,x,y,inv,pauseBeforeAdmission:async side=>gate=await c.gate((kind==='redeem-revoke'&&side==='second'?'invite.revoke':'invite.redeem')+'.before_admission',{workspace_id:h.w,account_id:side==='first'?x.account_id:kind==='redeem-revoke'?h.a.account_id:y.account_id,...(kind==='redeem-revoke'&&side==='second'?{invite_id:inv.invite_id}:{token_hash:createHash('sha256').update(inv.token).digest('hex')})}),cleanup:async()=>{if(gate)await gate.cleanup();}};},
  first:f=>c.request('/v2/invites/redeem',f.x,'POST',{token:f.inv.token}),second:f=>kind==='redeem-revoke'?c.request(root(f.h)+'/invites/'+f.inv.invite_id,f.h.a,'DELETE'):c.request('/v2/invites/redeem',f.y,'POST',{token:f.inv.token}),
  inspect:async({fixture:f,order,resultA,resultB})=>{assert.equal(resultA.status,200);const rows=(await c.admin.query('SELECT account_id,role FROM cloud.members WHERE workspace_id=$1 AND account_id=ANY($2::text[])',[f.h.w,[f.x.account_id,f.y.account_id]])).rows;if(kind==='double-redeem'){assert.equal(resultB.data.error,'invite_used');assert.deepEqual(rows,[{account_id:order==='first-before-second'?f.x.account_id:f.y.account_id,role:'guest'}]);}else{const redeem=order==='first-before-second'?resultA:resultB;assert.equal(redeem.status,order==='first-before-second'?200:403);if(order==='second-before-first')assert.equal(redeem.data.error,'invite_revoked');assert.equal(rows.length,order==='first-before-second'?1:0);}assert.equal((await c.request('/v2/invites/redeem',f.y,'POST',{token:f.inv.token})).status,403);}
  });
- const h=await c.humans('invite_expiry'),x=await c.actor('expired'),inv=await c.ok(root(h)+'/invites',h.a,'POST',{role:'owner',room_ids:[h.r.room_id],expires_in_seconds:1});await pause(1100);for(const route of ['preview','redeem']){const r=await c.request('/v2/invites/'+route,x,'POST',{token:inv.token});assert.equal(r.data.error,'invite_expired');}assert.equal((await c.admin.query('SELECT 1 FROM cloud.members WHERE workspace_id=$1 AND account_id=$2',[h.w,x.account_id])).rowCount,0);
+ const h=await c.humans('invite_expiry'),x=inviteActors[0],inv=await c.ok(root(h)+'/invites',h.a,'POST',{role:'owner',room_ids:[h.r.room_id],expires_in_seconds:1});await pause(1100);for(const route of ['preview','redeem']){const r=await c.request('/v2/invites/'+route,x,'POST',{token:inv.token});assert.equal(r.data.error,'invite_expired');}assert.equal((await c.admin.query('SELECT 1 FROM cloud.members WHERE workspace_id=$1 AND account_id=$2',[h.w,x.account_id])).rowCount,0);
 });
 writeFileSync(evidence+'/summary.json',JSON.stringify({source:c.source,results},null,2)+'\n',{flag:'wx',mode:0o600});
 }catch(e){console.error(e);process.exitCode=1;}finally{await c.close();}

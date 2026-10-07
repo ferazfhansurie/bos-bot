@@ -118,6 +118,68 @@ final class CloudRoomsLiveUITests: XCTestCase {
 
     // MARK: - steps
 
+    /// Independent check-owned fault proxy forwards to the real local issuer.
+    /// Revocation calls the issuer sign-out with the actual session captured at
+    /// sign-in; no bearer is exposed to XCTest output or attachments.
+    @MainActor
+    func testRevokedAndUnavailableStates() async throws {
+        guard let secret = ProcessInfo.processInfo.environment["CLOUD_CHECK_SECRET"]
+        else { throw XCTSkip("no check-owned fault target") }
+        let address = "native-state-\(UUID().uuidString.lowercased())@example.test"
+        let app = launch()
+        XCTAssertTrue(app.textFields["cloud.email"].exists)
+        log(["event": "signedOutState"])
+        func control(_ path: String, _ value: [String: String]) async throws {
+            var request = URLRequest(url: issuer.appendingPathComponent("__check/" + path))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(secret, forHTTPHeaderField: "X-Check-Secret")
+            request.httpBody = try JSONSerialization.data(withJSONObject: value)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            if path == "otp-slot", let json = try JSONSerialization.jsonObject(with: data) as? [String: Double], let at = json["at_ms"] {
+                let delay = max(0, at / 1000 - Date().timeIntervalSince1970)
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+        try await control("otp-slot", [:])
+        try await signIn(address, in: app)
+        signOut(app)
+        log(["event": "signOutRendered"])
+        try await control("otp-slot", [:])
+        try await signIn(address, in: app)
+        app.buttons["cloud.createRoom"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+        openRoom(in: app)
+
+        try await control("mode", ["mode": "5xx"])
+        // A fresh protected action validates authoritatively. Socket closure
+        // alone need not carry an identity error to the native client.
+        type("fictional issuer outage probe", into: app.textFields["cloud.composer"])
+        app.buttons["cloud.send"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.problem"].waitForExistence(timeout: 20), problem(app))
+        XCTAssertTrue(problem(app).contains("identity unavailable"), "fresh action should render the issuer outage")
+        XCTAssertTrue(app.textFields["cloud.composer"].exists, "outage preserves the signed-in room")
+        XCTAssertFalse(app.textFields["cloud.email"].exists, "outage must not erase the account")
+        log(["event": "unavailableState", "accountPreserved": "true"])
+        shot("issuer unavailable", app)
+        try await control("mode", ["mode": "normal"])
+        // Relaunch only this simulator app to run its documented foreground
+        // identity validation and reload the preserved account/room store.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.staticTexts["cloud.subject"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.staticTexts["cloud.identityUnavailable"].exists)
+        openRoom(in: app)
+        log(["event": "issuerRecovered"])
+        try await control("revoke", ["email": address])
+        XCTAssertTrue(app.staticTexts["cloud.revoked"].waitForExistence(timeout: 20), problem(app))
+        XCTAssertTrue(app.textFields["cloud.email"].exists)
+        XCTAssertFalse(app.textFields["cloud.composer"].exists, "revocation removes the cached room")
+        log(["event": "revokedState", "roomRemoved": "true"])
+        shot("session revoked", app)
+    }
+
     @MainActor
     private func message(_ text: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)

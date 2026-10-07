@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { localURL, redact, Transport } from './transport.mjs';
 import { freezeManifest, Oracle } from './oracle.mjs';
 import { CloudDriver, PROTOCOL_COMMIT, frozenOperation, operationEnvelope, recipientMessages } from './protocol.mjs';
+import {dispatchOTP} from './dispatch-otp.mjs';
 import { FrameSchema, SnapshotSchema } from '../../../shared/cloud-protocol/index.ts';
 
 export const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -69,7 +70,7 @@ export async function connectFixture(serverArg, stateArg, evidenceArg) {
     assert.equal(r.status,200,JSON.stringify(data)); return data;
   };
   c.actor = async (label, email=`${label.replace(/[^a-z0-9_]/gi,'_')}_${randomUUID()}@example.test`) => {
-    const sent=await c.issuerRequest('/api/auth/email-otp/send-verification-otp',{method:'POST',headers:{'content-type':'application/json',origin:'http://127.0.0.1:5199'},body:JSON.stringify({email,type:'sign-in'})});
+    const sent=await dispatchOTP(statePath,()=>c.issuerRequest('/api/auth/email-otp/send-verification-otp',{method:'POST',headers:{'content-type':'application/json',origin:'http://127.0.0.1:5199'},body:JSON.stringify({email,type:'sign-in'})}));
     assert.equal(sent.status,200,'real issuer otp dispatch');
     const sink=await c.issuerRequest('/__dev/otp?email='+encodeURIComponent(email)); assert.equal(sink.status,200);
     const {otp}=await sink.json();
