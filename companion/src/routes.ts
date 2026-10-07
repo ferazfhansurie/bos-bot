@@ -212,6 +212,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/tts\/voices$/ },
   { method: "POST", path: /^\/api\/tts\/prepare$/ },
   { method: "POST", path: /^\/api\/tts\/speak$/ },
+  // Realtime voice call: the computer mints a short-lived xAI secret; the
+  // raw key never crosses the companion boundary.
+  { method: "POST", path: /^\/api\/voice\/call$/ },
 
   // Routines create ordinary tasks using an existing agent configuration.
   // Webhook management remains explicitly denied below.
