@@ -1,3 +1,4 @@
+import {runtimeRoute} from './runtime-http.ts';
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -94,11 +95,11 @@ export async function startCloud(
         res.setHeader("Access-Control-Allow-Credentials", "true");
         res.setHeader(
           "Access-Control-Allow-Headers",
-          "Authorization,Content-Type,X-Cloud-Fixture-Secret",
+          "Authorization,Content-Type,X-Cloud-Fixture-Secret,X-Cloud-Host-Credential,Range",
         );
         res.setHeader(
           "Access-Control-Allow-Methods",
-          "GET,POST,DELETE,OPTIONS",
+          "GET,POST,PUT,DELETE,OPTIONS",
         );
       }
       if (req.method === "OPTIONS") {
@@ -132,6 +133,7 @@ export async function startCloud(
         if (rates.size > 2048)
           for (const [k, v] of rates) if (v.until < now) rates.delete(k);
       }
+      if(await runtimeRoute(service,req,res,path,url,token,body,write))return;
       let value: any, scope: string | undefined, room: string | undefined;
       if (path.join("/") === "v2/me" && method === "GET") {
         const i = await service.identify(token);

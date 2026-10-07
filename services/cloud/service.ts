@@ -1,3 +1,6 @@
+import {PushHints} from './push.ts';
+import { RoomRuntime } from './runtime.ts';
+import { Attachments } from './attachments.ts';
 import {
   createHash,
   createHmac,
@@ -30,6 +33,9 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const readEmpty = () => ({ prefix: "0", intervals: [], attention: false });
 type Authority = { workspace: any; member: any; room?: any };
 export class CloudService {
+  push: PushHints;
+  runtime: RoomRuntime;
+  attachments: Attachments;
   db: Database;
   issuer: IssuerAdapter;
   service: string;
@@ -47,6 +53,9 @@ export class CloudService {
     this.service = service;
     this.key = key;
     this.hooks = hooks;
+    this.push = new PushHints(this);
+    this.runtime = new RoomRuntime(this);
+    this.attachments = new Attachments(this);
   }
   sign(value: Record<string, unknown>) {
     const data = Buffer.from(canonicalJson(value)).toString("base64url");
@@ -546,6 +555,7 @@ export class CloudService {
           "DELETE FROM cloud.members WHERE workspace_id=$1 AND account_id=$2",
           [w, account],
         );
+        await this.runtime.revokeActor(q, w, account);
         await this.bumpPolicies(q, w);
         return { removed: true };
       },
@@ -695,11 +705,10 @@ export class CloudService {
           reason = "operation_expired";
         else if (e.expected_policy_revision !== a.room.policy_revision)
           reason = "policy_changed";
-        else if (e.attachment_ids.length) reason = "unsupported_attachment";
-        else if (e.mentions.some((m) => m.kind === "bot"))
-          reason = "invalid_mention";
         else {
+          reason = await this.runtime.validate(q,w,e.room_id,e.thread_id,i.account_id,e.mentions,e.attachment_ids);
           for (const m of e.mentions) {
+            if (m.kind === "bot") continue;
             const member = (
               await q.query(
                 "SELECT 1 FROM cloud.members m WHERE m.workspace_id=$1 AND m.account_id=$2 AND (m.role<>'guest' OR EXISTS(SELECT 1 FROM cloud.room_grants g WHERE g.workspace_id=m.workspace_id AND g.account_id=m.account_id AND g.room_id=$3))",
@@ -763,6 +772,11 @@ export class CloudService {
               ],
             )
           ).rows[0];
+          if (e.attachment_ids.length) {
+            await q.query('UPDATE cloud.messages SET attachment_ids=$4 WHERE workspace_id=$1 AND room_id=$2 AND message_id=$3',[w,e.room_id,message_id,JSON.stringify(e.attachment_ids)]);
+            m.attachment_ids=e.attachment_ids;
+            await this.attachments.attach(q,w,e.room_id,message_id,e.attachment_ids);
+          }
           const message = this.message(m);
           const sequence = await this.event(
             q,
@@ -772,6 +786,7 @@ export class CloudService {
             "message.created",
             { message },
           );
+          await this.runtime.offer(q,w,e.room_id,e.thread_id,message,e.attachment_ids);
           result = {
             status: "accepted",
             client_operation_id: e.client_operation_id,
@@ -992,6 +1007,8 @@ export class CloudService {
         [w, r],
       )
     ).rows;
+    const runtimeProjection=await this.runtime.projection(q,w,r,t,i.account_id);
+    a.room.head=(await q.query('SELECT head::text FROM cloud.rooms WHERE workspace_id=$1 AND room_id=$2',[w,r])).rows[0].head;
     const snapshot_id = id(),
       expires_at = new Date(Date.now() + LIMITS.snapshotMs).toISOString();
     const projection = {
@@ -1009,8 +1026,7 @@ export class CloudService {
       threads,
       capabilities: ["message.send", "history", "read"],
       read: await this.coverage(q, w, r, t, i.account_id),
-      active_runs: [],
-      cards: [],
+      ...runtimeProjection,
     };
     await q.query(
       "INSERT INTO cloud.snapshots VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
@@ -1143,7 +1159,8 @@ export class CloudService {
     let scanned = c.sequence,
       bytes = 2048;
     for (const e of rows) {
-      const visible = e.thread_id === null || e.thread_id === b.thread_id;
+      const visible = (e.thread_id === null || e.thread_id === b.thread_id) &&
+        (!['approval.updated','attachment.updated'].includes(e.kind) || e.payload.actor_id === i.account_id);
       const event = {
         schema_version: 1,
         workspace_id: w,
@@ -1336,6 +1353,8 @@ export class CloudService {
           "SELECT 1 FROM cloud.workspaces WHERE workspace_id=$1 FOR UPDATE",
           [w],
         );
+        await this.runtime.sweep(q,w);
+        await this.attachments.expire(q,w);
         const work = (
           await q.query(
             "SELECT * FROM cloud.work_queue WHERE workspace_id=$1 AND completed_at IS NULL ORDER BY room_id,event_id LIMIT 100 FOR UPDATE SKIP LOCKED",

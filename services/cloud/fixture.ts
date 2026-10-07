@@ -1,3 +1,4 @@
+import {LocalObjects} from './objects.ts';
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile, rm, mkdir, readdir } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -136,6 +137,11 @@ async function createFixture(automaticWorker = true, options?: {issuerURL: strin
       key,
       hooks,
     );
+    service.attachments.store = new LocalObjects(dir+'/objects',async(bytes,type)=>{
+      // Fictional deterministic scanner for isolated acceptance only.
+      if(bytes.includes(Buffer.from('EICAR')) || (type==='image/png'&&!bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) || (type==='image/jpeg'&&!bytes.subarray(0,3).equals(Buffer.from([255,216,255]))) || (type==='application/pdf'&&!bytes.subarray(0,5).equals(Buffer.from('%PDF-'))) )return 'rejected';
+      return 'clean';
+    });
     app = await startCloud(
       service,
       httpPort,
