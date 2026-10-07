@@ -1,0 +1,106 @@
+name: bos-cloud-pilot
+x-room: &room
+  build:
+    context: ../..
+    dockerfile: deploy/selfhost/Dockerfile
+    target: room
+  image: bos-cloud-pilot-room:${RELEASE_TAG:-local}
+  environment: &room-env
+    CLOUD_DATABASE_URL: postgres://cloud_app:${CLOUD_APP_PASSWORD:?required}@postgres:5432/bos_rooms
+    CLOUD_SERVICE_URL: https://${DOMAIN:?required}
+    CLOUD_ISSUER_URL: https://${DOMAIN:?required}
+    CLOUD_ISSUER_INTERNAL_URL: http://issuer:8787
+    CLOUD_SERVICE_KEY: ${CLOUD_SERVICE_KEY:?required}
+    CLOUD_OBJECT_STORE_PATH: /objects
+  volumes:
+    - objects:/objects
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    issuer:
+      condition: service_healthy
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bos_owner
+      POSTGRES_DB: bos_rooms
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      ISSUER_DB_PASSWORD: ${ISSUER_DB_PASSWORD:?required}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./init-issuer.sh:/docker-entrypoint-initdb.d/10-issuer.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U bos_owner -d bos_rooms']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build:
+      context: ../..
+      dockerfile: deploy/selfhost/Dockerfile
+      target: room
+    image: bos-cloud-pilot-room:${RELEASE_TAG:-local}
+    command: [node, --experimental-strip-types, selfhost.ts, migrate]
+    environment:
+      CLOUD_MIGRATION_URL: postgres://bos_owner:${POSTGRES_PASSWORD:?required}@postgres:5432/bos_rooms
+      CLOUD_APP_PASSWORD: ${CLOUD_APP_PASSWORD:?required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+  issuer:
+    build:
+      context: ../..
+      dockerfile: deploy/selfhost/Dockerfile
+      target: issuer
+    image: bos-cloud-pilot-issuer:${RELEASE_TAG:-local}
+    restart: unless-stopped
+    environment:
+      ISSUER_PUBLIC_URL: https://${DOMAIN:?required}
+      ISSUER_DATABASE_URL: postgres://issuer_owner:${ISSUER_DB_PASSWORD:?required}@postgres:5432/bos_issuer
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?required}
+      ISSUER_ALLOWED_EMAILS: ${ISSUER_ALLOWED_EMAILS:-}
+      ISSUER_ALLOWED_EMAIL_DOMAINS: ${ISSUER_ALLOWED_EMAIL_DOMAINS:-}
+      ISSUER_OTP_DELIVERY: ${ISSUER_OTP_DELIVERY:-log}
+      ISSUER_SMTP_URL: ${ISSUER_SMTP_URL:-}
+      ISSUER_EMAIL_FROM: ${ISSUER_EMAIL_FROM:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  room:
+    <<: *room
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8790/v2/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  worker:
+    <<: *room
+    command: [node, --experimental-strip-types, selfhost.ts, worker]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?required}
+    ports:
+      - '${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-18080}:80'
+      - '${BIND_ADDRESS:-127.0.0.1}:${HTTPS_PORT:-18443}:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      room:
+        condition: service_healthy
+volumes:
+  postgres:
+  objects:
+  caddy_data:
+  caddy_config:

@@ -110,6 +110,9 @@ export async function migrate(migrationURL: string, appPassword: string) {
     }
     // cloud_app is created by 001 without a password; give it the operator's password.
     await c.query(`ALTER ROLE cloud_app PASSWORD ${c.escapeLiteral(appPassword)}`);
+    // The self-host bootstrap revokes PUBLIC connect on the room database.
+    const database = (await c.query('SELECT current_database() AS name')).rows[0].name;
+    await c.query(`GRANT CONNECT ON DATABASE ${c.escapeIdentifier(database)} TO cloud_app`);
     await c.query('REVOKE ALL ON public.bos_selfhost_migrations FROM PUBLIC');
   } finally {
     try { await c.query('SELECT pg_advisory_unlock(424242005)'); } catch {}

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set=issuer_password="$ISSUER_DB_PASSWORD" <<'SQL'
+CREATE ROLE issuer_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'issuer_password';
+CREATE DATABASE bos_issuer OWNER issuer_owner;
+REVOKE CONNECT ON DATABASE bos_rooms FROM PUBLIC;
+REVOKE CONNECT ON DATABASE bos_issuer FROM PUBLIC;
+GRANT CONNECT ON DATABASE bos_issuer TO issuer_owner;
+SQL

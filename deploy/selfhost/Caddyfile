@@ -1,0 +1,12 @@
+{$DOMAIN} {
+  handle /api/auth/* {
+    reverse_proxy issuer:8787
+  }
+  handle /v1/* {
+    reverse_proxy issuer:8787
+  }
+  handle /v2/* {
+    reverse_proxy room:8790
+  }
+  respond /healthz "bos self-host ingress" 200
+}
