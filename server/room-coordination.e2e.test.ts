@@ -423,7 +423,8 @@ it("consults multiple existing members and returns once, with no discussion prer
   expect(speakers.at(-1)).toBe(f.sender.id);
   expect(speakers.slice(1, -1).sort()).toEqual([f.target.id, reviewer.id].sort());
   const source = await f.messages(f.source.activeTaskId);
-  expect(source.filter((m: any) => m.comm).map((m: any) => m.comm.withBotId).sort()).toEqual([f.target.id, reviewer.id].sort());
+  // same room: each brief is a visible request post, not a "Sent to" chip
+  expect(source.filter((m: any) => m.roomRequest?.phase === "request").map((m: any) => m.text).sort()).toEqual(["@Engineer Give one risk from your role", "@Reviewer Give one risk from your role"]);
   expect(source.filter((m: any) => m.text === "Reviewed downstream outcome")).toHaveLength(1);
   const tools = f.provider()[0].evidence[0].result.tools.map((t: any) => t.name);
   expect(tools).toContain("coordinate_bots");
@@ -587,3 +588,24 @@ it("keeps distinct addressed worker results and suppresses acknowledgement loops
   expect(f.nodes().filter((n: any) => n.botId === lead.id)).toHaveLength(2);
   await f.recordWake("distinct-results");
 }), 45000);
+
+it("posts a same-room assignment as one visible brief when sent, and never re-posts an addressed reply", () => withRooms(async f => {
+  await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id] });
+  const gateFile = join(f.session.info.dataDir, "visible-brief.gate");
+  f.plan[f.target.id].gateFile = gateFile;
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id], message: "Review CSV", request_key: "review" } }];
+  f.plan[f.sender.id].reply = "@Engineer also check the totals";
+  f.savePlan(); await f.cli("send", "--bot", f.target.id, "--text", "Independent work");
+  await f.start();
+  await expect.poll(() => f.nodes().find((n: any) => n.key === `review:${f.target.id}`)?.status, { timeout: 15_000 }).toBe("queued");
+  // queued behind the recipient's own work, the brief is already in the room
+  let room = await f.messages(f.source.activeTaskId);
+  expect(room.filter((m: any) => m.text === "@Engineer Review CSV" && m.from?.botId === f.sender.id)).toHaveLength(1);
+  expect(room.some((m: any) => m.tool?.name?.startsWith("Sent to"))).toBe(false);
+  writeFileSync(gateFile, "release");
+  expect((await f.wait()).status).toBe("settled");
+  room = await f.messages(f.source.activeTaskId);
+  const posts = room.filter((m: any) => m.kind === "text");
+  expect(posts.filter((m: any) => m.text.includes("Review CSV"))).toHaveLength(1);
+  expect(posts.filter((m: any) => m.text.includes("also check the totals"))).toHaveLength(1);
+}), 45_000);

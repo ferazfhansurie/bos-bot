@@ -3253,7 +3253,9 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
     const result: GroupTurnOrchestration["result"] = {};
     const turnText = coordinationTurnText(node, resumed);
     const systemInstructions = coordinationSystemInstructions();
-    if (!resumed && !store.messagesFor(node.threadId).some(m => m.roomRequest?.id === node.id && m.roomRequest.phase === "request")) {
+    // A mention handoff is started by a reply that is already in the room;
+    // posting it again as a request is how one brief showed up twice.
+    if (!resumed && !node.key.startsWith("mention-") && !store.messagesFor(node.threadId).some(m => m.roomRequest?.id === node.id && m.roomRequest.phase === "request")) {
       store.appendMessage(node.threadId, { role: "bot", kind: "text",
         roomRequest: { id: node.id, phase: "request" },
         from: sender ? { botId: sender.id, name: sender.name, color: sender.color } : undefined,
@@ -16649,7 +16651,20 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               accepted.push({ requestId: node.id, botId: node.botId, duplicate, status: node.status });
               if (!duplicate) {
                 const recipient = store.bot(target.botId) ?? { ...internalSender, id: target.botId, name: remoteRoomMember(target.botId)?.name ?? remoteRoster.bots.find(bot => bot.id === target.botId)?.name ?? "Remote teammate" };
-                store.appendMessage(address.threadId, { role: "bot", kind: "activity",
+                // An assignment inside the room it is sent from is a room
+                // message: the person sees the brief the moment it is sent,
+                // not a "Sent to" chip until the recipient's queue reaches
+                // it. run() finds this request by its node id and never posts
+                // it a second time. Another room still gets its brief only
+                // when the work passes its dispatch checks.
+                if (destination && destination.id === source?.id && !store.messagesFor(node.threadId).some(m => m.roomRequest?.id === node.id && m.roomRequest.phase === "request")) {
+                  store.appendMessage(node.threadId, { role: "bot", kind: "text",
+                    roomRequest: { id: node.id, phase: "request" },
+                    from: { botId: internalSender.id, name: internalSender.name, color: internalSender.color },
+                    text: `@${recipient.name} ${node.text}`,
+                  });
+                }
+                if (!destination || destination.id !== source?.id) store.appendMessage(address.threadId, { role: "bot", kind: "activity",
                   from: { botId: internalSender.id, name: internalSender.name, color: internalSender.color },
                   tool: { name: "Sent to " + recipient.name + (destination && destination.id !== source?.id ? " · " + destination.name : ""), ok: true },
                   ...(destination ? { comm: { groupId: destination.id, threadId: node.threadId, withBotId: recipient.id, withName: recipient.name, withColor: recipient.color } }
