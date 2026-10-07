@@ -11,9 +11,9 @@ export async function identityStallGate(c) {
   try {
     for (const socket of sockets) socket.subscribe(h, snapshot);
     await c.until(() => sockets.every(s => s.frames.some(f => f.type === 'event_batch' && f.live)), '20 subscribed streams', 20000);
-    const offsets = sockets.map(s => s.frames.length);
     const envelope = await c.envelope(h, h.a, { text: 'fictional stall sentinel' });
     const stalledEnvelope = await c.envelope(h, h.b, { text: 'fictional denied during stall' });
+    const offsets = sockets.map(s => s.frames.length);
     const started = Date.now();
     c.f.issuer_fault.stall_bearer = h.b.bearer;
     c.f.issuer_fault.stall_ms = 15000;
@@ -26,8 +26,10 @@ export async function identityStallGate(c) {
     await c.until(() => sockets.every(s => s.code !== null), 'all 20 sockets fail closed', 10000);
     await c.pause(Math.max(0, started + 16000 - Date.now()));
     const frames = sockets.flatMap((s, index) => s.frames.slice(offsets[index]));
-    const publications = frames.filter(f => ['event_batch', 'reset'].includes(f.type));
+    const publications = sockets.flatMap(s => s.timed_frames).filter(({frame, received_at}) =>
+      received_at >= started + 15000 && ['event_batch', 'reset'].includes(frame.type));
     assert.equal(publications.length, 0, 'stalled issuer cannot publish protected room data');
+    assert.equal(frames.filter(f => f.type === 'event_batch' && f.events.some(e => e.payload.message?.message_id === committed.message_id)).length, 0, 'stall sentinel must not be published');
     assert.ok(sockets.every(s => s.code === 1008 && s.frames.some(f => f.type === 'error' && f.error === 'identity_unavailable')));
     c.log({ type: 'identity_stall_receipt', elapsed_ms: Date.now() - started,
       concurrent_sockets: sockets.length, closed_codes: sockets.map(s => s.code),

@@ -137,8 +137,8 @@ export async function connect({ server, candidate, schema, evidence, record }) {
     return { allocation: a, value: ready, bytes };
   };
   c.socket = async actor => {
-    const ws = new WebSocket(f.ws_url); sockets.add(ws); const trace = { ws, frames: [], code: null };
-    ws.on('message', b => { const frame = JSON.parse(b.toString()); trace.frames.push(frame); log({ type: 'ws_frame', account_id: actor.account_id, frame }); });
+    const ws = new WebSocket(f.ws_url); sockets.add(ws); const trace = { ws, frames: [], timed_frames: [], code: null };
+    ws.on('message', b => { const frame = JSON.parse(b.toString()); trace.frames.push(frame); trace.timed_frames.push({ frame, received_at: Date.now() }); log({ type: 'ws_frame', account_id: actor.account_id, frame }); });
     ws.on('error', e => log({ type: 'ws_error', message: e.message }));
     ws.on('close', code => { trace.code = code; sockets.delete(ws); log({ type: 'ws_close', code }); });
     await new Promise((r, j) => { ws.once('open', r); ws.once('error', j); });
