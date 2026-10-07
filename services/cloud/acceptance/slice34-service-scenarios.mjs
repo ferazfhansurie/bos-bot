@@ -164,6 +164,32 @@ export function serviceScenarios(c) {
       return { removals_before_reopen: removed.removed && removed.messages.length === 0,
         inaccessible_metadata_count: discovery.workspaces.filter(w => w.workspace_id === h.w).length };
     },
+    'slow-consumer-overflow-corrupt-cache': async () => {
+      const h = await c.humans('slow-corrupt'); const s = await c.snapshot(h);
+      const pending = { ...entry(await c.envelope(h)), state: 'checking', dispatched: true };
+      const initial = c.client.cloudRoomReducer(state(h, h.b, [pending]), { type: 'snapshot', snapshot: s });
+      const win = await c.ok(root(h) + '/operation-windows', h.a, 'POST', {});
+      const template = await c.envelope(h, h.a, { text: 'fictional tcp backpressure ' + 'x'.repeat(65000), window: win });
+      for (let i = 0; i < 24; i++) await c.send(h, h.a, { ...template, client_operation_id: win.window_id + '.fictional_pressure_' + String(i).padStart(16, '0') });
+      const frame = await c.replay(h, h.b, s); assert.ok(frame.events.length);
+      const corrupted = structuredClone(frame); corrupted.events[0].workspace_id = 'fictional-corrupt-cache';
+      const refused = apply(initial, corrupted); assert.equal(refused.reset_required, true);
+      const socket = await c.socket(h.b);
+      const peer = [...c.f.app.wsServer.clients].find(ws => ws._socket?.remotePort === socket.ws._socket.localPort); assert.ok(peer);
+      let peak = 0;
+      peer._socket.cork(); const meter = setInterval(() => peak = Math.max(peak, peer.bufferedAmount), 5);
+      try {
+        socket.ws.send(JSON.stringify({ type: 'subscribe', workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id, cursor: s.cursor }));
+        await c.until(() => peer.readyState >= c.WebSocket.CLOSING, 'actual outbound overflow');
+      } finally { clearInterval(meter); peer._socket?.uncork(); }
+      await c.until(() => socket.code !== null, 'actual overflow close'); assert.equal(socket.code, 1013);
+      const reset = await c.snapshot(h); const recovered = c.client.cloudRoomReducer(refused, { type: 'snapshot', snapshot: reset });
+      c.log({ type: 'actual_slow_consumer_corrupt_cache', peak_buffered_bytes: peak, close_code: socket.code,
+        corrupted, refused_cursor: refused.cursor, restored_outbox: recovered.outbox, client_artifact: c.clientArtifact });
+      return { bounded_buffer: peak <= 1048576 + 128 && socket.code === 1013,
+        unresolved_outbox_lost: initial.outbox.filter(e => !recovered.outbox.some(n => n.envelope.client_operation_id === e.envelope.client_operation_id)).length,
+        corrupt_cursor_advanced: +(refused.cursor !== initial.cursor) };
+    },
     'sparse-read-bound-concurrent-devices': async () => {
       const h = await c.humans('read-bound'); const win = await c.ok(root(h) + '/operation-windows', h.a, 'POST', {});
       for (let i = 0; i < 514; i++) await c.send(h, h.a, await c.envelope(h, h.a, { text: 'fictional read ' + i, window: win }));
@@ -263,13 +289,20 @@ export function serviceScenarios(c) {
       const h = await c.humans('guest-memory'); const s = await c.snapshot(h); const e = await c.envelope(h); let writes = 0;
       const storage = { getItem: () => null, setItem: () => { writes++; } };
       const session = { ...h.b, baseUrl: c.f.url };
-      const offline = { online: () => false, subscribe: () => () => {} };
+      let online = true, networkListener;
+      const offline = { online: () => online, subscribe: fn => { networkListener = fn; return () => { networkListener = undefined; }; } };
       const api = c.client.cloudApi(session);
       const make = () => new c.client.CloudRoomController(session, api, { workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id, policy_revision: s.policy_revision, guest: true }, storage, c.WebSocket, () => {}, offline);
-      const guest = make(); await guest.send('fictional guest never transmitted'); guest.stop();
+      const guest = make(); guest.start();
+      assert.equal(await guest.send('fictional guest recorded online'), null);
+      await c.until(() => guest.getState().outbox.some(e => e.state === 'accepted'), 'real guest send recorded');
+      online = false; networkListener(false);
+      assert.equal(await guest.send('fictional guest never transmitted'), null);
+      const drafts = guest.getState().outbox.filter(e => e.state === 'draft'); assert.equal(drafts.length, 1);
+      guest.stop();
       const recorded = await c.send(h, h.b, e); const recreated = make();
       assert.equal((await c.lookup(h, h.b, e)).message_id, recorded.message_id);
-      const recreatedOutbox = recreated.getState().outbox; recreated.stop();
+      recreated.start(); const recreatedOutbox = recreated.getState().outbox; recreated.stop();
       c.log({ type: 'real_guest_controller_death', writes, recreatedOutbox, recorded, client_artifact: c.clientArtifact });
       return { persistent_guest_payloads: writes, unrecorded_guest_intent_recreated: recreatedOutbox.length };
     },
@@ -338,7 +371,7 @@ export function serviceScenarios(c) {
       const controller = new c.client.CloudRoomController(session, c.client.cloudApi(session),
         { workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id, policy_revision: s.policy_revision }, null,
         c.WebSocket, () => {}, { online: () => false, subscribe: () => () => {} });
-      assert.equal(await controller.decide(card, 'approve'), 'offline');
+      controller.start(); assert.equal(await controller.decide(card, 'approve'), 'offline');
       const replayedControls = controller.getState().outbox.filter(e => e.envelope.kind !== 'message.send').length; controller.stop();
       c.log({ type: 'approval_actor_pin', card, revoked, wrongActor, expired, denied });
       return { invalid_approval_decisions: invalid, automatic_offline_control_replay: replayedControls };

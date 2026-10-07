@@ -156,7 +156,8 @@ export async function connect({ server, candidate, schema, evidence, record }) {
     c.actors = [await c.actor('alice'), await c.actor('bob'), await c.actor('foreign'), await c.actor('spare')];
     const cpRequire = createRequire(server + '/cloudflare/control-plane/package.json');
     const bundle = resolve(evidence, 'actual-web-client.mjs');
-    await cpRequire('esbuild').build({ stdin: { contents: "export * from './src/cloud/room-reducer.ts'; export * from './src/cloud/outbox.ts'; export * from './src/cloud/read-coverage.ts'; export * from './src/cloud/controller.ts'; export * from './src/cloud/api.ts';", resolveDir: server, sourcefile: 'acceptance-entry.ts' },
+    const bundler = createRequire(cpRequire.resolve('wrangler/package.json'))('esbuild');
+    await bundler.build({ stdin: { contents: "export * from './src/cloud/room-reducer.ts'; export * from './src/cloud/outbox.ts'; export * from './src/cloud/read-coverage.ts'; export * from './src/cloud/controller.ts'; export * from './src/cloud/api.ts';", resolveDir: server, sourcefile: 'acceptance-entry.ts' },
       bundle: true, platform: 'node', format: 'esm', outfile: bundle, logLevel: 'silent' });
     c.client = await import(pathToFileURL(bundle).href);
     c.clientArtifact = { path: bundle, sha256: bytesDigest(readFileSync(bundle)) };
@@ -168,7 +169,16 @@ export async function connect({ server, candidate, schema, evidence, record }) {
         native_provider_available: false, limitations: ['fictional scanner is not malware certification', 'web reducers run in Node; browser and native lifecycle receipts remain separate'], client_artifact: c.clientArtifact }),
       scenario: async spec => {
         trace = []; const fn = scenarios[spec.name];
-        if (!fn) return { name: spec.name, status: 'unrun', reason: 'requires native provider/browser/iOS lifecycle receipts unavailable in the isolated service fixture' };
+        const missing = {
+          'two-human-native': 'two human native host/provider transcripts and recipient receipts are unavailable; no provider is configured or called',
+          'model-pinned-no-fallback': 'actual native provider model/fallback receipts unavailable; fixture model metadata is not provider evidence',
+          'explicit-steer-and-two-bot-no-loop': 'native explicit-steer/two-bot provider transcripts unavailable; no provider execution is modeled',
+          'stream-reorder-duplicate-edit-delete': 'candidate has replay wire types but no HTTP edit/delete mutation driver; the complete edit/delete service scenario cannot execute',
+          'identity-stall-15s-renewal-loss-20-concurrent': 'native bearer renewal response-loss receipt unavailable; issuer validation alone does not prove renewal semantics',
+          'late-old-account-callback-push-deeplink': 'native late callback/push/deeplink lifecycle driver unavailable; local hint construction is not device receipt',
+          'web-ios-offline-background-replay': 'real browser and iOS offline/background lifecycle receipts are not available in this service-only run',
+        };
+        if (!fn) { assert.ok(missing[spec.name], 'implement or explicitly explain every frozen scenario'); return { name: spec.name, status: 'unrun', reason: missing[spec.name] }; }
         return c.observation(spec, await fn());
       },
       prepareRace: (name, context) => prepareRace(c, name, context),
@@ -188,6 +198,7 @@ export async function connect({ server, candidate, schema, evidence, record }) {
 }
 
 async function prepareRace(c, name, context) {
+  c.f.hooks.pausedWorker = true; // No modeled host; queue delivery is separate from admission.
   const h = await c.humans('race-' + name, { runtime: name !== 'seal-delayed-submit' });
   let gate, first, second, expected, inspect, intents;
   if (name.startsWith('stale-host-')) {
@@ -199,7 +210,7 @@ async function prepareRace(c, name, context) {
     first = async () => reclaimed = await c.request(root(h) + '/hosts/' + other.host_id + '/claim', h.a, 'POST', { invocation_id: run.invocation_id }, other.host_credential);
     second = () => c.appendRequest(h, run, event);
     expected = { model: h.model, prior_fence_gen: run.fence_gen };
-    intents = [{ id: 'reclaim', envelope: { invocation_id: run.invocation_id, host_id: other.host_id } }, { id: 'stale', envelope: { ...binding(run), ...event } }];
+    intents = [{ id: 'reclaim', envelope: { invocation_id: run.invocation_id, host_id: other.host_id }, expected: { status: 200, fence_advances: true } }, { id: 'stale', envelope: { ...binding(run), ...event }, expected: { status: 409, error: 'lease_lost' } }];
     inspect = async () => {
       const rows = await c.sql('SELECT * FROM cloud.invocations WHERE workspace_id=$1 AND invocation_id=$2', [h.w, run.invocation_id]);
       const attempts = await c.sql('SELECT model,attempt,fence_gen::text FROM cloud.run_attempts WHERE workspace_id=$1 AND invocation_id=$2 ORDER BY attempt', [h.w, run.invocation_id]);
@@ -225,7 +236,8 @@ async function prepareRace(c, name, context) {
     const fields = ['approval_id', 'version', 'effect_id', 'digest', 'invocation_id', 'attempt', 'fence_gen', 'expires_at'];
     const pinned = Object.fromEntries(fields.map(k => [k, card[k]]));
     expected = { card: pinned, authorized_actor_id: card.actor_id };
-    intents = ['approve', 'deny'].map(decision => ({ id: decision, envelope: { ...base, decision } }));
+    intents = ['approve', 'deny'].map((decision, index) => ({ id: decision, envelope: { ...base, decision },
+      expected: { status: (context.order === 'first-before-second' ? index === 0 : index === 1) ? 200 : 409 } }));
     h.points = { first: 'approval.decision.before_admission', second: 'approval.decision.before_admission' };
     // Both requests share the same action/account. The selected decision is paused
     // by a scoped one-shot hit wrapper; the opposing request proceeds through the
@@ -248,7 +260,7 @@ async function prepareRace(c, name, context) {
     first = () => c.request(root(h) + '/operations/' + envelope.client_operation_id + '/resolve-not-accepted', h.b, 'POST', envelope);
     second = () => c.request(root(h) + '/messages', h.b, 'POST', envelope);
     expected = { digest: digest(envelope) };
-    intents = ['seal', 'submit'].map(id => ({ id, envelope }));
+    intents = ['seal', 'submit'].map(id => ({ id, envelope, expected: { status: context.order === 'first-before-second' ? 'rejected' : 'accepted' } }));
     h.points = { first: 'operation.seal.before_admission', second: 'message.send.before_admission' };
     h.matches = { workspace_id: h.w, client_operation_id: envelope.client_operation_id };
     inspect = async () => {

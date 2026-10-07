@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { root, room, digest } from './slice34-service-adapter.mjs';
 
 export async function createRecovery(c) {
+  c.f.hooks.pausedWorker = true;
   const h = await c.humans('recovery-corpus', { role: 'member' });
   const windows = await Promise.all([h.a, h.b].map(a => c.ok(root(h) + '/operation-windows', a, 'POST', {})));
   const snapshots = await Promise.all([h.a, h.b].map(a => c.snapshot(h, a)));
@@ -110,7 +111,7 @@ export async function createRecovery(c) {
       } else {
         if (intent.fault === 'dropped-wakeup') { c.f.hooks.dropNotify = true; c.f.hooks.pausedWorker = true; }
         try { await c.send(h, actor, e); if (intent.fault === 'duplicate-delivery') await c.send(h, actor, e); }
-        finally { c.f.hooks.dropNotify = false; c.f.hooks.pausedWorker = false; }
+        finally { c.f.hooks.dropNotify = false; c.f.hooks.pausedWorker = true; }
       }
       await recoverOutbox(index, intent, e);
       if (intent.fault === 'expired-cursor-reset') {
