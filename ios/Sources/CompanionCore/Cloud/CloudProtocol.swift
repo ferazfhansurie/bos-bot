@@ -199,11 +199,16 @@ public struct CloudErrorCode: RawRepresentable, Hashable, Codable, Sendable, Cus
     public static let lastOwner = Self(rawValue: "last_owner")
     public static let unavailable = Self(rawValue: "unavailable")
     public static let deadlineExceeded = Self(rawValue: "deadline_exceeded")
+    /// The issuer refused the bearer: sign in again, never retry it.
+    public static let sessionInvalid = Self(rawValue: "session_invalid")
 
     /// Codes that say nothing about whether a send committed.
     public var isIndeterminate: Bool {
-        [.identityUnavailable, .unauthenticated, .unavailable, .deadlineExceeded].contains(self)
+        [.identityUnavailable, .unauthenticated, .sessionInvalid, .unavailable, .deadlineExceeded].contains(self)
     }
+
+    /// The bearer is gone for good; slice 1's `unauthenticated` means the same.
+    public var isSessionInvalid: Bool { self == .sessionInvalid || self == .unauthenticated }
 }
 
 /// `{error, retry_after?}`, the body of every /v2 failure.
