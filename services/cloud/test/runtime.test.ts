@@ -172,7 +172,9 @@ test('attachments quarantine until verified, explicit send grants range access, 
     await f.service.tickWorker();
     assert.equal((await f.service.attachments.metadata(h.b.bearer, h.w, a.attachment_id)).state, 'ready');
     const { run } = await invoke(h);
+    const reg = await f.service.push.renew(h.b.bearer, h.w, { installation_id: 'fictional-removed', generation: '1', token_version: '1', provider: 'apns', environment: 'sandbox', muted: false });
     await ok('DELETE', `/v2/workspaces/${h.w}/members/${h.b.account_id}`, h.a.bearer);
+    assert.equal((await admin('SELECT revoked FROM cloud.push_registrations WHERE workspace_id=$1 AND registration_id=$2', [h.w, reg.registration_id])).rows[0].revoked, true);
     const denied = await fetch(f.url + `/v2/workspaces/${h.w}/attachments/${a.attachment_id}/download`, { headers: { authorization: 'Bearer ' + h.b.bearer } });
     assert.equal(denied.status, 403);
     await assert.rejects(f.service.runtime.append(h.a.bearer, h.w, h.host.host_id, h.host.host_credential, { ...binding(run), kind: 'final.commit', text: 'must not publish' }), err('forbidden'));

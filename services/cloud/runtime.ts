@@ -96,7 +96,7 @@ export class RoomRuntime {
         for (const v of runs)
             await this.hold(q, v);
         await q.query("UPDATE cloud.approvals SET status='revoked',version=version+1 WHERE workspace_id=$1 AND actor_id=$2 AND status='pending'", [w, account]);
-        await q.query('UPDATE cloud.push_registrations SET revoked=true WHERE workspace_id=$1 AND account_id=$2', [w, account]);
+        await q.query('SELECT cloud.revoke_member_push($1,$2)', [w, account]);
     }
     async revokeHost(token: string, w: string, h: string) { return this.s.protect(token, w, undefined, 'host.revoke', {}, async (q, _i, a) => { this.s.admin(a); await q.query('UPDATE cloud.hosts SET revoked=true WHERE workspace_id=$1 AND host_id=$2', [w, h]); for (const v of (await q.query("SELECT * FROM cloud.invocations WHERE workspace_id=$1 AND host_id=$2 AND state IN ('leased','running','waiting_for_human')", [w, h])).rows)
         await this.hold(q, v); return { revoked: true }; }); }
