@@ -509,6 +509,7 @@ import { acquireDataDirLeaseForProcess } from "./data-dir-lease.ts";
 import { createWorkspaceAccess, describeEdition, editionStatus, hostedWorkspaceConfiguration, hostedWorkspaceConfigured, loadEnterpriseLayer, type WorkspaceAccess } from "./enterprise.ts";
 import { environmentDescriptor, loadEnvironmentId, serverVersion } from "./environment.ts";
 import { WorkspaceBackupMaintenance } from "./workspace-backup-maintenance.ts";
+import { CloudAuthority, isAuthorityGuardedRequest } from "./cloud-authority.ts";
 import { createWorkspaceBackupRoutes, isWorkspaceBackupSessionControl } from "./workspace-backup-http.ts";
 import { applyPendingWorkspaceRestore, readLastWorkspaceRestore, type WorkspaceRestoreResult } from "./workspace-backup.ts";
 import { createCustomDomainVerifier, customDomainIpv4, normalizeCustomDomain } from "./custom-domain.ts";
@@ -586,6 +587,9 @@ if (existsSync(join(DATA_DIR, ".backups"))) {
   }
 }
 const workspaceMaintenance = new WorkspaceBackupMaintenance();
+// BOS 2.0 slice 5 (server/cloud-authority.ts): once ship freezes this install
+// for its cloud migration, room/message writes and bot dispatch are refused.
+const cloudAuthority = new CloudAuthority(DATA_DIR);
 // The update drain (1.3): once firaz presses update and the build is staged,
 // no new turns are admitted while the live ones finish. Lifted when the
 // update is cancelled or fails; after a successful restart it is a new process.
@@ -1304,7 +1308,8 @@ function hasDirectDispatch(botId: string): boolean {
  * blocks every other turn kind; it does not consume a capacity slot. */
 function unattendedDispatchState(botId: string): "ready" | "busy" | "missing" {
   const bot = store.bot(botId);
-  return !bot ? "missing" : botAtThreadCapacity(botId) || activeGroupTurnForBot(botId) ? "busy" : "ready";
+  // A frozen install defers queued runs instead of dispatching or failing them.
+  return !bot ? "missing" : cloudAuthority.frozen() || botAtThreadCapacity(botId) || activeGroupTurnForBot(botId) ? "busy" : "ready";
 }
 
 function requestedTaskBot(botId: string, rawThreadId: unknown): BotRecord {
@@ -7479,6 +7484,7 @@ interface SharedBotChain { requesterId: string; hop: number; started: Set<string
 
 async function runSharedBotTurn(room: SharedRoom, source: SharedTextMessage, chain?: SharedBotChain): Promise<void> {
   workspaceMaintenance.assertAvailable();
+  cloudAuthority.assertWritable("shared room bot turns");
   assertNotDraining();
   if (source.kind === "activity" || source.editedAt || source.deletedAt) return;
   const fromBot = Boolean(chain);
@@ -8041,6 +8047,7 @@ async function startTurn(
   },
 ) {
   workspaceMaintenance.assertAvailable();
+  cloudAuthority.assertWritable("bot turns");
   if (!opts?.cardContinuation) assertNotDraining();
   opts?.dispatchGuard?.();
   opts?.requestGuard?.();
@@ -9476,7 +9483,7 @@ routines = new RoutineManager({
     ) {
       return "missing";
     }
-    return groupIsWorking(group) || coordinator.busy ? "busy" : "ready";
+    return cloudAuthority.frozen() || groupIsWorking(group) || coordinator.busy ? "busy" : "ready";
   },
   createTask: (botId, title, activate = false) => {
     const task = store.createTask(botId, title, activate);
@@ -10342,6 +10349,7 @@ try {
   webhookIngress = await listenWebhookIngress(webhooks, {
     port: WEBHOOK_PORT, publicBaseUrl: WEBHOOK_PUBLIC_URL,
     claimRequest: () => workspaceMaintenance.request(),
+    admit: () => cloudAuthority.assertWritable("webhook runs"),
   });
   const advertised = WEBHOOK_PUBLIC_URL ? ` (advertised as ${webhookIngress.baseUrl})` : "";
   console.log(`openmausbot webhook receiver on http://${webhookIngress.host}:${webhookIngress.port}${advertised}`);
@@ -10516,6 +10524,8 @@ async function executeGroupMemberTurn(
     onDispatchError?.(updateDraining ? "BOS is updating; this turn starts again after the restart." : "A workspace backup or restore is in progress.");
     return false;
   }
+  try { cloudAuthority.assertWritable("room member turns"); }
+  catch { onDispatchError?.("This workspace moved to BOS cloud; local bot turns are frozen."); return false; }
   if (isCancelled?.()) return false;
   if (providerFleetReloading) {
     onDispatchError?.("provider settings are being updated — try again shortly");
@@ -11854,6 +11864,7 @@ function startGroupTurn(
   options: StartGroupTurnOptions = {},
 ) {
   workspaceMaintenance.assertAvailable();
+  cloudAuthority.assertWritable("room turns");
   assertNotDraining();
   const group = store.group(groupId);
   if (!group) throw Object.assign(new Error("no such group"), { status: 404 });
@@ -12217,6 +12228,9 @@ function deliverCalendarCall(call: CalendarCall, scheduledFor: number): void {
   // A one-bot calendar entry remains a reminder that opens that bot's chat.
   // Multi-bot entries are rooms and begin with the shared event prompt.
   if (call.botIds.length < 2) return;
+  // A frozen install neither opens the room nor starts its turn; the
+  // scheduler moves on rather than retrying a refused kickoff every tick.
+  try { cloudAuthority.assertWritable("scheduled room calls"); } catch { return; }
   const group = ensureCalendarCallRoom(call);
   const text = [
     `@everyone ${call.description.trim() || call.name}`,
@@ -13990,6 +14004,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
     if (!gate.auth) return json(res, gate.status, { error: gate.error });
     const auth = gate.auth;
+    // Legacy writer freeze (server/cloud-authority.ts): one guard for every
+    // room, message, thread and dispatching route, ahead of the linked-room
+    // relay so remote-room writes are refused too. Reads fall through.
+    if (isAuthorityGuardedRequest(method, path)) {
+      const frozen = cloudAuthority.frozen();
+      if (frozen) { req.resume(); return json(res, 409, { error: "authority_moved", workspace_id: frozen.workspace_id, epoch: frozen.epoch }); }
+    }
     if (await terminals.handle(req, res)) return;
     if (await workspaceFiles.handle(req, res)) return;
     // Rooms this home joined on another home are relayed to that home with
@@ -22587,6 +22608,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
 
     return json(res, 404, { error: `no route: ${method} ${path}` });
   } catch (e) {
+    // A dispatch refused at the chokepoint by an unguarded route still answers
+    // with the exact authority_moved body.
+    if ((e as { code?: unknown })?.code === "authority_moved" && (e as { body?: unknown }).body) return json(res, 409, (e as { body: unknown }).body);
     const status = (e as any)?.status ?? 500;
     const candidateCode = (e as { code?: unknown })?.code;
     const code = typeof candidateCode === "string" && ["guarded_busy", "guarded_branch", "guarded_permissions", "thread_busy", "thread_limit", "workspace_busy"].includes(candidateCode)

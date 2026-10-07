@@ -88,7 +88,9 @@ function eventName(req: IncomingMessage): string | undefined {
   )?.trim() || undefined;
 }
 
-export function createWebhookIngressHandler(manager: WebhookManager, claimRequest?: () => () => void) {
+/** `admit` runs after the capability check and may throw a refusal (the
+ * legacy writer freeze), so only a valid sender learns why it was refused. */
+export function createWebhookIngressHandler(manager: WebhookManager, claimRequest?: () => () => void, admit?: () => void) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (req.method === "GET" && url.pathname === "/health") {
@@ -112,6 +114,7 @@ export function createWebhookIngressHandler(manager: WebhookManager, claimReques
         });
         return json(res, 401, { error: "Invalid webhook URL or secret" });
       }
+      admit?.();
       const raw = await readRawBody(req);
       const contentType = header(req, "content-type")?.split(";")[0]?.trim().toLowerCase() ?? "text/plain";
       const payload = parsePayload(raw, contentType);
@@ -124,6 +127,9 @@ export function createWebhookIngressHandler(manager: WebhookManager, claimReques
       });
       return json(res, 202, { accepted: true, ...result });
     } catch (error) {
+      // The legacy writer freeze refuses with its exact 409 body.
+      const refusal = error as { code?: unknown; body?: unknown } | null;
+      if (refusal?.code === "authority_moved" && refusal.body) return json(res, 409, refusal.body as JsonValue);
       const parsedError = statusErrorSchema.safeParse(error);
       const status = parsedError.success ? parsedError.data.status ?? 500 : 500;
       const message = error instanceof Error ? error.message : String(error);
@@ -164,11 +170,11 @@ export function advertisedWebhookBase(raw: string): string {
 
 export async function listenWebhookIngress(
   manager: WebhookManager,
-  options: { host?: string; port: number; publicBaseUrl?: string; claimRequest?: () => () => void },
+  options: { host?: string; port: number; publicBaseUrl?: string; claimRequest?: () => () => void; admit?: () => void },
 ): Promise<WebhookIngress> {
   const host = options.host ?? "127.0.0.1";
   const advertised = options.publicBaseUrl === undefined ? undefined : advertisedWebhookBase(options.publicBaseUrl);
-  const server = createServer(createWebhookIngressHandler(manager, options.claimRequest));
+  const server = createServer(createWebhookIngressHandler(manager, options.claimRequest, options.admit));
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => reject(error);
     server.once("error", onError);
