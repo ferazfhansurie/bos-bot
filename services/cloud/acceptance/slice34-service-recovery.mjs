@@ -22,6 +22,7 @@ export async function createRecovery(c) {
   let projections = snapshots.map((s, i) => c.client.cloudRoomReducer(c.client.initialCloudRoomState({
     namespace: windows[i].namespace.subject, account_id: windows[i].namespace.account_id,
     workspace_id: h.w, room_id: h.r.room_id, thread_id: h.r.thread_id }), { type: 'snapshot', snapshot: s }));
+  const previousFrames = [null, null];
   let slowPrepared = false;
   let pressureCursor = snapshots[1].cursor, pressureIssued = Date.now();
   const recipientFrame = async (i, { crash = false, duplicate = false } = {}) => {
@@ -139,11 +140,17 @@ export async function createRecovery(c) {
       }
       if (intent.fault === 'slow-consumer-overflow') faultArtifact = await slowFault();
       for (let i = 0; i < 2; i++) {
+        const older = previousFrames[i];
         const frame = await recipientFrame(i, { crash: intent.fault === 'crash-after-apply-before-checkpoint', duplicate: intent.fault === 'reordered-stream' });
+        previousFrames[i] = structuredClone(frame);
         if (intent.fault === 'reordered-stream') {
-          // Deliver an actual older frame after the current frame to the actual
-          // reducer, then restore the latest replay cursor from the service.
-          const old = await c.ok(room(h) + '/replay', i ? h.b : h.a, 'POST', { thread_id: h.r.thread_id, cursor: snapshots[i].cursor });
+          // Reorder bytes already received from the actual service. Querying
+          // the initial cursor again after five minutes instead injects a
+          // legitimate expired-snapshot reset, not an older event batch.
+          assert.equal(older?.type, 'event_batch');
+          assert.equal(frame.type, 'event_batch');
+          assert.ok(BigInt(older.scanned_sequence) <= BigInt(frame.scanned_sequence));
+          const old = older;
           const before = projections[i].messages;
           projections[i] = c.client.cloudRoomReducer(projections[i], { type: 'frame', frame: old });
           projections[i] = c.client.cloudRoomReducer(projections[i], { type: 'frame', frame });
