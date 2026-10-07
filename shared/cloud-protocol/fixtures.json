@@ -1,0 +1,2007 @@
+{
+  "schema_version": 1,
+  "digest_vectors": [
+    {
+      "envelope": {
+        "kind": "message.send",
+        "namespace": {
+          "service": "cloud-local",
+          "issuer": "stub",
+          "subject": "alice",
+          "account_id": "alice",
+          "workspace_id": "w1",
+          "epoch": "e1"
+        },
+        "client_operation_id": "window1.abcdefghijklmnop",
+        "window_token": "fixture.signature",
+        "room_id": "r1",
+        "thread_id": "t1",
+        "text": "hello 👋 @bob\nexact  ",
+        "mentions": [
+          {
+            "kind": "human",
+            "id": "bob",
+            "start": 9,
+            "end": 13
+          }
+        ],
+        "attachment_ids": [],
+        "reply_to_message_id": null,
+        "expected_policy_revision": "1"
+      },
+      "sha256": "582c246cb4a978a45f8f3c5636da0f7a92ff1c0bb83676048289d8cfdbb49d20"
+    },
+    {
+      "envelope": {
+        "kind": "message.send",
+        "namespace": {
+          "service": "cloud-local",
+          "issuer": "stub",
+          "subject": "alice",
+          "account_id": "alice",
+          "workspace_id": "w1",
+          "epoch": "e1"
+        },
+        "client_operation_id": "window1.abcdefghijklmnop",
+        "window_token": "fixture.signature",
+        "room_id": "r1",
+        "thread_id": "t1",
+        "text": "hello 👋 @bob\nexact  !",
+        "mentions": [
+          {
+            "kind": "human",
+            "id": "bob",
+            "start": 9,
+            "end": 13
+          }
+        ],
+        "attachment_ids": [],
+        "reply_to_message_id": null,
+        "expected_policy_revision": "1"
+      },
+      "sha256": "c1b6b3b658f2a363c9ed8fc7cfe94ac85ee5574de5b5e97fd4537ac188d1489d"
+    }
+  ],
+  "schema_cases": [
+    {
+      "id": "exact-text",
+      "schema": "send",
+      "value": {
+        "kind": "message.send",
+        "namespace": {
+          "service": "cloud-local",
+          "issuer": "stub",
+          "subject": "alice",
+          "account_id": "alice",
+          "workspace_id": "w1",
+          "epoch": "e1"
+        },
+        "client_operation_id": "window1.abcdefghijklmnop",
+        "window_token": "fixture.signature",
+        "room_id": "r1",
+        "thread_id": "t1",
+        "text": "hello 👋 @bob\nexact  ",
+        "mentions": [
+          {
+            "kind": "human",
+            "id": "bob",
+            "start": 9,
+            "end": 13
+          }
+        ],
+        "attachment_ids": [],
+        "reply_to_message_id": null,
+        "expected_policy_revision": "1"
+      },
+      "valid": true
+    },
+    {
+      "id": "surrogate-split",
+      "schema": "send",
+      "value": {
+        "kind": "message.send",
+        "namespace": {
+          "service": "cloud-local",
+          "issuer": "stub",
+          "subject": "alice",
+          "account_id": "alice",
+          "workspace_id": "w1",
+          "epoch": "e1"
+        },
+        "client_operation_id": "window1.abcdefghijklmnop",
+        "window_token": "fixture.signature",
+        "room_id": "r1",
+        "thread_id": "t1",
+        "text": "hello 👋 @bob\nexact  ",
+        "mentions": [
+          {
+            "kind": "human",
+            "id": "bob",
+            "start": 7,
+            "end": 13
+          }
+        ],
+        "attachment_ids": [],
+        "reply_to_message_id": null,
+        "expected_policy_revision": "1"
+      },
+      "valid": false
+    },
+    {
+      "id": "overlapping-mentions",
+      "schema": "send",
+      "value": {
+        "kind": "message.send",
+        "namespace": {
+          "service": "cloud-local",
+          "issuer": "stub",
+          "subject": "alice",
+          "account_id": "alice",
+          "workspace_id": "w1",
+          "epoch": "e1"
+        },
+        "client_operation_id": "window1.abcdefghijklmnop",
+        "window_token": "fixture.signature",
+        "room_id": "r1",
+        "thread_id": "t1",
+        "text": "hello 👋 @bob\nexact  ",
+        "mentions": [
+          {
+            "kind": "human",
+            "id": "bob",
+            "start": 9,
+            "end": 13
+          },
+          {
+            "kind": "human",
+            "id": "bob",
+            "start": 10,
+            "end": 13
+          }
+        ],
+        "attachment_ids": [],
+        "reply_to_message_id": null,
+        "expected_policy_revision": "1"
+      },
+      "valid": false
+    },
+    {
+      "id": "accepted",
+      "schema": "lookup",
+      "value": {
+        "status": "accepted",
+        "client_operation_id": "window1.abcdefghijklmnop",
+        "digest": "582c246cb4a978a45f8f3c5636da0f7a92ff1c0bb83676048289d8cfdbb49d20",
+        "message_id": "m1",
+        "room_id": "r1",
+        "thread_id": "t1",
+        "sequence": "1",
+        "redacted": false,
+        "retry": "none"
+      },
+      "valid": true
+    },
+    {
+      "id": "snapshot",
+      "schema": "snapshot",
+      "value": {
+        "snapshot_id": "snap1",
+        "expires_at": "2026-10-07T00:05:00.000Z",
+        "workspace_id": "w1",
+        "room_id": "r1",
+        "thread_id": "t1",
+        "watermark": "10",
+        "frontier": "10",
+        "cursor": "cursor10",
+        "policy_revision": "1",
+        "messages": [
+          {
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "message_id": "m10",
+            "actor_id": "bob",
+            "client_operation_id": "window1.operation0000000000000010",
+            "sequence": "10",
+            "version": 1,
+            "text": "hello",
+            "mentions": [],
+            "reply_to_message_id": null,
+            "deleted": false,
+            "created_at": "2026-10-07T00:00:00.000Z"
+          }
+        ],
+        "members": [
+          {
+            "account_id": "alice",
+            "role": "owner"
+          },
+          {
+            "account_id": "bob",
+            "role": "member"
+          }
+        ],
+        "threads": [
+          {
+            "thread_id": "t1",
+            "archived": false
+          }
+        ],
+        "capabilities": [
+          "read",
+          "send"
+        ],
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        },
+        "active_runs": [],
+        "cards": []
+      },
+      "valid": true
+    },
+    {
+      "id": "decimal-sequence",
+      "schema": "event",
+      "value": {
+        "schema_version": 1,
+        "workspace_id": "w1",
+        "room_id": "r1",
+        "event_id": "ev9007199254740993",
+        "sequence": "9007199254740993",
+        "kind": "message.created",
+        "required": true,
+        "payload": {
+          "message": {
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "message_id": "m9007199254740993",
+            "actor_id": "bob",
+            "client_operation_id": "window1.operation9007199254740993",
+            "sequence": "9007199254740993",
+            "version": 1,
+            "text": "hello",
+            "mentions": [],
+            "reply_to_message_id": null,
+            "deleted": false,
+            "created_at": "2026-10-07T00:00:00.000Z"
+          }
+        }
+      },
+      "valid": true
+    }
+  ],
+  "reducer_cases": [
+    {
+      "id": "send-accepted",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "outbox",
+          "state": "draft",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "outbox",
+          "state": "sending",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "operation",
+          "result": {
+            "status": "accepted",
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "digest": "582c246cb4a978a45f8f3c5636da0f7a92ff1c0bb83676048289d8cfdbb49d20",
+            "message_id": "m1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "sequence": "1",
+            "redacted": false,
+            "retry": "none"
+          }
+        }
+      ],
+      "expected": {
+        "outbox_state": "accepted",
+        "outbox_envelope": {
+          "kind": "message.send",
+          "namespace": {
+            "service": "cloud-local",
+            "issuer": "stub",
+            "subject": "alice",
+            "account_id": "alice",
+            "workspace_id": "w1",
+            "epoch": "e1"
+          },
+          "client_operation_id": "window1.abcdefghijklmnop",
+          "window_token": "fixture.signature",
+          "room_id": "r1",
+          "thread_id": "t1",
+          "text": "hello 👋 @bob\nexact  ",
+          "mentions": [
+            {
+              "kind": "human",
+              "id": "bob",
+              "start": 9,
+              "end": 13
+            }
+          ],
+          "attachment_ids": [],
+          "reply_to_message_id": null,
+          "expected_policy_revision": "1"
+        },
+        "message_ids": []
+      }
+    },
+    {
+      "id": "lost-send-response",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "outbox",
+          "state": "sending",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "outbox",
+          "state": "checking",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "operation",
+          "result": {
+            "status": "accepted",
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "digest": "582c246cb4a978a45f8f3c5636da0f7a92ff1c0bb83676048289d8cfdbb49d20",
+            "message_id": "m1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "sequence": "1",
+            "redacted": false,
+            "retry": "none"
+          }
+        }
+      ],
+      "expected": {
+        "outbox_state": "accepted",
+        "outbox_envelope": {
+          "kind": "message.send",
+          "namespace": {
+            "service": "cloud-local",
+            "issuer": "stub",
+            "subject": "alice",
+            "account_id": "alice",
+            "workspace_id": "w1",
+            "epoch": "e1"
+          },
+          "client_operation_id": "window1.abcdefghijklmnop",
+          "window_token": "fixture.signature",
+          "room_id": "r1",
+          "thread_id": "t1",
+          "text": "hello 👋 @bob\nexact  ",
+          "mentions": [
+            {
+              "kind": "human",
+              "id": "bob",
+              "start": 9,
+              "end": 13
+            }
+          ],
+          "attachment_ids": [],
+          "reply_to_message_id": null,
+          "expected_policy_revision": "1"
+        }
+      }
+    },
+    {
+      "id": "lookup-not-found-keeps-envelope",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "outbox",
+          "state": "checking",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "operation",
+          "result": {
+            "status": "not_found",
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "retry": "unchanged_or_seal"
+          }
+        }
+      ],
+      "expected": {
+        "outbox_state": "checking",
+        "outbox_envelope": {
+          "kind": "message.send",
+          "namespace": {
+            "service": "cloud-local",
+            "issuer": "stub",
+            "subject": "alice",
+            "account_id": "alice",
+            "workspace_id": "w1",
+            "epoch": "e1"
+          },
+          "client_operation_id": "window1.abcdefghijklmnop",
+          "window_token": "fixture.signature",
+          "room_id": "r1",
+          "thread_id": "t1",
+          "text": "hello 👋 @bob\nexact  ",
+          "mentions": [
+            {
+              "kind": "human",
+              "id": "bob",
+              "start": 9,
+              "end": 13
+            }
+          ],
+          "attachment_ids": [],
+          "reply_to_message_id": null,
+          "expected_policy_revision": "1"
+        }
+      }
+    },
+    {
+      "id": "recovery-unknown-no-replay",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "outbox",
+          "state": "checking",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "operation",
+          "result": {
+            "status": "recovery_unknown",
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "retry": "reconcile_only"
+          }
+        }
+      ],
+      "expected": {
+        "outbox_state": "checking",
+        "outbox_envelope": {
+          "kind": "message.send",
+          "namespace": {
+            "service": "cloud-local",
+            "issuer": "stub",
+            "subject": "alice",
+            "account_id": "alice",
+            "workspace_id": "w1",
+            "epoch": "e1"
+          },
+          "client_operation_id": "window1.abcdefghijklmnop",
+          "window_token": "fixture.signature",
+          "room_id": "r1",
+          "thread_id": "t1",
+          "text": "hello 👋 @bob\nexact  ",
+          "mentions": [
+            {
+              "kind": "human",
+              "id": "bob",
+              "start": 9,
+              "end": 13
+            }
+          ],
+          "attachment_ids": [],
+          "reply_to_message_id": null,
+          "expected_policy_revision": "1"
+        },
+        "recovery_required": true
+      }
+    },
+    {
+      "id": "terminal-rejection-preserves-draft",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "outbox",
+          "state": "sending",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "operation",
+          "result": {
+            "status": "rejected",
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "digest": "582c246cb4a978a45f8f3c5636da0f7a92ff1c0bb83676048289d8cfdbb49d20",
+            "reason": "policy_changed",
+            "retry": "none"
+          }
+        }
+      ],
+      "expected": {
+        "outbox_state": "rejected",
+        "outbox_envelope": {
+          "kind": "message.send",
+          "namespace": {
+            "service": "cloud-local",
+            "issuer": "stub",
+            "subject": "alice",
+            "account_id": "alice",
+            "workspace_id": "w1",
+            "epoch": "e1"
+          },
+          "client_operation_id": "window1.abcdefghijklmnop",
+          "window_token": "fixture.signature",
+          "room_id": "r1",
+          "thread_id": "t1",
+          "text": "hello 👋 @bob\nexact  ",
+          "mentions": [
+            {
+              "kind": "human",
+              "id": "bob",
+              "start": 9,
+              "end": 13
+            }
+          ],
+          "attachment_ids": [],
+          "reply_to_message_id": null,
+          "expected_policy_revision": "1"
+        }
+      }
+    },
+    {
+      "id": "duplicate-events",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor1",
+            "scanned_sequence": "1",
+            "frontier": "1",
+            "live": true
+          }
+        },
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor1",
+            "scanned_sequence": "1",
+            "frontier": "1",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [
+          "m1"
+        ],
+        "cursor": "cursor1",
+        "live": true
+      }
+    },
+    {
+      "id": "filtered-sequence-gap",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              },
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev5",
+                "sequence": "5",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m5",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000005",
+                    "sequence": "5",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor5",
+            "scanned_sequence": "5",
+            "frontier": "5",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [
+          "m1",
+          "m5"
+        ],
+        "cursor": "cursor5",
+        "live": true
+      }
+    },
+    {
+      "id": "empty-page-advances",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [],
+            "cursor": "cursor5",
+            "scanned_sequence": "5",
+            "frontier": "5",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [],
+        "cursor": "cursor5",
+        "live": true
+      }
+    },
+    {
+      "id": "snapshot-catch-up",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "snapshot",
+          "snapshot": {
+            "snapshot_id": "snap1",
+            "expires_at": "2026-10-07T00:05:00.000Z",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "watermark": "10",
+            "frontier": "10",
+            "cursor": "cursor10",
+            "policy_revision": "1",
+            "messages": [
+              {
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "thread_id": "t1",
+                "message_id": "m10",
+                "actor_id": "bob",
+                "client_operation_id": "window1.operation0000000000000010",
+                "sequence": "10",
+                "version": 1,
+                "text": "hello",
+                "mentions": [],
+                "reply_to_message_id": null,
+                "deleted": false,
+                "created_at": "2026-10-07T00:00:00.000Z"
+              }
+            ],
+            "members": [
+              {
+                "account_id": "alice",
+                "role": "owner"
+              },
+              {
+                "account_id": "bob",
+                "role": "member"
+              }
+            ],
+            "threads": [
+              {
+                "thread_id": "t1",
+                "archived": false
+              }
+            ],
+            "capabilities": [
+              "read",
+              "send"
+            ],
+            "read": {
+              "prefix": "0",
+              "intervals": [],
+              "attention": false
+            },
+            "active_runs": [],
+            "cards": []
+          }
+        },
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev11",
+                "sequence": "11",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m11",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000011",
+                    "sequence": "11",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor11",
+            "scanned_sequence": "11",
+            "frontier": "11",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [
+          "m10",
+          "m11"
+        ],
+        "cursor": "cursor11",
+        "live": true
+      }
+    },
+    {
+      "id": "snapshot-preserves-outbox",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "outbox",
+          "state": "checking",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "snapshot",
+          "snapshot": {
+            "snapshot_id": "snap1",
+            "expires_at": "2026-10-07T00:05:00.000Z",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "watermark": "10",
+            "frontier": "10",
+            "cursor": "cursor10",
+            "policy_revision": "1",
+            "messages": [
+              {
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "thread_id": "t1",
+                "message_id": "m10",
+                "actor_id": "bob",
+                "client_operation_id": "window1.operation0000000000000010",
+                "sequence": "10",
+                "version": 1,
+                "text": "hello",
+                "mentions": [],
+                "reply_to_message_id": null,
+                "deleted": false,
+                "created_at": "2026-10-07T00:00:00.000Z"
+              }
+            ],
+            "members": [
+              {
+                "account_id": "alice",
+                "role": "owner"
+              },
+              {
+                "account_id": "bob",
+                "role": "member"
+              }
+            ],
+            "threads": [
+              {
+                "thread_id": "t1",
+                "archived": false
+              }
+            ],
+            "capabilities": [
+              "read",
+              "send"
+            ],
+            "read": {
+              "prefix": "0",
+              "intervals": [],
+              "attention": false
+            },
+            "active_runs": [],
+            "cards": []
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [
+          "m10"
+        ],
+        "outbox_state": "checking",
+        "outbox_envelope": {
+          "kind": "message.send",
+          "namespace": {
+            "service": "cloud-local",
+            "issuer": "stub",
+            "subject": "alice",
+            "account_id": "alice",
+            "workspace_id": "w1",
+            "epoch": "e1"
+          },
+          "client_operation_id": "window1.abcdefghijklmnop",
+          "window_token": "fixture.signature",
+          "room_id": "r1",
+          "thread_id": "t1",
+          "text": "hello 👋 @bob\nexact  ",
+          "mentions": [
+            {
+              "kind": "human",
+              "id": "bob",
+              "start": 9,
+              "end": 13
+            }
+          ],
+          "attachment_ids": [],
+          "reply_to_message_id": null,
+          "expected_policy_revision": "1"
+        },
+        "cursor": "cursor10",
+        "live": false
+      }
+    },
+    {
+      "id": "late-pre-watermark-event",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "snapshot",
+          "snapshot": {
+            "snapshot_id": "snap1",
+            "expires_at": "2026-10-07T00:05:00.000Z",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "watermark": "10",
+            "frontier": "10",
+            "cursor": "cursor10",
+            "policy_revision": "1",
+            "messages": [
+              {
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "thread_id": "t1",
+                "message_id": "m10",
+                "actor_id": "bob",
+                "client_operation_id": "window1.operation0000000000000010",
+                "sequence": "10",
+                "version": 1,
+                "text": "hello",
+                "mentions": [],
+                "reply_to_message_id": null,
+                "deleted": false,
+                "created_at": "2026-10-07T00:00:00.000Z"
+              }
+            ],
+            "members": [
+              {
+                "account_id": "alice",
+                "role": "owner"
+              },
+              {
+                "account_id": "bob",
+                "role": "member"
+              }
+            ],
+            "threads": [
+              {
+                "thread_id": "t1",
+                "archived": false
+              }
+            ],
+            "capabilities": [
+              "read",
+              "send"
+            ],
+            "read": {
+              "prefix": "0",
+              "intervals": [],
+              "attention": false
+            },
+            "active_runs": [],
+            "cards": []
+          }
+        },
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev9",
+                "sequence": "9",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m9",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000009",
+                    "sequence": "9",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor10",
+            "scanned_sequence": "10",
+            "frontier": "10",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [
+          "m10"
+        ],
+        "cursor": "cursor10"
+      }
+    },
+    {
+      "id": "required-unknown-blocks-atomic-batch",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              },
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev2",
+                "sequence": "2",
+                "kind": "future.required",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m2",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000002",
+                    "sequence": "2",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor2",
+            "scanned_sequence": "2",
+            "frontier": "2",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [],
+        "cursor": null,
+        "upgrade_required": true
+      }
+    },
+    {
+      "id": "required-unknown-schema",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 2,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor1",
+            "scanned_sequence": "1",
+            "frontier": "1",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [],
+        "cursor": null,
+        "upgrade_required": true
+      }
+    },
+    {
+      "id": "optional-unknown-advances",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 2,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "future.optional",
+                "required": false,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor1",
+            "scanned_sequence": "1",
+            "frontier": "1",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [],
+        "cursor": "cursor1",
+        "upgrade_required": false
+      }
+    },
+    {
+      "id": "reset-holds-live",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor1",
+            "scanned_sequence": "1",
+            "frontier": "1",
+            "live": true
+          }
+        },
+        {
+          "type": "frame",
+          "frame": {
+            "type": "reset_required",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "reason": "overflow"
+          }
+        }
+      ],
+      "expected": {
+        "message_ids": [
+          "m1"
+        ],
+        "live": false,
+        "reset_required": true
+      }
+    },
+    {
+      "id": "other-thread-no-navigation",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev2",
+                "sequence": "2",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t2",
+                    "message_id": "m2",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000002",
+                    "sequence": "2",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor2",
+            "scanned_sequence": "2",
+            "frontier": "2",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "message_ids": [],
+        "cursor": "cursor2"
+      }
+    },
+    {
+      "id": "read-does-not-bridge-gap",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "read",
+          "coverage": {
+            "prefix": "2",
+            "intervals": [
+              [
+                "5",
+                "5"
+              ]
+            ],
+            "attention": false
+          }
+        }
+      ],
+      "expected": {
+        "read": {
+          "prefix": "2",
+          "intervals": [
+            [
+              "5",
+              "5"
+            ]
+          ],
+          "attention": false
+        }
+      }
+    },
+    {
+      "id": "sync-never-marks-read",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor1",
+            "scanned_sequence": "1",
+            "frontier": "1",
+            "live": true
+          }
+        }
+      ],
+      "expected": {
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      }
+    },
+    {
+      "id": "account-switch-isolates",
+      "initial": {
+        "namespace": "alice",
+        "selected_room_id": "r1",
+        "selected_thread_id": "t1",
+        "messages": [],
+        "cursor": null,
+        "live": false,
+        "outbox": {},
+        "read": {
+          "prefix": "0",
+          "intervals": [],
+          "attention": false
+        }
+      },
+      "steps": [
+        {
+          "type": "outbox",
+          "state": "sending",
+          "envelope": {
+            "kind": "message.send",
+            "namespace": {
+              "service": "cloud-local",
+              "issuer": "stub",
+              "subject": "alice",
+              "account_id": "alice",
+              "workspace_id": "w1",
+              "epoch": "e1"
+            },
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "window_token": "fixture.signature",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "text": "hello 👋 @bob\nexact  ",
+            "mentions": [
+              {
+                "kind": "human",
+                "id": "bob",
+                "start": 9,
+                "end": 13
+              }
+            ],
+            "attachment_ids": [],
+            "reply_to_message_id": null,
+            "expected_policy_revision": "1"
+          }
+        },
+        {
+          "type": "frame",
+          "frame": {
+            "type": "event_batch",
+            "workspace_id": "w1",
+            "room_id": "r1",
+            "events": [
+              {
+                "schema_version": 1,
+                "workspace_id": "w1",
+                "room_id": "r1",
+                "event_id": "ev1",
+                "sequence": "1",
+                "kind": "message.created",
+                "required": true,
+                "payload": {
+                  "message": {
+                    "workspace_id": "w1",
+                    "room_id": "r1",
+                    "thread_id": "t1",
+                    "message_id": "m1",
+                    "actor_id": "bob",
+                    "client_operation_id": "window1.operation0000000000000001",
+                    "sequence": "1",
+                    "version": 1,
+                    "text": "hello",
+                    "mentions": [],
+                    "reply_to_message_id": null,
+                    "deleted": false,
+                    "created_at": "2026-10-07T00:00:00.000Z"
+                  }
+                }
+              }
+            ],
+            "cursor": "cursor1",
+            "scanned_sequence": "1",
+            "frontier": "1",
+            "live": true
+          }
+        },
+        {
+          "type": "account_switch",
+          "namespace": "bob"
+        },
+        {
+          "type": "operation",
+          "namespace": "alice",
+          "result": {
+            "status": "accepted",
+            "client_operation_id": "window1.abcdefghijklmnop",
+            "digest": "582c246cb4a978a45f8f3c5636da0f7a92ff1c0bb83676048289d8cfdbb49d20",
+            "message_id": "m1",
+            "room_id": "r1",
+            "thread_id": "t1",
+            "sequence": "1",
+            "redacted": false,
+            "retry": "none"
+          }
+        }
+      ],
+      "expected": {
+        "namespace": "bob",
+        "message_ids": [],
+        "outbox_empty": true,
+        "cursor": null,
+        "live": false
+      }
+    }
+  ]
+}
