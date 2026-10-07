@@ -28,7 +28,7 @@ export async function createRecovery(c) {
   const recipientFrame = async (i, { crash = false, duplicate = false } = {}) => {
     const actor = i ? h.b : h.a;
     let frame = await c.ok(room(h) + '/replay', actor, 'POST', { thread_id: h.r.thread_id, cursor: projections[i].cursor });
-    const checkpoint = c.artifact('recipient-before-apply', projections[i]);
+    const checkpoint = crash ? c.artifact('recipient-before-apply', projections[i]) : null;
     const apply = c.client.cloudRoomReducer(projections[i], { type: 'frame', frame });
     if (crash) {
       c.log({ type: 'crash_after_actual_reducer_apply_before_checkpoint', recipient: i, applied_cursor: apply.cursor, checkpoint });
