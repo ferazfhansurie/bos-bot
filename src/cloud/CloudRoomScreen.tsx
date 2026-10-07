@@ -284,13 +284,13 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
       <div className="flex-1 overflow-y-auto px-4 py-2">
         {items.map((item) =>
           item.kind === "message" ? (
-            <div key={item.message.message_id} className="py-1">
+            <div key={item.message.message_id} className="whitespace-pre-wrap py-1">
               <span className="text-neutral-500">{item.message.actor_id === session.account_id ? "you" : item.message.actor_id}</span>{" "}
               {item.message.deleted ? <em className="text-neutral-400">deleted</em> : item.message.text}
             </div>
           ) : (
             <div key={item.entry.envelope.client_operation_id} className="flex items-center gap-2 py-1 opacity-70">
-              <span className="text-neutral-500">you</span> {item.entry.envelope.text}
+              <span className="text-neutral-500">you</span> <span className="whitespace-pre-wrap">{item.entry.envelope.text}</span>
               <span className="text-xs text-neutral-400">{outboxLabel(item.entry)}</span>
               {item.entry.review_required && (
                 <button className={button} onClick={() => controller.confirmReview(item.entry.envelope.client_operation_id)}>send anyway</button>
@@ -316,7 +316,20 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
           }
         }}
       >
-        <input className={`${field} flex-1`} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="message" disabled={state.removed} />
+        {/* A textarea, not an input: an input strips the newline out of a multi-line message. */}
+        <textarea
+          className={`${field} flex-1 resize-none`}
+          rows={Math.min(6, draft.split("\n").length)}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            if (draft.trim() && !state.removed) event.currentTarget.form?.requestSubmit();
+          }}
+          placeholder="message"
+          disabled={state.removed}
+        />
         <button className={button} disabled={!draft.trim() || state.removed}>send</button>
         {problem && <span className="self-center text-red-600">{problem}</span>}
       </form>
