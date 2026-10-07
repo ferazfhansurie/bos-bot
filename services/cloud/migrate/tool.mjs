@@ -4,14 +4,15 @@ import {
   writeFile,
   rename,
   realpath,
-  stat,
   rm,
+  open,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import pg from "pg";
 import { pathToFileURL } from "node:url";
+import { scanInventory } from "./inventory.mjs";
+import { servingAction, rollbackProjection } from "./serving.mjs";
 const HASH = (v) => createHash("sha256").update(v).digest("hex");
 const NS = Buffer.from("b6581fef740f55cd8f39549ab86cbb55", "hex");
 export function mappedId(install, type, id) {
@@ -43,74 +44,7 @@ export async function assertCopy(dir) {
   return p;
 }
 export async function inventory(dir) {
-  dir = await assertCopy(dir);
-  const marker = await json(join(dir, ".bos-migration-copy.json"));
-  if (!marker.source_install_id)
-    throw new Error("stable source_install_id required");
-  const records = [];
-  const seen = new Set();
-  const add = (type, id, payload) => {
-    if (typeof id !== "string" || !id) throw new Error("source id required");
-    const key = JSON.stringify([type, id]);
-    if (seen.has(key)) throw new Error("duplicate source identity");
-    seen.add(key);
-    const encoded = JSON.stringify(payload);
-    records.push({ type, id, encoded, digest: HASH(encoded) });
-  };
-  for (const [file, type] of [
-    ["groups.json", "room"],
-    ["bots.json", "bot"],
-    ["multiplayer-actors.json", "actor"],
-    ["multiplayer-links.json", "link"],
-    ["shared-rooms.json", "shared_room"],
-    ["workspace-membership.json", "membership"],
-    ["trusted-peers.json", "home"],
-    ["work-runtime.json", "pending_run"],
-  ]) {
-    const value = await json(join(dir, file), []);
-    add("metadata", file, value);
-    if (Array.isArray(value))
-      for (const row of value) {
-        if (row?.id) add(type, row.id, row);
-      }
-  }
-  const dbPath = join(dir, "messages.db");
-  if (await stat(dbPath).catch(() => null)) {
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      for (const row of db
-        .prepare(
-          "SELECT thread_id,id,json FROM messages ORDER BY thread_id,at,id",
-        )
-        .iterate()) {
-        const payload = JSON.parse(row.json);
-        add("message", JSON.stringify([row.thread_id, row.id]), {
-          thread_id: row.thread_id,
-          ...payload,
-        });
-      }
-      const tables = new Set(
-        db
-          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-          .all()
-          .map((r) => r.name),
-      );
-      for (const table of ["thread_state", "chat_followups"])
-        if (tables.has(table))
-          for (const row of db.prepare(`SELECT * FROM ${table}`).iterate())
-            add(table, row.id ?? row.thread_id, row);
-    } finally {
-      db.close();
-    }
-  }
-  records.sort(
-    (a, b) => a.type.localeCompare(b.type) || a.id.localeCompare(b.id),
-  );
-  return {
-    source_install_id: marker.source_install_id,
-    records,
-    digest: HASH(JSON.stringify(records.map((r) => [r.type, r.id, r.digest]))),
-  };
+  return scanInventory(await assertCopy(dir));
 }
 async function flag(dir, run, state) {
   const file = join(dir, "cloud-authority.json");
@@ -123,7 +57,19 @@ async function flag(dir, run, state) {
     }),
     { mode: 0o600 },
   );
+  const handle = await open(file + ".tmp", "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
   await rename(file + ".tmp", file);
+  const directory = await open(dir, "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
 }
 export async function connect(url) {
   const u = new URL(url);
@@ -134,19 +80,34 @@ export async function connect(url) {
     throw new Error("throwaway loopback rehearsal database required");
   const c = new pg.Client({ connectionString: url });
   await c.connect();
-  await c.query(
-    await readFile(new URL("./schema.sql", import.meta.url), "utf8"),
-  );
+  try {
+    const role = (
+      await c.query(
+        "SELECT current_user,rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user",
+      )
+    ).rows[0];
+    if (
+      role.current_user === "cloud_app" ||
+      (!role.rolsuper && !role.rolbypassrls)
+    )
+      throw new Error("separate RLS-bypassing migration owner required");
+    await c.query(
+      await readFile(new URL("./schema.sql", import.meta.url), "utf8"),
+    );
+  } catch (e) {
+    await c.end();
+    throw e;
+  }
   return c;
 }
-export async function migrate(
-  c,
-  dir,
-  workspace,
-  action,
-  { batch = 100, onBatch } = {},
-) {
+export async function migrate(c, dir, workspace, action, options = {}) {
+  const { batch = 100, onBatch } = options;
   dir = await assertCopy(dir);
+  if (
+    typeof workspace !== "string" ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(workspace)
+  )
+    throw new Error("invalid workspace id");
   if (!Number.isSafeInteger(batch) || batch < 1 || batch > 1000)
     throw new Error("invalid batch size");
   await c.query("SELECT pg_advisory_lock(hashtext($1))", [workspace]);
@@ -158,7 +119,29 @@ export async function migrate(
       )
     ).rows[0];
     if (action === "rollback") {
-      if (!run) throw new Error("no run");
+      if (!run) {
+        const f = await json(join(dir, "cloud-authority.json"), null);
+        if (!f) return { state: "rolled_back" };
+        if (f.workspace_id !== workspace)
+          throw new Error("authority flag mismatch");
+        if (["cloud_active", "legacy_archived"].includes(f.state))
+          throw new Error("forward repair only");
+        const schema = (
+          await c.query("SELECT to_regclass('cloud.workspaces') AS name")
+        ).rows[0].name;
+        if (
+          schema &&
+          (
+            await c.query(
+              "SELECT 1 FROM cloud.workspaces WHERE workspace_id=$1",
+              [workspace],
+            )
+          ).rowCount
+        )
+          throw new Error("forward repair only");
+        await rm(join(dir, "cloud-authority.json"), { force: true });
+        return { state: "rolled_back" };
+      }
       if (["cloud_active", "legacy_archived"].includes(run.state))
         throw new Error("forward repair only");
       const f = await json(join(dir, "cloud-authority.json"), null);
@@ -167,21 +150,13 @@ export async function migrate(
         (f.workspace_id !== workspace || String(f.epoch) !== String(run.epoch))
       )
         throw new Error("authority flag mismatch");
+      await rollbackProjection(c, workspace);
       await c.query(
         "DELETE FROM migration.migration_runs WHERE workspace_id=$1",
         [workspace],
       );
       await rm(join(dir, "cloud-authority.json"), { force: true });
       return { state: "rolled_back" };
-    }
-    if (action === "cutover" || action === "archive") {
-      if (!run?.projection_verified)
-        throw new Error(
-          "serving projection and independent acceptance required before cutover",
-        );
-      throw new Error(
-        "release coordinator required; rehearsal never moves authority",
-      );
     }
     const inv = await inventory(dir);
     if (!run) {
@@ -201,6 +176,11 @@ export async function migrate(
       run.source_digest !== inv.digest
     )
       throw new Error("source changed; hold and reinventory");
+    if (
+      ["project", "verify-projection", "cutover", "archive"].includes(action)
+    ) {
+      return servingAction(c, dir, run, inv, action, options, flag);
+    }
     if (action === "inventory")
       return {
         state: run.state,
@@ -262,9 +242,9 @@ export async function migrate(
               ],
             );
             if (
-              r.type === "message" ||
-              r.type === "pending_run" ||
-              r.type === "chat_followups"
+              !["metadata", "transcript_file", "shared_room_journal"].includes(
+                r.type,
+              )
             )
               await c.query(
                 "INSERT INTO migration.migration_quarantine VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
@@ -274,7 +254,7 @@ export async function migrate(
                   r.id,
                   r.type === "message"
                     ? "author_and_grant_projection_required"
-                    : "pending_work_never_replayed",
+                    : "inert_source_requires_review",
                 ],
               );
           }
@@ -308,7 +288,19 @@ export async function migrate(
       const actual = rows
         .map((r) => [r.source_type, r.source_id, HASH(r.encoded)])
         .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
-      const digest = HASH(JSON.stringify(actual));
+      const orders = new Map(
+        inv.records.map((r) => [JSON.stringify([r.type, r.id]), r.order]),
+      );
+      const digest = HASH(
+        JSON.stringify(
+          actual.map(([type, id, digest]) => [
+            type,
+            id,
+            digest,
+            orders.get(JSON.stringify([type, id])) ?? null,
+          ]),
+        ),
+      );
       if (digest !== inv.digest || rows.length !== inv.records.length)
         throw new Error("count/hash mismatch");
       const mappings = (
@@ -365,7 +357,18 @@ if (
   let c;
   try {
     c = await connect(process.env.BOS_MIGRATION_URL);
-    console.log(JSON.stringify(await migrate(c, dir, workspace, action)));
+    const options = {};
+    if (process.env.BOS_MIGRATION_PLAN)
+      options.plan = JSON.parse(
+        await readFile(process.env.BOS_MIGRATION_PLAN, "utf8"),
+      );
+    if (process.env.BOS_MIGRATION_ACCEPTANCE)
+      options.acceptance = JSON.parse(
+        await readFile(process.env.BOS_MIGRATION_ACCEPTANCE, "utf8"),
+      );
+    console.log(
+      JSON.stringify(await migrate(c, dir, workspace, action, options)),
+    );
   } catch (e) {
     console.error("migration refused or failed: " + e.message);
     process.exitCode = 1;

@@ -24,3 +24,14 @@ CREATE TABLE IF NOT EXISTS migration.migration_quarantine (
  PRIMARY KEY(workspace_id,source_type,source_id),
  FOREIGN KEY(workspace_id,source_type,source_id) REFERENCES migration.migration_mappings ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS migration.serving_projections (
+ workspace_id text PRIMARY KEY REFERENCES migration.migration_runs ON DELETE CASCADE,
+ plan json NOT NULL, plan_digest text NOT NULL, projection_digest text NOT NULL,
+ quarantine_digest text NOT NULL, acceptance json, archive json
+);
+DO $$ BEGIN
+ IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='cloud_app') THEN
+  REVOKE ALL ON SCHEMA migration FROM cloud_app;
+  REVOKE ALL ON ALL TABLES IN SCHEMA migration FROM cloud_app;
+ END IF;
+END $$;
