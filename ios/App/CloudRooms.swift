@@ -236,18 +236,36 @@ final class CloudRoomsModel: ObservableObject {
         // Nothing goes out while an attachment is still on its way.
         guard attached.allSatisfy({ $0.state == .ready }) else { return false }
         let attachmentIds = attached.compactMap(\.attachment?.attachmentId)
-        guard !trimmed.isEmpty || !attachmentIds.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
+        guard !trimmed.isEmpty || !attachmentIds.isEmpty else { return false }
+        let queued = await enqueue(trimmed, attachmentIds: attachmentIds, in: ref)
+        if queued { drafts[key(ref)] = nil }
+        return queued
+    }
+
+    /// A draft written before the workspace moved authority epochs: its
+    /// envelope can never go out, so its text is frozen again under the new
+    /// window as a new send, and the old entry is dropped once that queued.
+    @discardableResult
+    func sendAgain(_ id: CloudOperationID, in ref: CloudRoomRef) async -> Bool {
+        guard let entry = outbox?.entry(id), entry.status == .held(.authorityChanged), !entry.dispatched else { return false }
+        let old = entry.envelope
+        guard await enqueue(old.text, mentions: old.mentions, attachmentIds: old.attachmentIds, replyTo: old.replyToMessageId, in: ref) else { return false }
+        discard(id)
+        return true
+    }
+
+    private func enqueue(_ text: String, mentions: [CloudMention] = [], attachmentIds: [String], replyTo: String? = nil, in ref: CloudRoomRef) async -> Bool {
+        guard let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
         var queued = false
         await work {
             let window = try await self.window(for: ref.workspaceId)
-            var envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: trimmed, expectedPolicyRevision: policy)
+            var envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: text, mentions: mentions, replyToMessageId: replyTo, expectedPolicyRevision: policy)
             envelope.attachmentIds = attachmentIds
             guard var outbox = self.outbox, let expiry = window.expiryDate else { return }
             // Guest drafts are session memory only.
             let effects = try outbox.enqueue(envelope, windowExpiresAt: expiry, ephemeral: ref.role == .guest, now: Date())
             self.outbox = outbox
             queued = true
-            self.drafts[self.key(ref)] = nil
             self.runOutbox(effects)
         }
         return queued
@@ -611,7 +629,7 @@ final class CloudRoomsModel: ObservableObject {
     /// Fetches a signed window for each workspace that lacks a fresh one,
     /// so a send made after the network drops can still be frozen.
     private func prefetchWindows(_ discovery: CloudDiscovery, generation: Int) async {
-        for workspace in discovery.workspaces where windows[workspace.workspaceId].map(Self.fresh) != true {
+        for workspace in discovery.workspaces where windows[workspace.workspaceId].map(usable) != true {
             guard generation == session.generation, let window = try? await client.operationWindow(workspaceId: workspace.workspaceId) else { continue }
             guard generation == session.generation else { return }
             windows[workspace.workspaceId] = window
@@ -621,6 +639,13 @@ final class CloudRoomsModel: ObservableObject {
 
     private static func fresh(_ window: CloudSendWindow) -> Bool {
         (window.expiryDate ?? .distantPast) > Date().addingTimeInterval(60)
+    }
+
+    /// Fresh, and not from an epoch a room in its workspace has moved past.
+    private func usable(_ window: CloudSendWindow) -> Bool {
+        Self.fresh(window) && !rooms.values.contains {
+            $0.workspaceId == window.namespace.workspaceId && $0.authorityEpoch.map { $0 != window.namespace.epoch } == true
+        }
     }
 
     private func saveWindows() {
@@ -705,6 +730,18 @@ final class CloudRoomsModel: ObservableObject {
                 if var outbox { let effects = outbox.audienceChanged(roomId: ref.roomId); self.outbox = outbox; runOutbox(effects) }
             case .resyncDiscovery:
                 run(session.reduce(.retryDue(.recovery, generation: session.generation)))
+            case .authorityChanged(let epoch):
+                if var outbox {
+                    let effects = outbox.authorityChanged(workspaceId: ref.workspaceId, epoch: epoch)
+                    self.outbox = outbox
+                    runOutbox(effects)
+                }
+                // The saved window is bound to the old epoch; the next send opens a fresh one.
+                if let window = windows[ref.workspaceId], window.namespace.epoch != epoch {
+                    windows[ref.workspaceId] = nil
+                    saveWindows()
+                }
+                run(session.reduce(.authorityChanged(generation: session.generation)))
             case .attachmentUpdated(let attachment):
                 // Only a terminal answer moves a draft; the upload path owns the rest.
                 guard [.ready, .rejected, .expired].contains(attachment.state),
@@ -756,7 +793,7 @@ final class CloudRoomsModel: ObservableObject {
     }
 
     private func window(for workspaceId: String) async throws -> CloudSendWindow {
-        if let window = windows[workspaceId], Self.fresh(window) { return window }
+        if let window = windows[workspaceId], usable(window) { return window }
         let window = try await client.operationWindow(workspaceId: workspaceId)
         windows[workspaceId] = window
         saveWindows()
@@ -998,7 +1035,7 @@ struct CloudRoomChatView: View {
                         CloudApprovalCardView(model: model, ref: ref, card: card)
                     }
                     ForEach(model.pending(in: ref)) { entry in
-                        CloudPendingRow(model: model, entry: entry)
+                        CloudPendingRow(model: model, entry: entry, ref: ref)
                     }
                 }
                 .listStyle(.plain)
@@ -1248,6 +1285,7 @@ enum CloudSamples {
 struct CloudPendingRow: View {
     @ObservedObject var model: CloudRoomsModel
     let entry: CloudOutboxEntry
+    let ref: CloudRoomRef
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
@@ -1258,7 +1296,10 @@ struct CloudPendingRow: View {
             }
             HStack(spacing: 12) {
                 Spacer()
-                if case .held = entry.status, !entry.dispatched {
+                if entry.status == .held(.authorityChanged), !entry.dispatched {
+                    Button("send again") { Task { await model.sendAgain(entry.id, in: ref) } }.accessibilityIdentifier("cloud.pending.sendAgain")
+                    Button("discard", role: .destructive) { model.discard(entry.id) }.accessibilityIdentifier("cloud.pending.discard")
+                } else if case .held = entry.status, !entry.dispatched {
                     Button("send") { model.release(entry.id) }.accessibilityIdentifier("cloud.pending.release")
                     Button("discard", role: .destructive) { model.discard(entry.id) }.accessibilityIdentifier("cloud.pending.discard")
                 } else if entry.status == .checking, entry.notCommitted, !entry.autoReplay {
@@ -1278,6 +1319,7 @@ struct CloudPendingRow: View {
         case .held(.relaunched): "not sent yet, check before sending"
         case .held(.audienceChanged): "room changed, check before sending"
         case .held(.parentRejected): "reply target wasn't sent"
+        case .held(.authorityChanged): "not sent · written before this room moved"
         case .recoveryUnknown: "can't confirm, checking"
         default: entry.status.label.rawValue
         }

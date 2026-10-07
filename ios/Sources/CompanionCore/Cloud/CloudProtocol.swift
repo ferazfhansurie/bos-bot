@@ -492,9 +492,11 @@ public enum CloudEventKind {
     public static let runUpdated = "run.updated"
     public static let approvalUpdated = "approval.updated"
     public static let attachmentUpdated = "attachment.updated"
+    /// The workspace moved to a new authority epoch at a migration cutover.
+    public static let authorityChanged = "authority_changed"
     public static let all: Set<String> = [messageCreated, messageUpdated, messageDeleted, policyChanged, membershipChanged, presence,
                                           invocationOffered, invocationClaimed, streamDelta, finalCommit, stopRequested, stopObserved,
-                                          runUpdated, approvalUpdated, attachmentUpdated]
+                                          runUpdated, approvalUpdated, attachmentUpdated, authorityChanged]
 }
 
 public struct CloudMember: Hashable, Codable, Sendable {
