@@ -338,6 +338,7 @@ import {
   mentionedBots,
   roomResponders,
   sectionKey,
+  BOS_SEED_GREETING,
   Store,
   titleFromLlm,
   type BotRecord,
@@ -13327,7 +13328,11 @@ function applyOnboardingChat(event: OnboardingChatEvent): OnboardingChatState | 
     personName: cfg.profile?.name ?? "",
     messages: (threadId) => store.messagesFor(threadId),
     append: (threadId, line) => { store.appendMessage(threadId, { role: "bot", kind: "text", text: line.text, onboarding: line }); },
-    patch: (threadId, messageId, line) => { store.patchMessage(threadId, messageId, { onboarding: line }); },
+    patch: (threadId, messageId, line) => { store.patchMessage(threadId, messageId, { text: line.text, onboarding: line }); },
+    seedGreeting: (threadId) => {
+      const rows = store.messagesFor(threadId);
+      return rows.length === 1 && rows[0].role === "bot" && rows[0].text === BOS_SEED_GREETING && !rows[0].onboarding ? rows[0].id : null;
+    },
     rename: (botId, name) => {
       const bot = store.bot(botId);
       if (!bot || bot.name === name) return;

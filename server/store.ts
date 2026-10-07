@@ -487,6 +487,9 @@ function newBotApprovalMode(): ApprovalMode {
   return mode === "custom" ? "ask" : mode;
 }
 
+/** The first-run seed line. 2.0 chat onboarding takes it over in place. */
+export const BOS_SEED_GREETING = "I'm BOS, your first AI teammate. Tell me what your business does and who you help. We'll choose a useful first task, and I can work with you or help you recruit a specialist.";
+
 export class Store {
   bots: BotRecord[] = [];
   groups: GroupRecord[] = [];
@@ -2418,6 +2421,6 @@ export class Store {
     if (this.bots.length) return;
     const bot = this.createBot(BOS_STARTER, { seedMessages: false });
     this.setChiefOfStaff(bot.id);
-    this.appendMessage(bot.threadId, { role: "bot", kind: "text", text: "I'm BOS, your first AI teammate. Tell me what your business does and who you help. We'll choose a useful first task, and I can work with you or help you recruit a specialist." });
+    this.appendMessage(bot.threadId, { role: "bot", kind: "text", text: BOS_SEED_GREETING });
   }
 }

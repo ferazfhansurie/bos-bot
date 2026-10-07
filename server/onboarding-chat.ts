@@ -63,6 +63,9 @@ export interface OnboardingChatHost {
   messages(threadId: string): readonly OnboardingLine[];
   append(threadId: string, line: OnboardingChatMessage): void;
   patch(threadId: string, messageId: string, line: OnboardingChatMessage): void;
+  /** The untouched first-run seed greeting, if the thread holds only that.
+   * The first greet line replaces it so setup never opens with two hellos. */
+  seedGreeting?(threadId: string): string | null;
   /** Called once the person names the bot. */
   rename?(botId: string, name: string): void;
   save(state: OnboardingChatState): void;
@@ -80,7 +83,10 @@ export function applyOnboardingChatEvent(host: OnboardingChatHost, before: Onboa
     if (posted.has(step)) return;
     posted.add(step);
     const ctx = { personName: host.personName, botName: state.botName, engineReady: state.engineReady, connected: state.connected };
-    for (const line of onboardingScript(step, ctx)) host.append(threadId, line);
+    const lines = onboardingScript(step, ctx);
+    const seed = step === "greet" && lines.length ? host.seedGreeting?.(threadId) : null;
+    if (seed) host.patch(threadId, seed, lines[0]);
+    for (const line of seed ? lines.slice(1) : lines) host.append(threadId, line);
   };
   if (state.step === "done") {
     // typing early (or skipping the last card) ends setup; nothing more posts

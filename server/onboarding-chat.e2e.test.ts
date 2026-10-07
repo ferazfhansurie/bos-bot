@@ -42,6 +42,10 @@ it("walks a fresh workspace from start to first task, posting each scripted line
     const thread = () => api("GET", `/api/threads/${state.threadId}/messages`).then((r) => r.body.messages as any[]);
     const ctx = () => ({ personName: "Ada Lovelace", botName: state.botName, engineReady: state.engineReady, connected: state.connected });
     expect(onboardingLines(await thread()).map(lineKey)).toEqual([...onboardingScript("greet", ctx()), ...onboardingScript("name", ctx())].map(lineKey));
+    // the first-run seed greeting is taken over, not left above the new one
+    const opening = await thread();
+    expect(opening.some((row) => row.text?.startsWith("I'm BOS, your first AI teammate"))).toBe(false);
+    expect(opening.every((row) => row.onboarding)).toBe(true);
     expect((await event({ type: "start" })).body.state).toEqual(state);
 
     state = (await event({ type: "name", value: "  Jarvis  " })).body.state;
