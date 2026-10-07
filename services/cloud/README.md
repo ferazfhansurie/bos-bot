@@ -75,7 +75,14 @@ before executing the operation. Redeem also holds the invite row lock at its
 `after_admission` point. It validates expiry/use/revocation after the barrier.
 
 Ordinary details: `workspace_id`, `room_id` (empty for workspace-only actions),
-`account_id` (the actor). Send/seal also have `client_operation_id`; removal has
+`account_id` (the actor). Send/seal also have `client_operation_id` and `digest`
+at both admission points. `digest` is the lowercase SHA-256 hex of
+`canonicalJson(SendEnvelopeSchema.parse(body))`, the same digest used by the
+operation ledger. Include it in `match` to pause only one envelope when competing
+envelopes share the same operation key; a key-only match pauses both. For example,
+arm `message.send.before_admission` with
+`match:{workspace_id,account_id,client_operation_id,digest}` for the intended loser
+so the changed-envelope winner can acquire the real admission lock. Removal has
 `target_id`; revoke has `invite_id`; snapshot page has `snapshot_id`. Redeem has
 `workspace_id`, `account_id`, `token_hash` (SHA-256 of the token), and at its after
 point also `invite_id`.

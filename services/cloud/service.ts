@@ -613,7 +613,7 @@ export class CloudService {
       w,
       e.room_id,
       seal ? "operation.seal" : "message.send",
-      { client_operation_id: e.client_operation_id },
+      { client_operation_id: e.client_operation_id, digest },
       async (q, i, a) => {
         await this.thread(q, w, e.room_id, e.thread_id);
         const expected = this.namespace(i, a.workspace);
