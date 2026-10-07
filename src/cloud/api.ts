@@ -1,5 +1,6 @@
-// HTTP and realtime transport for the /v2 cloud room service. Every request
-// carries the issuer bearer; the server derives the actor and membership.
+// HTTP and realtime transport for the /v2 cloud room service. Native clients
+// send the issuer bearer; the web client sends nothing and relies on the
+// same-site session cookie. The server derives the actor and membership.
 import {
   FrameSchema,
   LIMITS,
@@ -12,6 +13,7 @@ import {
   type ReadCoverage,
   type SendEnvelope,
 } from "../../shared/cloud-protocol/index";
+import { identityProblem, type IdentityProblem } from "./auth-state";
 
 export interface CloudIdentity {
   account_id: string;
@@ -22,7 +24,8 @@ export interface CloudIdentity {
 
 export interface CloudSession extends CloudIdentity {
   baseUrl: string;
-  bearer: string;
+  /** Null on the web: the issuer's protected cookie authenticates instead. */
+  bearer: string | null;
 }
 
 export type CloudFailure = { error: string; status: number; retry_after?: number } | { transport: true; status?: number };
@@ -55,6 +58,7 @@ async function request<T>(baseUrl: string, bearer: string | null, method: string
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
       method,
+      credentials: "same-origin",
       headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...(bearer ? { authorization: `Bearer ${bearer}` } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
@@ -76,14 +80,24 @@ async function request<T>(baseUrl: string, bearer: string | null, method: string
 
 const enc = encodeURIComponent;
 
-export async function signInWithTestIssuer(baseUrl: string, subject: string): Promise<CloudResult<CloudSession>> {
-  const result = await request<CloudIdentity & { bearer: string }>(baseUrl, null, "POST", "/v2/test/sign-in", { subject });
+/** Who the room service says is signed in, validated fresh against the issuer. */
+export async function currentSession(baseUrl: string, bearer: string | null): Promise<CloudResult<CloudSession>> {
+  const result = await request<CloudIdentity>(baseUrl, bearer, "GET", "/v2/me");
   if (!result.ok) return result;
-  return { ok: true, value: { ...result.value, baseUrl } };
+  return { ok: true, value: { ...result.value, baseUrl, bearer } };
 }
 
-export function cloudApi(session: CloudSession) {
-  const call = <T>(method: string, path: string, body?: unknown) => request<T>(session.baseUrl, session.bearer, method, path, body);
+/** `onIdentity` hears every identity failure, and `null` after any success. */
+export function cloudApi(session: CloudSession, onIdentity: (problem: IdentityProblem | null) => void = () => {}) {
+  const call = async <T>(method: string, path: string, body?: unknown) => {
+    const result = await request<T>(session.baseUrl, session.bearer, method, path, body);
+    if (result.ok) onIdentity(null);
+    else {
+      const problem = identityProblem(result.failure);
+      if (problem) onIdentity(problem);
+    }
+    return result;
+  };
   return {
     me: () => call<CloudIdentity>("GET", "/v2/me"),
     sync: () => call<{ workspaces: SyncWorkspace[] }>("GET", "/v2/discovery/sync"),
@@ -134,13 +148,16 @@ export interface RealtimeConnection {
   close(): void;
 }
 
-/** Open the realtime socket. The bearer goes in the first frame, never the URL. */
+/**
+ * Open the realtime socket. A native bearer goes in the first frame, never the
+ * URL; on the web the frame carries no bearer and the upgrade's cookie counts.
+ */
 export function connectRealtime(session: CloudSession, handlers: RealtimeHandlers, Socket: typeof WebSocket = WebSocket): RealtimeConnection {
   const url = `${session.baseUrl.replace(/^http/, "ws").replace(/\/$/, "")}/v2/realtime`;
   const socket = new Socket(url);
   let closed = false;
   socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: "authenticate", bearer: session.bearer }));
+    socket.send(JSON.stringify(session.bearer ? { type: "authenticate", bearer: session.bearer } : { type: "authenticate" }));
     handlers.onOpen();
   });
   socket.addEventListener("message", (event: MessageEvent) => {

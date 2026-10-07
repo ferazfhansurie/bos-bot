@@ -1,8 +1,11 @@
-// Minimal slice 1 room screen: test sign-in, workspace/room/invite setup and
-// one room thread with its outbox. Fictional data against a local server only.
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { cloudApi, signInWithTestIssuer, type CloudApi, type CloudSession, type SyncWorkspace } from "./api";
+// Cloud rooms screen: email OTP sign-in against the issuer, then workspace,
+// room and invite setup and one room thread with its outbox. Fictional data
+// against local services only.
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { cloudApi, currentSession, type CloudApi, type CloudSession, type SyncWorkspace } from "./api";
+import { authReducer, identityProblem, type IdentityProblem } from "./auth-state";
 import { CloudRoomController, type CloudRoomRef } from "./controller";
+import { issuer } from "./issuer";
 import { outboxLabel } from "./outbox";
 import { isRead } from "./read-coverage";
 import { timeline } from "./room-reducer";
@@ -11,37 +14,119 @@ const field = "rounded border border-neutral-300 px-2 py-1 text-sm dark:border-n
 const button = "rounded border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800";
 
 function failureText(result: { ok: false; failure: { error: string } | { transport: true } }): string {
-  return "error" in result.failure ? result.failure.error : "couldn't reach the server";
+  return "error" in result.failure ? result.failure.error.replace(/_/g, " ") : "couldn't reach the server";
 }
+
+type OnIdentity = (problem: IdentityProblem | null) => void;
 
 export function CloudRoomScreen({ baseUrl }: { baseUrl: string }) {
-  const [session, setSession] = useState<CloudSession | null>(null);
-  const [subject, setSubject] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [auth, dispatch] = useReducer(authReducer, { status: "checking" });
+  const onIdentity = useCallback<OnIdentity>((problem) => dispatch({ type: "identity", problem, now: Date.now() }), []);
 
-  if (!session) {
+  // The room service validates the cookie fresh against the issuer; a timeout
+  // or 5xx there is identity_unavailable, never signed out.
+  const check = useCallback(async () => {
+    const result = await currentSession(baseUrl, null);
+    if (result.ok) dispatch({ type: "checked", session: result.value });
+    else onIdentity(identityProblem(result.failure) ?? { kind: "identity_unavailable" });
+  }, [baseUrl, onIdentity]);
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  const retryAt = auth.status === "unavailable" ? auth.retry_at : auth.status === "signed_in" ? auth.unavailable_until : null;
+  useEffect(() => {
+    if (retryAt === null) return;
+    const timer = setTimeout(() => void check(), Math.max(0, retryAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [retryAt, check]);
+
+  if (auth.status === "checking") return <p className="p-6 text-sm text-neutral-500">checking sign-in...</p>;
+  if (auth.status === "unavailable") {
     return (
-      <form
-        className="flex max-w-sm flex-col gap-2 p-6"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          const result = await signInWithTestIssuer(baseUrl, subject.trim());
-          if (result.ok) setSession(result.value);
-          else setError(failureText(result));
-        }}
-      >
-        <label className="text-sm">test sign-in subject</label>
-        <input className={field} value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="alice" />
-        <button className={button} disabled={!subject.trim()}>sign in</button>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-      </form>
+      <div className="flex max-w-sm flex-col gap-2 p-6 text-sm">
+        <p>can't confirm your sign-in right now. retrying.</p>
+        <button className={button} onClick={() => void check()}>retry now</button>
+      </div>
     );
   }
-  return <SignedIn session={session} onSignOut={() => setSession(null)} />;
+  if (auth.status === "signed_out" || auth.status === "revoked") {
+    return <SignIn revoked={auth.status === "revoked"} onSignedIn={check} />;
+  }
+  return (
+    <SignedIn
+      session={auth.session}
+      unavailable={auth.unavailable_until !== null}
+      onIdentity={onIdentity}
+      onSignedOut={() => dispatch({ type: "signed_out" })}
+    />
+  );
 }
 
-function SignedIn({ session, onSignOut }: { session: CloudSession; onSignOut: () => void }) {
-  const api = useMemo(() => cloudApi(session), [session]);
+function SignIn({ revoked, onSignedIn }: { revoked: boolean; onSignedIn: () => Promise<void> }) {
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (step: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await step();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const sendCode = (address: string) =>
+    run(async () => {
+      const result = await issuer.sendCode(address);
+      if (result.ok) {
+        setSentTo(address);
+        setCode("");
+      } else setError(result.message);
+    });
+
+  return (
+    <form
+      className="flex max-w-sm flex-col gap-2 p-6 text-sm"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!sentTo) return void sendCode(email.trim());
+        void run(async () => {
+          const result = await issuer.verifyCode(sentTo, code.trim());
+          if (result.ok) await onSignedIn();
+          else setError(result.message);
+        });
+      }}
+    >
+      {revoked && <p>you were signed out. sign in again to keep using cloud rooms.</p>}
+      {sentTo ? (
+        <>
+          <label htmlFor="cloud-otp">code sent to {sentTo}</label>
+          <input id="cloud-otp" className={field} value={code} onChange={(event) => setCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" autoFocus />
+          <button className={button} disabled={busy || !code.trim()}>sign in</button>
+          <div className="flex gap-2">
+            <button type="button" className={button} disabled={busy} onClick={() => void sendCode(sentTo)}>send a new code</button>
+            <button type="button" className={button} disabled={busy} onClick={() => setSentTo(null)}>use another email</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <label htmlFor="cloud-email">email</label>
+          <input id="cloud-email" className={field} type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" autoFocus />
+          <button className={button} disabled={busy || !email.trim()}>email me a code</button>
+        </>
+      )}
+      {error && <p className="text-red-600">{error}</p>}
+    </form>
+  );
+}
+
+function SignedIn(props: { session: CloudSession; unavailable: boolean; onIdentity: OnIdentity; onSignedOut: () => void }) {
+  const { session, unavailable, onIdentity, onSignedOut } = props;
+  const api = useMemo(() => cloudApi(session, onIdentity), [session, onIdentity]);
   const [workspaces, setWorkspaces] = useState<SyncWorkspace[]>([]);
   const [room, setRoom] = useState<CloudRoomRef | null>(null);
   const [name, setName] = useState("");
@@ -72,9 +157,19 @@ function SignedIn({ session, onSignOut }: { session: CloudSession; onSignOut: ()
     <div className="flex h-screen text-sm">
       <aside className="flex w-72 flex-col gap-3 overflow-y-auto border-r border-neutral-200 p-3 dark:border-neutral-800">
         <div className="flex items-center justify-between">
-          <span>{session.subject}</span>
-          <button className={button} onClick={onSignOut}>sign out</button>
+          <span className="truncate" title={session.subject}>{session.subject}</span>
+          <button
+            className={button}
+            onClick={async () => {
+              const result = await issuer.signOut();
+              if (result.ok) onSignedOut();
+              else setNotice(result.message);
+            }}
+          >
+            sign out
+          </button>
         </div>
+        {unavailable && <p className="text-amber-600">can't confirm your sign-in right now. retrying.</p>}
         <div className="flex gap-1">
           <input className={`${field} min-w-0 flex-1`} value={name} onChange={(event) => setName(event.target.value)} placeholder="workspace name" />
           <button className={button} disabled={!name.trim()} onClick={() => void act(() => api.createWorkspace(name.trim())).then(() => setName(""))}>create</button>
@@ -90,7 +185,7 @@ function SignedIn({ session, onSignOut }: { session: CloudSession; onSignOut: ()
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
         {room ? (
-          <RoomView key={`${room.workspace_id}/${room.room_id}`} session={session} api={api} room={room} />
+          <RoomView key={`${room.workspace_id}/${room.room_id}`} session={session} api={api} room={room} onIdentity={onIdentity} />
         ) : (
           <p className="p-6 text-neutral-500">pick a room.</p>
         )}
@@ -143,8 +238,11 @@ function WorkspaceItem(props: {
   );
 }
 
-function RoomView({ session, api, room }: { session: CloudSession; api: CloudApi; room: CloudRoomRef }) {
-  const controller = useMemo(() => new CloudRoomController(session, api, room, window.localStorage), [session, api, room]);
+function RoomView({ session, api, room, onIdentity }: { session: CloudSession; api: CloudApi; room: CloudRoomRef; onIdentity: OnIdentity }) {
+  const controller = useMemo(
+    () => new CloudRoomController(session, api, room, window.localStorage, WebSocket, onIdentity),
+    [session, api, room, onIdentity],
+  );
   useEffect(() => {
     controller.start();
     return () => controller.stop();

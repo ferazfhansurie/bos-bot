@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import fixtures from "../../shared/cloud-protocol/fixtures.json";
+import { ERROR_CODES } from "../../shared/cloud-protocol/index";
 import type { CloudApi, CloudResult, CloudSession } from "./api";
 import { CloudRoomController } from "./controller";
 import type { OutboxEntry } from "./outbox";
@@ -140,5 +141,47 @@ describe("cloud room controller", () => {
     expect(controller.getState().outbox).toHaveLength(1);
     expect(setItem).not.toHaveBeenCalled();
     controller.stop();
+  });
+
+  it("authenticates a cookie session without a bearer in the first frame", () => {
+    const controller = new CloudRoomController({ ...session, bearer: null }, fakeApi({}), room, null, FakeSocket as unknown as typeof WebSocket);
+    controller.start();
+    FakeSocket.last.open();
+    expect(FakeSocket.last.sent[0]).toEqual({ type: "authenticate" });
+    controller.stop();
+  });
+
+  it("reports identity_unavailable from the stream and keeps reconnecting", () => {
+    vi.useFakeTimers();
+    const onIdentity = vi.fn();
+    const controller = new CloudRoomController(session, fakeApi({}), room, null, FakeSocket as unknown as typeof WebSocket, onIdentity);
+    controller.start();
+    const socket = FakeSocket.last;
+    socket.open();
+    socket.receive({ type: "error", error: "identity_unavailable" });
+    expect(onIdentity).toHaveBeenCalledWith({ kind: "identity_unavailable", retry_after: undefined });
+    expect(controller.getState().removed).toBe(false);
+    socket.closed();
+    vi.runOnlyPendingTimers();
+    expect(FakeSocket.last).not.toBe(socket);
+    controller.stop();
+    vi.useRealTimers();
+  });
+
+  // session_invalid joins the wire error codes in api's slice 2 protocol change.
+  it.skipIf(!(ERROR_CODES as readonly string[]).includes("session_invalid"))("stops reconnecting once the stream says the session is invalid", () => {
+    vi.useFakeTimers();
+    const onIdentity = vi.fn();
+    const controller = new CloudRoomController(session, fakeApi({}), room, null, FakeSocket as unknown as typeof WebSocket, onIdentity);
+    controller.start();
+    const socket = FakeSocket.last;
+    socket.open();
+    socket.receive({ type: "error", error: "session_invalid" });
+    expect(onIdentity).toHaveBeenCalledWith({ kind: "session_invalid" });
+    const created = FakeSocket.created;
+    socket.closed();
+    vi.runOnlyPendingTimers();
+    expect(FakeSocket.created).toBe(created);
+    vi.useRealTimers();
   });
 });
