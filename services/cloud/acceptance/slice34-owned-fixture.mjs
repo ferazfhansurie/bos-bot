@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -27,19 +28,33 @@ export async function ownedFixture(server, { evidence, record = () => {} } = {})
   const port = net.address().port;
   await new Promise(r => net.close(r));
   const upstream = 'http://127.0.0.1:' + port;
-  const issuerFault = { outage: false, stall_ms: 0 };
+  const issuerFault = { outage: false, stall_ms: 0, stall_bearer: null, drop_me_response_bearer: null };
   const proxy = httpServer(async (req, res) => {
     const started = performance.now();
     const info = { type: 'issuer_proxy', method: req.method, path: req.url.split('?')[0] };
     try {
       if (req.url === '/v1/me' && issuerFault.outage) { record({ ...info, status: 503, injected_outage: true }); res.writeHead(503); res.end('{}'); return; }
-      if (req.url === '/v1/me' && issuerFault.stall_ms) await pause(issuerFault.stall_ms);
+      const bearer = req.headers.authorization?.replace(/^Bearer /, '');
+      if (req.url === '/v1/me' && issuerFault.stall_ms && (!issuerFault.stall_bearer || issuerFault.stall_bearer === bearer)) {
+        const ms = issuerFault.stall_ms;
+        record({ ...info, injected_stall_ms: ms, bearer_sha256: createHash('sha256').update(bearer ?? '').digest('hex') });
+        await pause(ms);
+        record({ ...info, stall_elapsed_ms: performance.now() - started, client_disconnected: res.destroyed });
+      }
       if (res.destroyed) return;
       const chunks = []; for await (const b of req) chunks.push(b);
       const headers = { ...req.headers }; delete headers.host; delete headers.connection; delete headers['content-length'];
       const response = await fetch(upstream + req.url, { method: req.method, headers,
         ...(!['GET', 'HEAD'].includes(req.method) ? { body: Buffer.concat(chunks) } : {}), redirect: 'manual' });
-      record({ ...info, upstream_status: response.status, duration_ms: performance.now() - started });
+      if (req.url === '/v1/me' && bearer && issuerFault.drop_me_response_bearer === bearer) {
+        issuerFault.drop_me_response_bearer = null;
+        await response.arrayBuffer();
+        record({ ...info, upstream_status: response.status, injected_response_loss: true,
+          bearer_sha256: createHash('sha256').update(bearer).digest('hex'), duration_ms: performance.now() - started });
+        res.destroy(); return;
+      }
+      record({ ...info, upstream_status: response.status, duration_ms: performance.now() - started,
+        ...(req.url === '/v1/me' && bearer ? { bearer_sha256: createHash('sha256').update(bearer).digest('hex') } : {}) });
       const outHeaders = Object.fromEntries(response.headers); delete outHeaders['content-encoding']; delete outHeaders['content-length'];
       if (response.headers.getSetCookie().length) outHeaders['set-cookie'] = response.headers.getSetCookie();
       res.writeHead(response.status, outHeaders); res.end(Buffer.from(await response.arrayBuffer()));

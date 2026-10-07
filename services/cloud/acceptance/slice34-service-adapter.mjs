@@ -32,7 +32,7 @@ export async function connect({ server, candidate, schema, evidence, record }) {
     writeFileSync(path, raw, { mode: 0o600, flag: 'wx', flush: true });
     return { path, sha256: bytesDigest(raw) };
   };
-  const c = { f, admin, evidence, log, artifact, digest, pause, until, sockets, WebSocket, candidate, schema };
+  const c = { f, admin, server, evidence, log, artifact, digest, pause, until, sockets, WebSocket, candidate, schema };
   // Browser WebSocket errors are DOM events. Node ws additionally throws when
   // no EventEmitter error listener exists (e.g. stop before the TCP handshake).
   c.BrowserSocket = class extends WebSocket {
@@ -180,7 +180,6 @@ export async function connect({ server, candidate, schema, evidence, record }) {
           'model-pinned-no-fallback': 'actual native provider model/fallback receipts unavailable; fixture model metadata is not provider evidence',
           'explicit-steer-and-two-bot-no-loop': 'native explicit-steer/two-bot provider transcripts unavailable; no provider execution is modeled',
           'stream-reorder-duplicate-edit-delete': 'candidate has replay wire types but no HTTP edit/delete mutation driver; the complete edit/delete service scenario cannot execute',
-          'identity-stall-15s-renewal-loss-20-concurrent': 'native bearer renewal response-loss receipt unavailable; issuer validation alone does not prove renewal semantics',
           'late-old-account-callback-push-deeplink': 'native late callback/push/deeplink lifecycle driver unavailable; local hint construction is not device receipt',
           'web-ios-offline-background-replay': 'real browser and iOS offline/background lifecycle receipts are not available in this service-only run',
         };
