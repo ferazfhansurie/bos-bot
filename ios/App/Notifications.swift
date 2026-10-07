@@ -18,6 +18,16 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     var sharedRoomHandler: ((String, String?) -> Void)?
     var foregroundPresentation: (@MainActor (NotificationTarget) -> NotificationPresentation)?
     var foregroundSharedPresentation: (@MainActor (String, String?) -> NotificationPresentation)?
+    /// BOS 2.0 cloud rooms. A tap that launches the app arrives before any
+    /// view sets the handler; it waits in `pendingCloudHint` until one does.
+    var cloudHintHandler: (@MainActor (CloudPushHint) -> Void)? {
+        didSet { if let hint = pendingCloudHint, let cloudHintHandler { pendingCloudHint = nil; Task { @MainActor in cloudHintHandler(hint) } } }
+    }
+    var foregroundCloudPresentation: (@MainActor (CloudPushHint) -> NotificationPresentation)?
+    var cloudTokenHandler: ((Data) -> Void)?
+    private(set) var pendingCloudHint: CloudPushHint?
+    /// The last APNs token this launch, for a handler set after it arrived.
+    private(set) var deviceToken: Data?
     private var replay = NotificationReplayLedger(ids: UserDefaults.standard.stringArray(forKey: "bos.notificationReplayIDs") ?? [])
 
     private override init() {
@@ -61,6 +71,11 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
 
+    func receivedDeviceToken(_ token: Data) {
+        deviceToken = token
+        cloudTokenHandler?(token)
+    }
+
     func setBadge(_ count: Int) {
         center.setBadgeCount(max(0, count))
     }
@@ -73,7 +88,9 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         let payload = Self.strings(notification.request.content.userInfo)
         Task { @MainActor in
             let presentation: NotificationPresentation
-            if let roomID = payload["roomId"] {
+            if let hint = CloudPushHint(userInfo: notification.request.content.userInfo) {
+                presentation = foregroundCloudPresentation?(hint) ?? .quiet
+            } else if let roomID = payload["roomId"] {
                 presentation = foregroundSharedPresentation?(roomID, payload["connectionId"]) ?? .quiet
             } else if let target = NotificationTarget(payload: payload) {
                 presentation = foregroundPresentation?(target) ?? .quiet
@@ -94,7 +111,9 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let strings = Self.strings(response.notification.request.content.userInfo)
-        if let roomID = strings["roomId"] { sharedRoomHandler?(roomID, strings["connectionId"]) }
+        if let hint = CloudPushHint(userInfo: response.notification.request.content.userInfo) {
+            if let cloudHintHandler { Task { @MainActor in cloudHintHandler(hint) } } else { pendingCloudHint = hint }
+        } else if let roomID = strings["roomId"] { sharedRoomHandler?(roomID, strings["connectionId"]) }
         else if let target = NotificationTarget(payload: strings) { responseHandler?(target) }
         completionHandler()
     }
