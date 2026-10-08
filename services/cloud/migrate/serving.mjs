@@ -2,6 +2,16 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, rename, open } from "node:fs/promises";
 import { join } from "node:path";
 import { mappedId } from "./tool.mjs";
+import {
+  attachmentContext,
+  markReferences,
+  objectStore,
+  planAttachments,
+  rollbackAttachments,
+  sweepObjects,
+  transferAttachments,
+  verifyAttachmentObjects,
+} from "./attachments.mjs";
 const hash = (v) => createHash("sha256").update(v).digest("hex");
 const key = (type, id) => JSON.stringify([type, id]);
 const validId = (v) =>
@@ -33,6 +43,8 @@ async function digests(c, w) {
     ["threads", "room_id,thread_id"],
     ["room_grants", "room_id,account_id"],
     ["messages", "room_id,sequence"],
+    ["attachment_objects", "attachment_id"],
+    ["message_attachments", "message_id,attachment_id"],
   ])
     rows[table] = (
       await c.query(
@@ -282,10 +294,12 @@ function servingView(r) {
     replyToId: m.replyTo,
   };
 }
-async function project(c, run, inv, plan) {
+async function project(c, run, inv, plan, dir, options) {
   const w = run.workspace_id,
     inputs = planInputs(plan, inv),
-    planDigest = hash(JSON.stringify(plan));
+    planDigest = hash(JSON.stringify(plan)),
+    store = objectStore(options.objectStorePath),
+    attachments = attachmentContext(inv, dir, store, options.scan);
   const old = (
     await c.query(
       "SELECT * FROM migration.serving_projections WHERE workspace_id=$1",
@@ -301,7 +315,12 @@ async function project(c, run, inv, plan) {
       actual.quarantine_digest !== old.quarantine_digest
     )
       throw new Error("projection integrity mismatch");
-    return { ...actual, state: "projected", idempotent: true };
+    return {
+      ...actual,
+      ...(await verifyAttachmentObjects(c, w, store)),
+      state: "projected",
+      idempotent: true,
+    };
   }
   if (
     (await c.query("SELECT 1 FROM cloud.workspaces WHERE workspace_id=$1", [w]))
@@ -380,7 +399,7 @@ async function project(c, run, inv, plan) {
       room = inputs.threads.get(m.thread_id),
       a = inputs.authors.get(sourceAuthor(m, r.id)),
       member = a && inputs.members.get(a.account_id);
-    let reason;
+    let reason, attach;
     if (
       r.type === "shared_message" &&
       inv.pending_shared_journals.includes(m.thread_id)
@@ -406,8 +425,10 @@ async function project(c, run, inv, plan) {
       !["user", "bot"].includes(m.role)
     )
       reason = "unsupported_legacy_payload";
-    else if (m.attachments?.length)
-      reason = "attachment_requires_verified_transfer";
+    else if (
+      (attach = await planAttachments(attachments, r.type, r.id, m))?.reason
+    )
+      reason = attach.reason;
     else if (
       !Number.isFinite(m.at) ||
       !Number.isFinite(new Date(m.at).getTime()) ||
@@ -418,9 +439,10 @@ async function project(c, run, inv, plan) {
       reason = "invalid_source_version_or_time";
     if (reason) {
       await quarantine(c, w, r.type, r.id, reason);
+      await markReferences(c, w, attach?.failed);
       continue;
     }
-    eligible.set(r.id, { r, m, a, room });
+    eligible.set(r.id, { r, m, a, room, attach });
   }
   // A missing/conflicting quoted message never gets a fabricated reply target.
   let changed = true;
@@ -441,7 +463,7 @@ async function project(c, run, inv, plan) {
   for (const v of [...eligible.values()].sort(
     (a, b) => a.r.order - b.r.order || a.r.id.localeCompare(b.r.id),
   )) {
-    const { r, m, a, room } = v,
+    const { r, m, a, room, attach } = v,
       roomId = roomIds.get(room.source_id),
       threadId = mappedId(inv.source_install_id, "thread", m.thread_id),
       seq = (heads.get(roomId) ?? 0) + 1;
@@ -472,6 +494,22 @@ async function project(c, run, inv, plan) {
       "DELETE FROM migration.migration_quarantine WHERE workspace_id=$1 AND source_type=$2 AND source_id=$3",
       [w, r.type, r.id],
     );
+    if (attach) {
+      await markReferences(c, w, attach.failed);
+      await transferAttachments(
+        c,
+        attachments,
+        w,
+        {
+          room_id: roomId,
+          thread_id: threadId,
+          message_id: mappedId(inv.source_install_id, r.type, r.id),
+          owner_id: a.account_id,
+          created_at: new Date(m.at).toISOString(),
+        },
+        attach.items,
+      );
+    }
   }
   for (const v of eligible.values())
     if (v.m.replyToId)
@@ -526,7 +564,7 @@ async function project(c, run, inv, plan) {
   );
   return { ...actual, state: "projected", idempotent: false };
 }
-export async function rollbackProjection(c, w) {
+export async function rollbackProjection(c, w, store = null) {
   if (
     !(
       await c.query(
@@ -535,7 +573,7 @@ export async function rollbackProjection(c, w) {
       )
     ).rowCount
   )
-    return;
+    return sweepObjects(w, store);
   await transaction(c, async () => {
     const authority = (
       await c.query(
@@ -545,6 +583,7 @@ export async function rollbackProjection(c, w) {
     ).rows[0];
     if (!authority) return;
     if (authority.state !== "staged") throw new Error("forward repair only");
+    await rollbackAttachments(c, w, store);
     for (const table of [
       "messages",
       "room_grants",
@@ -567,7 +606,7 @@ export async function servingAction(c, dir, run, inv, action, options, flag) {
     if (run.state !== "validated")
       throw new Error("projection frozen after cutover");
     if (!options.plan) throw new Error("explicit plan required");
-    return transaction(c, () => project(c, run, inv, options.plan));
+    return transaction(c, () => project(c, run, inv, options.plan, dir, options));
   }
   const projection = (
     await c.query(
@@ -592,12 +631,18 @@ export async function servingAction(c, dir, run, inv, action, options, flag) {
       actual.quarantine_digest !== projection.quarantine_digest
     )
       throw new Error("projection integrity mismatch");
+    const objects = await verifyAttachmentObjects(
+      c,
+      w,
+      objectStore(options.objectStorePath),
+    );
     await c.query(
       "UPDATE migration.migration_runs SET projection_verified=true WHERE workspace_id=$1",
       [w],
     );
     return {
       ...actual,
+      ...objects,
       state: "projection_verified",
       source_digest: inv.digest,
       plan_digest: projection.plan_digest,
