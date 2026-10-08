@@ -113,6 +113,41 @@ describe("cloud room controller", () => {
     controller.stop();
   });
 
+  it("pages older history from the oldest loaded message, one request at a time, and stops at the thread start", async () => {
+    const base = snapshot.messages[0]!;
+    const message = (sequence: number) => ({ ...base, thread_id: "t1", message_id: `m${sequence}`, client_operation_id: `window1.op${String(sequence).padStart(14, "0")}`, sequence: String(sequence), version: 1 });
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => message(from + index));
+    let release: () => void = () => {};
+    const history = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => (release = resolve));
+        return { ok: true as const, value: { messages: range(51, 150), next_before: "51" } };
+      })
+      .mockImplementationOnce(async () => ({ ok: true as const, value: { messages: range(1, 50), next_before: null } }));
+    const api = fakeApi({ history, snapshot: vi.fn(async () => ({ ok: true as const, value: { ...snapshot, thread_id: "t1", messages: range(151, 200) } })) });
+    const controller = new CloudRoomController(session, api, room, null, FakeSocket as unknown as typeof WebSocket);
+    controller.start();
+    FakeSocket.last.open();
+    FakeSocket.last.receive({ type: "reset_required", workspace_id: "w1", room_id: "r1", reason: "cursor_invalid" });
+    await vi.waitFor(() => expect(controller.getState().messages).toHaveLength(50));
+    const first = controller.loadOlder();
+    // A second scroll to the top while the page is in flight asks for nothing.
+    await controller.loadOlder();
+    expect(history).toHaveBeenCalledTimes(1);
+    expect(history).toHaveBeenCalledWith("w1", "r1", "t1", "151");
+    release();
+    await first;
+    expect(controller.getState().messages).toHaveLength(150);
+    await controller.loadOlder();
+    expect(history).toHaveBeenLastCalledWith("w1", "r1", "t1", "51");
+    expect(controller.getState()).toMatchObject({ start_loaded: true, older_before: null });
+    expect(controller.getState().messages.map((item) => item.sequence)).toEqual(range(1, 200).map((item) => item.sequence));
+    await controller.loadOlder();
+    expect(history).toHaveBeenCalledTimes(2);
+    controller.stop();
+  });
+
   it("restarts after StrictMode's start, stop, start and ignores the old socket closing late", async () => {
     vi.useFakeTimers();
     const controller = new CloudRoomController(session, fakeApi({}), room, null, FakeSocket as unknown as typeof WebSocket);
