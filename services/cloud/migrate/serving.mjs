@@ -7,6 +7,73 @@ const key = (type, id) => JSON.stringify([type, id]);
 const validId = (v) =>
   typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const parse = (r) => JSON.parse(r.encoded);
+// Room mapping source types. "bot_threads" maps one source bot record to a
+// private room holding that bot's legacy 1:1 threads (bot.threadId + tasks).
+const ROOM_SOURCES = {
+  room: { record: "room", messages: "message" },
+  shared_room: { record: "shared_room", messages: "shared_message" },
+  bot_threads: { record: "bot", messages: "message" },
+};
+// Kinds whose `text` is the complete, human-readable message: routine/goal
+// run notices carry a designated plain-text fallback. Only that text serves;
+// structured cards stay operator-only in staging.
+const TEXT_KINDS = new Set(["text", "markdown", "routine.run", "goal.run"]);
+// Executable, approval, credential or derived-receipt payloads never serve.
+const QUARANTINED_KINDS = {
+  activity: "legacy_tool_activity",
+  options: "legacy_approval_card",
+  secret: "legacy_secret_request",
+  screen: "legacy_screen_capture",
+  digest: "legacy_turn_receipt",
+  compaction: "legacy_turn_receipt",
+};
+const EXECUTABLE_FIELDS = ["tool", "card", "secret", "png", "comm"];
+/** Null when the source message is plain text that may serve, else the quarantine reason. */
+export function payloadReason(m) {
+  if (!["user", "bot"].includes(m.role)) return "unsupported_legacy_payload";
+  const kind = m.kind ?? "text";
+  if (Object.hasOwn(QUARANTINED_KINDS, kind)) return QUARANTINED_KINDS[kind];
+  if (!TEXT_KINDS.has(kind) || typeof m.text !== "string")
+    return "unsupported_legacy_payload";
+  if (EXECUTABLE_FIELDS.some((f) => m[f] !== undefined))
+    return "legacy_executable_payload";
+  return null;
+}
+/** Owners of a source thread, without the duplicate a room's own thread gets when it is also listed in its tasks. */
+export function threadOwners(thread) {
+  const seen = new Map();
+  for (const o of thread.rooms ?? []) seen.set(key(o.type, o.id), o);
+  return [...seen.values()];
+}
+/** Source threads of a bot record: its 1:1 thread and its task threads. */
+export function botThreadIds(bot) {
+  return [
+    ...new Set(
+      [bot.threadId, ...(bot.tasks ?? []).map((t) => t.threadId)].filter(
+        (t) => typeof t === "string" && t,
+      ),
+    ),
+  ];
+}
+/** Inventory message ids (sorted) whose stamped author is a bot ID. */
+export function botMessageIds(inv) {
+  const out = new Map();
+  for (const r of inv.records)
+    if (r.type === "message") {
+      const botId = parse(r).from?.botId;
+      if (typeof botId === "string" && botId) {
+        const list = out.get(botId) ?? [];
+        list.push(r.id);
+        out.set(botId, list);
+      }
+    }
+  for (const list of out.values()) list.sort();
+  return out;
+}
+/** Evidence for a bot that has messages but no surviving bot record. */
+export function retiredBotEvidence(id, messageIds) {
+  return { type: "retired_bot", id, digest: hash(JSON.stringify(messageIds)) };
+}
 async function transaction(c, fn) {
   await c.query("BEGIN");
   try {
@@ -124,6 +191,26 @@ function planInputs(plan, inv) {
       throw new Error("mapping evidence mismatch");
     return parse(r);
   };
+  // A deleted bot leaves only its stamped messages: the evidence binds the
+  // exact sorted set of messages that name it, and no bot record may exist.
+  let stamped;
+  const retired = (e) => {
+    stamped ??= botMessageIds(inv);
+    const ids = stamped.get(e?.id);
+    if (
+      typeof e?.id !== "string" ||
+      records.has(key("bot", e.id)) ||
+      !ids?.length ||
+      retiredBotEvidence(e.id, ids).digest !== e.digest
+    )
+      throw new Error("retired bot evidence mismatch");
+    return { id: e.id, retired: true };
+  };
+  const botThreads = new Map();
+  for (const r of inv.records)
+    if (r.type === "bot")
+      for (const t of botThreadIds(parse(r)))
+        botThreads.set(t, [...(botThreads.get(t) ?? []), r.id]);
   const members = new Map(),
     authors = new Map(),
     threads = new Map(),
@@ -149,7 +236,10 @@ function planInputs(plan, inv) {
       typeof a.subject !== "string"
     )
       throw new Error("invalid or duplicate author");
-    const source = evidence(a.evidence);
+    const source =
+      a.evidence?.type === "retired_bot"
+        ? retired(a.evidence)
+        : evidence(a.evidence);
     const sourceContact = source.actor
       ? `${source.actor.homeId}:${source.actor.kind}:${source.actor.localId}`
       : null;
@@ -170,6 +260,8 @@ function planInputs(plan, inv) {
       a.source_author.startsWith("bot:") &&
       !(
         (a.evidence.type === "bot" && source.id === a.source_author.slice(4)) ||
+        (a.evidence.type === "retired_bot" &&
+          source.id === a.source_author.slice(4)) ||
         (a.evidence.type === "shared_message" &&
           source.actor?.kind === "bot" &&
           sourceContact === a.source_author.slice(4))
@@ -200,14 +292,15 @@ function planInputs(plan, inv) {
   }
   for (const r of plan.rooms ?? []) {
     const sourceType = r.source_type ?? "room";
-    if (!["room", "shared_room"].includes(sourceType))
+    if (!Object.hasOwn(ROOM_SOURCES, sourceType))
       throw new Error("unsupported source room type");
-    const source = records.get(key(sourceType, r.source_id));
-    if (!source || rooms.has(r.source_id))
+    const recordType = ROOM_SOURCES[sourceType].record;
+    const source = records.get(key(recordType, r.source_id));
+    if (!source || rooms.has(key(sourceType, r.source_id)))
       throw new Error("unknown or duplicate room");
-    rooms.add(r.source_id);
+    rooms.add(key(sourceType, r.source_id));
     if (
-      r.evidence?.type !== sourceType ||
+      r.evidence?.type !== recordType ||
       r.evidence.id !== r.source_id ||
       !Array.isArray(r.thread_ids) ||
       !Array.isArray(r.grants)
@@ -216,20 +309,25 @@ function planInputs(plan, inv) {
     evidence(r.evidence);
     const original = parse(source),
       allowedThreads = new Set(
-        [
-          sourceType === "shared_room" ? original.id : original.threadId,
-          ...(original.tasks ?? []).map((t) => t.threadId),
-        ].filter(Boolean),
+        sourceType === "bot_threads"
+          ? botThreadIds(original)
+          : [
+              sourceType === "shared_room" ? original.id : original.threadId,
+              ...(original.tasks ?? []).map((t) => t.threadId),
+            ].filter(Boolean),
       );
     for (const t of r.thread_ids ?? []) {
       if (typeof t !== "string" || !allowedThreads.has(t) || threads.has(t))
         throw new Error("unowned or duplicate source thread");
       const sourceThread = records.get(key("thread", t));
+      const owners = sourceThread && threadOwners(parse(sourceThread));
       if (
         !sourceThread ||
-        parse(sourceThread).rooms.length !== 1 ||
-        parse(sourceThread).rooms[0].type !== sourceType ||
-        parse(sourceThread).rooms[0].id !== r.source_id
+        (sourceType === "bot_threads"
+          ? owners.length !== 0 || botThreads.get(t)?.length !== 1
+          : owners.length !== 1 ||
+            owners[0].type !== sourceType ||
+            owners[0].id !== r.source_id)
       )
         throw new Error("ambiguous thread ownership");
       threads.set(t, r);
@@ -239,6 +337,17 @@ function planInputs(plan, inv) {
       if (!members.has(g.account_id) || grants.has(g.account_id))
         throw new Error("unknown or duplicate grant");
       evidence(g.evidence);
+      if (sourceType === "bot_threads") {
+        // A legacy 1:1 bot thread was the owner's alone.
+        if (
+          members.get(g.account_id).role !== "owner" ||
+          g.evidence.type !== "bot" ||
+          g.evidence.id !== r.source_id
+        )
+          throw new Error("room grant evidence mismatch");
+        grants.add(g.account_id);
+        continue;
+      }
       if (
         g.evidence.type !== sourceType ||
         g.evidence.id !== r.source_id ||
@@ -250,16 +359,28 @@ function planInputs(plan, inv) {
       grants.add(g.account_id);
     }
   }
+  // The cloud service has no per-room privacy for non-guests: owner-only 1:1
+  // bot history may not be projected into a workspace other members can read.
+  if (
+    plan.rooms.some((r) => r.source_type === "bot_threads") &&
+    [...members.values()].some((m) => !["owner", "guest"].includes(m.role))
+  )
+    throw new Error("private bot rooms require owner and guest members only");
   return { members, authors, threads, records };
 }
-function sourceAuthor(m, id) {
+/** Source author key of a serving view; a 1:1 bot thread's unstamped bot replies are its bot's. */
+export function sourceAuthor(m, id, room) {
   if (m.role === "bot")
-    return m.from?.botId ? "bot:" + m.from.botId : "message:" + id;
+    return m.from?.botId
+      ? "bot:" + m.from.botId
+      : room?.source_type === "bot_threads"
+        ? "bot:" + room.source_id
+        : "message:" + id;
   if (m.role === "user")
     return m.sender?.id ? "human:" + m.sender.id : "message:" + id;
   return null;
 }
-function servingView(r) {
+export function servingView(r) {
   const m = parse(r);
   if (r.type === "message") return m;
   const actor = m.actor;
@@ -348,14 +469,17 @@ async function project(c, run, inv, plan) {
       r.source_type ?? "room",
       r.source_id,
     );
-    roomIds.set(r.source_id, id);
+    roomIds.set(key(r.source_type ?? "room", r.source_id), id);
     await c.query(
       "INSERT INTO cloud.rooms(workspace_id,room_id,name) VALUES($1,$2,$3)",
       [
         w,
         id,
-        parse(inputs.records.get(key(r.source_type ?? "room", r.source_id)))
-          .name ?? r.source_id,
+        parse(
+          inputs.records.get(
+            key(ROOM_SOURCES[r.source_type ?? "room"].record, r.source_id),
+          ),
+        ).name ?? r.source_id,
       ],
     );
     for (const t of r.thread_ids)
@@ -378,7 +502,7 @@ async function project(c, run, inv, plan) {
   )) {
     const m = servingView(r),
       room = inputs.threads.get(m.thread_id),
-      a = inputs.authors.get(sourceAuthor(m, r.id)),
+      a = inputs.authors.get(sourceAuthor(m, r.id, room)),
       member = a && inputs.members.get(a.account_id);
     let reason;
     if (
@@ -389,10 +513,12 @@ async function project(c, run, inv, plan) {
     else if (conflicts.has(r.id)) reason = "conflicting_copy";
     else if (
       !room ||
-      (room.source_type ?? "room") !==
-        (r.type === "shared_message" ? "shared_room" : "room")
+      ROOM_SOURCES[room.source_type ?? "room"].messages !== r.type
     )
       reason = "unmapped_room_or_thread";
+    // Payload before author: tool calls, approvals and receipts never serve,
+    // whoever wrote them.
+    else if (payloadReason(m)) reason = payloadReason(m);
     else if (!a) reason = "unknown_author";
     else if (
       !member ||
@@ -400,12 +526,6 @@ async function project(c, run, inv, plan) {
         !room.grants.some((g) => g.account_id === a.account_id))
     )
       reason = "missing_current_grant";
-    else if (
-      (m.kind && m.kind !== "text") ||
-      typeof m.text !== "string" ||
-      !["user", "bot"].includes(m.role)
-    )
-      reason = "unsupported_legacy_payload";
     else if (m.attachments?.length)
       reason = "attachment_requires_verified_transfer";
     else if (
@@ -442,7 +562,7 @@ async function project(c, run, inv, plan) {
     (a, b) => a.r.order - b.r.order || a.r.id.localeCompare(b.r.id),
   )) {
     const { r, m, a, room } = v,
-      roomId = roomIds.get(room.source_id),
+      roomId = roomIds.get(key(room.source_type ?? "room", room.source_id)),
       threadId = mappedId(inv.source_install_id, "thread", m.thread_id),
       seq = (heads.get(roomId) ?? 0) + 1;
     heads.set(roomId, seq);
@@ -463,8 +583,12 @@ async function project(c, run, inv, plan) {
         JSON.stringify(m.deleted ? "" : m.text),
         m.deleted === true,
         new Date(m.at).toISOString(),
-        m.role === "bot" && m.from?.botId
-          ? mappedId(inv.source_install_id, "bot", m.from.botId)
+        sourceAuthor(m, r.id, room).startsWith("bot:")
+          ? mappedId(
+              inv.source_install_id,
+              "bot",
+              sourceAuthor(m, r.id, room).slice(4),
+            )
           : null,
       ],
     );
@@ -499,7 +623,7 @@ async function project(c, run, inv, plan) {
     if (["actor", "bot", "membership"].includes(a.evidence.type))
       resolved.add(key(a.evidence.type, a.evidence.id));
   for (const r of plan.rooms) {
-    resolved.add(key(r.source_type ?? "room", r.source_id));
+    resolved.add(key(ROOM_SOURCES[r.source_type ?? "room"].record, r.source_id));
     for (const t of r.thread_ids) resolved.add(key("thread", t));
   }
   for (const entry of resolved) {

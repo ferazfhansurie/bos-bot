@@ -97,6 +97,27 @@ the migration never replays its append inputs as new work. Consolidate and
 reinventory the copy explicitly before reviewing a new projection. Generated
 room/message/thread IDs match the source-type mapping ledger.
 
+Legacy 1:1 bot threads (a bot record's `threadId` plus its tasks' thread IDs,
+owned by no room) map as one private room per bot: `source_type:"bot_threads"`,
+`source_id` = the bot ID, bot-record evidence, and an owner-role grant only.
+Such a room is refused while any non-owner, non-guest member is mapped, because
+the canonical service shows every room to owners/admins/members. In that room an
+unstamped bot reply is the thread's bot. A deleted bot (stamped in messages, no
+bot record left) binds with `{"type":"retired_bot","id":botId,"digest":sha256(JSON
+of the sorted message record IDs naming it)}`; the digest is recomputed from the
+inventory and refused when it differs or a live record exists.
+`node migrate/plan.mjs <copyDir> <ownerAccountId> --reviewer name` generates this
+manifest: the owner, every bot, every room/shared room/bot room, per-message
+owner bindings for unstamped servable messages, and other humans only from an
+explicit `--accounts` mapping file.
+
+Payloads serve only when they are plain text (`text`, `markdown`, and the
+plain-text fallback of `routine.run`/`goal.run`) from a user or bot role without
+a tool/card/secret/screen/comm field. Everything else quarantines by kind:
+`legacy_tool_activity`, `legacy_approval_card`, `legacy_secret_request`,
+`legacy_screen_capture`, `legacy_turn_receipt` (digest/compaction chips),
+`legacy_executable_payload`, or `unsupported_legacy_payload`.
+
 Unmapped authors/threads, missing grants, conflicts, cards/pending work and
 attachments without a verified transfer remain quarantined. Attachment objects
 are inventoried and retained, not certified as scanned or downloadable. Serving
