@@ -1348,16 +1348,56 @@ public struct CompanionClient: Sendable {
     /// avatars never go through `AsyncImage`, which cannot attach that token.
     public func avatar(path: String) async throws -> Data {
         guard Self.validAvatarPath(path) else { throw APIError.badURL }
-        let request = try makeRequest("GET", path)
+        var request = try makeRequest("GET", path)
+        // A person's photo path arrives already percent-encoded
+        // ("home%3Aperson%3Aowner"); send it as is rather than encoding the %.
+        if path.contains("%"), let url = request.url,
+           var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.percentEncodedPath = path
+            request.url = components.url
+        }
         let (data, response) = try await perform(request)
         try verify(response, data)
         return data
     }
 
-    private static func validAvatarPath(_ path: String) -> Bool {
-        let prefix = "/api/attachments/"
-        guard path.hasPrefix(prefix) else { return false }
-        let name = path.dropFirst(prefix.count)
+    /// The three app-owned photo routes: a local attachment, a remote
+    /// room's relayed room or bot photo, and a person's profile photo.
+    /// Mirrors the companion sidecar's allowlist; anything else is refused
+    /// before a request is made.
+    static func validAvatarPath(_ path: String) -> Bool {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        // "/api/attachments/<file>"
+        if parts.count == 4, parts[0].isEmpty, parts[1] == "api", parts[2] == "attachments" {
+            return validAvatarFile(parts[3])
+        }
+        // "/api/groups/<groupId>/avatars/<file>"
+        if parts.count == 6, parts[0].isEmpty, parts[1] == "api", parts[2] == "groups", parts[4] == "avatars" {
+            return validSegment(parts[3], extra: []) && validAvatarFile(parts[5])
+        }
+        // "/api/multiplayer/people/<personId>/photo"; ids are percent-encoded
+        // ("home%3Aperson%3Aowner"), so allow % : . but never a dot segment.
+        if parts.count == 6, parts[0].isEmpty, parts[1] == "api", parts[2] == "multiplayer",
+           parts[3] == "people", parts[5] == "photo" {
+            let id = parts[4]
+            return id.utf8.count <= 300 && validSegment(id, extra: [37, 46, 58]) && id != "." && id != ".."
+                && !id.contains("%2e") && !id.contains("%2E") && !id.contains("%2f") && !id.contains("%2F")
+        }
+        return false
+    }
+
+    /// Letters, digits, `-`, `_`, plus any `extra` bytes; never empty.
+    private static func validSegment(_ segment: Substring, extra: Set<UInt8>) -> Bool {
+        !segment.isEmpty && segment.utf8.allSatisfy { byte in
+            (48...57).contains(byte)
+                || (65...90).contains(byte)
+                || (97...122).contains(byte)
+                || byte == 45 || byte == 95
+                || extra.contains(byte)
+        }
+    }
+
+    private static func validAvatarFile(_ name: Substring) -> Bool {
         guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return false }
         let stem = name[..<dot]
         let ext = name[name.index(after: dot)...]
@@ -1369,7 +1409,7 @@ public struct CompanionClient: Sendable {
                 || (97...122).contains(byte)
                 || byte == 45
         }
-        return validStem && ["png", "jpg", "gif", "webp"].contains(String(ext))
+        return validStem && ["png", "jpg", "jpeg", "gif", "webp"].contains(String(ext).lowercased())
     }
 
     public func voices() async throws -> [Voice] {

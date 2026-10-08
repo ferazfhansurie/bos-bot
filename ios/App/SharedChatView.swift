@@ -413,10 +413,8 @@ struct SharedChatView: View {
         if let peer, peer.kind == "bot" {
             let live = liveFace(botId: peer.id)
             SharedBotFace(bot: peer, size: 30, state: live ?? .idle, animated: live?.showsActivity == true)
-        } else if let peer, let avatar = peer.avatar, PersonCutout.image(dataURL: avatar) != nil {
-            PersonPhotoView(dataURL: avatar, size: 30)
         } else if let peer {
-            ProfileAvatar(name: peer.name, size: 30)
+            PersonFaceView(name: peer.name, avatar: peer.avatar, size: 30)
         } else {
             GroupMarkView(members: GroupMarkView.faces(room, contacts: contacts, selfID: selfID), size: 34)
         }

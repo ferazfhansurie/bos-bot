@@ -72,11 +72,7 @@ struct SharedConversationDetails: View {
                     ForEach(displayed.memberIds, id: \.self) { id in
                         HStack(spacing: 12) {
                             let contact = contacts.first { $0.id == id }
-                            if let avatar = contact?.avatar, PersonCutout.image(dataURL: avatar) != nil {
-                                PersonPhotoView(dataURL: avatar, size: 34)
-                            } else {
-                                ProfileAvatar(name: contact?.name ?? "Member", size: 34)
-                            }
+                            PersonFaceView(name: contact?.name ?? "Member", avatar: contact?.avatar, size: 34)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(contact?.name ?? "Member") + Text(id == selfID ? " (you)" : "").foregroundStyle(.secondary)
                                 if displayed.isGroup {

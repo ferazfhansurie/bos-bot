@@ -579,6 +579,10 @@ struct ChatListView: View {
                                                        avatarUrl: contact.avatarUrl, crop: contact.avatarCrop) {
                     NotificationAvatarCache.store(data, for: contact.id)
                 }
+            } else if let avatar = contact.avatar, avatar.hasPrefix("/api/"),
+                      let data = await session.avatarData(path: avatar),
+                      let photo = (PersonCutout.image(data: data, key: avatar) ?? UIImage(data: data))?.pngData() {
+                NotificationAvatarCache.store(photo, for: contact.id)
             } else if let avatar = contact.avatar,
                       let encoded = avatar.split(separator: ",", maxSplits: 1).last,
                       let data = Data(base64Encoded: String(encoded)),
@@ -952,10 +956,8 @@ struct ChatListView: View {
         if contact.kind == "bot" {
             MausAvatar(color: contact.color ?? "green", size: size, bodyId: contact.mascotBody,
                        eyeStyle: MascotEyeStyle(stored: contact.mascotEyes), animated: false)
-        } else if let avatar = contact.avatar, PersonCutout.image(dataURL: avatar) != nil {
-            PersonPhotoView(dataURL: avatar, size: size)
         } else {
-            ProfileAvatar(name: contact.name, size: size)
+            PersonFaceView(name: contact.name, avatar: contact.avatar, size: size)
         }
     }
 

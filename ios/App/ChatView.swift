@@ -2397,6 +2397,13 @@ struct TextBubble: View {
         return core.count >= 3 && core.allSatisfy { $0 == "-" }
     }
 
+
+    /// The room person who wrote this line, as the room lists them.
+    private var roomPerson: RoomPerson? {
+        guard case let .room(room) = chat, let id = message.sender?.id else { return nil }
+        return room.people?.first { $0.id == id }
+    }
+
     var body: some View {
         // A person's line is plain text whoever wrote it; only yours sits on
         // the trailing side.
@@ -2405,10 +2412,21 @@ struct TextBubble: View {
         let customCard = parsedDiff != nil || parsedTable != nil
         // rooms attribute each line to the member who said it
         let speaker = message.from
-        // No face beside the bubble: the bot's face is in the header, and in
-        // a room the name line says who spoke. The bubble sits at the edge.
+        // No bot face beside the bubble: the bot's face is in the header, and
+        // in a room the name line says who spoke. Another person's lines get
+        // their face at the end of each run, as on the desktop.
+        let otherPerson = fromPerson && !mine ? roomPerson : nil
         HStack(alignment: .bottom, spacing: 0) {
             if mine { Spacer(minLength: 56) }
+            if let otherPerson {
+                Group {
+                    if tailed { PersonFaceView(name: otherPerson.name, avatar: otherPerson.avatar, size: 26) }
+                    else { Color.clear }
+                }
+                .frame(width: 26, height: 26)
+                .padding(.trailing, 6)
+                .accessibilityHidden(true)
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 if let speaker, !mine, !chat.isBot {

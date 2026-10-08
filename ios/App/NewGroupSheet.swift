@@ -33,10 +33,8 @@ struct NewGroupSheet: View {
     @ViewBuilder private func sharedAvatar(_ contact: SharedContact) -> some View {
         if contact.kind == "bot" {
             MausAvatar(color: contact.color ?? "green", size: 36, bodyId: contact.mascotBody, animated: false)
-        } else if let avatar = contact.avatar, PersonCutout.image(dataURL: avatar) != nil {
-            PersonPhotoView(dataURL: avatar, size: 36)
         } else {
-            ProfileAvatar(name: contact.name, size: 36)
+            PersonFaceView(name: contact.name, avatar: contact.avatar, size: 36)
         }
     }
 

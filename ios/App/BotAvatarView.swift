@@ -155,6 +155,7 @@ struct ChatAvatarView: View {
 }
 
 /// Uses the same authenticated, connection-scoped attachment cache as bot faces.
+/// A room with no photo wears its members' faces, like `GroupMark` on the desktop.
 struct ChannelAvatarView: View {
     let room: Room
     let size: CGFloat
@@ -163,16 +164,34 @@ struct ChannelAvatarView: View {
     @State private var image: UIImage?
     var body: some View {
         Group {
-            if let image { Image(uiImage: image).resizable().scaledToFill() }
-            else { Image(systemName: "person.3.fill").resizable().scaledToFit().padding(size * 0.22).foregroundStyle(Color.accentColor) }
+            if room.avatarUrl == nil, !faces.isEmpty {
+                GroupMarkView(members: faces, size: size)
+            } else {
+                Group {
+                    if let image { Image(uiImage: image).resizable().scaledToFill() }
+                    else { Image(systemName: "person.3.fill").resizable().scaledToFit().padding(size * 0.22).foregroundStyle(Color.accentColor) }
+                }
+                .frame(width: size, height: size).background(Color.accentColor.opacity(0.12)).clipShape(Circle())
+            }
         }
-        .frame(width: size, height: size).background(Color.accentColor.opacity(0.12)).clipShape(Circle())
         .accessibilityLabel("\(room.name) group avatar")
         .task(id: room.avatarUrl) {
             image = nil
             guard let path = room.avatarUrl, let data = await session.avatarData(path: path), !Task.isCancelled else { return }
             image = UIImage(data: data)
         }
+    }
+
+    /// The room's people (everyone but me first), then its bots.
+    private var faces: [SharedContact] {
+        let me = session.roomActorId ?? room.ownerPersonId
+        let people = (room.people ?? []).sorted { ($0.id == me ? 1 : 0) < ($1.id == me ? 1 : 0) }
+            .map { SharedContact(id: $0.id, name: $0.name, kind: "person", homeId: $0.homeId, color: $0.color, avatar: $0.avatar) }
+        let bots = room.members(from: session.state.bots).map { bot in
+            SharedContact(id: bot.id, name: bot.name, kind: "bot", color: bot.color, mascotEyes: bot.mascotEyes,
+                          mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop)
+        }
+        return people + bots
     }
 }
 
@@ -210,10 +229,8 @@ struct GroupMarkView: View {
         if member.kind == "bot" {
             // a bot with a photo wears it here too, matching its face everywhere else
             SharedBotFace(bot: member, size: px)
-        } else if let avatar = member.avatar, PersonCutout.image(dataURL: avatar) != nil {
-            PersonPhotoView(dataURL: avatar, size: px)
         } else {
-            ProfileAvatar(name: member.name, size: px)
+            PersonFaceView(name: member.name, avatar: member.avatar, size: px)
         }
     }
 
@@ -270,6 +287,39 @@ struct SharedBotFace: View {
         case .circle: AnyShape(Circle())
         case .rounded: AnyShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
         case .square, .mascot: AnyShape(Rectangle())
+        }
+    }
+}
+
+/// A person's face: their photo cut out like a mascot, or their initial.
+/// The photo is either an inline data URL or an app path such as
+/// `/api/multiplayer/people/<id>/photo`, fetched with the paired token.
+struct PersonFaceView: View {
+    let name: String
+    let avatar: String?
+    let size: CGFloat
+    @Environment(\.sessionActions) private var sessionActions
+    @State private var fetched: UIImage?
+
+    var body: some View {
+        Group {
+            if let avatar, avatar.hasPrefix("data:"), PersonCutout.image(dataURL: avatar) != nil {
+                PersonPhotoView(dataURL: avatar, size: size)
+            } else if let fetched {
+                if PersonCutout.isCut(fetched) {
+                    Image(uiImage: fetched).resizable().scaledToFit().frame(width: size, height: size)
+                } else {
+                    Image(uiImage: fetched).resizable().scaledToFill().frame(width: size, height: size).clipShape(Circle())
+                }
+            } else {
+                ProfileAvatar(name: name, size: size)
+            }
+        }
+        .task(id: avatar) {
+            fetched = nil
+            guard let avatar, avatar.hasPrefix("/api/"),
+                  let data = await sessionActions?.avatarData(path: avatar), !Task.isCancelled else { return }
+            fetched = PersonCutout.image(data: data, key: avatar)
         }
     }
 }

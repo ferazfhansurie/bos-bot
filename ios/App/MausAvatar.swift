@@ -662,6 +662,16 @@ enum PersonCutout {
         return result
     }
 
+    /// The same cutout for photo bytes fetched from a path; `key` is the
+    /// path, so each photo is cut once.
+    static func image(data: Data, key: String) -> UIImage? {
+        if let hit = cache[key] { return hit }
+        guard let photo = UIImage(data: data) else { return nil }
+        let result = cut(photo) ?? photo
+        cache[key] = result
+        return result
+    }
+
     static func isCut(_ image: UIImage) -> Bool { image.accessibilityIdentifier == "person-cutout" }
 
     private static func cut(_ photo: UIImage) -> UIImage? {

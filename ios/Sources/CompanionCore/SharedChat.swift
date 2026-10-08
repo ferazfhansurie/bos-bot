@@ -17,6 +17,14 @@ public struct SharedContact: Codable, Hashable, Identifiable, Sendable {
     /// For a bot that lives on another linked Mac: whose it is.
     public let ownerName: String?
     public let remote: Bool?
+
+    public init(id: String, name: String, kind: String, homeId: String? = nil, title: String? = nil,
+                color: String? = nil, mascotEyes: String? = nil, mascotBody: String? = nil, avatar: String? = nil,
+                avatarUrl: String? = nil, avatarCrop: AvatarCrop? = nil, ownerName: String? = nil, remote: Bool? = nil) {
+        self.id = id; self.name = name; self.kind = kind; self.homeId = homeId; self.title = title
+        self.color = color; self.mascotEyes = mascotEyes; self.mascotBody = mascotBody; self.avatar = avatar
+        self.avatarUrl = avatarUrl; self.avatarCrop = avatarCrop; self.ownerName = ownerName; self.remote = remote
+    }
 }
 
 public struct SharedRoomSummary: Codable, Hashable, Identifiable, Sendable {
