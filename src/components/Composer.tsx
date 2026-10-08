@@ -62,7 +62,7 @@ import {
 import { skillAuthoringEnabled } from "@/lib/feature-flags";
 import { composerPriorityVisible, effectiveSendPriority, type SendPriority } from "@/lib/composer-priority";
 import { mentionChoicesForQuery, mentionMatchRange } from "@/lib/mentions";
-import { roomMentionPool } from "@/lib/room-members";
+import { roomMentionPool, roomBotSupportsImages } from "@/lib/room-members";
 import { botControlAvailable, mentionableBots } from "@/lib/remote-bot";
 import { sharedAttachmentError, type SharedComposer } from "./shared-conversation";
 import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@/lib/thread-refs";
@@ -245,14 +245,12 @@ export function Composer({
   // `members.some` would let a mixed room send <attached-image> to Grok.
   // A bot relayed from a linked Mac runs an engine this Mac may not have
   // installed; its own server decides, so never gate it on local instances.
-  const botSupportsImages = (candidate?: Bot) =>
-    Boolean(
-      candidate &&
-        (candidate.remote ||
-          state.instances.find((i) => i.instanceId === candidate.modelSelection.instanceId)?.capabilities?.images),
-    );
+  const botSupportsImages = (candidate?: Bot) => roomBotSupportsImages(candidate, state.instances);
   const imageTargetsSupport = (message: string, mode: "chat" | "goal") => {
     if (!group) return botSupportsImages(bot);
+    // A remote room's provider is decided on its host. Upload pixels even
+    // before a mention is typed; never fall back to a path on this Mac.
+    if (group.home && mode === "chat") return true;
     if (mode === "goal") {
       return botSupportsImages(goalCoordinatorForComposer(message, members ?? [], group) ?? undefined);
     }
@@ -509,7 +507,7 @@ export function Composer({
     }
     changeDraftAttachmentPending(draftId, true);
     try {
-      const remote = bot?.remote ? uploadOnlyIntake() : null;
+      const remote = bot?.remote || group?.home ? uploadOnlyIntake() : null;
       const { attachments: added, notice: intakeNotice } = await intakeFiles(Array.from(picked), {
         allowImages: engineSupportsImages,
         getPath: remote?.getPath ?? pathForFile,
@@ -1010,7 +1008,7 @@ export function Composer({
           onNotice={setAttachmentNotice}
           onPendingChange={(pending) => changeDraftAttachmentPending(draftId, pending)}
           uploadImage={uploadImage}
-          uploadOnly={Boolean(bot?.remote)}
+          uploadOnly={Boolean(bot?.remote || group?.home)}
         />}
         <QueuedComposerMessages
           items={queuedMessages}

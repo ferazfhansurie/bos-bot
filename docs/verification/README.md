@@ -183,6 +183,10 @@ desktop routing, cancellation, and computer authority cleanup.
 The [shared files fixture](shared-files.md) checks published attachments, linked-home
 routes and navigation to a source outside the initial history page.
 
+The [remote room attachments fixture](remote-room-attachments.md) checks guest
+image transfer into the canonical host store, native helper image input, scoped
+preview/download relays and revoked access across two disposable homes.
+
 The [shared request fixture](shared-requests.md) checks two request-linked bot
 answers in a human-only group, source-message navigation and settled activity.
 

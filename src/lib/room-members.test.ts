@@ -30,7 +30,7 @@ describe("nextMemberIds", () => {
   });
 });
 
-import { localRoomMembers, roomCandidateBots, roomMemberBots, roomMentionPool, isRoomGuestBot } from "./room-members";
+import { localRoomMembers, roomCandidateBots, roomMemberBots, roomMentionPool, isRoomGuestBot, roomBotSupportsImages } from "./room-members";
 import { mentionableBots } from "./remote-bot";
 import { mentionChoicesForQuery } from "./mentions";
 import type { Bot } from "@/state/store";
@@ -47,6 +47,12 @@ const memberBots = [
 ];
 
 describe("roomMemberBots", () => {
+  it("admits a canonical-home member's image without a matching local provider", () => {
+    const [guest] = roomMemberBots({ memberIds: ["partner-codex"], home: partner, memberBots }, []);
+    expect(roomBotSupportsImages(guest, [])).toBe(true);
+    expect(roomBotSupportsImages(localBot("a", "Alpha"), [])).toBe(false);
+    expect(roomBotSupportsImages(localBot("a", "Alpha"), [{ instanceId: "claude", capabilities: { images: true } }])).toBe(true);
+  });
   it("resolves a local room against this home's bots, in roster order", () => {
     const bots = [localBot("a", "Alpha"), localBot("b", "Beta")];
     expect(roomMemberBots({ memberIds: ["b", "a", "gone"] }, bots).map((bot) => bot.id)).toEqual(["b", "a"]);

@@ -198,6 +198,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/brand$/ },
   { methods: ["GET"], path: /^\/api\/events$/ },
   { methods: ["GET"], path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?$/ },
+  { methods: ["POST"], path: /^\/api\/groups\/[\w-]+\/attachments$/ },
   // A room this home joined on another home streams from there; the relay
   // in server/remote-rooms.ts answers only the owner, local ids fall through.
   { methods: ["GET"], path: /^\/api\/groups\/[\w-]+\/events$/ },
@@ -218,7 +219,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/image$/ },
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/export$/ },
-  { methods: ["POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/file$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/file$/ },
   // chat, one to one
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/messages$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/threads\/[\w-]+\/recovery\/[\w-]+\/resume$/ },
@@ -310,6 +311,8 @@ export function isLegacyPeerSession(session: SessionRecord): boolean {
  * Ordinary-room reads and events require current person membership; bridge
  * thread IDs are checked again against PeerThreads in the server handler. */
 export const PEER_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegExp }> = [
+  { methods: ["POST"], path: /^\/api\/groups\/[\w-]+\/attachments$/ },
+  { methods: ["GET", "POST"], path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/file$/ },
   { methods: ["POST", "DELETE"], path: /^\/api\/groups\/[\w-]+\/people(?:\/[^/]+)?$/ },
   { methods: ["POST"], path: /^\/api\/auth\/stream-ticket$/ },
   // Canonical room handlers recheck person membership on every operation.

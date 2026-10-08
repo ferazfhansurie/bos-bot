@@ -10,6 +10,14 @@ const image = { path: "/store/123e4567-e89b-42d3-a456-426614174000.png", name: "
 afterEach(() => vi.unstubAllGlobals());
 
 describe("message gallery", () => {
+  it("previews remote-room composer images through their exact message instead of the guest's private store", () => {
+    const markup = renderToStaticMarkup(createElement(AttachmentGallery, { images: [image], message: { ...message, remoteRoom: true } }));
+    expect(markup).toContain(`/api/threads/thread%2Fone/messages/message%20two/file?attachment=${encodeURIComponent(image.path)}`);
+    expect(markup).not.toContain("src=\"/api/attachments/");
+    expect(markup).not.toContain("Unavailable");
+    const local = renderToStaticMarkup(createElement(AttachmentGallery, { images: [image], message }));
+    expect(local).toContain("src=\"/api/attachments/");
+  });
   it("collects only rendered local file links, including references, with generated files deduplicated", () => {
     const text = [
       "I wrote [report](./report.pdf) and [again](./report.pdf).",

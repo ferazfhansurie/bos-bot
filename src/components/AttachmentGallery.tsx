@@ -236,7 +236,7 @@ export function AttachmentGallery({ images = [], files = [], message, eager = fa
       if (seen.has(key)) continue;
       seen.add(key);
       const image = typeof reference === "string" || reference.private
-        ? previewImage(path, typeof reference === "string" ? undefined : reference.name)
+        ? previewImage(path, typeof reference === "string" ? undefined : reference.name, message)
         : null;
       if (image) result.push({ key, kind: "image", image });
       else result.push({ key, kind: "file", file: typeof reference === "string" ? { path, name: attachmentBasename(path) } : reference });
