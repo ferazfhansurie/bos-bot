@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as atomic from "./atomic.ts";
-import { WorkspaceMembership } from "./workspace-membership.ts";
+import { rebaseWorkspaceMembershipLedger, WorkspaceMembership } from "./workspace-membership.ts";
 import type { WorkspaceRole } from "../shared/workspace-membership.ts";
 
 const owner = "home:person:owner", foreignOwner = "other:person:owner", member = "home:person:member";
@@ -99,4 +99,69 @@ it("migrates only existing bound identities once and leaves later bindings guest
     expect(second.role("old:person:owner")).toBe("member");
     expect(second.role("new:person:owner")).toBe("client-guest");
   } finally { rmSync(folder, { recursive: true, force: true }); }
+});
+
+describe("restoring a membership ledger onto another home", () => {
+  let folder: string, file: string;
+  const source = "src:person:owner", destination = "dst:person:owner";
+  beforeEach(() => { folder = mkdtempSync(join(tmpdir(), "membership-rebase-")); file = join(folder, "membership.json"); });
+  afterEach(() => { vi.restoreAllMocks(); rmSync(folder, { recursive: true, force: true }); });
+
+  it("rebases to the destination owner without carrying source-home authority", () => {
+    const ledger = new WorkspaceMembership(file, source);
+    ledger.set("src:person:alice", "admin");
+    ledger.set(destination, "admin");
+    ledger.set("dst:person:bob", "member");
+    ledger.set("other:person:owner", "admin");
+    ledger.set("third:person:carol", "client-guest");
+    ledger.setGrants("room-a", ["src:bot:helper", "other:bot:ui"]);
+    ledger.setGrants("room-b", ["src:bot:helper"]);
+    rebaseWorkspaceMembershipLedger(file, destination);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(() => new WorkspaceMembership(file, source)).toThrow("invalid workspace membership ledger");
+    const restored = new WorkspaceMembership(file, destination);
+    expect(restored.list()).toEqual([
+      { actorId: destination, role: "owner" },
+      { actorId: "dst:person:bob", role: "member" },
+      { actorId: "other:person:owner", role: "admin" },
+      { actorId: "third:person:carol", role: "client-guest" },
+    ]);
+    // Neither the source owner nor another source-home admin gains anything.
+    for (const actor of [source, "src:person:alice"]) {
+      expect(restored.role(actor)).toBe("client-guest");
+      expect(restored.canManage(actor)).toBe(false);
+    }
+    expect(restored.grants("room-a")).toEqual(["other:bot:ui"]);
+    expect(restored.grants("room-b")).toEqual([]);
+    // A legacy upgrade must not run later over the restored actor bindings.
+    expect(new WorkspaceMembership(file, destination, ["src:person:alice"]).role("src:person:alice")).toBe("client-guest");
+  });
+
+  it("leaves same-home ledgers byte-identical and missing ledgers missing", () => {
+    rebaseWorkspaceMembershipLedger(file, destination);
+    expect(() => readFileSync(file)).toThrow();
+    const ledger = new WorkspaceMembership(file, destination);
+    ledger.set("src:person:alice", "admin");
+    ledger.setGrants("room-a", ["dst:bot:helper"]);
+    const before = readFileSync(file, "utf8");
+    rebaseWorkspaceMembershipLedger(file, destination);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("refuses corrupt or non-owner source ledgers instead of rebasing them", () => {
+    new WorkspaceMembership(file, source).set("src:person:alice", "member");
+    const valid = JSON.parse(readFileSync(file, "utf8"));
+    const corruptions = ["{", "null", JSON.stringify({ ...valid, version: 2 }), JSON.stringify({ ...valid, ownerId: "src:person:alice" }),
+      JSON.stringify({ ...valid, ownerId: "src:bot:owner" }), JSON.stringify({ ...valid, members: [{ actorId: "other:person:owner", role: "owner" }] }),
+      JSON.stringify({ ...valid, members: [{ actorId: source, role: "admin" }] }),
+      JSON.stringify({ ...valid, roomBotGrants: [{ roomId: "r", botIds: ["other:person:owner"] }] })];
+    for (const corrupt of corruptions) {
+      writeFileSync(file, corrupt);
+      expect(() => rebaseWorkspaceMembershipLedger(file, destination)).toThrow();
+      expect(readFileSync(file, "utf8")).toBe(corrupt);
+    }
+    writeFileSync(file, JSON.stringify(valid));
+    expect(() => rebaseWorkspaceMembershipLedger(file, "dst:bot:owner")).toThrow();
+    expect(readFileSync(file, "utf8")).toBe(JSON.stringify(valid));
+  });
 });

@@ -115,3 +115,41 @@ export class WorkspaceMembership {
     writeFileAtomic(this.file, JSON.stringify(snapshot), { mode: 0o600 });
   }
 }
+
+/** Workspace restore onto another home. The ledger names the home owner it was
+ * written for, while the destination keeps its own environment identity, so a
+ * foreign ledger would make the restored server refuse to start. Rebase it to
+ * the destination owner without granting anything the source did not have:
+ * - the source owner and every other source-home person or bot are dropped
+ *   (those ids cannot exist here; the source owner never becomes a member);
+ * - the destination owner is dropped from members (it is already the owner);
+ * - other people keep exactly their source role; room bot grants keep only
+ *   bots from other homes. Restored local bots must be granted again.
+ * The source ledger is fully validated first and the result is validated
+ * against the destination owner before returning. Same-home ledgers are only
+ * validated, never changed. A missing file stays missing. */
+export function rebaseWorkspaceMembershipLedger(file: string, ownerId: string): void {
+  person(ownerId);
+  if (!existsSync(file)) return;
+  const raw = JSON.parse(readFileSync(file, "utf8")) as Partial<Snapshot> | null;
+  const sourceOwnerId = raw && typeof raw === "object" ? raw.ownerId : undefined;
+  const sourceOwner = parseContactId(sourceOwnerId);
+  if (sourceOwner?.kind !== "person" || sourceOwner.localId !== "owner") throw new Error("invalid workspace membership ledger");
+  if (sourceOwnerId === ownerId) {
+    new WorkspaceMembership(file, ownerId);
+    return;
+  }
+  // Full validation as the ledger its source home would have read.
+  new WorkspaceMembership(file, sourceOwnerId as string);
+  const snapshot = JSON.parse(readFileSync(file, "utf8")) as Snapshot;
+  const portable = (id: string) => parseContactId(id)?.homeId !== sourceOwner.homeId;
+  const members = snapshot.members
+    .filter(member => portable(member.actorId) && member.actorId !== ownerId)
+    .map(member => ({ actorId: member.actorId, role: member.role }));
+  const roomBotGrants = snapshot.roomBotGrants
+    .map(grant => ({ roomId: grant.roomId, botIds: grant.botIds.filter(portable) }))
+    .filter(grant => grant.botIds.length > 0);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileAtomic(file, JSON.stringify({ version: 1, ownerId, members, roomBotGrants } satisfies Snapshot), { mode: 0o600 });
+  new WorkspaceMembership(file, ownerId);
+}

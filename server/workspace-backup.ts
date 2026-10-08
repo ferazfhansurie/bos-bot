@@ -16,8 +16,10 @@ import { writeFileAtomic } from "./atomic.ts";
 import { escapeAttribute, splitTranscriptAttachments } from "../src/lib/composer-attachments.ts";
 import { WORKSPACE_BACKUP_CLIENT_KEYS } from "../shared/workspace-backup-client.ts";
 import { excludedWorkspaceAuthPath, portableWorkspaceConfig, restoredWorkspaceConfig } from "./workspace-backup-policy.ts";
-import { SharedRoomLog, type SharedRoom, type SharedTextMessage } from "../shared/multiplayer.ts";
+import { contactId, SharedRoomLog, type SharedRoom, type SharedTextMessage } from "../shared/multiplayer.ts";
 import { SharedRequestStore } from "./shared-request-store.ts";
+import { loadEnvironmentId } from "./environment.ts";
+import { rebaseWorkspaceMembershipLedger } from "./workspace-membership.ts";
 import type { WorkspaceBackupClientState, WorkspaceBackupPrivateMetadata, WorkspaceBackupSummary } from "../shared/workspace-backup.ts";
 
 export type { WorkspaceBackupSummary, WorkspaceBackupPrivateMetadata } from "../shared/workspace-backup.ts";
@@ -685,6 +687,13 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
     change(value);
     writeJson(path, value);
   };
+  // The destination keeps its own environment-id, so its owner differs from
+  // the one a cross-home ledger names. Rebase (never widen) membership here;
+  // the server's ledger check stays strict for every normal start.
+  const membership = join(prepared, "workspace-membership.json");
+  if (existsSync(membership)) {
+    rebaseWorkspaceMembershipLedger(membership, contactId({ homeId: loadEnvironmentId(dataDir), kind: "person", localId: "owner" }));
+  }
   for (const name of ["bots.json", "groups.json", "config.json", "routines.json", "calendar-calls.json"]) {
     changeJson(name, (value) => rebaseFields(value, manifest.sourceDataDir, resolve(dataDir)));
   }
