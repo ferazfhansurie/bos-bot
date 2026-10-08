@@ -142,6 +142,10 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
   // A room joined on another home streams from there; the harness relays it
   // for the owner only and answers 404 for a local id.
   { method: "GET", path: /^\/api\/groups\/[\w-]+\/events$/ },
+  // Faces for rooms: a joined room's photo and bot photos relayed from the
+  // home that owns it, and each person's saved photo. Image bytes only.
+  { method: "GET", path: /^\/api\/groups\/[\w-]+\/avatars\/[\w-]+\.(?:png|jpe?g|gif|webp)$/i },
+  { method: "GET", path: /^\/api\/multiplayer\/people\/[\w%.:-]{1,300}\/photo$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/people$/ },
   { method: "DELETE", path: /^\/api\/groups\/[\w-]+\/people\/[^/]+$/ },
   { method: "POST", path: /^\/api\/multiplayer\/invites$/ },

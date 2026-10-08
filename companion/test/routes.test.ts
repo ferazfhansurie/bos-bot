@@ -97,6 +97,8 @@ describe("what the app may do", () => {
     ["POST", "/api/bots/bot_123/computer/screenshot"],
     ["POST", "/api/bots/bot_123/computer/viewer-close"],
     ["GET", "/api/groups/room-1/events"],
+    ["GET", "/api/groups/room-1/avatars/a1b2-c3.png"],
+    ["GET", "/api/multiplayer/people/home-1%3Aperson%3Aowner/photo"],
     ["POST", "/api/groups/room-1/messages"],
     ["POST", "/api/groups/room-1/interrupt"],
     ["DELETE", "/api/groups/room-1/queue/queue_1"],
@@ -285,6 +287,8 @@ describe("what it may not", () => {
     expect(allowed("GET", "/api/bots/bot_123/computer")).toBe(false);
     expect(allowed("GET", "/api/botsandthensome")).toBe(false);
     expect(allowed("GET", "/api/events/all")).toBe(false);
+    expect(allowed("GET", "/api/groups/room-1/avatars/../../config")).toBe(false);
+    expect(allowed("GET", "/api/multiplayer/people/x/photo/raw")).toBe(false);
     expect(allowed("GET", "/api/threads/th_1/messages/msg_2/image/../../../config")).toBe(false);
     expect(allowed("GET", "/api/bots%2f..%2fwebhooks")).toBe(false);
   });
