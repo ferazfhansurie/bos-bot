@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { CloudEvent, CloudFrame } from "../../shared/cloud-protocol/index";
+import fixtures from "../../shared/cloud-protocol/fixtures.json";
+import type { CloudEvent, CloudFrame, CloudMessage, CloudSnapshot } from "../../shared/cloud-protocol/index";
 import { freezeSend, type OutboxEntry } from "./outbox";
-import { cloudRoomReducer, initialCloudRoomState, timeline, type CloudRoomAction, type CloudRoomState } from "./room-reducer";
+import { cloudRoomReducer, initialCloudRoomState, mergeOlder, olderCursor, timeline, type CloudRoomAction, type CloudRoomState, type HistoryPage } from "./room-reducer";
 
 function created(sequence: string, id: string, actor = "bob", op = `window1.op${sequence.padStart(14, "0")}`, thread = "t1"): CloudEvent {
   return {
@@ -183,5 +184,105 @@ describe("cloud room reducer: bot runs, cards and revocation", () => {
   it("goes not-live when the device goes offline", () => {
     const state = run(start(), [batch([], "1", true), { type: "network", online: false }]);
     expect(state).toMatchObject({ online: false, live: false });
+  });
+});
+
+describe("cloud room reducer: older history pages", () => {
+  const baseSnapshot = (fixtures.reducer_cases as Array<{ steps: Array<{ type: string; snapshot?: unknown }> }>)
+    .flatMap((testCase) => testCase.steps)
+    .find((step) => step.type === "snapshot")!.snapshot as CloudSnapshot;
+  const message = (sequence: number, thread = "t1", version = 1): CloudMessage => ({
+    ...(created(String(sequence), `m${sequence}`, "bob", undefined, thread).payload.message as CloudMessage),
+    version,
+  });
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => message(from + index));
+  const snapshot = (messages: CloudMessage[]): CloudRoomAction => ({
+    type: "snapshot",
+    snapshot: { ...baseSnapshot, workspace_id: "w1", room_id: "r1", thread_id: "t1", watermark: "1000", messages },
+  });
+  const ref = { room_id: "r1", thread_id: "t1" };
+  const requested = (before: string): CloudRoomAction => ({ type: "history_requested", ...ref, before });
+  const page = (before: string, messages: CloudMessage[], next_before: string | null): CloudRoomAction => ({ type: "history", page: { ...ref, before, messages, next_before } satisfies HistoryPage });
+  const ids = (state: CloudRoomState) => state.messages.map((item) => Number(item.sequence));
+
+  it("a full snapshot is not the thread start; a short one is", () => {
+    const full = run(start(), [snapshot(range(951, 1000))]);
+    expect(full.start_loaded).toBe(false);
+    expect(olderCursor(full)).toBe("951");
+    const short = run(start(), [snapshot(range(1, 10))]);
+    expect(short.start_loaded).toBe(true);
+    expect(olderCursor(short)).toBeNull();
+  });
+
+  it("pages backward without duplicates or gaps and stops at the thread start", () => {
+    let state = run(start(), [snapshot(range(151, 200)), requested("151")]);
+    // One page in flight at a time.
+    expect(olderCursor(state)).toBeNull();
+    // A duplicate of a loaded message and another thread's message never show twice or leak in.
+    state = run(state, [page("151", [...range(51, 150), message(40, "t2")], "51")]);
+    expect(ids(state)).toEqual(Array.from({ length: 150 }, (_, index) => 51 + index));
+    expect(state).toMatchObject({ start_loaded: false, older_before: null });
+    expect(olderCursor(state)).toBe("51");
+    state = run(state, [requested("51"), page("51", range(1, 50), null)]);
+    expect(ids(state)).toEqual(Array.from({ length: 200 }, (_, index) => 1 + index));
+    expect(new Set(state.messages.map((item) => item.message_id)).size).toBe(200);
+    expect(state.start_loaded).toBe(true);
+    expect(olderCursor(state)).toBeNull();
+    // Nothing more is asked for once the start is reached.
+    expect(run(state, [requested("1")])).toBe(state);
+  });
+
+  it("an empty page means the start was reached exactly on a page boundary", () => {
+    const state = run(start(), [snapshot(range(1, 50)), requested("1"), page("1", [], null)]);
+    expect(state.start_loaded).toBe(true);
+    expect(ids(state)).toHaveLength(50);
+  });
+
+  it("ignores rows the server should not have sent: at or after the cursor", () => {
+    const state = run(start(), [snapshot(range(101, 150)), requested("101"), page("101", [...range(1, 100), { ...message(101), text: "stale" }], "1")]);
+    expect(state.messages.find((item) => item.message_id === "m101")?.text).toBe("m101");
+    expect(ids(state)).toHaveLength(150);
+  });
+
+  it("drops a page that lands after a reset replaced the projection", () => {
+    let state = run(start(), [snapshot(range(151, 200)), requested("151")]);
+    state = run(state, [snapshot(range(201, 250))]);
+    expect(state.older_before).toBeNull();
+    const after = run(state, [page("151", range(51, 150), "51")]);
+    expect(ids(after)).toEqual(ids(state));
+    expect(olderCursor(after)).toBe("201");
+  });
+
+  it("drops a page for another thread or after the room is lost", () => {
+    const state = run(start(), [snapshot(range(151, 200)), requested("151")]);
+    const other: CloudRoomAction = { type: "history", page: { room_id: "r1", thread_id: "t9", before: "151", messages: range(51, 150), next_before: "51" } };
+    expect(run(state, [other])).toBe(state);
+    const removed = run(state, [{ type: "frame", frame: { type: "error", error: "forbidden" } }, page("151", range(51, 150), "51")]);
+    expect(removed.messages).toEqual([]);
+  });
+
+  it("a failed page can be retried", () => {
+    let state = run(start(), [snapshot(range(151, 200)), requested("151"), { type: "history_failed", ...ref, before: "151" }]);
+    expect(state).toMatchObject({ older_before: null, older_failed: true });
+    expect(olderCursor(state)).toBe("151");
+    state = run(state, [requested("151")]);
+    expect(state).toMatchObject({ older_before: "151", older_failed: false });
+  });
+
+  it("live messages keep arriving while a page is in flight", () => {
+    const state = run(start(), [snapshot(range(151, 200)), requested("151"), batch([created("1001", "m1001")], "1001"), page("151", range(51, 150), "51")]);
+    expect(ids(state)[0]).toBe(51);
+    expect(ids(state).at(-1)).toBe(1001);
+    expect(ids(state)).toHaveLength(151);
+  });
+
+  it("merge keeps one entry per message, the higher version, in sequence order", () => {
+    const merged = mergeOlder([message(5), message(7, "t1", 2)], [message(2), message(7, "t1", 1), message(3)]);
+    expect(merged.map((item) => [item.message_id, item.version])).toEqual([
+      ["m2", 1],
+      ["m3", 1],
+      ["m5", 1],
+      ["m7", 2],
+    ]);
   });
 });

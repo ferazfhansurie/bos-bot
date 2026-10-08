@@ -14,6 +14,9 @@ loopback on 18080/18443, keeping existing services and their ports untouched.
 An existing authenticated tailnet ingress may proxy to Caddy; use the same
 public origin for the private issuer and room service. For direct public TLS,
 set BIND_ADDRESS and ports only after checking conflicts and reachability.
+Behind a Cloudflare tunnel, set CADDYFILE=./Caddyfile.tunnel (plain :80, client IP
+from Cf-Connecting-Ip) and point the tunnel at http://127.0.0.1:HTTP_PORT; keep
+BIND_ADDRESS on loopback so only cloudflared can reach Caddy.
 
 Set an email/domain allowlist. Log OTP delivery is a pilot aid requiring the
 operator to relay each code privately; it is not self-service email delivery.

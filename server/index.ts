@@ -351,6 +351,7 @@ import {
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { mintVoiceCallCredential, NoVoiceCallKey, VOICE_CALL_LANGUAGES, VOICE_CALL_SPEEDS, VOICE_CALL_VOICES, voiceCallPlan } from "./voice-call.ts";
+import { createXaiCreditsReader, fetchXaiCredits, isVoiceCallId, recordVoiceCallEnd, recordVoiceCallStart, summarizeVoiceUsage } from "./xai-usage.ts";
 import { buildRecoveryText, buildTurnContext, engineIsFresh, peerMessageText } from "./turn-context.ts";
 import { Handoffs, handedStateUsable, recordHanded, renderUnseen, sessionStart, unseenMessages, withUnseenMessages, type ContextMessage } from "./delta-context.ts";
 import { extractTurnImages, rejectedTurnImages } from "./turn-images.ts";
@@ -512,7 +513,7 @@ import { acquireDataDirLeaseForProcess } from "./data-dir-lease.ts";
 import { createWorkspaceAccess, describeEdition, editionStatus, hostedWorkspaceConfiguration, hostedWorkspaceConfigured, loadEnterpriseLayer, type WorkspaceAccess } from "./enterprise.ts";
 import { environmentDescriptor, loadEnvironmentId, serverVersion } from "./environment.ts";
 import { WorkspaceBackupMaintenance } from "./workspace-backup-maintenance.ts";
-import { CloudAuthority, isAuthorityGuardedRequest } from "./cloud-authority.ts";
+import { authorityMovedBody, CloudAuthority, environmentAuthority, isAuthorityGuardedRequest } from "./cloud-authority.ts";
 import { createWorkspaceBackupRoutes, isWorkspaceBackupSessionControl } from "./workspace-backup-http.ts";
 import { applyPendingWorkspaceRestore, readLastWorkspaceRestore, type WorkspaceRestoreResult } from "./workspace-backup.ts";
 import { createCustomDomainVerifier, customDomainIpv4, normalizeCustomDomain } from "./custom-domain.ts";
@@ -716,6 +717,8 @@ let companionMutationToken: string | undefined = DESKTOP_MANAGED ? "" : undefine
 // Where remote clients reach this server (a proxy's public address); pairing URLs use it.
 const FALLBACK_PUBLIC_URL = process.env.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "") || null;
 const cfg = loadConfig();
+/** prepaid xAI credits, read at most every 5 min (Settings → Usage, sidebar) */
+const readXaiCredits = createXaiCreditsReader();
 // The per-thread event log cap is checked after every NDJSON append.
 // config.json is read once per process (a change restarts the server, like
 // every other hand-edited knob), so a binding made here never goes stale.
@@ -13114,6 +13117,7 @@ function cliProbeEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath() };
   for (const key of [
     "XAI_API_KEY",
+    "OMB_XAI_MANAGEMENT_KEY",
     "BOX_TOKEN",
     "OPENCODE_API_KEY",
     "COMPOSIO_API_KEY",
@@ -13244,7 +13248,7 @@ async function perBotLocalVmCountForModeChange(): Promise<number | null> {
 
 function configStatus() {
   return {
-    xai: { configured: Boolean(cfg.xai?.key) },
+    xai: { configured: Boolean(cfg.xai?.key), managementConfigured: Boolean(cfg.xai?.managementKey?.trim()) },
     anthropic: { configured: Boolean(cfg.anthropic?.key) },
     // a fleet agent on this server means Settings → Workspaces has something to drive
     fleet: { available: fleetAvailable(fleetSocketPath()) },
@@ -13983,7 +13987,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // paired session with the right scope.
     if (method === "GET" && !path.startsWith("/api/") && !path.startsWith("/.well-known/") && serveStatic(res, path)) return;
     if (method === "GET" && path === "/.well-known/openmausbot/environment") {
-      return json(res, 200, environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: !HOSTED_WORKSPACE && emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg) }));
+      return json(res, 200, environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: !HOSTED_WORKSPACE && emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg), authority: environmentAuthority(cloudAuthority.current()) }));
     }
     const domainCheck = /^\/\.well-known\/openmausbot\/domain-check\/([a-f0-9]{64})$/.exec(path);
     if (method === "GET" && domainCheck) {
@@ -14022,7 +14026,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       sessions.clearFailures(source);
       const issued = sessions.issue({ label: label.trim() || labelFromUserAgent(req.headers["user-agent"]), scopes: verified.scopes, userId: verified.userId, email: verified.email });
-      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: true, sharedComputers: sharedComputersEnabled(cfg) });
+      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: true, sharedComputers: sharedComputersEnabled(cfg), authority: environmentAuthority(cloudAuthority.current()) });
       const secure = requestOrigin(req)?.startsWith("https://") === true;
       res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, issued.token, { secure, maxAgeSeconds: cookieMaxAgeSeconds(issued.session) }));
       return json(res, 200, { session: issued.session, environment });
@@ -14049,7 +14053,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         teamInvites.delete(result.pairingId);
         if (teamInvite.expiresAt > Date.now()) pendingTeamJoins.set(result.session.id, teamInvite);
       }
-      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg) });
+      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg), authority: environmentAuthority(cloudAuthority.current()) });
       if (wantsCookie) {
         const secure = requestOrigin(req)?.startsWith("https://") === true;
         res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, result.token, { secure, maxAgeSeconds: cookieMaxAgeSeconds(result.session) }));
@@ -14135,7 +14139,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // relay so remote-room writes are refused too. Reads fall through.
     if (isAuthorityGuardedRequest(method, path)) {
       const frozen = cloudAuthority.frozen();
-      if (frozen) { req.resume(); return json(res, 409, { error: "authority_moved", workspace_id: frozen.workspace_id, epoch: frozen.epoch }); }
+      if (frozen) { req.resume(); return json(res, 409, authorityMovedBody(frozen)); }
     }
     if (await terminals.handle(req, res)) return;
     if (await workspaceFiles.handle(req, res)) return;
@@ -21316,6 +21320,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       res.setHeader("cache-control", "no-store");
       return json(res, 200, { accounts: await providerUsage(persistableInstanceConfigs(cfg)) });
     }
+    // xAI voice: our own call tally plus, with a management key, xAI's
+    // prepaid credits. Neither key ever leaves this process.
+    if (method === "GET" && path === "/api/xai-usage") {
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, {
+        voice: summarizeVoiceUsage(DATA_DIR),
+        credits: await readXaiCredits(cfg.xai?.managementKey),
+      });
+    }
     if (method === "GET" && (path === "/api/usage" || path === "/api/usage.csv")) {
       const range = parseUsageRange(url.searchParams.get("from"), url.searchParams.get("to"));
       if (!range) return json(res, 400, { error: "from and to must be YYYY-MM-DD, from no later than to, at most a year apart" });
@@ -22126,6 +22139,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // Each cloud voice provider owns its own credential. Validate the field
       // against that provider rather than whichever provider happens to be
       // selected, so switching engines never sends one service another's key.
+      // A management key is only useful if it reads this team's billing.
+      const newManagementKey = patch.xai?.managementKey?.trim();
+      if (newManagementKey) {
+        try {
+          await fetchXaiCredits(newManagementKey);
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : "xAI rejected the management key" });
+        }
+      }
       const newTts = patch.tts;
       if (newTts?.key?.trim()) {
         const check = await tts.verifyKey("elevenlabs", newTts.key.trim());
@@ -22189,6 +22211,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           // never survive the merge in config.json.
           const persisted = structuredClone(patch);
           if (persisted.xai?.key !== undefined) persisted.xai.key = "";
+          if (persisted.xai?.managementKey !== undefined) persisted.xai.managementKey = "";
           if (persisted.composio?.apiKey !== undefined) persisted.composio.apiKey = "";
           if (persisted.box?.token !== undefined) persisted.box.token = "";
           if (persisted.opencodeGo?.apiKey !== undefined) persisted.opencodeGo.apiKey = "";
@@ -22338,6 +22361,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (typeof body.botId === "string" && !bot) return json(res, 404, { error: "no such bot" });
       try {
         const credential = await mintVoiceCallCredential(cfg);
+        // Reconnects echo the client's callId and are booked once; older
+        // clients send none and each mint counts as its own call.
+        const callId = isVoiceCallId(body.callId) ? body.callId : randomUUID();
+        void recordVoiceCallStart(DATA_DIR, callId, bot?.id ?? null);
         const plan = voiceCallPlan({
           agentName: bot?.name,
           userName: cfg.profile?.name,
@@ -22345,6 +22372,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           language: typeof body.language === "string" ? body.language : undefined,
         });
         return json(res, 200, {
+          callId,
           credential,
           plan,
           options: { voices: VOICE_CALL_VOICES, speeds: VOICE_CALL_SPEEDS, languages: VOICE_CALL_LANGUAGES },
@@ -22353,6 +22381,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (e instanceof NoVoiceCallKey) return json(res, 409, { error: e.message });
         return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
       }
+    }
+    // The client hung up: how long the line was connected. Seconds only.
+    if (method === "POST" && path === "/api/voice/call/usage") {
+      const body = await readBody(req);
+      if (!isVoiceCallId(body.callId)) return json(res, 400, { error: "callId required" });
+      const seconds = typeof body.seconds === "number" ? body.seconds : NaN;
+      if (!Number.isFinite(seconds) || seconds < 0) return json(res, 400, { error: "seconds must be a non-negative number" });
+      await recordVoiceCallEnd(DATA_DIR, body.callId, seconds);
+      return json(res, 200, { ok: true });
     }
     if (method === "POST" && path === "/api/tts/speak") {
       const body = await readBody(req);

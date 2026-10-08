@@ -1381,6 +1381,8 @@ struct ChatView: View {
     /// A round + and a glass pill with dictation and send inside it.
     private var composer: some View {
         VStack(spacing: 6) {
+            LegacyArchivedBanner()
+
             if !heldSends.isEmpty {
                 let roomSteer = roomSteerTarget
                 QueuedSendList(sends: heldSends, steerTargetName: roomSteer?.target?.name,

@@ -18,6 +18,14 @@ export function verifyArtifact(artifact, evidence) {
   assert.equal(createHash('sha256').update(readFileSync(path)).digest('hex'), artifact.sha256, 'artifact digest mismatch');
 }
 
+export function unrunReason(spec, observation) {
+  if (observation.status !== 'unrun') return null;
+  assert.equal(observation.name, spec.name);
+  assert.ok(typeof observation.reason === 'string' && observation.reason.trim().length > 0, 'unrun requires a concrete missing capability');
+  assert.equal(observation.observed, undefined, 'unrun cannot supply modeled observations');
+  return observation.reason;
+}
+
 // Schema binding is pinned; actual service adapter awaits the backend commit.
 // No modeled adapter is shipped as an acceptance target.
 export function prepare(evidence, pins, count = 1000) {
@@ -52,15 +60,19 @@ export async function run({ server, evidence, candidate, schema, adapterPath }) 
   const record = entry => appendFileSync(raw, JSON.stringify(redact({ at: new Date().toISOString(), ...entry })) + '\n', { flush: true });
   const adapter = await (await import(pathToFileURL(modulePath).href)).connect({ server, candidate: candidateSHA, schema: schemaSHA, evidence, record });
   const results = [];
+  const counts = { scenarios: { scheduled: p.scenarios.length, passed: 0, failed: 0, unrun: 0 }, races: { scheduled: 800, passed: 0, failed: 0, unrun: 800 }, recovery: { scheduled: p.recovery.length, prepared: 0, submitted: 0, verified: 0 } };
+  const journalRecord = record;
+  const countRecord = entry => { if (entry.type === 'race') { counts.races[entry.state === 'passed' ? 'passed' : 'failed']++; counts.races.unrun--; } journalRecord(entry); };
   try {
     const d = await adapter.describe();
     localURL(d.url); assert.equal(d.isolated, true); assert.equal(d.acceptance_hooks, true);
     assert.equal(d.modeled, false); assert.equal(d.candidate, candidateSHA); assert.equal(d.schema, schemaSHA);
     assert.equal(d.real_issuer, true); record({ type: 'target', description: d });
     for (const spec of p.scenarios) {
+      try {
       let nativeIntents;
-      if (spec.evidence.includes('provider')) {
-        assert.ok(d.pinned_model && d.scope?.room_id);
+      if (spec.evidence.includes('provider') && d.native_provider_available !== false) {
+        assert.ok(d.pinned_model && d.scope?.room_id, 'real pinned native provider required');
         nativeIntents = ['fictional-alice', 'fictional-bob'].map((actor_alias, index) => ({
           id: `${spec.name}-source-${index}`, envelope: { room_id: d.scope.room_id, actor_alias,
             text: `@fictional-bot ${spec.name} source ${index} e\u0301 🦊`,
@@ -72,13 +84,18 @@ export async function run({ server, evidence, candidate, schema, adapterPath }) 
         });
       }
       const o = await adapter.scenario(spec, { fixtures: FIXTURES, nativeIntents });
-      record({ type: 'scenario_observation', observation: o }); verifyScenario(spec, o, nativeIntents);
+      record({ type: 'scenario_observation', observation: o });
+      const missing = unrunReason(spec, o);
+      if (missing) { results.push({ name: spec.name, state: 'unrun', reason: missing }); counts.scenarios.unrun++; continue; }
+      verifyScenario(spec, o, nativeIntents);
       for (const key of spec.evidence) for (const a of o.evidence[key]) verifyArtifact(a, evidence);
       for (const key of Object.keys(spec.expected)) verifyArtifact(o.artifacts[key], evidence);
       if (nativeIntents) for (const trigger of o.native.triggers) verifyArtifact(trigger.provider_transcript_artifact, evidence);
       results.push({ name: spec.name, state: 'passed' });
+      counts.scenarios.passed++;
+      } catch (error) { counts.scenarios.failed++; const result = { name: spec.name, state: 'failed', error: error.message }; results.push(result); record({ type: 'scenario_failure', ...result }); }
     }
-    for (const name of RACES) await bothOrders({ name,
+    for (const name of RACES) { try { await bothOrders({ name,
       prepare: async context => {
         const fixture = await adapter.prepareRace(name, context);
         assert.ok(fixture.scope && fixture.intents?.length === 2 && fixture.expected);
@@ -98,17 +115,22 @@ export async function run({ server, evidence, candidate, schema, adapterPath }) 
           assert.equal(o.authorized_actor_id, fixture.frozenExpected.authorized_actor_id);
         }
         verifyArtifact(o.barrier_artifact, evidence); verifyArtifact(o.durable_readback_artifact, evidence);
-      }, record });
+      }, record: countRecord });
+      } catch (error) { record({ type: 'race_group_failed', name, error: error.message }); results.push({ name: 'race-' + name, state: 'failed', error: error.message }); }
+    }
     // Allocate signed windows first; freeze the exact wire envelopes before dispatch.
     const wired = [];
+    try {
     for (const intent of p.recovery) {
       const envelope = await adapter.prepareOperation(intent);
       wired.push({ id: intent.id, envelope, expected: intent.expected });
+      counts.recovery.prepared++;
     }
     freezeManifest(evidence + '/recovery-wire.manifest.json', { candidate: candidateSHA, protocol: schemaSHA, scope: d.scope, operations: wired });
     for (let index = 0; index < p.recovery.length; index++) {
       const intent = p.recovery[index], wire = wired[index];
       record({ type: 'submitted', id: intent.id, intent_digest: digest(intent.envelope), wire_digest: digest(wire.envelope), fault: intent.fault });
+      counts.recovery.submitted++;
       await adapter.submitRecovery(intent, wire.envelope);
     }
     const recovered = await adapter.reconcileRecovery(p.recovery);
@@ -122,7 +144,13 @@ export async function run({ server, evidence, candidate, schema, adapterPath }) 
       verifyArtifact(projection.cursor_artifact, evidence); verifyArtifact(projection.durable_readback_artifact, evidence);
     }
     results.push({ name: 'recovery', state: 'passed', count: p.recovery.length });
-    record({ type: 'complete', status: 'passed', results });
+    counts.recovery.verified = p.recovery.length;
+    } catch (error) { results.push({ name: 'recovery', state: 'failed', error: error.message }); record({ type: 'recovery_failed', error: error.message }); }
+    const status = counts.scenarios.failed || counts.races.failed || results.some(r => r.state === 'failed') ? 'failed'
+      : counts.scenarios.unrun || counts.races.unrun || counts.recovery.verified !== p.recovery.length ? 'incomplete' : 'passed';
+    const summary = { candidate: candidateSHA, schema: schemaSHA, adapterDigest, status, counts, results };
+    writeFileSync(evidence + '/summary.json', JSON.stringify(summary, null, 2) + '\n', { flag: 'wx', mode: 0o600, flush: true });
+    record({ type: 'complete', ...summary }); return summary;
   } catch (error) { record({ type: 'complete', status: 'failed', error: error.message, results }); throw error; }
   finally { await adapter.close(); }
 }
@@ -137,6 +165,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     console.log('prepared; product acceptance unrun');
   } else {
     assert.equal(mode, '--run'); assert.equal(args.length, 5, 'usage: --run SERVER CANDIDATE SCHEMA ADAPTER NEW_EXTERNAL_EVIDENCE_DIR');
-    await run({ server: args[0], candidate: args[1], schema: args[2], adapterPath: args[3], evidence: args[4] });
+    const summary = await run({ server: args[0], candidate: args[1], schema: args[2], adapterPath: args[3], evidence: args[4] });
+    console.log(JSON.stringify({ status: summary.status, counts: summary.counts }));
+    if (summary.status !== 'passed') process.exitCode = summary.status === 'incomplete' ? 2 : 1;
   }
 }

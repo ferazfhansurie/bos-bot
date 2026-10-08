@@ -569,7 +569,7 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
-  xai?: { configured: boolean };
+  xai?: { configured: boolean; managementConfigured?: boolean };
   anthropic?: { configured: boolean };
   openaiCompat?: { configured: boolean; url?: string };
   /** what this server is entitled to; Settings shows only what works here */
@@ -2325,7 +2325,11 @@ export async function api<T = any>(path: string, init?: RequestInit & { timeoutM
         : AbortSignal.timeout(timeoutMs),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(body.error ?? `${res.status} ${res.statusText}`, res.status);
+  if (!res.ok) {
+    // A frozen legacy server says why in plain words; show that, not the code.
+    const message = body.error === "authority_moved" && typeof body.message === "string" ? body.message : body.error;
+    throw new ApiError(message ?? `${res.status} ${res.statusText}`, res.status);
+  }
   return body;
 }
 

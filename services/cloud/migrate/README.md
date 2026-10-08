@@ -97,9 +97,31 @@ the migration never replays its append inputs as new work. Consolidate and
 reinventory the copy explicitly before reviewing a new projection. Generated
 room/message/thread IDs match the source-type mapping ledger.
 
+Legacy 1:1 bot threads (a bot record's `threadId` plus its tasks' thread IDs,
+owned by no room) map as one private room per bot: `source_type:"bot_threads"`,
+`source_id` = the bot ID, bot-record evidence, and an owner-role grant only.
+Such a room is refused while any non-owner, non-guest member is mapped, because
+the canonical service shows every room to owners/admins/members. In that room an
+unstamped bot reply is the thread's bot. A deleted bot (stamped in messages, no
+bot record left) binds with `{"type":"retired_bot","id":botId,"digest":sha256(JSON
+of the sorted message record IDs naming it)}`; the digest is recomputed from the
+inventory and refused when it differs or a live record exists.
+`node migrate/plan.mjs <copyDir> <ownerAccountId> --reviewer name` generates this
+manifest: the owner, every bot, every room/shared room/bot room, per-message
+owner bindings for unstamped servable messages, and other humans only from an
+explicit `--accounts` mapping file.
+
+Payloads serve only when they are plain text (`text`, `markdown`, and the
+plain-text fallback of `routine.run`/`goal.run`) from a user or bot role without
+a tool/card/secret/screen/comm field. Everything else quarantines by kind:
+`legacy_tool_activity`, `legacy_approval_card`, `legacy_secret_request`,
+`legacy_screen_capture`, `legacy_turn_receipt` (digest/compaction chips),
+`legacy_executable_payload`, or `unsupported_legacy_payload`.
+
 Unmapped authors/threads, missing grants, conflicts, cards/pending work and
-attachments without a verified transfer remain quarantined. Attachment objects
-are inventoried and retained, not certified as scanned or downloadable. Serving
+attachments without a verified transfer remain quarantined. Without an object
+store (below) attachment bytes are inventoried and retained only, and every
+message with references keeps `attachment_requires_verified_transfer`. Serving
 text preserves Unicode/NUL/surrogates, source order, versions and reply links;
 deleted rows expose empty text while the original payload stays operator-only.
 Mentions are inert on imported history. Historical bot IDs carry provenance
@@ -125,11 +147,73 @@ repairs the flag without emitting duplicate events.
 legacy writer frozen. It never deletes the original backup. Pre-cutover rollback
 removes staged cloud rows and the private import ledger, then clears the copy's
 flag. After `cloud_active`, rollback refuses; recovery is forward repair. Real
-pilot identity/grant review, attachment transfer/scanning, installed client reset
-acceptance and release approval remain separate gates.
+pilot identity/grant review, malware scanning, installed client reset acceptance
+and release approval remain separate gates.
+
+## Attachment transfer
+
+`BOS_MIGRATION_OBJECT_STORE=/absolute/objects` (`objectStorePath` in code) names
+the slice 4 object store root. It must be absolute and outside the legacy data
+dir. `project`, `verify-projection` and `rollback` all need it once any object
+was transferred; without it they fail closed. The transfer lives in
+`attachments.mjs`; `serving.mjs` only calls it from its attachment branch.
+
+For a message that is otherwise servable (mapped room/thread, bound author,
+grants), each attachment reference is resolved, in order, against the copy:
+
+1. the reference path must name a file directly in the owned flat
+   `attachments/` tree (absolute legacy path or `attachments/<name>`; no
+   `..`, no nesting, no other directory);
+2. the inventory must hold that file as a regular file (symlinks and
+   non-regular entries are never followed);
+3. size must be within `1..ATTACHMENT_LIMITS.bytes` (10 MiB) and the
+   referenced MIME one of the slice 4 types (png, jpeg, pdf, text/plain);
+4. the bytes are read again with `O_NOFOLLOW`; length and sha256 must equal
+   the inventory, then the magic bytes must match the declared type;
+5. an optional operator scanner (`options.scan(bytes, type)`) must return
+   `"clean"`. No scanner means no claim of scanning; it is not a pass.
+
+Passing references are written under the same tenant key as live uploads
+(`workspace|room|attachment`), read back, re-hashed against the inventory, then
+inserted as `ready`, `attached` `cloud.attachment_objects` rows owned by the
+message's bound author, room and thread, linked via `cloud.message_attachments`,
+and listed in the message's `attachment_ids` in source order. Attachment IDs are
+UUIDv5 of the `attachment_reference` source ID, so the object key is
+deterministic. A rerun over an existing object with identical bytes keeps it; a
+different object at that key aborts the projection. The projection digest covers
+both new tables; the idempotent `project` and `verify-projection` re-hash every
+stored object and report `attachments` and `attachment_bytes`.
+
+**Quarantine, not "unavailable".** Slice 4 has no unavailable attachment state:
+`attachment_ids` must name real `ready` rows with a non-empty object, and the
+client renders whatever those rows say. So the migration never guesses. If any
+reference of a message fails, the whole message stays quarantined with the
+first failing reason, and every failing `attachment_reference` row carries its
+own reason (passing siblings keep the generic review reason). Reasons:
+`attachment_unresolvable_reference`, `attachment_outside_owned_tree`,
+`attachment_missing`, `attachment_unsafe`, `attachment_empty`,
+`attachment_too_large`, `attachment_unsupported_type`,
+`attachment_type_mismatch`, `attachment_hash_mismatch`,
+`attachment_scan_rejected`. A deleted message is served as its empty tombstone;
+its bytes are not moved and its references are marked
+`attachment_of_deleted_message`. Transferred references and their files leave the
+quarantine. A source byte change between check and write aborts the projection
+(`attachment source changed; hold and reinventory`).
+
+**Rollback removes bytes.** Pre-cutover rollback deletes the link and object
+rows in the same staged-only transaction, then removes each object and sweeps
+every remaining `workspace|…|…` key in the store root, which also catches bytes
+left by a projection that crashed before commit. Bytes can only be reached
+through an `attachment_objects` row, so any byte that outlived a failed sweep is
+unreachable; D09 expiry is row-driven and would not delete it, which is why the
+sweep runs (and reruns on every rollback, including one with no projection).
+Migrated rows are `attached`, so the 24h orphan expiry never touches them after
+cutover. After cutover rollback refuses and the objects stay.
+
+Measured on the g08 real copy: `docs/verification/slice5/real-migration-attach-20261008.md`.
 
 Run the fictional serving test (temporary PG, real request role and HTTP):
 
 ```sh
-node --experimental-strip-types --test services/cloud/test/serving-migration.test.mjs
+node --experimental-strip-types --test services/cloud/test/serving-migration*.test.mjs
 ```

@@ -53,13 +53,15 @@ export function startRealtimeCall(botId: string): VoiceCallEngine {
   if (active && active.botId === botId && active.getSnapshot().phase !== "failed") return active;
   active?.hangUp();
   void track("call_started", { mode: "realtime" });
+  // One id for the whole call, reconnects included, so the server books it once.
+  const callId = crypto.randomUUID();
   const engine: VoiceCallEngine = new VoiceCallEngine({
     botId,
     mint: async () => {
       const language = loadVoiceSettings(botId).language;
       return api<VoiceCallTicket>("/api/voice/call", {
         method: "POST",
-        body: JSON.stringify({ botId, language }),
+        body: JSON.stringify({ botId, language, callId }),
         timeoutMs: 20_000,
       });
     },
@@ -74,6 +76,7 @@ export function startRealtimeCall(botId: string): VoiceCallEngine {
     playHangupChime,
     onFinished: (snapshot: VoiceCallSnapshot) => {
       endCall(botId);
+      reportCallLength(callId, snapshot.startedAtMs);
       // A failure keeps the card up until dismissed; a hang-up just goes.
       if (snapshot.phase !== "failed" && active === engine) {
         active = null;
@@ -88,6 +91,14 @@ export function startRealtimeCall(botId: string): VoiceCallEngine {
   notify();
   engine.start();
   return engine;
+}
+
+/** Tell the server how long the line was up (Settings → Usage, xAI voice).
+ * Seconds only; a call that never connected has nothing to book. */
+function reportCallLength(callId: string, startedAtMs: number | null): void {
+  if (startedAtMs === null) return;
+  const seconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
+  void api("/api/voice/call/usage", { method: "POST", body: JSON.stringify({ callId, seconds }) }).catch(() => {});
 }
 
 export function hangUpRealtimeCall(): void {

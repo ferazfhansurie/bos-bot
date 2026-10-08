@@ -12,6 +12,7 @@ import { bearer, emailOTP } from 'better-auth/plugins';
 import { getMigrations } from 'better-auth/db/migration';
 import pg from 'pg';
 import * as Sentry from '@sentry/node';
+import { buildOTPEmail } from './otp-email.ts';
 
 const HOSTED = /(^|\.)openmausbot\.com$/i;
 const MAX_BODY = 16 * 1024;
@@ -75,10 +76,8 @@ async function deliver(config: IssuerConfig, input: OTPInput) {
   }
   const nodemailer = await import('nodemailer');
   const transport = nodemailer.createTransport(config.smtpURL!);
-  await transport.sendMail({
-    from: config.emailFrom, to: input.email, subject: 'Your BOS sign-in code',
-    text: `Your BOS sign-in code is ${input.otp}\n\nIt expires in 10 minutes. If you did not ask for it, ignore this email.`,
-  });
+  const { subject, text, html } = buildOTPEmail({ ...input, publicURL: config.publicURL });
+  await transport.sendMail({ from: config.emailFrom, to: input.email, subject, text, html });
 }
 
 function authOptions(config: IssuerConfig, pool: pg.Pool) {

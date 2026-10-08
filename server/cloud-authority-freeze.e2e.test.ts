@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 
 import { launchVerificationServer } from "../scripts/control-omb.ts";
+import { AUTHORITY_MOVED_MESSAGE } from "./cloud-authority.ts";
 
 it("refuses room/message writes and bot dispatch while frozen, keeps reads, and lifts on rollback", async () => {
   const fixture = await launchVerificationServer();
@@ -41,6 +42,8 @@ it("refuses room/message writes and bot dispatch while frozen, keeps reads, and 
       if (text === null) expect(existsSync(flag)).toBe(false); else setFlag(text);
       const renamed = await call("PATCH", `/api/groups/${groupId}`, { name: `Freeze room ${text?.length ?? 0}` });
       expect(renamed.status, String(text)).toBe(200);
+      // Not moved: the public descriptor says so.
+      expect((await call("GET", "/.well-known/openmausbot/environment")).body.authority, String(text)).toBeNull();
     }
 
     // The first frozen state: one message write dispatches nothing.
@@ -48,7 +51,11 @@ it("refuses room/message writes and bot dispatch while frozen, keeps reads, and 
     const sentBefore = (await messages(bot.threadId)).length;
     for (const [state, epoch] of [["frozen", 7], ["imported", "8"], ["validated", 9], ["cloud_active", 10], ["legacy_archived", 11]] as const) {
       setFlag(JSON.stringify({ workspace_id: "ws_cloud_1", epoch, state }));
-      const refusal = { error: "authority_moved", workspace_id: "ws_cloud_1", epoch };
+      const refusal = { error: "authority_moved", workspace_id: "ws_cloud_1", epoch, message: AUTHORITY_MOVED_MESSAGE };
+      // The public descriptor reports the move without the cloud workspace id.
+      const descriptor = await call("GET", "/.well-known/openmausbot/environment");
+      expect(descriptor.body.authority).toEqual({ state, epoch });
+      expect(JSON.stringify(descriptor.body)).not.toContain("ws_cloud_1");
       // Message writes, direct and in a room.
       expect(await call("POST", `/api/bots/${bot.id}/messages`, { text: `frozen ${state}` })).toEqual({ status: 409, body: refusal });
       expect(await call("POST", `/api/groups/${groupId}/messages`, { text: `@${bot.name} frozen ${state}` })).toEqual({ status: 409, body: refusal });
@@ -76,6 +83,7 @@ it("refuses room/message writes and bot dispatch while frozen, keeps reads, and 
 
     // Rollback before cloud_active clears the flag: writes and dispatch resume without a restart.
     rmSync(flag);
+    expect((await call("GET", "/.well-known/openmausbot/environment")).body.authority).toBeNull();
     const sent = await call("POST", `/api/bots/${bot.id}/messages`, { text: "after rollback" });
     expect(sent.status).toBe(202);
     await expect.poll(async () => (await messages(bot.threadId)).some((message) => message.role === "bot" && message.kind === "text"),

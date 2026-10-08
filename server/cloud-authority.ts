@@ -4,7 +4,8 @@
 // `<dataDir>/cloud-authority.json` = {workspace_id, epoch, state}. Once the
 // state reaches `frozen` (and every later state up to `legacy_archived`) this
 // local server must stop changing conversation state: room and message writes
-// are refused with 409 {error:"authority_moved", workspace_id, epoch}, and no
+// are refused with 409 {error:"authority_moved", workspace_id, epoch, message}
+// (`error` stays the machine code; `message` is the sentence for people), and no
 // bot turn is dispatched. Reads stay allowed. A missing, unreadable or
 // malformed flag, or any other state (inventoried, failed, held), is no freeze,
 // so a rollback before cloud_active only has to delete the file.
@@ -37,7 +38,16 @@ export interface CloudAuthorityFlag {
   state: CloudAuthorityState;
 }
 
-export interface AuthorityMovedBody { error: "authority_moved"; workspace_id: string; epoch: number | string }
+/** Shown to people refused by the freeze. The iOS companion maps the code to
+ * the same sentence; older web clients print `error`, so that field keeps the
+ * machine code and this rides alongside it. */
+export const AUTHORITY_MOVED_MESSAGE = "This computer's chats moved to BOS cloud. They're read-only here now; keep chatting in Cloud rooms.";
+
+export interface AuthorityMovedBody { error: "authority_moved"; workspace_id: string; epoch: number | string; message: string }
+
+/** What the unauthenticated environment descriptor says about the move: only
+ * the state and epoch, never the cloud workspace id. */
+export interface EnvironmentAuthority { state: CloudAuthorityState; epoch: number | string }
 
 /** Shape-check a parsed flag. Anything unexpected is null: no freeze. */
 export function parseCloudAuthorityFlag(value: unknown): CloudAuthorityFlag | null {
@@ -57,7 +67,14 @@ export function isFrozenAuthority(flag: CloudAuthorityFlag | null): flag is Clou
 }
 
 export function authorityMovedBody(flag: CloudAuthorityFlag): AuthorityMovedBody {
-  return { error: "authority_moved", workspace_id: flag.workspace_id, epoch: flag.epoch };
+  return { error: "authority_moved", workspace_id: flag.workspace_id, epoch: flag.epoch, message: AUTHORITY_MOVED_MESSAGE };
+}
+
+/** The environment descriptor's view of a flag. Non-null exactly when the
+ * freeze is enforced (a missing, malformed or non-freezing flag is null), so a
+ * client reading it agrees with what a write would get. */
+export function environmentAuthority(flag: CloudAuthorityFlag | null): EnvironmentAuthority | null {
+  return isFrozenAuthority(flag) ? { state: flag.state, epoch: flag.epoch } : null;
 }
 
 /** The error a dispatch chokepoint throws; the HTTP layer renders it as the

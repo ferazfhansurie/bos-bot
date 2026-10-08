@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  CLOUD_AUTHORITY_FILE, CloudAuthority, FROZEN_AUTHORITY_STATES, isAuthorityGuardedRequest, parseCloudAuthorityFlag,
+  AUTHORITY_MOVED_MESSAGE, CLOUD_AUTHORITY_FILE, CloudAuthority, environmentAuthority, FROZEN_AUTHORITY_STATES, isAuthorityGuardedRequest,
+  parseCloudAuthorityFlag,
 } from "./cloud-authority.ts";
 
 const dirs: string[] = [];
@@ -40,6 +41,7 @@ describe("cloud authority flag", () => {
       write(text);
       expect(gate.frozen(), text).toBeNull();
       expect(() => gate.assertWritable()).not.toThrow();
+      expect(environmentAuthority(gate.current()), text).toBeNull();
     }
     rmSync(join(dir, CLOUD_AUTHORITY_FILE));
     // A directory in the flag's place is unreadable, not a freeze.
@@ -53,6 +55,8 @@ describe("cloud authority flag", () => {
       write(JSON.stringify({ workspace_id: "ws_1", epoch: 3, state }));
       expect(gate.current()).toEqual({ workspace_id: "ws_1", epoch: 3, state });
       expect(gate.frozen()).toBeNull();
+      // Not moved: the environment descriptor agrees with enforcement.
+      expect(environmentAuthority(gate.current())).toBeNull();
     }
   });
 
@@ -64,8 +68,9 @@ describe("cloud authority flag", () => {
       expect(gate.frozen()).toEqual({ workspace_id: "ws_cloud", epoch, state });
       expect(() => gate.assertWritable("bot turns")).toThrow(expect.objectContaining({
         message: "authority_moved", status: 409, code: "authority_moved",
-        body: { error: "authority_moved", workspace_id: "ws_cloud", epoch },
+        body: { error: "authority_moved", workspace_id: "ws_cloud", epoch, message: AUTHORITY_MOVED_MESSAGE },
       }));
+      expect(environmentAuthority(gate.current())).toEqual({ state, epoch });
     }
     // One log line per distinct freeze, not per refused dispatch.
     expect(() => gate.assertWritable()).toThrow();
@@ -73,6 +78,18 @@ describe("cloud authority flag", () => {
     unlinkSync(join(dir, CLOUD_AUTHORITY_FILE));
     expect(gate.frozen()).toBeNull();
     expect(() => gate.assertWritable()).not.toThrow();
+  });
+
+  it("carries a sentence for people beside the unchanged machine code", () => {
+    expect(AUTHORITY_MOVED_MESSAGE).toBe("This computer's chats moved to BOS cloud. They're read-only here now; keep chatting in Cloud rooms.");
+    const { gate, write } = authority();
+    write(JSON.stringify({ workspace_id: "ws_1", epoch: 2, state: "frozen" }));
+    try { gate.assertWritable(); throw new Error("not refused"); } catch (error) {
+      const body = (error as { body: Record<string, unknown> }).body;
+      expect(body.error).toBe("authority_moved");
+      expect(body.message).toBe(AUTHORITY_MOVED_MESSAGE);
+    }
+    expect(environmentAuthority(null)).toBeNull();
   });
 
   it("parses the frozen spec shape", () => {

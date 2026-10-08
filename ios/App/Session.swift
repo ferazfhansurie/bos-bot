@@ -147,7 +147,24 @@ final class Session: ObservableObject {
     /// NavigationStack after the exact detached task has been activated.
     @Published private(set) var notificationChat: Chat?
 
-    private var client: CompanionClient?
+    private var client: CompanionClient? {
+        // Every client this session builds reports write authority back,
+        // whichever of the many construction sites made it.
+        didSet {
+            guard let id = client?.connection.id else { return }
+            client?.authorityObserver = { [weak self] event in
+                Task { @MainActor in self?.noteWriteAuthority(event, connectionID: id) }
+            }
+        }
+    }
+    /// Connections whose workspace moved to BOS cloud: their legacy server
+    /// answered a write with `authority_moved`. Persisted so a relaunch shows
+    /// it before any write; cleared only when a later send there succeeds.
+    @Published private(set) var legacyArchivedIDs: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: Session.legacyArchivedKey) ?? [])
+    private static let legacyArchivedKey = "bos.legacyArchivedConnections"
+    /// The selected computer's chats are read-only here; history still loads.
+    var legacyArchived: Bool { connection.map { legacyArchivedIDs.contains($0.id) } ?? false }
     /// Ciphertext-only operations survive navigation and transient
     /// disconnects so a retry cannot accidentally reseal the same value with
     /// a different HPKE operation id. Nothing here is persisted to disk.
@@ -633,6 +650,7 @@ final class Session: ObservableObject {
 
     func forgetConnection(id: String) {
         guard let forgotten = registry.connection(id: id) else { return }
+        setLegacyArchived(false, connectionID: id)
         let wasActive = registry.activeConnectionID == id
         // A server session is ended on the server too, best effort: the
         // bearer is discarded locally either way.
@@ -1769,6 +1787,18 @@ final class Session: ObservableObject {
             actionError = error.localizedDescription
             return false
         }
+    }
+
+    /// No unpairing, retrying or draft changes here: the failed write already
+    /// reported the friendly error, and the banner says why from now on.
+    private func noteWriteAuthority(_ event: WriteAuthority, connectionID: String) {
+        setLegacyArchived(event == .moved, connectionID: connectionID)
+    }
+
+    private func setLegacyArchived(_ archived: Bool, connectionID: String) {
+        guard legacyArchivedIDs.contains(connectionID) != archived else { return }
+        if archived { legacyArchivedIDs.insert(connectionID) } else { legacyArchivedIDs.remove(connectionID) }
+        UserDefaults.standard.set(legacyArchivedIDs.sorted(), forKey: Self.legacyArchivedKey)
     }
 
     // MARK: Voice calls

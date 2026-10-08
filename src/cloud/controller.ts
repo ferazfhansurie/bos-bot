@@ -1,7 +1,7 @@
 // Drives one cloud room: owns the reducer state, persists the outbox before
 // any network I/O, works the outbox sequentially and keeps the realtime
 // subscription caught up through resets and reconnects.
-import { ATTACHMENT_LIMITS, LIMITS, type ApprovalCard, type CloudAttachment, type SendEnvelope } from "../../shared/cloud-protocol/index";
+import { ATTACHMENT_LIMITS, type ApprovalCard, type CloudAttachment, type SendEnvelope } from "../../shared/cloud-protocol/index";
 import { identityProblem, type IdentityProblem } from "./auth-state";
 import { connectRealtime, type CloudApi, type CloudSession, type OperationWindow, type RealtimeConnection } from "./api";
 import {
@@ -18,7 +18,7 @@ import {
 } from "./outbox";
 import { decidable } from "./runs";
 import { isEligible, markViewed } from "./read-coverage";
-import { cloudRoomReducer, initialCloudRoomState, type CloudRoomAction, type CloudRoomState } from "./room-reducer";
+import { cloudRoomReducer, initialCloudRoomState, olderCursor, type CloudRoomAction, type CloudRoomState } from "./room-reducer";
 import { compareSequence } from "./sequence";
 
 type OutboxNamespace = SendEnvelope["namespace"];
@@ -95,8 +95,6 @@ export class CloudRoomController {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private resetting = false;
-  /** The loaded page reaches the first message of the thread. */
-  private threadStartLoaded = false;
   private readonly identity: OutboxNamespace;
   private readonly windows: WindowStore;
   private unsubscribeNetwork: (() => void) | null = null;
@@ -442,7 +440,6 @@ export class CloudRoomController {
             if (problem.kind === "session_invalid") this.stop();
             return;
           }
-          if (frame.type === "reset_required" && frame.snapshot) this.threadStartLoaded = frame.snapshot.messages.length < LIMITS.snapshotMessages;
           this.dispatch({ type: "frame", frame });
           // A server reset or a batch that failed validation both recover from a snapshot.
           if (this.state.reset_required) void this.reset();
@@ -475,13 +472,27 @@ export class CloudRoomController {
     try {
       const result = await this.api.snapshot(this.room.workspace_id, this.room.room_id, this.room.thread_id);
       if (result.ok) {
-        this.threadStartLoaded = result.value.messages.length < LIMITS.snapshotMessages;
         this.dispatch({ type: "snapshot", snapshot: result.value });
         this.resubscribe();
       }
     } finally {
       this.resetting = false;
     }
+  }
+
+  /**
+   * Page in the messages just before the oldest loaded one. A no-op while a
+   * page is in flight, once the thread start is loaded, or with nothing loaded.
+   */
+  async loadOlder(): Promise<void> {
+    if (this.stopped) return;
+    const before = olderCursor(this.state);
+    if (before === null) return;
+    const ref = { room_id: this.room.room_id, thread_id: this.room.thread_id, before };
+    this.dispatch({ type: "history_requested", ...ref });
+    const result = await this.api.history(this.room.workspace_id, this.room.room_id, this.room.thread_id, before);
+    if (result.ok) this.dispatch({ type: "history", page: { ...ref, ...result.value } });
+    else this.dispatch({ type: "history_failed", ...ref });
   }
 
   /**
@@ -493,7 +504,7 @@ export class CloudRoomController {
       .filter((message) => isEligible(message, this.state.account_id))
       .map((message) => message.sequence)
       .sort(compareSequence);
-    const result = markViewed(this.state.read, { sequences: eligible, after: this.threadStartLoaded ? null : undefined }, sequences);
+    const result = markViewed(this.state.read, { sequences: eligible, after: this.state.start_loaded ? null : undefined }, sequences);
     if (result.post.length === 0) return;
     this.dispatch({ type: "read", coverage: result.coverage });
     const saved = await this.api.postRead(this.room.workspace_id, this.room.room_id, { thread_id: this.room.thread_id, intervals: result.post });

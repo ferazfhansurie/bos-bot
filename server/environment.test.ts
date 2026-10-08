@@ -127,6 +127,7 @@ describe("environment identity", () => {
       delegatedProtocol: 1,
       sharedConversationIsolation: 1,
       capabilities: { remoteSessions: true, selfUpdate: "desktop-managed", emailSignIn: false },
+      authority: null,
     });
     expect(environmentDescriptor({ environmentId: "abc", desktopManaged: false }).capabilities.selfUpdate).toBe("operator");
     // Computer sharing is advertised only while its opt-in gate is on, so a
@@ -135,6 +136,15 @@ describe("environment identity", () => {
       .not.toHaveProperty("sharedComputers");
     expect(environmentDescriptor({ environmentId: "abc", desktopManaged: true, sharedComputers: true }).capabilities)
       .toEqual({ remoteSessions: true, sharedComputers: true, selfUpdate: "desktop-managed", emailSignIn: false });
+  });
+
+  it("reports the cloud move's state and epoch only, and null when not moved", () => {
+    expect(environmentDescriptor({ environmentId: "abc", desktopManaged: true, authority: null }).authority).toBeNull();
+    const moved = environmentDescriptor({ environmentId: "abc", desktopManaged: true,
+      authority: { state: "cloud_active", epoch: "7", workspace_id: "ws_secret" } as never });
+    // Only state and epoch cross into this unauthenticated descriptor.
+    expect(moved.authority).toEqual({ state: "cloud_active", epoch: "7" });
+    expect(JSON.stringify(moved)).not.toContain("ws_secret");
   });
 
   it("falls back to the checkout's package.json version, then to unknown", () => {

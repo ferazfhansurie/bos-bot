@@ -430,6 +430,10 @@ public enum APIError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case let .status(code, message):
+            // The server's code word, not a sentence: say what it means.
+            if isAuthorityMoved {
+                return "This computer’s chats moved to BOS cloud. They’re read-only here now; keep chatting in Cloud rooms."
+            }
             if let message { return message }
             switch code {
             case 401: return "This phone is not paired with that computer."
@@ -456,6 +460,22 @@ public enum APIError: Error, LocalizedError, Sendable {
         if case let .status(code, _) = self { return code == 404 }
         return false
     }
+
+    /// The computer's workspace moved to BOS cloud. Its legacy server keeps
+    /// answering reads, but refuses every write with this 409 for good —
+    /// unless the move is rolled back. Not a busy bot: retrying won't help.
+    public var isAuthorityMoved: Bool {
+        if case let .status(code, message) = self { return code == 409 && message == "authority_moved" }
+        return false
+    }
+}
+
+/// What a write said about where the workspace's authority lives: refused
+/// because it moved to BOS cloud, or a message accepted here after all (a
+/// move rolled back before cutover).
+public enum WriteAuthority: Sendable {
+    case moved
+    case accepted
 }
 
 /// What the harness answered about a send. Either the message went straight
@@ -597,6 +617,10 @@ public struct CompanionClient: Sendable {
     private let token: String?
     private let session: URLSession
     private let requestTimeout: TimeInterval
+    /// Told when any request is refused with `authority_moved`, and when a
+    /// message send is accepted. Copies of the client carry it, so a view
+    /// that captured the client for an upload still reports through it.
+    public var authorityObserver: (@Sendable (WriteAuthority) -> Void)?
 
     public init(
         connection: Connection,
@@ -656,7 +680,7 @@ public struct CompanionClient: Sendable {
     @discardableResult
     private func send<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
         let (data, response) = try await perform(request)
-        try Self.check(response, data)
+        try verify(response, data)
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
@@ -666,7 +690,7 @@ public struct CompanionClient: Sendable {
 
     private func send(_ request: URLRequest) async throws {
         let (data, response) = try await perform(request)
-        try Self.check(response, data)
+        try verify(response, data)
     }
 
     /// A send that succeeded is a send that succeeded: the harness's own
@@ -675,7 +699,8 @@ public struct CompanionClient: Sendable {
     /// rather than a failed send.
     private func sendForReceipt(_ request: URLRequest) async throws -> SendReceipt {
         let (data, response) = try await perform(request)
-        try Self.check(response, data)
+        try verify(response, data)
+        authorityObserver?(.accepted)
         return (try? JSONDecoder().decode(SendReceipt.self, from: data)) ?? SendReceipt()
     }
 
@@ -800,6 +825,7 @@ public struct CompanionClient: Sendable {
         var body: [String: Any] = ["text": text, "sendId": sendId, "attachments": rows]
         if let replyTo { body["replyTo"] = replyTo }
         try await send(makeRequest("POST", "/api/multiplayer/rooms/\(id)/messages", body: body))
+        authorityObserver?(.accepted)
     }
 
     public func uploadSharedAttachment(roomId: String, name: String, mime: String, data: Data) async throws -> SharedAttachment {
@@ -814,6 +840,16 @@ public struct CompanionClient: Sendable {
         let room = roomId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? roomId
         let id = attachmentId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? attachmentId
         return try await send(makeRequest("GET", "/api/multiplayer/rooms/\(room)/attachments/\(id)"), as: SharedAttachmentData.self)
+    }
+
+    /// `check`, reporting an `authority_moved` refusal to the observer.
+    private func verify(_ response: URLResponse, _ data: Data) throws {
+        do {
+            try Self.check(response, data)
+        } catch let error as APIError where error.isAuthorityMoved {
+            authorityObserver?(.moved)
+            throw error
+        }
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
@@ -1106,7 +1142,7 @@ public struct CompanionClient: Sendable {
             query: [URLQueryItem(name: "format", value: format)]
         )
         let (data, response) = try await perform(request)
-        try Self.check(response, data)
+        try verify(response, data)
         let http = response as? HTTPURLResponse
         let fallback = "transcript.\(format == "json" ? "json" : "md")"
         let disposition = http?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
@@ -1209,7 +1245,7 @@ public struct CompanionClient: Sendable {
     public func image(threadId: String, messageId: String) async throws -> Data {
         let imageRequest = try makeRequest("GET", "/api/threads/\(threadId)/messages/\(messageId)/image")
         let (data, response) = try await perform(imageRequest)
-        try Self.check(response, data)
+        try verify(response, data)
         return data
     }
 
@@ -1231,7 +1267,7 @@ public struct CompanionClient: Sendable {
             body: ["path": path]
         )
         let (data, response) = try await perform(request)
-        try Self.check(response, data)
+        try verify(response, data)
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("The computer sent something this app couldn't read.")
         }
@@ -1314,7 +1350,7 @@ public struct CompanionClient: Sendable {
         guard Self.validAvatarPath(path) else { throw APIError.badURL }
         let request = try makeRequest("GET", path)
         let (data, response) = try await perform(request)
-        try Self.check(response, data)
+        try verify(response, data)
         return data
     }
 
@@ -1528,7 +1564,7 @@ public struct CompanionClient: Sendable {
             body: ["text": String(text.prefix(500)), "voiceId": voiceId]
         )
         let (data, response) = try await perform(request)
-        try Self.check(response, data)
+        try verify(response, data)
         return data
     }
 

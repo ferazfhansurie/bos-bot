@@ -13,6 +13,7 @@ import fs from "node:fs";
 // asserts the two lists never drift apart.
 export const CREDENTIAL_ENV_NAMES = [
   "XAI_API_KEY",
+  "OMB_XAI_MANAGEMENT_KEY",
   "OMB_ANTHROPIC_API_KEY",
   "OMB_ANTHROPIC_API_URL",
   "OPENAI_COMPAT_API_KEY",
