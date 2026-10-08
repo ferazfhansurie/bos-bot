@@ -24,6 +24,8 @@ const sha = (v) => createHash("sha256").update(v).digest("hex");
 const W = "real_migration";
 const EMAIL = "owner@example.test";
 const batch = 1000;
+// Attachments transfer into the stack's own object store, like slice 4 uploads.
+const objects = join(state.fixture_directory, "objects");
 const t0 = Date.now();
 const log = (step, extra = {}) => console.error(JSON.stringify({ step, s: Math.round((Date.now() - t0) / 1000), ...extra }));
 
@@ -65,37 +67,37 @@ try {
 
   const steps = {};
   const pass = async (label) => {
-    for (const action of ["inventory", "freeze"]) steps[action] = await migrate(c, copy, W, action, { batch });
-    steps.import = await migrate(c, copy, W, "import", { batch });
+    for (const action of ["inventory", "freeze"]) steps[action] = await migrate(c, copy, W, action, { batch, objectStorePath: objects });
+    steps.import = await migrate(c, copy, W, "import", { batch, objectStorePath: objects });
     const first = await staging();
     log(label + ":import", first);
-    await migrate(c, copy, W, "import", { batch });
+    await migrate(c, copy, W, "import", { batch, objectStorePath: objects });
     const second = await staging();
     if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error("second import changed staging");
-    steps.validate = await migrate(c, copy, W, "validate", { batch });
-    steps.project = await migrate(c, copy, W, "project", { plan });
-    const again = await migrate(c, copy, W, "project", { plan });
+    steps.validate = await migrate(c, copy, W, "validate", { batch, objectStorePath: objects });
+    steps.project = await migrate(c, copy, W, "project", { plan, objectStorePath: objects });
+    const again = await migrate(c, copy, W, "project", { plan, objectStorePath: objects });
     if (!again.idempotent || again.projection_digest !== steps.project.projection_digest) throw new Error("projection not idempotent");
     log(label + ":project", { messages: steps.project.messages, quarantine: steps.project.quarantine });
     return { import_first: first, import_second: second, projection_digest: steps.project.projection_digest, quarantine_digest: steps.project.quarantine_digest, served: steps.project.messages, reasons: await reasons() };
   };
   const runA = await pass("A");
-  await migrate(c, copy, W, "rollback");
+  await migrate(c, copy, W, "rollback", { objectStorePath: objects });
   log("rollback");
   const runB = await pass("B");
   for (const k of ["projection_digest", "quarantine_digest", "served"])
     if (runA[k] !== runB[k]) throw new Error("rerun from scratch differs: " + k);
   if (runA.import_first.digest !== runB.import_first.digest) throw new Error("rerun staging differs");
 
-  const verified = await migrate(c, copy, W, "verify-projection");
+  const verified = await migrate(c, copy, W, "verify-projection", { objectStorePath: objects });
   const reader = new pg.Client({ connectionString: state.migration_url });
   await reader.connect();
   const served = (await reader.query(
     "SELECT room_id,thread_id,message_id,sequence FROM cloud.messages WHERE workspace_id=$1 ORDER BY room_id,sequence", [W])).rows;
   await reader.end();
   const acceptance = { ...verified, reviewer: "real migration independent readback", evidence_digest: sha(JSON.stringify(served)) };
-  steps.cutover = await migrate(c, copy, W, "cutover", { acceptance });
-  steps.archive = await migrate(c, copy, W, "archive");
+  steps.cutover = await migrate(c, copy, W, "cutover", { acceptance, objectStorePath: objects });
+  steps.archive = await migrate(c, copy, W, "archive", { objectStorePath: objects });
   log("archived");
 
   const servedIds = new Set(served.map((m) => m.message_id));
