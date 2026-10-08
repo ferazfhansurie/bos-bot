@@ -14367,8 +14367,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (duplicate.kind === "match") return json(res, 200, { message: duplicate.message, duplicate: true });
       const named = roomResponders(body.text, group!.memberIds.map(id => store.bot(id)).filter((bot): bot is BotRecord => !!bot), { kind: "mentions" });
       if (named.some(bot => bot.hidden || bot.visibility === "private" || !workspaceMembers.grants(group!.id).includes(`${ENVIRONMENT_ID}:bot:${bot.id}`))) return json(res, 403, { error: "mentioned bot is not granted to this room" });
-      const message = store.appendMessage(threadId, { role: "user", kind: "text", text: body.text.trim(), sendId, replyToId: replyTo?.id, sender: channelMessageSender(auth), channelMode: "chat" });
-      void runPersonChannelTurn(group!.id, threadId, message, requestActor, auth.session.id).catch(error => console.warn("person room turn failed", error instanceof Error ? error.message : "unknown"));
+      // An admin the owner appointed speaks in rooms as the owner does: bots
+      // answer with their full home setup (soul, memory, tools, their own
+      // approval settings), not the conversation-only helper policy.
+      const trustedAdmin = workspaceMembers.role(requestActor) === "admin";
+      if (trustedAdmin && groupIsWorking(group!)) {
+        const queued = queueChannelMessage(group!.id, threadId, body.text.trim(), { replyToId: replyTo?.id, sendId, mode: "chat", deferUntilIdle: true, sender: channelMessageSender(auth) });
+        return json(res, 202, { ok: true, queued: true, queueId: queued.id, threadId });
+      }
+      const message = trustedAdmin
+        ? startGroupTurn(group!.id, body.text.trim(), replyTo, sendId, "chat", undefined, { threadId, sender: channelMessageSender(auth) })
+        : store.appendMessage(threadId, { role: "user", kind: "text", text: body.text.trim(), sendId, replyToId: replyTo?.id, sender: channelMessageSender(auth), channelMode: "chat" });
+      if (!trustedAdmin) void runPersonChannelTurn(group!.id, threadId, message, requestActor, auth.session.id).catch(error => console.warn("person room turn failed", error instanceof Error ? error.message : "unknown"));
       for (const personId of roomPushPeople(group!, multiplayerActors.ownerId, id => canReadChannel(group!, id), requestActor)) {
         void apnsPush.send(personId, message.sender!.name, message.text!, { roomId: group!.id, threadId, senderId: requestActor, senderName: message.sender!.name, messageId: message.id }).catch(() => {});
       }
