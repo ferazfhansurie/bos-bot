@@ -93,6 +93,7 @@ interface SafeBot {
   modelSelection: WireBot["modelSelection"];
   approvalMode?: WireBot["approvalMode"];
   autoApprove?: boolean;
+  approvePeerComms: boolean;
   notifications: boolean;
   createdAt: number;
 }
@@ -225,6 +226,9 @@ function safeBot(raw: Record<string, any>, previous?: SafeBot): SafeBot {
     modelSelection: model as SafeBot["modelSelection"],
     ...(typeof raw.approvalMode === "string" ? { approvalMode: raw.approvalMode as SafeBot["approvalMode"] } : {}),
     ...(typeof raw.autoApprove === "boolean" ? { autoApprove: raw.autoApprove } : {}),
+    // Older homes do not advertise this policy. Keep their reply mentions
+    // closed until they can prove that no sender approval is required.
+    approvePeerComms: typeof raw.approvePeerComms === "boolean" ? raw.approvePeerComms : true,
     notifications: typeof raw.notifications === "boolean" ? raw.notifications : previous?.notifications ?? true,
     createdAt: typeof raw.createdAt === "number" ? raw.createdAt : previous?.createdAt ?? Date.now(),
   };
@@ -718,10 +722,10 @@ export class RemoteBotBridge {
 
   /** A shared room member on a linked Mac: the contact's home and bot id, or
    * null when that Mac is not linked or does not share the bot. */
-  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string; color: string; mascotBody?: string | null; mascotEyes?: string | null; avatarUrl: string | null; avatarCrop?: string; availability?: RemoteBotOrigin["availability"] } | null {
+  roomBot(homeId: string, remoteBotId: string): { virtualId: string; name: string; color: string; approvePeerComms: boolean; mascotBody?: string | null; mascotEyes?: string | null; avatarUrl: string | null; avatarCrop?: string; availability?: RemoteBotOrigin["availability"] } | null {
     const home = this.homes.get(homeId);
     const bot = home?.state.bots[remoteBotId];
-    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), color: bot.color, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop, availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
+    return home && bot ? { virtualId: this.botId(home, remoteBotId), name: String((bot as { name?: unknown }).name ?? "Bot"), color: bot.color, approvePeerComms: bot.approvePeerComms ?? true, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop, availability: home.availability ?? (home.connected ? "ready" : "offline") } : null;
   }
 
   /** A room member addressed by its virtual id (`rb-<homeKey>-<remoteBotId>`):

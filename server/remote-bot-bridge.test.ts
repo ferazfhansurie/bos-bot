@@ -34,11 +34,13 @@ class FakeHome {
   afterThreadCreated: (() => void) | null = null;
   afterRoomSent: (() => void) | null = null;
   awaitingRoomApproval = false;
+  approvePeerComms?: boolean;
 
   bot(): Record<string, unknown> {
     return {
       id: "pixie", name: "Pixie", title: "Helper", description: "", color: "pink", mascotBody: "bear", avatarCrop: "circle", avatarUrl: "/api/attachments/aaaa-bbbb.png",
       modelSelection: { instanceId: "claude", model: "opus" }, notifications: true, createdAt: 5,
+      ...(this.approvePeerComms === undefined ? {} : { approvePeerComms: this.approvePeerComms }),
       soul: `${SECRET} soul`, cwd: `/Users/owner/${SECRET}`,
       threadId: this.selected, tasks: this.tasks, messages: this.threads.get(this.selected) ?? [],
     };
@@ -203,7 +205,17 @@ describe("RemoteBotBridge", () => {
 
   it("carries the linked bot appearance into the shared-room roster without private fields", async () => {
     await bridge.listBots(0);
-    expect(bridge.roomBot(HOME, "pixie")).toEqual({ virtualId: botId, name: "Pixie", color: "pink", mascotBody: "bear", avatarCrop: "circle", avatarUrl: "/api/attachments/aaaa-bbbb.png", availability: "offline" });
+    expect(bridge.roomBot(HOME, "pixie")).toEqual({ virtualId: botId, name: "Pixie", color: "pink", approvePeerComms: true, mascotBody: "bear", mascotEyes: undefined, avatarCrop: "circle", avatarUrl: "/api/attachments/aaaa-bbbb.png", availability: "offline" });
+  });
+
+  it("keeps unknown remote sender approval closed and tracks advertised policy changes", async () => {
+    await bridge.listBots(0);
+    expect(bridge.roomMember(botId)?.approvePeerComms).toBe(true);
+    for (const policy of [false, true, undefined]) {
+      fake.approvePeerComms = policy;
+      bridge.handleFrame(bridge.homeForTest(HOME)!, { kind: "bot", bot: fake.bot() });
+      expect(bridge.roomMember(botId)?.approvePeerComms).toBe(policy ?? true);
+    }
   });
 
   it("accepts an async 202 receipt and returns the shared-room reply", async () => {

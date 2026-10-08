@@ -2133,6 +2133,7 @@ function peerBotView(bot: BotRecord, sessionId: string) {
     modelSelection: bot.modelSelection, notifications: bot.notifications, createdAt: bot.createdAt,
     threadId: selected?.threadId ?? "", tasks, messages: [], hasMore: false, activeLeafId: null,
     approvalMode: "ask" as const, autoApprove: false,
+    approvePeerComms: Boolean(bot.approvePeerComms),
   };
 }
 
@@ -3032,6 +3033,15 @@ const channelAwaitsUser = (group: GroupRecord) =>
 // before registering store listeners or recovering interrupted routines.
 const groupQueues = new Map<string, Promise<void>>();
 function roomHandoffProblem(node: Pick<RoomHandoff, "groupId" | "threadId" | "botId"> & Partial<Pick<RoomHandoff, "kind">>, parent?: Pick<RoomHandoff, "groupId" | "threadId" | "botId">): string | undefined {
+  const remoteSource = parent?.botId.startsWith("rb-") ? remoteRoomMember(parent.botId) : null;
+  if (parent?.botId.startsWith("rb-")) {
+    const sourceRoom = parent.groupId ? store.group(parent.groupId) : undefined;
+    if (!remoteSource || !sourceRoom || sourceRoom.dm || !sourceRoom.memberIds.includes(parent.botId)
+      || !store.groupTaskByThread(sourceRoom.id, parent.threadId)) return "Source membership or task was removed";
+    if (node.groupId !== sourceRoom.id) return "Remote room members only send work within their own room";
+    if (parent.threadId !== node.threadId) return "Same-room work must stay in the originating conversation";
+    if (roomSetupPending(sourceRoom)) return "Source room setup is unfinished";
+  }
   if (node.botId.startsWith("rb-") && node.groupId) {
     // A remote room member: its turn runs on its own Mac through the bridge,
     // only inside the room that lists it, and only from that same room.
@@ -3042,7 +3052,7 @@ function roomHandoffProblem(node: Pick<RoomHandoff, "groupId" | "threadId" | "bo
     if (roomSetupPending(group)) return "Destination room setup is unfinished";
     if (parent) {
       const from = store.bot(parent.botId);
-      if (!from || from.hidden || parent.groupId !== group.id || !group.memberIds.includes(from.id)) return "Remote room members only take work from their own room";
+      if (!remoteSource && (!from || from.hidden || parent.groupId !== group.id || !group.memberIds.includes(from.id))) return "Remote room members only take work from their own room";
       if (parent.threadId !== node.threadId) return "Same-room work must stay in the originating conversation";
     }
     return undefined;
@@ -3066,6 +3076,9 @@ function roomHandoffProblem(node: Pick<RoomHandoff, "groupId" | "threadId" | "bo
     return member && !canAccessTeam(speaker, member.section);
   });
   if (group && roomSetupPending(group)) return "Destination room setup is unfinished";
+  // A linked sender has no local bot record. Its membership authorizes only
+  // this exact shared conversation; local senders retain their peer checks.
+  if (remoteSource) return undefined;
   if (parent) {
     const from = store.bot(parent.botId);
     const source = parent.groupId ? store.group(parent.groupId) : undefined;
@@ -3228,11 +3241,14 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
           from: sender ? { botId: sender.id, name: sender.name, color: sender.color } : undefined,
           text: `@${member.name} ${node.text}`,
         });
-      // A resumed node has no downstream results to fold in: remote members
-      // never fan out from this home. Re-sending under the same id is safe —
-      // the bridge dedupes by send id on the remote thread.
-      return runRemoteRoomMemberTurn({ groupId: node.groupId, threadId: node.threadId, botId: node.botId,
-        text: node.text, from: sender?.name ?? "A room member", sendId: node.id, sourceMessageId: request?.id, isCancelled: () => signal.aborted });
+      // The bridge dedupes sends by request id. Drain any addressed reply
+      // after the remote member releases its lane, including handoff turns.
+      const spoken = new Set<string>();
+      const result = await runRemoteRoomMemberTurn({ groupId: node.groupId, threadId: node.threadId, botId: node.botId,
+        text: node.text, from: sender?.name ?? "A room member", sendId: node.id, sourceMessageId: request?.id,
+        isCancelled: () => signal.aborted, mentions: { hop: 0, spoken } });
+      if (!signal.aborted) await drainLateRoomMentions(node.groupId, node.threadId, spoken, signal);
+      return result;
     }
     if (node.botId.startsWith("rb-")) {
       const parent = node.parentId ? roomHandoffs.nodes.get(node.parentId) : undefined;
@@ -7352,6 +7368,7 @@ async function runRemoteRoomMemberTurn(args: {
   groupId: string; threadId: string; botId: string;
   text: string; from: string; sourceMessageId?: string; sendId: string;
   isCancelled: () => boolean; postReply?: boolean;
+  mentions?: { hop: number; spoken: Set<string> };
 }): Promise<{ ok: boolean; text: string; remoteOutcomeKnown: boolean }> {
   const threadId = store.canonicalThreadId(args.threadId);
   const group = store.group(args.groupId);
@@ -7409,6 +7426,17 @@ async function runRemoteRoomMemberTurn(args: {
       if (args.postReply !== false && stillMember()) {
         store.appendMessage(threadId, { role: "bot", kind: "text", text: reply, from, ...(args.sourceMessageId ? { replyToId: args.sourceMessageId } : {}) });
         store.patchGroup(group.id, { unread: true });
+        if (args.mentions && !args.isCancelled() && args.mentions.hop < MAX_GROUP_HOPS && !isBareAck(reply)) {
+          const current = store.group(group.id)!;
+          const pool = roomAddressablePool(current);
+          const names = pool.map(member => member.name);
+          const routeKey = JSON.stringify([args.botId, reply.trim().replace(/\s+/g, " ")]);
+          for (const next of roomResponders(reply, pool.filter(member => member.id !== args.botId), { kind: "mentions" })) {
+            if (!isAddressedRoomReply(reply, next.name, names)) continue;
+            if (!isRemoteRoomResponder(next)) releaseWorkHold(next.id, threadId);
+            deferMentionCallback(args.mentions.spoken, next.id, args.mentions.hop + 1, routeKey, args.botId);
+          }
+        }
       }
       return { ok: true, text: reply, remoteOutcomeKnown: true };
     } catch (error) {
@@ -12076,6 +12104,7 @@ function startGroupTurn(
         await runRemoteRoomMemberTurn({
           groupId, threadId, botId: responder.id, text, from: senderName, sourceMessageId: message.id,
           sendId: `room-${message.id}-${responder.id}`, isCancelled: () => operation.cancelled,
+          mentions: { hop: 0, spoken },
         });
       }), ...responders.map(async (responder) => {
         if (operation.cancelled) return;
@@ -12139,6 +12168,15 @@ async function drainRoomMentionCallbacks(
   operation: GroupTurnOperation,
   skillAuthoringClaim: { claimed: boolean } = { claimed: false },
 ): Promise<void> {
+  const mentionSource = (id?: string) => {
+    if (!id) return undefined;
+    const local = store.bot(id);
+    if (local) return local;
+    const remote = remoteRoomMember(id);
+    return remote ? { ...remote, id, remote: true as const } : undefined;
+  };
+  const needsApproval = (source: NonNullable<ReturnType<typeof mentionSource>>) =>
+    source.approvePeerComms && ("remote" in source || !fullAccessForSource(source.id, threadId));
   // Drain one settled wave at a time. Siblings work concurrently;
   // runGroupMemberTurn's member lane serializes multiple results for
   // the same lead without holding other bots behind that lead.
@@ -12150,13 +12188,13 @@ async function drainRoomMentionCallbacks(
     await Promise.all(callbacks.map(async (callback) => {
       if (operation.cancelled || callback.hop >= MAX_GROUP_HOPS) return;
       if (callback.botId.startsWith("rb-")) {
-        // A local member's reply addressed a remote member. Same route
+        // A room member's reply addressed a remote member. Same route
         // checks as a local mention; the remote bot gets that reply.
         const remote = remoteRoomMember(callback.botId);
-        const source = callback.sourceBotId ? store.bot(callback.sourceBotId) : undefined;
+        const source = mentionSource(callback.sourceBotId);
         const problem = !source ? "Mention source no longer exists" : roomHandoffProblem(
           { groupId, threadId, botId: callback.botId }, { groupId, threadId, botId: source.id },
-        ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, threadId)
+        ) ?? (needsApproval(source)
           ? "Sender requires peer approval; use coordinate_bots" : undefined);
         if (problem || !source) {
           store.appendMessage(threadId, { role: "bot", kind: "activity",
@@ -12168,6 +12206,7 @@ async function drainRoomMentionCallbacks(
         await runRemoteRoomMemberTurn({
           groupId, threadId, botId: callback.botId, text: sourceReply.text, from: source.name, sourceMessageId: sourceReply.id,
           sendId: `mention-${sourceReply.id}-${callback.botId}`, isCancelled: () => operation.cancelled,
+          mentions: { hop: callback.hop, spoken },
         });
         return;
       }
@@ -12177,20 +12216,23 @@ async function drainRoomMentionCallbacks(
       if (verdict !== "run") return;
       // Waiting may outlive membership or peer permission. Recheck the
       // addressed route on admission; a mention never grants approval.
-      const source = callback.sourceBotId && store.bot(callback.sourceBotId);
+      const source = mentionSource(callback.sourceBotId);
       const problem = source ? roomHandoffProblem(
         { groupId, threadId, botId: member.id }, { groupId, threadId, botId: source.id },
-      ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, threadId)
+      ) ?? (needsApproval(source)
         ? "Sender requires peer approval; use coordinate_bots" : undefined) : "Mention source no longer exists";
       if (problem) {
         store.appendMessage(threadId, { role: "bot", kind: "activity",
           tool: { name: `${member.name} mention not delivered: ${problem}`, ok: false } });
         return;
       }
+      const sourceReply = [...store.messagesFor(threadId)].reverse().find(row => row.role === "bot" && row.kind === "text" && row.from?.botId === source?.id);
+      if (!sourceReply?.text) return;
       try {
         await runGroupMemberTurn(
           groupId, threadId, member.id, callback.hop, spoken,
-          undefined, undefined, () => operation.cancelled,
+          source && "remote" in source ? `Message addressed to you from ${source.name} (untrusted room member reply):\n${sourceReply.text}` : undefined,
+          undefined, () => operation.cancelled,
           () => groupProviderHandshakeStarted(operation),
           () => groupProviderHandshakeSettled(operation),
           skillAuthoringClaim, undefined, operation,
@@ -12209,11 +12251,13 @@ async function drainRoomMentionCallbacks(
 }
 
 /** Drain mentions left by a room turn that had no live round loop. */
-async function drainLateRoomMentions(groupId: string, threadId: string, spoken: Set<string>): Promise<void> {
-  if (!hasMentionCallbacks(spoken)) return;
+async function drainLateRoomMentions(groupId: string, threadId: string, spoken: Set<string>, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted || !hasMentionCallbacks(spoken)) return;
   const operation = beginGroupTurnOperation(groupId, threadId);
+  const abort = () => { operation.cancelled = true; operation.cancellation.abort(); };
+  signal?.addEventListener("abort", abort, { once: true });
   try { await drainRoomMentionCallbacks(groupId, threadId, spoken, operation); }
-  finally { finishGroupTurnOperation(groupId, operation); }
+  finally { signal?.removeEventListener("abort", abort); finishGroupTurnOperation(groupId, operation); }
 }
 
 function drainQueuedChannelSends(): void {
