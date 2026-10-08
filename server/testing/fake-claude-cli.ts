@@ -45,6 +45,9 @@
 //                      one tool_use (fresh id, that name and input) followed
 //                      by its tool_result (is_error unless ok, default true).
 //                      Unset, a turn makes the single default Bash call.
+//   FAKE_CLAUDE_TEXT_BEFORE_TOOLS 1: with FAKE_CLAUDE_TOOL_CALLS, the first
+//                      reply item is said before the tool calls and the rest
+//                      after them: text, tool call, text, as a real turn does.
 //   FAKE_CLAUDE_HOOKS  1: honour the `hooks` block of the --settings file the
 //                      way the real CLI does — after each tool_result run
 //                      every PostToolUse command with the event JSON on
@@ -488,6 +491,10 @@ const playTurn = (prompt: JsonValue) => {
   }
   if (scriptedToolCalls) {
     // scripted calls come first, each settled before the reply text
+    if (process.env.FAKE_CLAUDE_TEXT_BEFORE_TOOLS === "1" && replyParts.length > 1) {
+      out({ type: "assistant", message: { content: [{ type: "text", text: replyParts[0]! }], usage } });
+      replyParts = replyParts.slice(1);
+    }
     for (const call of scriptedToolCalls) {
       const id = call.id ?? `tu-${process.pid}-${++toolUseCount}`;
       out({ type: "assistant", message: { content: [{ type: "tool_use", id, name: call.name, input: call.input }], usage } });

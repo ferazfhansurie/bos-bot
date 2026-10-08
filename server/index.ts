@@ -3253,9 +3253,10 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
     const result: GroupTurnOrchestration["result"] = {};
     const turnText = coordinationTurnText(node, resumed);
     const systemInstructions = coordinationSystemInstructions();
-    // A mention handoff is started by a reply that is already in the room;
-    // posting it again as a request is how one brief showed up twice.
-    if (!resumed && !node.key.startsWith("mention-") && !store.messagesFor(node.threadId).some(m => m.roomRequest?.id === node.id && m.roomRequest.phase === "request")) {
+    // A mention handoff's words are the sender's reply, already posted in
+    // the room; echoing them again as a request would show them twice.
+    // coordinate_bots keys always carry ":<botId>", so they never match.
+    if (!resumed && !/^mention-[^:]+-[0-9a-f]{64}$/.test(node.key) && !store.messagesFor(node.threadId).some(m => m.roomRequest?.id === node.id && m.roomRequest.phase === "request")) {
       store.appendMessage(node.threadId, { role: "bot", kind: "text",
         roomRequest: { id: node.id, phase: "request" },
         from: sender ? { botId: sender.id, name: sender.name, color: sender.color } : undefined,
@@ -11121,6 +11122,7 @@ async function executeGroupMemberTurn(
     ...(latestUser?.id ? { sourceId: latestUser.id } : {}), ...(cwd ? { cwd: workspaceResource(cwd).slice("workspace:".length), workspace: workspaceResource(cwd) } : {}), createdAt: Date.now(), serverPid: process.pid,
     ...(process.env.OMB_DESKTOP_LIFECYCLE_GENERATION ? { hostGeneration: process.env.OMB_DESKTOP_LIFECYCLE_GENERATION } : {}) });
   let replyText = "";
+  let turnText = "";
   let providerTurnId: string | undefined;
   let abandoned = false;
   const retirementOwner = `room-abandoned:${randomUUID()}`;
@@ -11159,7 +11161,13 @@ async function executeGroupMemberTurn(
       if (shouldIgnoreProviderEvent(e)) return;
       if (e.threadId !== threadId) return;
       if (providerTurnId && e.turnId && e.turnId !== providerTurnId) return;
-      if (e.type === "item.completed" && e.itemType === "assistant_text") replyText += `\n${e.text}`;
+      // The room post is the turn's last text; earlier text is commentary
+      // between tool calls and must not be re-sent with it. Orchestration
+      // results keep every item: a goal envelope can span them.
+      if (e.type === "item.completed" && e.itemType === "assistant_text") {
+        replyText = e.text;
+        turnText += `\n${e.text}`;
+      }
       else if (e.type === "turn.completed") {
         if (orchestration && !e.ok) {
           orchestration.result.stopReason = e.stopReason ?? null;
@@ -11253,7 +11261,7 @@ async function executeGroupMemberTurn(
   if (!retainRoomVmLease) releaseRoomVmLease();
   roomHandoffSourceSucceeded = outcome === "settled";
   if (orchestration) {
-    orchestration.result.replyText = replyText.trim();
+    orchestration.result.replyText = turnText.trim();
     orchestration.result.outcome = outcome;
   }
   // A timed-out provider still owns the room thread until its interrupt

@@ -1295,11 +1295,25 @@ export class Store {
     for (let i = path.length - 1; i >= 0; i -= 1) {
       const message = path[i];
       if (message.role === "bot" && message.kind === "text" && message.turnId === turnId && (!roomOwner || message.from?.botId === roomOwner.botId)) {
+        if (roomOwner) this.demoteRoomCommentary(threadId, path.slice(0, i), turnId, roomOwner.botId);
         if (message.turnTerminal && (!failed.turnOutcome || message.turnOutcome)) return message;
         return this.patchMessage(threadId, message.id, { turnTerminal: true, ...failed });
       }
     }
     return null;
+  }
+
+  /** A room post is the member's last text of the turn. Text it wrote
+   * before or between tool calls is working commentary: it stays readable
+   * as an activity row, but is no longer a post of its own. */
+  private demoteRoomCommentary(threadId: string, before: Message[], turnId: string, botId: string): void {
+    for (const message of before) {
+      if (message.role !== "bot" || message.kind !== "text" || message.turnId !== turnId || message.from?.botId !== botId) continue;
+      if (!message.text?.trim() || message.attachments?.length || message.roomRequest) continue;
+      const line = message.text.trim().split("\n", 1)[0]!;
+      this.patchMessage(threadId, message.id, { kind: "activity", text: undefined,
+        tool: { name: line.length > 140 ? `${line.slice(0, 139)}…` : line, ok: true, output: message.text } });
+    }
   }
 
   /** Settle a provider turn so every poller can see where it ended. The last
