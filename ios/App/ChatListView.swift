@@ -311,6 +311,7 @@ struct ChatListView: View {
         GeometryReader { geo in
         VStack(spacing: 0) {
             header
+            LegacyArchivedBanner()
             StatusBanner()
             InterruptedTurnsBanner()
             if searchOpen {
@@ -1617,6 +1618,26 @@ struct StatusBanner: View {
             .padding(.vertical, 6)
             .glassCapsule(interactive: false)
             .padding(.bottom, 8)
+    }
+}
+
+/// The selected computer's workspace moved to BOS cloud. Not dismissable:
+/// it stays true until a send there succeeds again. History still loads.
+struct LegacyArchivedBanner: View {
+    @EnvironmentObject private var session: Session
+
+    var body: some View {
+        if session.legacyArchived {
+            Label("Moved to BOS cloud · read-only on this computer", systemImage: "icloud.and.arrow.up")
+                .font(.footnote)
+                .foregroundStyle(Color.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .glassCapsule(interactive: false)
+                .padding(.bottom, 8)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("legacy.archived.banner")
+        }
     }
 }
 

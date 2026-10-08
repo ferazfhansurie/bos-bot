@@ -257,6 +257,7 @@ struct SharedChatView: View {
                     Text(preference.replyBotIds?.isEmpty == false ? "will reply · @someone else to switch" : "Mention a bot for a reply")
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 4)
             }
+            LegacyArchivedBanner()
             if composer.sending {
                 Text("Sending…").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).accessibilityAddTraits(.updatesFrequently)
             } else if let sendError = composer.error {

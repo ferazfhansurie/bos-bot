@@ -90,6 +90,10 @@ public struct PendingSharedFile: Identifiable, Sendable {
             // can confirm the accepted send without executing it twice.
             do { try save() } catch { self.error = "Message sent, but local draft cleanup failed. Check storage before restarting." }
             return true
+        } catch let error as APIError where error.isAuthorityMoved {
+            // A definite refusal, not an unconfirmed send.
+            self.error = error.localizedDescription + " Your message and files are kept."
+            return false
         } catch {
             self.error = "Couldn’t confirm this send. Your message and files are kept. " + error.localizedDescription
             return false
