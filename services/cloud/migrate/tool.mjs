@@ -13,6 +13,7 @@ import pg from "pg";
 import { pathToFileURL } from "node:url";
 import { scanInventory } from "./inventory.mjs";
 import { servingAction, rollbackProjection } from "./serving.mjs";
+import { objectStore } from "./attachments.mjs";
 const HASH = (v) => createHash("sha256").update(v).digest("hex");
 const NS = Buffer.from("b6581fef740f55cd8f39549ab86cbb55", "hex");
 export function mappedId(install, type, id) {
@@ -150,7 +151,11 @@ export async function migrate(c, dir, workspace, action, options = {}) {
         (f.workspace_id !== workspace || String(f.epoch) !== String(run.epoch))
       )
         throw new Error("authority flag mismatch");
-      await rollbackProjection(c, workspace);
+      await rollbackProjection(
+        c,
+        workspace,
+        objectStore(options.objectStorePath),
+      );
       await c.query(
         "DELETE FROM migration.migration_runs WHERE workspace_id=$1",
         [workspace],
@@ -358,6 +363,8 @@ if (
   try {
     c = await connect(process.env.BOS_MIGRATION_URL);
     const options = {};
+    if (process.env.BOS_MIGRATION_OBJECT_STORE)
+      options.objectStorePath = process.env.BOS_MIGRATION_OBJECT_STORE;
     if (process.env.BOS_MIGRATION_PLAN)
       options.plan = JSON.parse(
         await readFile(process.env.BOS_MIGRATION_PLAN, "utf8"),
