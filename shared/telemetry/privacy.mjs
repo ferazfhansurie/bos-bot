@@ -31,6 +31,8 @@ export function telemetryOptions(env, component) {
     dsn:env.SENTRY_DSN || undefined,enabled:Boolean(env.SENTRY_DSN),
     release:env.SENTRY_RELEASE || 'bos@2.0.0-dev',environment:env.SENTRY_ENVIRONMENT || 'development',
     tracesSampleRate:Number.isFinite(rate)?Math.max(0,Math.min(1,rate)):0.1,
+    // scrubSpan keeps transaction-shaped spans; streamed spans need name/attributes and crash the process
+    traceLifecycle:'static',
     dataCollection:{userInfo:false,cookies:false,httpHeaders:false,httpBodies:[],
       urlQueryParams:false,graphQL:{document:false,variables:false},genAI:{inputs:false,outputs:false},
       databaseQueryData:false,queues:false,stackFrameVariables:false,frameContextLines:0},

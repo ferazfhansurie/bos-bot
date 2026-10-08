@@ -16,3 +16,6 @@ test('telemetry stays disabled without a designated DSN and tracing is bounded',
   assert.equal(telemetryOptions({SENTRY_DSN:'test',SENTRY_TRACES_SAMPLE_RATE:'9'},'room').tracesSampleRate,1);
   assert.equal(telemetryOptions({SENTRY_DSN:'test',SENTRY_TRACES_SAMPLE_RATE:'oops'},'room').tracesSampleRate,0.1);
 });
+test('telemetry keeps static trace lifecycle so scrubbed spans are never streamed', () => {
+  assert.equal(telemetryOptions({SENTRY_DSN:'test'},'room').traceLifecycle,'static');
+});
