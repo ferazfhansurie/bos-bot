@@ -1793,6 +1793,16 @@ private struct TouchWatcher: UIGestureRecognizerRepresentable {
             if down { down = false; onTouch?(false) }
         }
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+        // UIKit controls (the filter tabs) never select while this is
+        // watching their touch, and rows don't move under them anyway
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            var view = touch.view
+            while let current = view {
+                if current is UIControl { return false }
+                view = current.superview
+            }
+            return true
+        }
     }
 
     func makeUIGestureRecognizer(context: Context) -> Recognizer {
