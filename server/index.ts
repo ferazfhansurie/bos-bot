@@ -75,7 +75,7 @@ import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type 
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { LeadActions, taggedLeadReport, leadResolutionSchema, type LeadAction } from "./lead-actions.ts";
 import { RoomHandoffs, type RoomHandoff } from "./room-handoffs.ts";
-import { deferMentionCallback, dropMentionCallback, isAddressedRoomReply, restoreMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
+import { deferMentionCallback, dropMentionCallback, hasMentionCallbacks, isAddressedRoomReply, restoreMentionCallback, isBareAck, isRoomStopCommand, takeMentionCallback } from "./room-loop-brake.ts";
 import { botAvatarUrlFromStoredPath } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
 import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
@@ -10135,8 +10135,10 @@ function dispatchTeamSetupResume(entry: TeamSetupResumeEntry): void {
       const current = connectorThread(request.botId, request.threadId);
       if (!current?.group) return;
       if (current.bot.busy) { pendingTeamSetupResumes.set(request.requestId, entry); return; }
-      await runGroupMemberTurn(groupId, request.threadId, request.botId, 0, new Set(), prompt, failed,
+      const spoken = new Set<string>();
+      await runGroupMemberTurn(groupId, request.threadId, request.botId, 0, spoken, prompt, failed,
         () => operation.cancelled, () => groupProviderHandshakeStarted(operation), () => groupProviderHandshakeSettled(operation));
+      await drainRoomMentionCallbacks(groupId, store.canonicalThreadId(request.threadId), spoken, operation);
     });
     groupQueues.set(groupId, next.finally(() => finishGroupTurnOperation(groupId, operation)).catch((error) => failed(error instanceof Error ? error.message : String(error))));
     return;
@@ -10621,8 +10623,11 @@ async function executeGroupMemberTurn(
     prompt => {
       const causalHuman = workHuman(threadId)?.id;
       const snapshot = workSnapshot(botId, threadId);
+      // The round that started this chain may have finished draining, so
+      // this continuation delivers its own @name wakes when it settles.
       return runGroupMemberTurn(groupId, store.canonicalThreadId(threadId), botId, hop, spoken, prompt, onDispatchError,
-        () => Boolean(isCancelled?.()) || workHuman(threadId)?.id !== causalHuman || workSnapshot(botId, threadId) !== snapshot || workRuntime.round(botId, store.canonicalThreadId(threadId), causalHuman ?? "").held);
+        () => Boolean(isCancelled?.()) || workHuman(threadId)?.id !== causalHuman || workSnapshot(botId, threadId) !== snapshot || workRuntime.round(botId, store.canonicalThreadId(threadId), causalHuman ?? "").held)
+        .finally(() => drainLateRoomMentions(groupId, store.canonicalThreadId(threadId), spoken));
     });
   if (operation) roomOperationOwners.set(threadId, { generation: internalGeneration, operation });
   const resourceOwner = { threadId, generation: internalGeneration };
@@ -12110,78 +12115,101 @@ function startGroupTurn(
           });
         }
       })]);
-      // Drain one settled wave at a time. Siblings work concurrently;
-      // runGroupMemberTurn's member lane serializes multiple results for
-      // the same lead without holding other bots behind that lead.
-      for (;;) {
-        if (operation.cancelled) break;
-        const callbacks = [];
-        for (let callback = takeMentionCallback(spoken); callback; callback = takeMentionCallback(spoken)) callbacks.push(callback);
-        if (!callbacks.length) break;
-        await Promise.all(callbacks.map(async (callback) => {
-          if (operation.cancelled || callback.hop >= MAX_GROUP_HOPS) return;
-          if (callback.botId.startsWith("rb-")) {
-            // A local member's reply addressed a remote member. Same route
-            // checks as a local mention; the remote bot gets that reply.
-            const remote = remoteRoomMember(callback.botId);
-            const source = callback.sourceBotId ? store.bot(callback.sourceBotId) : undefined;
-            const problem = !source ? "Mention source no longer exists" : roomHandoffProblem(
-              { groupId, threadId, botId: callback.botId }, { groupId, threadId, botId: source.id },
-            ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, threadId)
-              ? "Sender requires peer approval; use coordinate_bots" : undefined);
-            if (problem || !source) {
-              store.appendMessage(threadId, { role: "bot", kind: "activity",
-                tool: { name: `${remote?.name ?? "Remote member"} mention not delivered: ${problem}`, ok: false } });
-              return;
-            }
-            const sourceReply = [...store.messagesFor(threadId)].reverse().find(row => row.role === "bot" && row.kind === "text" && row.from?.botId === source.id);
-            if (!sourceReply?.text) return;
-            await runRemoteRoomMemberTurn({
-              groupId, threadId, botId: callback.botId, text: sourceReply.text, from: source.name, sourceMessageId: sourceReply.id,
-              sendId: `mention-${sourceReply.id}-${callback.botId}`, isCancelled: () => operation.cancelled,
-            });
-            return;
-          }
-          const member = store.bot(callback.botId);
-          if (!member || !store.group(groupId)?.memberIds.includes(member.id)) return;
-          const verdict = await waitForChatRoomMember(operation, threadId, member);
-          if (verdict !== "run") return;
-          // Waiting may outlive membership or peer permission. Recheck the
-          // addressed route on admission; a mention never grants approval.
-          const source = callback.sourceBotId && store.bot(callback.sourceBotId);
-          const problem = source ? roomHandoffProblem(
-            { groupId, threadId, botId: member.id }, { groupId, threadId, botId: source.id },
-          ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, threadId)
-            ? "Sender requires peer approval; use coordinate_bots" : undefined) : "Mention source no longer exists";
-          if (problem) {
-            store.appendMessage(threadId, { role: "bot", kind: "activity",
-              tool: { name: `${member.name} mention not delivered: ${problem}`, ok: false } });
-            return;
-          }
-          try {
-            await runGroupMemberTurn(
-              groupId, threadId, member.id, callback.hop, spoken,
-              undefined, undefined, () => operation.cancelled,
-              () => groupProviderHandshakeStarted(operation),
-              () => groupProviderHandshakeSettled(operation),
-              skillAuthoringClaim, undefined, operation,
-            );
-          } catch (error) {
-            if (operation.cancelled) return;
-            const detail = error instanceof Error ? error.message : String(error);
-            store.appendMessage(threadId, {
-              role: "bot", kind: "activity",
-              from: { botId: member.id, name: member.name, color: member.color },
-              tool: { name: `${member.name} couldn't start on this mention — not delivered: ${detail}`, ok: false },
-            });
-          }
-        }));
-      }
+      await drainRoomMentionCallbacks(groupId, threadId, spoken, operation, skillAuthoringClaim);
     }
   });
   const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
   groupQueues.set(groupId, Promise.allSettled([prev, tracked]).then(() => {}));
   return message;
+}
+
+/** Deliver every @mention a room turn deferred onto `spoken`, one settled
+ * wave at a time. The person's own round drains here, and so does any room
+ * turn that ran after that round's loop ended or without one (a work
+ * continuity auto-continue, an approval/connector/secret resume): before,
+ * their @name wakes sat on a ledger nobody read and were dropped silently. */
+async function drainRoomMentionCallbacks(
+  groupId: string,
+  threadId: string,
+  spoken: Set<string>,
+  operation: GroupTurnOperation,
+  skillAuthoringClaim: { claimed: boolean } = { claimed: false },
+): Promise<void> {
+  // Drain one settled wave at a time. Siblings work concurrently;
+  // runGroupMemberTurn's member lane serializes multiple results for
+  // the same lead without holding other bots behind that lead.
+  for (;;) {
+    if (operation.cancelled) break;
+    const callbacks = [];
+    for (let callback = takeMentionCallback(spoken); callback; callback = takeMentionCallback(spoken)) callbacks.push(callback);
+    if (!callbacks.length) break;
+    await Promise.all(callbacks.map(async (callback) => {
+      if (operation.cancelled || callback.hop >= MAX_GROUP_HOPS) return;
+      if (callback.botId.startsWith("rb-")) {
+        // A local member's reply addressed a remote member. Same route
+        // checks as a local mention; the remote bot gets that reply.
+        const remote = remoteRoomMember(callback.botId);
+        const source = callback.sourceBotId ? store.bot(callback.sourceBotId) : undefined;
+        const problem = !source ? "Mention source no longer exists" : roomHandoffProblem(
+          { groupId, threadId, botId: callback.botId }, { groupId, threadId, botId: source.id },
+        ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, threadId)
+          ? "Sender requires peer approval; use coordinate_bots" : undefined);
+        if (problem || !source) {
+          store.appendMessage(threadId, { role: "bot", kind: "activity",
+            tool: { name: `${remote?.name ?? "Remote member"} mention not delivered: ${problem}`, ok: false } });
+          return;
+        }
+        const sourceReply = [...store.messagesFor(threadId)].reverse().find(row => row.role === "bot" && row.kind === "text" && row.from?.botId === source.id);
+        if (!sourceReply?.text) return;
+        await runRemoteRoomMemberTurn({
+          groupId, threadId, botId: callback.botId, text: sourceReply.text, from: source.name, sourceMessageId: sourceReply.id,
+          sendId: `mention-${sourceReply.id}-${callback.botId}`, isCancelled: () => operation.cancelled,
+        });
+        return;
+      }
+      const member = store.bot(callback.botId);
+      if (!member || !store.group(groupId)?.memberIds.includes(member.id)) return;
+      const verdict = await waitForChatRoomMember(operation, threadId, member);
+      if (verdict !== "run") return;
+      // Waiting may outlive membership or peer permission. Recheck the
+      // addressed route on admission; a mention never grants approval.
+      const source = callback.sourceBotId && store.bot(callback.sourceBotId);
+      const problem = source ? roomHandoffProblem(
+        { groupId, threadId, botId: member.id }, { groupId, threadId, botId: source.id },
+      ) ?? (source.approvePeerComms && !fullAccessForSource(source.id, threadId)
+        ? "Sender requires peer approval; use coordinate_bots" : undefined) : "Mention source no longer exists";
+      if (problem) {
+        store.appendMessage(threadId, { role: "bot", kind: "activity",
+          tool: { name: `${member.name} mention not delivered: ${problem}`, ok: false } });
+        return;
+      }
+      try {
+        await runGroupMemberTurn(
+          groupId, threadId, member.id, callback.hop, spoken,
+          undefined, undefined, () => operation.cancelled,
+          () => groupProviderHandshakeStarted(operation),
+          () => groupProviderHandshakeSettled(operation),
+          skillAuthoringClaim, undefined, operation,
+        );
+      } catch (error) {
+        if (operation.cancelled) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        store.appendMessage(threadId, {
+          role: "bot", kind: "activity",
+          from: { botId: member.id, name: member.name, color: member.color },
+          tool: { name: `${member.name} couldn't start on this mention — not delivered: ${detail}`, ok: false },
+        });
+      }
+    }));
+  }
+}
+
+/** Drain mentions left by a room turn that had no live round loop. */
+async function drainLateRoomMentions(groupId: string, threadId: string, spoken: Set<string>): Promise<void> {
+  if (!hasMentionCallbacks(spoken)) return;
+  const operation = beginGroupTurnOperation(groupId, threadId);
+  try { await drainRoomMentionCallbacks(groupId, threadId, spoken, operation); }
+  finally { finishGroupTurnOperation(groupId, operation); }
 }
 
 function drainQueuedChannelSends(): void {
@@ -12713,18 +12741,20 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
         pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
         return;
       }
+      const spoken = new Set<string>();
       await runGroupMemberTurn(
         current.group.id,
         entry.threadId,
         entry.botId,
         0,
-        new Set(),
+        spoken,
         prompt,
         (message) => markConnectorResumeFailed(entry.threadId, entry.resumeKey, message),
         () => operation.cancelled,
         () => groupProviderHandshakeStarted(operation),
         () => groupProviderHandshakeSettled(operation),
       );
+      await drainRoomMentionCallbacks(current.group.id, store.canonicalThreadId(entry.threadId), spoken, operation);
     });
     const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
     groupQueues.set(
@@ -12858,18 +12888,20 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
         pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
         return;
       }
+      const spoken = new Set<string>();
       await runGroupMemberTurn(
         current.group.id,
         entry.threadId,
         entry.botId,
         0,
-        new Set(),
+        spoken,
         prompt,
         (message) => markSecretResumeFailed(entry.threadId, entry.messageId, message),
         () => operation.cancelled,
         () => groupProviderHandshakeStarted(operation),
         () => groupProviderHandshakeSettled(operation),
       );
+      await drainRoomMentionCallbacks(current.group.id, store.canonicalThreadId(entry.threadId), spoken, operation);
     });
     const tracked = next.finally(() => finishGroupTurnOperation(groupId, operation));
     groupQueues.set(
