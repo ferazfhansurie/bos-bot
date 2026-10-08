@@ -96,6 +96,7 @@ describe("what the app may do", () => {
     ["POST", "/api/bots/bot_123/computer/control"],
     ["POST", "/api/bots/bot_123/computer/screenshot"],
     ["POST", "/api/bots/bot_123/computer/viewer-close"],
+    ["GET", "/api/groups/room-1/events"],
     ["POST", "/api/groups/room-1/messages"],
     ["POST", "/api/groups/room-1/interrupt"],
     ["DELETE", "/api/groups/room-1/queue/queue_1"],

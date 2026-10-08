@@ -139,6 +139,9 @@ const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
 
   CLOUD_DESKTOP_CONTROL_ROUTE,
   { method: "GET", path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?$/ },
+  // A room joined on another home streams from there; the harness relays it
+  // for the owner only and answers 404 for a local id.
+  { method: "GET", path: /^\/api\/groups\/[\w-]+\/events$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/people$/ },
   { method: "DELETE", path: /^\/api\/groups\/[\w-]+\/people\/[^/]+$/ },
   { method: "POST", path: /^\/api\/multiplayer\/invites$/ },
