@@ -155,7 +155,8 @@ struct ChatAvatarView: View {
 }
 
 /// Uses the same authenticated, connection-scoped attachment cache as bot faces.
-/// A room with no photo wears its members' faces, like `GroupMark` on the desktop.
+/// A room with no photo wears its member bots stacked, like `StackedMauses` in
+/// the desktop sidebar; a room with no bots falls back to its people.
 struct ChannelAvatarView: View {
     let room: Room
     let size: CGFloat
@@ -164,8 +165,10 @@ struct ChannelAvatarView: View {
     @State private var image: UIImage?
     var body: some View {
         Group {
-            if room.avatarUrl == nil, !faces.isEmpty {
-                GroupMarkView(members: faces, size: size)
+            if room.avatarUrl == nil, !bots.isEmpty {
+                StackedMausesView(bots: bots, size: size)
+            } else if room.avatarUrl == nil, !people.isEmpty {
+                GroupMarkView(members: people, size: size)
             } else {
                 Group {
                     if let image { Image(uiImage: image).resizable().scaledToFill() }
@@ -182,16 +185,46 @@ struct ChannelAvatarView: View {
         }
     }
 
-    /// The room's people (everyone but me first), then its bots.
-    private var faces: [SharedContact] {
+    private var bots: [Bot] { room.members(from: session.state.bots) }
+
+    /// The room's people, everyone but me first, for a room with no bots.
+    private var people: [SharedContact] {
         let me = session.roomActorId ?? room.ownerPersonId
-        let people = (room.people ?? []).sorted { ($0.id == me ? 1 : 0) < ($1.id == me ? 1 : 0) }
+        return (room.people ?? []).sorted { ($0.id == me ? 1 : 0) < ($1.id == me ? 1 : 0) }
             .map { SharedContact(id: $0.id, name: $0.name, kind: "person", homeId: $0.homeId, color: $0.color, avatar: $0.avatar) }
-        let bots = room.members(from: session.state.bots).map { bot in
-            SharedContact(id: bot.id, name: bot.name, kind: "bot", color: bot.color, mascotEyes: bot.mascotEyes,
-                          mascotBody: bot.mascotBody, avatarUrl: bot.avatarUrl, avatarCrop: bot.avatarCrop)
+    }
+}
+
+/// A room's bots side by side: one bot alone fills the slot, otherwise the
+/// first two overlap with a count of the rest. Mirrors `StackedMauses` in
+/// `src/components/Sidebar.tsx`, scaled from its 32pt slot.
+struct StackedMausesView: View {
+    let bots: [Bot]
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if bots.count == 1, let only = bots.first {
+                BotAvatarView(bot: only, size: size, state: .happy)
+            } else {
+                let face = (size * 0.6).rounded()
+                HStack(spacing: -face * 0.5) {
+                    ForEach(Array(bots.prefix(2).enumerated()), id: \.element.id) { index, bot in
+                        BotAvatarView(bot: bot, size: face, state: .happy).zIndex(Double(index))
+                    }
+                    if bots.count > 2 {
+                        Text("+\(bots.count - 2)")
+                            .font(.system(size: size * 0.2, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: size * 0.36, height: size * 0.36)
+                            .background(Circle().fill(Color(.secondarySystemBackground)))
+                            .overlay(Circle().strokeBorder(Color(.separator).opacity(0.4)))
+                            .zIndex(2)
+                    }
+                }
+            }
         }
-        return people + bots
+        .frame(width: size, height: size)
     }
 }
 
