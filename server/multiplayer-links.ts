@@ -27,12 +27,20 @@ interface PrimaryRoomHome { homeId: string; actorId: string }
 const ROOM_ID = /^[\w-]{1,128}$/;
 const AVATAR_NAME = /^[\w-]{1,128}\.(?:png|jpg|jpeg|gif|webp)$/;
 const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+/** This home's own bot avatar path by local bot id, if any. */
+export type OwnBotAvatar = (botId: string) => string | null | undefined;
 /** Canonical-home avatar paths mean nothing to this home's own server; point
  * them at the guest-side relay for that room instead. */
-export function relayAvatars<T extends Record<string, unknown>>(group: T, groupId: string): T {
+export function relayAvatars<T extends Record<string, unknown>>(group: T, groupId: string, ownBotAvatar?: OwnBotAvatar): T {
   const relay = (url: unknown) => typeof url === "string" && url.startsWith("/api/attachments/") && AVATAR_NAME.test(url.slice(17))
     ? `/api/groups/${groupId}/avatars/${url.slice(17)}` : typeof url === "string" ? null : url;
-  const bots = Array.isArray(group.memberBots) ? group.memberBots.map(bot => bot && typeof bot === "object" && "avatarUrl" in bot ? { ...bot, avatarUrl: relay(bot.avatarUrl) } : bot) : group.memberBots;
+  // A bot this home shared into the room keeps its photo path here: the file
+  // is ours, and the canonical home only echoes our path back.
+  const own = (bot: Record<string, unknown>) => {
+    const local = typeof bot.id === "string" ? /^rb-[\w]+-([\w-]+)$/.exec(bot.id)?.[1] : undefined;
+    return !!local && typeof bot.avatarUrl === "string" && ownBotAvatar?.(local) === bot.avatarUrl;
+  };
+  const bots = Array.isArray(group.memberBots) ? group.memberBots.map(bot => bot && typeof bot === "object" && "avatarUrl" in bot ? { ...bot, avatarUrl: own(bot) ? bot.avatarUrl : relay(bot.avatarUrl) } : bot) : group.memberBots;
   return { ...group, ...("avatarUrl" in group ? { avatarUrl: relay(group.avatarUrl) } : {}), ...(Array.isArray(group.memberBots) ? { memberBots: bots } : {}) };
 }
 /** The only canonical-home room routes a guest home relays. Each route is
@@ -83,6 +91,8 @@ export class MultiplayerLinks {
   private primary: PrimaryRoomHome | null = null;
   /** Last full room views per home, from the canonical home. Memory only. */
   private readonly groupViews = new Map<string, Array<Record<string, unknown>>>();
+  /** Set by the server so relayed rooms keep our own shared bots' photos. */
+  ownBotAvatar: OwnBotAvatar = () => null;
 
   constructor(file: string, homeId: string, fetcher: typeof fetch = fetch) {
     this.file = file;
@@ -240,11 +250,11 @@ export class MultiplayerLinks {
       const home = { id: link.homeId, name: this.homeLabel(link.homeId), available: fresh[index] };
       const views = this.groupViews.get(link.homeId);
       const joined = new Set((link.joinedGroups ?? []).map(group => group.id));
-      if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...relayAvatars(view, view.id as string), home }) as RemoteGroupView);
+      if (views) return views.filter(view => joined.has(view.id as string)).map(view => ({ ...relayAvatars(view, view.id as string, this.ownBotAvatar), home }) as RemoteGroupView);
       return (link.joinedGroups ?? []).map(group => relayAvatars({
         id: group.id, name: group.name, threadId: group.threadIds[0], memberIds: group.memberIds ?? [], memberBots: group.memberBots ?? [], avatarUrl: group.avatarUrl, defaultResponder: { kind: "mentions" },
         bulletin: "", unread: false, createdAt: 0, messages: [], home,
-      }, group.id) as RemoteGroupView);
+      }, group.id, this.ownBotAvatar) as RemoteGroupView);
     });
   }
 

@@ -648,6 +648,7 @@ const apnsPush = new ApnsPush(undefined, (sessionId, actorId) => {
   return bound === actorId || (actorId === multiplayerActors.ownerId && bound !== null && bound === multiplayerLinks.primaryActorId());
 });
 const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.json"), ENVIRONMENT_ID);
+multiplayerLinks.ownBotAvatar = id => store.bot(id)?.avatarUrl;
 const crossHomeGrants = new Delegations(join(DATA_DIR, "delegations.json"));
 const delegatedJobs = new DelegatedJobs(join(DATA_DIR, "delegated-jobs.json"));
 const delegatedClient = new DelegatedClient(ENVIRONMENT_ID, () => multiplayerLinks.bridgeLinks());
@@ -14154,6 +14155,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       readBody, json,
       stillOwner: () => auth.kind !== "session" || (sessions.isLive(auth.session.id) && workspaceActor(auth) === multiplayerActors.ownerId),
       waitMs: 1_500,
+      ownBotAvatar: multiplayerLinks.ownBotAvatar,
     };
     if (await handleRemoteRoom(req, res, { method, path, search: url.search, owner: remoteRoomOwner }, remoteRooms)) return;
     if (auth.kind === "session" && !workspaceMaintenance.active) {

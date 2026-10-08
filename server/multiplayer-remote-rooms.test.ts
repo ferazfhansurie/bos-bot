@@ -225,3 +225,17 @@ it("relays a joined room's own avatars from its home and nothing else", async ()
   expect(await links.groupAvatar("partner-home", "room-remote", "../claude.png")).toBeNull();
   expect(seen).toEqual([]);
 });
+
+it("keeps a bot this home shared into a joined room on its own photo", async () => {
+  const links = new MultiplayerLinks(join(folder, "own-avatar-links.json"), "mac-home");
+  const view = { ...remoteGroup, memberBots: [...remoteGroup.memberBots,
+    { id: "rb-ea1d2ab01102-bos-local", name: "bos", avatarUrl: "/api/attachments/bos.png" },
+    { id: "rb-ea1d2ab01102-stale-local", name: "old", avatarUrl: "/api/attachments/old.png" }] };
+  const { relayAvatars } = await import("./multiplayer-links.ts");
+  links.ownBotAvatar = id => ({ "bos-local": "/api/attachments/bos.png", "stale-local": "/api/attachments/new.png" } as Record<string, string>)[id];
+  const relayed = relayAvatars(view, "room-remote", links.ownBotAvatar);
+  expect((relayed.memberBots as Array<{ avatarUrl: string | null }>).map(bot => bot.avatarUrl)).toEqual([
+    null, "/api/groups/room-remote/avatars/claude.png", "/api/attachments/bos.png", "/api/groups/room-remote/avatars/old.png",
+  ]);
+  expect(relayAvatars(view, "room-remote").memberBots).toEqual(expect.arrayContaining([expect.objectContaining({ avatarUrl: "/api/groups/room-remote/avatars/bos.png" })]));
+});

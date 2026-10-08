@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { relayAvatars, remoteGroupRouteAllowed, type MultiplayerLinks, type RemoteGroupView } from "./multiplayer-links.ts";
+import { relayAvatars, remoteGroupRouteAllowed, type MultiplayerLinks, type OwnBotAvatar, type RemoteGroupView } from "./multiplayer-links.ts";
 
 /** A guest home shows rooms it joined on a canonical home next to its own
  * rooms and relays their reads, sends and events over the existing link.
@@ -15,6 +15,7 @@ export interface RemoteRoomContext {
   /** Rechecked after every remote await: the local owner session is live. */
   stillOwner(): boolean;
   waitMs?: number;
+  ownBotAvatar?: OwnBotAvatar;
 }
 
 export async function withRemoteGroups<T extends { id: string }>(groups: T[], ctx: Pick<RemoteRoomContext, "links" | "waitMs">): Promise<Array<T | RemoteGroupView>> {
@@ -74,7 +75,7 @@ export async function handleRemoteRoom(
     let answer = forwarded.body;
     const group = (answer as { group?: unknown } | null)?.group;
     if (forwarded.status < 300 && group && typeof group === "object" && !Array.isArray(group)) {
-      answer = { ...(answer as object), group: { ...relayAvatars(group as Record<string, unknown>, groupId!), home: { id: homeId, name: ctx.links.homeLabel(homeId), available: true } } };
+      answer = { ...(answer as object), group: { ...relayAvatars(group as Record<string, unknown>, groupId!, ctx.ownBotAvatar), home: { id: homeId, name: ctx.links.homeLabel(homeId), available: true } } };
     }
     ctx.json(res, forwarded.status, answer);
   } catch (error) {
