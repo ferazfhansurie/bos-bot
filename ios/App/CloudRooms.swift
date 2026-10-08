@@ -226,6 +226,29 @@ final class CloudRoomsModel: ObservableObject {
         if ref != nil { run(session.reduce(.retryDue(.recovery, generation: session.generation))) }
     }
 
+    /// Pages in the messages just before the oldest loaded one, one page at
+    /// a time. A page that lands after a snapshot replaced the room is dropped.
+    func loadOlder(in ref: CloudRoomRef) {
+        guard var state = rooms[key(ref)], let before = state.requestOlder() else { return }
+        rooms[key(ref)] = state
+        let generation = session.generation
+        Task {
+            do {
+                let page = try await self.client.history(ref, before: before)
+                guard var state = self.rooms[self.key(ref)] else { return }
+                let effects = state.apply(page, before: before)
+                self.rooms[self.key(ref)] = state
+                self.runRoom(effects, ref)
+            } catch {
+                if var state = self.rooms[self.key(ref)] {
+                    state.olderFailed(before: before)
+                    self.rooms[self.key(ref)] = state
+                }
+                if let error = error as? CloudError { _ = await self.rejected(error.error, generation: generation) }
+            }
+        }
+    }
+
     /// Freezes and queues a send. Offline it still goes in the outbox as
     /// long as a signed window is cached; false means nothing was queued
     /// and the composer keeps the text.
@@ -1005,11 +1028,22 @@ struct CloudRoomChatView: View {
     @State private var importing = false
     @State private var choosing = false
     @State private var viewing: CloudViewedAttachment?
+    /// The oldest message on screen when an older page was asked for.
+    @State private var anchor: String?
+
+    private func loadOlder() {
+        guard let room = model.room(ref), room.olderCursor != nil else { return }
+        anchor = room.messages.first?.messageId
+        model.loadOlder(in: ref)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 List {
+                    if let room = model.room(ref), !room.messages.isEmpty {
+                        CloudOlderRow(room: room, load: loadOlder)
+                    }
                     ForEach(model.room(ref)?.messages ?? [], id: \.messageId) { message in
                         let mine = message.actorId == model.identity?.accountId && message.botId == nil
                         VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
@@ -1039,8 +1073,20 @@ struct CloudRoomChatView: View {
                     }
                 }
                 .listStyle(.plain)
+                .nearTop { loadOlder() }
+                // Follow the newest message, not the count: an older page grows the list at the top.
                 .onChange(of: model.room(ref)?.messages.last?.messageId) { _, id in
                     if let id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
+                }
+                // Keep the reader on the same message when a page lands above it.
+                .onChange(of: model.room(ref)?.messages.first?.messageId) { _, _ in
+                    guard let saved = anchor, let room = model.room(ref), room.olderBefore == nil else { return }
+                    anchor = nil
+                    if room.messages.firstIndex(where: { $0.messageId == saved }) ?? 0 > 0 { proxy.scrollTo(saved, anchor: .top) }
+                }
+                .onChange(of: model.room(ref)?.olderBefore) { _, before in
+                    // A failed or dropped page leaves the list as it was.
+                    if before == nil, model.room(ref)?.messages.first?.messageId == anchor { anchor = nil }
                 }
             }
             if let problem = model.problem {
@@ -1128,6 +1174,66 @@ struct CloudRoomChatView: View {
     }
 }
 struct CloudViewedAttachment: Identifiable { let id: String }
+
+/// The top of a cloud thread: older messages on their way, the start of the
+/// thread, or a way to ask for more (also the way in when the loaded page
+/// doesn't fill the screen and can't scroll).
+struct CloudOlderRow: View {
+    let room: CloudRoomState
+    let load: () -> Void
+
+    var body: some View {
+        HStack {
+            Spacer()
+            if room.olderBefore != nil {
+                ProgressView().accessibilityIdentifier("cloud.older.loading")
+            } else if room.startLoaded {
+                Text("start of the thread").accessibilityIdentifier("cloud.older.start")
+            } else {
+                Button(room.olderFailed ? "couldn't load earlier messages · retry" : "load earlier messages", action: load)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("cloud.older.load")
+            }
+            Spacer()
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .listRowSeparator(.hidden)
+    }
+}
+
+/// Scrolling within this distance of the top pages in older messages.
+private let olderThreshold: CGFloat = 120
+
+extension View {
+    /// Calls `action` when the reader scrolls up into the top of the list.
+    /// Before iOS 18 there is no scroll geometry; the row's button does it.
+    @ViewBuilder
+    func nearTop(_ action: @escaping () -> Void) -> some View {
+        if #available(iOS 18.0, *) { modifier(NearTop(action: action)) } else { self }
+    }
+}
+
+/// Only a reader's own drag or fling counts: the first layout also starts
+/// at the top, and opening a room shouldn't page anything in.
+@available(iOS 18.0, *)
+private struct NearTop: ViewModifier {
+    let action: () -> Void
+    @State private var near = false
+    @State private var dragging = false
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top < olderThreshold } action: { _, value in
+                near = value
+                if near, dragging { action() }
+            }
+            .onScrollPhaseChange { _, phase in
+                dragging = phase == .interacting || phase == .decelerating
+                if near, dragging { action() }
+            }
+    }
+}
 
 /// A bot run still in progress, with its provisional text.
 struct CloudRunRow: View {

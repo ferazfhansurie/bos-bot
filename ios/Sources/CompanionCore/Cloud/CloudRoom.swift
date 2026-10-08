@@ -69,10 +69,20 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
     public private(set) var authorityEpoch: String?
     /// Provisional bot text by invocation. Never persisted.
     public private(set) var streaming: [String: CloudStreamText] = [:]
+    /// The loaded messages reach the first message of the thread; there is
+    /// nothing older to page in. Optional so older caches still decode.
+    private var startStore: Bool?
+    /// An older page is in flight, asked for before this sequence. Memory only.
+    public private(set) var olderBefore: CloudSequence?
+    /// The last older-page request failed; asking again retries. Memory only.
+    public private(set) var olderFailed = false
+    /// Older pages were joined since the last snapshot: live inserts stop
+    /// trimming the cache so the reader's history doesn't vanish under them.
+    private var pagedBack = false
 
     enum CodingKeys: String, CodingKey {
         case workspaceId, roomId, threadId, me, role, cursor, snapshotId, watermark, applied, policyRevision
-        case members, messages, read, live, resetRequired, upgradeRequired, runStore, cardStore, authorityEpoch
+        case members, messages, read, live, resetRequired, upgradeRequired, runStore, cardStore, authorityEpoch, startStore
     }
 
     public init(workspaceId: String, roomId: String, threadId: String, me: String, role: CloudRole = .member) {
@@ -80,6 +90,54 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
     }
 
     public var messageIds: [String] { messages.map(\.messageId) }
+
+    public var startLoaded: Bool { startStore ?? false }
+
+    /// The sequence to page backward from, or nil when there is nothing to
+    /// ask for: the start is loaded, a page is in flight, or nothing is
+    /// loaded. It is the oldest loaded message, so a page always joins the
+    /// projection without a gap.
+    public var olderCursor: CloudSequence? {
+        if startLoaded || olderBefore != nil { return nil }
+        return messages.first?.sequence
+    }
+
+    /// Marks an older page as asked for and returns its cursor, or nil when
+    /// there is nothing to ask for.
+    public mutating func requestOlder() -> CloudSequence? {
+        guard let before = olderCursor else { return nil }
+        olderBefore = before
+        olderFailed = false
+        return before
+    }
+
+    public mutating func olderFailed(before: CloudSequence) {
+        guard olderBefore == before else { return }
+        olderBefore = nil
+        olderFailed = true
+    }
+
+    /// Joins an older page in front of the loaded messages: one entry per
+    /// message id (the higher version wins), sequence order. A page asked
+    /// for before a snapshot replaced the projection no longer joins and is
+    /// dropped.
+    @discardableResult
+    public mutating func apply(_ page: CloudHistoryPage, before: CloudSequence) -> [CloudRoomEffect] {
+        guard olderBefore == before else { return [] }
+        olderBefore = nil
+        guard messages.first?.sequence == before else { return [] }
+        olderFailed = false
+        let older = page.messages.filter { $0.threadId == threadId && $0.sequence < before }
+        var byId: [String: CloudMessage] = [:]
+        for message in older + messages {
+            if let existing = byId[message.messageId], existing.version >= message.version { continue }
+            byId[message.messageId] = message
+        }
+        messages = byId.values.sorted { $0.sequence < $1.sequence }
+        startStore = page.nextBefore == nil || page.messages.isEmpty
+        if !older.isEmpty { pagedBack = true }
+        return [.persist]
+    }
 
     /// Runs oldest source first.
     public var runs: [CloudInvocation] {
@@ -151,7 +209,13 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
     @discardableResult
     public mutating func apply(_ snapshot: CloudSnapshot) -> [CloudRoomEffect] {
         guard snapshot.workspaceId == workspaceId, snapshot.roomId == roomId, snapshot.threadId == threadId else { return [] }
-        messages = Self.capped(snapshot.messages.filter { $0.threadId == threadId }.sorted { $0.sequence < $1.sequence })
+        let selected = snapshot.messages.filter { $0.threadId == threadId }.sorted { $0.sequence < $1.sequence }
+        messages = Self.capped(selected)
+        // Any older page in flight belonged to the replaced projection.
+        startStore = snapshot.messages.count < CloudLimits.snapshotMessages && messages.count == selected.count
+        olderBefore = nil
+        olderFailed = false
+        pagedBack = false
         members = snapshot.members
         read = snapshot.read
         runStore = Dictionary(snapshot.activeRuns.filter { $0.threadId == threadId }.map { ($0.invocationId, $0) }) { $1 }
@@ -395,7 +459,9 @@ public struct CloudRoomState: Hashable, Codable, Sendable {
         }
         let index = messages.firstIndex { $0.sequence > message.sequence } ?? messages.endIndex
         messages.insert(message, at: index)
+        if pagedBack || messages.count <= Self.cachedMessageLimit { return }
         messages = Self.capped(messages)
+        startStore = false
     }
 
     private static func capped(_ messages: [CloudMessage]) -> [CloudMessage] {

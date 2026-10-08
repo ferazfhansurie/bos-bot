@@ -11,6 +11,7 @@ public enum CloudLimits {
     public static let mentions = 256
     public static let attachments = 32
     public static let snapshotMessages = 50
+    public static let historyMessages = 100
     public static let sparseIntervals = 256
     public static let subscriptions = 50
     public static let requestSeconds: TimeInterval = 10
@@ -618,6 +619,20 @@ public struct CloudSnapshot: Hashable, Codable, Sendable {
         case threadId = "thread_id", watermark, frontier, cursor, policyRevision = "policy_revision"
         case messages, members, threads, capabilities, read, activeRuns = "active_runs", cards
     }
+}
+
+/// One backward /history page of a thread: messages strictly before the
+/// requested sequence, oldest first.
+public struct CloudHistoryPage: Hashable, Codable, Sendable {
+    public var messages: [CloudMessage]
+    /// Null once the page reaches the start of the thread.
+    public var nextBefore: CloudSequence?
+
+    public init(messages: [CloudMessage], nextBefore: CloudSequence?) {
+        self.messages = messages; self.nextBefore = nextBefore
+    }
+
+    enum CodingKeys: String, CodingKey { case messages, nextBefore = "next_before" }
 }
 
 public struct CloudEventBatch: Hashable, Codable, Sendable {

@@ -273,6 +273,118 @@ final class CloudRoomTests: XCTestCase {
         XCTAssertEqual(snapped.messages.first?.messageId, "s2")
     }
 
+    // MARK: - Older history
+
+    /// A full snapshot page (s51...s100), so the start isn't loaded yet.
+    private func pagedRoom() -> CloudRoomState {
+        var state = room()
+        state.apply(F.snapshot(messages: (51...100).map { F.message("s\($0)", sequence: $0) }, watermark: 100))
+        return state
+    }
+
+    func testOlderPagesJoinInFrontAndStopAtTheStart() throws {
+        var state = pagedRoom()
+        XCTAssertFalse(state.startLoaded)
+        let before = try XCTUnwrap(state.requestOlder())
+        XCTAssertEqual(before, CloudSequence(51))
+        XCTAssertNil(state.requestOlder(), "one page at a time")
+        XCTAssertNil(state.olderCursor)
+
+        // A newer version of a loaded message and another thread's message ride along.
+        let page = CloudHistoryPage(messages: (11...50).map { F.message("s\($0)", sequence: $0) } + [F.message("x", sequence: 49, thread: "t2"), F.message("s60", sequence: 60, version: 2, text: "edited")], nextBefore: CloudSequence(11))
+        XCTAssertEqual(state.apply(page, before: before), [.persist])
+        XCTAssertEqual(state.messageIds, (11...100).map { "s\($0)" })
+        XCTAssertEqual(state.messages.first { $0.messageId == "s60" }?.version, 1, "only messages before the cursor join")
+        XCTAssertFalse(state.startLoaded)
+        XCTAssertNil(state.olderBefore)
+
+        let next = try XCTUnwrap(state.requestOlder())
+        XCTAssertEqual(next, CloudSequence(11))
+        state.apply(CloudHistoryPage(messages: (1...10).map { F.message("s\($0)", sequence: $0) }, nextBefore: nil), before: next)
+        XCTAssertEqual(state.messageIds, (1...100).map { "s\($0)" })
+        XCTAssertTrue(state.startLoaded)
+        XCTAssertNil(state.olderCursor, "nothing older to ask for")
+    }
+
+    func testEmptyPageAtTheExactBoundaryReachesTheStart() throws {
+        var state = pagedRoom()
+        let before = try XCTUnwrap(state.requestOlder())
+        state.apply(CloudHistoryPage(messages: [], nextBefore: nil), before: before)
+        XCTAssertTrue(state.startLoaded)
+        XCTAssertEqual(state.messages.count, 50)
+    }
+
+    func testShortSnapshotIsTheWholeThread() {
+        var state = room()
+        state.apply(F.snapshot(messages: [F.message("m1", sequence: 1)], watermark: 1))
+        XCTAssertTrue(state.startLoaded)
+        XCTAssertNil(state.requestOlder())
+    }
+
+    func testPageAskedBeforeASnapshotIsDropped() throws {
+        var state = pagedRoom()
+        let before = try XCTUnwrap(state.requestOlder())
+        state.apply(F.snapshot(messages: (61...110).map { F.message("s\($0)", sequence: $0) }, watermark: 110, cursor: "c-new", snapshotId: "s2"))
+        XCTAssertNil(state.olderBefore, "the reset forgets the request")
+        XCTAssertEqual(state.apply(CloudHistoryPage(messages: [F.message("s50", sequence: 50)], nextBefore: CloudSequence(50)), before: before), [])
+        XCTAssertEqual(state.messages.first?.messageId, "s61")
+    }
+
+    func testFailedPageRetries() throws {
+        var state = pagedRoom()
+        let before = try XCTUnwrap(state.requestOlder())
+        state.olderFailed(before: before)
+        XCTAssertTrue(state.olderFailed)
+        XCTAssertNil(state.olderBefore)
+        XCTAssertEqual(state.requestOlder(), before)
+        XCTAssertFalse(state.olderFailed)
+    }
+
+    func testPagedHistoryIsNotTrimmedByLiveMessages() throws {
+        var state = room()
+        state.apply(F.snapshot(messages: (501...550).map { F.message("s\($0)", sequence: $0) }, watermark: 550))
+        var before = try XCTUnwrap(state.requestOlder())
+        // 50 + 5 pages of 100: 550 loaded, past the cache cap.
+        for page in 0..<5 {
+            let low = 501 - (page + 1) * 100
+            let messages = (low..<(low + 100)).map { F.message("o\($0)", sequence: $0) }
+            state.apply(CloudHistoryPage(messages: messages, nextBefore: messages.first?.sequence), before: before)
+            if page < 4 { before = try XCTUnwrap(state.requestOlder()) }
+        }
+        XCTAssertEqual(state.messages.count, 550)
+        _ = state.receive(F.batch([F.messageEvent(F.message("live", sequence: 2000), sequence: 2000)], cursor: "c-live"))
+        XCTAssertEqual(state.messages.count, 551)
+        XCTAssertEqual(state.messages.last?.messageId, "live")
+
+        // Once a snapshot replaces it, live inserts trim again and the start is no longer loaded.
+        var trimmed = room()
+        trimmed.apply(F.snapshot(messages: [F.message("m1", sequence: 1)], watermark: 1))
+        XCTAssertTrue(trimmed.startLoaded)
+        let events = (2...501).map { F.messageEvent(F.message("m\($0)", sequence: $0), sequence: $0) }
+        _ = trimmed.receive(F.batch(events, cursor: "c501"))
+        XCTAssertEqual(trimmed.messages.count, 500)
+        XCTAssertFalse(trimmed.startLoaded)
+        XCTAssertEqual(trimmed.olderCursor, CloudSequence(2))
+    }
+
+    func testStartLoadedSurvivesTheCacheAndOlderCachesDecode() throws {
+        var state = room()
+        state.apply(F.snapshot(messages: [F.message("m1", sequence: 1)], watermark: 1))
+        let data = try JSONEncoder().encode(state)
+        XCTAssertTrue(try JSONDecoder().decode(CloudRoomState.self, from: data).startLoaded)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["startStore"] = nil
+        let old = try JSONDecoder().decode(CloudRoomState.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertFalse(old.startLoaded)
+    }
+
+    func testHistoryPageDecodes() throws {
+        let json = #"{"messages":[],"next_before":null}"#
+        let page = try JSONDecoder().decode(CloudHistoryPage.self, from: Data(json.utf8))
+        XCTAssertNil(page.nextBefore)
+        XCTAssertEqual(CloudRoute.history(workspaceId: "w 1", roomId: "r1"), "/v2/workspaces/w%201/rooms/r1/history")
+    }
+
     // MARK: - Read state
 
     func testUnreadCountIgnoresOwnDeletedAndCovered() {

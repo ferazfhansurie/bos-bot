@@ -30,6 +30,9 @@ public enum CloudRoute {
     public static func snapshot(workspaceId: String, roomId: String) -> String {
         "/v2/workspaces/\(escape(workspaceId))/rooms/\(escape(roomId))/snapshot"
     }
+    public static func history(workspaceId: String, roomId: String) -> String {
+        "/v2/workspaces/\(escape(workspaceId))/rooms/\(escape(roomId))/history"
+    }
     public static func read(workspaceId: String, roomId: String) -> String {
         "/v2/workspaces/\(escape(workspaceId))/rooms/\(escape(roomId))/read"
     }
@@ -213,6 +216,12 @@ public final class CloudClient: @unchecked Sendable {
         try await json(CloudRoute.snapshot(workspaceId: room.workspaceId, roomId: room.roomId), method: "POST", body: ["thread_id": room.threadId])
     }
 
+    /// The page of the selected thread just before `before`, oldest first.
+    public func history(_ room: CloudRoomRef, before: CloudSequence) async throws -> CloudHistoryPage {
+        let query = [URLQueryItem(name: "thread_id", value: room.threadId), URLQueryItem(name: "before", value: before.rawValue), URLQueryItem(name: "limit", value: String(CloudLimits.historyMessages))]
+        return try await json(CloudRoute.history(workspaceId: room.workspaceId, roomId: room.roomId), method: "GET", body: nil as String?, query: query)
+    }
+
     public func markViewed(_ room: CloudRoomRef, intervals: [CloudReadInterval], markReadThrough: CloudSequence? = nil, attention: Bool? = nil) async throws -> CloudReadCoverage {
         struct Body: Encodable {
             var thread_id: String
@@ -330,8 +339,12 @@ public final class CloudClient: @unchecked Sendable {
         }
     }
 
-    private func json<T: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?) async throws -> T {
+    private func json<T: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?, query: [URLQueryItem] = []) async throws -> T {
         var request = try await request(path, method: method)
+        if !query.isEmpty, let url = request.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = query
+            request.url = components.url
+        }
         if let body { request.httpBody = try JSONEncoder().encode(body) }
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
