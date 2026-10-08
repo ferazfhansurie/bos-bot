@@ -187,6 +187,10 @@ The [remote room attachments fixture](remote-room-attachments.md) checks guest
 image transfer into the canonical host store, native helper image input, scoped
 preview/download relays and revoked access across two disposable homes.
 
+The [hidden linked-room context fixture](remote-room-hidden-context.md) checks
+clean user bubbles, provider-only untrusted room context, detached room threads,
+native images and compatibility with older receivers across two disposable homes.
+
 The [shared request fixture](shared-requests.md) checks two request-linked bot
 answers in a human-only group, source-message navigation and settled activity.
 

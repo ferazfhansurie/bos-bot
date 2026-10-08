@@ -28,6 +28,7 @@ export interface EnvironmentDescriptor {
   multiplayerProtocol: 1;
   delegatedProtocol: 1;
   sharedConversationIsolation: 1;
+  hiddenRoomContext: 1;
   capabilities: {
     /** Pairing and sessions are available (this build). */
     remoteSessions: true;
@@ -136,6 +137,7 @@ export function environmentDescriptor(input: { environmentId: string; desktopMan
     multiplayerProtocol: 1,
     delegatedProtocol: 1,
     sharedConversationIsolation: 1,
+    hiddenRoomContext: 1,
     capabilities: {
       remoteSessions: true,
       // Never advertise a protocol this server would refuse: the routes are
