@@ -311,6 +311,58 @@ test("identical retries/lookup survive replaced service object; changed digest c
   );
   assert.equal(history.messages.length, 1);
 });
+test("history pages backward by sequence cursor without overlap, stops at the start and keeps tenancy", async () => {
+  const h = await humans();
+  const sent: string[] = [];
+  for (let n = 0; n < 5; n++) {
+    const e = await envelope(h, h.a, "fictional page " + n);
+    sent.push((await ok("POST", `/v2/workspaces/${h.w}/messages`, h.a.bearer, e)).message_id);
+  }
+  const path = (before?: string, limit = 2, thread = h.r.thread_id, w = h.w) =>
+    `/v2/workspaces/${w}/rooms/${h.r.room_id}/history?thread_id=${thread}&limit=${limit}` +
+    (before === undefined ? "" : `&before=${before}`);
+  const pages: any[] = [];
+  let before: string | undefined;
+  for (;;) {
+    const page = await ok("GET", path(before), h.b.bearer);
+    pages.push(page);
+    if (page.next_before === null) break;
+    assert.equal(page.next_before, page.messages[0].sequence);
+    before = page.next_before;
+  }
+  assert.deepEqual(
+    pages.map((p) => p.messages.length),
+    [2, 2, 1],
+  );
+  const seen = pages
+    .slice()
+    .reverse()
+    .flatMap((p) => p.messages);
+  assert.deepEqual(
+    seen.map((m: any) => m.message_id),
+    sent,
+  );
+  for (const m of seen) MessageSchema.parse(m);
+  const sequences = seen.map((m: any) => BigInt(m.sequence));
+  assert.ok(sequences.every((s, i) => i === 0 || s > sequences[i - 1]));
+  // A page boundary that lands exactly on the start returns an empty final page.
+  const exact = await ok("GET", path(seen[0].sequence), h.b.bearer);
+  assert.deepEqual(exact, { messages: [], next_before: null });
+  // Bad cursors and limits are refused, not clamped.
+  for (const bad of [path("-1"), path("1.5"), path("x"), path(undefined, 0), path(undefined, 101)])
+    assert.equal((await request("GET", bad, h.b.bearer)).status, 400);
+  // Another workspace's member, and a thread from another workspace's room, get nothing.
+  const outsider = await humans();
+  assert.equal(
+    (await request("GET", path(undefined, 2, h.r.thread_id), outsider.a.bearer)).status,
+    403,
+  );
+  assert.equal(
+    (await request("GET", path(undefined, 2, outsider.r.thread_id), h.a.bearer)).status,
+    403,
+  );
+  assert.equal((await request("GET", path(), undefined)).status, 401);
+});
 for (const action of ["message.send", "operation.seal"]) {
   test(`digest-selected ${action} hooks isolate changed envelopes with the same key`, async () => {
     const h = await humans(),

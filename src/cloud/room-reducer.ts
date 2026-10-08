@@ -7,6 +7,7 @@ import {
   ApprovalCardSchema,
   EVENT_KINDS,
   InvocationSchema,
+  LIMITS,
   MessageSchema,
   RunBindingSchema,
   type ApprovalCard,
@@ -53,6 +54,22 @@ export interface CloudRoomState {
   runs: RunProjection;
   /** The device reports a network connection. */
   online: boolean;
+  /** The loaded messages reach the first message of the thread; there is nothing older to page in. */
+  start_loaded: boolean;
+  /** An older page is in flight, requested before this sequence. */
+  older_before: Sequence | null;
+  /** The last older-page request failed; scrolling up again retries. */
+  older_failed: boolean;
+}
+
+/** One backward page of the selected thread: everything strictly before `before`, newest last. */
+export interface HistoryPage {
+  room_id: string;
+  thread_id: string;
+  before: Sequence;
+  messages: CloudMessage[];
+  /** Null when the page reaches the start of the thread. */
+  next_before: Sequence | null;
 }
 
 export type CloudRoomAction =
@@ -66,7 +83,9 @@ export type CloudRoomAction =
   | { type: "outbox"; action: OutboxAction; namespace?: string }
   | { type: "outbox_persisted"; state: OutboxState; entry: OutboxEntry; namespace?: string }
   | { type: "operation"; result: OperationResult; now: number; namespace?: string }
-  | { type: "history"; messages: CloudMessage[] }
+  | { type: "history_requested"; room_id: string; thread_id: string; before: Sequence }
+  | { type: "history"; page: HistoryPage }
+  | { type: "history_failed"; room_id: string; thread_id: string; before: Sequence }
   | { type: "disconnected" };
 
 export function initialCloudRoomState(input: {
@@ -96,6 +115,9 @@ export function initialCloudRoomState(input: {
     outbox: input.outbox ?? [],
     runs: EMPTY_RUNS,
     online: true,
+    start_loaded: false,
+    older_before: null,
+    older_failed: false,
   };
 }
 
@@ -216,9 +238,13 @@ function applySnapshot(state: CloudRoomState, snapshot: CloudSnapshot): CloudRoo
     .filter((message) => message.thread_id === state.selected_thread_id)
     .sort((a, b) => compareSequence(a.sequence, b.sequence));
   // Atomic projection replacement; the outbox is independent and survives.
+  // Any older page in flight belonged to the replaced projection and is dropped when it lands.
   return {
     ...state,
     messages,
+    start_loaded: snapshot.messages.length < LIMITS.snapshotMessages,
+    older_before: null,
+    older_failed: false,
     cursor: snapshot.cursor,
     head: snapshot.watermark,
     live: false,
@@ -287,16 +313,56 @@ export function cloudRoomReducer(state: CloudRoomState, action: CloudRoomAction)
     case "operation":
       if (action.namespace !== undefined && action.namespace !== state.namespace) return state;
       return withOutbox(state, outboxReducer(state.outbox, { type: "operation_result", result: action.result, now: action.now }));
-    case "history": {
-      let messages = state.messages;
-      for (const message of action.messages) {
-        if (message.thread_id === state.selected_thread_id) messages = upsertMessage(messages, message);
-      }
-      return messages === state.messages ? state : { ...state, messages };
-    }
+    case "history_requested":
+      if (!selected(state, action) || olderCursor(state) !== action.before) return state;
+      return { ...state, older_before: action.before, older_failed: false };
+    case "history_failed":
+      if (!selected(state, action) || state.older_before !== action.before) return state;
+      return { ...state, older_before: null, older_failed: true };
+    case "history":
+      return applyOlderPage(state, action.page);
     case "disconnected":
       return state.live ? { ...state, live: false } : state;
   }
+}
+
+function selected(state: CloudRoomState, ref: { room_id: string; thread_id: string }): boolean {
+  return ref.room_id === state.selected_room_id && ref.thread_id === state.selected_thread_id;
+}
+
+/**
+ * The sequence to page backward from, or null when there is nothing to ask
+ * for: the start is loaded, a page is already in flight, or the room is gone.
+ * The cursor is the oldest loaded message, so a page always joins the
+ * projection without a gap.
+ */
+export function olderCursor(state: CloudRoomState): Sequence | null {
+  if (state.start_loaded || state.removed || state.older_before !== null) return null;
+  return state.messages[0]?.sequence ?? null;
+}
+
+/**
+ * Merge an older page in front of the loaded messages: one entry per
+ * message id (the higher version wins), server sequence order.
+ */
+export function mergeOlder(messages: CloudMessage[], older: CloudMessage[]): CloudMessage[] {
+  const byId = new Map<string, CloudMessage>();
+  for (const message of [...older, ...messages]) {
+    const existing = byId.get(message.message_id);
+    if (!existing || existing.version < message.version) byId.set(message.message_id, message);
+  }
+  return [...byId.values()].sort((a, b) => compareSequence(a.sequence, b.sequence));
+}
+
+function applyOlderPage(state: CloudRoomState, page: HistoryPage): CloudRoomState {
+  if (!selected(state, page) || state.removed) return state;
+  // A reset replaced the projection while the page was in flight: it no longer joins, drop it.
+  if (state.older_before !== page.before || state.messages[0]?.sequence !== page.before) {
+    return state.older_before === page.before ? { ...state, older_before: null } : state;
+  }
+  const older = page.messages.filter((message) => message.thread_id === state.selected_thread_id && isSequence(message.sequence) && compareSequence(message.sequence, page.before) < 0);
+  const start_loaded = page.next_before === null || page.messages.length === 0;
+  return { ...state, messages: older.length > 0 ? mergeOlder(state.messages, older) : state.messages, start_loaded, older_before: null, older_failed: false };
 }
 
 /**

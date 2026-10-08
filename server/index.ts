@@ -510,7 +510,7 @@ import { acquireDataDirLeaseForProcess } from "./data-dir-lease.ts";
 import { createWorkspaceAccess, describeEdition, editionStatus, hostedWorkspaceConfiguration, hostedWorkspaceConfigured, loadEnterpriseLayer, type WorkspaceAccess } from "./enterprise.ts";
 import { environmentDescriptor, loadEnvironmentId, serverVersion } from "./environment.ts";
 import { WorkspaceBackupMaintenance } from "./workspace-backup-maintenance.ts";
-import { CloudAuthority, isAuthorityGuardedRequest } from "./cloud-authority.ts";
+import { authorityMovedBody, CloudAuthority, environmentAuthority, isAuthorityGuardedRequest } from "./cloud-authority.ts";
 import { createWorkspaceBackupRoutes, isWorkspaceBackupSessionControl } from "./workspace-backup-http.ts";
 import { applyPendingWorkspaceRestore, readLastWorkspaceRestore, type WorkspaceRestoreResult } from "./workspace-backup.ts";
 import { createCustomDomainVerifier, customDomainIpv4, normalizeCustomDomain } from "./custom-domain.ts";
@@ -13861,7 +13861,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // paired session with the right scope.
     if (method === "GET" && !path.startsWith("/api/") && !path.startsWith("/.well-known/") && serveStatic(res, path)) return;
     if (method === "GET" && path === "/.well-known/openmausbot/environment") {
-      return json(res, 200, environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: !HOSTED_WORKSPACE && emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg) }));
+      return json(res, 200, environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: !HOSTED_WORKSPACE && emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg), authority: environmentAuthority(cloudAuthority.current()) }));
     }
     const domainCheck = /^\/\.well-known\/openmausbot\/domain-check\/([a-f0-9]{64})$/.exec(path);
     if (method === "GET" && domainCheck) {
@@ -13900,7 +13900,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       sessions.clearFailures(source);
       const issued = sessions.issue({ label: label.trim() || labelFromUserAgent(req.headers["user-agent"]), scopes: verified.scopes, userId: verified.userId, email: verified.email });
-      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: true, sharedComputers: sharedComputersEnabled(cfg) });
+      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: true, sharedComputers: sharedComputersEnabled(cfg), authority: environmentAuthority(cloudAuthority.current()) });
       const secure = requestOrigin(req)?.startsWith("https://") === true;
       res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, issued.token, { secure, maxAgeSeconds: cookieMaxAgeSeconds(issued.session) }));
       return json(res, 200, { session: issued.session, environment });
@@ -13927,7 +13927,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         teamInvites.delete(result.pairingId);
         if (teamInvite.expiresAt > Date.now()) pendingTeamJoins.set(result.session.id, teamInvite);
       }
-      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg) });
+      const environment = environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED, emailSignIn: emailSignIn.enabled(), sharedComputers: sharedComputersEnabled(cfg), authority: environmentAuthority(cloudAuthority.current()) });
       if (wantsCookie) {
         const secure = requestOrigin(req)?.startsWith("https://") === true;
         res.setHeader("set-cookie", serializeSessionCookie(SESSION_COOKIE, result.token, { secure, maxAgeSeconds: cookieMaxAgeSeconds(result.session) }));
@@ -14013,7 +14013,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // relay so remote-room writes are refused too. Reads fall through.
     if (isAuthorityGuardedRequest(method, path)) {
       const frozen = cloudAuthority.frozen();
-      if (frozen) { req.resume(); return json(res, 409, { error: "authority_moved", workspace_id: frozen.workspace_id, epoch: frozen.epoch }); }
+      if (frozen) { req.resume(); return json(res, 409, authorityMovedBody(frozen)); }
     }
     if (await terminals.handle(req, res)) return;
     if (await workspaceFiles.handle(req, res)) return;

@@ -10,18 +10,23 @@ import {
   FrameSchema,
   LIMITS,
   LookupSchema,
+  MessageSchema,
+  SequenceSchema,
   SnapshotSchema,
   type ApprovalCard,
   type CloudAttachment,
   type CloudFrame,
-  type CloudMessage,
   type CloudSnapshot,
   type OperationResult,
   type ReadCoverage,
   type SendEnvelope,
 } from "../../shared/cloud-protocol/index";
-import type { z } from "zod";
+import { z } from "zod";
 import { identityProblem, type IdentityProblem } from "./auth-state";
+
+/** One backward history page: messages strictly before the cursor, oldest first. */
+export const HistoryPageSchema = z.object({ messages: z.array(MessageSchema).max(LIMITS.historyMessages), next_before: SequenceSchema.nullable() });
+export type HistoryResponse = z.infer<typeof HistoryPageSchema>;
 
 export interface CloudIdentity {
   account_id: string;
@@ -135,10 +140,13 @@ export function cloudApi(session: CloudSession, onIdentity: (problem: IdentityPr
     },
     snapshot: async (workspaceId: string, roomId: string, threadId: string): Promise<CloudResult<CloudSnapshot>> =>
       parsed(await call<unknown>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/snapshot`, { thread_id: threadId }), SnapshotSchema),
-    history: (workspaceId: string, roomId: string, threadId: string, before: string) =>
-      call<{ messages: CloudMessage[]; next_before: string | null }>(
-        "GET",
-        `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/history?thread_id=${enc(threadId)}&before=${enc(before)}&limit=${LIMITS.historyMessages}`,
+    history: async (workspaceId: string, roomId: string, threadId: string, before: string): Promise<CloudResult<HistoryResponse>> =>
+      parsed(
+        await call<unknown>(
+          "GET",
+          `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/history?thread_id=${enc(threadId)}&before=${enc(before)}&limit=${LIMITS.historyMessages}`,
+        ),
+        HistoryPageSchema,
       ),
     postRead: (workspaceId: string, roomId: string, body: { thread_id: string; intervals: Array<[string, string]>; mark_read_through?: string }) =>
       call<ReadCoverage>("POST", `/v2/workspaces/${enc(workspaceId)}/rooms/${enc(roomId)}/read`, body),

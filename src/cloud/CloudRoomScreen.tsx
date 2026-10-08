@@ -1,7 +1,7 @@
 // Cloud rooms screen: email OTP sign-in against the issuer, then workspace,
 // room and invite setup and one room thread with its outbox. Fictional data
 // against local services only.
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { cloudApi, currentSession, type CloudApi, type CloudSession, type SyncWorkspace } from "./api";
 import { authReducer, identityProblem, type IdentityProblem } from "./auth-state";
 import type { ApprovalCard as CloudCard } from "../../shared/cloud-protocol/index";
@@ -9,10 +9,12 @@ import { CloudRoomController, type CardDecision, type CloudRoomRef, type Decisio
 import { issuer } from "./issuer";
 import { outboxLabel } from "./outbox";
 import { isRead } from "./read-coverage";
-import { timeline } from "./room-reducer";
+import { olderCursor, timeline } from "./room-reducer";
 import { decidable, roomBots, visibleRuns, type RunView } from "./runs";
 
 const field = "rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900";
+/** Scrolling within this distance of the top pages in older messages. */
+const OLDER_THRESHOLD_PX = 120;
 const button = "rounded border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800";
 
 function failureText(result: { ok: false; failure: { error: string } | { transport: true } }): string {
@@ -262,12 +264,37 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
   const readyIds = uploads.filter((upload) => upload.state === "ready" && upload.attachment_id).map((upload) => upload.attachment_id!);
   const [problem, setProblem] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  /** The oldest message and the distance from the bottom when an older page was asked for. */
+  const anchor = useRef<{ first: string; fromBottom: number } | null>(null);
+  const last = items.at(-1);
+  const lastKey = last ? (last.kind === "message" ? last.message.message_id : last.entry.envelope.client_operation_id) : null;
+  const canLoadOlder = olderCursor(state) !== null;
 
+  // Follow the newest message, not the count: an older page grows the list at the top.
   // Braces matter: scrollIntoView returns a promise in current Chrome, and an
   // effect may only return a cleanup function.
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [items.length, runs.length]);
+  }, [lastKey, runs.length]);
+
+  const loadOlder = useCallback(() => {
+    const element = scroller.current;
+    const first = controller.getState().messages[0];
+    if (!element || !first || olderCursor(controller.getState()) === null) return;
+    anchor.current = { first: first.message_id, fromBottom: element.scrollHeight - element.scrollTop };
+    void controller.loadOlder();
+  }, [controller]);
+
+  // Keep the reader on the same message when a page lands above it.
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    const saved = anchor.current;
+    if (!element || !saved || state.older_before !== null) return;
+    anchor.current = null;
+    // Only when the page joined in front of what was on screen (not after a reset or failure).
+    if (state.messages.findIndex((message) => message.message_id === saved.first) > 0) element.scrollTop = element.scrollHeight - saved.fromBottom;
+  }, [state.messages, state.older_before]);
 
   // Only messages actually on screen while the window is in the foreground count as read.
   useEffect(() => {
@@ -308,7 +335,27 @@ function RoomView({ session, api, room, onIdentity }: { session: CloudSession; a
             </button>
           ))}
       </header>
-      <div className="flex-1 overflow-y-auto px-4 py-2">
+      <div
+        ref={scroller}
+        className="flex-1 overflow-y-auto px-4 py-2"
+        onScroll={(event) => {
+          if (event.currentTarget.scrollTop < OLDER_THRESHOLD_PX) loadOlder();
+        }}
+      >
+        {!state.removed && state.messages.length > 0 && (
+          <div className="py-1 text-center text-xs text-neutral-400">
+            {state.older_before !== null ? (
+              "loading earlier messages"
+            ) : state.start_loaded ? (
+              "start of the thread"
+            ) : (
+              // Also the way in when the loaded page doesn't fill the view and can't scroll.
+              <button className={button} onClick={loadOlder} disabled={!canLoadOlder}>
+                {state.older_failed ? "couldn't load earlier messages · retry" : "load earlier messages"}
+              </button>
+            )}
+          </div>
+        )}
         {items.map((item) =>
           item.kind === "message" ? (
             <div key={item.message.message_id} className="whitespace-pre-wrap py-1">
