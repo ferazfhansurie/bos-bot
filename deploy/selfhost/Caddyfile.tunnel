@@ -1,0 +1,20 @@
+# Behind a Cloudflare tunnel: TLS ends at Cloudflare, cloudflared reaches Caddy on
+# loopback only. Bind stays 127.0.0.1, so Cf-Connecting-Ip can only come from cloudflared.
+:80 {
+  handle /api/auth/* {
+    reverse_proxy issuer:8787 {
+      header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
+    }
+  }
+  handle /v1/* {
+    reverse_proxy issuer:8787 {
+      header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
+    }
+  }
+  handle /v2/* {
+    reverse_proxy room:8790 {
+      header_up X-Forwarded-For {http.request.header.Cf-Connecting-Ip}
+    }
+  }
+  respond /healthz "bos self-host ingress" 200
+}

@@ -101,7 +101,7 @@ services:
       - '${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-18080}:80'
       - '${BIND_ADDRESS:-127.0.0.1}:${HTTPS_PORT:-18443}:443'
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
