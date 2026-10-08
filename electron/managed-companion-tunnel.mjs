@@ -6,7 +6,9 @@
 // short-lived file; it is never put in argv, the environment, status, or logs.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promises as dnsPromises } from "node:dns";
 import fs from "node:fs";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 
@@ -314,6 +316,72 @@ async function terminateChild(child, graceMs) {
   await waitForExit(child, Math.min(graceMs, 500));
 }
 
+const LOCAL_DNS_FAILURES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_NONAME", "EAI_FAIL"]);
+const PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8"];
+
+function isLocalDnsFailure(error) {
+  for (let cause = error; cause; cause = cause.cause) {
+    if (LOCAL_DNS_FAILURES.has(cause.code)) return true;
+  }
+  return false;
+}
+
+async function publicAddress(hostname) {
+  const resolver = new dnsPromises.Resolver({ timeout: 2_000, tries: 1 });
+  resolver.setServers(PUBLIC_RESOLVERS);
+  const addresses = await resolver.resolve4(hostname);
+  if (!addresses.length) throw new Error("no public address");
+  return addresses[0];
+}
+
+/** The health check must not depend on this computer's DNS cache: macOS can
+ * hold a stale "no such record" for the endpoint long after the network
+ * recovers, and a failed check tears the working connector down every cycle.
+ * When the system resolver fails, ask public DNS and connect to that address
+ * with the endpoint's own hostname for TLS, so the certificate still has to
+ * match. Any other failure is returned unchanged. */
+export async function fetchWithPublicDnsFallback(
+  url,
+  init = {},
+  { fetchImpl = globalThis.fetch, resolveAddress = publicAddress, request = https.request } = {},
+) {
+  try {
+    return await fetchImpl(url, init);
+  } catch (error) {
+    if (!isLocalDnsFailure(error)) throw error;
+    const target = new URL(url);
+    if (target.protocol !== "https:") throw error;
+    const address = await resolveAddress(target.hostname);
+    return await new Promise((resolve, reject) => {
+      const req = request(target, {
+        method: "GET",
+        headers: init.headers,
+        signal: init.signal,
+        servername: target.hostname,
+        lookup: (_hostname, options, callback) => {
+          if (options?.all) callback(null, [{ address, family: 4 }]);
+          else callback(null, address, 4);
+        },
+      }, (response) => {
+        const chunks = [];
+        let size = 0;
+        response.on("data", (chunk) => {
+          size += chunk.length;
+          if (size > 64 * 1024) response.destroy(new Error("response too large"));
+          else chunks.push(chunk);
+        });
+        response.on("error", reject);
+        response.on("end", () => {
+          const status = response.statusCode ?? 0;
+          resolve({ ok: status >= 200 && status < 300, status, text: async () => Buffer.concat(chunks).toString("utf8") });
+        });
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  }
+}
+
 async function verifyHostedEndpoint(
   endpoint,
   { fetchImpl, timeoutSignal, timeoutMs, cancellationSignal },
@@ -347,7 +415,7 @@ export function createManagedCompanionTunnel({
   environment = process.env,
   fileSystem = fs,
   spawnProcess = spawn,
-  fetchImpl = globalThis.fetch,
+  fetchImpl = fetchWithPublicDnsFallback,
   timeoutSignal = (milliseconds) => AbortSignal.timeout(milliseconds),
   identifier = randomUUID,
   processId = process.pid,

@@ -65,3 +65,13 @@ export declare function createManagedCompanionTunnel(options: {
   onChange?: (state: ManagedTunnelState) => void;
   log?: (line: string) => void;
 }): ManagedTunnel;
+
+export function fetchWithPublicDnsFallback(
+  url: string,
+  init?: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: RequestRedirect },
+  dependencies?: {
+    fetchImpl?: typeof fetch;
+    resolveAddress?: (hostname: string) => Promise<string>;
+    request?: typeof import("node:https").request;
+  },
+): Promise<{ ok: boolean; status: number; text(): Promise<string> }>;

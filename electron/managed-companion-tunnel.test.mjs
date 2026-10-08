@@ -7,6 +7,7 @@ import {
   cleanupStaleManagedCompanionTokens,
   companionKeepAwakeWanted,
   createManagedCompanionTunnel,
+  fetchWithPublicDnsFallback,
   hostedCompanionStatus,
   MANAGED_COMPANION_ORIGIN_VERSION,
   MANAGED_COMPANION_ORIGIN_VERSION_FIELD,
@@ -438,5 +439,58 @@ describe("companion keep-awake decision", () => {
 
   it("keeps its original meaning when no hosted route is configured", () => {
     expect(companionKeepAwakeWanted({ companionEnabled: true, keepAwake: true, hostedConfigured: false, hostedStatus: "off" })).toBe(true);
+  });
+});
+
+describe("fetchWithPublicDnsFallback", () => {
+  const dnsError = () => Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("getaddrinfo ENOTFOUND c-1.example.com"), { code: "ENOTFOUND" }),
+  });
+
+  function fakeRequest(body, statusCode = 200) {
+    const calls = [];
+    const request = vi.fn((url, options, onResponse) => {
+      calls.push({ url, options });
+      const req = new EventEmitter();
+      req.end = () => {
+        const response = new EventEmitter();
+        response.statusCode = statusCode;
+        onResponse(response);
+        response.emit("data", Buffer.from(body));
+        response.emit("end");
+      };
+      return req;
+    });
+    return { request, calls };
+  }
+
+  it("uses the system fetch when it works", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, text: async () => "{}" }));
+    const resolveAddress = vi.fn();
+    await fetchWithPublicDnsFallback("https://c-1.example.com/api/health", {}, { fetchImpl, resolveAddress });
+    expect(resolveAddress).not.toHaveBeenCalled();
+  });
+
+  it("falls back to public dns and keeps the hostname for tls when local dns fails", async () => {
+    const { request, calls } = fakeRequest('{"app":"openmausbot"}');
+    const response = await fetchWithPublicDnsFallback("https://c-1.example.com/api/health", {}, {
+      fetchImpl: vi.fn(async () => { throw dnsError(); }),
+      resolveAddress: vi.fn(async () => "104.16.0.1"),
+      request,
+    });
+    expect(response.ok).toBe(true);
+    expect(JSON.parse(await response.text()).app).toBe("openmausbot");
+    expect(calls[0].options.servername).toBe("c-1.example.com");
+    const looked = await new Promise((resolve) => calls[0].options.lookup("c-1.example.com", {}, (_e, a) => resolve(a)));
+    expect(looked).toBe("104.16.0.1");
+  });
+
+  it("does not hide non-dns failures", async () => {
+    const resolveAddress = vi.fn();
+    await expect(fetchWithPublicDnsFallback("https://c-1.example.com/api/health", {}, {
+      fetchImpl: vi.fn(async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }); }),
+      resolveAddress,
+    })).rejects.toThrow("fetch failed");
+    expect(resolveAddress).not.toHaveBeenCalled();
   });
 });
