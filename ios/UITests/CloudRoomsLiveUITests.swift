@@ -426,6 +426,131 @@ final class CloudRoomsLiveUITests: XCTestCase {
         print("CLOUD_INTEROP " + String(decoding: data, as: UTF8.self))
     }
 
+    // MARK: - push
+
+    /// Cloud push without APNs. The app registers this installation with the
+    /// room service for real; delivery is `xcrun simctl push` through the host
+    /// relay in services/cloud/acceptance/run-ios-push.mjs (skipped without
+    /// TEST_RUNNER_CLOUD_PUSH_RELAY_URL), which builds each hint and checks it
+    /// against PushHintSchema. Tapping the banner opens the room from the
+    /// background and from a cold launch; a hint for a room this account
+    /// can't see, or one off the schema, opens nothing.
+    @MainActor
+    func testPushRegistersAndTapOpensTheRoom() async throws {
+        guard let relay = ProcessInfo.processInfo.environment["CLOUD_PUSH_RELAY_URL"].flatMap(URL.init(string:))
+        else { throw XCTSkip("no simctl push relay") }
+        let run = String(UUID().uuidString.prefix(8)).lowercased()
+        let email = "push-\(run)@example.test"
+        let app = launch()
+        try await signIn(email, in: app)
+        app.buttons["cloud.createRoom"].tap()
+        XCTAssertTrue(app.staticTexts["cloud.lastInvite"].waitForExistence(timeout: 15), problem(app))
+
+        let enable = app.buttons["cloud.push.enable"]
+        XCTAssertTrue(reveal(enable, in: app), "notifications section at the end of the list")
+        enable.tap()
+        let allow = springboard.alerts.firstMatch.buttons["Allow"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 10), "the system asks for notifications")
+        allow.tap()
+        let status = app.staticTexts["cloud.push.status"]
+        XCTAssertTrue(reveal(status, in: app))
+        XCTAssertTrue(waitFor(status, "label == 'push registered 1'", timeout: 20), "registered with the room service: \(status.label)")
+        XCTAssertFalse(enable.exists, "allowed: no button")
+        shot("push registered", app)
+
+        let driver = try await CloudHostDriver.signIn(email: email, issuer: issuer, rooms: rooms, otp: otp(for:))
+        let room = try await driver.firstRoom()
+        func activity(_ text: String) async throws -> String {
+            let cursor = try await driver.cursor(workspace: room.workspace, room: room.room, thread: room.thread)
+            _ = try await driver.send(workspace: room.workspace, room: room.room, thread: room.thread, policyRevision: room.policyRevision, text: text)
+            return try await driver.eventId(workspace: room.workspace, room: room.room, thread: room.thread, after: cursor)
+        }
+
+        // In the background: the banner opens the room.
+        let away = "while you were away \(run)"
+        let first = try await activity(away)
+        XCUIDevice.shared.press(.home)
+        try await push(relay, ["workspace_id": room.workspace, "room_id": room.room, "event_id": first])
+        tapBanner()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertTrue(app.textFields["cloud.composer"].waitForExistence(timeout: 15), "the tap opens the room: \(problem(app))")
+        XCTAssertTrue(message(away, in: app).waitForExistence(timeout: 15), "with the activity in it")
+        shot("tap from background opened the room", app)
+        app.navigationBars.buttons.firstMatch.tap()
+
+        // Not running at all: the tap launches the app into the room.
+        let cold = "after a cold launch \(run)"
+        let second = try await activity(cold)
+        app.terminate()
+        try await push(relay, ["workspace_id": room.workspace, "room_id": room.room, "event_id": second])
+        tapBanner()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
+        XCTAssertTrue(app.textFields["cloud.composer"].waitForExistence(timeout: 20), "the tap opens the room after launch: \(problem(app))")
+        XCTAssertTrue(message(cold, in: app).waitForExistence(timeout: 15))
+        shot("tap from cold launch opened the room", app)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(reveal(status, in: app))
+
+        // Off the schema (message text in the hint): not a cloud hint, so
+        // the tap only brings the app back.
+        XCUIDevice.shared.press(.home)
+        try await push(relay, ["kind": "room_sync", "workspace_id": room.workspace, "room_id": room.room, "event_id": second, "preview": "New activity", "text": "hello"], raw: true)
+        tapBanner()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertFalse(app.textFields["cloud.composer"].waitForExistence(timeout: 4), "an off-schema hint opens nothing")
+
+        // A room this account can't see, in the foreground: still a banner
+        // (not the open room); the tap syncs once, then says so.
+        try await push(relay, ["workspace_id": room.workspace, "room_id": "r_missing_\(run)", "event_id": second])
+        tapBanner()
+        let p = app.staticTexts["cloud.problem"]
+        XCTAssertTrue(waitFor(p, "label == \"that room isn't available on this account\"", timeout: 15), "unknown room: \(problem(app))")
+        XCTAssertFalse(app.textFields["cloud.composer"].exists)
+        shot("unknown room refused", app)
+        app.swipeDown(); app.swipeDown()
+        signOut(app)
+        XCTAssertEqual(status.exists, false, "signed out")
+    }
+
+    private var springboard: XCUIApplication { XCUIApplication(bundleIdentifier: "com.apple.springboard") }
+
+    /// The generic banner (alert body is the schema's fixed preview).
+    @MainActor
+    private func tapBanner() {
+        let banner = springboard.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "New activity")).firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 15), "the push shows a banner")
+        banner.tap()
+        _ = waitGone(banner, timeout: 5)
+    }
+
+    /// Asks the host relay to `simctl push` one hint to this app. `raw`
+    /// sends the object as given, skipping the relay's schema check.
+    private func push(_ relay: URL, _ hint: [String: String], raw: Bool = false) async throws {
+        var request = URLRequest(url: relay.appendingPathComponent(raw ? "push-raw" : "push"), timeoutInterval: 20)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: hint)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        XCTAssertEqual(status, 200, "relay: " + (String(data: data, encoding: .utf8) ?? ""))
+    }
+
+    /// The list is lazy: scroll until `element` is on screen.
+    @MainActor
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        for _ in 0..<6 {
+            if element.waitForExistence(timeout: 2), element.isHittable { return true }
+            app.swipeUp()
+        }
+        return element.exists && element.isHittable
+    }
+
+    private func waitFor(_ element: XCUIElement, _ format: String, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: format), object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
     @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()

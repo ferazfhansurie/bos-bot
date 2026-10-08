@@ -47,6 +47,13 @@ public enum CloudRoute {
         attachments(workspaceId: workspaceId) + "/\(escape(attachmentId))/\(action)"
     }
 
+    public static func pushRegistrations(workspaceId: String) -> String {
+        "/v2/workspaces/\(escape(workspaceId))/push-registrations"
+    }
+    public static func pushRegistration(workspaceId: String, registrationId: String) -> String {
+        pushRegistrations(workspaceId: workspaceId) + "/\(escape(registrationId))"
+    }
+
     static func escape(_ segment: String) -> String {
         segment.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? segment
     }
@@ -174,6 +181,16 @@ public final class CloudClient: @unchecked Sendable {
 
     public func discovery() async throws -> CloudDiscovery {
         try await json(CloudRoute.discovery, method: "GET", body: nil as String?)
+    }
+
+    /// Authenticated foreground renewal; the device token is not part of it.
+    public func registerPush(workspaceId: String, _ registration: CloudPushRegistrationRequest) async throws -> CloudPushRegistration {
+        try await json(CloudRoute.pushRegistrations(workspaceId: workspaceId), method: "POST", body: registration)
+    }
+
+    public func revokePush(workspaceId: String, registrationId: String) async throws {
+        struct Revoked: Decodable { var revoked: Bool }
+        let _: Revoked = try await json(CloudRoute.pushRegistration(workspaceId: workspaceId, registrationId: registrationId), method: "DELETE", body: nil as String?)
     }
 
     public func operationWindow(workspaceId: String) async throws -> CloudSendWindow {

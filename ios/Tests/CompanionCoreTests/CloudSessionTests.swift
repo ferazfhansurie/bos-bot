@@ -104,6 +104,21 @@ final class CloudSessionTests: XCTestCase {
         XCTAssertLessThanOrEqual(after, CloudBackoff.ceiling(attempt: 1))
     }
 
+    func testAuthorityChangedRediscoversAndReopensEverySubscription() {
+        var session = CloudSession(account: alice)
+        recover(&session, with: F.discovery(["r1", "r2"]))
+        XCTAssertEqual(session.reduce(.authorityChanged(generation: 0)), [.refreshAuth(generation: 0)])
+        XCTAssertTrue(session.subscribed.isEmpty)
+        XCTAssertEqual(session.reduce(.authorityChanged(generation: 0)), [], "coalesced while recovering")
+        XCTAssertEqual(session.reduce(.authRefreshed(generation: 0)), [.syncDiscovery(generation: 0)])
+        // Same rooms, but every subscription reopens from the rooms' cleared cursors.
+        XCTAssertEqual(session.reduce(.discoverySynced(generation: 0, F.discovery(["r1", "r2"]))),
+                       [.closeSocket, .openSocket(generation: 0), .subscribe(F.room("r1")), .subscribe(F.room("r2")), .recoverOperations])
+        XCTAssertEqual(session.reduce(.authorityChanged(generation: 7)), [], "stale generation")
+        _ = session.reduce(.background)
+        XCTAssertEqual(session.reduce(.authorityChanged(generation: 0)), [], "background waits for foreground")
+    }
+
     func testAuthFailureSchedulesRecoveryRetry() {
         var session = CloudSession(account: alice)
         XCTAssertEqual(session.reduce(.foreground), [.refreshAuth(generation: 0)])

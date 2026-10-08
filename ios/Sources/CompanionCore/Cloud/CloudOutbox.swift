@@ -35,6 +35,9 @@ public enum CloudHoldReason: String, Hashable, Codable, Sendable {
     case audienceChanged
     /// The message it replies to was rejected.
     case parentRejected
+    /// Frozen under an authority epoch the workspace has since left. The
+    /// envelope can never be sent; only its text, re-frozen as a new send.
+    case authorityChanged
 }
 
 public enum CloudOutboxStatus: Hashable, Codable, Sendable {
@@ -199,6 +202,9 @@ public struct CloudOutbox: Hashable, Codable, Sendable {
             switch entries[index].status {
             case .accepted, .rejected:
                 continue
+            case .held(.authorityChanged):
+                // Waits for review and never holds up the room's new sends.
+                continue
             case .sending, .checking, .recoveryUnknown, .held:
                 busyRooms.insert(room)
                 continue
@@ -281,8 +287,24 @@ public struct CloudOutbox: Hashable, Codable, Sendable {
     /// grants changed. Dispatched sends keep their original envelope.
     public mutating func audienceChanged(roomId: String) -> [CloudOutboxEffect] {
         var changed = false
-        for index in entries.indices where entries[index].envelope.roomId == roomId && !entries[index].dispatched && !entries[index].status.isResolved {
+        for index in entries.indices where entries[index].envelope.roomId == roomId && !entries[index].dispatched && !entries[index].status.isResolved
+            && entries[index].status != .held(.authorityChanged) {
             entries[index].status = .held(.audienceChanged)
+            changed = true
+        }
+        return changed ? [.persist] : []
+    }
+
+    /// The workspace moved authority epochs. Never-sent drafts frozen under
+    /// another epoch are held for the person and never replayed; anything
+    /// that may have left the device keeps reconciling by lookup.
+    public mutating func authorityChanged(workspaceId: String, epoch: String) -> [CloudOutboxEffect] {
+        var changed = false
+        for index in entries.indices {
+            let namespace = entries[index].envelope.namespace
+            guard namespace.workspaceId == workspaceId, namespace.epoch != epoch, !entries[index].dispatched,
+                  !entries[index].status.isResolved, entries[index].status != .held(.authorityChanged) else { continue }
+            entries[index].status = .held(.authorityChanged)
             changed = true
         }
         return changed ? [.persist] : []
@@ -298,7 +320,8 @@ public struct CloudOutbox: Hashable, Codable, Sendable {
 
     /// The person reviewed a held draft and chose to send it as is.
     public mutating func release(_ id: CloudOperationID, now: Date) -> [CloudOutboxEffect] {
-        guard let index = entries.firstIndex(where: { $0.id == id }), case .held = entries[index].status, !entries[index].dispatched else { return [] }
+        guard let index = entries.firstIndex(where: { $0.id == id }), case .held(let reason) = entries[index].status, reason != .authorityChanged,
+              !entries[index].dispatched else { return [] }
         if now.timeIntervalSince(entries[index].createdAt) > Self.draftReviewAge { entries[index].createdAt = now }
         entries[index].status = .draft
         return [.persist] + dispatch(now: now)

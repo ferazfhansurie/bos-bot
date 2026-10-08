@@ -184,6 +184,74 @@ final class CloudRoomTests: XCTestCase {
         XCTAssertEqual(state.policyRevision, CloudSequence(3))
     }
 
+    // MARK: - Authority changed
+
+    private func authorityEvent(_ sequence: Int, epoch: String = "e2", workspace: String = "w1", reason: String = "migration_cutover") -> CloudEvent {
+        CloudEvent(workspaceId: "w1", roomId: "r1", eventId: "ev\(sequence)", sequence: CloudSequence(sequence), kind: CloudEventKind.authorityChanged,
+                   payload: ["workspace_id": .string(workspace), "epoch": .string(epoch), "reason": .string(reason)])
+    }
+
+    func testAuthorityChangedDropsCursorAndSkipsTheRestOfTheBatch() {
+        var state = liveRoom()
+        let after = F.messageEvent(F.message("m5", sequence: 5), sequence: 5)
+        let effects = state.receive(F.batch([authorityEvent(4), after], cursor: "c5"))
+        XCTAssertEqual(effects, [.persist, .authorityChanged(epoch: "e2")])
+        XCTAssertEqual(state.authorityEpoch, "e2")
+        XCTAssertNil(state.cursor)
+        XCTAssertNil(state.snapshotId)
+        XCTAssertNil(state.watermark)
+        XCTAssertFalse(state.live)
+        XCTAssertTrue(state.resetRequired)
+        XCTAssertTrue(state.awaitingAuthoritySnapshot)
+        // The old cache stays on screen until the new snapshot; m5 rode the old cursor.
+        XCTAssertEqual(state.messageIds, ["m1", "m2", "m3"])
+        XCTAssertEqual(state.resubscribe(), [.subscribe(cursor: nil, snapshotId: nil)])
+    }
+
+    func testAfterAuthorityChangedOldCursorBatchesWaitForTheNewSnapshot() {
+        var state = liveRoom()
+        _ = state.receive(F.batch([authorityEvent(4)], cursor: "c4"))
+        XCTAssertEqual(state.receive(F.batch([F.messageEvent(F.message("m6", sequence: 6), sequence: 6)], cursor: "c6")), [])
+        XCTAssertEqual(state.messageIds, ["m1", "m2", "m3"])
+        XCTAssertNil(state.cursor)
+
+        // The reset with a fresh snapshot replaces everything and streams resume.
+        let snapshot = F.snapshot(messages: [F.message("n1", sequence: 1)], watermark: 1, cursor: "e2c1", snapshotId: "e2s1")
+        XCTAssertEqual(state.receive(.reset(CloudReset(workspaceId: "w1", roomId: "r1", reason: .cursorInvalid, snapshot: snapshot))),
+                       [.persist, .subscribe(cursor: "e2c1", snapshotId: "e2s1")])
+        XCTAssertEqual(state.messageIds, ["n1"])
+        XCTAssertFalse(state.awaitingAuthoritySnapshot)
+        XCTAssertEqual(state.authorityEpoch, "e2")
+        XCTAssertEqual(state.receive(F.batch([F.messageEvent(F.message("n2", sequence: 2), sequence: 2)], cursor: "e2c2")), [.persist])
+        XCTAssertEqual(state.messageIds, ["n1", "n2"])
+    }
+
+    func testAuthorityChangedForTheSameEpochIsNotRepeated() {
+        var state = liveRoom()
+        _ = state.receive(F.batch([authorityEvent(4)], cursor: "c4"))
+        state.apply(F.snapshot(messages: [F.message("n1", sequence: 1)], watermark: 1, cursor: "e2c1", snapshotId: "e2s1"))
+        XCTAssertEqual(state.receive(F.batch([authorityEvent(2)], cursor: "e2c2")), [.persist])
+        XCTAssertEqual(state.cursor, "e2c2")
+    }
+
+    func testMalformedAuthorityChangedIsUnreadable() {
+        for bad in [authorityEvent(4, workspace: "w2"), authorityEvent(4, reason: "other"), authorityEvent(4, epoch: "")] {
+            var state = liveRoom()
+            XCTAssertEqual(state.receive(F.batch([bad], cursor: "c4")), [.closeStream, .persist])
+            XCTAssertTrue(state.upgradeRequired)
+            XCTAssertEqual(state.cursor, "c3")
+            XCTAssertNil(state.authorityEpoch)
+        }
+    }
+
+    func testAuthorityEpochSurvivesTheCache() throws {
+        var state = liveRoom()
+        _ = state.receive(F.batch([authorityEvent(4)], cursor: "c4"))
+        let decoded = try JSONDecoder().decode(CloudRoomState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(decoded.authorityEpoch, "e2")
+        XCTAssertTrue(decoded.awaitingAuthoritySnapshot)
+    }
+
     func testCacheCappedAt500() {
         var state = room()
         var sequence = 0

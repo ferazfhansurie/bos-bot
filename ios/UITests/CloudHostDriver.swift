@@ -107,6 +107,23 @@ final class CloudHostDriver {
         throw Failure(description: "discovery found no room for this account")
     }
 
+    /// A replay cursor at the room's head right now.
+    func cursor(workspace: String, room: String, thread: String) async throws -> String {
+        let (_, snap) = try await call("POST", "v2/workspaces/\(workspace)/rooms/\(room)/snapshot", ["thread_id": thread])
+        guard let cursor = snap["cursor"] as? String else { throw Failure(description: "snapshot without cursor") }
+        return cursor
+    }
+
+    /// The committed event id of `kind` after `cursor`, as replay returns it:
+    /// what a push hint for that event carries.
+    func eventId(workspace: String, room: String, thread: String, after cursor: String, kind: String = "message.created") async throws -> String {
+        let (_, batch) = try await call("POST", "v2/workspaces/\(workspace)/rooms/\(room)/replay", ["thread_id": thread, "cursor": cursor])
+        guard batch["type"] as? String == "event_batch" else { throw Failure(description: "replay -> \(batch["type"] as? String ?? "?")") }
+        guard let id = (batch["events"] as? [[String: Any]])?.last(where: { $0["kind"] as? String == kind })?["event_id"] as? String
+        else { throw Failure(description: "replay has no \(kind) event") }
+        return id
+    }
+
     /// Owner or admin only. The bot's owner is this account.
     func registerBot(workspace: String, room: String, botId: String, name: String) async throws {
         let model: [String: Any] = ["provider": "fixture", "model": "approval-driver", "config_revision": "1"]
@@ -127,6 +144,12 @@ final class CloudHostDriver {
     func sendMention(workspace: String, room: String, thread: String, policyRevision: String, text: String, botId: String) async throws -> String {
         let span = (text as NSString).range(of: "@" + botId)
         guard span.location != NSNotFound else { throw Failure(description: "text does not contain @\(botId)") }
+        return try await send(workspace: workspace, room: room, thread: thread, policyRevision: policyRevision, text: text,
+                              mentions: [["kind": "bot", "id": botId, "start": span.location, "end": span.location + span.length]])
+    }
+
+    /// A plain human send from this account. Returns the accepted message id.
+    func send(workspace: String, room: String, thread: String, policyRevision: String, text: String, mentions: [[String: Any]] = []) async throws -> String {
         let (_, window) = try await call("POST", "v2/workspaces/\(workspace)/operation-windows", [String: Any]())
         guard let namespace = window["namespace"] as? [String: Any], let windowId = window["window_id"] as? String,
               let token = window["window_token"] as? String
@@ -137,7 +160,7 @@ final class CloudHostDriver {
         let envelope: [String: Any] = [
             "kind": "message.send", "namespace": namespace, "client_operation_id": operationId,
             "window_token": token, "room_id": room, "thread_id": thread, "text": text,
-            "mentions": [["kind": "bot", "id": botId, "start": span.location, "end": span.location + span.length]],
+            "mentions": mentions,
             "attachment_ids": [String](), "reply_to_message_id": NSNull(), "expected_policy_revision": policyRevision,
         ]
         let (_, outcome) = try await call("POST", "v2/workspaces/\(workspace)/messages", envelope)

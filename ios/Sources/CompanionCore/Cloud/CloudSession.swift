@@ -19,6 +19,9 @@ public enum CloudSessionInput: Hashable, Sendable {
     /// The device's network came back: recover now instead of waiting out
     /// a backoff scheduled while offline.
     case networkRestored
+    /// A room announced a new authority epoch: re-discover and reopen every
+    /// subscription from the rooms' (now empty) cursors.
+    case authorityChanged(generation: Int)
 }
 
 public enum CloudSessionEffect: Hashable, Sendable {
@@ -151,6 +154,11 @@ public struct CloudSession: Hashable, Sendable {
             reset()
             self.account = nil
             return [.closeSocket, .clearVisibleState(previousGeneration: previous), .eraseStore(account)]
+
+        case .authorityChanged(let generation):
+            guard current(generation), isForeground else { return [] }
+            subscribed = []
+            return startRecovery()
 
         case .networkRestored:
             recoveryAttempt = 0

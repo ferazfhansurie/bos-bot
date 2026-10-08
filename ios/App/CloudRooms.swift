@@ -7,6 +7,7 @@ import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import UserNotifications
 
 /// BOS 2.0 cloud rooms, slice 2: email-OTP sign-in against a local issuer
 /// and two-person chat over /v2. Debug builds only, and only when launched
@@ -87,6 +88,11 @@ final class CloudRoomsModel: ObservableObject {
     @Published private(set) var offline = false
     /// Attachments on their way to `ready`, by room. Memory only.
     @Published private(set) var drafts: [String: [CloudAttachmentDraft]] = [:]
+    /// What push registration looks like for this account, for the list.
+    @Published private(set) var pushStatus = "push off"
+    @Published private(set) var pushAuthorized = false
+    /// A tapped push resolved to a room; the root pushes it and clears this.
+    @Published var pushTarget: CloudRoomRef?
 
     let identityCoordinator: CloudIdentityCoordinator
     private let client: CloudClient
@@ -96,6 +102,13 @@ final class CloudRoomsModel: ObservableObject {
     private var socket: Task<Void, Never>?
     private var windows: [String: CloudSendWindow] = [:]
     private let connectivity: CloudConnectivity
+    private var pushAccount: CloudAccountKey?
+    private var pushRegistrar: CloudPushRegistrar?
+    /// Workspaces from the last fresh discovery; registration waits for one.
+    private var discoveredWorkspaces: [String]?
+    private var pendingHint: CloudPushHint?
+    private var pushing = false
+    private var pushAgain = false
 
     init(roomsURL: URL, issuerURL: URL) {
         let coordinator = CloudIdentityCoordinator(issuer: CloudIssuerClient(baseURL: issuerURL), roomsURL: roomsURL, store: CloudKeychainStore())
@@ -107,6 +120,10 @@ final class CloudRoomsModel: ObservableObject {
         offline = !connectivity.reachable
         connectivity.onChange = { [weak self] reachable in self?.reachabilityChanged(reachable) }
         connectivity.start()
+        let notifications = NotificationCoordinator.shared
+        notifications.cloudTokenHandler = { [weak self] token in Task { @MainActor in self?.tokenReceived(token) } }
+        notifications.foregroundCloudPresentation = { [weak self] hint in self?.presentation(for: hint) ?? .quiet }
+        notifications.cloudHintHandler = { [weak self] hint in self?.open(hint) }
     }
 
     // MARK: - lifecycle
@@ -125,7 +142,10 @@ final class CloudRoomsModel: ObservableObject {
         }
     }
 
-    func foreground() { run(session.reduce(.foreground)) }
+    func foreground() {
+        run(session.reduce(.foreground))
+        Task { await syncPush() }
+    }
 
     /// Debug: take the room service away (or give it back) without
     /// touching the simulator's network.
@@ -169,12 +189,16 @@ final class CloudRoomsModel: ObservableObject {
         await work {
             let identity = try await self.identityCoordinator.signIn(email: email, code: code)
             self.enter(identity)
+            // A new session: what the old one registered no longer binds.
+            self.pushRegistrar?.sessionStarted()
+            self.savePush()
         }
     }
 
     func restartSignIn() { phase = .email; problem = nil }
 
     func signOut() async {
+        await revokePush()
         socket?.cancel()
         await identityCoordinator.signOut()
         run(session.reduce(.signedOut))
@@ -188,6 +212,8 @@ final class CloudRoomsModel: ObservableObject {
         problem = nil
         run(session.reduce(.accountChanged(identity.key)))
         run(session.reduce(.foreground))
+        // A cold-launch tap can open a cached room before discovery returns.
+        resolvePendingHint(synced: false)
     }
 
     // MARK: - rooms
@@ -210,18 +236,36 @@ final class CloudRoomsModel: ObservableObject {
         // Nothing goes out while an attachment is still on its way.
         guard attached.allSatisfy({ $0.state == .ready }) else { return false }
         let attachmentIds = attached.compactMap(\.attachment?.attachmentId)
-        guard !trimmed.isEmpty || !attachmentIds.isEmpty, let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
+        guard !trimmed.isEmpty || !attachmentIds.isEmpty else { return false }
+        let queued = await enqueue(trimmed, attachmentIds: attachmentIds, in: ref)
+        if queued { drafts[key(ref)] = nil }
+        return queued
+    }
+
+    /// A draft written before the workspace moved authority epochs: its
+    /// envelope can never go out, so its text is frozen again under the new
+    /// window as a new send, and the old entry is dropped once that queued.
+    @discardableResult
+    func sendAgain(_ id: CloudOperationID, in ref: CloudRoomRef) async -> Bool {
+        guard let entry = outbox?.entry(id), entry.status == .held(.authorityChanged), !entry.dispatched else { return false }
+        let old = entry.envelope
+        guard await enqueue(old.text, mentions: old.mentions, attachmentIds: old.attachmentIds, replyTo: old.replyToMessageId, in: ref) else { return false }
+        discard(id)
+        return true
+    }
+
+    private func enqueue(_ text: String, mentions: [CloudMention] = [], attachmentIds: [String], replyTo: String? = nil, in ref: CloudRoomRef) async -> Bool {
+        guard let policy = rooms[key(ref)]?.policyRevision ?? rows.first(where: { $0.ref.sameRoom(ref) })?.policyRevision else { return false }
         var queued = false
         await work {
             let window = try await self.window(for: ref.workspaceId)
-            var envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: trimmed, expectedPolicyRevision: policy)
+            var envelope = CloudSendEnvelope(window: window, roomId: ref.roomId, threadId: ref.threadId, text: text, mentions: mentions, replyToMessageId: replyTo, expectedPolicyRevision: policy)
             envelope.attachmentIds = attachmentIds
             guard var outbox = self.outbox, let expiry = window.expiryDate else { return }
             // Guest drafts are session memory only.
             let effects = try outbox.enqueue(envelope, windowExpiresAt: expiry, ephemeral: ref.role == .guest, now: Date())
             self.outbox = outbox
             queued = true
-            self.drafts[self.key(ref)] = nil
             self.runOutbox(effects)
         }
         return queued
@@ -354,6 +398,136 @@ final class CloudRoomsModel: ObservableObject {
         (outbox?.entries ?? []).filter { $0.envelope.roomId == ref.roomId && $0.envelope.namespace.workspaceId == ref.workspaceId && !$0.status.isResolved }
     }
 
+    // MARK: - push
+
+    /// Asks once; a yes registers this installation for every workspace.
+    func enablePush() async {
+        _ = await NotificationCoordinator.shared.requestAuthorization()
+        await syncPush()
+    }
+
+    /// A tapped hint: open its room if this account has it, after one fresh
+    /// discovery if it isn't cached. Waits for sign-in when there's no account.
+    func open(_ hint: CloudPushHint) {
+        pendingHint = hint
+        resolvePendingHint(synced: false)
+    }
+
+    private func resolvePendingHint(synced: Bool) {
+        guard let hint = pendingHint, phase == .ready else { return }
+        switch CloudPushRoute.resolve(hint, in: rows.map(\.ref), synced: synced) {
+        case .open(let ref):
+            pendingHint = nil
+            problem = nil
+            pushTarget = ref
+        case .refresh:
+            run(session.reduce(.retryDue(.recovery, generation: session.generation)))
+        case .unavailable:
+            pendingHint = nil
+            problem = "that room isn't available on this account"
+        }
+    }
+
+    /// In the room it's about: the open socket already has it.
+    private func presentation(for hint: CloudPushHint) -> NotificationPresentation {
+        let visible = UIApplication.shared.applicationState == .active
+            && selected?.workspaceId == hint.workspaceId && selected?.roomId == hint.roomId
+        return .resolve(enabled: true, visible: visible, blocking: false)
+    }
+
+    private func tokenReceived(_ token: Data) {
+        pushRegistrar?.tokenReceived(token)
+        savePush()
+        Task { await syncPush() }
+    }
+
+    private static let installationKey = "bos.cloud.push.installation"
+
+    private static func pushKey(_ account: CloudAccountKey) -> String { "bos.cloud.push." + account.namespace }
+
+    /// One random id per install; a reinstall is a new installation.
+    private static var installationId: String {
+        if let id = UserDefaults.standard.string(forKey: installationKey) { return id }
+        let id = Data((0..<18).map { _ in UInt8.random(in: 0...255) }).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        UserDefaults.standard.set(id, forKey: installationKey)
+        return id
+    }
+
+    private func loadPush(_ account: CloudAccountKey) {
+        let saved = UserDefaults.standard.data(forKey: Self.pushKey(account)).flatMap { try? JSONDecoder().decode(CloudPushState.self, from: $0) }
+        pushAccount = account
+        pushRegistrar = CloudPushRegistrar(state: saved ?? CloudPushState(installationId: Self.installationId))
+        if let token = NotificationCoordinator.shared.deviceToken { pushRegistrar?.tokenReceived(token) }
+        savePush()
+    }
+
+    private func savePush() {
+        guard let pushAccount, let state = pushRegistrar?.state, let data = try? JSONEncoder().encode(state) else { return }
+        UserDefaults.standard.set(data, forKey: Self.pushKey(pushAccount))
+    }
+
+    /// Registers, renews and revokes against the last fresh discovery.
+    /// Foreground and online only; the server binds this session.
+    func syncPush() async {
+        // One at a time; a sync asked for while one runs (the permission
+        // answer, a new token) runs once more when it ends.
+        let status = await NotificationCoordinator.shared.authorizationStatus()
+        let authorized = [.authorized, .provisional, .ephemeral].contains(status)
+        pushAuthorized = authorized
+        if pushing { pushAgain = true; return }
+        guard phase == .ready, !offline, let account = pushAccount, pushRegistrar != nil, let workspaces = discoveredWorkspaces else { return }
+        pushing = true
+        defer {
+            pushing = false
+            if pushAgain { pushAgain = false; Task { await syncPush() } }
+        }
+        if authorized { UIApplication.shared.registerForRemoteNotifications() }
+        var failure: String?
+        for action in pushRegistrar?.plan(workspaces: workspaces, authorized: authorized, now: Date()) ?? [] {
+            guard pushAccount == account else { return }
+            switch action {
+            case .register(let workspaceId, let request):
+                do {
+                    let result = try await client.registerPush(workspaceId: workspaceId, request)
+                    guard pushAccount == account else { return }
+                    pushRegistrar?.registered(workspaceId, request, result, now: Date())
+                } catch let error as CloudError where error.error == .controlConflict {
+                    pushRegistrar?.conflicted(workspaceId)
+                    failure = "push registration conflict, retrying"
+                } catch let error as CloudError {
+                    failure = "push registration failed: " + error.error.rawValue.replacingOccurrences(of: "_", with: " ")
+                } catch {
+                    failure = "push registration failed: " + error.localizedDescription
+                }
+            case .revoke(let workspaceId, let registrationId):
+                do {
+                    try await client.revokePush(workspaceId: workspaceId, registrationId: registrationId)
+                    pushRegistrar?.revoked(workspaceId)
+                } catch is CloudError {
+                    // The server answered; there is nothing left to revoke from here.
+                    pushRegistrar?.revoked(workspaceId)
+                } catch {}
+            }
+            savePush()
+        }
+        let count = pushRegistrar?.state.workspaces.count ?? 0
+        pushStatus = failure ?? (authorized ? "push registered \(count)" : "push off")
+    }
+
+    /// Best effort before sign-out, while the bearer still works.
+    private func revokePush() async {
+        guard let account = pushAccount, let registrar = pushRegistrar else { return }
+        if !offline {
+            for case .revoke(let workspaceId, let registrationId) in registrar.revokeAll {
+                try? await client.revokePush(workspaceId: workspaceId, registrationId: registrationId)
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: Self.pushKey(account))
+        pushAccount = nil; pushRegistrar = nil; discoveredWorkspaces = nil
+        pushStatus = "push off"
+    }
+
     // MARK: - effects
 
     private func run(_ effects: [CloudSessionEffect]) {
@@ -385,6 +559,7 @@ final class CloudRoomsModel: ObservableObject {
                 }
             case .clearVisibleState:
                 rooms = [:]; rows = []; selected = nil; outbox = nil; windows = [:]; lastInvite = nil; live = false; drafts = [:]
+                discoveredWorkspaces = nil; pushTarget = nil
             case .openStore(let account):
                 // Whoever used the phone before keeps only a quarantined outbox.
                 try? CloudAccountStore.wipeOtherAccounts(root: storageRoot, except: account)
@@ -397,6 +572,7 @@ final class CloudRoomsModel: ObservableObject {
                 let effects = outbox.recoverAfterLaunch(now: Date())
                 self.outbox = outbox
                 runOutbox(effects)
+                loadPush(account)
             case .eraseStore(let account):
                 try? CloudAccountStore(root: storageRoot, account: account).erase()
                 store = nil
@@ -431,7 +607,10 @@ final class CloudRoomsModel: ObservableObject {
             guard generation == session.generation else { return }
             rows = Self.rows(discovery)
             try? store?.save(discovery)
+            discoveredWorkspaces = discovery.workspaces.map(\.workspaceId)
             run(session.reduce(.discoverySynced(generation: generation, discovery)))
+            resolvePendingHint(synced: true)
+            Task { await syncPush() }
             await prefetchWindows(discovery, generation: generation)
         } catch let error as CloudError {
             if await rejected(error.error, generation: generation) { return }
@@ -450,7 +629,7 @@ final class CloudRoomsModel: ObservableObject {
     /// Fetches a signed window for each workspace that lacks a fresh one,
     /// so a send made after the network drops can still be frozen.
     private func prefetchWindows(_ discovery: CloudDiscovery, generation: Int) async {
-        for workspace in discovery.workspaces where windows[workspace.workspaceId].map(Self.fresh) != true {
+        for workspace in discovery.workspaces where windows[workspace.workspaceId].map(usable) != true {
             guard generation == session.generation, let window = try? await client.operationWindow(workspaceId: workspace.workspaceId) else { continue }
             guard generation == session.generation else { return }
             windows[workspace.workspaceId] = window
@@ -460,6 +639,13 @@ final class CloudRoomsModel: ObservableObject {
 
     private static func fresh(_ window: CloudSendWindow) -> Bool {
         (window.expiryDate ?? .distantPast) > Date().addingTimeInterval(60)
+    }
+
+    /// Fresh, and not from an epoch a room in its workspace has moved past.
+    private func usable(_ window: CloudSendWindow) -> Bool {
+        Self.fresh(window) && !rooms.values.contains {
+            $0.workspaceId == window.namespace.workspaceId && $0.authorityEpoch.map { $0 != window.namespace.epoch } == true
+        }
     }
 
     private func saveWindows() {
@@ -544,6 +730,18 @@ final class CloudRoomsModel: ObservableObject {
                 if var outbox { let effects = outbox.audienceChanged(roomId: ref.roomId); self.outbox = outbox; runOutbox(effects) }
             case .resyncDiscovery:
                 run(session.reduce(.retryDue(.recovery, generation: session.generation)))
+            case .authorityChanged(let epoch):
+                if var outbox {
+                    let effects = outbox.authorityChanged(workspaceId: ref.workspaceId, epoch: epoch)
+                    self.outbox = outbox
+                    runOutbox(effects)
+                }
+                // The saved window is bound to the old epoch; the next send opens a fresh one.
+                if let window = windows[ref.workspaceId], window.namespace.epoch != epoch {
+                    windows[ref.workspaceId] = nil
+                    saveWindows()
+                }
+                run(session.reduce(.authorityChanged(generation: session.generation)))
             case .attachmentUpdated(let attachment):
                 // Only a terminal answer moves a draft; the upload path owns the rest.
                 guard [.ready, .rejected, .expired].contains(attachment.state),
@@ -595,7 +793,7 @@ final class CloudRoomsModel: ObservableObject {
     }
 
     private func window(for workspaceId: String) async throws -> CloudSendWindow {
-        if let window = windows[workspaceId], Self.fresh(window) { return window }
+        if let window = windows[workspaceId], usable(window) { return window }
         let window = try await client.operationWindow(workspaceId: workspaceId)
         windows[workspaceId] = window
         saveWindows()
@@ -675,6 +873,11 @@ struct CloudRoomsRoot: View {
         // destination; a pushed room would otherwise render a blank warning.
         .onChange(of: model.phase) { _, phase in
             if phase != .ready { path = [] }
+        }
+        .onChange(of: model.pushTarget) { _, ref in
+            guard let ref else { return }
+            path = [ref]
+            model.pushTarget = nil
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -774,6 +977,16 @@ struct CloudRoomListView: View {
             if let problem = model.problem {
                 Section { Text(problem).foregroundStyle(.red).accessibilityIdentifier("cloud.problem") }
             }
+            // Last, so the room setup above stays where it was.
+            if model.identity != nil {
+                Section("notifications") {
+                    Text(model.pushStatus).accessibilityIdentifier("cloud.push.status")
+                    if !model.pushAuthorized {
+                        Button("allow notifications") { Task { await model.enablePush() } }
+                            .accessibilityIdentifier("cloud.push.enable")
+                    }
+                }
+            }
         }
         .navigationTitle("cloud rooms")
         .navigationDestination(for: CloudRoomRef.self) { ref in
@@ -822,7 +1035,7 @@ struct CloudRoomChatView: View {
                         CloudApprovalCardView(model: model, ref: ref, card: card)
                     }
                     ForEach(model.pending(in: ref)) { entry in
-                        CloudPendingRow(model: model, entry: entry)
+                        CloudPendingRow(model: model, entry: entry, ref: ref)
                     }
                 }
                 .listStyle(.plain)
@@ -1072,6 +1285,7 @@ enum CloudSamples {
 struct CloudPendingRow: View {
     @ObservedObject var model: CloudRoomsModel
     let entry: CloudOutboxEntry
+    let ref: CloudRoomRef
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
@@ -1082,7 +1296,10 @@ struct CloudPendingRow: View {
             }
             HStack(spacing: 12) {
                 Spacer()
-                if case .held = entry.status, !entry.dispatched {
+                if entry.status == .held(.authorityChanged), !entry.dispatched {
+                    Button("send again") { Task { await model.sendAgain(entry.id, in: ref) } }.accessibilityIdentifier("cloud.pending.sendAgain")
+                    Button("discard", role: .destructive) { model.discard(entry.id) }.accessibilityIdentifier("cloud.pending.discard")
+                } else if case .held = entry.status, !entry.dispatched {
                     Button("send") { model.release(entry.id) }.accessibilityIdentifier("cloud.pending.release")
                     Button("discard", role: .destructive) { model.discard(entry.id) }.accessibilityIdentifier("cloud.pending.discard")
                 } else if entry.status == .checking, entry.notCommitted, !entry.autoReplay {
@@ -1102,6 +1319,7 @@ struct CloudPendingRow: View {
         case .held(.relaunched): "not sent yet, check before sending"
         case .held(.audienceChanged): "room changed, check before sending"
         case .held(.parentRejected): "reply target wasn't sent"
+        case .held(.authorityChanged): "not sent · written before this room moved"
         case .recoveryUnknown: "can't confirm, checking"
         default: entry.status.label.rawValue
         }
