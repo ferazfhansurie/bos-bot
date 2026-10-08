@@ -2066,4 +2066,16 @@ public struct CompanionClient: Sendable {
         streamRequest.timeoutInterval = 90
         return eventStream(request: streamRequest, session: streamingSession ?? Self.streaming)
     }
+
+    /// The stream of a room this computer joined on another home, relayed
+    /// from that home. It carries every room shared with that home, so one
+    /// per home is enough; its frames belong to that home's stream, never to
+    /// this computer's cursor.
+    public func roomEvents(groupId: String, streamingSession: URLSession? = nil) throws -> AsyncThrowingStream<StreamFrame, Error> {
+        let id = groupId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? groupId
+        var streamRequest = try makeRequest("GET", "/api/groups/\(id)/events")
+        streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        streamRequest.timeoutInterval = 90
+        return eventStream(request: streamRequest, session: streamingSession ?? Self.streaming)
+    }
 }

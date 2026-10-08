@@ -178,6 +178,9 @@ final class Session: ObservableObject {
     /// and persisted — when a stream goes live.
     private var rotation = CandidateRotation(hosts: [])
     private var streamTask: Task<Void, Never>?
+    /// Rooms joined on another home stream from that home through
+    /// `/api/groups/:id/events`, one stream per home, beside the main one.
+    private var remoteStreams: [String: (groupId: String, task: Task<Void, Never>)] = [:]
     /// Frames received but not yet folded. The first frame after a quiet
     /// spell folds at once, so a send or an approval lands the moment the
     /// server says so; anything that follows within the window waits and
@@ -1026,6 +1029,7 @@ final class Session: ObservableObject {
         flushFrames()
         activityFeedTask?.cancel()
         activityFeedTask = nil
+        stopRemoteStreams()
         streamTask?.cancel()
         streamTask = nil
     }
@@ -1220,6 +1224,9 @@ final class Session: ObservableObject {
             next.apply(frame)
             next.advance(to: frame.seq)
         }
+        let roomsChanged = batch.contains {
+            switch $0.frame { case .room, .roomDeleted: return true; default: return false }
+        }
         // A reply's first token starts the typing dot and its end stops it,
         // so which threads are typing has to be announced; the tokens in
         // between reach only the open bubble.
@@ -1231,6 +1238,7 @@ final class Session: ObservableObject {
         foldingQuietly = quiet || held
         state = next
         foldingQuietly = false
+        if roomsChanged, let client { reconcileRemoteStreams(using: client) }
         if held {
             schedulePublish()
         } else if !quiet {
@@ -1337,6 +1345,7 @@ final class Session: ObservableObject {
                         // Every hello, resumed or not: activity pushes may
                         // not be replayable, so a gap is closed by a snapshot.
                         refreshActivityFeed(using: client)
+                        reconcileRemoteStreams(using: client)
                         continue
                     }
                     enqueue(frame)
@@ -1366,6 +1375,71 @@ final class Session: ObservableObject {
             // not the laptop's should not hammer it.
             reconnectDelay = reconnectDelay == 0 ? 1 : min(reconnectDelay * 2, 15)
             try? await Task.sleep(nanoseconds: reconnectDelay * 1_000_000_000)
+        }
+    }
+
+    // MARK: - Rooms on another home
+
+    /// Open a stream for every home this computer joined a room on, and
+    /// close the ones whose last room is gone. Only while the main stream
+    /// runs: these frames are folded beside it, never on their own.
+    private func reconcileRemoteStreams(using client: CompanionClient) {
+        guard streamTask != nil else { return stopRemoteStreams() }
+        let wanted = remoteRoomStreams(rooms: state.rooms)
+        for (homeId, stream) in remoteStreams where wanted[homeId] == nil {
+            stream.task.cancel()
+            remoteStreams.removeValue(forKey: homeId)
+        }
+        for (homeId, groupId) in wanted where remoteStreams[homeId] == nil {
+            remoteStreams[homeId] = (groupId, openRemoteStream(homeId: homeId, groupId: groupId, using: client))
+        }
+    }
+
+    private func stopRemoteStreams() {
+        for stream in remoteStreams.values { stream.task.cancel() }
+        remoteStreams.removeAll()
+    }
+
+    /// The relayed stream belongs to the other home: its frames carry that
+    /// home's sequence, so they fold without one and never move this
+    /// computer's cursor. It cannot resume either, so every hello catches
+    /// the joined rooms up from their newest page instead.
+    private func openRemoteStream(homeId: String, groupId: String, using client: CompanionClient) -> Task<Void, Never> {
+        Task { [weak self] in
+            var delay: UInt64 = 0
+            while !Task.isCancelled {
+                if delay > 0 { try? await Task.sleep(nanoseconds: delay * 1_000_000_000) }
+                if Task.isCancelled { return }
+                do {
+                    for try await frame in try client.roomEvents(groupId: groupId) {
+                        guard !Task.isCancelled, let self else { return }
+                        delay = 0
+                        if case .hello = frame.frame {
+                            await self.catchUpRemoteRooms(homeId: homeId, using: client)
+                            continue
+                        }
+                        guard let scoped = remoteRoomFrame(rooms: self.state.rooms, homeId: homeId, frame: frame.frame) else { continue }
+                        self.enqueue(StreamFrame(frame: scoped, seq: nil))
+                    }
+                } catch let APIError.status(code, _) where code == 401 || code == 403 || code == 404 {
+                    // An older computer, or a session that may not relay:
+                    // the room still refreshes on reopen, as before.
+                    log.notice("remote room stream refused: \(code, privacy: .public)")
+                    return
+                } catch {
+                    if Task.isCancelled || error is CancellationError { return }
+                }
+                delay = delay == 0 ? 2 : min(delay * 2, 30)
+            }
+        }
+    }
+
+    private func catchUpRemoteRooms(homeId: String, using client: CompanionClient) async {
+        for room in state.rooms where room.home?.id == homeId {
+            guard let page = try? await client.messages(threadId: room.threadId) else { continue }
+            if Task.isCancelled { return }
+            flushFrames()
+            state.merge(page, intoThread: room.threadId)
         }
     }
 

@@ -106,7 +106,7 @@ describe("scopes", () => {
       ["PATCH", "/api/bots/x/cards/m"], ["POST", "/api/groups/g/messages"], ["PATCH", "/api/groups/g"],
       ["PATCH", "/api/bots/x"], ["PATCH", "/api/bots/x/profile"], ["POST", "/api/attachments"],
       ["GET", "/api/attachments/a.png"], ["POST", "/api/routines"], ["POST", "/api/routines/r/run"],
-      ["GET", "/api/bots"], ["GET", "/api/threads/t/messages"], ["GET", "/api/search"], ["GET", "/api/events"],
+      ["GET", "/api/bots"], ["GET", "/api/threads/t/messages"], ["GET", "/api/search"], ["GET", "/api/events"], ["GET", "/api/groups/g/events"],
       ["GET", "/api/config"], ["GET", "/api/webhooks"], ["POST", "/api/tts/speak"], ["POST", "/api/voice/call"],
       ["GET", "/api/multiplayer/rooms/r/files"], ["GET", "/api/multiplayer/rooms/r/search"],
       ["GET", "/api/multiplayer/rooms/r/requests"], ["POST", "/api/multiplayer/rooms/r/requests/q/cancel"],

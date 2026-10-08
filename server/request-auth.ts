@@ -198,6 +198,9 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["GET"], path: /^\/api\/brand$/ },
   { methods: ["GET"], path: /^\/api\/events$/ },
   { methods: ["GET"], path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?$/ },
+  // A room this home joined on another home streams from there; the relay
+  // in server/remote-rooms.ts answers only the owner, local ids fall through.
+  { methods: ["GET"], path: /^\/api\/groups\/[\w-]+\/events$/ },
   { methods: ["POST", "DELETE"], path: /^\/api\/groups\/[\w-]+\/people(?:\/[^/]+)?$/ },
   // reads: fleet, transcripts, search (no secrets in any of these)
   { methods: ["GET"], path: /^\/api\/bots$/ },
