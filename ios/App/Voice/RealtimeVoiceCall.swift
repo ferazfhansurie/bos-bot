@@ -861,6 +861,7 @@ final class VoiceCallCenter: ObservableObject {
             if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: Self.recordsKey) }
         }
         guard call === ended else { return }
+        if case .failed = ended.phase { CallKitRinger.shared.callEnded(failed: true) } else { CallKitRinger.shared.callEnded(failed: false) }
         if case .failed = ended.phase {
             // The failure card stays until they dismiss it.
             withAnimation(.spring(duration: 0.35)) { presentation = .full }
@@ -877,7 +878,17 @@ final class VoiceCallCenter: ObservableObject {
 
     /// Show a ring full screen. Each ring once; a ring during a live call
     /// stays a notification, never a second call over the first.
-    func ring(_ ring: VoiceRing, bot: Bot, session: Session) {
+    func ring(_ ring: VoiceRing, bot: Bot, session: Session, viaCallKitWait: Bool = true) {
+        guard !CallKitRinger.shared.reported(ring.ringId) else { return }
+        // This phone gets a VoIP push for the ring: CallKit rings it. Only if
+        // that push never lands does the in-app ring take over.
+        if viaCallKitWait, CallKitRinger.shared.ringsThroughCallKit {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                self?.ring(ring, bot: bot, session: session, viaCallKitWait: false)
+            }
+            return
+        }
         guard seenRings.insert(ring.ringId).inserted, incoming == nil, liveCallId == nil else { return }
         incoming = IncomingVoiceRing(ring: ring, bot: bot, session: session)
         let ringer = VoiceRinger()

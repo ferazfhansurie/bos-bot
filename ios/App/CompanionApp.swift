@@ -14,6 +14,8 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
         // The notification delegate has to be in place before launch ends,
         // or a tap that cold-launches the app is never delivered.
         _ = NotificationCoordinator.shared
+        // Same for a VoIP ring that launched the app: CallKit needs it now.
+        CallKitRinger.shared.start()
         return true
     }
 

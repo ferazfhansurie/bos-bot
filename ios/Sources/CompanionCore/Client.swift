@@ -708,8 +708,10 @@ public struct CompanionClient: Sendable {
         try await send(makeRequest("GET", "/api/multiplayer/me"), as: SharedMe.self)
     }
 
-    public func registerPushToken(_ token: String, environment: String) async throws {
-        try await send(makeRequest("POST", "/api/multiplayer/push-token", body: ["token": token, "environment": environment, "connectionId": connection.id]))
+    public func registerPushToken(_ token: String, environment: String, voipToken: String? = nil) async throws {
+        var body = ["token": token, "environment": environment, "connectionId": connection.id]
+        if let voipToken { body["voipToken"] = voipToken }
+        try await send(makeRequest("POST", "/api/multiplayer/push-token", body: body))
     }
 
     public func sharedContacts() async throws -> [SharedContact] {

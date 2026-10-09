@@ -317,6 +317,12 @@ final class Session: ObservableObject {
         NotificationCoordinator.shared.pushTokenHandler = { [weak self] token in
             Task { @MainActor in await self?.registerPushToken(token) }
         }
+        // The PushKit token can arrive after the APNs one; register again with both.
+        CallKitRinger.shared.tokenHandler = { [weak self] _ in
+            Task { @MainActor in
+                if let token = UserDefaults.standard.string(forKey: "bos.apnsToken") { await self?.registerPushToken(token) }
+            }
+        }
         NotificationCoordinator.shared.sharedRoomHandler = { [weak self] roomID, connectionID in
             Task { @MainActor in
                 guard let self else { return }
@@ -3280,7 +3286,7 @@ final class Session: ObservableObject {
 
     private func registerPushToken(_ token: String) async {
         guard let client else { return }
-        try? await client.registerPushToken(token, environment: Self.apnsEnvironment)
+        try? await client.registerPushToken(token, environment: Self.apnsEnvironment, voipToken: CallKitRinger.shared.voipToken)
     }
 
     func enableNotifications() async {
