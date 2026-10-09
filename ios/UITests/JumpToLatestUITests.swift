@@ -52,7 +52,7 @@ final class JumpToLatestUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-store-preview", "-threads-preview", "-stream-preview", "-stream-preview-autostart",
-                               "-stream-preview-history", "300", "-open-first"] + common
+                               "-stream-preview-history", "300", "-stream-preview-seconds", "600", "-open-first"] + common
         let input = app.descendants(matching: .any).matching(identifier: "message-input").firstMatch
         for _ in 0..<4 {
             app.launch()

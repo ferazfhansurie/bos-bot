@@ -1087,7 +1087,9 @@ final class Session: ObservableObject {
             let reply = String(repeating: paragraph, count: 2) + "\n\n- first thing to check\n- second thing to check\n\n"
             let words = reply.split(separator: " ", omittingEmptySubsequences: false).map { $0 + " " }
             var seq = 1, tick = 0
-            let end = ContinuousClock.now + .seconds(90)
+            // `-stream-preview-seconds n`: stream longer, for slow ui tests
+            let seconds = args.firstIndex(of: "-stream-preview-seconds").flatMap { args.indices.contains($0 + 1) ? Int(args[$0 + 1]) : nil } ?? 90
+            let end = ContinuousClock.now + .seconds(seconds)
             while ContinuousClock.now < end, let self {
                 tick += 1
                 let delta = (0..<4).map { words[(tick * 4 + $0) % words.count] }.joined()

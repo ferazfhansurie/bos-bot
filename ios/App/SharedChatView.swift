@@ -46,6 +46,9 @@ struct SharedChatView: View {
     @State private var readingStore: ReadingPositionStore?
     @State private var savedReading: ReadingPosition?
     @State private var visibleReadingID: String?
+    /// Bumped by the down button; on iOS 18 the scroll position goes to the
+    /// bottom edge.
+    @State private var jumpRequest = 0
     @State private var lastReadingID: String?
     @State private var newestObservedID: String?
     @State private var readingTarget: String?
@@ -213,7 +216,7 @@ struct SharedChatView: View {
                     }
                 }
                 .defaultScrollAnchor(.bottom)
-                .scrollPosition(id: $visibleReadingID, anchor: .top)
+                .modifier(ReadingScrollPosition(visibleID: $visibleReadingID, jumpToEnd: jumpRequest))
                 .onChange(of: visibleReadingID) { _, id in
                     if let id, messages.contains(where: { $0.id == id }) { lastReadingID = id }
                 }
@@ -514,12 +517,16 @@ struct SharedChatView: View {
     }
 
     /// Rows far above the end only have estimated heights in the lazy
-    /// stack, so one animated jump in a long room stopped partway, and the
-    /// end marker isn't a ForEach row, so the stack can't find it until it's
-    /// built. Go to the newest row first, then settle on the end until it is
-    /// on screen.
+    /// stack, so one jump to the end in a long room stopped partway. On
+    /// iOS 18 the scroll position goes to the bottom edge, which doesn't
+    /// depend on finding a row. On 17, go to the newest row first, then
+    /// settle on the end marker.
     private func jumpToLatest(_ proxy: ScrollViewProxy) {
         followingBottom = true
+        if #available(iOS 18.0, *) {
+            jumpRequest += 1
+            return
+        }
         if let newest = SharedChatMessage.visible(messages).last?.id { proxy.scrollTo(newest, anchor: .bottom) }
         Task { @MainActor in
             for pass in 0..<10 {
