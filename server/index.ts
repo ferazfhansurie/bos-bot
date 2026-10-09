@@ -62,6 +62,7 @@ import { onboardingChief } from "./onboarding-chief.ts";
 import { applyOnboardingChatEvent, ONBOARDING_CONNECT_APPS, parseOnboardingChatEvent } from "./onboarding-chat.ts";
 import { initialOnboardingState, type OnboardingChatEvent, type OnboardingChatState } from "../shared/onboarding-chat.ts";
 import { hostedFreeTokenValid, registerHostedFree, verifyFreeModelKey } from "./free-model-setup.ts";
+import { requestWelcome, welcomeInstallId, welcomeName } from "./welcome-chat.ts";
 import { BOS_FREE_API, BOS_FREE_MODEL, BOS_FREE_NAME } from "./drivers/openrouter-free.ts";
 import { SharedRoomRepository } from "./shared-room-repository.ts";
 import { SharedBotTasks } from "./shared-bot-tasks.ts";
@@ -21689,6 +21690,21 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         res.setHeader("cache-control","no-store");
         return json(res,200,{instances:await describeInstances(),moved});
       } finally {providerInstancesChanging.delete(instanceId);providerConfigBusy=false;}
+    }
+
+    // "Say hi to firaz" at the end of first run: an explicit owner action
+    // (default admin scope). bos.aihlete.com answers 201/429/503 as-is.
+    if (method === "POST" && path === "/api/onboarding/welcome") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      const body = await readBody(req, 2048);
+      const name = welcomeName(body?.name);
+      if (!name) return json(res, 400, { error: "Your name needs 1 to 40 characters." });
+      let installId: string;
+      try { installId = await welcomeInstallId(DATA_DIR); }
+      catch { return json(res, 503, { error: "Firaz isn't around right now." }); }
+      const result = await requestWelcome({ installId, name });
+      res.setHeader("cache-control", "no-store");
+      return json(res, result.status, result.status === 201 ? { url: result.url, expiresAt: result.expiresAt } : { error: result.error });
     }
 
     // ── provider instances (model picker) ──

@@ -34,6 +34,7 @@ import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-lin
 import { windowChromeOptions } from "./window-chrome.mjs";
 import { collisionFreeDownloadPath, defaultSaveName, withSavableFile } from "./save-file.mjs";
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
+import { WELCOME_PARTITION, sameWelcomeOrigin, welcomePermissionAllowed, welcomeWindowUrl } from "./welcome-window.mjs";
 import { appPermissionAllowed, externalWebUrl } from "./app-permissions.mjs";
 import {
   ensureManagedComposioCredentials,
@@ -109,6 +110,7 @@ const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = SERVER_PORTS[0];
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 let desktopViewerWindow = null;
+let welcomeWindow = null;
 let desktopViewerOwner = null;
 let desktopViewerContextId = null;
 let desktopWorkspaceManager = null;
@@ -1629,6 +1631,73 @@ function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
   return true;
 }
 
+// "Say hi to firaz": a top-level window on firaz's server, in its own
+// persistent partition so the guest stays signed in across launches and its
+// cookie never meets the app's. A second hello focuses the open window.
+function openWelcomeWindow(rawUrl) {
+  const url = welcomeWindowUrl(rawUrl);
+  if (welcomeWindow && !welcomeWindow.isDestroyed()) {
+    if (!sameWelcomeOrigin(welcomeWindow.webContents.getURL(), url.origin) || url.hash) void welcomeWindow.loadURL(url.toString());
+    welcomeWindow.show();
+    welcomeWindow.focus();
+    return true;
+  }
+  const origin = url.origin;
+  const win = new BrowserWindow({
+    width: 980,
+    height: 760,
+    minWidth: 420,
+    minHeight: 480,
+    show: false,
+    title: "say hi to firaz",
+    icon: APP_ICON,
+    backgroundColor: "#070707",
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      partition: WELCOME_PARTITION,
+    },
+  });
+  welcomeWindow = win;
+  win.webContents.session.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
+    welcomePermissionAllowed(permission, requestingOrigin, origin),
+  );
+  win.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details) =>
+    callback(welcomePermissionAllowed(permission, details?.requestingUrl || webContents.getURL(), origin)),
+  );
+  win.once("ready-to-show", () => {
+    if (win.isDestroyed()) return;
+    win.show();
+    win.focus();
+  });
+  win.on("closed", () => {
+    if (welcomeWindow === win) welcomeWindow = null;
+  });
+  win.webContents.setWindowOpenHandler(({ url: target }) => {
+    try {
+      void shell.openExternal(externalWebUrl(target));
+    } catch {
+      // Ignore non-web links from remote content.
+    }
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (event, target) => {
+    if (sameWelcomeOrigin(target, origin)) return;
+    event.preventDefault();
+    try {
+      void shell.openExternal(externalWebUrl(target));
+    } catch {
+      // Keep privileged or malformed navigation out of the window.
+    }
+  });
+  void win.loadURL(url.toString()).catch(() => {
+    if (!win.isDestroyed()) win.show();
+  });
+  return true;
+}
+
 function ensureDesktopWorkspace(owner) {
   if (!owner || owner.isDestroyed()) throw new Error("The OpenMausBot window is unavailable");
   if (desktopWorkspaceManager) {
@@ -2383,6 +2452,8 @@ ipcMain.handle("desktop-viewer:open", localOnly("desktop-viewer:open", (event, r
   const owner = BrowserWindow.fromWebContents(event.sender);
   return openDesktopViewer(owner, rawUrl, title, contextId);
 }));
+
+ipcMain.handle("welcome:open", localOnly("welcome:open", (_event, rawUrl) => openWelcomeWindow(rawUrl)));
 
 // Two Local VM desktops share the existing app BrowserWindow. The renderer
 // supplies only layout and intent; URL validation, sandboxing, session

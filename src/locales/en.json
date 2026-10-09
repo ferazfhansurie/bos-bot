@@ -1976,6 +1976,8 @@
   "connectors.searchPlaceholder": "Search apps",
   "connectors.notConfigured": "Connected apps are temporarily unavailable. Retry after restarting the host, or configure the connection service there.",
   "connectors.openSettings": "Open settings",
+  "connectors.needsComposioKey": "Connected apps need a Composio key. Add yours in Settings > Connections.",
+  "connectors.addComposioKey": "Add your Composio key",
   "connectors.perBot.title": "Not every bot can use these apps.",
   "connectors.perBot.body": "Connecting an app here does not hand it to a bot. Each bot has its own Connected apps switch under Settings → Access, and until it is on the bot does not know the app exists.",
   "connectors.perBot.allow": "Allow {name}",
