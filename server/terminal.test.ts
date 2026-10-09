@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -113,7 +114,7 @@ it("strips workspace credentials from the real shell without changing the server
     const items = await waitFor(ws, items => items.some(f => f.type === "exit"));
     const lines = items.filter(f => f.type === "output").map(f => f.data).join("").split(/\r?\n/);
     expect(lines).toContain("credential-state::::safe-value:xterm-256color");
-    for (const key of ["XAI_API_KEY", "BOX_TOKEN", "OMB_TTS_KEY"]) expect(process.env[key]).toBe("fixture-workspace-secret");
+    for (const key of ["XAI_API_KEY", "BOX_TOKEN", "OMB_TTS_KEY"]) expect(compatEnv[key]).toBe("fixture-workspace-secret");
   } finally { vi.unstubAllEnvs(); }
 });
 it("requires desktop authority even for a loopback admin or companion", async () => {
@@ -188,3 +189,4 @@ it("holds the actual update/restore admission guard until terminal cleanup finis
   expect(await maintenance.prepareUpdate("fixture-update",async()=>"prepared",hooks)).toBe("prepared");
   maintenance.cancelUpdate("fixture-update");
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

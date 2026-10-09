@@ -161,3 +161,4 @@ test("does not cache a failed save for an exact encrypted retry", async () => {
   assert.deepEqual(await save(request), phoneSecretSaveResult("operation_1", true));
   assert.equal(calls, 2);
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

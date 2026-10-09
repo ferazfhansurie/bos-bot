@@ -57,3 +57,4 @@ it("gives a room turn the memory_update guidance, not the file-tools one", async
     await fixture.close();
   }
 }, 120_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

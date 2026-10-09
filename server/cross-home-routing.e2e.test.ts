@@ -172,3 +172,4 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     writeFileSync(gate, "finish");
   } finally { if (restarted && restarted.exitCode === null && restarted.signalCode === null) { const done = once(restarted, "exit"); restarted.kill("SIGTERM"); await done; } await local?.close(); await remote.close(); rmSync(gates, { recursive: true, force: true }); }
 }, 120000);
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

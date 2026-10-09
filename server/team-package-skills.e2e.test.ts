@@ -87,3 +87,4 @@ it("transfers only selected skills disabled, preserves originals, and rolls back
     await fixture.close();
   }
 }, 90_000);
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

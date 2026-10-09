@@ -14,7 +14,7 @@ import pg from 'pg';
 import * as Sentry from '@sentry/node';
 import { buildOTPEmail } from './otp-email.ts';
 
-const HOSTED = /(^|\.)openmausbot\.com$/i;
+const HOSTED = /(^|\.)bosbot\.com$/i;
 const MAX_BODY = 16 * 1024;
 
 export type IssuerConfig = {

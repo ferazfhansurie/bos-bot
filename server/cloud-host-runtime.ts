@@ -1,3 +1,4 @@
+import { compatEnvironment } from "../electron/branding-env.cjs";
 import { createHash } from "node:crypto";
 import { IdSchema } from "../shared/cloud-protocol/index.ts";
 import type { RuntimeEvent } from "../shared/runtime-events.ts";
@@ -186,15 +187,15 @@ const nodeFetch: HostFetch = (url, init) => fetch(url, { ...init, redirect: "err
  * _CREDENTIAL and _BEARER are all set; OMB_CLOUD_HOST_BOTS optionally maps
  * cloud bot ids to local ones (JSON object). Never runs in the packaged app. */
 export function startCloudHostFromEnv(env: NodeJS.ProcessEnv, deps: CloudHostRuntimeDeps, fetchImpl: HostFetch = nodeFetch): CloudRoomHost | null {
-  const values = ENV.map(name => env[name]?.trim() ?? "");
+  const values = ENV.map(name => compatEnvironment(env)[name]?.trim() ?? "");
   if (values.some(value => !value)) return null;
   const [rawUrl, workspaceId, hostId, credential, bearer] = values as [string, string, string, string, string];
   const log = deps.log ?? ((message: string) => console.warn(message));
-  if (env.OMB_RESOURCES_PATH) { log("cloud host: ignored in the packaged app (dev build only)"); return null; }
+  if (compatEnvironment(env).OMB_RESOURCES_PATH) { log("cloud host: ignored in the packaged app (dev build only)"); return null; }
   const baseUrl = cloudHostBaseUrl(rawUrl);
   if (!baseUrl) { log("cloud host: OMB_CLOUD_HOST_URL must be https, or http to 127.0.0.1/localhost"); return null; }
   if (!IdSchema.safeParse(workspaceId).success || !IdSchema.safeParse(hostId).success) { log("cloud host: workspace or host id is malformed"); return null; }
-  const botMap = parseBotMap(env.OMB_CLOUD_HOST_BOTS);
+  const botMap = parseBotMap(compatEnvironment(env).OMB_CLOUD_HOST_BOTS);
   if (botMap === null) { log("cloud host: OMB_CLOUD_HOST_BOTS must be a JSON object of cloud bot id to local bot id"); return null; }
   try {
     const runtime = createCloudHostRuntime({ ...deps, log, ...(botMap ? { botMap } : {}) });
@@ -207,3 +208,4 @@ export function startCloudHostFromEnv(env: NodeJS.ProcessEnv, deps: CloudHostRun
     return null;
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

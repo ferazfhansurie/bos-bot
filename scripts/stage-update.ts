@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --experimental-strip-types
+import { compatEnv } from "../electron/branding-env.cjs";
 // Stage a built BOS Bot.app as the update candidate the in-app Update button
 // applies. The no-downgrade guard judges the bundle FIRST, with the same
 // `check` the updater runs at admission and again inside apply.py: an
@@ -22,7 +23,7 @@ const args = process.argv.slice(2);
 const flag = (name: string) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : undefined; };
 const source = args.find(a => !a.startsWith("--") && a.endsWith(".app"));
 if (!source || !existsSync(join(source, "Contents"))) { console.error("usage: stage-update.ts <BOS Bot.app> --version X --sha Y [--data-dir DIR] [--live APP] [--rollback]"); process.exit(2); }
-const dataDir = resolve(flag("data-dir") ?? process.env.OMB_DATA_DIR ?? join(homedir(), ".bos-bot"));
+const dataDir = resolve(flag("data-dir") ?? compatEnv.OMB_DATA_DIR ?? join(homedir(), ".bos-bot"));
 const version = flag("version") ?? (() => {
   const plist = readFileSync(join(source, "Contents", "Info.plist"), "utf8");
   return /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1];
@@ -35,7 +36,7 @@ if (!version || !sha) { console.error("need --version and --sha (or an Info.plis
 const here = dirname(fileURLToPath(import.meta.url));
 const guardScript = flag("guard") ?? join(here, "..", "electron", "resources", "updater", "no-downgrade.py");
 if (!existsSync(guardScript)) { console.error(`no-downgrade guard missing at ${guardScript}; refusing to stage`); process.exit(1); }
-const live = flag("live") ?? process.env.OMB_UPDATER_LIVE_APP ?? "/Applications/BOS Bot.app";
+const live = flag("live") ?? compatEnv.OMB_UPDATER_LIVE_APP ?? "/Applications/BOS Bot.app";
 const rollback = args.includes("--rollback");
 const guardArgs = [guardScript, "check", "--candidate", resolve(source), "--live", live, "--ledger", join(dataDir, "updates", "live-build.json")];
 if (rollback) guardArgs.push("--rollback");
@@ -59,3 +60,4 @@ if (process.platform === "darwin") execFileSync("/usr/bin/ditto", [source, targe
 else cpSync(source, target, { recursive: true, verbatimSymlinks: true });
 const manifest = writeCandidateManifest(dir, { version, sha, app: basename(source) });
 console.log(JSON.stringify({ staged: target, ...manifest }, null, 2));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

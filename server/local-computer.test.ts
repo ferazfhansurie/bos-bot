@@ -303,3 +303,4 @@ describe("local computer descriptor", () => {
     expect(readCuaConnection({ platform: "win32", userData })).toBeNull();
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -891,15 +892,15 @@ describe("credential env preference", () => {
   let saved: Record<string, string | undefined>;
 
   beforeEach(() => {
-    saved = Object.fromEntries(VARS.map((name) => [name, process.env[name]]));
-    for (const name of VARS) delete process.env[name];
+    saved = Object.fromEntries(VARS.map((name) => [name, compatEnv[name]]));
+    for (const name of VARS) delete compatEnv[name];
     mkdirSync(DATA_DIR, { recursive: true });
     rmSync(join(DATA_DIR, "config.json"), { force: true });
   });
   afterEach(() => {
     for (const name of VARS) {
-      if (saved[name] === undefined) delete process.env[name];
-      else process.env[name] = saved[name];
+      if (saved[name] === undefined) delete compatEnv[name];
+      else compatEnv[name] = saved[name];
     }
     rmSync(join(DATA_DIR, "config.json"), { force: true });
   });
@@ -918,12 +919,12 @@ describe("credential env preference", () => {
         imageGen: { key: "file-image" },
       }),
     );
-    process.env.XAI_API_KEY = "env-xai";
-    process.env.BOX_TOKEN = "env-box";
-    process.env.OPENCODE_API_KEY = "env-ocg";
-    process.env.OMB_TTS_KEY = "env-tts";
-    process.env.OMB_FISH_AUDIO_API_KEY = "env-fish";
-    process.env.OMB_OPENAI_IMAGE_KEY = "env-image";
+    compatEnv.XAI_API_KEY = "env-xai";
+    compatEnv.BOX_TOKEN = "env-box";
+    compatEnv.OPENCODE_API_KEY = "env-ocg";
+    compatEnv.OMB_TTS_KEY = "env-tts";
+    compatEnv.OMB_FISH_AUDIO_API_KEY = "env-fish";
+    compatEnv.OMB_OPENAI_IMAGE_KEY = "env-image";
     const cfg = loadConfig();
     expect(cfg.xai).toEqual({ key: "env-xai", url: "https://api.example.test/v1" });
     expect(cfg.box).toEqual({ token: "env-box" });
@@ -1129,14 +1130,14 @@ describe("credential env preference", () => {
     // after migration the desktop shell may leave "" behind (a cleared key
     // that was saved mid-session); the env-injected value must still win
     writeFileSync(join(DATA_DIR, "config.json"), JSON.stringify({ xai: { key: "" } }));
-    process.env.XAI_API_KEY = "env-xai";
+    compatEnv.XAI_API_KEY = "env-xai";
     expect(loadConfig().xai?.key).toBe("env-xai");
   });
 
   it("syncCredentialEnv keeps process.env in step with a credential save", () => {
-    process.env.XAI_API_KEY = "boot-injected";
-    process.env.BOX_TOKEN = "boot-injected";
-    process.env.COMPOSIO_API_KEY = "boot-injected";
+    compatEnv.XAI_API_KEY = "boot-injected";
+    compatEnv.BOX_TOKEN = "boot-injected";
+    compatEnv.COMPOSIO_API_KEY = "boot-injected";
     syncCredentialEnv({
       xai: { key: "just-saved" },
       composio: { apiKey: "ak_just_saved" },
@@ -1145,48 +1146,48 @@ describe("credential env preference", () => {
     });
     // a saved value replaces the boot-time one; a cleared value drops it;
     // untouched sections change nothing
-    expect(process.env.XAI_API_KEY).toBe("just-saved");
-    expect(process.env.COMPOSIO_API_KEY).toBe("ak_just_saved");
-    expect(process.env.BOX_TOKEN).toBeUndefined();
-    expect(process.env.OMB_TTS_KEY).toBeUndefined();
-    expect(process.env.OMB_FISH_AUDIO_API_KEY).toBeUndefined();
+    expect(compatEnv.XAI_API_KEY).toBe("just-saved");
+    expect(compatEnv.COMPOSIO_API_KEY).toBe("ak_just_saved");
+    expect(compatEnv.BOX_TOKEN).toBeUndefined();
+    expect(compatEnv.OMB_TTS_KEY).toBeUndefined();
+    expect(compatEnv.OMB_FISH_AUDIO_API_KEY).toBeUndefined();
   });
 
   it("syncCredentialEnv updates Fish Audio without replacing ElevenLabs", () => {
-    process.env.OMB_TTS_KEY = "eleven-kept";
-    process.env.OMB_FISH_AUDIO_API_KEY = "fish-old";
+    compatEnv.OMB_TTS_KEY = "eleven-kept";
+    compatEnv.OMB_FISH_AUDIO_API_KEY = "fish-old";
     syncCredentialEnv({ tts: { fishKey: "fish-new" } });
-    expect(process.env.OMB_TTS_KEY).toBe("eleven-kept");
-    expect(process.env.OMB_FISH_AUDIO_API_KEY).toBe("fish-new");
+    expect(compatEnv.OMB_TTS_KEY).toBe("eleven-kept");
+    expect(compatEnv.OMB_FISH_AUDIO_API_KEY).toBe("fish-new");
   });
 
   it("syncCredentialEnv keeps model and provider env in step with a save", () => {
     // loadConfig() prefers OPENAI_COMPAT_MODEL/PROVIDER over the file, so a
     // mid-session save must update them like key/url or the boot-injected
     // values shadow the save until relaunch
-    process.env.OPENAI_COMPAT_MODEL = "boot-model";
-    process.env.OPENAI_COMPAT_PROVIDER = "boot-provider";
+    compatEnv.OPENAI_COMPAT_MODEL = "boot-model";
+    compatEnv.OPENAI_COMPAT_PROVIDER = "boot-provider";
     syncCredentialEnv({
       openaiCompat: { model: "vendor/just-saved", provider: "fireworks" },
     });
-    expect(process.env.OPENAI_COMPAT_MODEL).toBe("vendor/just-saved");
-    expect(process.env.OPENAI_COMPAT_PROVIDER).toBe("fireworks");
+    expect(compatEnv.OPENAI_COMPAT_MODEL).toBe("vendor/just-saved");
+    expect(compatEnv.OPENAI_COMPAT_PROVIDER).toBe("fireworks");
   });
 
   it("syncCredentialEnv clears model and provider env on an empty-string save", () => {
-    process.env.OPENAI_COMPAT_MODEL = "boot-model";
-    process.env.OPENAI_COMPAT_PROVIDER = "boot-provider";
+    compatEnv.OPENAI_COMPAT_MODEL = "boot-model";
+    compatEnv.OPENAI_COMPAT_PROVIDER = "boot-provider";
     syncCredentialEnv({ openaiCompat: { model: "", provider: "" } });
-    expect(process.env.OPENAI_COMPAT_MODEL).toBeUndefined();
-    expect(process.env.OPENAI_COMPAT_PROVIDER).toBeUndefined();
+    expect(compatEnv.OPENAI_COMPAT_MODEL).toBeUndefined();
+    expect(compatEnv.OPENAI_COMPAT_PROVIDER).toBeUndefined();
   });
 
   it("syncCredentialEnv leaves model and provider env untouched when absent from the patch", () => {
-    process.env.OPENAI_COMPAT_MODEL = "boot-model";
-    process.env.OPENAI_COMPAT_PROVIDER = "boot-provider";
+    compatEnv.OPENAI_COMPAT_MODEL = "boot-model";
+    compatEnv.OPENAI_COMPAT_PROVIDER = "boot-provider";
     syncCredentialEnv({ openaiCompat: { key: "just-saved" } });
-    expect(process.env.OPENAI_COMPAT_MODEL).toBe("boot-model");
-    expect(process.env.OPENAI_COMPAT_PROVIDER).toBe("boot-provider");
+    expect(compatEnv.OPENAI_COMPAT_MODEL).toBe("boot-model");
+    expect(compatEnv.OPENAI_COMPAT_PROVIDER).toBe("boot-provider");
   });
 });
 
@@ -1312,3 +1313,4 @@ describe("customMcpServers with url entries", () => {
     });
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,4 +1,4 @@
-// "About OpenMausBot" — the version you are running and where to go next.
+// "About BOS Bot" — the version you are running and where to go next.
 // Small on purpose: the interesting settings live in the settings panel, and
 // this exists so a bug report can quote a version number.
 import { useEffect, useRef } from "react";
@@ -53,7 +53,7 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
           {platform ? ` · ${platform}` : ""}
         </p>
         <p className="mt-3 text-[13px] leading-relaxed text-ink-secondary">
-          A shared place for people and their bots. Built on OpenMausBot, under the Apache 2.0 license.
+          A shared place for people and their bots. Built on BOS Bot, under the Apache 2.0 license.
         </p>
         <div className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[13px]">
           <AboutLink href={APP_REPOSITORY} label="Upstream source" />

@@ -53,7 +53,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("OpenMausBot data-directory lease", () => {
+describe("BOS Bot data-directory lease", () => {
   it("holds one directory until its matching handle releases it", () => {
     const dir = tempDataDir();
     const lease = acquireDataDirLease(dir);
@@ -158,3 +158,4 @@ describe("OpenMausBot data-directory lease", () => {
     expect(readFileSync(path, "utf8")).toBe("not-json\n");
   });
 });
+// branding compatibility (electron/branding-compat.json): lease: a new server must lock the same data-directory lease as an existing process

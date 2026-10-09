@@ -1,12 +1,12 @@
 # Self-host the full stack with rootless Podman
 
-Run the OpenMausBot server, Caddy, and per-bot Linux desktops with one Podman
+Run the BOS Bot server, Caddy, and per-bot Linux desktops with one Podman
 engine. Docker Engine, Docker Desktop, and Docker Compose are not required;
 `podman-compose` provides the Compose commands. The existing
 [`deploy/docker-compose.yml`](../docker-compose.yml) remains an independent option.
 
 ```text
-Browser -> loopback Caddy :8080 -> OpenMausBot :8799
+Browser -> loopback Caddy :8080 -> BOS Bot :8799
                                     |
                              rootless Podman socket
                                     |
@@ -31,15 +31,15 @@ that WSL can access through `/mnt/c`, `/mnt/d`, etc. From the repository root:
 .\deploy\podman\maus.ps1 ps
 ```
 
-Setup creates/starts a WSL2 machine named `openmausbot` (4 CPUs, 10 GiB RAM,
+Setup creates/starts a WSL2 machine named `bosbot` (4 CPUs, 10 GiB RAM,
 60 GiB requested disk), installs `podman-compose` inside it if missing, enables
 the user socket, and generates `.env`. WSL resource limits still apply.
-It preserves an existing `.env`. Use `OMB_PODMAN_MACHINE` to select a different
+It preserves an existing `.env`. Use `BOS_PODMAN_MACHINE` to select a different
 machine. The wrapper refuses a stopped machine for normal Compose commands;
-after a reboot, use `podman machine start openmausbot` before `up -d`.
+after a reboot, use `podman machine start bosbot` before `up -d`.
 
 Compose runs **inside** the machine, so the socket and bind paths have the same
-meaning for the server and the engine. `OMB_PODMAN_ENV_FILE` selects an alternate
+meaning for the server and the engine. `BOS_PODMAN_ENV_FILE` selects an alternate
 environment file (relative to `deploy/podman`), useful for an isolated fixture.
 
 ## Linux x64 / systemd
@@ -67,7 +67,7 @@ Podman restart service configured according to the host's administration policy.
 ## Engines and desktops
 
 Open <http://localhost:8080>. Sign the selected engines in inside the container,
-for example `maus.ps1 exec omb claude`. Their logins persist under `OMB_DATA_ROOT`.
+for example `maus.ps1 exec omb claude`. Their logins persist under `BOS_DATA_ROOT`.
 For the Linux commands, substitute the `podman compose --env-file .env -f
 compose.yaml` prefix for `maus.ps1`.
 
@@ -90,9 +90,9 @@ existing data.
 ## Access and trust boundary
 
 Caddy listens on loopback only. To use Tailscale Serve, route the tailnet HTTPS
-endpoint to `http://127.0.0.1:8080`, set `OMB_PUBLIC_URL` to that HTTPS URL and
-`OMB_HTTPS_HOST` to its hostname, then recreate the services with `up -d`.
-Mint a pairing code with `maus.ps1 exec omb node dist-server/openmausbot.js pair`.
+endpoint to `http://127.0.0.1:8080`, set `BOS_PUBLIC_URL` to that HTTPS URL and
+`BOS_HTTPS_HOST` to its hostname, then recreate the services with `up -d`.
+Mint a pairing code with `maus.ps1 exec omb node dist-server/bosbot.js pair`.
 The proxy forwards the client address and scheme so the server's pairing checks
 remain in force. Do not publish the server, webhook listener, or Podman socket
 directly. For public-domain HTTPS, use the existing Docker deployment or design
@@ -109,7 +109,7 @@ manual noVNC access from another device needs a separate authenticated relay.
 
 - Update the checkout and run `up -d --build`; there is no published Podman app
   image/update channel in this recipe.
-- Data, chats, credentials, and desktop workspaces live under `OMB_DATA_ROOT`.
+- Data, chats, credentials, and desktop workspaces live under `BOS_DATA_ROOT`.
   Stop the app and its desktops before archiving that Linux directory. Do not
   copy a live SQLite database. Preserve ownership and the absolute path on restore.
 - Compose `down` stops the app and Caddy, **not** the dynamically created bot

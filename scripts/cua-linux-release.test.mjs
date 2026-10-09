@@ -275,3 +275,4 @@ describe("Linux CUA release staging", () => {
     },
   );
 });
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

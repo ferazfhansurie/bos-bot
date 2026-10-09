@@ -1,11 +1,11 @@
 {
-  "name": "@openmausbot/companion",
+  "name": "@bosbot/companion",
   "version": "0.1.0",
   "private": true,
-  "description": "A sidecar that lets a paired phone reach an unmodified OpenMausBot harness",
+  "description": "A sidecar that lets a paired phone reach an unmodified BOS Bot harness",
   "type": "module",
   "bin": {
-    "openmausbot-companion": "./src/index.ts"
+    "bosbot-companion": "./src/index.ts"
   },
   "engines": {
     "node": ">=24"

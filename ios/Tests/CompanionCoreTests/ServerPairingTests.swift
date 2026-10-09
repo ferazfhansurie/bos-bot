@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import CompanionCore
 
-/// Pairing with a server directly (`openmausbot serve`, the Docker stack):
+/// Pairing with a server directly (`bosbot serve`, the Docker stack):
 /// the `https://host/pair#code=…` link, `POST /api/auth/pair`, and the
 /// connection that comes out of it.
 private final class ServerRequestStub: URLProtocol {
@@ -277,3 +277,4 @@ final class ServerPairingTests: XCTestCase {
         XCTAssertEqual(components.queryItems?.first { $0.name == "screens" }?.value, "off")
     }
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

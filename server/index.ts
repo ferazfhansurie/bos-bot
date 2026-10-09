@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { roomPeople, roomPushPeople, personCanReadRoom, checkedRoomPeople, roomForPerson } from "./room-people.ts";
 import { publicRoomMemberTurns } from "./room-member-turns.ts";
 import { WorkContinuity, assessTeamWork, workPlanInputSchema } from "./work-continuity.ts";
@@ -15,7 +16,7 @@ import { SHARED_ARTIFACT_INSTRUCTIONS } from "./shared-response-artifacts.ts";
 import { groupReplyTargets } from "../shared/group-replies.ts";
 import { SharedTyping } from "./shared-typing.ts";
 import { sharedMentionTargets } from "../shared/shared-mentions.ts";
-// OpenMausBot server — the harness host. Clients hold no transports
+// BOS Bot server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -51,8 +52,8 @@ import { RemoteBotBridge, isRemoteBotPath, homeKey } from "./remote-bot-bridge.t
 import { tailnetOrigin } from "./tailnet-origin.ts";
 /** Self-hosts may advertise a public HTTPS origin; private hosts use Tailscale. */
 async function federationOrigin(peer?: string): Promise<string | null> {
-  if (process.env.OMB_FEDERATION_ORIGIN) {
-    const origin = new URL(process.env.OMB_FEDERATION_ORIGIN);
+  if (compatEnv.OMB_FEDERATION_ORIGIN) {
+    const origin = new URL(compatEnv.OMB_FEDERATION_ORIGIN);
     if (origin.protocol !== "https:" || origin.pathname !== "/" || origin.username || origin.password || origin.search || origin.hash) throw new Error("invalid federation origin");
     return origin.origin;
   }
@@ -170,7 +171,7 @@ import * as composio from "./composio.ts";
 import { WhatsAppService, WHATSAPP_NATIVE_PROMPT } from "./whatsapp-service.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
 import { canAccessTeam, canMessagePeer, canReachPeer, messageablePeers, peerAllowed, peerName, peerRosterSystemPrompt, peerStatus, peerStatusWords, reachablePeers, resolveTeammate, roomPeerRosterSystemPrompt, roomRosterLine, PEER_ACCESS_HELP } from "./peer-roster.ts";
-import { openMausStatusSystemPrompt } from "./openmaus-status-capsule.ts";
+import { bosStatusSystemPrompt } from "./bos-status-capsule.ts";
 import {
   containerComputerAction,
   containerComputerExists,
@@ -551,11 +552,11 @@ import {
   type PhoneSecretContext,
 } from "./phone-secret.ts";
 
-const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
-const WEBHOOK_PORT = Number(process.env.OMB_WEBHOOK_PORT || PORT + 1);
+const PORT = Number(compatEnv.OMB_PORT || compatEnv.OGB_PORT || 8799);
+const WEBHOOK_PORT = Number(compatEnv.OMB_WEBHOOK_PORT || PORT + 1);
 // Behind a proxy or tunnel, the base URL senders should use (docs/self-hosting.md).
-const WEBHOOK_PUBLIC_URL = process.env.OMB_WEBHOOK_PUBLIC_URL || undefined;
-const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
+const WEBHOOK_PUBLIC_URL = compatEnv.OMB_WEBHOOK_PUBLIC_URL || undefined;
+const STATIC_DIR = compatEnv.OMB_STATIC_DIR || null;
 const MIME: Record<string, string> = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -605,8 +606,8 @@ let updateDraining = false;
 function assertNotDraining(): void {
   if (updateDraining) throw Object.assign(new Error("BOS is updating. New work starts again after the restart."), { status: 503 });
 }
-const desktopLifecycleGeneration = process.env.OMB_DESKTOP_LIFECYCLE_GENERATION;
-const startupUpdateReceipt = process.env.OMB_DESKTOP_PARENT === "1" ? readPreparedUpdateReceipt(DATA_DIR, desktopLifecycleGeneration) : null;
+const desktopLifecycleGeneration = compatEnv.OMB_DESKTOP_LIFECYCLE_GENERATION;
+const startupUpdateReceipt = compatEnv.OMB_DESKTOP_PARENT === "1" ? readPreparedUpdateReceipt(DATA_DIR, desktopLifecycleGeneration) : null;
 if (startupUpdateReceipt) workspaceMaintenance.restoreUpdate(startupUpdateReceipt.nonce);
 // Only after ensureDirs(): it performs the one-time rename of the legacy data
 // dir, which must not find a freshly created ~/.openmausbot already there.
@@ -631,7 +632,7 @@ const peerHandoffs = new PeerHandoffs(join(DATA_DIR, "peer-handoffs.json"));
 // push registration is bound to the sidecar's device id instead, and lives
 // exactly as long as that device stays paired in the sidecar's registry.
 const COMPANION_PUSH_PREFIX = "companion-";
-const COMPANION_DEVICES_FILE = join(process.env.OMB_COMPANION_DIR ?? join(homedir(), ".openmausbot-companion"), "devices.json");
+const COMPANION_DEVICES_FILE = join(compatEnv.OMB_COMPANION_DIR ?? join(homedir(), ".openmausbot-companion"), "devices.json");
 function companionDevicePaired(deviceId: string): boolean {
   try {
     const parsed = JSON.parse(readFileSync(COMPANION_DEVICES_FILE, "utf8")) as { devices?: Array<{ id?: unknown }> } | Array<{ id?: unknown }>;
@@ -727,13 +728,13 @@ const sharedComputers = new SharedComputers(id => sessions.isLive(id));
 const SESSION_COOKIE = sessionCookieName(PORT, ENVIRONMENT_ID);
 const HOSTED_WORKSPACE = hostedWorkspaceConfigured();
 let workspaceAccess: WorkspaceAccess | null = null;
-const DESKTOP_MANAGED = process.env.OMB_DESKTOP_PARENT === "1";
+const DESKTOP_MANAGED = compatEnv.OMB_DESKTOP_PARENT === "1";
 // Empty is deliberately a deny-all bootstrap state. Only Electron's private
 // utility-process port can replace it with the per-launch owner capability.
 let desktopMutationToken: string | undefined = DESKTOP_MANAGED ? "" : undefined;
 let companionMutationToken: string | undefined = DESKTOP_MANAGED ? "" : undefined;
 // Where remote clients reach this server (a proxy's public address); pairing URLs use it.
-const FALLBACK_PUBLIC_URL = process.env.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "") || null;
+const FALLBACK_PUBLIC_URL = compatEnv.OMB_PUBLIC_URL?.trim().replace(/\/+$/, "") || null;
 const cfg = loadConfig();
 /** prepaid xAI credits, read at most every 5 min (Settings → Usage, sidebar) */
 const readXaiCredits = createXaiCreditsReader();
@@ -871,7 +872,7 @@ function applyDesktopMutationTokenMessage(raw: unknown): boolean {
 const browserCleanup: BrowserCleanupCoordinator = new BrowserCleanupCoordinator({
   file: join(DATA_DIR, "browser-cleanups.json"),
   send: (request) => {
-    // Cleanup may only run the engine OpenMausBot itself configured or
+    // Cleanup may only run the engine BOS Bot itself configured or
     // downloaded. A binary the ambient PATH turned up — on a dev machine, a
     // global wrapper that shadows the harness PATH and rewrites the session
     // key — is not that engine: a close through it can fail and wedge the
@@ -890,7 +891,7 @@ const browserCleanup: BrowserCleanupCoordinator = new BrowserCleanupCoordinator(
     const work = status.kind === "ready" && sessions.length
       ? Promise.all(sessions.map(async (session) => {
           const ok = await clearBrowserSessionState(status.binaryPath, session, { encryptionKey: browserEngineEncryptionKey() });
-          if (!ok) console.warn(`browser cleanup: could not clear saved state for session ${session}; restart OpenMausBot to retry this profile's cleanup. Do not use state clear --all: it erases other profiles too.`);
+          if (!ok) console.warn(`browser cleanup: could not clear saved state for session ${session}; restart BOS Bot to retry this profile's cleanup. Do not use state clear --all: it erases other profiles too.`);
           return ok;
         }))
       : Promise.resolve([true]);
@@ -1169,7 +1170,7 @@ function agentsIntegration(
 
 /** Engine lifecycle hooks (item 0.2): a turn-scoped bearer the engine's hook
  * helper presents on /api/internal/hook. OMB_HOOKS=0 turns the channel off. */
-const hooksEnabled = () => process.env.OMB_HOOKS !== "0";
+const hooksEnabled = () => compatEnv.OMB_HOOKS !== "0";
 function hooksIntegration(botId: string, threadId: string, generation: string): { url: string; token: string } {
   const token = mintInternalCapability({
     botId,
@@ -1550,7 +1551,7 @@ async function browserIntegration(botId: string, profile: string | undefined, tu
       session,
       encryptionKey: browserEngineEncryptionKey(),
       persistent: profile !== "guest",
-      env: { ...process.env, PATH: augmentedPath() },
+      env: { ...compatEnv, PATH: augmentedPath() },
       attachCdpUrl: browserEngineAttachCdpUrl(cfg) ?? undefined,
     });
   await prepareBrowserSessionState(status.binaryPath, session, { env: spec.env, persistent: profile !== "guest", isCurrent: () => {
@@ -1582,9 +1583,9 @@ export function browserEngineSummary(): { kind: "engine" | "unavailable"; reason
 
 function phoneIntegration() {
   const env: Record<string, string> = { ...AGENTS_NODE_FLAG };
-  if (process.env.OMB_ADB_PATH) env.OMB_ADB_PATH = process.env.OMB_ADB_PATH;
-  if (process.env.OMB_RESOURCES_PATH) env.OMB_RESOURCES_PATH = process.env.OMB_RESOURCES_PATH;
-  if (process.env.PH_ANDROID_SERIAL) env.PH_ANDROID_SERIAL = process.env.PH_ANDROID_SERIAL;
+  if (compatEnv.OMB_ADB_PATH) env.OMB_ADB_PATH = compatEnv.OMB_ADB_PATH;
+  if (compatEnv.OMB_RESOURCES_PATH) env.OMB_RESOURCES_PATH = compatEnv.OMB_RESOURCES_PATH;
+  if (compatEnv.PH_ANDROID_SERIAL) env.PH_ANDROID_SERIAL = compatEnv.PH_ANDROID_SERIAL;
   return { command: process.execPath, args: [phoneProxyPath], env };
 }
 
@@ -2181,7 +2182,7 @@ function previewSystemPrompt(bot: BotRecord) {
   // `cfg` is the module-level config (`const cfg = loadConfig()` near the
   // top of index.ts), the same object the turn code reads.
   const persona = [
-    `You are ${bot.name}, a personal bot in OpenMausBot.`,
+    `You are ${bot.name}, a personal bot in BOS Bot.`,
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
   ]
@@ -2201,7 +2202,7 @@ function previewSystemPrompt(bot: BotRecord) {
           : null;
   const peers = reachablePeers(store.bots, bot);
   const coordination = bot.chiefOfStaff
-    ? chiefOfStaffSystemPrompt(bot.id, store.bots, true, openMausStatusSystemPrompt())
+    ? chiefOfStaffSystemPrompt(bot.id, store.bots, true, bosStatusSystemPrompt())
     : peers.length > 0
       ? peerRosterSystemPrompt(peers)
       : "";
@@ -3923,7 +3924,7 @@ sessions.onSessionRevoked((sessionId) => {
  * correctly through its own Last-Event-ID with no client code at all. */
 const STREAM_ID = randomUUID().slice(0, 8);
 const REPLAY_MAX = 500;
-const configuredSseHeartbeatMs = Number(process.env.OMB_SSE_HEARTBEAT_MS);
+const configuredSseHeartbeatMs = Number(compatEnv.OMB_SSE_HEARTBEAT_MS);
 const SSE_HEARTBEAT_MS =
   Number.isFinite(configuredSseHeartbeatMs) && configuredSseHeartbeatMs > 0
     ? configuredSseHeartbeatMs
@@ -4283,16 +4284,16 @@ const repeats = new RepeatDetector({ thresholds: [5, 10, 20], maxKeysPerThread: 
 // left its bot busy forever. The watchdog stops a turn whose thread has emitted NOTHING for stallMs —
 // activity-based, so an hour-long turn that keeps streaming is never
 // touched, and turns parked on a human approval are exempt.
-const TURN_STALL_MS = Math.max(60_000, Number(process.env.OMB_TURN_STALL_MS) || 20 * 60_000);
+const TURN_STALL_MS = Math.max(60_000, Number(compatEnv.OMB_TURN_STALL_MS) || 20 * 60_000);
 /** How long ask_bot waits synchronously before the ask is converted into a
  * delegation claim ticket (the peer's turn keeps running either way). */
-const ASK_BOT_TIMEOUT_MS = Math.max(5_000, Number(process.env.OMB_ASK_BOT_TIMEOUT_MS) || 4 * 60_000);
+const ASK_BOT_TIMEOUT_MS = Math.max(5_000, Number(compatEnv.OMB_ASK_BOT_TIMEOUT_MS) || 4 * 60_000);
 // A room waits for a busy teammate instead of dropping them, but never
 // forever: a bot parked on a permission card in another chat is "busy" until
 // a human returns. Past this cap a goal's lead is told the teammate could not
 // free up and reassigns, and a chat round moves on with a chip that says so —
 // the wait ends as data, not as a dead room. Tests shrink it.
-const GROUP_GOAL_WAIT_MAX_MS = Math.max(1_000, Number(process.env.OMB_GOAL_WAIT_MAX_MS) || 30 * 60_000);
+const GROUP_GOAL_WAIT_MAX_MS = Math.max(1_000, Number(compatEnv.OMB_GOAL_WAIT_MAX_MS) || 30 * 60_000);
 // Reassigning around a busy teammate is bounded too: after this many
 // exhausted waits in one run the team is blocked on availability, not stuck.
 const GROUP_GOAL_MAX_WAIT_EXHAUSTIONS = 3;
@@ -4853,7 +4854,7 @@ async function mountHostComputer(owner: TurnOwner, botId: string, providerSuppor
       : "this model engine cannot control this computer — choose Claude or an ACP engine, or select another destination");
   }
   const cua = readCuaConnection();
-  if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart OpenMausBot");
+  if (!cua) throw new Error("CUA Driver is not ready for this computer — check permissions and restart BOS Bot");
   await bindTurnComputer(owner, "computer:host");
   return gatedLocalComputer(cua, controlIntegration(botId, owner.threadId, owner.generation));
 }
@@ -5517,7 +5518,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const permission = event.requestType === "permission" && !event.questions?.length;
       // A permission request here is one the provider left for a person: its
       // own mode already ran (Ask, Edits, Auto's reviewer, Custom's config).
-      // OpenMausBot decides nothing about the action itself. Only Full access
+      // BOS Bot decides nothing about the action itself. Only Full access
       // answers, because that is exactly what the person granted. A QUESTION
       // always reaches the human — even Full access never invents an answer.
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
@@ -6277,7 +6278,7 @@ async function compactConversation(input: {
   // Use the selected account's launch setting. "auto" and "off" supply no
   // known numeric boundary; other providers do not inherit Claude's limit.
   const nativeCompactAt = instance.driverKind === "claudeAgent"
-    ? Number(autoCompactWindow({ ...process.env, ...cfg.instances?.[instance.instanceId]?.environment })) : undefined;
+    ? Number(autoCompactWindow({ ...compatEnv, ...cfg.instances?.[instance.instanceId]?.environment })) : undefined;
   if (!manual && !shouldCompact({ contextTokens: measurement?.tokens, estimatedBytes: bytes,
     budget: compactBudget(window, cfg.context?.compactAt, nativeCompactAt), floor, window, nativeCompactAt })) return;
   const fold = manual ? { folded: history, firstKeptId: "" } : foldPoint(history);
@@ -8593,7 +8594,7 @@ async function startTurn(
       let dispatchContext = decideContext(plannedConfig);
 
       const persona = [
-        `You are ${bot.name}, a personal bot in OpenMausBot.`,
+        `You are ${bot.name}, a personal bot in BOS Bot.`,
         bot.title && `Role: ${bot.title}.`,
         bot.description && `About: ${bot.description}`,
       ]
@@ -8674,13 +8675,13 @@ async function startTurn(
         throw Object.assign(new Error("another thread is working in this project folder — wait for it to finish or choose a separate folder"), { status: 409, code: "workspace_busy" });
       }
       // Checkpoint explicit project folders, where a bot can overwrite the
-      // user's work. Its private OpenMaus workspace is app-owned and changes
+      // user's work. Its private Bos workspace is app-owned and changes
       // on nearly every ordinary chat; snapshotting it would add hidden disk
       // and process overhead without a user project to restore.
       const checkpointCwd = cwd && cwd !== privateWorkspace && !folderShared ? cwd : undefined;
       // dweb is opt-in: without an explicit daemon URL, do not advertise
       // tools that would fail on every call or spawn an unnecessary proxy.
-      const dwebUrl = sharedContext ? undefined : process.env.DWEB_URL?.trim();
+      const dwebUrl = sharedContext ? undefined : compatEnv.DWEB_URL?.trim();
       if (dwebUrl) integrations.dweb = { url: dwebUrl };
       // Cloud routines always use Box/BoxAgent. The per-bot backend applies
       // only to ordinary turns that mount a computer into the local agent.
@@ -9042,7 +9043,7 @@ async function startTurn(
             bot.id,
             store.bots,
             Boolean(integrations.agents),
-            openMausStatusSystemPrompt(),
+            bosStatusSystemPrompt(),
             boundedCoordination,
           )
         : integrations.agents && sectionPeers.length > 0
@@ -9216,10 +9217,10 @@ async function startTurn(
       if (strictResume && !(opts?.cardContinuation && continuingRoutine) && dispatchedConfig !== plannedConfig) dispatchContext = decideContext(dispatchedConfig);
       // Provider setup may have awaited while the owner revoked this caller.
       // Check immediately before the adapter receives any work.
-      if (opts?.requestGuard && process.env.FAKE_CLAUDE_PRE_DISPATCH_GATE) {
+      if (opts?.requestGuard && compatEnv.FAKE_CLAUDE_PRE_DISPATCH_GATE) {
         // Disposable fake-engine fixture only: hold this exact handoff so the
         // test can revoke privacy during asynchronous setup without a model.
-        const gate = join(DATA_DIR, basename(process.env.FAKE_CLAUDE_PRE_DISPATCH_GATE));
+        const gate = join(DATA_DIR, basename(compatEnv.FAKE_CLAUDE_PRE_DISPATCH_GATE));
         writeFileAtomic(`${gate}.waiting`, "1");
         const deadline = Date.now() + 10_000;
         while (!existsSync(gate) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
@@ -9241,7 +9242,7 @@ async function startTurn(
       // emit its whole turn before its handshake returns. This is not a queue.
       privateTurnDispatches.prepare({ id: dispatchClaimId, botId: bot.id, threadId,
         ...(userMessage?.id ? { sourceId: userMessage.id } : {}), ...(cwd ? { cwd: workspaceResource(cwd).slice("workspace:".length), workspace: workspaceResource(cwd) } : {}), createdAt: Date.now(), serverPid: process.pid,
-        ...(process.env.OMB_DESKTOP_LIFECYCLE_GENERATION ? { hostGeneration: process.env.OMB_DESKTOP_LIFECYCLE_GENERATION } : {}) });
+        ...(compatEnv.OMB_DESKTOP_LIFECYCLE_GENERATION ? { hostGeneration: compatEnv.OMB_DESKTOP_LIFECYCLE_GENERATION } : {}) });
       const dispatch = await guardTurnDispatch(instance.adapter.sendTurn({
         threadId,
         ...(sharedContext ? { sharedContext: { mode: "conversation-only" as const } } : {}),
@@ -9725,10 +9726,10 @@ store.reconcileInterruptedGroupGoals((runId, threadId) => {
   );
   const detail = run.output ?? run.error ?? (
     status === "completed"
-      ? "The scheduled team goal completed before OpenMausBot restarted."
+      ? "The scheduled team goal completed before BOS Bot restarted."
       : status === "stopped"
         ? "The scheduled team goal was stopped."
-        : "OpenMausBot restarted before this scheduled team goal finished."
+        : "BOS Bot restarted before this scheduled team goal finished."
   );
   return { status, detail, finishedAt: run.finishedAt ?? groupGoalRecoveryAt };
 });
@@ -9766,7 +9767,7 @@ async function cloudRoutineReadiness(): Promise<{ ready: boolean; reason?: strin
   }
   const instance = registry.instances().find((candidate) => candidate.driverKind === "boxAgent");
   if (!instance) {
-    return { ready: false, reason: "The Cloud VM runner is unavailable. Restart OpenMausBot and try again." };
+    return { ready: false, reason: "The Cloud VM runner is unavailable. Restart BOS Bot and try again." };
   }
   try {
     const snapshot = await instance.snapshot();
@@ -9867,12 +9868,12 @@ async function deleteBotWithLifecycle(botId: string, revalidate: () => void = ()
           const vm = await containerComputerStatus(undefined, undefined, target);
           if (!vm.daemonUp && existsSync(target.workspaceDir)) {
             return deletionResponse( 409, {
-              error: "start the container runtime so OpenMausBot can remove this bot's Local VM while deleting it",
+              error: "start the container runtime so BOS Bot can remove this bot's Local VM while deleting it",
             });
           }
           if (vm.container !== "missing" && !vm.managed) {
             return deletionResponse(409, {
-              error: `The container named ${vm.container_name} was not created by OpenMausBot. Remove it manually before deleting this bot`,
+              error: `The container named ${vm.container_name} was not created by BOS Bot. Remove it manually before deleting this bot`,
             });
           }
           localVmCleanup = {
@@ -10252,7 +10253,7 @@ function dispatchTeamSetupResume(entry: TeamSetupResumeEntry): void {
     pendingTeamSetupResumes.set(request.requestId, entry);
     return;
   }
-  const prompt = `OpenMausBot team setup decision ${request.requestId}: ${JSON.stringify(request.result)}. Report this exact result and continue the user's already requested work. Do not ask for confirmation again or repeat this setup/deletion. A denied or cancelled operation did not authorize any substitute action. Existing thread models were not changed.`;
+  const prompt = `BOS Bot team setup decision ${request.requestId}: ${JSON.stringify(request.result)}. Report this exact result and continue the user's already requested work. Do not ask for confirmation again or repeat this setup/deletion. A denied or cancelled operation did not authorize any substitute action. Existing thread models were not changed.`;
   const failed = (error: string) => {
     if (cancelled()) return;
     const current = store.messagesFor(request.threadId).find((item) => item.id === messageId);
@@ -10498,10 +10499,10 @@ try {
     admit: () => cloudAuthority.assertWritable("webhook runs"),
   });
   const advertised = WEBHOOK_PUBLIC_URL ? ` (advertised as ${webhookIngress.baseUrl})` : "";
-  console.log(`openmausbot webhook receiver on http://${webhookIngress.host}:${webhookIngress.port}${advertised}`);
+  console.log(`bosbot webhook receiver on http://${webhookIngress.host}:${webhookIngress.port}${advertised}`);
 } catch (error) {
   webhookIngressError = error instanceof Error ? error.message : String(error);
-  console.error(`openmausbot webhook receiver unavailable: ${webhookIngressError}`);
+  console.error(`bosbot webhook receiver unavailable: ${webhookIngressError}`);
 }
 
 const webhookIngressStatus = () => ({
@@ -11130,7 +11131,7 @@ async function executeGroupMemberTurn(
     ? reachablePeers(store.bots, bot).filter((peer) => !readyGroup.memberIds.includes(peer.id))
     : [];
   const system = [
-    `You are ${bot.name}, a bot in the room "${readyGroup.name}" in OpenMausBot.`,
+    `You are ${bot.name}, a bot in the room "${readyGroup.name}" in BOS Bot.`,
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
     `Room members: ${roster}, and ${userName} (the human).`,
@@ -11138,7 +11139,7 @@ async function executeGroupMemberTurn(
     `Reply as yourself, briefly and conversationally. To bring a teammate in, mention them like @Name — they'll see the conversation and respond.`,
     outsideRoom.length > 0 && orchestration && !orchestration.roomHandoffId && roomPeerRosterSystemPrompt(outsideRoom),
     integrations.agents && (CREDENTIAL_PROMPT + (orchestration && !orchestration.roomHandoffId ? THREADS_PROMPT : "")).trim(),
-    integrations.agents && (!orchestration || orchestration.roomHandoffId) && "For actual OpenMausBot teamwork, discover IDs with list_room_targets and use coordinate_bots for advice or work in this or another room. Do not substitute native coding helpers for these named bots. Consult only when needed to make a decision; no discussion step is mandatory. Give concrete responsibilities, exact accessible paths and acceptance checks. End your turn after assigning; busy teammates queue and results automatically resume you. When they return, finish the requested verification and give the user one final answer. Native helper names are not evidence that an OpenMausBot teammate participated. Plain @mentions are only for conversational replies in this room.",
+    integrations.agents && (!orchestration || orchestration.roomHandoffId) && "For actual BOS Bot teamwork, discover IDs with list_room_targets and use coordinate_bots for advice or work in this or another room. Do not substitute native coding helpers for these named bots. Consult only when needed to make a decision; no discussion step is mandatory. Give concrete responsibilities, exact accessible paths and acceptance checks. End your turn after assigning; busy teammates queue and results automatically resume you. When they return, finish the requested verification and give the user one final answer. Native helper names are not evidence that an BOS Bot teammate participated. Plain @mentions are only for conversational replies in this room.",
     integrations.agents && ROUTINE_PROMPT.trim(),
     integrations.agents && PROFILE_PROMPT.trim(),
     skillAuthoring && LEARN_PROMPT.trim(),
@@ -11257,7 +11258,7 @@ async function executeGroupMemberTurn(
   }
   privateTurnDispatches.prepare({ id: internalGeneration, botId: bot.id, threadId, groupId: group.id,
     ...(latestUser?.id ? { sourceId: latestUser.id } : {}), ...(cwd ? { cwd: workspaceResource(cwd).slice("workspace:".length), workspace: workspaceResource(cwd) } : {}), createdAt: Date.now(), serverPid: process.pid,
-    ...(process.env.OMB_DESKTOP_LIFECYCLE_GENERATION ? { hostGeneration: process.env.OMB_DESKTOP_LIFECYCLE_GENERATION } : {}) });
+    ...(compatEnv.OMB_DESKTOP_LIFECYCLE_GENERATION ? { hostGeneration: compatEnv.OMB_DESKTOP_LIFECYCLE_GENERATION } : {}) });
   let replyText = "";
   let turnText = "";
   let providerTurnId: string | undefined;
@@ -12872,7 +12873,7 @@ function dispatchConnectorResume(entry: { botId: string; threadId: string; resum
   const owner = connectorThread(entry.botId, entry.threadId);
   if (!owner) return;
   const names = entry.labels.join(", ");
-  const prompt = `OpenMausBot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
+  const prompt = `BOS Bot connection update: the user securely connected ${names}. Continue the task that paused for this connection. Do not ask them to connect it again.`;
   if (owner.group ? owner.bot.busy : threadBusy(entry.botId, entry.threadId) || activeGroupTurnForBot(entry.botId)) {
     pendingConnectorResumes.set(`${entry.threadId}:${entry.resumeKey}`, entry);
     return;
@@ -12981,7 +12982,7 @@ function phoneSecretSubmissionKey(threadId: string, messageId: string, requestKe
 }
 
 function credentialDesktopHandoff(label: string): string {
-  return `Securely provide the ${label} from OpenMausBot on your phone or computer. It is never added to chat.`;
+  return `Securely provide the ${label} from BOS Bot on your phone or computer. It is never added to chat.`;
 }
 
 function secretMessage(botId: string, threadId: string, messageId: string): Message | null {
@@ -13018,8 +13019,8 @@ function dispatchSecretResume(entry: SecretResumeEntry) {
   if (!owner) return;
   const prompt =
     entry.outcome === "provided"
-      ? `OpenMausBot credential update: the user securely provided ${entry.label}. Continue the task that paused for it. You do not receive the secret and must not ask them to paste it into chat.`
-      : `OpenMausBot credential update: the user declined to provide ${entry.label}. Continue without it if possible, or briefly explain the limitation. Do not ask them to paste it into chat.`;
+      ? `BOS Bot credential update: the user securely provided ${entry.label}. Continue the task that paused for it. You do not receive the secret and must not ask them to paste it into chat.`
+      : `BOS Bot credential update: the user declined to provide ${entry.label}. Continue without it if possible, or briefly explain the limitation. Do not ask them to paste it into chat.`;
   if (owner.group ? owner.bot.busy : threadBusy(entry.botId, entry.threadId) || activeGroupTurnForBot(entry.botId)) {
     pendingSecretResumes.set(`${entry.threadId}:${entry.messageId}`, entry);
     return;
@@ -13259,7 +13260,7 @@ async function testCliBinary(
 /** A pre-save probe only needs PATH. Never hand credentials inherited by the
  * desktop/server process to an arbitrary wrapper selected through Settings. */
 function cliProbeEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: augmentedPath() };
+  const env: NodeJS.ProcessEnv = { ...compatEnv, PATH: augmentedPath() };
   for (const key of [
     "XAI_API_KEY",
     "OMB_XAI_MANAGEMENT_KEY",
@@ -13900,25 +13901,25 @@ const desktopUpdateLifecycle = new DesktopUpdateLifecycle(workspaceMaintenance, 
 // 8812 is the managed companion gateway (electron/companion-origin-gateway.mjs); it only counts when bound.
 // OMB_UPDATE_SANDBOX=1 is the acceptance suite's seam: a copied bundle, a
 // staged bundle, a plist directory instead of launchd, an optional fault.
-const UPDATE_SANDBOX = process.env.OMB_UPDATE_SANDBOX === "1";
+const UPDATE_SANDBOX = compatEnv.OMB_UPDATE_SANDBOX === "1";
 const LIVE_APP_PATH = (() => {
   const fromStatic = STATIC_DIR ? /^(.*\.app)\/Contents\//.exec(STATIC_DIR)?.[1] : undefined;
   const fromExec = /^(.*\.app)\/Contents\//.exec(process.execPath)?.[1];
-  return (UPDATE_SANDBOX && process.env.OMB_UPDATE_APP_PATH) || process.env.OMB_UPDATER_LIVE_APP || fromStatic || fromExec || "";
+  return (UPDATE_SANDBOX && compatEnv.OMB_UPDATE_APP_PATH) || compatEnv.OMB_UPDATER_LIVE_APP || fromStatic || fromExec || "";
 })();
-const UPDATE_RESOURCES_PATH = process.env.OMB_RESOURCES_PATH || (LIVE_APP_PATH ? join(LIVE_APP_PATH, "Contents", "Resources") : "");
-const UPDATE_PREFLIGHT_PATH = process.env.OMB_UPDATER_PREFLIGHT || (UPDATE_RESOURCES_PATH && !UPDATE_SANDBOX ? join(UPDATE_RESOURCES_PATH, "updater", "preflight.py") : undefined);
+const UPDATE_RESOURCES_PATH = compatEnv.OMB_RESOURCES_PATH || (LIVE_APP_PATH ? join(LIVE_APP_PATH, "Contents", "Resources") : "");
+const UPDATE_PREFLIGHT_PATH = compatEnv.OMB_UPDATER_PREFLIGHT || (UPDATE_RESOURCES_PATH && !UPDATE_SANDBOX ? join(UPDATE_RESOURCES_PATH, "updater", "preflight.py") : undefined);
 // The no-downgrade guard beside it. Branches come from the environment for
 // now (OMB_UPDATE_RELEASE_BRANCH, OMB_UPDATE_PROD_BRANCH; defaults
 // release/bos-1.0 and prod) or from the ledger seeded by its first `record`;
 // OMB_UPDATE_REPO names the canonical checkout the ancestry is checked in.
-const UPDATE_NO_DOWNGRADE_PATH = process.env.OMB_UPDATER_NO_DOWNGRADE || (UPDATE_RESOURCES_PATH && !UPDATE_SANDBOX ? join(UPDATE_RESOURCES_PATH, "updater", "no-downgrade.py") : undefined);
+const UPDATE_NO_DOWNGRADE_PATH = compatEnv.OMB_UPDATER_NO_DOWNGRADE || (UPDATE_RESOURCES_PATH && !UPDATE_SANDBOX ? join(UPDATE_RESOURCES_PATH, "updater", "no-downgrade.py") : undefined);
 const UPDATE_NO_DOWNGRADE: NoDowngradeOptions | undefined = UPDATE_NO_DOWNGRADE_PATH ? {
   script: UPDATE_NO_DOWNGRADE_PATH,
   ledger: join(DATA_DIR, "updates", "live-build.json"),
-  ...(process.env.OMB_UPDATE_REPO ? { repo: process.env.OMB_UPDATE_REPO } : {}),
-  releaseBranch: process.env.OMB_UPDATE_RELEASE_BRANCH || "release/bos-1.0",
-  ...(process.env.OMB_UPDATE_PROD_BRANCH !== undefined ? { prodBranch: process.env.OMB_UPDATE_PROD_BRANCH } : {}),
+  ...(compatEnv.OMB_UPDATE_REPO ? { repo: compatEnv.OMB_UPDATE_REPO } : {}),
+  releaseBranch: compatEnv.OMB_UPDATE_RELEASE_BRANCH || "release/bos-1.0",
+  ...(compatEnv.OMB_UPDATE_PROD_BRANCH !== undefined ? { prodBranch: compatEnv.OMB_UPDATE_PROD_BRANCH } : {}),
   require: !UPDATE_SANDBOX,
 } : undefined;
 const UPDATE_OWNER_PREFIX = "update:";
@@ -13928,11 +13929,11 @@ const updateExecutor: UpdateExecutor = process.platform === "win32"
   ? createElectronUpdateExecutor({ port: utilityParentPort, serverPort: PORT, extraPorts: [8812], log: line => console.log(line) })
   : createDarwinExecutor(
     UPDATE_SANDBOX
-      ? createSandboxUpdaterHost({ jobsDir: process.env.OMB_UPDATE_JOBS_DIR || join(DATA_DIR, "updates", "jobs"), port: PORT })
+      ? createSandboxUpdaterHost({ jobsDir: compatEnv.OMB_UPDATE_JOBS_DIR || join(DATA_DIR, "updates", "jobs"), port: PORT })
       : createDarwinUpdaterHost({ dataDir: DATA_DIR, port: PORT, extraPorts: [8812] }),
     {
       dataDir: DATA_DIR, liveApp: LIVE_APP_PATH,
-      codesign: !UPDATE_SANDBOX && process.env.OMB_UPDATER_CODESIGN !== "0", requireLaunchd: !UPDATE_SANDBOX,
+      codesign: !UPDATE_SANDBOX && compatEnv.OMB_UPDATER_CODESIGN !== "0", requireLaunchd: !UPDATE_SANDBOX,
       // Contents/Resources/updater/preflight.py (electron-builder mac.extraResources),
       // reached through process.resourcesPath, which the desktop hands us as
       // OMB_RESOURCES_PATH. Read-only, prints json; admission refuses unless
@@ -13940,7 +13941,7 @@ const updateExecutor: UpdateExecutor = process.platform === "win32"
       preflight: UPDATE_PREFLIGHT_PATH,
       requirePreflight: Boolean(UPDATE_PREFLIGHT_PATH) && !UPDATE_SANDBOX,
       ...(UPDATE_NO_DOWNGRADE ? { noDowngrade: UPDATE_NO_DOWNGRADE } : {}),
-      ...(UPDATE_SANDBOX ? { sandbox: { ...(process.env.OMB_UPDATE_STAGED_PATH ? { stagedPath: process.env.OMB_UPDATE_STAGED_PATH } : {}), ...(process.env.OMB_UPDATE_FAULT ? { fault: process.env.OMB_UPDATE_FAULT } : {}) } } : {}),
+      ...(UPDATE_SANDBOX ? { sandbox: { ...(compatEnv.OMB_UPDATE_STAGED_PATH ? { stagedPath: compatEnv.OMB_UPDATE_STAGED_PATH } : {}), ...(compatEnv.OMB_UPDATE_FAULT ? { fault: compatEnv.OMB_UPDATE_FAULT } : {}) } } : {}),
       log: line => console.log(line),
     },
   );
@@ -13958,7 +13959,7 @@ const listBusyTurns = (): BusyTurn[] => {
 };
 const updateCoordinator = new UpdateCoordinator({
   dataDir: DATA_DIR,
-  current: () => ({ version: serverVersion(), sha: readInstalled(DATA_DIR)?.sha ?? process.env.OMB_APP_SHA ?? "unknown" }),
+  current: () => ({ version: serverVersion(), sha: readInstalled(DATA_DIR)?.sha ?? compatEnv.OMB_APP_SHA ?? "unknown" }),
   listBusyTurns,
   stopAll: async () => {
     for (const bot of store.bots) {
@@ -13997,7 +13998,7 @@ const updateCoordinator = new UpdateCoordinator({
       check: async () => {
         const source = readUpdateSource(DATA_DIR);
         const target = await resolveUpdateTarget(source);
-        return previewUpdate({ script: UPDATE_NO_DOWNGRADE.script, ledger: UPDATE_NO_DOWNGRADE.ledger, liveApp: LIVE_APP_PATH, source, target, current: { version: serverVersion(), sha: readInstalled(DATA_DIR)?.sha ?? process.env.OMB_APP_SHA ?? "unknown" } });
+        return previewUpdate({ script: UPDATE_NO_DOWNGRADE.script, ledger: UPDATE_NO_DOWNGRADE.ledger, liveApp: LIVE_APP_PATH, source, target, current: { version: serverVersion(), sha: readInstalled(DATA_DIR)?.sha ?? compatEnv.OMB_APP_SHA ?? "unknown" } });
       },
       build: async (target, log) => {
         const source = readUpdateSource(DATA_DIR);
@@ -14932,7 +14933,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (path === "/api/multiplayer/welcome-guest" && method === "POST") {
         if (actorId !== multiplayerActors.ownerId || !auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
-        const origin = process.env.BOS_WELCOME_ORIGIN?.replace(/\/+$/, "") || await federationOrigin();
+        const origin = compatEnv.BOS_WELCOME_ORIGIN?.replace(/\/+$/, "") || await federationOrigin();
         if (!origin) return json(res, 503, { error: "no public origin for the welcome chat" });
         const body = await readBody(req, 4096);
         const name = typeof body?.name === "string" ? body.name.replace(/[\u0000-\u001f\u007f]/g, "").trim() : "";
@@ -15466,8 +15467,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           for (const memberId of room.memberIds) {
             if (memberId !== actorId && !privateRoom(room, memberId) && sharedRoomShouldNotify(room.id, memberId, result.message) && multiplayerActors.people(cfg.profile?.name ?? "Owner").some(person => person.id === memberId)) {
               const pushText = result.message.text || (result.message.attachments?.length ? "Sent an attachment" : "New message");
-              if (process.env.FAKE_CLAUDE_ROOM_PUSH_OUTBOX) {
-                appendFileSync(join(DATA_DIR, basename(process.env.FAKE_CLAUDE_ROOM_PUSH_OUTBOX)), JSON.stringify({ memberId, text: pushText }) + "\n");
+              if (compatEnv.FAKE_CLAUDE_ROOM_PUSH_OUTBOX) {
+                appendFileSync(join(DATA_DIR, basename(compatEnv.FAKE_CLAUDE_ROOM_PUSH_OUTBOX)), JSON.stringify({ memberId, text: pushText }) + "\n");
               } else {
                 void apnsPush.send(memberId, multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message",
                   pushText, { roomId: room.id, senderId: actorId, senderName: multiplayerActors.nameFor(actorId) ?? cfg.profile?.name ?? "New message" }).catch(error =>
@@ -15554,7 +15555,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       res.setHeader("cache-control", "no-store");
       if (method === "GET") return json(res, 200, customDomainStatus());
       if (method === "POST" || method === "DELETE") {
-        if (DESKTOP_MANAGED) return json(res, 409, { error: "Custom domains are configured on a self-hosted OpenMausBot server, not the desktop companion." });
+        if (DESKTOP_MANAGED) return json(res, 409, { error: "Custom domains are configured on a self-hosted BOS Bot server, not the desktop companion." });
         if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
           return json(res, 415, { error: "content-type must be application/json" });
         }
@@ -15637,7 +15638,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // unless the launcher explicitly sets that key; production builds never
     // set it.
     if (method === "POST" && path === "/api/testing/internal-capability") {
-      const expected = process.env.OMB_TEST_INTERNAL_CAPABILITY_KEY ?? "";
+      const expected = compatEnv.OMB_TEST_INTERNAL_CAPABILITY_KEY ?? "";
       const actual = Array.isArray(req.headers["x-openmausbot-test-capability"])
         ? ""
         : String(req.headers["x-openmausbot-test-capability"] ?? "");
@@ -15853,7 +15854,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           source!.previousSurface = store.taskByThread(bot.id, bot.threadId)?.surface;
         }
         return json(res, 200, { status: "pending", surface: option.surface,
-          message: `End this turn now without using the previous computer tools. OpenMausBot will continue the original request on ${option.label} with a fresh tool connection.` });
+          message: `End this turn now without using the previous computer tools. BOS Bot will continue the original request on ${option.label} with a fresh tool connection.` });
       }
       if (method === "POST" && path === "/api/internal/hook") {
         const body = await readInternalBody();
@@ -17708,7 +17709,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // ── independent webhook triggers ────────────────────────────────────
     // Management stays on the app-only server. Actual deliveries land on a
     // second, webhook-only loopback listener so Funnel or a future hosted
-    // relay never has to expose the rest of OpenMausBot's control surface.
+    // relay never has to expose the rest of BOS Bot's control surface.
     if (path === "/api/webhooks" && method === "GET") {
       return json(res, 200, { webhooks: webhooks.list(), attempts: webhooks.listAttempts(), ingress: webhookIngressStatus() });
     }
@@ -17894,7 +17895,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (threadId === undefined &&
         (auth.kind === "session" || req.headers["x-openmausbot-companion"] === "1") &&
         store.tasks(botId).length > 1) {
-        throw Object.assign(new Error("This bot has more than one thread. Update the OpenMausBot app on this device, then choose a thread and try again."), { status: 409 });
+        throw Object.assign(new Error("This bot has more than one thread. Update the BOS Bot app on this device, then choose a thread and try again."), { status: 409 });
       }
     };
     if (method === "GET" && path === "/api/lead-actions") {
@@ -18093,7 +18094,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // a bot must render a Markdown link or carry a generated-image attachment,
     // while a user message must carry the standalone composer tag. The bot
     // branch derives conversation/workspace roots; the user branch is limited
-    // to OpenMausBot's private attachment directory. This is deliberately not
+    // to BOS Bot's private attachment directory. This is deliberately not
     // a general path reader.
     m = path.match(/^\/api\/threads\/([\w-]+)\/messages\/([\w-]+)\/file$/);
     const streamsMessageImage = Boolean(
@@ -18464,7 +18465,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           ? body.name.trim()
           : profileName
             ? `${profileName}'s Team`
-            : "My OpenMaus Team";
+            : "My Bos Team";
       const memberIds = store.bots.filter((bot) => !bot.hidden).map((bot) => bot.id);
       if ((body.format === "backup" ? store.bots.length : memberIds.length) === 0) return json(res, 400, { error: "Create a bot before exporting your team" });
       try {
@@ -20314,7 +20315,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // to open by hand instead.
       const workspacePath = memoryOverview(m[1]).workspacePath;
       if (auth.kind !== "loopback") {
-        return json(res, 403, { error: `This only works on the computer running OpenMausBot. The memory folder there is ${workspacePath}`, workspacePath });
+        return json(res, 403, { error: `This only works on the computer running BOS Bot. The memory folder there is ${workspacePath}`, workspacePath });
       }
       const opened = await openMemoryLocation(m[1], parsed.data.target);
       if (!opened.ok) return json(res, 500, { error: opened.error, workspacePath: opened.workspacePath });
@@ -21531,7 +21532,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (fleetRoute) {
       if (!entitled("admin")) return json(res, 403, { error: "Workspaces need an enterprise licence with the admin feature." });
       const socket = fleetSocketPath();
-      if (!fleetAvailable(socket)) return json(res, 404, { error: "No fleet agent on this server. Run `openmausbot fleet init --domain … --operator <this user>` as root." });
+      if (!fleetAvailable(socket)) return json(res, 404, { error: "No fleet agent on this server. Run `bosbot fleet init --domain … --operator <this user>` as root." });
       const [, resource, slug, sub] = fleetRoute;
       let forward: { method: string; path: string; body?: unknown } | null = null;
       if (method === "GET" && !resource) forward = { method: "GET", path: "/workspaces" };
@@ -21826,7 +21827,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 200, { instances: await describeInstances() });
         }
         if (action === "install") {
-          if (!(await registry.installRuntime(instanceId))) return json(res, 404, { error: "Installing this engine from Settings is not available on this server. Use the install command on the machine running OpenMausBot." });
+          if (!(await registry.installRuntime(instanceId))) return json(res, 404, { error: "Installing this engine from Settings is not available on this server. Use the install command on the machine running BOS Bot." });
           return json(res, 200, { instances: await describeInstances() });
         }
         if (action === "auth/start") {
@@ -22291,7 +22292,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               // deterministic rename. The replacement credential already
               // proved the exact deletion target, so its in-flight resource
               // is governed by that stronger target-bound receipt rather
-              // than an OpenMausBot name check.
+              // than an BOS Bot name check.
               if (replacementProvedByDeletion && deletingBoxIds.has(recovery.boxId)) continue;
               const inspected = await box.inspectBoxIdentity({ box: { token: currentBoxToken } }, recovery.boxId);
               if (!inspected.available) {
@@ -23518,7 +23519,7 @@ restoreChannelMessages();
 
 server.listen(PORT, "127.0.0.1", () => {
   companyRuntimeReady();
-  console.log(`openmausbot server on http://127.0.0.1:${PORT}`);
+  console.log(`bosbot server on http://127.0.0.1:${PORT}`);
   followupsReady = true;
   drainQueuedSends();
   drainQueuedChannelSends();
@@ -23549,7 +23550,7 @@ server.listen(PORT, "127.0.0.1", () => {
   // BOS 2.0 slices 3/4, dev build only: host this Mac's bots in cloud rooms
   // (outbound HTTPS polling; OMB_CLOUD_HOST_URL, _WORKSPACE, _ID, _CREDENTIAL
   // and _BEARER all required, see server/cloud-host-runtime.ts).
-  startCloudHostFromEnv(process.env, {
+  startCloudHostFromEnv(compatEnv, {
     store, sharedBotTasks, bus, interruptDirectThread, shouldIgnoreProviderEvent,
     startTurn: (botId, text, opts) => startTurn(botId, text, opts as Parameters<typeof startTurn>[2]),
     admissionBlocked: (botId, threadId) => threadBusy(botId, threadId) || botAtThreadCapacity(botId) ||
@@ -23563,18 +23564,18 @@ server.listen(PORT, "127.0.0.1", () => {
     console.warn(`whatsapp: could not resume — ${error instanceof Error ? error.message : "unknown"}`));
 });
 
-// A second listener for `openmausbot serve --tunnel` (server/tunnel.ts): the
+// A second listener for `bosbot serve --tunnel` (server/tunnel.ts): the
 // connector gateway on this machine forwards public traffic to this IPC path.
 // Nothing changes about the loopback bind above. Requests arriving here have
 // no peer address, which request-auth treats as "through a proxy": a session
 // is required, never loopback trust, whatever headers the request carries.
-const TUNNEL_SOCKET = process.env.OMB_TUNNEL_SOCKET?.trim() || null;
+const TUNNEL_SOCKET = compatEnv.OMB_TUNNEL_SOCKET?.trim() || null;
 let tunnelListener: ReturnType<typeof createServer> | null = null;
 if (TUNNEL_SOCKET) {
   if (process.platform !== "win32") rmSync(TUNNEL_SOCKET, { force: true });
   tunnelListener = createServer(handleRequest);
   tunnelListener.listen(TUNNEL_SOCKET, () => {
-    console.log(`openmausbot tunnel listener on ${TUNNEL_SOCKET}`);
+    console.log(`bosbot tunnel listener on ${TUNNEL_SOCKET}`);
   });
 }
 
@@ -23633,3 +23634,4 @@ const gracefulShutdown = createGracefulShutdown({
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, gracefulShutdown);
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

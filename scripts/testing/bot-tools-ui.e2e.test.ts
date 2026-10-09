@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Full-app regression through the existing disposable browser harness. No
 // real provider, OAuth account, MCP package, or user data is used.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -12,8 +13,8 @@ import { runControlOmb } from "../control-omb.ts";
 import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
-const forced = process.env.OMB_UI_E2E === "1";
+const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv });
+const forced = compatEnv.OMB_UI_E2E === "1";
 const enabled = forced || Boolean(binary);
 if (!enabled) console.log("skipping bot tools UI e2e: no agent-browser; set OMB_UI_E2E=1 to install the pinned release");
 const LAUNCH_TIMEOUT_MS = forced && !binary ? 600_000 : 180_000;
@@ -32,7 +33,7 @@ describe("bot setup and tools in the real renderer", () => {
     let stdout = "";
     let stderr = "";
     child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
     child.stderr!.on("data", (chunk: Buffer) => { stderr += String(chunk); });
@@ -216,3 +217,4 @@ describe("bot setup and tools in the real renderer", () => {
     expect(existsSync(info.logPath)).toBe(true);
   }, LAUNCH_TIMEOUT_MS + 180_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

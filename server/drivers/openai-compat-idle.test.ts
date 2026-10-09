@@ -49,3 +49,4 @@ it.each(["json", "http-error", "truncated", "interrupt"] as const)("settles a re
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
   }
 }, 10_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

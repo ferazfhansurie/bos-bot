@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Codex driver contract tests, run against the scripted fake app-server
 // in server/testing/fake-codex-app-server.ts — the driver must drive the
 // JSON-RPC handshake, normalize notifications into canonical events, and
@@ -86,7 +87,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   const create = async (
     opts: { mode?: string; fullAuto?: boolean; environment?: Record<string, string>; managed?: boolean } = {},
   ) => {
-    if (opts.mode) process.env.FAKE_CODEX_MODE = opts.mode;
+    if (opts.mode) compatEnv.FAKE_CODEX_MODE = opts.mode;
     instance = await CodexDriver.create({
       instanceId: "codex-test",
       displayName: "Codex Test",
@@ -110,35 +111,35 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   afterEach(async () => {
-    delete process.env.FAKE_CODEX_MODE;
-    delete process.env.FAKE_CODEX_DUMP;
-    delete process.env.FAKE_CODEX_ASK_HOLD;
-    delete process.env.FAKE_CODEX_TRANSIENTS;
-    delete process.env.FAKE_CODEX_PARTIAL_FAILS;
-    delete process.env.FAKE_CODEX_STATE;
-    delete process.env.FAKE_CODEX_RETRY_SCALE;
-    delete process.env.FAKE_CODEX_LAUNCH_CRASHES;
-    delete process.env.FAKE_CODEX_LAUNCH_KILLS;
-    delete process.env.FAKE_CODEX_LAUNCH_SILENT;
-    delete process.env.FAKE_CODEX_ACK_CRASH;
-    delete process.env.FAKE_CODEX_EXIT_MID_TURN;
-    delete process.env.FAKE_CODEX_EXIT_MID_TURN_KILL;
-    delete process.env.FAKE_CODEX_VERSION;
-    delete process.env.FAKE_CODEX_ASTRA;
-    delete process.env.FAKE_CODEX_INSTRUCTIONS;
-    delete process.env.FAKE_CODEX_RESUME_ERROR;
-    delete process.env.FAKE_CODEX_START_ERROR;
-    delete process.env.FAKE_CODEX_STEER_ERROR;
-    delete process.env.FAKE_CODEX_STEER_ERROR_FILE;
-    delete process.env.FAKE_CODEX_STEER_HANG;
-    delete process.env.FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE;
-    delete process.env.FAKE_CODEX_STEER_SETTLE_GRACE_MS;
-    delete process.env.FAKE_CODEX_STEER_TIMEOUT_MS;
-    delete process.env.FAKE_CODEX_INTERRUPT_SILENT;
-    delete process.env.FAKE_CODEX_INTERRUPT_GRACE_MS;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.BOX_TOKEN;
-    delete process.env.OMB_TTS_KEY;
+    delete compatEnv.FAKE_CODEX_MODE;
+    delete compatEnv.FAKE_CODEX_DUMP;
+    delete compatEnv.FAKE_CODEX_ASK_HOLD;
+    delete compatEnv.FAKE_CODEX_TRANSIENTS;
+    delete compatEnv.FAKE_CODEX_PARTIAL_FAILS;
+    delete compatEnv.FAKE_CODEX_STATE;
+    delete compatEnv.FAKE_CODEX_RETRY_SCALE;
+    delete compatEnv.FAKE_CODEX_LAUNCH_CRASHES;
+    delete compatEnv.FAKE_CODEX_LAUNCH_KILLS;
+    delete compatEnv.FAKE_CODEX_LAUNCH_SILENT;
+    delete compatEnv.FAKE_CODEX_ACK_CRASH;
+    delete compatEnv.FAKE_CODEX_EXIT_MID_TURN;
+    delete compatEnv.FAKE_CODEX_EXIT_MID_TURN_KILL;
+    delete compatEnv.FAKE_CODEX_VERSION;
+    delete compatEnv.FAKE_CODEX_ASTRA;
+    delete compatEnv.FAKE_CODEX_INSTRUCTIONS;
+    delete compatEnv.FAKE_CODEX_RESUME_ERROR;
+    delete compatEnv.FAKE_CODEX_START_ERROR;
+    delete compatEnv.FAKE_CODEX_STEER_ERROR;
+    delete compatEnv.FAKE_CODEX_STEER_ERROR_FILE;
+    delete compatEnv.FAKE_CODEX_STEER_HANG;
+    delete compatEnv.FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE;
+    delete compatEnv.FAKE_CODEX_STEER_SETTLE_GRACE_MS;
+    delete compatEnv.FAKE_CODEX_STEER_TIMEOUT_MS;
+    delete compatEnv.FAKE_CODEX_INTERRUPT_SILENT;
+    delete compatEnv.FAKE_CODEX_INTERRUPT_GRACE_MS;
+    delete compatEnv.OPENAI_API_KEY;
+    delete compatEnv.BOX_TOKEN;
+    delete compatEnv.OMB_TTS_KEY;
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
@@ -165,7 +166,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(connected).toMatchObject({ state: "available", authenticated: true, account: { email: "ada@example.test" } });
     expect(JSON.stringify(connected)).not.toContain("fixture");
     expect(instance.signOut).toBeTypeOf("function");
-    process.env.FAKE_CODEX_MODE = "logged-out";
+    compatEnv.FAKE_CODEX_MODE = "logged-out";
     const signedOut = await instance.snapshot();
     expect(signedOut).toMatchObject({ state: "available", authenticated: false });
     expect(signedOut).not.toHaveProperty("account");
@@ -179,12 +180,12 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("runs the handshake and normalizes a full turn", async () => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.OPENAI_API_KEY = "sk-should-not-leak";
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.OPENAI_API_KEY = "sk-should-not-leak";
     // workspace credentials the harness may hold (env-injected at boot by
     // the desktop shell) must never ride into the CLI child
-    process.env.BOX_TOKEN = "box-should-not-leak";
-    process.env.OMB_TTS_KEY = "tts-should-not-leak";
+    compatEnv.BOX_TOKEN = "box-should-not-leak";
+    compatEnv.OMB_TTS_KEY = "tts-should-not-leak";
 
     const { turnId } = await instance.adapter.sendTurn({
       threadId: "t-happy",
@@ -199,7 +200,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       "turn.started",
       "session.started",
       "item.started", // commandExecution ls -la
-      "item.started", // webSearch OpenMausBot
+      "item.started", // webSearch BOS Bot
       "item.completed", // commandExecution done
       "item.completed", // webSearch done
       "content.delta",
@@ -301,7 +302,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     async (approvalMode, approvalPolicy, sandbox, turnSandbox) => {
       await create();
       const dump = join(scratch, `${approvalMode}.json`);
-      process.env.FAKE_CODEX_DUMP = dump;
+      compatEnv.FAKE_CODEX_DUMP = dump;
 
       await instance.adapter.sendTurn({
         threadId: `t-${approvalMode}`,
@@ -332,7 +333,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     async (model) => {
       await create({ mode: "resume", fullAuto: true });
       const dump = join(scratch, "approval-transitions.json");
-      process.env.FAKE_CODEX_DUMP = dump;
+      compatEnv.FAKE_CODEX_DUMP = dump;
 
       for (const [approvalMode, approvalPolicy, sandbox, turnSandbox] of [
         ["full", "never", "danger-full-access", "dangerFullAccess"],
@@ -371,7 +372,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("reasserts the effective config.toml settings for Custom", async () => {
     await create({ mode: "resume", fullAuto: true });
     const dump = join(scratch, "custom.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     mkdirSync(NATIVE_DIR, { recursive: true });
 
     await instance.adapter.sendTurn({
@@ -416,7 +417,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     await create({ mode: "config-profile" });
     const threadId = `t-custom-profile-${threadMethod.replace("/", "-")}`;
     const dump = join(scratch, `${threadId}.json`);
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     mkdirSync(NATIVE_DIR, { recursive: true });
 
     await instance.adapter.sendTurn({
@@ -453,7 +454,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("falls back to the safe legacy Custom settings when profiles are unsupported", async () => {
     await create({ mode: "config-profile-unsupported" });
     const dump = join(scratch, "custom-profile-fallback.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-custom-profile-fallback",
@@ -485,7 +486,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it.each(["ask", "auto", "full", "custom"] as const)("stops before replacing unknown native instructions in %s mode", async (approvalMode) => {
     await create({ mode: "config-read-error" });
     const dump = join(scratch, "custom-config-error.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-custom-config-error",
@@ -506,7 +507,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     await create();
     const dump = join(scratch, "images.json");
     const imagePath = join(scratch, "private image.png");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     mkdirSync(NATIVE_DIR, { recursive: true });
     writeFileSync(imagePath, "png");
 
@@ -532,7 +533,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   it("normalizes native image generation bytes without exposing the provider path", async () => {
-    process.env.FAKE_CODEX_MODE = "image";
+    compatEnv.FAKE_CODEX_MODE = "image";
     await create();
     await instance.adapter.sendTurn({
       threadId: "t-image",
@@ -578,7 +579,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     const codexHome = join(scratch, "custom-codex-home");
     await create({ environment: { CODEX_HOME: codexHome } });
     const dump = join(scratch, "environment.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-environment", text: "hi" });
     await recorder.until((event) => event.type === "turn.completed");
@@ -589,7 +590,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("mounts connected apps without placing credential values in argv", async () => {
     await create();
     const dump = join(scratch, "composio.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     expect(instance.adapter.capabilities.composioMcp).toBe(true);
 
     await instance.adapter.sendTurn({
@@ -623,7 +624,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("mounts custom MCP servers on-request while built-ins stay pre-quieted", async () => {
     await create();
     const dump = join(scratch, "custom-mcp.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     expect(instance.adapter.capabilities.customMcp).toBe(true);
 
     await instance.adapter.sendTurn({
@@ -657,7 +658,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("mounts a url server for codex to connect to, header values off argv", async () => {
     await create();
     const dump = join(scratch, "remote-mcp.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-remote-mcp",
@@ -712,7 +713,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it.each(["ask", "auto"] as const)("pre-allows peer-agent comms without exposing its token in %s mode", async (approvalMode) => {
     await create();
     const dump = join(scratch, "agents.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-agents",
@@ -748,7 +749,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it.each(["ask", "auto"] as const)("pre-allows the built-in browser while preserving the native %s reviewer", async (approvalMode) => {
     await create();
     const dump = join(scratch, "browser.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-browser",
@@ -784,7 +785,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("mounts the Local VM computer MCP server without placing credentials in argv", async () => {
     await create();
     const dump = join(scratch, "local-computer.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     expect(instance.adapter.capabilities.computerMcp).toBe(true);
 
     await instance.adapter.sendTurn({
@@ -812,7 +813,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("sends the local provider when the picker id is custom-encoded", async () => {
     await create({ environment: { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" } });
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "t-local",
       text: "hi",
@@ -831,7 +832,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   it("streams agentMessage deltas without re-emitting the settled text", async () => {
-    process.env.FAKE_CODEX_MODE = "stream";
+    compatEnv.FAKE_CODEX_MODE = "stream";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-stream", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -851,7 +852,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("tries thread/resume with a cursor and reuses the thread id", async () => {
     await create({ mode: "resume" });
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-resume",
@@ -885,7 +886,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("fails a rejected resume without silently replacing native history", async () => {
     await create(); // fake rejects thread/resume outside resume mode
     const dump = join(scratch, "personal-missing-thread.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-fallback", text: "go", resumeCursor: "gone-thread", recoveryText: "Previous messages\nUser: go" });
     await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: false });
     expect(recorder.events.some((e) => e.type === "session.started")).toBe(false);
@@ -912,7 +913,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("rebuilds a missing Company native thread once with its approved model and canonical history", async () => {
     await create({ managed: true });
     const dump = join(scratch, "company-missing-thread.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     const recoveryText = "User: Remember ALPHA.\nAssistant: Remembered.\nUser: What did I say?";
     const imagePath = join(scratch, "current-image.png");
     await instance.adapter.sendTurn({
@@ -942,7 +943,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("rebuilds a missing personal thread only for a turn whose recovery text is the replay it would have had", async () => {
     await create();
     const dump = join(scratch, "personal-missing-replay.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     const recoveryText = "[This conversation received an update outside your provider session.]\nUser: go";
     await instance.adapter.sendTurn({ threadId: "t-personal-replay", text: "go", resumeCursor: "gone-thread", recoveryText, recoveryIsReplay: true });
     await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: true });
@@ -955,7 +956,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("does not announce a rebuilt Company thread when the recovery text is the turn itself", async () => {
     await create({ managed: true });
     const dump = join(scratch, "company-no-replay.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "company-no-replay", text: "Continue", resumeCursor: "gone-company-thread",
       recoveryText: "Continue", model: "company-codex-model",
@@ -969,7 +970,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("keeps successful Company resumes native without replaying the canonical transcript", async () => {
     await create({ managed: true, mode: "resume" });
     const dump = join(scratch, "company-resume.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "company-resume", text: "Continue", resumeCursor: "company-existing-thread",
       recoveryText: "Old history must not be replayed", model: "company-codex-model",
@@ -983,7 +984,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it.each([undefined, "", "  \n"])("does not replace missing Company native history without canonical recovery text (%j)", async (recoveryText) => {
     await create({ managed: true });
     const dump = join(scratch, "company-no-recovery.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "company-no-recovery", text: "Continue", resumeCursor: "gone-thread", recoveryText, model: "company-codex-model" });
     await expect(recorder.until((event) => event.type === "turn.completed")).resolves.toMatchObject({ ok: false });
     const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
@@ -1001,9 +1002,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   ])("does not rebuild Company history on an unrelated resume rejection: $message", async (error) => {
     await create({ managed: true });
     const dump = join(scratch, "company-rejected-resume.json");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_RESUME_ERROR = JSON.stringify(error);
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_RESUME_ERROR = JSON.stringify(error);
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     await instance.adapter.sendTurn({
       threadId: "company-rejected-resume", text: "Continue", resumeCursor: "gone-thread",
       recoveryText: "History\nUser: Continue", model: "company-codex-model",
@@ -1017,9 +1018,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("does not repeatedly rebuild Company history when the replacement start fails", async () => {
     await create({ managed: true });
     const dump = join(scratch, "company-failed-recovery.json");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_START_ERROR = JSON.stringify({ code: -32603, message: "503: unavailable" });
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_START_ERROR = JSON.stringify({ code: -32603, message: "503: unavailable" });
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     await instance.adapter.sendTurn({
       threadId: "company-failed-recovery", text: "Continue", resumeCursor: "gone-thread",
       recoveryText: "History\nUser: Continue", model: "company-codex-model",
@@ -1035,10 +1036,10 @@ describe("CodexDriver turns (fake app-server)", () => {
     await create({ managed: true, mode });
     const dump = join(scratch, "company-submitted-turn.json");
     const attempts = join(scratch, "company-submitted-attempts");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_TRANSIENTS = "1";
-    process.env.FAKE_CODEX_STATE = attempts;
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_TRANSIENTS = "1";
+    compatEnv.FAKE_CODEX_STATE = attempts;
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     await instance.adapter.sendTurn({
       threadId: "company-submitted-turn", text: "Continue", resumeCursor: "gone-thread",
       recoveryText: "History\nUser: Continue", model: "company-codex-model",
@@ -1056,7 +1057,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("fails before user submission if native instruction updates are unsupported", async () => {
     await create({ mode: "instructions-unsupported" });
     const dump = join(scratch, "unsupported.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-old-codex", text: "go", system: "rules", resumeCursor: "old-session" });
     await expect(recorder.until((event) => event.type === "turn.completed")).resolves.toMatchObject({ ok: false });
     expect(recorder.events.some((event) => event.type === "runtime.error" && event.message.includes("Update Codex"))).toBe(true);
@@ -1070,7 +1071,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   ])("reasserts current instructions across processes and %s recovery", async (mode, cursor) => {
     await create({ mode });
     const dump = join(scratch, "instructions.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     const instructions = "You are Testy. Follow the bot rules. ".repeat(100);
     const systems = [instructions, instructions, "You are Renamed. Use the new rules.", "", undefined];
     for (const [index, system] of systems.entries()) {
@@ -1097,7 +1098,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       if (index > 0) expect(threadCalls[0].method).toBe("thread/resume");
       const updates = calls.filter((call) => call.method === "thread/inject_items");
       expect(updates).toHaveLength(index === 2 || index === 3 ? 1 : 0);
-      if (updates.length) expect(JSON.stringify(updates[0].params)).toContain(system || "No OpenMausBot bot-specific instructions remain.");
+      if (updates.length) expect(JSON.stringify(updates[0].params)).toContain(system || "No BOS Bot bot-specific instructions remain.");
       for (const call of calls.filter((call) => call.method === "turn/start")) {
         expect(call.params.input).toEqual([{ type: "text", text: `message-${index}` }]);
       }
@@ -1106,9 +1107,9 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   it.each(["ask", "auto", "full", "custom"] as const)("preserves configured native rules and keeps them private in %s mode", async (approvalMode) => {
     await create({ mode: "resume" });
-    process.env.FAKE_CODEX_INSTRUCTIONS = "Private native rules.";
+    compatEnv.FAKE_CODEX_INSTRUCTIONS = "Private native rules.";
     const dump = join(scratch, "native-instructions.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     mkdirSync(NATIVE_DIR, { recursive: true });
     const threadId = `t-native-instructions-${approvalMode}`;
     for (const [index, system] of ["Bot rules.", "", undefined].entries()) {
@@ -1119,7 +1120,7 @@ describe("CodexDriver turns (fake app-server)", () => {
       await expect(recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId)).resolves.toMatchObject({ ok: true });
       const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
       const threadCall = calls.find((call: { method: string }) => call.method === (index ? "thread/resume" : "thread/start"));
-      expect(threadCall.params.developerInstructions).toBe(`${system || "No OpenMausBot bot-specific instructions remain."}\n\nPrivate native rules.`);
+      expect(threadCall.params.developerInstructions).toBe(`${system || "No BOS Bot bot-specific instructions remain."}\n\nPrivate native rules.`);
       expect(calls.filter((call: { method: string }) => call.method === "thread/inject_items")).toHaveLength(index === 1 ? 1 : 0);
       expect(calls.find((call: { method: string }) => call.method === "turn/start").params.input).toEqual([{ type: "text", text: `message-${index}` }]);
     }
@@ -1135,7 +1136,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("surfaces an approval request and forwards the user's decision", async () => {
     await create({ mode: "approval" });
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-approve", text: "clean up" });
     const opened = await recorder.until((e) => e.type === "request.opened");
@@ -1153,7 +1154,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("answers a single-question ask and keeps its reply scoped to that question", async () => {
     await create({ mode: "question" });
     const dump = join(scratch, "question-single.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-question-single", text: "ask me" });
     const opened = await recorder.until((e) => e.type === "request.opened");
@@ -1178,7 +1179,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("refuses a bundled multi-question ask instead of copying one answer into every question (#1237)", async () => {
     await create({ mode: "multi-question" });
     const dump = join(scratch, "question-multi.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-question-multi", text: "ask me twice" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -1194,7 +1195,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("refuses an empty ask instead of opening a card with nothing to answer", async () => {
     await create({ mode: "empty-question" });
     const dump = join(scratch, "question-empty.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-question-empty", text: "ask me nothing" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -1209,7 +1210,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("refuses a malformed ask payload instead of opening an empty card", async () => {
     await create({ mode: "malformed-question" });
     const dump = join(scratch, "question-malformed.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-question-malformed", text: "ask me wrongly" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -1225,10 +1226,10 @@ describe("CodexDriver turns (fake app-server)", () => {
     // Hold the ask reply without completing the turn: a completed turn
     // starts the driver's child-reap loop, whose 25ms setTimeout poll would
     // freeze on the fake clock and strand the teardown.
-    process.env.FAKE_CODEX_ASK_HOLD = "1";
+    compatEnv.FAKE_CODEX_ASK_HOLD = "1";
     await create({ mode: "question" });
     const dump = join(scratch, "question-timeout.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
@@ -1263,7 +1264,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("answers Codex 0.149 MCP elicitation with the MCP result shape", async () => {
     await create({ mode: "mcp-elicitation" });
     const dump = join(scratch, "mcp-elicitation.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-mcp-elicitation", text: "list bots" });
     const opened = await recorder.until((e) => e.type === "request.opened");
@@ -1281,7 +1282,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("surfaces a schema-backed app-access form and returns its one-time approval", async () => {
     await create({ mode: "mcp-app-approval" });
     const dump = join(scratch, "mcp-app-approval.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-mcp-app-approval", text: "use Safari" });
     const opened = await recorder.until((event) => event.type === "request.opened");
@@ -1302,7 +1303,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("auto-approves a schema-backed app-access form only once in Full access", async () => {
     await create({ mode: "mcp-app-approval" });
     const dump = join(scratch, "mcp-app-full.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-mcp-app-full",
@@ -1321,7 +1322,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("never treats a normal MCP input form as a Full access permission", async () => {
     await create({ mode: "mcp-form" });
     const dump = join(scratch, "mcp-form.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-mcp-form",
@@ -1337,7 +1338,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("grants Codex additional permissions with their native response shape", async () => {
     await create({ mode: "permissions-approval" });
     const dump = join(scratch, "permissions-approval.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-permissions",
@@ -1356,7 +1357,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("does not turn Custom never + read-only into blanket permission grants", async () => {
     await create({ mode: "permissions-approval" });
     const dump = join(scratch, "custom-permissions-approval.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-custom-permissions",
@@ -1414,7 +1415,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("auto-approves commands in fullAuto without opening a request", async () => {
     await create({ mode: "approval", fullAuto: true });
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-auto", text: "clean up" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -1426,7 +1427,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("uses the per-turn Full access mode even when instance fullAuto is off", async () => {
     await create({ mode: "approval" });
     const dump = join(scratch, "per-turn-full.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-per-turn-full",
@@ -1450,7 +1451,7 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   it("steers the running turn through turn/steer without killing the child", async () => {
     const dump = join(scratch, "codex-steer.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await create({ mode: "approval" }); // parks the turn open mid-flight
     expect(instance.adapter.capabilities.queueing).toBe(true);
 
@@ -1481,7 +1482,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     writeFileSync(imagePath, Buffer.from("iVBORw0KGgo=", "base64"));
     const images = [{ path: imagePath, mime: "image/png" as const, bytes: 8 }];
     const threadId = `t-image-steer-${text ? "text" : "only"}`;
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     mkdirSync(NATIVE_DIR, { recursive: true });
     await create({ mode: "approval" });
     expect(instance.adapter.capabilities.nativeImageSteer).toBe(true);
@@ -1506,8 +1507,8 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   it.each([false, true])("reports an explicitly refused steer as refused and keeps the child alive (images=%s)", async (withImages) => {
     const dump = join(scratch, "codex-steer-refused.json");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_STEER_ERROR = JSON.stringify({ code: -32000, message: "active turn is not steerable" });
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_STEER_ERROR = JSON.stringify({ code: -32000, message: "active turn is not steerable" });
     await create({ mode: "approval" });
     await instance.adapter.sendTurn({ threadId: "t-codex-steer-refused", text: "one" });
     await recorder.until((e) => e.type === "request.opened");
@@ -1526,8 +1527,8 @@ describe("CodexDriver turns (fake app-server)", () => {
     // killCliTree legitimately reaps the catalog probe and a finished turn server;
     // a queue path must never kill the child that owns the running turn.
     const dump = join(scratch, "codex-queue-nokill.json");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_STEER_ERROR = JSON.stringify({ code: -32000, message: "active turn is not steerable" });
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_STEER_ERROR = JSON.stringify({ code: -32000, message: "active turn is not steerable" });
     const kills = vi.spyOn(procs, "killCliTree");
     const killed = (pid: number) => kills.mock.calls.some((c: any[]) => c[0]?.pid === pid);
     await create({ mode: "approval" });
@@ -1563,11 +1564,11 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   it.each([false, true])("a steer timeout is indeterminate, never a re-queueable refusal (images=%s)", async (withImages) => {
     const dump = join(scratch, "codex-steer-hang.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     // The fake accepts turn/steer and never answers: delivery happened, the
     // reply is lost. Re-queueing these words would run them twice.
-    process.env.FAKE_CODEX_STEER_HANG = "1";
-    process.env.FAKE_CODEX_STEER_TIMEOUT_MS = "150";
+    compatEnv.FAKE_CODEX_STEER_HANG = "1";
+    compatEnv.FAKE_CODEX_STEER_TIMEOUT_MS = "150";
     await create({ mode: "approval" });
     await instance.adapter.sendTurn({ threadId: "t-codex-steer-hang", text: "one" });
     await recorder.until((e) => e.type === "request.opened");
@@ -1585,8 +1586,8 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   it("reports an image steer racing turn completion as indeterminate", async () => {
     const dump = join(scratch, "codex-image-steer-race.json");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_STEER_HANG = "1";
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_STEER_HANG = "1";
     await create({ mode: "approval" });
     const threadId = "t-codex-image-steer-race";
     await instance.adapter.sendTurn({ threadId, text: "one" });
@@ -1606,8 +1607,8 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   it("a steer the server refuses just after the turn ended is refused, not indeterminate", async () => {
     const dump = join(scratch, "codex-steer-refused-after-complete.json");
-    process.env.FAKE_CODEX_DUMP = dump;
-    process.env.FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE = "1";
+    compatEnv.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_STEER_REFUSE_AFTER_COMPLETE = "1";
     await create({ mode: "approval" });
     const threadId = "t-codex-steer-refused-after-complete";
     await instance.adapter.sendTurn({ threadId, text: "one" });
@@ -1621,7 +1622,7 @@ describe("CodexDriver turns (fake app-server)", () => {
 
   it("Stop interrupts through the protocol and reports no signal error", async () => {
     const dump = join(scratch, "codex-interrupt.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
     await create({ mode: "approval" });
     await instance.adapter.sendTurn({ threadId: "t-codex-stop-clean", text: "one" });
     await recorder.until((e) => e.type === "request.opened");
@@ -1636,9 +1637,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   }, 20_000);
 
   it("escalates to a kill when the server ignores turn/interrupt, still without the signal error", async () => {
-    process.env.FAKE_CODEX_DUMP = join(scratch, "codex-interrupt-silent.json");
-    process.env.FAKE_CODEX_INTERRUPT_SILENT = "1";
-    process.env.FAKE_CODEX_INTERRUPT_GRACE_MS = "60";
+    compatEnv.FAKE_CODEX_DUMP = join(scratch, "codex-interrupt-silent.json");
+    compatEnv.FAKE_CODEX_INTERRUPT_SILENT = "1";
+    compatEnv.FAKE_CODEX_INTERRUPT_GRACE_MS = "60";
     await create({ mode: "approval" });
     await instance.adapter.sendTurn({ threadId: "t-codex-stop-wedged", text: "one" });
     await recorder.until((e) => e.type === "request.opened");
@@ -1723,7 +1724,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   it("offers the exact Astra update command without blocking older Codex models", async () => {
-    process.env.FAKE_CODEX_VERSION = "codex-cli 0.152.1";
+    compatEnv.FAKE_CODEX_VERSION = "codex-cli 0.152.1";
     await create();
 
     await expect(instance.snapshot()).resolves.toMatchObject({
@@ -1736,15 +1737,15 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   it("does not show an Astra update prompt for a supported Codex version", async () => {
-    process.env.FAKE_CODEX_VERSION = "codex-cli 0.153.1";
+    compatEnv.FAKE_CODEX_VERSION = "codex-cli 0.153.1";
     await create();
 
     expect((await instance.snapshot()).update).toBeUndefined();
   });
 
   it("trusts a live Astra catalog even when the bundled CLI version predates the documented release", async () => {
-    process.env.FAKE_CODEX_VERSION = "codex-cli 0.153.0";
-    process.env.FAKE_CODEX_ASTRA = "1";
+    compatEnv.FAKE_CODEX_VERSION = "codex-cli 0.153.0";
+    compatEnv.FAKE_CODEX_ASTRA = "1";
     await create();
 
     expect(instance.models.options.map((model) => model.id)).toContain("gpt-6-astra");
@@ -1803,9 +1804,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   it("auto-retries a transient turn/start failure, then completes with one final message", async () => {
-    process.env.FAKE_CODEX_TRANSIENTS = "2";
-    process.env.FAKE_CODEX_STATE = join(scratch, "codex-launches");
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_TRANSIENTS = "2";
+    compatEnv.FAKE_CODEX_STATE = join(scratch, "codex-launches");
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-codex-retry", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed" && e.ok === true);
@@ -1820,9 +1821,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   }, 20_000);
 
   it("does not repeat an accepted instruction update when turn/start retries", async () => {
-    process.env.FAKE_CODEX_TRANSIENTS = "1";
-    process.env.FAKE_CODEX_STATE = join(scratch, "instruction-retry");
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_TRANSIENTS = "1";
+    compatEnv.FAKE_CODEX_STATE = join(scratch, "instruction-retry");
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     mkdirSync(NATIVE_DIR, { recursive: true });
     await create({ mode: "resume" });
     await instance.adapter.sendTurn({
@@ -1836,9 +1837,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   });
 
   it("stops retrying at the attempt cap and settles as failed", async () => {
-    process.env.FAKE_CODEX_TRANSIENTS = "9";
-    process.env.FAKE_CODEX_STATE = join(scratch, "codex-launches-cap");
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_TRANSIENTS = "9";
+    compatEnv.FAKE_CODEX_STATE = join(scratch, "codex-launches-cap");
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-codex-cap", text: "hi" });
 
@@ -1848,8 +1849,8 @@ describe("CodexDriver turns (fake app-server)", () => {
   }, 20_000);
 
   it("interrupting one thread does not cancel another thread's retry", async () => {
-    process.env.FAKE_CODEX_TRANSIENTS = "2";
-    process.env.FAKE_CODEX_STATE = join(scratch, "codex-launches-concurrent");
+    compatEnv.FAKE_CODEX_TRANSIENTS = "2";
+    compatEnv.FAKE_CODEX_STATE = join(scratch, "codex-launches-concurrent");
     await create();
 
     const first = instance.adapter.sendTurn({ threadId: "t-codex-stop", text: "stop me" });
@@ -1865,9 +1866,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   }, 20_000);
 
   it("an interrupt during the retry backoff settles the turn at once, not after the wait", async () => {
-    process.env.FAKE_CODEX_TRANSIENTS = "9";
-    process.env.FAKE_CODEX_STATE = join(scratch, "codex-launches-cancel-backoff");
-    process.env.FAKE_CODEX_RETRY_SCALE = "60"; // long backoff — we cancel inside it
+    compatEnv.FAKE_CODEX_TRANSIENTS = "9";
+    compatEnv.FAKE_CODEX_STATE = join(scratch, "codex-launches-cancel-backoff");
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "60"; // long backoff — we cancel inside it
     await create();
     const turn = instance.adapter.sendTurn({ threadId: "t-codex-cancel-backoff", text: "hi" });
     await recorder.until((e) => e.type === "turn.retrying");
@@ -1883,10 +1884,10 @@ describe("CodexDriver turns (fake app-server)", () => {
   }, 20_000);
 
   it("never retries after agent text already streamed (duplicate-text hazard)", async () => {
-    process.env.FAKE_CODEX_TRANSIENTS = "1";
-    process.env.FAKE_CODEX_PARTIAL_FAILS = "1";
-    process.env.FAKE_CODEX_STATE = join(scratch, "codex-launches-partial");
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_TRANSIENTS = "1";
+    compatEnv.FAKE_CODEX_PARTIAL_FAILS = "1";
+    compatEnv.FAKE_CODEX_STATE = join(scratch, "codex-launches-partial");
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-codex-partial", text: "hi" });
 
@@ -1897,9 +1898,9 @@ describe("CodexDriver turns (fake app-server)", () => {
 
 
   it("retries a transient app-server crash before the turn starts", async () => {
-    process.env.FAKE_CODEX_LAUNCH_CRASHES = "1";
-    process.env.FAKE_CODEX_STATE = join(scratch, "codex-launch-crash");
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CODEX_LAUNCH_CRASHES = "1";
+    compatEnv.FAKE_CODEX_STATE = join(scratch, "codex-launch-crash");
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.001";
     try {
       await create();
       await instance.adapter.sendTurn({ threadId: "t-codex-launch-crash", text: "hi" });
@@ -1911,14 +1912,14 @@ describe("CodexDriver turns (fake app-server)", () => {
       const replies = recorder.events.filter((e) => e.type === "item.completed" && e.itemType === "assistant_text");
       expect(replies).toHaveLength(1);
     } finally {
-      delete process.env.FAKE_CODEX_LAUNCH_CRASHES;
-      delete process.env.FAKE_CODEX_STATE;
-      delete process.env.FAKE_CODEX_RETRY_SCALE;
+      delete compatEnv.FAKE_CODEX_LAUNCH_CRASHES;
+      delete compatEnv.FAKE_CODEX_STATE;
+      delete compatEnv.FAKE_CODEX_RETRY_SCALE;
     }
   }, 20_000);
   it("never replays a turn after turn/start was acknowledged, even for a transient-looking exit", async () => {
     const ackGate = join(scratch, "ack-crash-gate");
-    process.env.FAKE_CODEX_ACK_CRASH = ackGate;
+    compatEnv.FAKE_CODEX_ACK_CRASH = ackGate;
     // The fake holds its crash until the test confirms the driver parsed
     // the ack. stdout and stderr are separate pipes, so only the reader
     // can order them: this listener runs in the same synchronous dispatch
@@ -1945,14 +1946,14 @@ describe("CodexDriver turns (fake app-server)", () => {
       expect(error?.message).toContain("connection reset");
     } finally {
       spawnSpy.mockRestore();
-      delete process.env.FAKE_CODEX_ACK_CRASH;
+      delete compatEnv.FAKE_CODEX_ACK_CRASH;
     }
   }, 20_000);
   it("does not blame stale stderr when the app-server is killed mid-turn", async () => {
     const stderrGate = join(scratch, "exit-mid-turn-stderr-gate");
     const killGate = join(scratch, "exit-mid-turn-kill-gate");
-    process.env.FAKE_CODEX_EXIT_MID_TURN = stderrGate;
-    process.env.FAKE_CODEX_EXIT_MID_TURN_KILL = killGate;
+    compatEnv.FAKE_CODEX_EXIT_MID_TURN = stderrGate;
+    compatEnv.FAKE_CODEX_EXIT_MID_TURN_KILL = killGate;
     // The fake writes the stale 426 first, then holds its stdout until this
     // test confirms the driver read that stderr chunk, and finally holds the
     // kill until the reasoning delta was parsed. The gate file is only
@@ -1987,8 +1988,8 @@ describe("CodexDriver turns (fake app-server)", () => {
       expect(error?.message).not.toContain("426");
     } finally {
       spawnSpy.mockRestore();
-      delete process.env.FAKE_CODEX_EXIT_MID_TURN;
-      delete process.env.FAKE_CODEX_EXIT_MID_TURN_KILL;
+      delete compatEnv.FAKE_CODEX_EXIT_MID_TURN;
+      delete compatEnv.FAKE_CODEX_EXIT_MID_TURN_KILL;
     }
   }, 20_000);
   // POSIX-only: win32 turns process.kill into TerminateProcess (exit code
@@ -1996,9 +1997,9 @@ describe("CodexDriver turns (fake app-server)", () => {
   // all. The silent-exit test below covers the classification path win32
   // can reach, and the mid-turn test splits its wording by platform.
   (process.platform === "win32" ? it.skip : it)("treats a signal-killed app-server as terminal even with transient stderr", async () => {
-    process.env.FAKE_CODEX_LAUNCH_KILLS = "1";
+    compatEnv.FAKE_CODEX_LAUNCH_KILLS = "1";
     const stateFile = join(scratch, "launch-kills.json");
-    process.env.FAKE_CODEX_STATE = stateFile;
+    compatEnv.FAKE_CODEX_STATE = stateFile;
     try {
       await create();
       await instance.adapter.sendTurn({ threadId: "t-codex-launch-kill", text: "hi" });
@@ -2009,14 +2010,14 @@ describe("CodexDriver turns (fake app-server)", () => {
       expect(error?.message).toContain("signal SIGKILL");
       expect(readFileSync(stateFile, "utf8")).toBe("1");
     } finally {
-      delete process.env.FAKE_CODEX_LAUNCH_KILLS;
-      delete process.env.FAKE_CODEX_STATE;
+      delete compatEnv.FAKE_CODEX_LAUNCH_KILLS;
+      delete compatEnv.FAKE_CODEX_STATE;
     }
   }, 20_000);
   it("treats a silent pre-ack exit as terminal instead of retrying off lifetime stderr", async () => {
-    process.env.FAKE_CODEX_LAUNCH_SILENT = "1";
+    compatEnv.FAKE_CODEX_LAUNCH_SILENT = "1";
     const stateFile = join(scratch, "launch-silent.json");
-    process.env.FAKE_CODEX_STATE = stateFile;
+    compatEnv.FAKE_CODEX_STATE = stateFile;
     try {
       await create();
       await instance.adapter.sendTurn({ threadId: "t-codex-launch-silent", text: "hi" });
@@ -2027,15 +2028,15 @@ describe("CodexDriver turns (fake app-server)", () => {
       expect(error?.message).toContain("codex exited 1 before turn/completed");
       expect(readFileSync(stateFile, "utf8")).toBe("1");
     } finally {
-      delete process.env.FAKE_CODEX_LAUNCH_SILENT;
-      delete process.env.FAKE_CODEX_STATE;
+      delete compatEnv.FAKE_CODEX_LAUNCH_SILENT;
+      delete compatEnv.FAKE_CODEX_STATE;
     }
   }, 20_000);
   it("does not announce a retry when Stop races a transient handshake failure", async () => {
-    process.env.FAKE_CODEX_TRANSIENTS = "1";
+    compatEnv.FAKE_CODEX_TRANSIENTS = "1";
     const stateFile = join(scratch, "stop-race.json");
-    process.env.FAKE_CODEX_STATE = stateFile;
-    process.env.FAKE_CODEX_RETRY_SCALE = "0.01";
+    compatEnv.FAKE_CODEX_STATE = stateFile;
+    compatEnv.FAKE_CODEX_RETRY_SCALE = "0.01";
     try {
       await create();
       await instance.adapter.sendTurn({ threadId: "t-codex-stop-race", text: "hi" });
@@ -2044,15 +2045,15 @@ describe("CodexDriver turns (fake app-server)", () => {
       await recorder.until((e) => e.type === "turn.completed");
       expect(recorder.events.some((e) => e.type === "turn.retrying")).toBe(false);
     } finally {
-      delete process.env.FAKE_CODEX_TRANSIENTS;
-      delete process.env.FAKE_CODEX_STATE;
-      delete process.env.FAKE_CODEX_RETRY_SCALE;
+      delete compatEnv.FAKE_CODEX_TRANSIENTS;
+      delete compatEnv.FAKE_CODEX_STATE;
+      delete compatEnv.FAKE_CODEX_RETRY_SCALE;
     }
   }, 20_000);
   it.each(["start", "resume"] as const)(
     "banks this turn's usage after a coalesced thread/%s response and restored usage notification",
     async (mode) => {
-      process.env.FAKE_CODEX_RESTORED_USAGE = "1";
+      compatEnv.FAKE_CODEX_RESTORED_USAGE = "1";
       try {
         await create({ mode: mode === "resume" ? "resume" : undefined });
         await instance.adapter.sendTurn({
@@ -2067,7 +2068,7 @@ describe("CodexDriver turns (fake app-server)", () => {
         // the restored total that arrived before turn/start is a baseline, not an indicator reading
         expect(recorder.events.filter((e) => e.type === "thread.token-usage.updated")).toHaveLength(1);
       } finally {
-        delete process.env.FAKE_CODEX_RESTORED_USAGE;
+        delete compatEnv.FAKE_CODEX_RESTORED_USAGE;
       }
     },
   );
@@ -2085,7 +2086,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("sends effort on turn/start, and omits the key when unset", async () => {
     await create();
     const dump = join(scratch, "effort.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-effort", text: "hi", effort: "xhigh" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -2098,7 +2099,7 @@ describe("CodexDriver turns (fake app-server)", () => {
   it("sends no effort key when the turn has none", async () => {
     await create();
     const dump = join(scratch, "no-effort.json");
-    process.env.FAKE_CODEX_DUMP = dump;
+    compatEnv.FAKE_CODEX_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-no-effort", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -2108,3 +2109,4 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(turnStart.params).not.toHaveProperty("effort");
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; local-container-name: existing local VM container remains recognizable rather than becoming an orphan; engine-config: stored engine provider and built-in MCP identities remain reserved and cleanable; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -5,7 +6,7 @@ import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.
 import { handleToolCall, request } from "../scripts/mcp-server.ts";
 
 async function withPair(test: (f: any) => Promise<void>) {
-  const session = await launchVerificationServer(process.env, undefined, undefined, undefined, undefined, { scripted: true });
+  const session = await launchVerificationServer(compatEnv, undefined, undefined, undefined, undefined, { scripted: true });
   const url = session.info.url;
   const env = { OPENMAUSBOT_URL: url };
   const cli = (...args: string[]) => runControlOmb(args, { env }) as Promise<any>;
@@ -84,9 +85,9 @@ it.each(["idle", "busy"])("wakes an %s lead once from a plain teammate reply", s
   const transcript = await f.messages();
   expect(transcript.filter((m: any) => m.kind === "text" && m.from?.botId === f.bee.id)).toHaveLength(1);
   expect(transcript.filter((m: any) => m.kind === "text" && m.from?.botId === f.ace.id)).toHaveLength(1);
-  if (process.env.WAKE_EVIDENCE_DIR) {
-    mkdirSync(process.env.WAKE_EVIDENCE_DIR, { recursive: true });
-    writeFileSync(join(process.env.WAKE_EVIDENCE_DIR, `plain-${state}.json`), JSON.stringify({
+  if (compatEnv.WAKE_EVIDENCE_DIR) {
+    mkdirSync(compatEnv.WAKE_EVIDENCE_DIR, { recursive: true });
+    writeFileSync(join(compatEnv.WAKE_EVIDENCE_DIR, `plain-${state}.json`), JSON.stringify({
       wait: await f.wait(), transcript, providerTurns: f.turns(), dispatches: { workerRoom: 1, leadRoom: 1, leadIndependent: state === "busy" ? 1 : 0 },
     }, null, 2));
   }
@@ -107,3 +108,4 @@ it.each(["peer", "membership", "approval"])("withholds a busy plain callback aft
   await f.wait(); await f.cli("wait", "--bot", f.bee.id, "--timeout", "15");
   expect((await f.messages()).filter((m: any) => m.kind === "text" && m.from?.botId === f.bee.id)).toHaveLength(0);
 }), 45000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,4 +1,4 @@
-# OpenMausBot control plane
+# BOS Bot control plane
 
 This directory is an isolated Cloudflare Worker for cloud account identity,
 installation ownership, and per-installation managed companion endpoints. It
@@ -136,8 +136,8 @@ non-production scoped `CLOUDFLARE_API_TOKEN`, apply the migrations locally, and
 start Wrangler:
 
 ```sh
-pnpm --filter @openmausbot/control-plane exec wrangler d1 migrations apply DB --local --config wrangler.jsonc
-pnpm --filter @openmausbot/control-plane exec wrangler dev --config wrangler.jsonc
+pnpm --filter @bosbot/control-plane exec wrangler d1 migrations apply DB --local --config wrangler.jsonc
+pnpm --filter @bosbot/control-plane exec wrangler dev --config wrangler.jsonc
 ```
 
 Do not commit `.dev.vars`.
@@ -184,3 +184,4 @@ only its tunnel connector token, which can run that one remotely managed tunnel.
 The public companion service still enforces its own pairing and application
 authentication; the tunnel is transport, not user authentication. This control
 plane does not collect marketing consent.
+<!-- branding compatibility (electron/branding-compat.json): deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service -->

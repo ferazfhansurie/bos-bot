@@ -160,3 +160,4 @@ describe("the sending bot's face", () => {
     await expect(notificationIcon(undefined)).resolves.toBeUndefined();
   });
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

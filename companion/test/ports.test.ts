@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The sidecar refuses ports the harness owns.
 //
 // This exists because of a bug that shipped: the sidecar's device port was
@@ -35,11 +36,11 @@ const start = (env: Record<string, string>): Promise<{ code: number | null; err:
   new Promise((resolve) => {
     const child = spawn(process.execPath, [ENTRY], {
       env: {
-        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-        ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
-        ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}),
-        ...(process.env.OMB_COMPANION_DIR ? { OMB_COMPANION_DIR: process.env.OMB_COMPANION_DIR } : {}),
+        ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+        ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
+        ...(compatEnv.HOME ? { HOME: compatEnv.HOME } : {}),
+        ...(compatEnv.USERPROFILE ? { USERPROFILE: compatEnv.USERPROFILE } : {}),
+        ...(compatEnv.OMB_COMPANION_DIR ? { OMB_COMPANION_DIR: compatEnv.OMB_COMPANION_DIR } : {}),
         ...env,
       },
       stdio: ["ignore", "ignore", "pipe"],
@@ -124,3 +125,4 @@ describe("port conflicts with the harness", () => {
     expect(moved.err).not.toContain("OMB_COMPANION_PORT");
   }, 40_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

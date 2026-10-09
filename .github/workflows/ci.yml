@@ -348,7 +348,7 @@ jobs:
           sudo chmod 4755 release/linux-unpacked/chrome-sandbox
           test "$(stat -c '%U:%G %a' release/linux-unpacked/chrome-sandbox)" = "root:root 4755"
       - name: Verify the installed browser with Ubuntu sandbox restrictions
-        run: node scripts/smoke-browser-bundle.mjs --resources /opt/OpenMausBot/resources
+        run: node scripts/smoke-browser-bundle.mjs --resources /opt/BOS Bot/resources
       - name: Launch packaged app and verify lifecycle
         env:
           OMB_KEEP_SMOKE_DIR: "1"
@@ -356,12 +356,12 @@ jobs:
         run: pnpm smoke:linux-package
       - name: Remove the installed upgrade fixture
         if: always()
-        run: sudo dpkg --purge openmausbot || true
+        run: sudo dpkg --purge bosbot || true
       - name: Upload smoke diagnostics on failure
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: openmausbot-ubuntu-smoke-diagnostics
+          name: bosbot-ubuntu-smoke-diagnostics
           path: |
             /tmp/omb-linux-smoke-*
             /tmp/omb-linux-smoke-runtime-*
@@ -387,8 +387,8 @@ jobs:
         run: |
           cd ios
           xcodebuild \
-            -project OpenMausCompanion.xcodeproj \
-            -scheme OpenMausCompanion \
+            -project BosBot.xcodeproj \
+            -scheme BosBot \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
@@ -451,3 +451,4 @@ jobs:
             android/app/build/test-results
           if-no-files-found: warn
           retention-days: 7
+# branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -110,7 +110,7 @@ jobs:
             --base main \
             --head "release/v$VERSION" \
             --title "chore(release): bump version to $VERSION" \
-            --body "Bumps OpenMausBot to \`$VERSION\`. Merging this PR automatically starts the existing release workflow and assembles a draft release from the exact merge commit.")
+            --body "Bumps BOS Bot to \`$VERSION\`. Merging this PR automatically starts the existing release workflow and assembles a draft release from the exact merge commit.")
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "### Release PR" >> "$GITHUB_STEP_SUMMARY"
           echo "$url" >> "$GITHUB_STEP_SUMMARY"
@@ -123,3 +123,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.next }}
         run: gh workflow run ci.yml --ref "release/v$VERSION"
+# branding compatibility (electron/branding-compat.json): upstream-artifacts: pinned third-party binaries and historical upstream provenance cannot be redirected by a product rename

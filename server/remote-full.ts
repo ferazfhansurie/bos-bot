@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { createHash, createPublicKey, randomBytes, sign, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +11,7 @@ import type { Store } from "./store.ts";
 /** The owner authority is the configured control plane (BOS_CONTROL_PLANE_URL
  * or legacy OMB_CONTROL_PLANE_URL). There is no hosted default: unset means
  * Remote Full is "not configured" and no authority request is ever made. */
-export function remoteFullAuthorityOrigin(env: NodeJS.ProcessEnv = process.env): string {
+export function remoteFullAuthorityOrigin(env: NodeJS.ProcessEnv = compatEnv): string {
   return resolveCompanionControlPlaneURL({ environment: env });
 }
 export const REMOTE_FULL_NOT_CONFIGURED = "remote sign-in not configured";
@@ -145,3 +146,4 @@ export class RemoteFullService {
     } finally { this.pending.delete(challenge.nonce); }
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

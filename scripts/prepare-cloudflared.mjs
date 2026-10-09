@@ -1,10 +1,11 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Stage a pinned Cloudflare Tunnel connector for every desktop architecture
 // electron-builder will package on this host. Pass --current for development
 // or self-hosting to stage only the platform and architecture running this
 // script. The release asset is verified before extraction and the executable
 // is verified again on every reuse.
 // Nothing is installed globally and cloudflared's own updater stays disabled;
-// OpenMausBot updates this dependency with an ordinary reviewed app release.
+// BOS Bot updates this dependency with an ordinary reviewed app release.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -89,7 +90,7 @@ export function parsePrepareCloudflaredArgs(args = []) {
     if (argument === "--current" && !options.current) {
       options.current = true;
     } else if (argument === "--root" && !options.root && typeof next === "string" && next !== "") {
-      // `openmausbot serve --tunnel` stages into its data dir, not a checkout.
+      // `bosbot serve --tunnel` stages into its data dir, not a checkout.
       options.root = next;
       index += 1;
     } else {
@@ -220,7 +221,7 @@ function extractionFailure(result) {
 
 /** Retry transient download failures; callers still verify the pinned digest. */
 export async function releaseBytes(asset) {
-  const cacheDirectory = process.env.OMB_CLOUDFLARED_ARCHIVE_DIR;
+  const cacheDirectory = compatEnv.OMB_CLOUDFLARED_ARCHIVE_DIR;
   const cached = cacheDirectory ? join(cacheDirectory, asset.name) : "";
   if (cached && existsSync(cached)) return readFileSync(cached);
 
@@ -259,7 +260,7 @@ async function stageTarget(root, target) {
     return;
   }
 
-  const scratch = mkdtempSync(join(tmpdir(), `openmaus-cloudflared-${target}-`));
+  const scratch = mkdtempSync(join(tmpdir(), `bos-cloudflared-${target}-`));
   try {
     const payload = await releaseBytes(asset);
     verifySha256(payload, asset.sha256, asset.name);
@@ -325,3 +326,4 @@ export async function prepareCloudflared({
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   await prepareCloudflared(parsePrepareCloudflaredArgs(process.argv.slice(2)));
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

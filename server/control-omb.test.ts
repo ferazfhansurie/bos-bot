@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -115,7 +116,7 @@ describe("control-omb command mapping", () => {
     });
   });
 
-  it("rejects an available engine when the endpoint is not OpenMausBot", async () => {
+  it("rejects an available engine when the endpoint is not BOS Bot", async () => {
     const callTool = vi.fn(async (name: string) => name === "get_system_health"
       ? { status: "connected", app: "another-app" }
       : { instances: [{ instanceId: "ready", snapshot: { state: "available" } }] });
@@ -132,7 +133,7 @@ describe("control-omb command mapping", () => {
       callTool: vi.fn() as any,
       env: {},
     })).rejects.toMatchObject({
-      message: "mutating commands require an explicit OpenMausBot instance",
+      message: "mutating commands require an explicit BOS Bot instance",
     });
   });
 
@@ -186,7 +187,7 @@ describe("control-omb command mapping", () => {
       callTool: vi.fn() as any,
       env: {},
     })).rejects.toMatchObject({
-      message: "mutating commands require an explicit OpenMausBot instance",
+      message: "mutating commands require an explicit BOS Bot instance",
     });
   });
 
@@ -230,7 +231,7 @@ describe("control-omb command mapping", () => {
     });
     await expect(runControlOmb(["set-model", "--bot", "bot-1", "--instance", "claude", "--model", "model-b"], {
       callTool: callTool as any, env: {},
-    })).rejects.toThrow("explicit OpenMausBot instance");
+    })).rejects.toThrow("explicit BOS Bot instance");
   });
 });
 
@@ -247,7 +248,7 @@ describe("control-omb isolated verification loop", () => {
 
   it("launches, drives a real fake-engine turn, and removes only its test data", async () => {
     const parentEnv = {
-      ...process.env,
+      ...compatEnv,
       COMPOSIO_API_KEY: "must-not-reach-the-fixture",
       OMB_SKILLS_DIR: "/must/not/reach/the/fixture",
       XAI_API_KEY: "must-not-reach-the-fixture",
@@ -283,7 +284,7 @@ describe("control-omb isolated verification loop", () => {
 
   it("scripts the fake engine's tool calls from the launcher's environment", async () => {
     const session = await launchVerificationServer({
-      ...process.env,
+      ...compatEnv,
       FAKE_CLAUDE_TOOL_CALLS: '[{"name":"Bash","input":{"command":"pnpm control:omb doctor","password":"fixture-secret"},"output":{"text":"fixture healthy","api_key":"fixture-output-secret"},"ok":true},{"name":"Bash","input":{"command":"false"},"output":"fixture command failed","ok":false}]',
     });
     const env = { OPENMAUSBOT_URL: session.info.url };
@@ -328,3 +329,4 @@ describe("control-omb isolated verification loop", () => {
     }
   }, 30_000);
 });
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

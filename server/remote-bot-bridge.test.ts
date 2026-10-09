@@ -889,3 +889,4 @@ describe("RemoteBotBridge", () => {
     expect(fake.created).toBe(0);
   });
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

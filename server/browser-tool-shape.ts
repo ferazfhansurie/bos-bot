@@ -11,7 +11,7 @@
 // the boundary so the saving applies to every engine.
 import { trimResultText } from "./mcp-trim.ts";
 
-/** Launch, session and network settings OpenMausBot owns through the
+/** Launch, session and network settings BOS Bot owns through the
  * environment (see browser-engine.ts). A model has no business setting them
  * per call — `session` would reach another bot's browser, `extraArgs` and
  * `caCert` change the launch — and each one cost more schema than the tool's

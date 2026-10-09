@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real server + pairing + agent MCP process + outbound desktop connector.
 // Only the model is fake. Files live in the disposable verification home.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -80,7 +81,7 @@ beforeAll(async () => {
   const agents = JSON.parse(readFileSync(dump, "utf8")).mcpConfig.mcpServers.agents;
   expect(agents.env.OMB_COMMS_TOKEN).toBeTruthy();
   proxy = spawn(agents.command, agents.args, {
-    env: { PATH: process.env.PATH, HOME: fixture.info.dataDir, ...agents.env }, stdio: ["pipe", "pipe", "pipe"],
+    env: { PATH: compatEnv.PATH, HOME: fixture.info.dataDir, ...agents.env }, stdio: ["pipe", "pipe", "pipe"],
   });
   createInterface({ input: proxy.stdout! }).on("line", line => { const msg = JSON.parse(line); waiting.get(msg.id)?.(msg); waiting.delete(msg.id); });
   await rpc("initialize", { protocolVersion: "2024-11-05" });
@@ -203,3 +204,4 @@ it("withdrawing the workspace flag closes pending jobs and refuses a previously 
   expect((await api("GET", "/.well-known/openmausbot/environment")).body.capabilities).not.toHaveProperty("sharedComputers");
   evidence.push("workspace flag withdrawal closes in-flight requests and refuses tools advertised to an earlier provider turn");
 }, 45_000);
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateConfig, validatePackaged, signingPrerequisites, releaseSigning, releaseFeed, validateWindowsUpdateSigning, DEFAULT_FEED } from './release-contract.mjs';
@@ -7,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 const config = parse(readFileSync('electron-builder.yml', 'utf8'));
 test('live identity and feed are BOS owned', () => validateConfig(config, 'live'));
 test('upstream feed, staging identity, wrong output fail', () => {
-  for (const patch of [{publish:[{provider:'github',owner:'milind-soni',repo:'OpenMausBot'}]}, {appId:'ai.bos.bot.staging'}, {directories:{output:'release-staging'}}]) assert.throws(() => validateConfig({...config,...patch}, 'live'));
+  for (const patch of [{publish:[{provider:'github',owner:'milind-soni',repo:'BOS Bot'}]}, {appId:'ai.bos.bot.staging'}, {directories:{output:'release-staging'}}]) assert.throws(() => validateConfig({...config,...patch}, 'live'));
 });
 test('staging has no update feed', () => { const s = parse(readFileSync('electron-builder.staging.yml','utf8')); validateConfig({...config,...s},'staging'); assert.throws(() => validateConfig({...config,...s,publish:config.publish},'staging')); });
 test('production signing fails closed without secrets', () => { assert.throws(() => signingPrerequisites('win',{})); assert.throws(() => signingPrerequisites('mac',{})); signingPrerequisites('win',{WIN_CSC_LINK:'supplied',WIN_CSC_KEY_PASSWORD:'supplied',BOS_WINDOWS_PUBLISHER:'stable subject'}); });
@@ -16,7 +17,7 @@ test('packaged channel, commit and feed parity', () => {
  const feed={provider:'github',owner:'firazfhansurie',repo:'bos-bot'};
  validatePackaged(p,feed,'live','a'.repeat(40));
  assert.throws(()=>validatePackaged({...p,bosSourceCommit:'b'.repeat(40)},feed,'live','a'.repeat(40)));
- assert.throws(()=>validatePackaged(p,{...feed,repo:'OpenMausBot'},'live','a'.repeat(40)));
+ assert.throws(()=>validatePackaged(p,{...feed,repo:'BOS Bot'},'live','a'.repeat(40)));
  assert.throws(()=>validatePackaged({...p,bosChannel:'staging'},feed,'live','a'.repeat(40)));
  validatePackaged({...p,name:'bos-staging',bosChannel:'staging'},null,'staging','a'.repeat(40));
  assert.throws(()=>validatePackaged({...p,name:'bos-staging',bosChannel:'staging'},feed,'staging','a'.repeat(40)));
@@ -73,7 +74,7 @@ function liveConfig(env) {
 const r=createRequire(require.resolve('electron-builder',{paths:[process.cwd()]}));
 const {getConfig}=require(path.join(path.dirname(r.resolve('app-builder-lib')),'util/config/config.js'));
 getConfig(process.cwd(),'electron-builder.live.cjs',null).then(c=>process.stdout.write('\\n'+JSON.stringify(c)));`;
- const out=execFileSync(process.execPath,['-e',probe],{encoding:'utf8',env:{PATH:process.env.PATH,...env}});
+ const out=execFileSync(process.execPath,['-e',probe],{encoding:'utf8',env:{PATH:compatEnv.PATH,...env}});
  return JSON.parse(out.slice(out.lastIndexOf('\n')+1));
 }
 test('live builder config: one feed, signed by default, unsigned windows skips update signature checks', () => {

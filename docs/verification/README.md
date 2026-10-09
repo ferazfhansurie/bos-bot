@@ -1,6 +1,6 @@
-# Verifying OpenMausBot
+# Verifying BOS Bot
 
-OpenMausBot has one development control surface: `pnpm control:omb`. It is a
+BOS Bot has one development control surface: `pnpm control:omb`. It is a
 thin command-line adapter over `scripts/mcp-server.ts`, so verification uses
 the same URL validation, task pinning, bounded transcripts, wait states, and
 redaction as external MCP clients.
@@ -19,7 +19,7 @@ it receives Ctrl-C and can stop its child before removing the temporary data.
 It gives the child a temporary data directory and home, chooses a free
 harness/webhook port pair, installs only the repository's fake engine, prints
 the URL, PID, data directory, and persistent log path, then stays attached to
-that exact child. The parent shell and the user's OpenMausBot data are
+that exact child. The parent shell and the user's BOS Bot data are
 untouched. Only `FAKE_CLAUDE_*` variables cross from the launcher's
 environment into that child, so a recipe can script the fake engine's mode,
 replies and tool calls without writing a wrapper CLI.

@@ -200,3 +200,4 @@ public enum PhoneSecretCrypto {
         return Data(base64Encoded: base64)
     }
 }
+// branding compatibility (electron/branding-compat.json): phone-crypto: HPKE labels are part of the paired phone credential protocol

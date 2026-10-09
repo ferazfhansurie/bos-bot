@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -172,7 +173,7 @@ describe.skipIf(!posix)("startTunnel: guardian, gateway and connector, verified 
       originTarget: { pid: process.pid, socketPath: origin.socketPath },
       binaryPath: fake,
       guardian: guardian ?? "",
-      env: { ...process.env, OMB_TUNNEL_ORIGIN_PORT: String(originPort) },
+      env: { ...compatEnv, OMB_TUNNEL_ORIGIN_PORT: String(originPort) },
       // the public address does not exist here; verify through the gateway instead
       fetchImpl: (input, init) => fetch(String(input).replace(endpoint, `http://127.0.0.1:${originPort}`), init),
       onState: (state) => states.push(state.status),
@@ -208,7 +209,7 @@ describe("a fleet's credential in the environment", () => {
   it("gets the public address with no account file and no emailed code; a rejected credential is a clear error", async () => {
     const stub = await startControlPlaneStub();
     try {
-      const env = { ...process.env, OMB_CONTROL_PLANE_URL: stub.url };
+      const env = { ...compatEnv, OMB_CONTROL_PLANE_URL: stub.url };
       expect(fleetCredential({})).toBeNull();
       expect(fleetCredential({ OMB_INSTALLATION_CREDENTIAL: "   " })).toBeNull();
       const credential = stub.seedInstallation("box-1");
@@ -224,3 +225,4 @@ describe("a fleet's credential in the environment", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

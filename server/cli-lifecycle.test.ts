@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -76,7 +77,7 @@ function interrupt(): void {
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.denyLogOpen = false;
-  dataDir = mkdtempSync(join(process.env.HOME!, "cli-lifecycle-"));
+  dataDir = mkdtempSync(join(compatEnv.HOME!, "cli-lifecycle-"));
   options = { command: "serve", port: 18451, dataDir, tailscale: false, tunnel: false, client: false, pair: false, json: false, guided: true, open: false };
   signalListeners = new Map(["SIGINT", "SIGTERM"].map((signal) => [signal as NodeJS.Signals, new Set(process.listeners(signal))]));
   mocks.spawn.mockImplementation(() => childProcess());
@@ -169,7 +170,7 @@ describe("CLI startup lifecycle", () => {
     writeFileSync(join(dataDir, "openmausbot-server.lease"), JSON.stringify({
       version: 1, pid: process.pid, host: hostname(), token: workspaceId, createdAt: Date.now(),
     }));
-    vi.stubEnv("OMB_DATA_DIR", process.env.OMB_DATA_DIR);
+    vi.stubEnv("OMB_DATA_DIR", compatEnv.OMB_DATA_DIR);
     for (const stream of [process.stdin, process.stdout]) Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => String(url).endsWith("/api/health")
       ? Response.json({ app: "openmausbot", pid: childPid })
@@ -256,7 +257,7 @@ describe("CLI startup lifecycle", () => {
     expect(output).toContain(`web browser:   ${pairingUrl}`);
     expect(output).toMatch(/[▀▄█]/);
     expect(output).toContain(`Or open ${origin}/pair on your phone and enter the code.`);
-    expect(output).toContain("On Android, open the OpenMausBot app and scan the QR with its pairing scanner.");
+    expect(output).toContain("On Android, open the BOS Bot app and scan the QR with its pairing scanner.");
     // The QR rendered for an Android phone must be the app-scheme invite, not
     // the https link its scanner rejects.
     expect(output).toContain(qrToString(inviteUrl));
@@ -267,3 +268,4 @@ describe("CLI startup lifecycle", () => {
     expect(output).not.toMatch(/pairing complete|phone (?:is |successfully )?connected|paired successfully/i);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; lease: a new server must lock the same data-directory lease as an existing process; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

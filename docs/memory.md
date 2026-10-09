@@ -1,7 +1,7 @@
 # Bot memory
 
 Every bot keeps notes between tasks. The notes are plain markdown files in a
-folder on the computer running OpenMausBot — nothing is stored anywhere else,
+folder on the computer running BOS Bot — nothing is stored anywhere else,
 and you can open, edit, or delete any of it in any editor. **Bot Settings →
 Memory** shows the same files with a gauge of how much of them actually loads,
 an editor that never overwrites something the bot wrote while you were typing,
@@ -22,7 +22,7 @@ The folder is the bot's private workspace: the directory its file tools work in
 when it has no project folder set. It is created the first time the bot runs a
 turn. **Open in Obsidian** and **Show in Finder** (Explorer, or your file
 manager) in the Memory panel open this folder; because it is on the server's
-disk, those buttons only work from the computer running OpenMausBot — a
+disk, those buttons only work from the computer running BOS Bot — a
 paired phone or a remote browser is shown the path instead.
 
 Files are written with owner-only permissions (`0600`), atomically (a crash
@@ -165,3 +165,4 @@ free form, or one you rewrite by hand, works the same.
 | `POST` | `/api/bots/:id/memory/open` | `{ target: "obsidian" \| "folder" }` — opens the folder on this computer; loopback only. |
 
 All of them need the owner (admin) session, like the other bot-settings routes.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

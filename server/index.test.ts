@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // API smoke test: boots the real harness server (node server/index.ts)
 // against a throwaway home directory and exercises the HTTP surface the
 // app depends on. The config pins one deliberately-unknown driver so the
@@ -426,7 +427,7 @@ beforeAll(async () => {
   // a fleet of exactly one unknown driver: no CLI probes, no network
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
   mkdirSync(join(staticDir, "assets"), { recursive: true });
-  writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Packaged OpenMausBot</title>");
+  writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Packaged BOS Bot</title>");
   writeFileSync(join(staticDir, "assets", "smoke.css"), "body { color: white; }");
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
@@ -991,9 +992,9 @@ beforeAll(async () => {
   child = spawn(process.execPath, ["--import", browserPrelude, join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.PATHEXT ? { PATHEXT: compatEnv.PATHEXT } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(PORT),
@@ -1057,10 +1058,10 @@ describe("harness HTTP API", () => {
     expect(room.messages.find(
       (message: { id: string }) => message.id === "restarted-goal-card",
     )).toMatchObject({
-      text: "Goal failed: OpenMausBot restarted before this goal finished.",
+      text: "Goal failed: BOS Bot restarted before this goal finished.",
       goalRun: {
         status: "failed",
-        detail: "OpenMausBot restarted before this goal finished.",
+        detail: "BOS Bot restarted before this goal finished.",
         turnCount: 2,
         finishedAt: expect.any(Number),
       },
@@ -1195,8 +1196,8 @@ describe("harness HTTP API", () => {
     const contender = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: ROOT,
       env: {
-        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+        ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
         OMB_DATA_DIR: join(home, ".openmausbot"),
         OMB_PORT: String(contenderPort),
         OMB_STATIC_DIR: staticDir,
@@ -1228,7 +1229,7 @@ describe("harness HTTP API", () => {
     const root = await fetch(`${BASE}/`);
     expect(root.status).toBe(200);
     expect(root.headers.get("content-type")).toBe("text/html");
-    expect(await root.text()).toContain("Packaged OpenMausBot");
+    expect(await root.text()).toContain("Packaged BOS Bot");
 
     const asset = await fetch(`${BASE}/assets/smoke.css`);
     expect(asset.status).toBe(200);
@@ -1238,7 +1239,7 @@ describe("harness HTTP API", () => {
     const spa = await fetch(`${BASE}/settings/desktop`);
     expect(spa.status).toBe(200);
     expect(spa.headers.get("content-type")).toBe("text/html");
-    expect(await spa.text()).toContain("Packaged OpenMausBot");
+    expect(await spa.text()).toContain("Packaged BOS Bot");
 
     const unknownApi = await api("GET", "/api/not-a-real-route");
     expect(unknownApi.status).toBe(404);
@@ -1857,7 +1858,7 @@ describe("harness HTTP API", () => {
   });
 
   it.skipIf(process.platform !== "darwin")("dispatches this computer with Docker unavailable and an unrelated sibling VM pin", async () => {
-    const descriptorDir = join(home, "Library", "Application Support", "OpenMausBot");
+    const descriptorDir = join(home, "Library", "Application Support", "BOS Bot");
     mkdirSync(descriptorDir, { recursive: true });
     const descriptor = join(descriptorDir, "cua-connection.json");
     // Fake CLI never calls this stand-in: this asserts admission/MCP mounting,
@@ -4221,9 +4222,9 @@ describe("harness HTTP API", () => {
     const isolatedChild = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: ROOT,
       env: {
-        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-        ...(process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {}),
-        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+        ...(compatEnv.PATHEXT ? { PATHEXT: compatEnv.PATHEXT } : {}),
+        ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
         HOME: isolatedHome,
         USERPROFILE: isolatedHome,
         OMB_PORT: String(isolatedPort),
@@ -4371,7 +4372,7 @@ describe("harness HTTP API", () => {
     expect(markdownExport.body.markdown).toContain("Give this file to your Chief of Staff");
     expect(markdownExport.body.markdown).not.toMatch(/Archived|autoApprove|alwaysAllow|modelSelection|threadId/);
     expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBefore);
-    expect((await api("POST", "/api/teams/export", {})).body.team.name).toBe("My OpenMaus Team");
+    expect((await api("POST", "/api/teams/export", {})).body.team.name).toBe("My Bos Team");
 
     const stream = await openSse(`${BASE}/api/events`);
     try {
@@ -4526,7 +4527,7 @@ describe("harness HTTP API", () => {
         tagline: "Find and explain the signal.",
         summary: "A complete two-bot signal workflow.",
         category: "Research",
-        author: { name: "OpenMausBot" },
+        author: { name: "BOS Bot" },
         license: "MIT",
         outcomes: ["Produce a concise signal brief."],
         setupMinutes: 4,
@@ -4941,7 +4942,7 @@ describe("harness HTTP API", () => {
         .find((message: { id: string }) => message.id === messageId);
       expect(directCard).toMatchObject({
         kind: "secret",
-        text: "Securely provide the OpenAI API key from OpenMausBot on your phone or computer. It is never added to chat.",
+        text: "Securely provide the OpenAI API key from BOS Bot on your phone or computer. It is never added to chat.",
       });
       expect(directCard.secret.description).toContain(
         `${bot.name} can use it but never read it back.`,
@@ -5115,8 +5116,8 @@ describe("harness HTTP API", () => {
       {
         cwd: ROOT,
         env: {
-          ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-          ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+          ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+          ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
           HOME: isolatedHome,
           USERPROFILE: isolatedHome,
           OMB_PORT: String(isolatedPort),
@@ -6522,7 +6523,7 @@ describe("harness HTTP API", () => {
 
   it("cards every ask when Claude's reviewer never started, says so once, and can hand the allow to Claude for the session", async () => {
     // A bot on Approve for me with Haiku 4.5: the CLI takes `auto`, runs
-    // Manual, and asks about everything. OpenMausBot passes that through —
+    // Manual, and asks about everything. BOS Bot passes that through —
     // no rule of its own answers — and says why, once.
     const bot = (await api("POST", "/api/bots", { name: "Quill" })).body.bot;
     const conns: Socket[] = [];
@@ -6631,8 +6632,8 @@ describe("harness HTTP API", () => {
       await expect.poll(() => existsSync(fakeClaudeDump), { timeout: 5_000 }).toBe(true);
       const seen = JSON.parse(readFileSync(fakeClaudeDump, "utf8"));
       const system: string = seen.systemPrompt ?? "";
-      expect(system.startsWith("You are Kiwi, a personal bot in OpenMausBot. Role: Tracker.")).toBe(true);
-      const persona = "You are Kiwi, a personal bot in OpenMausBot. Role: Tracker.";
+      expect(system.startsWith("You are Kiwi, a personal bot in BOS Bot. Role: Tracker.")).toBe(true);
+      const persona = "You are Kiwi, a personal bot in BOS Bot. Role: Tracker.";
       const afterPersona = system.slice(persona.length);
       expect(afterPersona.startsWith("\n\nYour standing instructions follow.")).toBe(true);
       expect(system).toContain("--- BEGIN STANDING INSTRUCTIONS (SOUL.md, 28 bytes) ---\nFile bugs. Never file noise.\n--- END STANDING INSTRUCTIONS ---");
@@ -6694,7 +6695,7 @@ describe("harness HTTP API", () => {
       rmSync(fakeClaudeDump, { force: true });
       expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "hello" })).status).toBe(202);
       let system = (await readJsonFileWhenReady<{ systemPrompt: string }>(fakeClaudeDump, 15_000)).systemPrompt;
-      expect(system.startsWith("You are Blank, a personal bot in OpenMausBot.")).toBe(true);
+      expect(system.startsWith("You are Blank, a personal bot in BOS Bot.")).toBe(true);
       expect(system).not.toContain("at most four questions");
       expect(system).toContain("propose_profile");
 
@@ -7305,8 +7306,8 @@ describe("harness HTTP API", () => {
       {
         cwd: ROOT,
         env: {
-          ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-          ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+          ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+          ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
           HOME: isolatedHome,
           USERPROFILE: isolatedHome,
           OMB_PORT: String(isolatedPort),
@@ -7532,7 +7533,7 @@ describe("harness HTTP API", () => {
 
       const removed = await api("POST", `/api/bots/${bot.id}/local-computer/remove`, {});
       expect(removed.status).toBe(409);
-      expect(removed.body.error).toMatch(/not created by OpenMausBot.*remove it manually/i);
+      expect(removed.body.error).toMatch(/not created by BOS Bot.*remove it manually/i);
       expect(readFileSync(fakeDockerLog, "utf8").split("\n")).not.toContain(
         `rm -f ${status.body.container_name}`,
       );
@@ -7770,7 +7771,7 @@ describe("harness HTTP API", () => {
         .find((message: { id: string }) => message.id === messageId);
       expect(roomCard).toMatchObject({
         kind: "secret",
-        text: "Securely provide the OpenAI API key from OpenMausBot on your phone or computer. It is never added to chat.",
+        text: "Securely provide the OpenAI API key from BOS Bot on your phone or computer. It is never added to chat.",
         from: { botId: second.id, name: second.name, color: second.color },
       });
 
@@ -9683,7 +9684,7 @@ describe("bot memory API", () => {
       expect(before.body.sections[0]).toEqual({
         id: "persona",
         label: "Identity",
-        text: "You are Kiwi, a personal bot in OpenMausBot. Role: Tracker. About: Files bugs.",
+        text: "You are Kiwi, a personal bot in BOS Bot. Role: Tracker. About: Files bugs.",
         bytes: 78,
       });
       expect(before.body.sections.map((s: { id: string }) => s.id)).not.toContain("soul");
@@ -10442,3 +10443,4 @@ describe("computer control API (who is driving)", () => {
     expect(res.status).toBe(401);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; container-identity: existing managed containers, labels and pinned image entry points remain recognized; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling; stored-prompt-tags: existing message and skill delimiters are still readable by the current parsers

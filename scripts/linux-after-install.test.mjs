@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -50,14 +51,14 @@ function fixture() {
 function runHook(appRoot) {
   return spawnSync("/bin/sh", [hook], {
     encoding: "utf8",
-    env: { ...process.env, OPENMAUSBOT_POSTINSTALL_TEST_ROOT: appRoot },
+    env: { ...compatEnv, OPENMAUSBOT_POSTINSTALL_TEST_ROOT: appRoot },
   });
 }
 
 function runRemoveHook(appRoot, operation = "remove") {
   return spawnSync("/bin/sh", [removeHook, operation], {
     encoding: "utf8",
-    env: { ...process.env, OPENMAUSBOT_POSTINSTALL_TEST_ROOT: appRoot },
+    env: { ...compatEnv, OPENMAUSBOT_POSTINSTALL_TEST_ROOT: appRoot },
   });
 }
 
@@ -312,3 +313,4 @@ describe.skipIf(process.platform !== "linux")("Linux DEB upgrade hook", () => {
     expect(result.stderr).toContain("must stay under /tmp");
   });
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

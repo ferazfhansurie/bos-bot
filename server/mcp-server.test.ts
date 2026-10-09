@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -26,8 +27,8 @@ function jsonResponse(body: unknown, options: { ok?: boolean; status?: number; s
 afterEach(() => {
   vi.restoreAllMocks();
   globalThis.fetch = ORIGINAL_FETCH;
-  delete process.env.OPENMAUSBOT_TOKEN;
-  delete process.env.ALLOW_INSECURE_HTTP;
+  delete compatEnv.OPENMAUSBOT_TOKEN;
+  delete compatEnv.ALLOW_INSECURE_HTTP;
 });
 
 describe("MCP JSON-RPC protocol", () => {
@@ -40,7 +41,7 @@ describe("MCP JSON-RPC protocol", () => {
     })))!);
     expect(supported.result).toMatchObject({
       protocolVersion: "2024-11-05",
-      serverInfo: { name: "openmausbot-mcp", version: "1.1.0" },
+      serverInfo: { name: "bosbot-mcp", version: "1.1.0" },
       capabilities: { tools: {} },
     });
 
@@ -311,16 +312,16 @@ describe("MCP tool execution", () => {
 
     await expect(handleToolCall("update_bot_profile", {
       bot_id: "bot-1", name: "Mira",
-    }, fetcher)).rejects.toThrow("OpenMausBot did not return the updated bot");
+    }, fetcher)).rejects.toThrow("BOS Bot did not return the updated bot");
     await expect(handleToolCall("update_channel", {
       channel_id: "channel-1", name: "Launch",
-    }, fetcher)).rejects.toThrow("OpenMausBot did not return the updated channel");
+    }, fetcher)).rejects.toThrow("BOS Bot did not return the updated channel");
     await expect(handleToolCall("create_task", {
       target_type: "bot", target_id: "bot-1", title: "Fresh",
-    }, fetcher)).rejects.toThrow("OpenMausBot did not return the created task");
+    }, fetcher)).rejects.toThrow("BOS Bot did not return the created task");
     await expect(handleToolCall("rename_task", {
       target_type: "bot", target_id: "bot-1", task_id: "task-1", title: "Renamed",
-    }, fetcher)).rejects.toThrow("OpenMausBot did not return the renamed task");
+    }, fetcher)).rejects.toThrow("BOS Bot did not return the renamed task");
   });
 
   it("searches with encoded, bounded parameters", async () => {
@@ -728,7 +729,7 @@ describe("connection security and discovery", () => {
 
   it("skips a foreign process and discovers the real fallback port", async () => {
     globalThis.fetch = vi.fn(async (url: any) => {
-      if (String(url).includes(":8799")) return jsonResponse({ app: "not-openmausbot" });
+      if (String(url).includes(":8799")) return jsonResponse({ app: "not-bosbot" });
       if (String(url).includes(":18799")) return jsonResponse({ app: "openmausbot" });
       throw new Error("unexpected port");
     }) as any;
@@ -736,7 +737,7 @@ describe("connection security and discovery", () => {
   });
 
   it("rejects successful non-JSON responses and sends an optional bearer token", async () => {
-    process.env.OPENMAUSBOT_TOKEN = "proxy-token";
+    compatEnv.OPENMAUSBOT_TOKEN = "proxy-token";
     globalThis.fetch = vi.fn(async (_url: any, options: any) => {
       expect(new Headers(options.headers).get("Authorization")).toBe("Bearer proxy-token");
       return { ...jsonResponse({}), json: vi.fn(async () => { throw new Error("not json"); }) };
@@ -756,7 +757,7 @@ describe("connection security and discovery", () => {
   });
 
   it("requires an explicit destination before sending a bearer token", async () => {
-    process.env.OPENMAUSBOT_TOKEN = "proxy-token";
+    compatEnv.OPENMAUSBOT_TOKEN = "proxy-token";
     await expect(resolveBaseUrl()).rejects.toThrow("OPENMAUSBOT_URL or OMB_PORT");
   });
 
@@ -765,3 +766,4 @@ describe("connection security and discovery", () => {
     expect(() => validateToolArguments("send_bot_message", { bot_id: "bot-1", text: "hello", extra: true })).toThrow("not supported");
   });
 });
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

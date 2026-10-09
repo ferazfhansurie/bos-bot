@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // PATH augmentation contract (issues #8, #12): a CLI living in a
 // well-known install dir — or an nvm bin dir — must be findable even
 // when the process itself started with a bare GUI PATH.
@@ -15,20 +16,20 @@ const posixIt = it.skipIf(process.platform === "win32");
 
 describe("augmentedPath", () => {
   afterEach(() => {
-    delete process.env.OMB_EXTRA_PATH;
+    delete compatEnv.OMB_EXTRA_PATH;
     resetPathCacheForTests();
   });
 
   it("keeps the existing PATH entries first", () => {
     resetPathCacheForTests();
     const path = augmentedPath();
-    const firstExisting = (process.env.PATH ?? "").split(delimiter).filter(Boolean)[0];
+    const firstExisting = (compatEnv.PATH ?? "").split(delimiter).filter(Boolean)[0];
     // OMB_EXTRA_PATH is unset here, so the inherited PATH leads
     expect(path.split(delimiter)[0]).toBe(firstExisting);
   });
 
   it("prepends OMB_EXTRA_PATH and dedupes", () => {
-    process.env.OMB_EXTRA_PATH = ["/tmp/omb-extra", "/tmp/omb-extra"].join(delimiter);
+    compatEnv.OMB_EXTRA_PATH = ["/tmp/omb-extra", "/tmp/omb-extra"].join(delimiter);
     resetPathCacheForTests();
     const parts = augmentedPath().split(delimiter);
     expect(parts[0]).toBe("/tmp/omb-extra");
@@ -81,14 +82,14 @@ describe("augmentedPath", () => {
   posixIt("keeps the last login-shell PATH available during a rescan", async () => {
     const shell = join(homedir(), "fake-login-shell");
     const rcOnlyBin = join(homedir(), "rc-only", "bin");
-    writeFileSync(shell, `#!/bin/sh\nprintf '__OMB_PATH__%s' '${rcOnlyBin}'\n`);
+    writeFileSync(shell, `#!/bin/sh\nprintf '__BOS_PATH__%s' '${rcOnlyBin}'\n`);
     chmodSync(shell, 0o755);
 
-    const previousShell = process.env.SHELL;
-    const previousVitest = process.env.VITEST;
+    const previousShell = compatEnv.SHELL;
+    const previousVitest = compatEnv.VITEST;
     try {
-      process.env.SHELL = shell;
-      delete process.env.VITEST;
+      compatEnv.SHELL = shell;
+      delete compatEnv.VITEST;
       resetPathCacheForTests();
 
       augmentedPath();
@@ -97,10 +98,10 @@ describe("augmentedPath", () => {
       resetPathCache();
       expect(augmentedPath().split(delimiter)).toContain(rcOnlyBin);
     } finally {
-      if (previousShell === undefined) delete process.env.SHELL;
-      else process.env.SHELL = previousShell;
-      if (previousVitest === undefined) delete process.env.VITEST;
-      else process.env.VITEST = previousVitest;
+      if (previousShell === undefined) delete compatEnv.SHELL;
+      else compatEnv.SHELL = previousShell;
+      if (previousVitest === undefined) delete compatEnv.VITEST;
+      else compatEnv.VITEST = previousVitest;
       resetPathCacheForTests();
     }
   });
@@ -113,17 +114,17 @@ describe("augmentedPath", () => {
   });
 
   it.skipIf(process.platform !== "win32")("finds Antigravity installed after launch", () => {
-    const previous = process.env.LOCALAPPDATA;
+    const previous = compatEnv.LOCALAPPDATA;
     const localAppData = mkdtempSync(join(tmpdir(), "omb-localappdata-"));
     try {
-      process.env.LOCALAPPDATA = localAppData;
+      compatEnv.LOCALAPPDATA = localAppData;
       const agyBin = join(localAppData, "agy", "bin");
       mkdirSync(agyBin, { recursive: true });
       resetPathCacheForTests();
       expect(augmentedPath().split(delimiter)).toContain(agyBin);
     } finally {
-      if (previous === undefined) delete process.env.LOCALAPPDATA;
-      else process.env.LOCALAPPDATA = previous;
+      if (previous === undefined) delete compatEnv.LOCALAPPDATA;
+      else compatEnv.LOCALAPPDATA = previous;
       resetPathCacheForTests();
       rmSync(localAppData, { recursive: true, force: true });
     }
@@ -204,7 +205,7 @@ describe("resolveCli", () => {
 winOnly("resolveCli (Windows)", () => {
   let dir: string;
   const onPath = () => {
-    process.env.OMB_EXTRA_PATH = dir;
+    compatEnv.OMB_EXTRA_PATH = dir;
     resetPathCacheForTests();
   };
   const shimWith = (name: string, body: string, target: string, targetBody: string) => {
@@ -217,7 +218,7 @@ winOnly("resolveCli (Windows)", () => {
     dir = mkdtempSync(join(tmpdir(), "omb-shim-"));
   });
   afterEach(async () => {
-    delete process.env.OMB_EXTRA_PATH;
+    delete compatEnv.OMB_EXTRA_PATH;
     resetPathCacheForTests();
     // These tests spawn the shims out of this directory; a just-exited one can
     // still be holding it for a beat after the call returns.
@@ -387,3 +388,4 @@ describe("registerPathDir", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

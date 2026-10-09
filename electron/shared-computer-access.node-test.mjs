@@ -243,11 +243,11 @@ test("a protected directory spelled in another case is still refused", async t =
   await writeFile(path.join(dir, "OpenMausBot", "credentials.bin"), "credential blob");
   grant.protectedPaths = [path.join(dir, "OpenMausBot")];
   folder.write = true;
-  await assert.rejects(run({ action: "read_file", path: "OpenMausBot/credentials.bin" }), /Desktop credentials/);
-  await assert.rejects(run({ action: "read_file", path: "openmausbot/credentials.bin" }), /Desktop credentials/);
+  await assert.rejects(run({ action: "read_file", path: "BOS Bot/credentials.bin" }), /Desktop credentials/);
+  await assert.rejects(run({ action: "read_file", path: "bosbot/credentials.bin" }), /Desktop credentials/);
   await assert.rejects(run({ action: "read_file", path: "OPENMAUSBOT/credentials.bin" }), /Desktop credentials/);
   await assert.rejects(run({ action: "list_files", path: "openmausbot" }), /Desktop credentials/);
-  await assert.rejects(run({ action: "write_file", path: "openmausbot/computer-sharing.json", content: "{}" }), /sharing settings/);
+  await assert.rejects(run({ action: "write_file", path: "bosbot/computer-sharing.json", content: "{}" }), /sharing settings/);
 });
 
 test("a protected directory spelled in another Unicode normalization is still refused", async t => {
@@ -412,3 +412,4 @@ test("a harness data directory that does not exist yet still saves and connects"
   assert.equal(JSON.parse(result.content[0].text).content, "ordinary file");
   assert.equal(stub.state.connected.folders.length, 1);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; legacy-credential-path-denylist: credential access checks must deny both legacy and renamed app directories; legacy-credential-path-case: case-insensitive filesystem access must still deny the legacy credential directory

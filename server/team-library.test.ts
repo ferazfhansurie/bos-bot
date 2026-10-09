@@ -108,3 +108,4 @@ describe("team library", () => {
     expect(fetcher).toHaveBeenCalledTimes(6);
   });
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; upstream-team-library: the existing upstream playbook library remains the configured source until a BOS library is published

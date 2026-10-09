@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // The work digest, end to end and across engines (Phase 0, item 0.1 with
 // the standing "every engine" rule): boots the real harness server with one
 // fake instance per engine family the repo has a fake for, runs one turn on
@@ -93,7 +94,7 @@ posixOnly("work digest e2e (every fake engine)", () => {
     writeFileSync(join(home, ".openmausbot", "config.json"), JSON.stringify({ instances }));
 
     const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, OMB_PORT: String(PORT) };
-    if (process.env.PATH) env.PATH = process.env.PATH;
+    if (compatEnv.PATH) env.PATH = compatEnv.PATH;
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env,
@@ -174,3 +175,4 @@ posixOnly("work digest e2e (every fake engine)", () => {
     await removeTempDir(project);
   }, 60_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

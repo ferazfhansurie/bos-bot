@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 // Generate a version 1 reviewed manifest (README.md) from an inventory and the
 // signed-in owner's cloud account row. Deterministic for the same inputs. It
 // never invents a person or a grant:
@@ -239,11 +240,11 @@ function args(argv) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const a = args(process.argv.slice(2));
   const [dir, ownerAccountId] = a.positional;
-  if (!dir || !ownerAccountId || !a.reviewer || !process.env.BOS_MIGRATION_URL)
+  if (!dir || !ownerAccountId || !a.reviewer || !compatEnv.BOS_MIGRATION_URL)
     throw new Error(
       "usage: BOS_MIGRATION_URL=... plan.mjs <copyDir> <ownerAccountId> --reviewer name [--name ws] [--accounts mappings.json]",
     );
-  const c = await connect(process.env.BOS_MIGRATION_URL);
+  const c = await connect(compatEnv.BOS_MIGRATION_URL);
   try {
     const row = async (id) =>
       (await c.query("SELECT account_id,issuer,subject FROM cloud.accounts WHERE account_id=$1", [id])).rows[0];

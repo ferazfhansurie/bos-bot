@@ -102,3 +102,4 @@ export function resolveLocalSystemVoice(voiceId: string): SpeechSynthesisVoice |
       .find((voice) => voice.voiceURI === voiceId || voice.name === voiceId) ?? null
   );
 }
+// branding compatibility (electron/branding-compat.json): browser-storage: existing localStorage and native attestation records keep their keys

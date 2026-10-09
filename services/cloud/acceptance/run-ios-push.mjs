@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 // iOS cloud push without APNs. Starts the local fixture (local.ts), a
 // 127.0.0.1 relay that turns a hint request into `xcrun simctl push`, and
 // CloudRoomsLiveUITests/testPushRegistersAndTapOpensTheRoom on one simulator.
@@ -29,7 +30,7 @@ const save=(name,value)=>writeFileSync(out+'/'+name,JSON.stringify(value,null,2)
 const children=new Set(),pushes=[];
 function launch(name,command,args,options={}) {
  const fd=openSync(out+'/'+name+'.private.log','wx',0o600);
- const p=spawn(command,args,{cwd:server,env:process.env,stdio:['ignore',fd,fd],...options});closeSync(fd);children.add(p);
+ const p=spawn(command,args,{cwd:server,env:compatEnv,stdio:['ignore',fd,fd],...options});closeSync(fd);children.add(p);
  p.done=new Promise((r,j)=>{p.on('error',j);p.on('exit',(code,signal)=>{children.delete(p);r({name,code,signal});});});
  return p;
 }
@@ -81,9 +82,9 @@ try {
  for(const [k,v] of [['BOS_CLOUD_ROOMS','1'],['CLOUD_ROOMS_URL',state.url],['CLOUD_ISSUER_URL',state.issuer_url]])await defaults('write',bundle,k,'-string',v);
  set=true;
  save('preflight.json',{at:new Date().toISOString(),room:state.url,issuer:state.issuer_url,relay:relayURL,simulator,bundle});
- const ui=launch('ui','xcodebuild',['test-without-building','-project','OpenMausCompanion.xcodeproj','-scheme','OpenMausCompanion','-destination','id='+simulator,'-derivedDataPath',derived,
-  '-only-testing:OpenMausCompanionUITests/CloudRoomsLiveUITests/testPushRegistersAndTapOpensTheRoom','-parallel-testing-enabled','NO','-resultBundlePath',out+'/ui.xcresult'],
-  {cwd:server+'/ios',env:{...process.env,TEST_RUNNER_CLOUD_ISSUER_URL:state.issuer_url,TEST_RUNNER_CLOUD_ROOMS_URL:state.url,TEST_RUNNER_CLOUD_PUSH_RELAY_URL:relayURL}});
+ const ui=launch('ui','xcodebuild',['test-without-building','-project','BosBot.xcodeproj','-scheme','BosBot','-destination','id='+simulator,'-derivedDataPath',derived,
+  '-only-testing:BosBotUITests/CloudRoomsLiveUITests/testPushRegistersAndTapOpensTheRoom','-parallel-testing-enabled','NO','-resultBundlePath',out+'/ui.xcresult'],
+  {cwd:server+'/ios',env:{...compatEnv,TEST_RUNNER_CLOUD_ISSUER_URL:state.issuer_url,TEST_RUNNER_CLOUD_ROOMS_URL:state.url,TEST_RUNNER_CLOUD_PUSH_RELAY_URL:relayURL}});
  const result=await ui.done;
  const log=readFileSync(out+'/ui.private.log','utf8');
  const executed=/Executed 1 test, with 0 failures/.test(log),skipped=/skipped/i.test(log.match(/Test case .*testPushRegistersAndTapOpensTheRoom.*/g)?.join('\n')??'');

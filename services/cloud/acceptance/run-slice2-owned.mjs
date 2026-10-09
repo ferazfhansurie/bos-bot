@@ -39,7 +39,7 @@ try {
   launch('expiry',process.execPath,['services/cloud/acceptance/run-slice2-invite-expiry.mjs',server,state.state_path,out+'/expiry']),
   ...(!previousOwner?[launch('owner-orphan',process.execPath,['services/cloud/acceptance/run-slice2-owner-orphan.mjs',server,state.state_path,out+'/owner-orphan'])]:[]),
   ]:[]),
-  launch('native','xcodebuild',['test-without-building','-project','OpenMausCompanion.xcodeproj','-scheme','OpenMausCompanion','-destination','id='+simulator,'-derivedDataPath',derived,'-only-testing:OpenMausCompanionUITests/CloudRoomsLiveUITests/testRevokedAndUnavailableStates','-parallel-testing-enabled','NO','-resultBundlePath',out+'/native.xcresult'],{cwd:server+'/ios',env:{...process.env,TEST_RUNNER_CLOUD_ISSUER_URL:target.issuer_url,TEST_RUNNER_CLOUD_ROOMS_URL:target.url,TEST_RUNNER_CLOUD_CHECK_SECRET:target.secret}})
+  launch('native','xcodebuild',['test-without-building','-project','BosBot.xcodeproj','-scheme','BosBot','-destination','id='+simulator,'-derivedDataPath',derived,'-only-testing:BosBotUITests/CloudRoomsLiveUITests/testRevokedAndUnavailableStates','-parallel-testing-enabled','NO','-resultBundlePath',out+'/native.xcresult'],{cwd:server+'/ios',env:{...process.env,TEST_RUNNER_CLOUD_ISSUER_URL:target.issuer_url,TEST_RUNNER_CLOUD_ROOMS_URL:target.url,TEST_RUNNER_CLOUD_CHECK_SECRET:target.secret}})
  ];
  if(previousOwner && !nativeOnly){const owner=JSON.parse(readFileSync(previousOwner+'/owner-orphan/summary.json'));assert.ok(owner.results.every(x=>x.state==='passed'));save('previous-owner.json',{path:previousOwner,results:owner.results});}
  await Promise.all(jobs.map(async p=>{const r=await p.done;results.push(r);save('job-results.json',results);console.log(JSON.stringify(r));}));

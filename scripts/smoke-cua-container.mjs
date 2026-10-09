@@ -1,10 +1,11 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Live, non-destructive Cua sandbox smoke: official MCP handshake, tool
 // discovery, desktop capture, and one pointer move inside an existing test VM.
 import { spawn } from "node:child_process";
 
-const runtime = process.env.OMB_CUA_RUNTIME || "docker";
-const container = process.env.OMB_CUA_CONTAINER;
-const socket = process.env.OMB_CUA_SOCKET || "/run/user/1000/openmausbot-cua.sock";
+const runtime = compatEnv.OMB_CUA_RUNTIME || "docker";
+const container = compatEnv.OMB_CUA_CONTAINER;
+const socket = compatEnv.OMB_CUA_SOCKET || "/run/user/1000/openmausbot-cua.sock";
 if (!container || !/^[a-zA-Z0-9_.-]+$/.test(container)) {
   throw new Error("set OMB_CUA_CONTAINER to the explicitly created smoke container name");
 }
@@ -79,7 +80,7 @@ try {
   await rpc("initialize", {
     protocolVersion: "2024-11-05",
     capabilities: {},
-    clientInfo: { name: "openmausbot-container-smoke", version: "1" },
+    clientInfo: { name: "bosbot-container-smoke", version: "1" },
   });
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
@@ -112,3 +113,4 @@ try {
   await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))]);
   if (child.exitCode === null) child.kill("SIGTERM");
 }
+// branding compatibility (electron/branding-compat.json): container-identity: existing managed containers, labels and pinned image entry points remain recognized; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

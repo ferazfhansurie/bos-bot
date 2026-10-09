@@ -22,7 +22,7 @@ try {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   }).trim();
-  if (status.startsWith("ii")) fail("refusing to replace a pre-existing OpenMausBot installation");
+  if (status.startsWith("ii")) fail("refusing to replace a pre-existing BOS Bot installation");
 } catch (error) {
   if (String(error?.message ?? error).includes("refusing to replace")) throw error;
 }

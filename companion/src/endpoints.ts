@@ -93,3 +93,4 @@ export function companionEndpointCandidates(
   const head = ordered.filter((endpoint) => endpoint.kind !== "bonjour").slice(0, MAX_COMPANION_ENDPOINTS - 1);
   return bonjour ? [...head, bonjour] : ordered.slice(0, MAX_COMPANION_ENDPOINTS);
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

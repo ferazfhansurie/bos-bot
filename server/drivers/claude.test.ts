@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Claude driver contract tests, run against the scripted fake CLI in
 // server/testing/fake-claude-cli.ts — the driver must normalize the
 // stream-json protocol into canonical events, keep argv hygiene (prompt
@@ -133,7 +134,7 @@ describe("ClaudeDriver.decodeConfig", () => {
 
   it.skipIf(process.platform !== "win32")("names permission pipes per harness process", () => {
     expect(permissionSocketPath("thread-abc")).toMatch(
-      new RegExp(`^\\\\\\\\\\.\\\\pipe\\\\openmausbot-perm-${process.pid}-thre[0-9a-f]{4}$`),
+      new RegExp(`^\\\\\\\\\\.\\\\pipe\\\\bosbot-perm-${process.pid}-thre[0-9a-f]{4}$`),
     );
   });
 
@@ -320,7 +321,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     environment: Record<string, string> = {},
     config: Partial<ClaudeConfig> = {},
   ) => {
-    if (mode) process.env.FAKE_CLAUDE_MODE = mode;
+    if (mode) compatEnv.FAKE_CLAUDE_MODE = mode;
     instance = await ClaudeDriver.create({
       instanceId: "claude-test",
       displayName: "Claude Test",
@@ -342,22 +343,22 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   });
 
   afterEach(async () => {
-    delete process.env.FAKE_CLAUDE_MODE;
-    delete process.env.FAKE_CLAUDE_AUTO_UNAVAILABLE_MODELS;
-    delete process.env.FAKE_CLAUDE_DUMP;
-    delete process.env.FAKE_CLAUDE_PROMPTS;
-    delete process.env.FAKE_CLAUDE_TRANSIENTS;
-    delete process.env.FAKE_CLAUDE_PARTIAL_FAILS;
-    delete process.env.FAKE_CLAUDE_STATE;
-    delete process.env.FAKE_CLAUDE_RETRY_SCALE;
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.XAI_API_KEY;
-    delete process.env.COMPOSIO_API_KEY;
-    delete process.env.BOX_TOKEN;
-    delete process.env.OPENCODE_API_KEY;
-    delete process.env.OMB_TTS_KEY;
-    delete process.env.OMB_CLAUDE_SESSION_IDLE_MS;
-    delete process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS;
+    delete compatEnv.FAKE_CLAUDE_MODE;
+    delete compatEnv.FAKE_CLAUDE_AUTO_UNAVAILABLE_MODELS;
+    delete compatEnv.FAKE_CLAUDE_DUMP;
+    delete compatEnv.FAKE_CLAUDE_PROMPTS;
+    delete compatEnv.FAKE_CLAUDE_TRANSIENTS;
+    delete compatEnv.FAKE_CLAUDE_PARTIAL_FAILS;
+    delete compatEnv.FAKE_CLAUDE_STATE;
+    delete compatEnv.FAKE_CLAUDE_RETRY_SCALE;
+    delete compatEnv.ANTHROPIC_API_KEY;
+    delete compatEnv.XAI_API_KEY;
+    delete compatEnv.COMPOSIO_API_KEY;
+    delete compatEnv.BOX_TOKEN;
+    delete compatEnv.OPENCODE_API_KEY;
+    delete compatEnv.OMB_TTS_KEY;
+    delete compatEnv.OMB_CLAUDE_SESSION_IDLE_MS;
+    delete compatEnv.OMB_CLAUDE_SESSION_IDLE_MIN_MS;
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
@@ -494,8 +495,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("keeps a workspace Anthropic key set on purpose while still dropping one from the parent env", async () => {
     await create(undefined, { ANTHROPIC_API_KEY: "sk-ant-workspace-fixture" });
     const dump = join(scratch, "dump-workspace-key.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
-    process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.ANTHROPIC_API_KEY = "sk-should-not-leak";
     await instance.adapter.sendTurn({ threadId: "t-workspace-key", text: "hello" });
     await recorder.until((e) => e.type === "turn.completed");
     const seen = JSON.parse(readFileSync(dump, "utf8"));
@@ -524,13 +525,13 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("keeps user and system prompts off argv and strips identity env vars", async () => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
-    process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.ANTHROPIC_API_KEY = "sk-should-not-leak";
     // workspace credentials the harness may hold (env-injected at boot by
     // the desktop shell) must never ride into the CLI child
-    process.env.XAI_API_KEY = "xai-should-not-leak";
-    process.env.BOX_TOKEN = "box-should-not-leak";
-    process.env.OMB_TTS_KEY = "tts-should-not-leak";
+    compatEnv.XAI_API_KEY = "xai-should-not-leak";
+    compatEnv.BOX_TOKEN = "box-should-not-leak";
+    compatEnv.OMB_TTS_KEY = "tts-should-not-leak";
 
     await instance.adapter.sendTurn({ threadId: "t-hygiene", text: "the secret prompt", system: "You are Testy." });
     await recorder.until((e) => e.type === "turn.completed");
@@ -554,7 +555,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("per-bot Ask restores the broker on a legacy bypass instance", async () => {
     await create(undefined, {}, { permissionMode: "bypassPermissions" });
     const dump = join(scratch, "ask-overrides-bypass.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-ask-overrides-bypass",
@@ -572,7 +573,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it.each(["claude-sonnet-5", "claude-fable-5"])("reapplies Full, Auto, and Ask on the same resumed %s conversation", async (model) => {
     await create(undefined, {}, { permissionMode: "bypassPermissions" });
     const dump = join(scratch, "approval-transitions.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     for (const [approvalMode, nativeMode] of [["full", "bypassPermissions"], ["auto", "auto"], ["edits", "acceptEdits"], ["ask", "default"]] as const) {
       const { turnId } = await instance.adapter.sendTurn({
         threadId: "t-mode-transitions",
@@ -746,7 +747,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("sends attached images as native blocks before text without logging their bytes", async () => {
     await create();
     const dump = join(scratch, "dump-images.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 5, 6, 7]);
     const pngPath = join(scratch, "one.png");
@@ -808,7 +809,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("launches with a Windows-sized system prompt without putting it on argv", async () => {
     await create();
     const dump = join(scratch, "dump-long-system.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const system = `room instructions\n${"context-0123456789".repeat(8_000)}`;
 
     await instance.adapter.sendTurn({ threadId: "t-long-system", text: "review this", system });
@@ -823,7 +824,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("uses instance credentials when launching an injected local model", async () => {
     await create(undefined, { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" });
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-local-model",
@@ -849,7 +850,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     try {
       await create(undefined, { UNSLOTH_STUDIO_AUTH_TOKEN: "unsloth-secret" });
       const dump = join(scratch, "dump-leftover.json");
-      process.env.FAKE_CLAUDE_DUMP = dump;
+      compatEnv.FAKE_CLAUDE_DUMP = dump;
 
       await instance.adapter.sendTurn({
         threadId: "t-leftover-local",
@@ -871,7 +872,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it.each(["ask", "auto"] as const)("pre-allows the agents comms proxy while retaining native %s approval", async (approvalMode) => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-agents",
@@ -907,8 +908,8 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await create();
     const dump = join(scratch, "volatile.json");
     const prompts = join(scratch, "volatile-prompts.jsonl");
-    process.env.FAKE_CLAUDE_DUMP = dump;
-    process.env.FAKE_CLAUDE_PROMPTS = prompts;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_PROMPTS = prompts;
 
     await instance.adapter.sendTurn({
       threadId: "t-volatile",
@@ -946,7 +947,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("still relaunches when the stable half of the prompt changes", async () => {
     await create();
     const dump = join(scratch, "stable.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-stable", text: "one", system: "You are Testy.", systemStable: "You are Testy." });
     await recorder.until((e) => e.type === "turn.completed");
@@ -962,7 +963,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("launches a new session with the volatile half already in the system prompt", async () => {
     await create();
     const dump = join(scratch, "volatile-spawn.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-volatile-spawn",
@@ -1059,7 +1060,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("compacts the CLI session at a window the harness picks", async () => {
     await create();
     const dump = join(scratch, "compact.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-compact", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -1091,7 +1092,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("launches isolated from the machine's own Claude Code configuration", async () => {
     await create();
     const dump = join(scratch, "isolation.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-isolate", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -1119,7 +1120,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("loads the machine's own MCP servers when the turn asks, keeping the rest isolated", async () => {
     await create();
     const dump = join(scratch, "user-mcp.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-user-mcp", text: "hi", mcpFromUserConfig: true });
     await recorder.until((e) => e.type === "turn.completed");
@@ -1134,7 +1135,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("mounts a url server in the CLI's own shape, header values in the private file", async () => {
     await create();
     const dump = join(scratch, "remote-mcp.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-remote-mcp",
@@ -1315,7 +1316,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("forwards the bot project's own .mcp.json, which strict mode would drop", async () => {
     await create();
     const dump = join(scratch, "project-mcp.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const projectDir = join(scratch, "project");
     mkdirSync(projectDir, { recursive: true });
     writeFileSync(
@@ -1351,7 +1352,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("mounts a bot's own MCP server behind the result gate", async () => {
     await create();
     const dump = join(scratch, "gate.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-gate",
@@ -1395,7 +1396,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("leaves an http project server unmounted by the gate rather than mangling it", async () => {
     await create();
     const dump = join(scratch, "gate-http.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const projectDir = join(scratch, "http-project");
     mkdirSync(projectDir, { recursive: true });
     writeFileSync(join(projectDir, ".mcp.json"), JSON.stringify({ mcpServers: { hosted: { type: "http", url: "https://example.test/mcp" } } }));
@@ -1410,7 +1411,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("survives a malformed or missing project .mcp.json", async () => {
     await create();
     const dump = join(scratch, "bad-mcp.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const projectDir = join(scratch, "bad-project");
     mkdirSync(projectDir, { recursive: true });
     writeFileSync(join(projectDir, ".mcp.json"), "{ not json");
@@ -1460,7 +1461,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("mounts custom MCP servers without pre-allowing their tools", async () => {
     await create();
     const dump = join(scratch, "custom-mcp.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-custom-mcp",
@@ -1504,7 +1505,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       disallowedTools: ["Bash(git *)", "Edit"],
     });
     const dump = join(scratch, "tool-scope.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-tool-scope", text: "inspect" });
     await recorder.until((event) => event.type === "turn.completed");
@@ -1517,7 +1518,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("passes an explicit empty available set to disable every Claude built-in", async () => {
     await create(undefined, {}, { tools: [], disallowedTools: [] });
     const dump = join(scratch, "no-builtins.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-no-builtins", text: "reply only" });
     await recorder.until((event) => event.type === "turn.completed");
@@ -1530,7 +1531,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("mounts the dweb proxy from the drivers directory and pre-allows its tools", async () => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-dweb",
@@ -1551,7 +1552,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("mounts the user's connected apps and claims the capability that gates them", async () => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     expect(instance.adapter.capabilities.composioMcp).toBe(true);
     await instance.adapter.sendTurn({
@@ -1587,7 +1588,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   ])("deletes the mcp config file after %s", async (_label, mode) => {
     await create(mode);
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({
       threadId: "t-cleanup",
@@ -1614,7 +1615,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("mounts local CUA without pre-allowing its computer namespace", async () => {
     await create();
     const dump = join(scratch, "local-dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "t-local",
       text: "inspect the desktop",
@@ -1645,7 +1646,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("resumes with --resume when a cursor exists and reports that session id", async () => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const image = Buffer.from([0x47, 0x49, 0x46, 0x38]);
     const imagePath = join(scratch, "resume.gif");
     writeFileSync(imagePath, image);
@@ -1724,7 +1725,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       await expect(pendingAnswer).resolves.toMatchObject({ id: "before-stop", behavior: "deny" });
       const lateAnswer = nextAnswer();
       conn.write(JSON.stringify({ t: "ask", id: "after-stop", tool: "Bash", input: { command: "echo too late" } }) + "\n");
-      await expect(lateAnswer).resolves.toMatchObject({ id: "after-stop", behavior: "deny", message: "OpenMausBot: the turn ended" });
+      await expect(lateAnswer).resolves.toMatchObject({ id: "after-stop", behavior: "deny", message: "BOS Bot: the turn ended" });
       expect(recorder.events.filter((e) => e.type === "request.opened")).toHaveLength(openedBefore);
       await expect(instance.adapter.respondToRequest(threadId, "after-stop", { behavior: "allow" })).resolves.toBe("unavailable");
     } finally {
@@ -1829,7 +1830,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it.each([false, true])("reuses the live process for the next compatible turn, explicit cursor: %s", async (withCursor) => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-live", text: "one" });
     await recorder.until((e) => e.type === "turn.completed");
     const dumpBefore = readFileSync(dump, "utf8");
@@ -1844,7 +1845,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it.each([false, true])("resets retained native context even with an old cursor supplied: %s", async (withCursor) => {
     await create();
     const dump = join(scratch, "reset.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const first = await instance.adapter.sendTurn({ threadId: "t-reset", text: "abandoned branch" });
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === first.turnId);
     const previous = JSON.parse(readFileSync(dump, "utf8"));
@@ -1882,7 +1883,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await expect(answer).resolves.toMatchObject({
       id: "ask-between",
       behavior: "deny",
-      message: "OpenMausBot: the turn ended",
+      message: "BOS Bot: the turn ended",
     });
     expect(recorder.events.filter((e) => e.type === "request.opened")).toHaveLength(opensBefore);
     await expect(
@@ -1894,7 +1895,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("replaces and resumes a live process when its spawn contract changes", async () => {
     await create();
     const dumpPath = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dumpPath;
+    compatEnv.FAKE_CLAUDE_DUMP = dumpPath;
     await instance.adapter.sendTurn({ threadId: "t-switch", text: "one" });
     await recorder.until((e) => e.type === "turn.completed");
     rmSync(dumpPath);
@@ -1912,12 +1913,12 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   });
 
   it("closes an idle session after the configured window", async () => {
-    process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS = "10";
-    process.env.OMB_CLAUDE_SESSION_IDLE_MS = "50";
+    compatEnv.OMB_CLAUDE_SESSION_IDLE_MIN_MS = "10";
+    compatEnv.OMB_CLAUDE_SESSION_IDLE_MS = "50";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-idle", text: "one" });
     await recorder.until((e) => e.type === "turn.completed");
-    process.env.FAKE_CLAUDE_DUMP = join(scratch, "idle-dump.json");
+    compatEnv.FAKE_CLAUDE_DUMP = join(scratch, "idle-dump.json");
     await new Promise((resolve) => setTimeout(resolve, 150));
     const announced = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
     const second = await instance.adapter.sendTurn({ threadId: "t-idle", text: "two", resumeCursor: announced });
@@ -1936,11 +1937,11 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   });
 
   it("auto-retries transient exits, then completes with exactly one final message", async () => {
-    process.env.FAKE_CLAUDE_TRANSIENTS = "2";
-    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches");
-    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CLAUDE_TRANSIENTS = "2";
+    compatEnv.FAKE_CLAUDE_STATE = join(scratch, "launches");
+    compatEnv.FAKE_CLAUDE_RETRY_SCALE = "0.001";
     const dump = join(scratch, "retry-images.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const image = Buffer.from([0x52, 0x49, 0x46, 0x46]);
     const imagePath = join(scratch, "retry.webp");
     writeFileSync(imagePath, image);
@@ -1972,10 +1973,10 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("consumes a context reset once and resumes the replacement on a transient retry", async () => {
     const dump = join(scratch, "reset-retry.json");
     const state = join(scratch, "reset-retry-count");
-    process.env.FAKE_CLAUDE_DUMP = dump;
-    process.env.FAKE_CLAUDE_TRANSIENTS = "1";
-    process.env.FAKE_CLAUDE_STATE = state;
-    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_TRANSIENTS = "1";
+    compatEnv.FAKE_CLAUDE_STATE = state;
+    compatEnv.FAKE_CLAUDE_RETRY_SCALE = "0.001";
     writeFileSync(state, "1");
     await create();
     const first = await instance.adapter.sendTurn({ threadId: "t-reset-retry", text: "old history" });
@@ -2000,9 +2001,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   });
 
   it("stops retrying at the attempt cap and settles the turn as failed", async () => {
-    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
-    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-cap");
-    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CLAUDE_TRANSIENTS = "9";
+    compatEnv.FAKE_CLAUDE_STATE = join(scratch, "launches-cap");
+    compatEnv.FAKE_CLAUDE_RETRY_SCALE = "0.001";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-cap", text: "go" });
 
@@ -2015,10 +2016,10 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("keeps the second retained turn's prompt and ACK identity across a retry", async () => {
     const state = join(scratch, "retained-launches");
     const dump = join(scratch, "retained-retry.json");
-    process.env.FAKE_CLAUDE_TRANSIENTS = "1";
-    process.env.FAKE_CLAUDE_STATE = state;
-    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_TRANSIENTS = "1";
+    compatEnv.FAKE_CLAUDE_STATE = state;
+    compatEnv.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     writeFileSync(state, "1"); // first turn succeeds in the retained process
     await create();
     const first = await instance.adapter.sendTurn({ threadId: "t-retained-retry", text: "first request" });
@@ -2038,9 +2039,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   }, 20_000);
 
   it("gives a later turn on the same thread a fresh retry budget", async () => {
-    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
-    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-fresh-budget");
-    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CLAUDE_TRANSIENTS = "9";
+    compatEnv.FAKE_CLAUDE_STATE = join(scratch, "launches-fresh-budget");
+    compatEnv.FAKE_CLAUDE_RETRY_SCALE = "0.001";
     await create();
 
     await instance.adapter.sendTurn({ threadId: "t-fresh-budget", text: "one" });
@@ -2060,10 +2061,10 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   }, 20_000);
 
   it("never retries after assistant text already streamed (duplicate-text hazard)", async () => {
-    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
-    process.env.FAKE_CLAUDE_PARTIAL_FAILS = "1";
-    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-partial");
-    process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+    compatEnv.FAKE_CLAUDE_TRANSIENTS = "9";
+    compatEnv.FAKE_CLAUDE_PARTIAL_FAILS = "1";
+    compatEnv.FAKE_CLAUDE_STATE = join(scratch, "launches-partial");
+    compatEnv.FAKE_CLAUDE_RETRY_SCALE = "0.001";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-partial", text: "go" });
 
@@ -2073,9 +2074,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   }, 20_000);
 
   it("an interrupt during the retry backoff cancels cleanly without a zombie relaunch", async () => {
-    process.env.FAKE_CLAUDE_TRANSIENTS = "9";
-    process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-cancel");
-    process.env.FAKE_CLAUDE_RETRY_SCALE = "60"; // long backoff — we cancel inside it
+    compatEnv.FAKE_CLAUDE_TRANSIENTS = "9";
+    compatEnv.FAKE_CLAUDE_STATE = join(scratch, "launches-cancel");
+    compatEnv.FAKE_CLAUDE_RETRY_SCALE = "60"; // long backoff — we cancel inside it
     await create();
     await instance.adapter.sendTurn({ threadId: "t-cancel-backoff", text: "go" });
 
@@ -2098,9 +2099,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       return [];
     });
     try {
-      process.env.FAKE_CLAUDE_TRANSIENTS = "1";
-      process.env.FAKE_CLAUDE_STATE = join(scratch, "launches-relaunch-window");
-      process.env.FAKE_CLAUDE_RETRY_SCALE = "0.001";
+      compatEnv.FAKE_CLAUDE_TRANSIENTS = "1";
+      compatEnv.FAKE_CLAUDE_STATE = join(scratch, "launches-relaunch-window");
+      compatEnv.FAKE_CLAUDE_RETRY_SCALE = "0.001";
       await create("hang"); // a relaunched CLI would run until killed
       const threadId = "t-stop-relaunch-window";
       await instance.adapter.sendTurn({ threadId, text: "go", model: "custom-slow-model" });
@@ -2157,7 +2158,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     // Manual without an error. Only init's permissionMode tells the truth,
     // and the harness needs it to tell a verdict from a Manual session
     // asking about everything.
-    process.env.FAKE_CLAUDE_AUTO_UNAVAILABLE_MODELS = "claude-haiku-4-5";
+    compatEnv.FAKE_CLAUDE_AUTO_UNAVAILABLE_MODELS = "claude-haiku-4-5";
     await create("hang", {}, { permissionMode: "bypassPermissions" });
     const raise = async (threadId: string, id: string) => {
       const conn = connect(permissionSocketPath(threadId));
@@ -2275,7 +2276,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("binds a fallback pipe when the thread's broker path is already held", async () => {
     await create("hang");
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const basePath = permissionSocketPath("t-perm-squat");
     // squat the deterministic path the way a hung child from an earlier
     // process does. On POSIX the driver steals the socket file (unlink) and
@@ -2370,7 +2371,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(await nextAnswer()).toMatchObject({
       id: "dup-1",
       behavior: "deny",
-      message: "OpenMausBot: duplicate ask id — skipping this request.",
+      message: "BOS Bot: duplicate ask id — skipping this request.",
     });
     expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-1")).toHaveLength(1);
 
@@ -2402,7 +2403,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(await conn2Answer).toMatchObject({
       id: "dup-2",
       behavior: "deny",
-      message: "OpenMausBot: duplicate ask id — skipping this request.",
+      message: "BOS Bot: duplicate ask id — skipping this request.",
     });
     expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-2")).toHaveLength(1);
 
@@ -2460,7 +2461,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(await nextAnswer()).toMatchObject({
       id: "dup-4",
       behavior: "deny",
-      message: "OpenMausBot: duplicate ask id — skipping this request.",
+      message: "BOS Bot: duplicate ask id — skipping this request.",
     });
     expect(recorder.events.filter((e) => e.type === "request.opened" && e.requestId === "dup-4")).toHaveLength(1);
 
@@ -2504,7 +2505,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(await reply).toMatchObject({
       id: "ask-late",
       behavior: "deny",
-      message: "OpenMausBot: the turn ended",
+      message: "BOS Bot: the turn ended",
     });
     expect(recorder.events.filter((e) => e.type === "request.opened")).toHaveLength(opensBefore);
     await expect(instance.adapter.respondToRequest("t-perm-late", "ask-late", { behavior: "allow" })).resolves.toBe(
@@ -2539,7 +2540,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(await reply).toMatchObject({
       id: "q-late",
       behavior: "answer",
-      message: "OpenMausBot: the turn is ending — wrap up.",
+      message: "BOS Bot: the turn is ending — wrap up.",
     });
     expect(recorder.events.filter((e) => e.type === "request.opened")).toHaveLength(opensBefore);
     await expect(
@@ -2552,7 +2553,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("passes effort to the CLI, and omits the flag when unset", async () => {
     await create();
     const dump = join(scratch, "effort.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-effort", text: "hi", effort: "xhigh" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -2566,7 +2567,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
   it("adds no effort flag when the turn has none", async () => {
     await create();
     const dump = join(scratch, "no-effort.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-no-effort", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -2579,9 +2580,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     const instanceConfigDir = join(scratch, "instance-claude-config");
     await create(undefined, { CLAUDE_CONFIG_DIR: instanceConfigDir });
     const dump = join(scratch, "generate-text-env.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const names = ["XAI_API_KEY", "COMPOSIO_API_KEY", "BOX_TOKEN", "OPENCODE_API_KEY", "OMB_TTS_KEY"] as const;
-    for (const name of names) process.env[name] = `${name}-must-not-leak`;
+    for (const name of names) compatEnv[name] = `${name}-must-not-leak`;
 
     await instance.generateText?.("summarize safely");
 
@@ -2599,7 +2600,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
   it("stops the one-shot text call when its caller aborts mid-flight", async () => {
     await create();
-    process.env.FAKE_CLAUDE_TEXT_HANG = "1";
+    compatEnv.FAKE_CLAUDE_TEXT_HANG = "1";
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 100);
     await expect(instance.generateText?.("summarize safely", { signal: controller.signal }))
@@ -2636,7 +2637,7 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
     ensureDirs();
     chmodSync(FAKE_CLI, 0o755);
     scratch = mkdtempSync(join(tmpdir(), "omb-claude-recover-"));
-    process.env.FAKE_CLAUDE_MODE = "dead-session";
+    compatEnv.FAKE_CLAUDE_MODE = "dead-session";
     instance = await ClaudeDriver.create({
       instanceId: "claude-test",
       displayName: "Claude Test",
@@ -2648,9 +2649,9 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
   });
 
   afterEach(async () => {
-    delete process.env.FAKE_CLAUDE_MODE;
-    delete process.env.FAKE_CLAUDE_DUMP;
-    delete process.env.FAKE_CLAUDE_TEXT_HANG;
+    delete compatEnv.FAKE_CLAUDE_MODE;
+    delete compatEnv.FAKE_CLAUDE_DUMP;
+    delete compatEnv.FAKE_CLAUDE_TEXT_HANG;
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
@@ -2662,7 +2663,7 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
     // so every later turn resumed the same missing session and failed
     // identically, with no way back except switching engines.
     const dump = join(scratch, "recovered.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     const dispatch = await instance.adapter.sendTurn({
       threadId: "t-dead",
       text: "what now?",
@@ -2689,7 +2690,7 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
   it("rebuilds when the CLI reports a missing resume session as an error result", async () => {
     // Claude Code 2.1.288 prints an error result without an init frame
     // instead of just exiting; settling it bricked trusted peer threads.
-    process.env.FAKE_CLAUDE_MODE = "dead-session-result";
+    compatEnv.FAKE_CLAUDE_MODE = "dead-session-result";
     const dispatch = await instance.adapter.sendTurn({
       threadId: "t-dead-result",
       text: "what now?",
@@ -2706,7 +2707,7 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
     // no rebuild: that session holds the turn, not the conversation, and the
     // harness must not credit it with a replay it never saw.
     const dump = join(scratch, "no-replay.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "t-no-replay",
       text: "what now?",
@@ -2726,7 +2727,7 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
     // exit-early refuses every launch, resumed or fresh: the recovery is
     // spent on the first relaunch and the turn must then settle as failed
     // rather than relaunching forever
-    process.env.FAKE_CLAUDE_MODE = "exit-early";
+    compatEnv.FAKE_CLAUDE_MODE = "exit-early";
     await instance.adapter.sendTurn({ threadId: "t-always-dead", text: "what now?", resumeCursor: "gone", recoveryText: REBUILD });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "turn.completed").at(-1)).toMatchObject({ ok: false });
@@ -2737,7 +2738,7 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
     // the resumed session emitted `init` — it read the prompt, and may have
     // run tools on it — and then died with no output. That is the far side
     // of the acceptance boundary: replaying here is a duplicate side effect
-    process.env.FAKE_CLAUDE_MODE = "resume-dies-after-init";
+    compatEnv.FAKE_CLAUDE_MODE = "resume-dies-after-init";
     await instance.adapter.sendTurn({ threadId: "t-accepted", text: "what now?", resumeCursor: "accepted-then-died", recoveryText: REBUILD });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "turn.completed").at(-1)).toMatchObject({ ok: false });
@@ -2748,7 +2749,7 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
     // no cursor was offered, so there is no resume to have been rejected:
     // this is an ordinary terminal failure, not a licence to send the turn
     // again
-    process.env.FAKE_CLAUDE_MODE = "exit-early";
+    compatEnv.FAKE_CLAUDE_MODE = "exit-early";
     await instance.adapter.sendTurn({ threadId: "t-fresh-crash", text: "what now?", recoveryText: REBUILD });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "turn.completed").at(-1)).toMatchObject({ ok: false });
@@ -2756,9 +2757,9 @@ describe("ClaudeDriver resume recovery (fake CLI)", () => {
   });
 
   it("does not rebuild when there was no session to resume", async () => {
-    process.env.FAKE_CLAUDE_MODE = "happy";
+    compatEnv.FAKE_CLAUDE_MODE = "happy";
     const dump = join(scratch, "fresh.json");
-    process.env.FAKE_CLAUDE_DUMP = dump;
+    compatEnv.FAKE_CLAUDE_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-fresh", text: "what now?", recoveryText: REBUILD });
     await recorder.until((e) => e.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "turn.completed").at(-1)).toMatchObject({ ok: true });
@@ -2788,19 +2789,19 @@ describe("ClaudeDriver snapshot auth (fake CLI)", () => {
   });
 
   afterEach(async () => {
-    delete process.env.FAKE_CLAUDE_AUTH;
-    delete process.env.ANTHROPIC_API_KEY;
+    delete compatEnv.FAKE_CLAUDE_AUTH;
+    delete compatEnv.ANTHROPIC_API_KEY;
     await instance?.dispose();
   });
 
   it("reports authenticated when `auth status` says loggedIn", async () => {
-    process.env.FAKE_CLAUDE_AUTH = "in";
+    compatEnv.FAKE_CLAUDE_AUTH = "in";
     await create();
     expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: true });
   });
 
   it("reports signed out when `auth status` says loggedIn:false", async () => {
-    process.env.FAKE_CLAUDE_AUTH = "out";
+    compatEnv.FAKE_CLAUDE_AUTH = "out";
     await create();
     expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
   });
@@ -2808,16 +2809,17 @@ describe("ClaudeDriver snapshot auth (fake CLI)", () => {
   it("fails closed instead of trusting stale credential storage", async () => {
     await create();
 
-    process.env.FAKE_CLAUDE_AUTH = "unsupported";
+    compatEnv.FAKE_CLAUDE_AUTH = "unsupported";
     expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
 
-    process.env.FAKE_CLAUDE_AUTH = "malformed";
+    compatEnv.FAKE_CLAUDE_AUTH = "malformed";
     expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
 
     // The real turn removes inherited API keys, so the auth probe must do the
     // same or setup can report a login the turn cannot use.
-    process.env.FAKE_CLAUDE_AUTH = "inherited-api-key";
-    process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
+    compatEnv.FAKE_CLAUDE_AUTH = "inherited-api-key";
+    compatEnv.ANTHROPIC_API_KEY = "sk-should-not-leak";
     expect(await instance.snapshot()).toMatchObject({ state: "available", authenticated: false });
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

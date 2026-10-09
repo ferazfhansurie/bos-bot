@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Resumed sessions and teammate results, end to end through the isolated
 // launcher and the repository's fake engines: what each provider turn
 // actually received, counted by unique sentinels.
@@ -19,7 +20,7 @@ const jsonl = (path: string) => existsSync(path)
 async function fixture(test: (f: any) => Promise<void>, options: { env?: NodeJS.ProcessEnv; codex?: Record<string, string> } = {}) {
   // The fixture's Claude is a CLI new enough to refresh a resumed session's
   // recorded system prompt; a test that wants an older one overrides it.
-  const parentEnv = { ...process.env, FAKE_CLAUDE_VERSION: "2.1.270", ...options.env };
+  const parentEnv = { ...compatEnv, FAKE_CLAUDE_VERSION: "2.1.270", ...options.env };
   const session = await launchVerificationServer(parentEnv, undefined, undefined, undefined, undefined,
     { scripted: true }, options.codex ? ["codex"] : []);
   const cli = (...args: string[]) => runControlOmb(args, { env: { OPENMAUSBOT_URL: session.info.url } }) as Promise<any>;
@@ -906,7 +907,7 @@ it("replays a result that reaches an engine switched in before it arrived with t
 // A `git` on the server's PATH that holds its first command while `hold` exists,
 // then runs the real git: a turn's checkpoint then waits inside turn setup.
 const holdingGit = (dataDir: string, hold: string, held: string) => {
-  const real = (process.env.PATH ?? "").split(delimiter).map((dir) => join(dir, "git")).find((path) => existsSync(path));
+  const real = (compatEnv.PATH ?? "").split(delimiter).map((dir) => join(dir, "git")).find((path) => existsSync(path));
   if (!real) throw new Error("this test needs git on PATH");
   const bin = join(dataDir, "fake-bin");
   mkdirSync(bin, { recursive: true });
@@ -1063,3 +1064,4 @@ it("keeps today's fresh return on a Claude CLI that cannot refresh a resumed sys
   // nothing recorded: this engine cannot be given only what it has not seen
   expect(f.handed()).toBeUndefined();
 }, { env: { FAKE_CLAUDE_VERSION: "2.1.200" } }), 90_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

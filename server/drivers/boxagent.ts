@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Box agent driver — the purest form of the idea: the turn runs ON the
 // bot's own cloud computer (box.ascii.dev), not on this machine. Uses the
 // Box substrate's native agent facility:
@@ -24,7 +25,7 @@ import { appendNative } from "./native.ts";
 
 const DRIVER_KIND = "boxAgent";
 // overridable so tests and a dev backend can be pointed at instead of the live provider
-const BOX_API = process.env.OMB_BOX_API || "https://ascii.dev/api/box/v1";
+const BOX_API = compatEnv.OMB_BOX_API || "https://ascii.dev/api/box/v1";
 
 const MODELS = {
   default: "claude-fable-5",
@@ -74,7 +75,7 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
 
   async create(input: DriverCreateInput<BoxAgentConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
-    const token = input.environment.BOX_TOKEN ?? process.env.BOX_TOKEN ?? "";
+    const token = input.environment.BOX_TOKEN ?? compatEnv.BOX_TOKEN ?? "";
     const listeners = new Set<RuntimeEventListener>();
     const active = new Map<string, { cancel: () => void; turnId: string; boxId: string }>();
 
@@ -308,3 +309,4 @@ export const BoxAgentDriver: ProviderDriver<BoxAgentConfig> = {
     };
   },
 };
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

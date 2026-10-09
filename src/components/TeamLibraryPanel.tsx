@@ -870,3 +870,4 @@ export function TeamLibraryPanel({
     document.body,
   );
 }
+// branding compatibility (electron/branding-compat.json): upstream-team-library: the existing upstream playbook library remains the configured source until a BOS library is published

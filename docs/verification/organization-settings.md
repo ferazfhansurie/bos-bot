@@ -22,7 +22,7 @@ The smoke checks:
   Branding is excluded from the strict runtime model grant and credential store.
 
 - Loading Settings does not enroll or open a browser. **Sign in with your
-  organisation** uses the standard OpenMaus Admin; a separate custom Admin
+  organisation** uses the standard Bos Admin; a separate custom Admin
   address remains available under **Advanced**.
 - The production client opens the browser and connects automatically after
   approval. The optional verification code stays collapsed under **Security

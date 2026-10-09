@@ -4,7 +4,7 @@ Related: #430. This change gives a room member its configured Local VM; it does
 not create a room-owned desktop or a room Computer panel.
 
 The pre-existing direct-turn stale lease after a missing terminal event is
-tracked separately in [#860](https://github.com/milind-soni/OpenMausBot/issues/860).
+tracked separately in [#860](https://github.com/firazfhansurie/bos-bot/issues/860).
 That follow-up needs distinct direct invocation identities and tests protecting
 a replacement turn from an old watchdog callback; it is outside this room slice.
 
@@ -20,7 +20,7 @@ member handoff.
 
 Prepare the managed desktop image on an explicitly selected Podman test machine.
 Build the renderer (`node node_modules/vite/bin/vite.js build`), set
-`OMB_VERIFY_PODMAN` to the absolute executable path and `OMB_VERIFY_MACHINE` to that connection,
+`BOS_VERIFY_PODMAN` to the absolute executable path and `BOS_VERIFY_MACHINE` to that connection,
 then run:
 
 ```sh

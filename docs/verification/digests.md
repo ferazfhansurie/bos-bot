@@ -41,6 +41,6 @@ behavior rather than treating a local macOS run as Windows verification.
 - `full` means every recorded tool row delivered an untruncated result through
   the hook. It does not mean tests passed. Otherwise evidence is `preview` or
   `none`. Hooks have their own four-second timeout, a bounded input and no
-  redirects. `OMB_HOOKS=0` disables them.
+  redirects. `BOS_HOOKS=0` disables them.
 - Desktop chips and native mobile presentation need their respective renderer
   checks. These server tests do not prove layout or a real provider's hooks.

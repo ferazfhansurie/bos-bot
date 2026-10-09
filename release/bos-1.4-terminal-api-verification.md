@@ -55,7 +55,7 @@ and inherited team-computer bot targets fail closed.
 - changed terminal/bundler/smoke files: oxlint deny-warnings and diff check passed.
 - standard control-omb disposable fake-provider fixture launched and doctor passed;
   its standalone terminal ticket route returned 403 as intended. fixture stopped.
-  retained fixture log: `/var/folders/q4/_qf5jflj6gn91bt65srrhq040000gn/T/openmausbot-verification-evidence/server-1791167628702-87812.log`.
+  retained fixture log: `/var/folders/q4/_qf5jflj6gn91bt65srrhq040000gn/T/bosbot-verification-evidence/server-1791167628702-87812.log`.
 
 ## remaining with ship
 
@@ -77,7 +77,7 @@ shell-owned child teardown guarantee.
   `stripWorkspaceCredentialEnv` to that copy, then passes it to node-pty.
 - regression verified red before the fix and green afterward through the real
   HTTP ticket / WebSocket / shell fixture: `XAI_API_KEY`, `BOX_TOKEN`, and
-  `OMB_TTS_KEY` are absent in the shell. ordinary env and TERM survive; the
+  `BOS_TTS_KEY` are absent in the shell. ordinary env and TERM survive; the
   server retains its credential env. fixtures use synthetic secrets only.
 - `pnpm exec vitest run server/terminal.test.ts server/terminal-target.test.ts server/request-auth.test.ts server/desktop-update-lifecycle.test.ts server/engine-install.test.ts`: 72 passed.
 - `pnpm typecheck`, `pnpm build:server`, changed-file oxlint deny-warnings,

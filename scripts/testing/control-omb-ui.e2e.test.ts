@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The first asserted renderer recipe: docs/verification/chat-ui.md, run by a
 // machine. It spawns the real `control-omb ui launch` (a child it can Ctrl-C),
 // drives the real <App/> through the ui verbs, and reads the outcome back from
@@ -21,8 +22,8 @@ import { fixtureApi } from "./preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const CLI = join(ROOT, "scripts", "control-omb.ts");
-const forced = process.env.OMB_UI_E2E === "1";
-const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
+const forced = compatEnv.OMB_UI_E2E === "1";
+const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv });
 const enabled = forced || Boolean(binary);
 if (!enabled) {
   console.log(`skipping control-omb ui e2e: no agent-browser binary resolves (looked in ${UI_TOOLS_DIR}, OMB_AGENT_BROWSER_PATH and PATH); set OMB_UI_E2E=1 to install the pinned release`);
@@ -42,8 +43,8 @@ const TOOL_CALLS = JSON.stringify([
 const REPLY = "hello from fake claude"; // the fake engine's default reply text
 const COMPOSER = `document.querySelector('textarea[aria-label="Message Pepper"]')`;
 // OMB_UI_EVIDENCE_DIR keeps the screenshot (CI uploads it); otherwise it is temporary.
-const evidenceDir = process.env.OMB_UI_EVIDENCE_DIR ? resolve(ROOT, process.env.OMB_UI_EVIDENCE_DIR) : mkdtempSync(join(tmpdir(), "omb-ui-evidence-"));
-const ownsEvidenceDir = !process.env.OMB_UI_EVIDENCE_DIR;
+const evidenceDir = compatEnv.OMB_UI_EVIDENCE_DIR ? resolve(ROOT, compatEnv.OMB_UI_EVIDENCE_DIR) : mkdtempSync(join(tmpdir(), "omb-ui-evidence-"));
+const ownsEvidenceDir = !compatEnv.OMB_UI_EVIDENCE_DIR;
 
 interface Launched {
   child: ReturnType<typeof spawn>;
@@ -57,7 +58,7 @@ function launch(args: string[]): Promise<Launched> {
     // Own process group: a timeout must take the launch AND whatever it is
     // running (an `agent-browser install` mid-download) down with it.
     const child = spawn(process.execPath, ["--experimental-strip-types", CLI, "ui", "launch", ...args], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
+      cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
     });
     const killGroup = (signal: NodeJS.Signals) => {
       if (child.pid && process.platform !== "win32") {
@@ -372,7 +373,7 @@ describe("control-omb ui drives the real renderer", () => {
     expect(logs.ok).toBe(true);
     expect((logs.messages as Array<{ type: string; text: string }>).filter((message) => message.type === "error")).toEqual([]);
     const title = await ui("eval", info.ui, "--js", "document.title");
-    expect(title).toMatchObject({ ok: true, result: "Isolated OpenMaus Chat" });
+    expect(title).toMatchObject({ ok: true, result: "Isolated Bos Chat" });
 
     // Ctrl-C: browser, preview and fixture close; only the fixture's data goes.
     await waitForExit(launched.child, { signal: "SIGINT", graceMs: 30_000 });
@@ -382,3 +383,4 @@ describe("control-omb ui drives the real renderer", () => {
     await expect(ui("snapshot", info.ui)).rejects.toThrow("could not read the ui handle");
   }, LAUNCH_TIMEOUT_MS + 120_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

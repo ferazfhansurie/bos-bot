@@ -393,13 +393,13 @@ export class PhoneSecretBridge {
   private async provideWithinLimit(context: PhoneSecretContext): Promise<void> {
     if (!this.identity) {
       throw new PhoneSecretError(
-        "Secure phone entry is not ready on this computer. Reopen OpenMausBot and try again.",
+        "Secure phone entry is not ready on this computer. Reopen BOS Bot and try again.",
         503,
       );
     }
     const identity = await this.identity.catch(() => {
       throw new PhoneSecretError(
-        "Secure phone entry is not ready on this computer. Reopen OpenMausBot and try again.",
+        "Secure phone entry is not ready on this computer. Reopen BOS Bot and try again.",
         503,
       );
     });
@@ -462,3 +462,4 @@ export class PhoneSecretBridge {
     });
   }
 }
+// branding compatibility (electron/branding-compat.json): phone-crypto: HPKE labels are part of the paired phone credential protocol; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

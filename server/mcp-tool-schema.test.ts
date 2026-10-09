@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createToolListNormalizer, providerSafeInputSchema } from "./mcp-tool-schema.ts";
 
 // Verbatim from `cua-driver describe browser_prepare`, cua-driver 0.22.1 —
-// the driver OpenMausBot bundles. Strict providers (OpenAI, xAI, Bedrock,
+// the driver BOS Bot bundles. Strict providers (OpenAI, xAI, Bedrock,
 // Kimi) reject the root anyOf whose branches carry no `type: "object"`.
 const BROWSER_PREPARE_0_22_1 = {
   additionalProperties: true,

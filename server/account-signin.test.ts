@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { describe, expect, it } from "vitest";
 
 import { allowedScopes, createEmailSignIn, parseAllowList, signInEnabled } from "./account-signin.ts";
@@ -30,7 +31,7 @@ describe("the exchange with the control plane", () => {
     try {
       const signIn = createEmailSignIn({
         allow: { admins: ["her@example.test"], members: ["@team.test"] },
-        env: { ...process.env, OMB_CONTROL_PLANE_URL: stub.url },
+        env: { ...compatEnv, OMB_CONTROL_PLANE_URL: stub.url },
       });
       expect(signIn.enabled()).toBe(true);
       expect(await signIn.start("nobody@example.test")).toMatchObject({ ok: false, status: 403 });
@@ -59,7 +60,8 @@ describe("the exchange with the control plane", () => {
   it("is off with an empty allow-list and says so when the sign-in service is down", async () => {
     const off = createEmailSignIn({ allow: () => ({ admins: [], members: [] }) });
     expect(off.enabled()).toBe(false);
-    const down = createEmailSignIn({ allow: { admins: ["a@b.test"], members: [] }, env: { ...process.env, OMB_CONTROL_PLANE_URL: "http://127.0.0.1:9" } });
+    const down = createEmailSignIn({ allow: { admins: ["a@b.test"], members: [] }, env: { ...compatEnv, OMB_CONTROL_PLANE_URL: "http://127.0.0.1:9" } });
     expect(await down.start("a@b.test")).toMatchObject({ ok: false, status: 502 });
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

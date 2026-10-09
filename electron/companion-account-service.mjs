@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "./branding-env.cjs";
 import {
   ControlPlaneError,
   normalizeAccountEmail,
@@ -41,18 +42,18 @@ const ownString = (document, field) =>
  * there is no fallback to any upstream service. `isPackaged` is accepted for
  * compatibility and no longer changes the answer. */
 export function resolveCompanionControlPlaneURL({
-  environment = process.env,
+  environment = compatEnv,
 } = {}) {
   for (const key of [CONTROL_PLANE_URL_ENV, LEGACY_CONTROL_PLANE_URL_ENV]) {
     if (environment && Object.hasOwn(environment, key)) {
-      return normalizeControlPlaneURL(environment[key]);
+      return normalizeControlPlaneURL(compatEnvironment(environment)[key]);
     }
   }
   return DEFAULT_COMPANION_CONTROL_PLANE_URL;
 }
 
 /** Why resolveCompanionControlPlaneURL returned "", phrased for operators. */
-export function controlPlaneUnavailableReason(environment = process.env) {
+export function controlPlaneUnavailableReason(environment = compatEnv) {
   const configured = [CONTROL_PLANE_URL_ENV, LEGACY_CONTROL_PLANE_URL_ENV].find(
     (key) => environment && Object.hasOwn(environment, key),
   );
@@ -151,7 +152,7 @@ const FRIENDLY_MESSAGES = Object.freeze({
   unauthorized: "Your sign-in expired. Email yourself a new code to reconnect.",
   forbidden: "The secure connection request was not allowed. Try signing in again.",
   signed_out: "Your sign-in expired. Email yourself a new code to reconnect.",
-  network_unavailable: "OpenMausBot could not reach its secure connection service. Check your internet and try again.",
+  network_unavailable: "BOS Bot could not reach its secure connection service. Check your internet and try again.",
   rate_limited: "Too many attempts were made. Wait a little, then try again.",
   credential_rotation_rate_limited: "This computer was reconnected too often. Wait a little, then try again.",
   installation_limit_reached: "This account has reached its computer limit. Remove an old computer and try again.",
@@ -646,3 +647,4 @@ export function createCompanionAccountService({
     restore,
   });
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

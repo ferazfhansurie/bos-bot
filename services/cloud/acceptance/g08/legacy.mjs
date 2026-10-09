@@ -75,3 +75,4 @@ const list = Array.isArray(groups) ? groups : Object.values(groups.groups ?? gro
 const chat = list.find((g) => g?.name)?.name;
 writeFileSync(join(out, "legacy.json"), JSON.stringify({ url, chat_name: chat, before }));
 console.log(JSON.stringify({ url, chat_name: chat, before }));
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

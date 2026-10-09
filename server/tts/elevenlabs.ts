@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // ElevenLabs, the one voice.
 //
 // Everything about talking to the service lives in this file: verifying a
@@ -10,7 +11,7 @@
 // client already splits text into utterances and fetches the next while the
 // current one plays, which gets the same perceived latency with far fewer
 // moving parts — and no socket to leak when a turn is interrupted.
-const API = process.env.OMB_ELEVENLABS_API || "https://api.elevenlabs.io/v1";
+const API = compatEnv.OMB_ELEVENLABS_API || "https://api.elevenlabs.io/v1";
 const MODEL = "eleven_flash_v2_5";
 // 64kbps mono is indistinguishable for speech and a third of the bytes
 const FORMAT = "mp3_44100_64";
@@ -102,3 +103,4 @@ export async function synthesize(text: string, voiceId: string, key: string): Pr
   if (!res.ok) throw new Error(message(res.status, "speaking", await safeJson(res)));
   return { bytes: new Uint8Array(await res.arrayBuffer()), mime: "audio/mpeg" };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

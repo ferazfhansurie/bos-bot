@@ -1,4 +1,4 @@
-// `openmausbot fleet`: many client workspaces on one Linux server. The plans
+// `bosbot fleet`: many client workspaces on one Linux server. The plans
 // come from fleet.ts; this runs them as root with fixed argument lists, or
 // prints them for an operator to paste into a root shell, and never builds
 // a shell command from user input. The fleet agent (fleet-agent.ts) reuses
@@ -299,7 +299,7 @@ function failed(io: FleetIo, what: string, output: string): number {
 
 export function loadRegistry(layout: FleetLayout, deps: FleetDeps): FleetRegistry {
   const text = deps.readText(layout.registryFile);
-  if (text === null) throw new Error(`no fleet on this server yet: run \`openmausbot fleet init --domain your.domain\` first`);
+  if (text === null) throw new Error(`no fleet on this server yet: run \`bosbot fleet init --domain your.domain\` first`);
   return parseRegistry(text);
 }
 
@@ -438,7 +438,7 @@ export async function runFleetCommand(input: FleetInput, io: FleetIo, deps: Flee
       const registry = loadRegistry(layout, deps);
       const rows = Object.values(registry.workspaces).sort((a, b) => a.slug.localeCompare(b.slug));
       if (!rows.length) {
-        io.log(`no workspaces yet on ${registry.domain}; create one with: openmausbot fleet create NAME --admin you@example.com`);
+        io.log(`no workspaces yet on ${registry.domain}; create one with: bosbot fleet create NAME --admin you@example.com`);
         return 0;
       }
       for (const workspace of rows) {
@@ -462,3 +462,4 @@ export async function runFleetCommand(input: FleetInput, io: FleetIo, deps: Flee
     return 2;
   }
 }
+// branding compatibility (electron/branding-compat.json): fleet-service: existing launchd/systemd units, fleet roots and firewall tables continue addressing the same installation; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

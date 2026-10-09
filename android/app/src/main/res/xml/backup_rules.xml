@@ -28,3 +28,4 @@
         domain="sharedpref"
         path="openmaus.onboarding.xml" />
 </full-backup-content>
+<!-- branding compatibility (electron/branding-compat.json): android-preferences: phone preferences and already posted notification intents survive the namespace move -->

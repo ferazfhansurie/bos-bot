@@ -4,18 +4,18 @@ description: Understand engine paths, credentials, and the local configuration b
 icon: Settings
 ---
 
-Most users configure OpenMausBot from the app. The packaged desktop validates credentials before saving them and stores supported secrets with the operating system's secure storage.
+Most users configure BOS Bot from the app. The packaged desktop validates credentials before saving them and stores supported secrets with the operating system's secure storage.
 
 ## Engine discovery
 
-OpenMausBot checks the inherited process path, common install locations, and the login shell. If an engine is installed somewhere unusual, open **Settings → Engines** and choose its executable explicitly.
+BOS Bot checks the inherited process path, common install locations, and the login shell. If an engine is installed somewhere unusual, open **Settings → Engines** and choose its executable explicitly.
 
 Explicit paths are useful when you:
 
 - keep multiple CLI versions;
 - use a wrapper script;
 - installed an engine in a directory desktop apps cannot discover; or
-- launch OpenMausBot from a Windows shortcut or Linux application menu with a different environment from your terminal.
+- launch BOS Bot from a Windows shortcut or Linux application menu with a different environment from your terminal.
 
 ## Optional credentials
 
@@ -52,14 +52,15 @@ Source and headless installations can give separate Claude instances different b
 }
 ```
 
-`tools` selects Claude's available built-ins; an explicit empty array disables every built-in, while omitting it keeps Claude's default set. `disallowedTools` applies Claude tool-name patterns as an additional deny list. These settings do not grant or pre-approve MCP integrations, which remain controlled by the instance's mounted integrations and OpenMausBot permission flow.
+`tools` selects Claude's available built-ins; an explicit empty array disables every built-in, while omitting it keeps Claude's default set. `disallowedTools` applies Claude tool-name patterns as an additional deny list. These settings do not grant or pre-approve MCP integrations, which remain controlled by the instance's mounted integrations and BOS Bot permission flow.
 
 ### Claude Code isolation
 
 A bot on the Claude engine sees only what its owner gave it: the MCP servers under **Settings → MCP servers**, its integrations (computer, browser, agents, phone), and its own project's `.mcp.json`. It does **not** load this machine's Claude Code setup — the MCP servers and claude.ai connectors in your user or local Claude config, your skills and agents, your hooks, or your personal `~/.claude/CLAUDE.md`. Loading those into every turn of every bot cost one measured desktop about 407 extra tools and 10k tokens per model call.
 
-`OMB_CLAUDE_INHERIT_USER_CONFIG=1` on the OpenMausBot process turns that isolation off again, for every Claude bot, until the variable is removed. It exists to recover a bot that genuinely depended on a user-scope server, and it is easy to forget: nothing in the chat looks different, only the token usage does. While it is set, **Settings → Engines** shows a warning on the Claude engine and the server logs one line at startup. The supported fix is to add the server the bot needs under **Settings → MCP servers** or to the bot project's `.mcp.json`, then unset the variable and restart.
+`BOS_CLAUDE_INHERIT_USER_CONFIG=1` on the BOS Bot process turns that isolation off again, for every Claude bot, until the variable is removed. It exists to recover a bot that genuinely depended on a user-scope server, and it is easy to forget: nothing in the chat looks different, only the token usage does. While it is set, **Settings → Engines** shows a warning on the Claude engine and the server logs one line at startup. The supported fix is to add the server the bot needs under **Settings → MCP servers** or to the bot project's `.mcp.json`, then unset the variable and restart.
 
 <Callout type="warn" title="Do not put secrets in prompts">
   A prompt becomes conversation history and may be sent to an agent provider. Use App Settings or environment configuration for credentials.
 </Callout>
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

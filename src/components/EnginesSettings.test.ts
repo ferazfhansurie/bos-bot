@@ -252,3 +252,4 @@ describe('Settings free cloud connection',()=>{
   expect(html).not.toContain('Set CLI');expect(html).not.toContain('CLI path and updates');
  });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

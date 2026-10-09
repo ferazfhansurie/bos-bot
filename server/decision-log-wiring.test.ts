@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // The decision log is only as good as its wiring: every row is written at
 // the request.opened fold or in answerRequest, and both of those keep
 // working (cards keep appearing, approvals keep flowing) even when the
@@ -131,8 +132,8 @@ posixOnly("authorization decisions are logged", () => {
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env: {
-        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-        ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+        ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+        ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
         HOME: home,
         USERPROFILE: home,
         OMB_PORT: String(PORT),
@@ -276,3 +277,4 @@ posixOnly("authorization decisions are logged", () => {
     expect((await api("GET", "/api/decisions?limit=nope")).status).toBe(400);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -42,7 +42,7 @@ function writeIfChanged(path: string, content: string, mode: number): void {
  * so that is included last for the same reason. */
 export function vpsSshConfigText(sshDir: string, userConfig = join(homedir(), ".ssh", "config"), systemConfig = "/etc/ssh/ssh_config"): string {
   return [
-    "# Written by OpenMausBot for its VPS computer connections. Do not edit;",
+    "# Written by BOS Bot for its VPS computer connections. Do not edit;",
     "# it is regenerated. Your own ~/.ssh/config is included first and wins.",
     ...(existsSync(userConfig) ? [`Include ${userConfig}`] : []),
     "Host *",
@@ -79,7 +79,7 @@ export function prepareVpsSsh(dataDir: string, pathValue: string, platform: Node
   if (!realSsh) return { configPath, path: pathValue };
   const shim = [
     "#!/bin/sh",
-    "# Written by OpenMausBot. docker's SSH transport finds this ssh first, so",
+    "# Written by BOS Bot. docker's SSH transport finds this ssh first, so",
     "# every VPS command shares one connection whether or not the alias says so.",
     `exec ${JSON.stringify(realSsh)} -F ${JSON.stringify(configPath)} "$@"`,
     "",

@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../../../electron/branding-env.cjs";
 // Hermes Agent — Nous Research's `hermes acp` CLI. Custom-only: Hermes is
 // a BYOK/local harness. ACP ignores `hermes -m` (cmd_acp does not forward
 // it), and setting OPENAI_API_KEY makes provider:auto resolve to OpenRouter
@@ -17,20 +18,20 @@ import { createAcpDriver, type AcpSupport } from "./core.ts";
 
 const EMPTY: ModelCatalog = { default: "", options: [] };
 
-export const HERMES_OPENMAUS_SCREENSHOT_COMPAT = "HERMES_OPENMAUS_SCREENSHOT_COMPAT";
-export const HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL = "HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL";
+export const HERMES_BOS_SCREENSHOT_COMPAT = "HERMES_OPENMAUS_SCREENSHOT_COMPAT";
+export const HERMES_BOS_SCREENSHOT_COMPAT_MODEL = "HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL";
 
 /** Bind screenshot pseudo-call compatibility to one exact injected model. */
 export function bindHermesScreenshotCompat(
   env: Record<string, string | undefined>,
   modelId: string | null | undefined,
 ): void {
-  delete env[HERMES_OPENMAUS_SCREENSHOT_COMPAT];
-  delete env[HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL];
+  delete env[HERMES_BOS_SCREENSHOT_COMPAT];
+  delete env[HERMES_BOS_SCREENSHOT_COMPAT_MODEL];
   const inject = decodeInjectId(modelId);
   if (!inject) return;
-  env[HERMES_OPENMAUS_SCREENSHOT_COMPAT] = "1";
-  env[HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL] = inject.model;
+  env[HERMES_BOS_SCREENSHOT_COMPAT] = "1";
+  env[HERMES_BOS_SCREENSHOT_COMPAT_MODEL] = inject.model;
 }
 
 function hermesHome(env: Record<string, string | undefined>): string {
@@ -73,7 +74,7 @@ function replaceHermesHostBlock(text: string, hostId: string, block: string): st
 /** Register an OpenAI-compatible host so ACP can `session/set_model custom:host:model`. */
 export function ensureHermesInjectProvider(
   modelId: string,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = compatEnv,
 ): string {
   const inject = decodeInjectId(modelId);
   if (!inject) return modelId;
@@ -205,7 +206,7 @@ function hermesConfigDefault(text: string): { model: string; provider: string } 
  * catalog exactly as it was for local-only setups.
  */
 export function hermesConfiguredModel(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = compatEnv,
 ): { id: string; label: string; custom: true } | null {
   const dir = hermesHome(env);
   let secrets = "";
@@ -270,7 +271,7 @@ export const HERMES_ACP_MODELS_TIMEOUT_ENV = "HERMES_ACP_MODELS_TIMEOUT_MS";
 export const HERMES_ACP_MODELS_DEFAULT_TIMEOUT_MS = 15_000;
 
 function hermesAcpModelsTimeoutMs(env: Record<string, string | undefined>): number {
-  const raw = env[HERMES_ACP_MODELS_TIMEOUT_ENV];
+  const raw = compatEnvironment(env)[HERMES_ACP_MODELS_TIMEOUT_ENV];
   if (raw === undefined) return HERMES_ACP_MODELS_DEFAULT_TIMEOUT_MS;
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 2_147_483_647
@@ -418,7 +419,7 @@ const support: AcpSupport = {
   resolveModels: (env: Record<string, string | undefined>, config: any) => resolveModels(env, config),
   resolveTurnModel: (model, env) => {
     // Never inherit a broad or stale compatibility grant from the parent.
-    // Only this OpenMaus driver binds one concrete local model; Hermes still
+    // Only this Bos driver binds one concrete local model; Hermes still
     // requires the exact read-only screenshot MCP tool before activation.
     bindHermesScreenshotCompat(env, model);
     if (!model) return model;
@@ -465,3 +466,4 @@ const support: AcpSupport = {
 };
 
 export const HermesAgentDriver = createAcpDriver(support);
+// branding compatibility (electron/branding-compat.json): plugin-protocol: external engine plugin grants and stored injected model ids keep their existing labels

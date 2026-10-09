@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { compatEnv } from "../electron/branding-env.cjs";
 // Reproduce: threads a bot opens with start_thread and later closes with
-// close_thread stay in the sidebar. Runs an isolated OpenMausBot server on a
+// close_thread stay in the sidebar. Runs an isolated BOS Bot server on a
 // throwaway data dir with the repository's fake engine, then drives the same
 // internal endpoints the agents tools hit. Never touches the user's app data.
 //
@@ -17,7 +18,7 @@ import { randomBytes } from "node:crypto";
 const ROOT = join(import.meta.dirname, "..");
 const FAKE_CLI = join(ROOT, "server", "testing", "fake-claude-cli.ts");
 // Serves the built UI from dist/ when present (run `npx vite build` first).
-const STATIC_DIR = process.env.REPRO_STATIC_DIR || join(ROOT, "dist");
+const STATIC_DIR = compatEnv.REPRO_STATIC_DIR || join(ROOT, "dist");
 const TEST_KEY = randomBytes(24).toString("hex");
 
 const freePort = () => new Promise((resolve, reject) => {
@@ -43,7 +44,7 @@ const base = `http://127.0.0.1:${port}`;
 const child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "server", "index.ts")], {
   cwd: ROOT,
   env: {
-    PATH: process.env.PATH,
+    PATH: compatEnv.PATH,
     HOME: home, USERPROFILE: home, OMB_DATA_DIR: home,
     TMPDIR: home,
     OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1),
@@ -161,3 +162,4 @@ Click one: the last row of the transcript is the "Closed by @Parker" chip.
 console.log(`
 Server log is inline above. Ctrl-C stops the fixture and deletes ${home}.`);
 await new Promise(() => {});
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

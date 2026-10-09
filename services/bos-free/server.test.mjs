@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import test from 'node:test';
 import assert from 'node:assert';
 import http from 'node:http';
@@ -11,7 +12,7 @@ const up = http.createServer((req, res) => {
 });
 await new Promise(r=>up.listen(0,'127.0.0.1',r));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(),'bosfree-'));
-Object.assign(process.env,{ OPENROUTER_API_KEY:'sk-owner-secret', UPSTREAM:`http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir,'d.json'), PER_INSTALL_DAILY:'2', GLOBAL_DAILY:'3', REGISTER_PER_IP_DAILY:'2', CHAT_PER_IP_DAILY:'100' });
+Object.assign(compatEnv,{ OPENROUTER_API_KEY:'sk-owner-secret', UPSTREAM:`http://127.0.0.1:${up.address().port}`, BOS_FREE_DATA: path.join(dir,'d.json'), PER_INSTALL_DAILY:'2', GLOBAL_DAILY:'3', REGISTER_PER_IP_DAILY:'2', CHAT_PER_IP_DAILY:'100' });
 const { server, MODEL_ID } = await import('./server.mjs');
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;

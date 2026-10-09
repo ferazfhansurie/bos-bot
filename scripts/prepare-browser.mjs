@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Download only reviewed vendor assets. Always extract anew from verified
 // archives: a previous/partial dist-native tree is never a trusted cache.
 import { spawnSync } from "node:child_process";
@@ -142,7 +143,7 @@ export async function releaseBytes(asset, cacheDirectory) {
   return bytes;
 }
 
-export function browserExtractionCommand(archive, directory, { platform = process.platform, systemRoot = process.env.SystemRoot ?? "C:\\Windows" } = {}) {
+export function browserExtractionCommand(archive, directory, { platform = process.platform, systemRoot = compatEnv.SystemRoot ?? "C:\\Windows" } = {}) {
   // Git Bash places GNU tar (no ZIP support) on PATH. Windows ships bsdtar;
   // address that exact executable instead of whichever tar appears first.
   return platform === "win32"
@@ -158,7 +159,7 @@ function extract(archive, directory) {
   if (result.error || result.status !== 0) throw new Error(`Browser archive extraction failed: ${result.error?.message ?? result.stderr ?? result.status}`);
 }
 
-export async function stageBrowserTarget(root, target, { cacheDirectory = process.env.OMB_BROWSER_ARCHIVE_DIR ?? join(root, "dist-native", "browser-archives") } = {}) {
+export async function stageBrowserTarget(root, target, { cacheDirectory = compatEnv.OMB_BROWSER_ARCHIVE_DIR ?? join(root, "dist-native", "browser-archives") } = {}) {
   const spec = browserBundleSpec(target);
   const parent = join(root, "dist-native", "browser");
   mkdirSync(parent, { recursive: true });
@@ -199,3 +200,4 @@ export async function stageBrowserTarget(root, target, { cacheDirectory = proces
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   for (const target of targetsForPreparation(parsePrepareBrowserArgs(process.argv.slice(2)))) await stageBrowserTarget(sourceRoot, target);
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -279,3 +279,4 @@ test("a captured backup generation cannot send a later account's backup request"
   await assert.rejects(f.client.requestBackup("/api/desktop/backups", { generation }), /connection changed/);
   assert.equal(f.requests.length, count);
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

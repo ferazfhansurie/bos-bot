@@ -1,4 +1,5 @@
-// Qwen Code — Alibaba's `qwen --acp` CLI. Custom-only in OpenMausBot:
+import { compatEnv } from "../../../electron/branding-env.cjs";
+// Qwen Code — Alibaba's `qwen --acp` CLI. Custom-only in BOS Bot:
 // the official pane has no Qwen Cloud catalog; live local hosts land in
 // Custom and are written into ~/.qwen/settings.json modelProviders.
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -90,7 +91,7 @@ function readQwenRoutes(env: Record<string, string | undefined>): QwenRoute[] {
 }
 
 /** Public metadata only. Use Qwen's provider-qualified ACP selectors, not raw model IDs. */
-export function readQwenModelCatalog(env: Record<string, string | undefined> = process.env): ModelCatalog {
+export function readQwenModelCatalog(env: Record<string, string | undefined> = compatEnv): ModelCatalog {
   const options = readQwenRoutes(env).map(({ id, model, label, provider }) => ({
     id, label: qwenModelLabel(model, label), custom: true as const, provider,
   }));
@@ -104,7 +105,7 @@ function envKeyFor(hostId: string): string {
 /** Upsert an OpenAI-compatible provider row so `qwen -m` can reach the host. */
 export function ensureQwenInjectModel(
   modelId: string,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = compatEnv,
 ): string {
   const inject = decodeInjectId(modelId);
   if (!inject) return modelId;
@@ -241,3 +242,4 @@ const support: AcpSupport = {
 };
 
 export const QwenAgentDriver = createAcpDriver(support);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

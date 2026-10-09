@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Real renderer and routes in a disposable fake-engine workspace only.
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
@@ -10,14 +11,14 @@ import { runControlOmb } from "../control-omb.ts";
 import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const enabled = process.env.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env }));
+const enabled = compatEnv.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv }));
 let child: ChildProcess | undefined;
 afterAll(() => waitForExit(child, { signal: "SIGINT", graceMs: 30_000 }));
 
 (enabled ? it : it.skip)("creates monthly routines, validates cron, preserves arbitrary expressions and excludes calls", async () => {
   let output = "";
   let stderr = "";
-  child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], { cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+  child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], { cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout!.on("data", chunk => { output += String(chunk); });
   child.stderr!.on("data", chunk => { stderr += String(chunk); });
   let fixture: { ui: string; url: string; botId: string; logPath: string };
@@ -112,3 +113,4 @@ afterAll(() => waitForExit(child, { signal: "SIGINT", graceMs: 30_000 }));
   expect((browserConsole.messages as Array<{ type: string }>).filter(message => message.type === "error")).toEqual([]);
   console.log(`Cron UI evidence: ${fixture!.logPath}.cron-monthly.png`);
 }, 720_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

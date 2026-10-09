@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
@@ -118,8 +119,8 @@ await import(${JSON.stringify(pathToFileURL(FAKE_CLAUDE).href)});
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(port),
@@ -654,8 +655,8 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
     await waitForExit(child);
     const port=Number(new URL(base).port);
     child=spawn(process.execPath,[join(SERVER_DIR,"index.ts")],{cwd:ROOT,env:{
-      ...(process.env.PATH ? {PATH:process.env.PATH} : {}),
-      ...(process.env.SystemRoot ? {SystemRoot:process.env.SystemRoot} : {}),
+      ...(compatEnv.PATH ? {PATH:compatEnv.PATH} : {}),
+      ...(compatEnv.SystemRoot ? {SystemRoot:compatEnv.SystemRoot} : {}),
       HOME:home,USERPROFILE:home,OMB_PORT:String(port),OMB_WEBHOOK_PORT:String(port+1),OMB_STATIC_DIR:join(home,"static"),OMB_TEST_INTERNAL_CAPABILITY_KEY:TEST_CAPABILITY_KEY,
     },stdio:["ignore","pipe","pipe"]});
     child.stderr!.on("data",chunk=>stderr+=chunk);
@@ -675,3 +676,4 @@ describe("room runtime concurrency", { timeout: 45000 }, () => {
   });
 
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

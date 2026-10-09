@@ -15,3 +15,4 @@ export const WORKSPACE_BACKUP_CLIENT_KEYS = [
 ] as const;
 
 export type WorkspaceBackupClientState = Partial<Record<(typeof WORKSPACE_BACKUP_CLIENT_KEYS)[number], string>>;
+// branding compatibility (electron/branding-compat.json): browser-storage: existing localStorage and native attestation records keep their keys

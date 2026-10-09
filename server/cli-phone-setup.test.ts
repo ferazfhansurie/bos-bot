@@ -76,7 +76,7 @@ describe("optional phone setup", () => {
     const result = await runPhoneSetup(options, ui.io, deps);
     expect(result).toEqual({ options });
     expect(result.options).toBe(options);
-    expect(ui.io.choose).toHaveBeenCalledWith("Use OpenMausBot on your phone?", expect.any(Array), 0);
+    expect(ui.io.choose).toHaveBeenCalledWith("Use BOS Bot on your phone?", expect.any(Array), 0);
     expect(deps.accountReady).not.toHaveBeenCalled();
     expect(deps.login).not.toHaveBeenCalled();
     ui.consumed();
@@ -113,7 +113,7 @@ describe("optional phone setup", () => {
     const ui = prompts({ choices: [2, 0], confirms: [true] });
     expect((await runPhoneSetup(options, ui.io, deps)).phone).toBe("android");
     expect(deps.login).not.toHaveBeenCalled();
-    expect(ui.lines.join("\n")).toContain("saved OpenMausBot account");
+    expect(ui.lines.join("\n")).toContain("saved BOS Bot account");
     ui.consumed();
   });
 
@@ -240,7 +240,7 @@ describe("phone pairing instructions", () => {
     const text = phonePairingInstructions("android", { origin: "https://maus.example", ready: true }).join("\n");
     // The QR beside these lines is the openmausbot:// invite, so the app's
     // own scanner is now the primary route rather than a dead end.
-    expect(text).toContain("open the OpenMausBot app and scan the QR with its pairing scanner");
+    expect(text).toContain("open the BOS Bot app and scan the QR with its pairing scanner");
     // The QR beside these lines is the app-scheme invite, so telling people to
     // scan it with Camera for the browser would send them nowhere.
     expect(text).toContain("Camera will not open it in a browser");
@@ -251,3 +251,4 @@ describe("phone pairing instructions", () => {
     expect(text).toContain("five minutes");
   });
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support

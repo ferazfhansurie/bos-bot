@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { createServer, type RequestListener, type Server } from "node:http";
 import { once } from "node:events";
 import { dirname, join } from "node:path";
@@ -21,7 +22,7 @@ async function listen(handler: RequestListener) {
 
 function start(env: Record<string, string>) {
   child = spawn(process.execPath, ["--experimental-strip-types", ENTRY], {
-    env: { ...process.env, ...env },
+    env: { ...compatEnv, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
   return readline.createInterface({ input: child.stdout });
@@ -140,7 +141,7 @@ describe("connector MCP bridge", () => {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "openmausbot-connectors", version: "1" },
+        serverInfo: { name: "bosbot-connectors", version: "1" },
       },
     });
     expect(reply.result).not.toHaveProperty("isError");
@@ -204,7 +205,7 @@ describe("connector MCP bridge", () => {
     child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2024-11-05" } })}\n`);
     const reply = await nextJson(lines);
     expect(reply.result.protocolVersion).toBe("2024-11-05");
-    expect(reply.result.serverInfo).toEqual({ name: "openmausbot-connectors", version: "1" });
+    expect(reply.result.serverInfo).toEqual({ name: "bosbot-connectors", version: "1" });
     expect(upstreamAuthorization).toBe("Bearer upstream-secret");
     expect(upstreamBody).toMatchObject({ method: "initialize" });
     expect(JSON.stringify(reply)).not.toContain("upstream-secret");
@@ -316,4 +317,4 @@ describe("connector MCP bridge", () => {
     expect(received).toBe(false);
   });
 });
-
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

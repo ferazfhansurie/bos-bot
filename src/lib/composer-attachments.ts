@@ -833,3 +833,4 @@ export function splitQueuedPreview(text: string): QueuedPreview {
   });
   return { ...splitTranscriptAttachments(withoutPastes), pastes };
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

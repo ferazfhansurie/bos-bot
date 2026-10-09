@@ -1,16 +1,16 @@
-# Deploy OpenMausBot on a VPS
+# Deploy BOS Bot on a VPS
 
-From a blank Linux server to OpenMausBot running on it around the clock, reachable from your laptop, the desktop app and your phone, with your bots working while every laptop is closed. It assumes nothing beyond being able to open a terminal and paste commands. About twenty minutes, most of it waiting.
+From a blank Linux server to BOS Bot running on it around the clock, reachable from your laptop, the desktop app and your phone, with your bots working while every laptop is closed. It assumes nothing beyond being able to open a terminal and paste commands. About twenty minutes, most of it waiting.
 
 Three ways to make the server reachable are covered. Pick one; the rest of the guide is the same.
 
 | | You need | Who can reach it | Best for |
 |---|---|---|---|
-| **A. Public address, no domain** (`serve --tunnel`) | an OpenMausBot account (email code) | anyone with a pairing code, over HTTPS | the fastest path; a phone on cellular |
+| **A. Public address, no domain** (`serve --tunnel`) | an BOS Bot account (email code) | anyone with a pairing code, over HTTPS | the fastest path; a phone on cellular |
 | **B. Your own domain** (Docker + Caddy) | a domain name, ports 80/443 | anyone with a pairing code, over HTTPS | a permanent address you own |
 | **C. Your Tailscale network** (`serve --tailscale`) | Tailscale on the server and your devices | only your tailnet | the most private; nothing public at all |
 
-Whichever you pick, the login is the same: you **pair** each device once with a short code and it stays signed in. A session lasts 30 days; using it with half that or less left renews it to a full 30, up to 180 days from pairing (`OMB_SESSION_TTL_DAYS` and `OMB_SESSION_MAX_DAYS` change both numbers). There is no password.
+Whichever you pick, the login is the same: you **pair** each device once with a short code and it stays signed in. A session lasts 30 days; using it with half that or less left renews it to a full 30, up to 180 days from pairing (`BOS_SESSION_TTL_DAYS` and `BOS_SESSION_MAX_DAYS` change both numbers). There is no password.
 
 ## Hetzner launch check (2026-09-07)
 
@@ -73,18 +73,18 @@ root, sign in again as `maus`; those accounts have different homes and credentia
 No domain, no proxy, no open port. The server gets an address like `https://c-7f3a9c.openmausbot.com` through a Cloudflare tunnel; only traffic through the tunnel reaches it, and that traffic still has to pair.
 
 ```sh
-npx openmausbot setup          # once: choose AI access, connect, and choose a model
-npx openmausbot login          # once: an emailed code signs this machine in and reserves its address
-npx openmausbot serve --tunnel # runs the server there and prints the pairing link with a QR code
+npx bosbot setup          # once: choose AI access, connect, and choose a model
+npx bosbot login          # once: an emailed code signs this machine in and reserves its address
+npx bosbot serve --tunnel # runs the server there and prints the pairing link with a QR code
 ```
 
-`setup` connects an AI provider; it is separate from the OpenMausBot account.
+`setup` connects an AI provider; it is separate from the BOS Bot account.
 Use Codex's device-code option over SSH, or enter a hidden API key for a
 chat-only connection. More engines can be added later. See [CLI setup](cli-onboarding.md).
 
 `login` asks for your email, sends an 8-digit code, and prints the address it reserved for this machine. `serve --tunnel` downloads `cloudflared` on the first run (a pinned version with a verified digest, into `~/.openmausbot`), starts the server, connects the tunnel, and after a few seconds prints `tunnel: live at https://…`. Leave it running; see "Keep it running" for a service.
 
-The account credentials live in `~/.openmausbot/tunnel-account.json`, readable only by your user. `npx openmausbot logout` releases the address.
+The account credentials live in `~/.openmausbot/tunnel-account.json`, readable only by your user. `npx bosbot logout` releases the address.
 
 Skip to "Install and sign the engines in".
 
@@ -103,7 +103,7 @@ One container for the server plus Caddy for HTTPS at `https://maus.example.com`.
 3. **Get the deploy files and set the name:**
 
    ```sh
-   git clone https://github.com/milind-soni/OpenMausBot && cd OpenMausBot/deploy
+   git clone https://github.com/firazfhansurie/bos-bot && cd bos-bot/deploy
    cp .env.example .env
    nano .env                # DOMAIN=maus.example.com ; ENGINES=@anthropic-ai/claude-code @openai/codex
    ```
@@ -119,10 +119,10 @@ One container for the server plus Caddy for HTTPS at `https://maus.example.com`.
 
    Caddy requests the certificate on its own; give it a minute. Then `https://maus.example.com` shows a page asking for a pairing code. That is correct: nothing works until you pair.
 
-In this path, every `npx openmausbot …` command below is run inside the container instead:
+In this path, every `npx bosbot …` command below is run inside the container instead:
 
 ```sh
-docker compose exec omb node dist-server/openmausbot.js pair --label "My MacBook"
+docker compose exec omb node dist-server/bosbot.js pair --label "My MacBook"
 ```
 
 ## Path C: only your Tailscale network
@@ -130,7 +130,7 @@ docker compose exec omb node dist-server/openmausbot.js pair --label "My MacBook
 From the administrator shell, install Tailscale on the server and sign in (`curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`). Enable HTTPS certificates for your tailnet once in the admin console (DNS → HTTPS Certificates), then run this from the `maus` shell:
 
 ```sh
-npx openmausbot serve --tailscale
+npx bosbot serve --tailscale
 ```
 
 Tailscale terminates HTTPS with its own certificate and the pairing link uses the server's MagicDNS name (`https://maus.tail1234.ts.net`). Only devices on your tailnet can reach it, which is a very good property for a server that can run tools.
@@ -142,13 +142,13 @@ the image. For paths A and C, install Linux system libraries once from the
 administrator shell:
 
 ```sh
-sudo -H npx --yes openmausbot browser install --with-deps
+sudo -H npx --yes bosbot browser install --with-deps
 ```
 
 Then install the browser in the service account's home, from the `maus` shell:
 
 ```sh
-npx --yes openmausbot browser install
+npx --yes bosbot browser install
 ```
 
 The administrator's browser download is in a different home; it does not install
@@ -162,7 +162,7 @@ gets its own isolated session whose logins persist across restarts.
 
 ## Install and sign the engines in
 
-The npm OpenMausBot package does not install model engine CLIs. For paths A and C,
+The npm BOS Bot package does not install model engine CLIs. For paths A and C,
 install the engine you use in the service account, then sign it in. For example,
 from the `maus` shell, for Claude:
 
@@ -178,7 +178,7 @@ engines you use. For path B, run the installed CLI inside the container, for
 example `docker compose exec omb claude`.
 
 Engine logins belong to the service user's home (for example `~/.codex` and
-`~/.claude`), separately from OpenMausBot's `~/.openmausbot`. Keep that home when
+`~/.claude`), separately from BOS Bot's `~/.openmausbot`. Keep that home when
 restarting or upgrading. The systemd example below includes `~/.local/bin` in PATH.
 
 ## Pair your first device
@@ -186,7 +186,7 @@ restarting or upgrading. The systemd example below includes `~/.local/bin` in PA
 `serve` already printed a pairing link and QR code when it started. For another device later:
 
 ```sh
-npx openmausbot pair --label "Kitchen iPad"
+npx bosbot pair --label "Kitchen iPad"
 ```
 
 ```
@@ -206,28 +206,28 @@ Worth knowing: a code works **once** and expires after **five minutes**; the lin
 Every paired device is a session:
 
 ```sh
-npx openmausbot sessions              # id, device, scope, last seen, expires
-npx openmausbot sessions revoke ID    # signs that device out and closes its stream at once
-npx openmausbot status                # what the server says about itself
+npx bosbot sessions              # id, device, scope, last seen, expires
+npx bosbot sessions revoke ID    # signs that device out and closes its stream at once
+npx bosbot status                # what the server says about itself
 ```
 
 ## Keep it running
 
-`npx openmausbot serve` is a plain foreground process. For systemd (paths A and C),
+`npx bosbot serve` is a plain foreground process. For systemd (paths A and C),
 install a chosen release first, from the `maus` shell. Replace `X.Y.Z` with the
 published version you want to run:
 
 ```sh
-npm install --global --prefix "$HOME/.local" openmausbot@X.Y.Z
+npm install --global --prefix "$HOME/.local" bosbot@X.Y.Z
 ```
 
 Stop the foreground server with Ctrl-C before enabling the service. From the
-administrator shell, save this as `/etc/systemd/system/openmausbot.service`:
+administrator shell, save this as `/etc/systemd/system/bosbot.service`:
 
 ```ini
-# /etc/systemd/system/openmausbot.service
+# /etc/systemd/system/bosbot.service
 [Unit]
-Description=OpenMausBot server
+Description=BOS Bot server
 After=network-online.target
 
 [Service]
@@ -235,7 +235,7 @@ User=maus
 WorkingDirectory=/home/maus
 Environment=HOME=/home/maus
 Environment=PATH=/home/maus/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/maus/.local/bin/openmausbot serve --tunnel --no-pair
+ExecStart=/home/maus/.local/bin/bosbot serve --tunnel --no-pair
 Restart=always
 RestartSec=5
 
@@ -244,11 +244,11 @@ WantedBy=multi-user.target
 ```
 
 ```sh
-sudo systemctl daemon-reload && sudo systemctl enable --now openmausbot
-journalctl -u openmausbot -f            # the server's log, including "tunnel: live at …"
+sudo systemctl daemon-reload && sudo systemctl enable --now bosbot
+journalctl -u bosbot -f            # the server's log, including "tunnel: live at …"
 ```
 
-Use `--tailscale` instead of `--tunnel` for path C. `--no-pair` skips printing a code at every restart; mint one with `npx openmausbot pair` when you need it. Docker (path B) restarts on its own (`restart: unless-stopped`).
+Use `--tailscale` instead of `--tunnel` for path C. `--no-pair` skips printing a code at every restart; mint one with `npx bosbot pair` when you need it. Docker (path B) restarts on its own (`restart: unless-stopped`).
 
 Adjust the account, home, and PATH if yours differ; Node 24 must be available on
 that PATH. The service runs the installed CLI directly, so a restart uses the
@@ -260,22 +260,22 @@ same release without an npm install prompt or an implicit upgrade.
   then run these commands from the administrator shell, replacing `X.Y.Z`:
 
   ```sh
-  sudo systemctl stop openmausbot
-  sudo -iu maus npm install --global --prefix /home/maus/.local openmausbot@X.Y.Z
-  sudo systemctl start openmausbot
+  sudo systemctl stop bosbot
+  sudo -iu maus npm install --global --prefix /home/maus/.local bosbot@X.Y.Z
+  sudo systemctl start bosbot
   ```
 
   Check that installation succeeded before starting. A service restart by itself
   does not update the installed package. For foreground `npx` usage, specify the
-  desired release as `npx --yes openmausbot@X.Y.Z serve --tunnel`.
-- **Path B:** `cd OpenMausBot/deploy && docker compose pull omb && docker compose up -d`.
+  desired release as `npx --yes bosbot@X.Y.Z serve --tunnel`.
+- **Path B:** `cd bos-bot/deploy && docker compose pull omb && docker compose up -d`.
 
 Routines and queued work survive a restart; a turn running at that moment does not, so update between runs.
 
 ## Back up
 
 Stop the server before copying its SQLite database: Ctrl-C for a foreground
-process, or `sudo systemctl stop openmausbot` from the administrator shell for
+process, or `sudo systemctl stop bosbot` from the administrator shell for
 the service above. Stop any engine processes and managed desktops still writing
 files you intend to back up.
 
@@ -284,8 +284,8 @@ credentials, and paired sessions). Run it from the service account's shell:
 
 ```sh
 umask 077
-backup_dir=$(mktemp -d "$PWD/openmausbot-backup.XXXXXX")
-tar czf "$backup_dir/openmausbot-data.tgz" -C "$HOME" .openmausbot
+backup_dir=$(mktemp -d "$PWD/bosbot-backup.XXXXXX")
+tar czf "$backup_dir/bosbot-data.tgz" -C "$HOME" .openmausbot
 ```
 
 A full backup also needs your engine credential/configuration paths, such as
@@ -295,20 +295,20 @@ any configured home/data-directory overrides, and workspaces outside the app
 directory. These are not included in the command above.
 
 For path B, the whole `/data` volume includes the container's CLI homes. From
-`OpenMausBot/deploy`, stop the app before archiving; `deploy_data` is the default
+`BOS Bot/deploy`, stop the app before archiving; `deploy_data` is the default
 volume name, so use your actual volume name if you changed the Compose project:
 
 ```sh
 docker compose stop omb
-backup_dir=$(mktemp -d "$PWD/openmausbot-backup.XXXXXX")
-docker run --rm -v deploy_data:/data:ro -v "$backup_dir":/b alpine sh -c 'umask 077; tar czf /b/openmausbot-data.tgz -C /data .'
+backup_dir=$(mktemp -d "$PWD/bosbot-backup.XXXXXX")
+docker run --rm -v deploy_data:/data:ro -v "$backup_dir":/b alpine sh -c 'umask 077; tar czf /b/bosbot-data.tgz -C /data .'
 ```
 
 Each command creates a fresh private folder in the current directory, so it
 cannot overwrite an older archive with more permissive access. Keep the
 archive inside that folder privately on another machine. Restore with the server stopped,
 using the same paths and original ownership. After backup or restore, start the
-service with `sudo systemctl start openmausbot`, or `docker compose start omb`.
+service with `sudo systemctl start bosbot`, or `docker compose start omb`.
 
 ## The rules the setup relies on
 
@@ -322,9 +322,9 @@ Read this before putting anything else in front of the server.
 
 ## Troubleshooting
 
-**`serve --tunnel` says "no account on this machine yet".** Run `npx openmausbot login` on this machine first; the credentials are per machine.
+**`serve --tunnel` says "no account on this machine yet".** Run `npx bosbot login` on this machine first; the credentials are per machine.
 
-**The tunnel stays on "retrying".** The server is running and usable locally; the public hop is not verified yet. Wait a minute (Cloudflare needs a moment on a fresh address), then check `journalctl`/the terminal for the reason. If it never comes up, `npx openmausbot logout && npx openmausbot login` issues a fresh address.
+**The tunnel stays on "retrying".** The server is running and usable locally; the public hop is not verified yet. Wait a minute (Cloudflare needs a moment on a fresh address), then check `journalctl`/the terminal for the reason. If it never comes up, `npx bosbot logout && npx bosbot login` issues a fresh address.
 
 **Path B: the page never loads or shows a certificate error.** Caddy could not get a certificate. Check that the name resolves to the server and that ports 80 and 443 are open; `docker compose logs caddy` shows the reason.
 
@@ -334,9 +334,9 @@ Read this before putting anything else in front of the server.
 
 **A bot says the engine is not signed in.** Sign that engine in again on the server.
 
-**What does the server think it is?** `https://<address>/.well-known/openmausbot/environment` is public and shows its id, label, version and capabilities; `npx openmausbot status` prints the same on the server.
+**What does the server think it is?** `https://<address>/.well-known/openmausbot/environment` is public and shows its id, label, version and capabilities; `npx bosbot status` prints the same on the server.
 
-**Something else.** `journalctl -u openmausbot --since -10m` (or `docker compose logs omb --tail 100`) shows the server's startup lines. Paste them with your question in the community channel.
+**Something else.** `journalctl -u bosbot --since -10m` (or `docker compose logs omb --tail 100`) shows the server's startup lines. Paste them with your question in the community channel.
 
 ### Ubuntu 24.04 browser sandbox
 
@@ -357,13 +357,13 @@ placeholder, not a fixed Chrome release. Copy the whole directory, including its
 libraries, to a new location that the service user cannot modify:
 
 ```sh
-sudo install -d -o root -g root -m 0755 /opt/openmausbot-browser
-sudo cp -R /home/maus/.agent-browser/browsers/chrome-VERSION /opt/openmausbot-browser/
-sudo chown -R root:root /opt/openmausbot-browser/chrome-VERSION
-sudo chmod -R go-w /opt/openmausbot-browser/chrome-VERSION
+sudo install -d -o root -g root -m 0755 /opt/bosbot-browser
+sudo cp -R /home/maus/.agent-browser/browsers/chrome-VERSION /opt/bosbot-browser/
+sudo chown -R root:root /opt/bosbot-browser/chrome-VERSION
+sudo chmod -R go-w /opt/bosbot-browser/chrome-VERSION
 ```
 
-Save this as the root-owned `/etc/apparmor.d/openmausbot-chrome`, replacing
+Save this as the root-owned `/etc/apparmor.d/bosbot-chrome`, replacing
 `VERSION` with the same value. Keep the exact executable path: a wildcard under
 the writable service home would also allow replacement executables.
 
@@ -371,7 +371,7 @@ the writable service home would also allow replacement executables.
 abi <abi/4.0>,
 include <tunables/global>
 
-profile openmausbot-chrome /opt/openmausbot-browser/chrome-VERSION/chrome flags=(unconfined) {
+profile bosbot-chrome /opt/bosbot-browser/chrome-VERSION/chrome flags=(unconfined) {
   userns,
 }
 ```
@@ -379,15 +379,15 @@ profile openmausbot-chrome /opt/openmausbot-browser/chrome-VERSION/chrome flags=
 Load the profile:
 
 ```sh
-sudo apparmor_parser -r /etc/apparmor.d/openmausbot-chrome
+sudo apparmor_parser -r /etc/apparmor.d/bosbot-chrome
 ```
 
 Add the following line under `[Service]` in the systemd unit above, again using
 the exact installed version, then run `sudo systemctl daemon-reload` and
-`sudo systemctl restart openmausbot`:
+`sudo systemctl restart bosbot`:
 
 ```ini
-Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/openmausbot-browser/chrome-VERSION/chrome
+Environment=AGENT_BROWSER_EXECUTABLE_PATH=/opt/bosbot-browser/chrome-VERSION/chrome
 ```
 
 For a foreground server, export `AGENT_BROWSER_EXECUTABLE_PATH` to that same
@@ -395,3 +395,4 @@ path in the `maus` shell before starting `serve`. After a Chrome update, copy th
 new version and update both the AppArmor profile and service environment; the
 root-owned copy is not updated by the browser installer. Keep
 `kernel.apparmor_restrict_unprivileged_userns=1`.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service -->

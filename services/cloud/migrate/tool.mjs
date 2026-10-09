@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 import { createHash } from "node:crypto";
 import {
   readFile,
@@ -361,17 +362,17 @@ if (
   const [action, dir, workspace] = process.argv.slice(2);
   let c;
   try {
-    c = await connect(process.env.BOS_MIGRATION_URL);
+    c = await connect(compatEnv.BOS_MIGRATION_URL);
     const options = {};
-    if (process.env.BOS_MIGRATION_OBJECT_STORE)
-      options.objectStorePath = process.env.BOS_MIGRATION_OBJECT_STORE;
-    if (process.env.BOS_MIGRATION_PLAN)
+    if (compatEnv.BOS_MIGRATION_OBJECT_STORE)
+      options.objectStorePath = compatEnv.BOS_MIGRATION_OBJECT_STORE;
+    if (compatEnv.BOS_MIGRATION_PLAN)
       options.plan = JSON.parse(
-        await readFile(process.env.BOS_MIGRATION_PLAN, "utf8"),
+        await readFile(compatEnv.BOS_MIGRATION_PLAN, "utf8"),
       );
-    if (process.env.BOS_MIGRATION_ACCEPTANCE)
+    if (compatEnv.BOS_MIGRATION_ACCEPTANCE)
       options.acceptance = JSON.parse(
-        await readFile(process.env.BOS_MIGRATION_ACCEPTANCE, "utf8"),
+        await readFile(compatEnv.BOS_MIGRATION_ACCEPTANCE, "utf8"),
       );
     console.log(
       JSON.stringify(await migrate(c, dir, workspace, action, options)),

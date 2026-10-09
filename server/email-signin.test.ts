@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // End to end: a hosted server with a sign-in allow-list lets a remote browser
 // sign in with an emailed code from the control plane (stubbed here) and
 // ends up with the same cookie session a pairing code would give.
@@ -102,8 +103,8 @@ beforeAll(async () => {
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(PORT),
@@ -275,3 +276,4 @@ describe("sign in with your email on a hosted server", () => {
     } finally { stream.close(); writeFileSync(configPath, JSON.stringify(config)); }
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

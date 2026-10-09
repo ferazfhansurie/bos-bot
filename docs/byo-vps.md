@@ -1,9 +1,9 @@
 # Bring Your Own VPS
 
-OpenMausBot can turn a Linux server you already own into a bot's computer. The agent process stays on your
+BOS Bot can turn a Linux server you already own into a bot's computer. The agent process stays on your
 machine; Docker's own SSH transport reaches the daemon on the VPS, and each bot gets one managed, hardened
 Cua container there — a Linux desktop it can see and control. SSH is the only credential involved and the
-only surface exposed: OpenMausBot never opens a public port on the VPS, never stores your SSH key or
+only surface exposed: BOS Bot never opens a public port on the VPS, never stores your SSH key or
 passphrase, and never runs an agent remotely.
 
 ## What works
@@ -33,7 +33,7 @@ not one that also holds things you would not hand to the agent.
 
 ## The required SSH config alias
 
-OpenMausBot connects only through a named alias in your `~/.ssh/config` — you type the alias into
+BOS Bot connects only through a named alias in your `~/.ssh/config` — you type the alias into
 App Settings → Connections, nothing else. Every bot action becomes a `docker exec` over SSH, so the app
 supplies connection sharing and fail-fast timeouts itself: it runs each VPS command through its own
 `ssh_config` (under `~/.openmausbot/ssh/`) that includes your file first and fills in `ControlMaster`,
@@ -59,7 +59,7 @@ Host my-vps
 - `ServerAliveInterval`/`ServerAliveCountMax`/`ConnectTimeout` — a dropped VPS must fail fast (under a
   minute, and ten seconds to connect), not hang a turn waiting on a dead TCP session.
 
-**Host key first, by hand.** Connect once manually before pointing OpenMausBot at the alias:
+**Host key first, by hand.** Connect once manually before pointing BOS Bot at the alias:
 
 ```sh
 ssh my-vps true
@@ -70,12 +70,12 @@ host is unknown simply fails until you have done this once.
 
 ## Security
 
-- **No public ports.** The managed container is created with no published ports, and OpenMausBot refuses to
+- **No public ports.** The managed container is created with no published ports, and BOS Bot refuses to
   use a container that publishes any — the check runs before every attach, not just at creation. Live view
   reaches the container's private bridge address through SSH and is loopback-only on your computer.
-- **Firewall the VPS to SSH only**, ideally from your IP. Nothing OpenMausBot does needs any other inbound
+- **Firewall the VPS to SSH only**, ideally from your IP. Nothing BOS Bot does needs any other inbound
   port open, so anything else open is pure attack surface.
-- **Nothing sensitive is stored.** The only thing OpenMausBot persists is the alias name itself
+- **Nothing sensitive is stored.** The only thing BOS Bot persists is the alias name itself
   (`~/.openmausbot/config.json`); keys, passphrases, and agent state stay with SSH. The alias is also kept
   off paired phones — the companion reports configured-or-not, never the name.
 - The container itself runs hardened: capabilities dropped, private network/IPC/cgroup namespaces, no host
@@ -92,7 +92,7 @@ independent of the bot's display name.
 - **Start** only wakes an existing stopped container; it never creates one.
 - **Sleep** stops the container. The VPS stops spending CPU on it; the filesystem stays put.
 - **Remove** is yours, done by hand when a bot no longer needs the server:
-  `docker -H ssh://my-vps rm -f <container>`. OpenMausBot never deletes a container on its own.
+  `docker -H ssh://my-vps rm -f <container>`. BOS Bot never deletes a container on its own.
 
 What survives what: sleep/start preserves the container's filesystem; removal — including the recreate that
 follows a Cua image upgrade, since a container pinned to an old image is refused rather than reused — wipes
@@ -132,3 +132,4 @@ Work up the same path the app takes, cheapest signal first:
 4. **Read the status states.** The panel surfaces exactly what the server found, in check order: alias not
    configured → daemon unreachable → image missing → container missing / stopped → container unmanaged or
    unsafe (ports, mounts, hardening) → desktop not ready. Each message names the step to fix.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; container-identity: existing managed containers, labels and pinned image entry points remain recognized -->

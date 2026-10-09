@@ -53,9 +53,9 @@ export function agentUnit(spec: { node: string; script: string; operator: string
   const layout = spec.layout ?? fleetLayout();
   const strip = spec.script.endsWith(".ts") ? " --experimental-strip-types" : "";
   return [
-    "# Written by `openmausbot fleet init`. The operator workspace creates and manages workspaces through this.",
+    "# Written by `bosbot fleet init`. The operator workspace creates and manages workspaces through this.",
     "[Unit]",
-    "Description=OpenMausBot fleet agent",
+    "Description=BOS Bot fleet agent",
     "After=network-online.target",
     "Wants=network-online.target",
     "",
@@ -151,9 +151,9 @@ export function templateUnit(spec: { node: string; script: string; layout?: Flee
   const layout = spec.layout ?? fleetLayout();
   const strip = spec.script.endsWith(".ts") ? " --experimental-strip-types" : "";
   return [
-    "# Written by `openmausbot fleet init`. One unit for every workspace: %i is the slug.",
+    "# Written by `bosbot fleet init`. One unit for every workspace: %i is the slug.",
     "[Unit]",
-    "Description=OpenMausBot workspace %i",
+    "Description=BOS Bot workspace %i",
     "After=network-online.target openmausbot-fence.service",
     "Wants=network-online.target",
     "Requires=openmausbot-fence.service",
@@ -186,9 +186,9 @@ export function templateUnit(spec: { node: string; script: string; layout?: Flee
 
 export function fenceUnit(layout = fleetLayout()): string {
   return [
-    "# Written by `openmausbot fleet init`: keeps each workspace's loopback ports to its own user.",
+    "# Written by `bosbot fleet init`: keeps each workspace's loopback ports to its own user.",
     "[Unit]",
-    "Description=OpenMausBot per-workspace loopback fence",
+    "Description=BOS Bot per-workspace loopback fence",
     "",
     "[Service]",
     "Type=oneshot",
@@ -205,7 +205,7 @@ export function fenceUnit(layout = fleetLayout()): string {
  * loopback ports, so a shell-capable bot cannot reach a sibling's API.
  * Written whole each time, so `nft -f` is idempotent. */
 export function fenceRules(workspaces: FleetWorkspace[]): string {
-  const lines = ["#!/usr/sbin/nft -f", "# Written by `openmausbot fleet`; regenerated on every create, suspend, resume and delete.", "add table inet openmausbot", "flush table inet openmausbot", "table inet openmausbot {", "\tchain output {", "\t\ttype filter hook output priority 0; policy accept;"];
+  const lines = ["#!/usr/sbin/nft -f", "# Written by `bosbot fleet`; regenerated on every create, suspend, resume and delete.", "add table inet openmausbot", "flush table inet openmausbot", "table inet openmausbot {", "\tchain output {", "\t\ttype filter hook output priority 0; policy accept;"];
   for (const workspace of [...workspaces].sort((a, b) => a.slug.localeCompare(b.slug))) {
     if (workspace.status !== "running" && workspace.status !== "suspended" && workspace.status !== "retained" && !workspace.accountCreated) continue;
     lines.push(`\t\toif lo tcp dport { ${workspace.port}, ${workspace.webhookPort} } meta skuid != { ${fleetUser(workspace.slug)}, caddy, root } reject`);
@@ -487,14 +487,14 @@ export function deletePlan(input: { registry: FleetRegistry; slug: string; keepD
 export function upgradePlan(input: { registry: FleetRegistry }): FleetStep[] {
   const running = Object.values(input.registry.workspaces).filter((workspace) => workspace.status === "running").sort((a, b) => a.slug.localeCompare(b.slug));
   return [
-    { kind: "run", argv: ["npm", "install", "-g", "openmausbot@latest"], why: "install the release every workspace runs from" },
+    { kind: "run", argv: ["npm", "install", "-g", "bosbot@latest"], why: "install the release every workspace runs from" },
     ...running.map((workspace) => ({ kind: "run" as const, argv: ["systemctl", "restart", `openmausbot@${workspace.slug}.service`], why: `restart ${workspace.slug} on the new release` })),
     ...running.map((workspace) => ({ kind: "health" as const, url: `http://127.0.0.1:${workspace.port}/api/health`, why: `wait for ${workspace.slug}` })),
   ];
 }
 
 /** A workspace's sign-in list edited from outside, the same shape
- * `openmausbot access` writes; the server reads it live. */
+ * `bosbot access` writes; the server reads it live. */
 export function applySignIn(configText: string, action: "add" | "remove", email: string, chatOnly: boolean): { config: string; summary: string } {
   const entry = email.trim().toLowerCase();
   assertEmailOrDomain(entry);
@@ -556,3 +556,4 @@ export function describeSteps(steps: FleetStep[]): string[] {
   }
   return lines;
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; fleet-service: existing launchd/systemd units, fleet roots and firewall tables continue addressing the same installation; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

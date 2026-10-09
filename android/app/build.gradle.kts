@@ -30,8 +30,22 @@ private val keystoreProperties = Properties().apply {
     if (file.isFile) file.inputStream().use(::load)
 }
 
+private fun brandingSigningEnvironment(name: String): String? {
+    val table = groovy.json.JsonSlurper().parse(rootProject.file("../electron/branding-compat.json")) as Map<*, *>
+    for (pair in table["prefixAliases"] as List<*>) {
+        val prefixes = pair as List<*>
+        val current = prefixes[0] as String
+        val legacy = prefixes[1] as String
+        val prefix = if (name.startsWith(current)) current else if (name.startsWith(legacy)) legacy else continue
+        val suffix = name.removePrefix(prefix)
+        System.getenv(current + suffix)?.let { return it }
+        System.getenv(legacy + suffix)?.let { return it }
+    }
+    return System.getenv(name)
+}
+
 private fun signingMaterial(property: String, environment: String): String? =
-    (System.getenv(environment) ?: keystoreProperties.getProperty(property))
+    (brandingSigningEnvironment(environment) ?: keystoreProperties.getProperty(property))
         ?.takeIf(String::isNotBlank)
 
 private val storeFilePath = signingMaterial("storeFile", "OPENMAUSBOT_KEYSTORE_FILE")
@@ -275,3 +289,4 @@ dependencies {
     debugImplementation(composeBom)
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; android-install: the installed Android application id and sandbox are unchanged; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

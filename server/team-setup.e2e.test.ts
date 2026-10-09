@@ -171,3 +171,4 @@ it("Clive reviews multi-provider teams once, continues after each decision, and 
     await fixture.close(); await removeTempDir(gates);
   }
 }, 150_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

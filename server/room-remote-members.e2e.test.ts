@@ -166,3 +166,4 @@ test("a room on A can list B's shared bot, route mentions through the bridge, an
     await Promise.all([a?.close(), bClosed ? undefined : b.close()]);
   }
 }, 180_000);
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

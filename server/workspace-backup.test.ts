@@ -476,3 +476,4 @@ describe("encrypted full workspace backups", () => {
     expect(() => removeWorkspaceBackupJob(root, staged.id)).toThrow(/needed/);
   });
 });
+// branding compatibility (electron/branding-compat.json): lease: a new server must lock the same data-directory lease as an existing process

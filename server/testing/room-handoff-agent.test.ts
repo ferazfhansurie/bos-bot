@@ -42,3 +42,4 @@ it("reaps the MCP process even if it ignores graceful shutdown", () => withMcp(`
   const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
   expect(() => process.kill(pid, 0)).toThrow();
 }));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

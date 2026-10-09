@@ -1,3 +1,4 @@
+import { isBrandEnvName } from "../electron/branding-env.cjs";
 import { z } from "zod";
 
 import type { McpServerSpec, RemoteMcpSpec, StdioMcpSpec } from "./contracts.ts";
@@ -45,18 +46,18 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** An HTTP header field name: RFC 9110 token characters. */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/;
 
-/** Names used to route OpenMausBot's built-in MCP proxies and their ephemeral
+/** Names used to route BOS Bot's built-in MCP proxies and their ephemeral
  * capabilities. Codex exposes MCP env names through one app-server process;
  * a custom server must never request one of these names or it could redirect
  * a built-in proxy or receive that proxy's bearer. */
 export function isHarnessOwnedMcpEnvName(name: string): boolean {
-  return name === "ELECTRON_RUN_AS_NODE" || name.startsWith("OMB_") || name.startsWith("OGB_");
+  return name === "ELECTRON_RUN_AS_NODE" || isBrandEnvName(name) || name.startsWith("OGB_");
 }
 
 function environmentNameError(name: string): string | null {
   if (!ENV_NAME.test(name)) return `Environment variable “${name}” is not valid.`;
   if (isHarnessOwnedMcpEnvName(name)) {
-    return `Environment variable “${name}” is reserved by OpenMausBot.`;
+    return `Environment variable “${name}” is reserved by BOS Bot.`;
   }
   return null;
 }
@@ -130,7 +131,7 @@ export function mcpServerNameError(name: string): string | null {
   if (!MCP_NAME.test(name)) {
     return "Use 1–32 lowercase letters, numbers, underscores, or hyphens, starting with a letter.";
   }
-  if (RESERVED_MCP_NAMES.has(name)) return "That name is reserved by OpenMausBot.";
+  if (RESERVED_MCP_NAMES.has(name)) return "That name is reserved by BOS Bot.";
   return null;
 }
 
@@ -327,3 +328,4 @@ function slugMcpName(raw: string): string {
   const slug = raw.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
   return /^[a-z]/.test(slug) ? slug : slug ? `mcp-${slug}`.slice(0, 32) : "";
 }
+// branding compatibility (electron/branding-compat.json): engine-config: stored engine provider and built-in MCP identities remain reserved and cleanable

@@ -139,7 +139,7 @@ describe("preparing a harness response for a device", () => {
       for (const action of ["join", "screenshot"]) {
         const { status, text } = await device(`/api/bots/b1/computer/${action}`, "POST");
         expect(status).toBe(403);
-        expect(text).toContain("enable it in OpenMausBot");
+        expect(text).toContain("enable it in BOS Bot");
         expect(text).toContain("Settings → Remote access");
       }
     } finally {
@@ -326,3 +326,4 @@ describe("preparing a harness response for a device", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(audio);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

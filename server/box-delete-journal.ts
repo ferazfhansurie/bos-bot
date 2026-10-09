@@ -106,7 +106,7 @@ function stateError(detail: string, cause?: unknown): Error & { status: number }
   return Object.assign(
     new Error(
       `Cloud computer deletion is paused because its recovery state is ${detail}. `
-      + "Check the Box provider before repairing OpenMausBot's local state.",
+      + "Check the Box provider before repairing BOS Bot's local state.",
     ),
     { status: 503, cause },
   );
@@ -333,7 +333,7 @@ function acquireJournalLock(): JournalLockOwner {
       }
       const current = readLockOwner();
       const reaped = current !== null && !processIsAlive(current.pid) && reapDeadLock(current);
-      if (performance.now() >= deadline) throw stateError("locked by another OpenMausBot process");
+      if (performance.now() >= deadline) throw stateError("locked by another BOS Bot process");
       if (reaped) continue;
       Atomics.wait(lockWait, 0, 0, LOCK_RETRY_MS);
     }

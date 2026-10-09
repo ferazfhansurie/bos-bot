@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,7 +33,7 @@ const executables = [
   path.join(root, "release", "linux-unpacked", "bos-bot"),
   path.join(root, "release", appImage),
 ];
-if (process.env.OMB_SMOKE_INSTALLED_DEB === "1") {
+if (compatEnv.OMB_SMOKE_INSTALLED_DEB === "1") {
   executables.push("/opt/BOS Bot/bos-bot");
 }
 
@@ -45,7 +46,7 @@ for (const executable of executables) {
     {
       cwd: root,
       env: {
-        ...process.env,
+        ...compatEnv,
         XDG_RUNTIME_DIR: runtimeDirectory,
         OMB_SMOKE_BUNDLED_CUA: "1",
         OMB_SMOKE_EXECUTABLE: executable,
@@ -74,7 +75,7 @@ if (process.exitCode === undefined) {
     {
       cwd: root,
       env: {
-        ...process.env,
+        ...compatEnv,
         XDG_RUNTIME_DIR: runtimeDirectory,
         OMB_SMOKE_BUNDLED_CUA: "1",
         OMB_SMOKE_SIGNAL_SHUTDOWN: "1",
@@ -103,7 +104,7 @@ if (process.exitCode === undefined) {
     {
       cwd: root,
       env: {
-        ...process.env,
+        ...compatEnv,
         XDG_RUNTIME_DIR: runtimeDirectory,
         OMB_SMOKE_HARD_DEATH: "1",
         OMB_SMOKE_EXECUTABLE: path.join(root, "release", "linux-unpacked", "bos-bot"),
@@ -139,7 +140,7 @@ if (process.exitCode === undefined) for (const lane of [
     {
       cwd: root,
       env: {
-        ...process.env,
+        ...compatEnv,
         XDG_RUNTIME_DIR: runtimeDirectory,
         OMB_SMOKE_WAYLAND: lane.wayland ? "1" : "0",
         OMB_SMOKE_LINUX_CUA_BLOCKED: lane.blocked ? "1" : "0",
@@ -155,3 +156,4 @@ if (process.exitCode === undefined) for (const lane of [
   }
   await cleanupRuntime(runtimeDirectory);
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

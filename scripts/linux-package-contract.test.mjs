@@ -55,3 +55,4 @@ test('staging hooks preserve every live safety check through exact identity subs
   assert.equal(stage,live.replaceAll('/opt/BOS Bot','/opt/BOS Staging').replaceAll('bos-bot','bos-staging'));
  }
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Mid-turn steering, end to end: boots the real harness with the fake claude
 // CLI in `slow` mode (a gap after the tool result the way a real turn has
 // between model calls), sends a message WHILE the turn runs, and asserts
@@ -112,7 +113,7 @@ posixOnly("mid-turn steering e2e", () => {
     );
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
-      env: { ...(process.env.PATH ? { PATH: process.env.PATH } : {}), HOME: home, USERPROFILE: home, OMB_PORT: String(PORT) },
+      env: { ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}), HOME: home, USERPROFILE: home, OMB_PORT: String(PORT) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stderr!.on("data", (c) => (stderr += c));
@@ -725,3 +726,4 @@ posixOnly("mid-turn steering e2e", () => {
 
   }, 40_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

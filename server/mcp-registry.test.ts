@@ -30,11 +30,11 @@ describe("custom MCP registry", () => {
     for (const key of ["OMB_HARNESS_URL", "OGB_BOX_TOKEN", "ELECTRON_RUN_AS_NODE"]) {
       expect(parseStoredMcpServer("notes", { command: "notes-mcp", env: { [key]: "bad" } })).toEqual({
         ok: false,
-        error: `Environment variable “${key}” is reserved by OpenMausBot.`,
+        error: `Environment variable “${key}” is reserved by BOS Bot.`,
       });
       expect(parseMcpServerMutation("notes", { command: "notes-mcp", env: { [key]: "bad" } })).toEqual({
         ok: false,
-        error: `Environment variable “${key}” is reserved by OpenMausBot.`,
+        error: `Environment variable “${key}” is reserved by BOS Bot.`,
       });
     }
   });
@@ -173,3 +173,4 @@ describe("remote (url) MCP servers", () => {
     )).toEqual({ ok: false, error: "No saved value exists for Authorization." });
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Legacy routine agent-to-agent comms, end to end: boots the real harness
 // server with the grokAgent driver pointed at the fake ACP CLI, then has
 // bot A's "agent" reach bot B through the injected agents proxy (list_bots →
@@ -257,9 +258,9 @@ describe("legacy routine comms e2e (fake ACP fleet)", () => {
       // synchronous wait to end while the gated peer turn is still open
       OMB_ASK_BOT_TIMEOUT_MS: "8000",
     };
-    if (process.env.PATH) env.PATH = process.env.PATH;
+    if (compatEnv.PATH) env.PATH = compatEnv.PATH;
     // Without SystemRoot, winsock fails to initialize in the child.
-    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    if (compatEnv.SystemRoot) env.SystemRoot = compatEnv.SystemRoot;
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env,
@@ -1449,3 +1450,4 @@ describe("legacy routine comms e2e (fake ACP fleet)", () => {
     expect(reply.text).not.toContain("peer error");
   }, 45_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

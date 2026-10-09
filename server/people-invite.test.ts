@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // End to end: adding people to a hosted workspace. The owner bootstraps the
 // first admin from the box, that admin signs in with an emailed code (the
 // control plane is stubbed) and, through the same requests Settings → People
@@ -74,7 +75,7 @@ function send(path: string, init: CallInit, headers: Record<string, string>): Pr
 }
 
 /** The box itself: a loopback Host and Origin, nothing forwarded. This is the
- * owner, the way `openmausbot` on the server or a bootstrap script talks. */
+ * owner, the way `bosbot` on the server or a bootstrap script talks. */
 const owner = (path: string, init: CallInit = {}) => send(path, init, { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` });
 
 /** A browser somewhere else, reaching the server through its proxy. */
@@ -110,8 +111,8 @@ beforeAll(async () => {
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(port),
@@ -251,3 +252,4 @@ describe("adding people to a hosted workspace", () => {
     expect((await signIn("carol@acme.test.evil", "Impostor")).reply.status).toBe(403);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

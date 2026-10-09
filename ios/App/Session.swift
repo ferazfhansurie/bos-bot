@@ -401,15 +401,15 @@ final class Session: ObservableObject {
     private func restore() {
         restorePending = false
         do {
-            try OpenMausSharedConnectionStore.recoverRegistry()
+            try BosSharedConnectionStore.recoverRegistry()
         } catch {
             restorePending = true
             status = .offline("Unlock this iPhone to restore its saved Mac connection.")
             return
         }
-        registry = OpenMausSharedConnectionStore.loadRegistry()
+        registry = BosSharedConnectionStore.loadRegistry()
         // Upgrade existing pairings before a future uninstall loses preferences.
-        OpenMausSharedConnectionStore.saveRegistry(registry)
+        BosSharedConnectionStore.saveRegistry(registry)
         connections = registry.connections
         // The Share extension can target any saved computer, not only the
         // one active at launch. Move every inactive pre-extension token into
@@ -550,7 +550,7 @@ final class Session: ObservableObject {
                 )
             }
         } saveConnection: {
-            OpenMausSharedConnectionStore.saveRegistry(updatedRegistry)
+            BosSharedConnectionStore.saveRegistry(updatedRegistry)
         }
 
         stopActiveRuntime()
@@ -764,7 +764,7 @@ final class Session: ObservableObject {
     }
 
     private func persistRegistry() {
-        OpenMausSharedConnectionStore.saveRegistry(registry)
+        BosSharedConnectionStore.saveRegistry(registry)
     }
 
     private func persistActiveConnection(_ updated: Connection) {
@@ -3281,3 +3281,4 @@ extension CompanionState {
     }
 
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

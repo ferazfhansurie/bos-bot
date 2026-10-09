@@ -248,7 +248,7 @@ const __APP_VERSION__: string;
       toolsBrowserPartition?: string;
       /** Popup URLs from the Browser tool (denied natively, open as a tab). */
       onToolsBrowserPopup?(cb: (url: string) => void): () => void;
-      /** Opens a live desktop as a sandboxed window owned by OpenMausBot. */
+      /** Opens a live desktop as a sandboxed window owned by BOS Bot. */
       desktopViewer?: {
         open(url: string, title: string, contextId: string): Promise<boolean>;
         /** Closes the live-desktop window, but only when it belongs to this bot. */
@@ -383,3 +383,4 @@ export type AndroidDeviceInput =
     }
   | { type: "key"; key: string; width?: number; height?: number }
   | { type: "text"; text: string; width?: number; height?: number };
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support

@@ -346,3 +346,4 @@ describe("Copy link", () => {
     vi.unstubAllGlobals();
   });
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support

@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // `control-omb ui`: drive the real React renderer headlessly against the
 // isolated fake-engine fixture, through the agent-browser binary the harness
 // already pins (server/browser-engine-release.ts). One launch owns a fixture
@@ -36,7 +37,7 @@ export const UI_TOOLS_DIR = join(ROOT, ".omb-scratch", "verify-tools");
 export const UI_MUTATING = new Set(["click", "type", "press", "flag", "eval"]);
 
 const ENTRIES = {
-  threads: { entry: "/scripts/testing/threads-preview.tsx", route: "/__threads.html", title: "Isolated OpenMaus Chat" },
+  threads: { entry: "/scripts/testing/threads-preview.tsx", route: "/__threads.html", title: "Isolated Bos Chat" },
 } as const satisfies Record<string, Parameters<typeof mountPreview>[1]>;
 const FAKE_MODES = ["happy", "exit-early", "hang", "malformed", "stream", "not-logged-in", "slow", "background-result"];
 const SEEDED_BOT = "Pepper";
@@ -70,7 +71,7 @@ type SessionEnv = Pick<UiHandle, "home" | "session" | "chrome">;
 /** The exact environment `open` launched with. Later verbs must repeat it:
  * agent-browser relaunches the browser (losing the page) when launch
  * settings drift, and the daemon socket lives under this HOME. */
-export function sessionEnv(handle: SessionEnv, parentEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function sessionEnv(handle: SessionEnv, parentEnv: NodeJS.ProcessEnv = compatEnv): NodeJS.ProcessEnv {
   const temp = join(handle.home, "tmp");
   const env: NodeJS.ProcessEnv = {
     HOME: handle.home,
@@ -163,7 +164,7 @@ export function installedChrome(toolsDir = UI_TOOLS_DIR, platform: NodeJS.Platfo
  * pinned download, verified by size and SHA-256. Chrome follows the same rule
  * with AGENT_BROWSER_EXECUTABLE_PATH. Both land once under UI_TOOLS_DIR. */
 export async function ensureUiBrowser(
-  parentEnv: NodeJS.ProcessEnv = process.env,
+  parentEnv: NodeJS.ProcessEnv = compatEnv,
   log: (line: string) => void = () => {},
   toolsDir = UI_TOOLS_DIR,
 ): Promise<{ binary: string; chrome: string | null }> {
@@ -426,7 +427,7 @@ function parkUntilSignalOrExit(child: ChildProcess, stopRequested: () => boolean
  * fixture in that order. Only ever runs from the executable CLI. */
 export async function launchUi(
   args: string[],
-  parentEnv: NodeJS.ProcessEnv = process.env,
+  parentEnv: NodeJS.ProcessEnv = compatEnv,
   io: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream } = process,
   fixtureOptions: { boxFixtureApi?: string } = {},
 ): Promise<void> {
@@ -518,3 +519,4 @@ export async function launchUi(
     await fixture?.close();
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

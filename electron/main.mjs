@@ -1,8 +1,9 @@
+import { compatEnv } from "./branding-env.cjs";
 import { confirmRemoteFull } from "./remote-full-client.mjs";
 import { signInRemoteOwner, authorizeRemoteFull } from "./remote-full-owner-window.mjs";
 import "./staging-bootstrap.mjs";
 import { stagingServerEnvironment } from "./staging-environment.mjs";
-import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEME } from "./release-channel.mjs";
+import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEMES } from "./release-channel.mjs";
 import { attachLaunchSplash } from "./launch-splash.mjs";
 import { TOOLS_BROWSER_PARTITION, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach } from "./tools-browser.mjs";
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess } from "electron";
@@ -106,7 +107,7 @@ const { MIN_BOUNDS, normalizeUnreadCount, parseWindowState, resolveWindowState }
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 127.0.0.1 explicitly — vite binds IPv4; a bare "localhost" here can
 // resolve to ::1 and paint a black window
-const DEV_URL = process.env.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
+const DEV_URL = compatEnv.ELECTRON_START_URL ?? "http://127.0.0.1:5199";
 let SERVER_PORT = SERVER_PORTS[0];
 const APP_ICON = path.join(__dirname, "resources/app-icon.png");
 let desktopViewerWindow = null;
@@ -212,7 +213,7 @@ if (process.platform === "linux") {
 // harness server on a fallback port and splits data dirs in two. The loser
 // exits before any child or window exists; the winner surfaces itself.
 if (!app.requestSingleInstanceLock()) {
-  console.log("[desktop] OpenMausBot is already running — focusing that window");
+  console.log("[desktop] BOS Bot is already running — focusing that window");
   process.exit(0);
 }
 
@@ -332,7 +333,7 @@ const serverSupervisor = createServerSupervisor({
     slog("server recovery paused after repeated failures; quit and reopen to retry");
     dialog.showErrorBox(
       "The bot server stopped",
-      "Automatic recovery could not restart the background server. Quit and reopen OpenMausBot to try again. Interrupted chat turns were not resent.\n\n" +
+      "Automatic recovery could not restart the background server. Quit and reopen BOS Bot to try again. Interrupted chat turns were not resent.\n\n" +
         `Server log: ${path.join(LOG_DIR, "server.log")}`,
     );
   },
@@ -344,7 +345,7 @@ function desktopDataDir() {
   // then pass this exact resolved path to the utility child. server/config.ts
   // intentionally treats an empty OMB_DATA_DIR differently, so inheriting it
   // without normalization would lease one directory and write another.
-  return process.env.OMB_DATA_DIR || path.join(app.getPath("home"), ".bos-bot");
+  return compatEnv.OMB_DATA_DIR || path.join(app.getPath("home"), ".bos-bot");
 }
 
 async function stopUtilityServer(proc, timeoutMs = UTILITY_SERVER_STOP_TIMEOUT_MS) {
@@ -478,12 +479,12 @@ async function secureWorkspaceConfig() {
 // operator points BOS_COMPOSIO_BROKER_URL (or legacy OMB_COMPOSIO_BROKER_URL)
 // at their own Worker. A Composio project key in settings still works without it.
 function composioBrokerUrl() {
-  return resolveManagedComposioBrokerUrl(process.env);
+  return resolveManagedComposioBrokerUrl(compatEnv);
 }
 
 // The packaged app has no terminal: everything about the server child's life
-// goes to server.log in the OS log dir (~/Library/Logs/OpenMausBot on macOS,
-// Console.app-visible; %APPDATA%\OpenMausBot\logs on Windows), which is also
+// goes to server.log in the OS log dir (~/Library/Logs/BOS Bot on macOS,
+// Console.app-visible; %APPDATA%\BOS Bot\logs on Windows), which is also
 // why stdio is piped, not inherited — under a Finder/Explorer launch the
 // parent's stdio leads nowhere and a failed boot is otherwise undiagnosable.
 const LOG_DIR = app.getPath("logs");
@@ -916,7 +917,7 @@ function ensureCompanionAccountService() {
   if (companionAccountService) return companionAccountService;
   const baseURL = resolveCompanionControlPlaneURL({
     isPackaged: app.isPackaged,
-    environment: process.env,
+    environment: compatEnv,
   });
   let client = null;
   if (baseURL) {
@@ -1162,11 +1163,11 @@ async function runCompanyBackup(kind, input, scheduled = null) {
     const status = await localBackupStatus(proc);
     if (status.pendingRestore) {
       publishCompanyBackupState({ busy: false, pendingRestore: true });
-      throw new Error("Restart OpenMausBot to finish the pending restore before starting another backup operation.");
+      throw new Error("Restart BOS Bot to finish the pending restore before starting another backup operation.");
     }
     if (status.busy) throw companyBackupDeferred();
     const transfers = createCompanyBackups({
-      tempRoot: path.join(app.getPath("temp"), "openmaus-company-backups"),
+      tempRoot: path.join(app.getPath("temp"), "bos-company-backups"),
       localRequest: (route, init) => localBackupRequest(proc, route, init),
       portalRequest: (route, options) => client.requestBackup(route, { ...options, generation }),
       availableBytes: async temporary => {
@@ -1292,7 +1293,7 @@ async function startServerOn(port) {
   if (desktopShutdownStarted) return { proc: null, abort: true };
   const entry = path.join(process.resourcesPath, "server", "index.js");
   const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), secureCredentials, {
-    ...(STAGING ? stagingServerEnvironment(process.env, desktopDataDir()) : process.env),
+    ...(STAGING ? stagingServerEnvironment(compatEnv, desktopDataDir()) : compatEnv),
     // The desktop parent owns the durable data-directory lease. Each utility
     // server gets only a private capability that validates that same live
     // owner; fallback-port children must not race to replace the parent lease.
@@ -1450,8 +1451,8 @@ function buildErrorPage({ allPortsOccupied }) {
   const serverLogPath = path.join(LOG_DIR, "server.log");
   const serverLogHref = pathToFileURL(serverLogPath).href;
   const reason = allPortsOccupied
-    ? "Every OpenMausBot port answered health checks from another process — likely a second copy of the app, or another program on ports 8799–28799. Quit that program, then quit and reopen OpenMausBot."
-    : "The background server didn't come up in time — this is usually slow startup, not a port conflict. Quit and reopen OpenMausBot.";
+    ? "Every BOS Bot port answered health checks from another process — likely a second copy of the app, or another program on ports 8799–28799. Quit that program, then quit and reopen BOS Bot."
+    : "The background server didn't come up in time — this is usually slow startup, not a port conflict. Quit and reopen BOS Bot.";
   return (
     "data:text/html;charset=utf-8," +
     encodeURIComponent(
@@ -1514,7 +1515,7 @@ function desktopViewerErrorPage(message, retryUrl) {
 }
 
 function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
-  if (!owner || owner.isDestroyed()) throw new Error("The OpenMausBot window is unavailable");
+  if (!owner || owner.isDestroyed()) throw new Error("The BOS Bot window is unavailable");
   const url = desktopViewerUrl(rawUrl);
   const titleCandidate = Object.prototype.toString.call(rawTitle) === "[object String]" ? rawTitle.trim() : "";
   const title = titleCandidate ? titleCandidate.slice(0, 80) : "Live desktop";
@@ -1559,7 +1560,7 @@ function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
       sandbox: true,
       // Keep provider cookies away from the app renderer and discard them on
       // app exit. The secret-bearing URL is sufficient to authenticate.
-      partition: "openmausbot-desktop-viewer",
+      partition: "bosbot-desktop-viewer",
     },
   });
   desktopViewerWindow = viewer;
@@ -1699,7 +1700,7 @@ function openWelcomeWindow(rawUrl) {
 }
 
 function ensureDesktopWorkspace(owner) {
-  if (!owner || owner.isDestroyed()) throw new Error("The OpenMausBot window is unavailable");
+  if (!owner || owner.isDestroyed()) throw new Error("The BOS Bot window is unavailable");
   if (desktopWorkspaceManager) {
     if (desktopWorkspaceOwner !== owner) {
       throw new Error("The desktop workspace belongs to another app window");
@@ -1711,7 +1712,7 @@ function ensureDesktopWorkspace(owner) {
   const manager = createDesktopWorkspaceManager({
     owner,
     createView: (options) => new WebContentsView(options),
-    partitionPrefix: `openmausbot-desktop-workspace-${randomUUID()}`,
+    partitionPrefix: `bosbot-desktop-workspace-${randomUUID()}`,
     notify: (state) => {
       if (!owner.isDestroyed() && !owner.webContents.isDestroyed()) {
         owner.webContents.send("desktop-workspace:state", state);
@@ -2180,14 +2181,14 @@ function createWindow() {
   // Packaged CI smoke hook. It validates the real renderer/preload bridge and
   // same-origin embedded server, then follows the normal window-close path.
   // No debugging port or sandbox override is needed.
-  if (process.env.OMB_SMOKE_TEST === "1") {
+  if (compatEnv.OMB_SMOKE_TEST === "1") {
     win.webContents.once("did-finish-load", async () => {
       try {
         const result = await win.webContents.executeJavaScript(`
           (async () => {
             if (!window.ogb?.getCapabilities) throw new Error("desktop preload bridge is unavailable");
             let crashPromise = null;
-            if (${JSON.stringify(process.env.OMB_SMOKE_CUA === "1")}) {
+            if (${JSON.stringify(compatEnv.OMB_SMOKE_CUA === "1")}) {
               crashPromise = new Promise((resolve, reject) => {
                 const timeout = setTimeout(() => {
                   unsubscribe?.();
@@ -2243,7 +2244,7 @@ function createWindow() {
             `unexpected packaged renderer URL: ${result.location} (expected ${expectedLocation})`,
           );
         }
-        if (process.env.OMB_SMOKE_BUNDLED_CUA === "1") {
+        if (compatEnv.OMB_SMOKE_BUNDLED_CUA === "1") {
           const connection = await cuaReady;
           const expectedDriver = path.join(
             process.resourcesPath,
@@ -2260,7 +2261,7 @@ function createWindow() {
             driverSource: connection?.driver?.source,
             exactBundledPath,
             appImagePrivateStage:
-              Boolean(process.env.APPIMAGE) &&
+              Boolean(compatEnv.APPIMAGE) &&
               connection?.driver?.path !== expectedDriver &&
               path.basename(path.dirname(connection?.driver?.path ?? "")).startsWith(
                 APPIMAGE_CUA_STAGE_PREFIX,
@@ -2281,7 +2282,7 @@ function createWindow() {
       } catch (error) {
         console.error(`[smoke] renderer-failed ${error?.stack ?? error}`);
       } finally {
-        if (process.env.OMB_SMOKE_KEEP_OPEN !== "1") win.close();
+        if (compatEnv.OMB_SMOKE_KEEP_OPEN !== "1") win.close();
       }
     });
   }
@@ -2377,7 +2378,7 @@ ipcMain.handle("desktop:export-diagnostics", localOnly("desktop:export-diagnosti
   return result.filePath;
 }));
 
-// Bots hand users files as markdown links to paths inside the OpenMausBot
+// Bots hand users files as markdown links to paths inside the BOS Bot
 // home (workspaces, attachments). As plain anchors those resolved against the
 // page origin, so the click opened http://127.0.0.1:8799<path> in the default
 // browser and the server's SPA fallback answered with index.html — a second
@@ -2447,7 +2448,7 @@ ipcMain.handle("desktop:open-external", localOnly("desktop:open-external", async
 
 // The Box VNC viewer must be a top-level page for its token exchange. A
 // sandboxed modal BrowserWindow satisfies that requirement while keeping the
-// live desktop inside OpenMausBot instead of sending the person to a browser.
+// live desktop inside BOS Bot instead of sending the person to a browser.
 ipcMain.handle("desktop-viewer:open", localOnly("desktop-viewer:open", (event, rawUrl, title, contextId) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
   return openDesktopViewer(owner, rawUrl, title, contextId);
@@ -2814,7 +2815,7 @@ ipcMain.handle("desktop:capabilities", async (event) =>
   desktopCapabilities({
     remote: !senderIsLocal(event),
     platform: process.platform,
-    env: process.env,
+    env: compatEnv,
     packaged: app.isPackaged,
     localConnection: await cuaReady,
   }),
@@ -2890,7 +2891,7 @@ ipcMain.handle("approvals:set-trusted-mode", localOnly("approvals:set-trusted-mo
 async function broadcastDesktopCapabilities() {
   const localConnection = await cuaReady;
   const build = (remote) =>
-    desktopCapabilities({ remote, platform: process.platform, env: process.env, packaged: app.isPackaged, localConnection });
+    desktopCapabilities({ remote, platform: process.platform, env: compatEnv, packaged: app.isPackaged, localConnection });
   const local = build(false);
   let redacted = null;
   for (const window of BrowserWindow.getAllWindows()) {
@@ -2924,8 +2925,8 @@ app.whenReady().then(async () => {
       desktopDataDirLease = acquireDataDirLease(desktopDataDir(),
         STAGING ? {} : { legacyDataDir: path.join(app.getPath("home"), ".opengrokbot") });
       desktopHostLifecycle = createHostLifecycle(desktopDataDir(), {
-        recovery: process.env.OMB_RECOVERY_GENERATION || process.env.OMB_RECOVERY_TOKEN
-          ? { generation: process.env.OMB_RECOVERY_GENERATION, token: process.env.OMB_RECOVERY_TOKEN }
+        recovery: compatEnv.OMB_RECOVERY_GENERATION || compatEnv.OMB_RECOVERY_TOKEN
+          ? { generation: compatEnv.OMB_RECOVERY_GENERATION, token: compatEnv.OMB_RECOVERY_TOKEN }
           : null,
       });
       if (process.platform === "win32") {
@@ -2947,19 +2948,19 @@ app.whenReady().then(async () => {
         });
       }
       // The launch capability belongs to main; never pass it to providers.
-      delete process.env.OMB_RECOVERY_GENERATION;
-      delete process.env.OMB_RECOVERY_TOKEN;
+      delete compatEnv.OMB_RECOVERY_GENERATION;
+      delete compatEnv.OMB_RECOVERY_TOKEN;
     } catch (error) {
       dialog.showErrorBox(
-        "OpenMausBot could not start safely",
-        error?.message ?? "Another process is using this OpenMausBot data folder.",
+        "BOS Bot could not start safely",
+        error?.message ?? "Another process is using this BOS Bot data folder.",
       );
       app.quit();
       return;
     }
   }
   if (app.isPackaged) {
-    app.setAsDefaultProtocolClient(PACKAGE_SCHEME);
+    for (const scheme of PACKAGE_SCHEMES) app.setAsDefaultProtocolClient(scheme);
     // Chromium adds this capability below JavaScript, so renderer requests
     // can mutate the local harness while a Full-access shell using curl
     // cannot impersonate the person operating the desktop app.
@@ -3009,7 +3010,7 @@ app.whenReady().then(async () => {
 
         const capabilities = desktopCapabilities({
           platform: process.platform,
-          env: process.env,
+          env: compatEnv,
           packaged: app.isPackaged,
         });
         const captureHost =
@@ -3102,7 +3103,7 @@ app.whenReady().then(async () => {
   // The outbound connector never starts while computer sharing is off: no
   // poll loop, no registration, no grant replay from disk.
   void refreshSharedComputersAllowed().then((allowed) => { if (allowed) sharingController().start(); });
-  if (closeToTrayEnabled({ platform: process.platform, env: process.env })) {
+  if (closeToTrayEnabled({ platform: process.platform, env: compatEnv })) {
     closeToTray = createCloseToTray({
       createTray: () => new Tray(nativeImage.createFromPath(APP_ICON).resize({ width: 16, height: 16 })),
       buildMenu: (template) => Menu.buildFromTemplate(template),
@@ -3256,3 +3257,4 @@ function releaseDesktopDataDirLease() {
 // process hook covers app.exit()/fatal exits that bypass it.
 app.on("will-quit", releaseDesktopDataDirLease);
 process.once("exit", releaseDesktopDataDirLease);
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

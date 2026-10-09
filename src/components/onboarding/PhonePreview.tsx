@@ -50,7 +50,7 @@ export function PhonePreview({ className }: { className?: string }) {
           </div>
           {/* composer */}
           <div className="mx-2.5 mb-2.5 rounded-full border border-hairline/40 bg-inset px-2.5 py-1.5 text-[8px] text-ink-secondary">
-            Message {brand().name === "OpenMausBot" ? "Maus" : brand().name}
+            Message {brand().name === "BOS Bot" ? "Maus" : brand().name}
           </div>
         </div>
       </div>

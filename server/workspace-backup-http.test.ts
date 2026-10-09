@@ -165,3 +165,4 @@ it("accepts drafts between 1 and 2 MiB and enforces the preference cap in UTF-8 
   expect(archive.create).toHaveBeenCalledOnce();
   expect(readdirSync(join(dataDir, ".backups"))).toHaveLength(1);
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

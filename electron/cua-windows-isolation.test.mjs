@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +52,7 @@ describe("Windows owned CUA host", () => {
       mcpEnv: { CUA_DRIVER_EMBEDDED: "1", CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" },
     });
     expect(fixture.start.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
-    expect(fixture.hosts[0].binary).toBe(process.env.CUA_DRIVER_PATH);
+    expect(fixture.hosts[0].binary).toBe(compatEnv.CUA_DRIVER_PATH);
     await cua.stopCua();
     expect(fixture.hosts[0].stop).toHaveBeenCalledOnce();
     expect(fixture.hosts[0].uniffiDestroy).toHaveBeenCalledOnce();
@@ -102,3 +103,4 @@ describe("Windows owned CUA host", () => {
     expect(cua.resolveDriverBinary()).toBe(join(stage, "cua-driver.exe"));
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

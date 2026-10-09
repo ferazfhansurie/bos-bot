@@ -260,8 +260,8 @@ describe("naming", () => {
     expect(dnsLabel("Dr. Smith's computer")).toBe("Dr  Smith's computer");
     expect(dnsLabel("x".repeat(200)).length).toBeLessThanOrEqual(63);
     expect(Buffer.byteLength(dnsLabel("é".repeat(60)), "utf8")).toBeLessThanOrEqual(63);
-    expect(dnsLabel("")).toBe("OpenMausBot");
-    expect(dnsLabel("   ")).toBe("OpenMausBot");
+    expect(dnsLabel("")).toBe("BOS Bot");
+    expect(dnsLabel("   ")).toBe("BOS Bot");
   });
 
   it("claims a host name the system responder will not fight us for", () => {
@@ -714,3 +714,4 @@ describe("clampBytes", () => {
     expect(clampBytes("\u{1F600}", 3)).toBe("");
   });
 });
+// branding compatibility (electron/branding-compat.json): bonjour: old phone clients continue discovering the existing server service; paired-mdns-host: saved phone fallback routes continue resolving the same stable LAN hostname

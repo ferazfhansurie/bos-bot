@@ -30,4 +30,4 @@ Installation, release publication and automatic-update rollout are separate acti
 - Artifact hashes and signing identity
 - Explicit approval, install receipt, rollback and post-install results
 
-Public distribution requires a verified BOS updater channel, proper Mac distribution signing/notarization and an approved iOS distribution route. Existing `.github/workflows/*release*` files describe upstream OpenMausBot infrastructure; they have not been configured or triggered for this BOS release.
+Public distribution requires a verified BOS updater channel, proper Mac distribution signing/notarization and an approved iOS distribution route. Existing `.github/workflows/*release*` files describe upstream BOS Bot infrastructure; they have not been configured or triggered for this BOS release.

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,8 +78,8 @@ beforeAll(async () => {
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(port),
@@ -141,3 +142,4 @@ it("posts only a room turn's last text when it goes text, tool call, text", asyn
   expect(beePrompt).toContain("build is green");
   expect(beePrompt).not.toContain(COMMENTARY);
 }, 45_000);
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

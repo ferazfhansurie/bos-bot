@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Windows CUA smoke: prove the staged win32 SDK bundle loads through the same
 // env-var redirect the packaged app uses and that one embedded driver host can
 // start and stop. Mirrors electron/cua.mjs startEmbedded(); run it after
@@ -34,8 +35,8 @@ if (!bundledSource.includes("OPENMAUSBOT_CUA_SDK_LIBRARY")) {
   process.exit(1);
 }
 
-process.env.OPENMAUSBOT_CUA_SDK_LIBRARY = dll;
-process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED = "0";
+compatEnv.OPENMAUSBOT_CUA_SDK_LIBRARY = dll;
+compatEnv.CUA_DRIVER_RS_TELEMETRY_ENABLED = "0";
 const watchdog = setTimeout(() => {
   console.error("smoke:cua-win timed out");
   process.exit(1); // Closing the host also closes the daemon's parent-liveness pipe.
@@ -78,3 +79,4 @@ try {
   console.error("smoke:cua-win FAILED:", err);
   process.exit(1);
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

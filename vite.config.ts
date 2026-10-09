@@ -1,3 +1,4 @@
+import { compatEnv } from "./electron/branding-env.cjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
@@ -16,7 +17,7 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(version),
     // Cloud rooms (bos 2.0) stay off unless the build opts in.
-    __BOS_CLOUD_ROOMS__: JSON.stringify(process.env.BOS_CLOUD_ROOMS === "1"),
+    __BOS_CLOUD_ROOMS__: JSON.stringify(compatEnv.BOS_CLOUD_ROOMS === "1"),
   },
   test: {
     environment: "node",
@@ -46,7 +47,7 @@ export default defineConfig({
     // IPv4 explicitly — a bare ::1 bind makes localhost a coin-flip for
     // clients that resolve IPv4 first
     host: "127.0.0.1",
-    port: Number(process.env.OMB_UI_PORT) || 5199,
+    port: Number(compatEnv.OMB_UI_PORT) || 5199,
     // packager output lands inside the repo — its HTML files must never
     // trigger dev full-page reloads
     watch: {
@@ -58,21 +59,22 @@ export default defineConfig({
       // cloud rooms sign in against the local control-plane issuer on this
       // origin, so its session cookie is same-site with /v2. Listed before
       // /api because the first matching prefix wins.
-      ...(process.env.BOS_CLOUD_ROOMS === "1"
-        ? { "/api/auth": { target: process.env.CLOUD_ISSUER_URL || "http://127.0.0.1:8787" } }
+      ...(compatEnv.BOS_CLOUD_ROOMS === "1"
+        ? { "/api/auth": { target: compatEnv.CLOUD_ISSUER_URL || "http://127.0.0.1:8787" } }
         : {}),
       "/api": {
-        target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
+        target: `http://127.0.0.1:${compatEnv.OMB_PORT || compatEnv.OGB_PORT || 8799}`,
         // the built-in terminal speaks a websocket on /api/terminal
         ws: true,
       },
       "/.well-known/openmausbot/environment": {
-        target: `http://127.0.0.1:${process.env.OMB_PORT || process.env.OGB_PORT || 8799}`,
+        target: `http://127.0.0.1:${compatEnv.OMB_PORT || compatEnv.OGB_PORT || 8799}`,
       },
       // the local cloud room test server, only when cloud rooms are on
-      ...(process.env.BOS_CLOUD_ROOMS === "1"
-        ? { "/v2": { target: process.env.BOS_CLOUD_URL || "http://127.0.0.1:8790", ws: true } }
+      ...(compatEnv.BOS_CLOUD_ROOMS === "1"
+        ? { "/v2": { target: compatEnv.BOS_CLOUD_URL || "http://127.0.0.1:8790", ws: true } }
         : {}),
     },
   },
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

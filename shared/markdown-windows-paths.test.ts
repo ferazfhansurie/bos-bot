@@ -54,3 +54,4 @@ describe("Windows path destinations", () => {
     expect(result.text).toContain("C:\\Users\\Maus.openmausbot");
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

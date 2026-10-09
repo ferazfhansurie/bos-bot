@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // The opt-in computer-sharing feature ships OFF (features.sharedComputers,
 // server/config.ts). This file proves what "off" means on the wire: every
 // route of the family answers exactly the way a route this build never had
@@ -86,8 +87,8 @@ beforeAll(async () => {
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: join(SERVER_DIR, ".."),
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(PORT),
@@ -160,3 +161,4 @@ it("brings the whole surface back when features.sharedComputers is turned on", a
 
   expect(await descriptorCapabilities()).toMatchObject({ sharedComputers: true });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

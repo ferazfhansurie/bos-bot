@@ -1,4 +1,5 @@
-// Rung three of the hosting ladder: `openmausbot serve --tunnel` gives a
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
+// Rung three of the hosting ladder: `bosbot serve --tunnel` gives a
 // server a public HTTPS address (https://c-<id>.openmausbot.com) with no
 // domain, no proxy and no open port, through the same control plane and
 // Cloudflare tunnel the desktop app already uses. Headless, so:
@@ -155,7 +156,7 @@ export function createTunnelAccount(options: {
   fetchImpl?: typeof fetch;
   machineName?: string;
 }): TunnelAccount {
-  const env = options.env ?? process.env;
+  const env = options.env ?? compatEnv;
   const credentials = openTunnelCredentials(options.dataDir);
   const controlPlane = resolveCompanionControlPlaneURL({ environment: env });
   const client = controlPlane ? createControlPlaneClient({ baseURL: controlPlane, fetchImpl: options.fetchImpl }) : null;
@@ -175,13 +176,13 @@ export const FLEET_CREDENTIAL_ENV = "OMB_INSTALLATION_CREDENTIAL";
 /** A container the fleet starts carries its installation credential in the
  * environment. Nothing is written to disk and nobody types a code; the
  * address and connector token are fetched fresh at every start. */
-export function fleetCredential(env: NodeJS.ProcessEnv = process.env): string | null {
-  const value = env[FLEET_CREDENTIAL_ENV]?.trim();
+export function fleetCredential(env: NodeJS.ProcessEnv = compatEnv): string | null {
+  const value = compatEnvironment(env)[FLEET_CREDENTIAL_ENV]?.trim();
   return value ? value : null;
 }
 
 export async function fleetAccess(options: { credential: string; env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch }): Promise<ManagedTunnelAccess> {
-  const env = options.env ?? process.env;
+  const env = options.env ?? compatEnv;
   const controlPlane = resolveCompanionControlPlaneURL({ environment: env });
   if (!controlPlane) throw new Error(controlPlaneUnavailableReason(env));
   const client = createControlPlaneClient({ baseURL: controlPlane, fetchImpl: options.fetchImpl });
@@ -199,7 +200,7 @@ export async function fleetAccess(options: { credential: string; env?: NodeJS.Pr
 // ── cloudflared and the guardian: where they are, or how to get them ──────
 /** OMB_CLOUDFLARED_PATH, then the copy this command downloaded into the data
  * dir, then PATH. */
-export function cloudflaredPath(dataDir: string, env: NodeJS.ProcessEnv = process.env): string | null {
+export function cloudflaredPath(dataDir: string, env: NodeJS.ProcessEnv = compatEnv): string | null {
   return resolveCloudflaredBinary({ isPackaged: false, appPath: dataDir, environment: env });
 }
 
@@ -225,7 +226,7 @@ export async function ensureCloudflared(options: {
   log: (line: string) => void;
   here?: string;
 }): Promise<string> {
-  const env = options.env ?? process.env;
+  const env = options.env ?? compatEnv;
   const found = cloudflaredPath(options.dataDir, env);
   if (found) return found;
   options.log(`downloading cloudflared once (pinned version and digest, about 40 MB) into ${options.dataDir}`);
@@ -274,8 +275,8 @@ export function startTunnel(options: {
   fetchImpl?: typeof fetch;
   onState?: (state: ManagedTunnelState) => void;
 }): RunningTunnel {
-  const env = options.env ?? process.env;
-  const originPort = Number(env.OMB_TUNNEL_ORIGIN_PORT || MANAGED_COMPANION_ORIGIN_PORT);
+  const env = options.env ?? compatEnv;
+  const originPort = Number(compatEnvironment(env).OMB_TUNNEL_ORIGIN_PORT || MANAGED_COMPANION_ORIGIN_PORT);
   let current: ManagedTunnelState = { status: "stopped", ready: false };
   const tunnel = createManagedCompanionTunnel({
     binaryPath: options.binaryPath,
@@ -315,3 +316,4 @@ export function describeTunnelState(state: ManagedTunnelState, address: string):
       return `tunnel: ${state.error ?? state.status}`;
   }
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

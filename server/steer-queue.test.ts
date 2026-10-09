@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Queue-and-steer for busy 1:1 bots, at two levels:
 //
 // Unit: the steer-queue module against a fake store — queue bookkeeping,
@@ -598,9 +599,9 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
       USERPROFILE: home,
       OMB_PORT: String(PORT),
     };
-    if (process.env.PATH) env.PATH = process.env.PATH;
+    if (compatEnv.PATH) env.PATH = compatEnv.PATH;
     // Without SystemRoot, winsock fails to initialize in the child.
-    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    if (compatEnv.SystemRoot) env.SystemRoot = compatEnv.SystemRoot;
     child = spawn(process.execPath, ["--import", pathToFileURL(prelude).href, join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env,
@@ -786,3 +787,4 @@ describe("steer-queue e2e (fake ACP fleet)", () => {
     60_000,
   );
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

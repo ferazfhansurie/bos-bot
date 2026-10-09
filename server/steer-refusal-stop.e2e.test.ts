@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Explicit queued-send steer refusal, multi-busy room targeting, and Stop while a steer is
 // in flight. Real server, fake codex app-server. Started as the QA repro for
 // d02f037f: a refusal racing the end of the turn was recorded "outcome
@@ -134,7 +135,7 @@ ${steerNeedle}`);
     );
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
-      env: { ...(process.env.PATH ? { PATH: process.env.PATH } : {}), HOME: home, USERPROFILE: home, OMB_PORT: String(PORT) },
+      env: { ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}), HOME: home, USERPROFILE: home, OMB_PORT: String(PORT) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stderr!.on("data", (c) => (stderr += c));
@@ -397,3 +398,4 @@ ${steerNeedle}`);
     expect(existsSync(home)).toBe(true);
   }, 60_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

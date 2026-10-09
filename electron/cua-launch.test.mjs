@@ -250,3 +250,4 @@ it("does not add blocking subprocess calls to Electron runtime modules", () => {
     expect(matches.length, name).toBeLessThanOrEqual(allowed[name] ?? 0);
   }
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

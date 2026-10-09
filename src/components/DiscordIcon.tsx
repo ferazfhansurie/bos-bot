@@ -19,3 +19,4 @@ export function DiscordIcon({ size = 18, className }: { size?: number; className
     </svg>
   );
 }
+// branding compatibility (electron/branding-compat.json): deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

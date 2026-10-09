@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // White-label as config: a brand.json next to the data dir renames and recolours
 // the product for one deployment. The file is customer data (it never lives in
 // this repo); applying it is the `whitelabel` entitlement, so an unlicensed
@@ -57,7 +58,7 @@ export interface BrandStatus {
 }
 
 export function brandFile(): string {
-  return process.env.OMB_BRAND_FILE || join(DATA_DIR, "brand.json");
+  return compatEnv.OMB_BRAND_FILE || join(DATA_DIR, "brand.json");
 }
 
 /** Resolve the brand for this server right now. Never throws. */
@@ -86,3 +87,4 @@ export function describeBrand(status: BrandStatus): string {
   if (status.source === "file") return `brand: ${status.brand.name} (from ${status.file})`;
   return `brand: default${status.notice ? ` (${status.notice})` : ""}`;
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

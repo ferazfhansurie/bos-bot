@@ -67,7 +67,7 @@ const bridge = {
     ipcRenderer.on("desktop:capabilities-changed", handler);
     return () => ipcRenderer.removeListener("desktop:capabilities-changed", handler);
   },
-  /** Pair this desktop app to another OpenMausBot host. The bearer remains in
+  /** Pair this desktop app to another BOS Bot host. The bearer remains in
    * the main process and is never returned over this bridge. */
   remoteClient: {
     active: desktopRemoteClient,
@@ -326,3 +326,4 @@ contextBridge.exposeInMainWorld(
   "ogb",
   isLocalPage ? bridge : Object.fromEntries(Object.entries(bridge).filter(([key]) => REMOTE_SAFE.has(key))),
 );
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; browser-storage: existing localStorage and native attestation records keep their keys; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

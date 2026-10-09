@@ -23,7 +23,7 @@ export function callCapabilityHelp(
       case "desktop-app-required":
         return {
           label: "Calls need the macOS desktop app",
-          reason: "Open this workspace in OpenMausBot for macOS to make calls with on-device speech recognition.",
+          reason: "Open this workspace in BOS Bot for macOS to make calls with on-device speech recognition.",
         };
       case "unsupported-platform":
         return {
@@ -40,7 +40,7 @@ export function callCapabilityHelp(
   if (!speechServiceAvailable) {
     return {
       label: "The call service is unavailable",
-      reason: "The speech service is unavailable in this app build. Restart or update OpenMausBot.",
+      reason: "The speech service is unavailable in this app build. Restart or update BOS Bot.",
     };
   }
   return null;

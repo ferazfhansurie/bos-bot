@@ -214,3 +214,4 @@ export async function startFleetAgent(options: FleetAgentOptions, io: { log(line
   io.log(`fleet agent listening on ${options.socketPath}${options.group ? ` for ${options.group}` : ""}`);
   return server;
 }
+// branding compatibility (electron/branding-compat.json): fleet-service: existing launchd/systemd units, fleet roots and firewall tables continue addressing the same installation

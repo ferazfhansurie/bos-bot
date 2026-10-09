@@ -132,7 +132,7 @@ describe("Settings → Appearance", () => {
     expect(local).toContain("Workspace address or pairing link");
     expect(local).toContain("Name (optional)");
     expect(local).toContain("Your workspaces");
-    expect(local).toContain("npx openmausbot pair --label");
+    expect(local).toContain("npx bosbot pair --label");
     fixture.section = "general";
     vi.stubGlobal("window", { ogb: { workspaces: {} } });
     expect(render()).not.toContain('<option value="desktopWorkspaces"');

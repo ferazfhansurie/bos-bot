@@ -1,4 +1,4 @@
-# OpenMausBot companion (iOS)
+# BOS Bot companion (iOS)
 
 Your bots keep running on the laptop. This is the phone you watch them from,
 answer their approvals on, and send them the next thing.
@@ -27,7 +27,7 @@ still works, but the app does not send a reusable device token with a credential
 request over cleartext LAN HTTP.
 
 The app also installs an iOS Share extension. From any app's Share sheet, a
-person can choose **OpenMausBot**, review the paired computer and destination,
+person can choose **BOS Bot**, review the paired computer and destination,
 add a note, and send selected text, a link, images, or documents directly to a
 bot or room. The extension remembers the last destination per computer, but it
 never sends silently: the destination is always visible before confirmation.
@@ -127,7 +127,7 @@ The app needs Xcode. The `.xcodeproj` is generated rather than committed:
 
 ```sh
 brew install xcodegen
-cd ios && xcodegen generate && open OpenMausCompanion.xcodeproj
+cd ios && xcodegen generate && open BosBot.xcodeproj
 ```
 
 **Re-run `xcodegen generate` after pulling any change that adds a file to
@@ -251,5 +251,6 @@ back to the user's computer, not a second transcript store. Composer dictation i
 Task management, SQLite transcript search,
 transcript sharing, reactions, and edit/version controls use narrow companion
 routes and the computer remains the source of truth. Tailscale is supported
-through manual MagicDNS entry; it is not a dependency and OpenMausBot does not
+through manual MagicDNS entry; it is not a dependency and BOS Bot does not
 operate a cloud copy of local data.
+<!-- branding compatibility (electron/branding-compat.json): bonjour: old phone clients continue discovering the existing server service -->

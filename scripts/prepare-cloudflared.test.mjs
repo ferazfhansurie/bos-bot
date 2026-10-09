@@ -158,7 +158,7 @@ describe("pinned cloudflared packaging", () => {
     expect(parsePrepareCloudflaredArgs(["--current"])).toEqual({ current: true });
     expect(() => parsePrepareCloudflaredArgs(["--all"])).toThrow(/Usage:/);
     expect(() => parsePrepareCloudflaredArgs(["--current", "--current"])).toThrow(/Usage:/);
-    // `openmausbot serve --tunnel` stages into its data dir
+    // `bosbot serve --tunnel` stages into its data dir
     expect(parsePrepareCloudflaredArgs(["--current", "--root", "/srv/omb"])).toEqual({ current: true, root: "/srv/omb" });
     expect(() => parsePrepareCloudflaredArgs(["--root"])).toThrow(/Usage:/);
     expect(() => parsePrepareCloudflaredArgs(["--root", "/a", "--root", "/b"])).toThrow(/Usage:/);
@@ -219,3 +219,4 @@ describe("pinned cloudflared packaging", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

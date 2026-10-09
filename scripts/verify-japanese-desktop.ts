@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real visual acceptance in disposable Podman desktops, with no user data.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -5,19 +6,19 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const podman = process.env.OMB_VERIFY_PODMAN;
-const machine = process.env.OMB_VERIFY_MACHINE;
-const image = process.env.OMB_VERIFY_IMAGE;
+const podman = compatEnv.OMB_VERIFY_PODMAN;
+const machine = compatEnv.OMB_VERIFY_MACHINE;
+const image = compatEnv.OMB_VERIFY_IMAGE;
 if (!podman || !machine || !image) throw new Error("Set explicit OMB_VERIFY_PODMAN, OMB_VERIFY_MACHINE and OMB_VERIFY_IMAGE");
-const output = resolve(process.env.OMB_VERIFY_OUTPUT || ".omb-scratch/japanese");
+const output = resolve(compatEnv.OMB_VERIFY_OUTPUT || ".omb-scratch/japanese");
 mkdirSync(output, { recursive: true });
 writeFileSync(resolve(output, "receipt.json"), JSON.stringify({ capturesComplete: false, visualReview: "pending" }, null, 2));
 // Keep Podman's existing connection/SSH configuration, but isolate app imports.
-const podmanEnv = { ...process.env };
+const podmanEnv = { ...compatEnv };
 const runtime = mkdtempSync(resolve(output, "runtime-"));
-process.env.HOME = process.env.USERPROFILE = resolve(runtime, "home");
-process.env.OMB_DATA_DIR = resolve(runtime, "app-data");
-mkdirSync(process.env.HOME, { recursive: true });
+compatEnv.HOME = compatEnv.USERPROFILE = resolve(runtime, "home");
+compatEnv.OMB_DATA_DIR = resolve(runtime, "app-data");
+mkdirSync(compatEnv.HOME, { recursive: true });
 try {
   await capture();
 } finally {
@@ -76,3 +77,4 @@ async function capture() {
   }
   writeFileSync(resolve(output, "receipt.json"), JSON.stringify({ capturesComplete: true, visualReview: "pending", records }, null, 2));
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -62,3 +62,4 @@ export function saveSidebarWidth(width: number, storage?: Pick<Storage, "setItem
     // Private browsing and locked-down webviews may reject localStorage.
   }
 }
+// branding compatibility (electron/branding-compat.json): browser-storage: existing localStorage and native attestation records keep their keys

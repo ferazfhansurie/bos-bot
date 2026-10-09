@@ -10,12 +10,12 @@ if [ "$(podman info --format '{{.Host.Security.Rootless}}')" != true ]; then
 fi
 systemctl --user enable --now podman.socket >/dev/null
 if [ ! -f .env ]; then
-    data_root="$HOME/openmausbot/data"
+    data_root="$HOME/bosbot/data"
     mkdir -p "$data_root"
     chmod 700 "$data_root"
     umask 077
     cat > .env <<EOF
-COMPOSE_PROJECT_NAME=openmausbot-podman
+COMPOSE_PROJECT_NAME=bosbot-podman
 OMB_DATA_ROOT=$data_root
 PODMAN_SOCKET=/run/user/$(id -u)/podman/podman.sock
 OMB_PORT=8799
@@ -27,3 +27,4 @@ ENGINES=
 EOF
 fi
 echo 'Ready: edit .env, then PODMAN_COMPOSE_PROVIDER=podman-compose podman compose --env-file .env -f compose.yaml up -d --build'
+# branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

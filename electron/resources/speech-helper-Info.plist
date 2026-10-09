@@ -3,7 +3,7 @@
 <plist version="1.0">
   <dict>
     <key>CFBundleDisplayName</key>
-    <string>OpenMausBot</string>
+    <string>BOS Bot</string>
     <key>CFBundleExecutable</key>
     <string>speech-helper</string>
     <key>CFBundleIdentifier</key>
@@ -11,14 +11,15 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>OpenMausBot Speech</string>
+    <string>BOS Bot Speech</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSBackgroundOnly</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>OpenMausBot listens while you dictate messages or talk to a bot.</string>
+    <string>BOS Bot listens while you dictate messages or talk to a bot.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>OpenMausBot converts your speech into text during dictation and calls.</string>
+    <string>BOS Bot converts your speech into text during dictation and calls.</string>
   </dict>
 </plist>
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same -->

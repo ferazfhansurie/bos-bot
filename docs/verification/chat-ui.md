@@ -19,7 +19,7 @@ node --experimental-strip-types scripts/control-omb.ts ui launch \
 Run it in the foreground so Ctrl-C reaches it. On first use it downloads the
 pinned agent-browser release (size and SHA-256 verified) and its Chrome for
 Testing into `.omb-scratch/verify-tools` (gitignored); later launches reuse
-them. `OMB_AGENT_BROWSER_PATH` and `AGENT_BROWSER_EXECUTABLE_PATH` take
+them. `BOS_AGENT_BROWSER_PATH` and `AGENT_BROWSER_EXECUTABLE_PATH` take
 precedence when set. The launcher then starts the fixture, pins its language
 to English (`PATCH /api/config`), creates Pepper through the same `new-bot`
 path as [Chat turns](chat-turns.md), mounts the preview, opens it in a headless
@@ -28,7 +28,7 @@ session named `omb-ui-<port>`, and prints a handle:
 ```json
 {
   "ok": true,
-  "ui": "/tmp/openmausbot-verify-data-XXXXXX/ui.json",
+  "ui": "/tmp/bosbot-verify-data-XXXXXX/ui.json",
   "url": "http://127.0.0.1:PORT",
   "previewUrl": "http://127.0.0.1:5178/__threads.html",
   "botId": "…", "dataDir": "…", "logPath": "…"
@@ -43,7 +43,7 @@ a browser it did not launch.
 ## Drive
 
 ```sh
-H=/tmp/openmausbot-verify-data-XXXXXX/ui.json
+H=/tmp/bosbot-verify-data-XXXXXX/ui.json
 pnpm control:omb ui flag --ui $H --set features.showToolCalls=true --dry-run
 pnpm control:omb ui flag --ui $H --set features.showToolCalls=true
 pnpm control:omb ui snapshot --ui $H --interactive
@@ -90,7 +90,7 @@ What the screenshot looks like when the recipe passes (`evidence/chat-ui/chat-ui
 The permanent form of this recipe is `scripts/testing/control-omb-ui.e2e.test.ts`:
 
 ```sh
-OMB_UI_E2E=1 pnpm exec vitest run scripts/testing/control-omb-ui.e2e.test.ts
+BOS_UI_E2E=1 pnpm exec vitest run scripts/testing/control-omb-ui.e2e.test.ts
 ```
 
 The asserted recipe now also covers the floating **This run** card with a
@@ -128,7 +128,7 @@ redaction is best effort. Neither this log nor a successful command proves an
 unasserted user outcome.
 
 It runs when an agent-browser binary resolves and is skipped with a printed
-reason otherwise; `OMB_UI_E2E=1` forces the verified download. The `ui-smoke`
+reason otherwise; `BOS_UI_E2E=1` forces the verified download. The `ui-smoke`
 job in `.github/workflows/ci.yml` runs it on Ubuntu 24.04 and uploads the
 screenshot; it is not one of the required checks.
 
@@ -160,7 +160,7 @@ and back mid-turn and holds the resumed readout to the same claim stamp,
 keeping a second screenshot.
 
 ```sh
-OMB_UI_E2E=1 pnpm exec vitest run scripts/testing/thinking-timer-ui.e2e.test.ts
+BOS_UI_E2E=1 pnpm exec vitest run scripts/testing/thinking-timer-ui.e2e.test.ts
 ```
 
 ## Paused-frame stream buffering
@@ -175,7 +175,7 @@ the fallback timer could fire. This probes state; the current app's active-turn
 tail displays presence rather than partial text/reasoning.
 
 ```sh
-OMB_UI_E2E=1 pnpm exec vitest run scripts/testing/stream-buffer.e2e.test.ts
+BOS_UI_E2E=1 pnpm exec vitest run scripts/testing/stream-buffer.e2e.test.ts
 pnpm exec vitest run src/state/store.test.ts
 ```
 
@@ -190,7 +190,7 @@ browser and server and removing its temporary data.
 ## Bot setup and MCP access recipe
 
 `scripts/testing/bot-tools-ui.e2e.test.ts` uses the same full-app launcher and
-optional `OMB_UI_E2E=1` gate. It verifies profile-only role creation, closing
+optional `BOS_UI_E2E=1` gate. It verifies profile-only role creation, closing
 and reopening the dialog during a slow creation without duplicate submissions, recovery
 when the preset PATCH fails after creation, the composer’s Tools shortcut,
 optional setup ideas, Paste config importing disabled servers, refreshed
@@ -222,3 +222,4 @@ browser panel and updater UI, and anything `Show threads` gates (that toggle is
 renderer localStorage, outside `ui flag`). `AGENT_BROWSER_HEADLESS=1` is set
 for consistency with the harness, but agent-browser 0.37.0 is headless by
 default and reads `AGENT_BROWSER_HEADED` to opt out.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

@@ -305,7 +305,7 @@ describe.skipIf(process.platform === "win32")("Linux CUA opt-in and lifecycle", 
   });
 
   it("passes the exact packaged candidate and architecture into inspection", async () => {
-    const bundledDriverPath = "/opt/OpenMausBot/resources/cua-linux-x64/cua-driver";
+    const bundledDriverPath = "/opt/BOS Bot/resources/cua-linux-x64/cua-driver";
     const context = harness({
       runtimeOptions: { bundledDriverPath, arch: "x64" },
     });
@@ -692,3 +692,4 @@ describe("Linux CUA handshake validation", () => {
     expect(calls.at(-1)).toEqual({ method: "call", name: "health_report", args: {} });
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same

@@ -28,7 +28,7 @@ const ORIGIN_TARGET =
     ? {
         pid: 31337,
         socketPath:
-          "\\\\.\\pipe\\openmausbot-companion-origin-31337-12345678-1234-1234-1234-123456789abc",
+          "\\\\.\\pipe\\bosbot-companion-origin-31337-12345678-1234-1234-1234-123456789abc",
       }
     : { pid: 31337, socketPath: "/tmp/omb-companion-origin-test/origin.sock" };
 const temporaryDirectories = [];
@@ -159,7 +159,7 @@ describe("cloudflared binary resolution", () => {
     const resourcesPath = path.join(
       path.parse(process.cwd()).root,
       "Applications",
-      "OpenMausBot",
+      "BOS Bot",
       "Contents",
       "Resources",
     );
@@ -494,3 +494,4 @@ describe("fetchWithPublicDnsFallback", () => {
     expect(resolveAddress).not.toHaveBeenCalled();
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; health: legacy app health identity is checked by old clients and updater preflight; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

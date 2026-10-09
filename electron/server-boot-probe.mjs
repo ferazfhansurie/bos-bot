@@ -91,3 +91,4 @@ export async function pollServerIdentity({
     return { outcome: "ready", latencyMs: now() - startedAt };
   }
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,7 +39,7 @@ const fetchMock = vi.fn<typeof fetch>();
 beforeEach(() => {
   vi.resetAllMocks();
   // The shared test setup supplies a throwaway HOME before module imports.
-  dataDir = mkdtempSync(join(process.env.HOME!, "cli-pair-"));
+  dataDir = mkdtempSync(join(compatEnv.HOME!, "cli-pair-"));
   vi.stubEnv("OMB_DATA_DIR", dataDir);
   options = { command: "pair", port: 18451, dataDir, tailscale: false, tunnel: false, client: false, pair: true, json: false };
   publicUrl = advertisedOrigin;
@@ -159,3 +160,4 @@ describe("guided phone pairing address discovery", () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith("https://"))).toHaveLength(0);
   });
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

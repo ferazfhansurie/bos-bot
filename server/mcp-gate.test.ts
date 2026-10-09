@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // The gate as a real process, with a scripted upstream MCP server on the far
 // side: frames must survive the round trip untouched except for an oversized
 // tool result, which must come back trimmed with its full text on disk.
@@ -45,7 +46,7 @@ describe("mcp-gate", () => {
     gate = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", GATE], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
-        ...process.env,
+        ...compatEnv,
         OMB_GATE_NAME: "shop",
         OMB_GATE_SPILL_DIR: join(scratch, "spill"),
         OMB_GATE_UPSTREAM: JSON.stringify({
@@ -114,7 +115,7 @@ describe("mcp-gate", () => {
     const answer = await call("search_products");
     const text = answer.result.content[0].text;
     expect(text.length).toBeLessThan(full.length / 10);
-    expect(text).toContain("OpenMausBot trimmed this tool result");
+    expect(text).toContain("BOS Bot trimmed this tool result");
 
     const spillDir = join(scratch, "spill");
     const [file] = readdirSync(spillDir);
@@ -124,7 +125,7 @@ describe("mcp-gate", () => {
     // never trimming. It is there for the person and the harness.
     expect(text).not.toContain(join(spillDir, file));
 
-    const kept = JSON.parse(text.slice(0, text.indexOf("\n\n[OpenMausBot")));
+    const kept = JSON.parse(text.slice(0, text.indexOf("\n\n[BOS Bot")));
     expect(kept.products[0]).toEqual(products[0]);
     expect(kept.nextOffset).toBe("1");
   });
@@ -154,7 +155,7 @@ describe("mcp-gate", () => {
     await nextLine();
     // proven by the upstream having started at all: it reads SCRIPT from the
     // env the gate passed through. Gate-only keys must not reach it.
-    expect(JSON.parse(JSON.stringify(process.env.OMB_GATE_UPSTREAM ?? null))).toBe(null);
+    expect(JSON.parse(JSON.stringify(compatEnv.OMB_GATE_UPSTREAM ?? null))).toBe(null);
   });
 
   it("spawns an upstream named as a bare command on PATH", async () => {
@@ -169,7 +170,7 @@ describe("mcp-gate", () => {
     gate = spawn(process.execPath, ["--experimental-strip-types", "--no-warnings", GATE], {
       stdio: ["pipe", "pipe", "pipe"],
       env: {
-        ...process.env,
+        ...compatEnv,
         OMB_GATE_NAME: "shop",
         OMB_GATE_UPSTREAM: JSON.stringify({ command: "node", args: [upstreamJs], env: { SCRIPT: script } }),
       },
@@ -191,3 +192,4 @@ describe("mcp-gate", () => {
     expect(answer.result.someOtherShape.length).toBe(40_000);
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

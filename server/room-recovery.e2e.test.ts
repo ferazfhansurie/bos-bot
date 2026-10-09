@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -25,7 +26,7 @@ it("boots and reports an interrupted routine back to its source room", async () 
     }] }));
     const env: NodeJS.ProcessEnv = {};
     for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) {
-      if (process.env[key]) env[key] = process.env[key];
+      if (compatEnv[key]) env[key] = compatEnv[key];
     }
     Object.assign(env, {
       HOME: dataDir, USERPROFILE: dataDir, OMB_DATA_DIR: dataDir,
@@ -46,7 +47,7 @@ it("boots and reports an interrupted routine back to its source room", async () 
       return fetch(url + "/api/health").then(r => r.ok).catch(() => false);
     }, { timeout: 10_000, interval: 150 }).toBe(true);
     const { runs } = await request("/api/routines", {}, url) as any;
-    expect(runs[0]).toMatchObject({ status: "failed", error: "OpenMausBot restarted while this routine was running" });
+    expect(runs[0]).toMatchObject({ status: "failed", error: "BOS Bot restarted while this routine was running" });
     const { messages } = await request(`/api/threads/${channel.activeTaskId}/messages`, {}, url) as any;
     expect(messages.filter((m: any) => m.routineRun?.runId === "interrupted-room-run"))
       .toMatchObject([{ routineRun: { status: "failed" } }]);
@@ -60,3 +61,4 @@ it("boots and reports an interrupted routine back to its source room", async () 
     await fixture.close();
   }
 }, 30_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

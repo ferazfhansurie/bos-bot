@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../../electron/branding-env.cjs";
 // Transcript-replay driver for OpenRouter, Groq, Together, llama.cpp, and
 // other endpoints that speak the OpenAI chat-completions contract.
 import type { ModelCatalog, ProviderDriver } from "../contracts.ts";
@@ -6,7 +7,7 @@ import { createOpenAIChatRuntime } from "./openai-chat.ts";
 const DRIVER_KIND = "openai-compat";
 const DEFAULT_IDLE_TIMEOUT_MS = 180_000;
 const idleTimeoutMs = () => {
-  const raw = process.env.OPENMAUS_OPENAI_COMPAT_IDLE_TIMEOUT_MS;
+  const raw = compatEnv.OPENMAUS_OPENAI_COMPAT_IDLE_TIMEOUT_MS;
   if (!raw) return DEFAULT_IDLE_TIMEOUT_MS;
   const value = Number(raw);
   return Number.isSafeInteger(value) && value >= 1_000 && value <= 2_147_483_647 ? value : DEFAULT_IDLE_TIMEOUT_MS;
@@ -40,7 +41,7 @@ function isOpenRouterUrl(url: string): boolean {
 function decodeConfig(raw: unknown): OpenAICompatConfig {
   const config = (raw ?? {}) as Record<string, unknown>;
   if (config.tools !== undefined && typeof config.tools !== "boolean") throw new Error("tools must be a boolean");
-  const envUrl = process.env.OPENAI_COMPAT_URL;
+  const envUrl = compatEnv.OPENAI_COMPAT_URL;
   return {
     ...(config.tools !== undefined ? { tools: config.tools as boolean } : {}),
     url: (typeof config.url === "string" && config.url ? config.url : envUrl || "https://openrouter.ai/api/v1")
@@ -51,12 +52,12 @@ function decodeConfig(raw: unknown): OpenAICompatConfig {
     key: typeof config.key === "string" && config.key ? config.key : undefined,
     model: typeof config.model === "string" && config.model
       ? config.model
-      : process.env.OPENAI_COMPAT_MODEL || undefined,
+      : compatEnv.OPENAI_COMPAT_MODEL || undefined,
     // An explicit empty override disables inherited routing for an isolated
     // connection (CLI setup uses this). Absent still inherits the global pin.
     provider: typeof config.provider === "string"
       ? config.provider || undefined
-      : process.env.OPENAI_COMPAT_PROVIDER || undefined,
+      : compatEnv.OPENAI_COMPAT_PROVIDER || undefined,
   };
 }
 
@@ -88,10 +89,10 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
     const { config } = input;
     const apiKey =
       config.key ??
-      input.environment[config.apiKeyEnv] ??
+      compatEnvironment(input.environment)[config.apiKeyEnv] ??
       input.environment.OPENAI_COMPAT_API_KEY ??
-      process.env[config.apiKeyEnv] ??
-      process.env.OPENAI_COMPAT_API_KEY ??
+      compatEnv[config.apiKeyEnv] ??
+      compatEnv.OPENAI_COMPAT_API_KEY ??
       "";
     let catalog: ModelCatalog = config.model
       ? {
@@ -171,3 +172,4 @@ export const OpenAICompatDriver: ProviderDriver<OpenAICompatConfig> = {
     });
   },
 };
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

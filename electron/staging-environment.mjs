@@ -15,3 +15,4 @@ export function stagingServerEnvironment(environment, dataDir) {
     CODEX_HOME: path.join(home, ".codex"), CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     OMB_DISABLE_LEGACY_MIGRATION: "1" };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

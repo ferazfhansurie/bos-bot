@@ -125,3 +125,4 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         }
     }
 }
+// branding compatibility (electron/branding-compat.json): notification-identity: posted phone notification and service intents keep their identity; ios-notification-category: already delivered phone notifications retain their registered action categories

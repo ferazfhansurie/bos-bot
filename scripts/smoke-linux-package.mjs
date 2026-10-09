@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
@@ -14,11 +15,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const wayland = process.env.OMB_SMOKE_WAYLAND === "1";
-const hardDeath = process.env.OMB_SMOKE_HARD_DEATH === "1";
-const bundled = process.env.OMB_SMOKE_BUNDLED_CUA === "1";
-const sessionBlocked = process.env.OMB_SMOKE_LINUX_CUA_BLOCKED === "1";
-const signalShutdown = process.env.OMB_SMOKE_SIGNAL_SHUTDOWN === "1";
+const wayland = compatEnv.OMB_SMOKE_WAYLAND === "1";
+const hardDeath = compatEnv.OMB_SMOKE_HARD_DEATH === "1";
+const bundled = compatEnv.OMB_SMOKE_BUNDLED_CUA === "1";
+const sessionBlocked = compatEnv.OMB_SMOKE_LINUX_CUA_BLOCKED === "1";
+const signalShutdown = compatEnv.OMB_SMOKE_SIGNAL_SHUTDOWN === "1";
 if ([hardDeath, bundled, sessionBlocked].filter(Boolean).length > 1) {
   throw new Error("hard-death, bundled, and release-safety smoke modes are mutually exclusive");
 }
@@ -26,7 +27,7 @@ if (signalShutdown && !bundled) {
   throw new Error("signal-shutdown smoke requires the bundled runtime mode");
 }
 const executable = path.resolve(
-  process.env.OMB_SMOKE_EXECUTABLE ?? path.join(root, "release", "linux-unpacked", "bos-bot"),
+  compatEnv.OMB_SMOKE_EXECUTABLE ?? path.join(root, "release", "linux-unpacked", "bos-bot"),
 );
 if (!existsSync(executable)) throw new Error(`[smoke-linux-package] missing executable: ${executable}`);
 
@@ -186,7 +187,7 @@ if (!brokerAddress || typeof brokerAddress === "string") {
 }
 
 const desktopEnv = {
-  ...process.env,
+  ...compatEnv,
   HOME: home,
   XDG_CONFIG_HOME: xdgConfig,
   XDG_RUNTIME_DIR: xdgRuntime,
@@ -591,6 +592,7 @@ try {
   await stopProcess();
   for (const socket of brokerSockets) socket.destroy();
   await new Promise((resolve) => slowBroker.close(resolve));
-  if (process.env.OMB_KEEP_SMOKE_DIR !== "1") rmSync(sandbox, { recursive: true, force: true });
+  if (compatEnv.OMB_KEEP_SMOKE_DIR !== "1") rmSync(sandbox, { recursive: true, force: true });
   else console.log(`[smoke-linux-package] kept ${sandbox}`);
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

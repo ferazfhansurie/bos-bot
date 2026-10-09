@@ -98,7 +98,7 @@ describe("Settings full backups", () => {
     replace().props.onClick!(); await flush();
     expect(JSON.parse(fixture.api.mock.calls[3][1].body)).toEqual({ id: "stage-id", confirmation: "REPLACE" });
     expect(storage.get("omb-pending-workspace-restore")).toBe("stage-id");
-    expect(render().html).toContain("Fully quit OpenMausBot");
+    expect(render().html).toContain("Fully quit BOS Bot");
   });
 
   it("does not offer a replacement after failed password validation", async () => {
@@ -136,7 +136,7 @@ describe("Settings full backups", () => {
     fixture.api.mockResolvedValueOnce({ busy: true, pendingRestore: true });
     expect(render(true).html).not.toContain("Continue without restoring drafts");
     fixture.effects[0](); await flush();
-    expect(render(true).html).toContain("Fully quit OpenMausBot");
+    expect(render(true).html).toContain("Fully quit BOS Bot");
     expect(render(true).html).not.toContain("Continue without restoring drafts");
     expect(fixture.api).toHaveBeenCalledOnce(); expect(storage.get("omb-drafts")).toBe("old");
     fixture.values = [];
@@ -198,3 +198,4 @@ describe("Settings full backups", () => {
     expect(window.location.reload).not.toHaveBeenCalled();
   });
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

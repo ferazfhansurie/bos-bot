@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Near-side gate for the host CUA process. The descriptor and turn token
 // travel in environment variables, never command-line arguments or logs.
 import { runMcpBridge } from "./mcp-bridge.ts";
@@ -9,7 +10,7 @@ const {
   OMB_CONTROL_URL: url,
   OMB_CONTROL_TOKEN: token,
   ...childEnv
-} = process.env;
+} = compatEnv;
 
 let args: string[];
 try {
@@ -34,3 +35,4 @@ runMcpBridge({
   label: "Local Cua Driver",
   gate: { url: url!, token: token! },
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

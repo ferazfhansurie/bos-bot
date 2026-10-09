@@ -46,7 +46,7 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// credential envelope and checked against the authenticated bearer.
     public var companionDeviceId: String?
     /// Set when this connection was paired against the server's own sessions
-    /// (`openmausbot serve` / the Docker stack) rather than the desktop's
+    /// (`bosbot serve` / the Docker stack) rather than the desktop's
     /// companion sidecar: the bearer is an `omb_sess_` token whose scopes
     /// say what the app may administer. Absent on connections saved before
     /// servers could be paired directly.
@@ -96,7 +96,7 @@ public struct Connection: Codable, Hashable, Identifiable, Sendable {
     /// sections, change models, generate avatars, connect apps, open cloud
     /// desktops. A companion pairing always may — the sidecar applies its
     /// own policy to each request. A server session may only with the
-    /// `admin` scope (`openmausbot pair` grants it; `--client` does not);
+    /// `admin` scope (`bosbot pair` grants it; `--client` does not);
     /// the server answers 403 otherwise, so the app hides those controls
     /// instead of offering buttons that can only fail.
     public var canAdminister: Bool {
@@ -240,7 +240,7 @@ public struct PairingInvite: Equatable, Sendable {
 
     public static func parse(_ url: URL) -> PairingInvite? {
         if let server = parseServerLink(url) { return server }
-        guard url.scheme?.lowercased() == "openmausbot",
+        guard ["openmausbot", "bosbot"].contains(url.scheme?.lowercased() ?? ""),
               url.host?.lowercased() == "pair",
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { return nil }
@@ -319,7 +319,7 @@ public struct PairingInvite: Equatable, Sendable {
     }
 
     /// `https://host/pair#code=ABCD-EFGH-JKLM`: the link a server prints
-    /// (`openmausbot serve`, `openmausbot pair`, the Docker stack). It pairs
+    /// (`bosbot serve`, `bosbot pair`, the Docker stack). It pairs
     /// against the server's own sessions, not the companion sidecar. The code
     /// rides in the fragment, which never reaches a server in a request, and
     /// the server takes it with or without dashes.
@@ -942,7 +942,7 @@ public struct CompanionClient: Sendable {
     /// that exact route is the user's preferred, explicit choice; neither a
     /// pairing credential nor the later bearer token is sprayed onto the
     /// current wifi merely because a private address was once advertised.
-    /// Only the first response that identifies itself as OpenMausBot receives
+    /// Only the first response that identifies itself as BOS Bot receives
     /// the one-time pairing POST. The request id makes that redemption safely
     /// replayable by newer desktop builds if its response is lost in transit.
     public static func pairFirstReachable(
@@ -2119,3 +2119,4 @@ public struct CompanionClient: Sendable {
         return eventStream(request: streamRequest, session: streamingSession ?? Self.streaming)
     }
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight

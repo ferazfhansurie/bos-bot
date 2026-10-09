@@ -185,3 +185,4 @@ test("an answer that arrives while the pid is still unknown is a foreign owner",
   });
   assert.equal(outcome.outcome, "foreign-owner");
 });
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

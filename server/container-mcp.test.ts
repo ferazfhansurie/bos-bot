@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,7 +20,7 @@ const posixOnly = describe.skipIf(process.platform === "win32");
 
 posixOnly("Local VM Cua MCP bridge", () => {
   it("passes MCP bytes unchanged to cua-driver mcp over the container runtime", async () => {
-    const bin = await mkdtemp(join(tmpdir(), "openmausbot-container-mcp-"));
+    const bin = await mkdtemp(join(tmpdir(), "bosbot-container-mcp-"));
     temporary.push(bin);
     const fakeDocker = join(bin, "docker");
     await writeFile(
@@ -35,7 +36,7 @@ posixOnly("Local VM Cua MCP bridge", () => {
         process.execPath,
         [fileURLToPath(new URL("./container-mcp.ts", import.meta.url)), "docker", CONTAINER, CUA_SOCKET],
         {
-          env: { ...process.env, OMB_EXTRA_PATH: bin, NODE_NO_WARNINGS: "1" },
+          env: { ...compatEnv, OMB_EXTRA_PATH: bin, NODE_NO_WARNINGS: "1" },
           stdio: ["pipe", "pipe", "pipe"],
         },
       );
@@ -58,7 +59,7 @@ posixOnly("Local VM Cua MCP bridge", () => {
   });
 
   it("answers ping locally so the bundled cua-driver is not invoked", async () => {
-    const bin = await mkdtemp(join(tmpdir(), "openmausbot-container-mcp-ping-"));
+    const bin = await mkdtemp(join(tmpdir(), "bosbot-container-mcp-ping-"));
     temporary.push(bin);
     const fakeDocker = join(bin, "docker");
     await writeFile(
@@ -84,7 +85,7 @@ posixOnly("Local VM Cua MCP bridge", () => {
         process.execPath,
         [fileURLToPath(new URL("./container-mcp.ts", import.meta.url)), "docker", CONTAINER, CUA_SOCKET],
         {
-          env: { ...process.env, OMB_EXTRA_PATH: bin, NODE_NO_WARNINGS: "1" },
+          env: { ...compatEnv, OMB_EXTRA_PATH: bin, NODE_NO_WARNINGS: "1" },
           stdio: ["pipe", "pipe", "pipe"],
         },
       );
@@ -111,3 +112,4 @@ posixOnly("Local VM Cua MCP bridge", () => {
     );
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

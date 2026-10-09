@@ -53,7 +53,7 @@ async function canonicalAuthResponse(response: Response): Promise<Response> {
 
   // Better Auth error bodies are dependency-owned and may contain prose or
   // change shape between releases (its rate limiter currently returns only a
-  // `message`). Publish only OpenMausBot's stable, lowercase error contract.
+  // `message`). Publish only BOS Bot's stable, lowercase error contract.
   const payload: unknown = await response.json().catch(() => null);
   const parsed = betterAuthErrorSchema.safeParse(payload);
   const dependencyCode = parsed.success ? parsed.data.code : "";
@@ -194,3 +194,4 @@ export function createWorker(cloudflareFetch: CloudflareFetch = fetch, authFacto
 }
 
 export default createWorker();
+// branding compatibility (electron/branding-compat.json): deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

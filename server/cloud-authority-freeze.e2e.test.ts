@@ -121,3 +121,4 @@ it("defers a scheduled routine while frozen and runs it after the flag is remove
     await fixture.close();
   }
 }, 90_000);
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

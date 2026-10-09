@@ -1,12 +1,13 @@
 #!/usr/bin/env node
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Offline UI fixture only. Explicit opt-in and a disposable HOME are required.
 // Approve by creating HOME/.omb-fake-codex-login-approved; this never opens a
 // network connection or creates real provider credentials.
 import { existsSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
-const home = process.env.HOME;
-if (process.env.OMB_DEVICE_AUTH_FIXTURE !== "1" || !home || !isAbsolute(home)) {
+const home = compatEnv.HOME;
+if (compatEnv.OMB_DEVICE_AUTH_FIXTURE !== "1" || !home || !isAbsolute(home)) {
   process.stderr.write("This fake CLI requires OMB_DEVICE_AUTH_FIXTURE=1 and an isolated HOME.\n");
   process.exit(2);
 }
@@ -31,11 +32,12 @@ if (args === "--version") {
     process.stderr.write("Successfully logged in\n");
   }, 100);
 } else if (process.argv[2] === "app-server") {
-  process.env.FAKE_CODEX_ASTRA = "1";
-  process.env.FAKE_CODEX_MODE = "happy";
-  delete process.env.FAKE_CODEX_DUMP;
+  compatEnv.FAKE_CODEX_ASTRA = "1";
+  compatEnv.FAKE_CODEX_MODE = "happy";
+  delete compatEnv.FAKE_CODEX_DUMP;
   await import("./fake-codex-app-server.ts");
 } else {
   process.stderr.write("Unsupported offline fixture command.\n");
   process.exitCode = 2;
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

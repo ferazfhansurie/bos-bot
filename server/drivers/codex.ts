@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../../electron/branding-env.cjs";
 // Codex driver — upstream CodexDriver skeleton over agentcal's
 // drivers/codex.js runtime: the official `codex` CLI headless over its
 // app-server JSON-RPC protocol (newline-delimited JSON on stdio).
@@ -84,7 +85,7 @@ export function codexPredatesAstra(version: string): boolean {
 
 /** Ask the configured executable to update itself. This matters when the user
  * selected a non-PATH Codex: installing a second global copy would leave
- * OpenMausBot pointing at the old binary. */
+ * BOS Bot pointing at the old binary. */
 export function codexUpdateCommand(cli: string, platform: NodeJS.Platform = process.platform): string {
   if (cli === "codex") return "codex update";
   const trimmed = cli.trim();
@@ -163,7 +164,7 @@ export function managedCodexArgs(config: NonNullable<CodexConfig["managed"]>): s
 
 const QUESTION_TIMEOUT_NOTE = "No answer was given — use your best judgment.";
 const DENY_TIMEOUT_NOTE =
-  "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+  "BOS Bot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 
 const skippedSseServers = new Set<string>();
 function noteSkippedSseServer(name: string): void {
@@ -558,7 +559,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const { instanceId, config } = input;
     const childEnv = (): Record<string, string | undefined> => {
       const env: Record<string, string | undefined> = {
-        ...process.env,
+        ...compatEnv,
         ...input.environment,
         PATH: augmentedPath(),
         NPM_CONFIG_LOGLEVEL: "error",
@@ -737,7 +738,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (!config.managed.models.includes(turn.model)) {
           throw new Error("Company model access is unavailable: " + turn.model + " is not approved for your organization. Reconnect your organization; personal billing will not be used.");
         }
-        if (!input.environment.OPENMAUSBOT_COMPANY_API_KEY) {
+        if (!compatEnvironment(input.environment).OPENMAUSBOT_COMPANY_API_KEY) {
           throw new Error("Company model access is unavailable: OPENMAUSBOT_COMPANY_API_KEY is missing. Reconnect your organization; personal billing will not be used.");
         }
         if (!input.environment.CODEX_HOME) {
@@ -770,7 +771,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const turnId = newId();
       // a retry relaunches the whole app-server; the backoff is scaled down in
       // tests so a fake's transient failures don't stall real seconds
-      const retryScale = Number(process.env.FAKE_CODEX_RETRY_SCALE ?? "1");
+      const retryScale = Number(compatEnv.FAKE_CODEX_RETRY_SCALE ?? "1");
 
       const launchAttempt = async (attempt: number): Promise<void> => {
         const env = childEnv();
@@ -921,7 +922,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (!state.settled && !interruptRequested && codexThreadId && codexTurnId &&
             child.exitCode === null && child.signalCode === null) {
           interruptRequested = true;
-          const graceMs = Math.max(1, Number(process.env.FAKE_CODEX_INTERRUPT_GRACE_MS ?? 750) || 750);
+          const graceMs = Math.max(1, Number(compatEnv.FAKE_CODEX_INTERRUPT_GRACE_MS ?? 750) || 750);
           try {
             await request("turn/interrupt", { threadId: codexThreadId, turnId: codexTurnId }, graceMs);
           } catch {
@@ -941,7 +942,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const settle = async (ok: boolean, stopReason: string | null) => {
         if (state.settled) return;
         state.settled = true;
-        for (const finish of Array.from(asks.values())) finish("deny", "OpenMausBot: the turn ended", "system");
+        for (const finish of Array.from(asks.values())) finish("deny", "BOS Bot: the turn ended", "system");
         // A steer the app-server has not answered yet still gets its answer:
         // the server replies to every request, and a steer that arrived after
         // the turn ended comes back as an explicit error — provably not taken,
@@ -956,7 +957,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           p.reject(new Error("turn settled"));
         }
         if (answering.length) {
-          const graceMs = Math.max(1, Number(process.env.FAKE_CODEX_STEER_SETTLE_GRACE_MS ?? 1_000) || 1_000);
+          const graceMs = Math.max(1, Number(compatEnv.FAKE_CODEX_STEER_SETTLE_GRACE_MS ?? 1_000) || 1_000);
           const deadline = Date.now() + graceMs;
           while (answering.some(([id]) => rpcPending.has(id)) && Date.now() < deadline &&
             !stopRequested && child.exitCode === null && child.signalCode === null) {
@@ -988,7 +989,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (state.settled || abandoned || stopRequested || !codexThreadId || !codexTurnId) return "refused";
         if (child.exitCode !== null || child.signalCode !== null) return "refused";
         try {
-          const steerTimeoutMs = Math.max(1, Number(process.env.FAKE_CODEX_STEER_TIMEOUT_MS ?? 10_000) || 10_000);
+          const steerTimeoutMs = Math.max(1, Number(compatEnv.FAKE_CODEX_STEER_TIMEOUT_MS ?? 10_000) || 10_000);
           await request("turn/steer", {
             threadId: codexThreadId,
             // Verified with codex-cli 0.155.1's generated v2/TurnSteerParams
@@ -1489,7 +1490,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // nothing streamed yet, and never for auth/shape errors or interrupts
       try {
         await request("initialize", {
-          clientInfo: { name: "openmausbot", version: "1" },
+          clientInfo: { name: "bosbot", version: "1" },
           // Named permission profiles are an experimental app-server field in
           // Codex 0.151. Negotiate them explicitly; older servers ignore this
           // capability and remain on the legacy Custom fallback below.
@@ -1522,7 +1523,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           approvalParams = namedApprovalParams(approvalMode);
         }
         // Codex's `never` means "do not ask to escalate", not "grant every
-        // requested permission". Only the user's explicit OpenMausBot Full
+        // requested permission". Only the user's explicit BOS Bot Full
         // mode may synthesize approvals; Custom must preserve the sandbox
         // boundary from config.toml (for example never + read-only).
         autoAcceptPermissions = approvalMode === "full";
@@ -1687,7 +1688,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       );
     });
     if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
-    if (config.managed) return { state: "available", version, authenticated: Boolean(input.environment.OPENMAUSBOT_COMPANY_API_KEY && input.environment.CODEX_HOME), billing: "metered" };
+    if (config.managed) return { state: "available", version, authenticated: Boolean(compatEnvironment(input.environment).OPENMAUSBOT_COMPANY_API_KEY && input.environment.CODEX_HOME), billing: "metered" };
     const authenticated = await new Promise<boolean>((resolve) => {
       execCli(config.cli, ["login", "status"], { timeout: 8000, env }, (err, stdout, stderr) =>
         resolve(!err && /^logged in\b/im.test(`${stdout}\n${stderr ?? ""}`)),
@@ -1772,3 +1773,4 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
   };
 },
 };
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; engine-config: stored engine provider and built-in MCP identities remain reserved and cleanable; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

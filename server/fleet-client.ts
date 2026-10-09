@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // The operator workspace's side of the fleet agent: one request over the
 // agent's Unix socket, JSON in and out. The socket's permissions are the
 // whole authorisation; this process can open it only because the operator
@@ -10,8 +11,8 @@ export interface FleetReply {
   body: unknown;
 }
 
-export function fleetSocketPath(env: NodeJS.ProcessEnv = process.env): string {
-  return env.OMB_FLEET_SOCKET?.trim() || "/run/openmausbot/fleet.sock";
+export function fleetSocketPath(env: NodeJS.ProcessEnv = compatEnv): string {
+  return compatEnvironment(env).OMB_FLEET_SOCKET?.trim() || "/run/bosbot/fleet.sock";
 }
 
 /** Whether this server can reach a fleet agent at all. */
@@ -38,12 +39,13 @@ export function fleetRequest(socketPath: string, method: string, path: string, b
     req.on("timeout", () => { req.destroy(new Error("the fleet agent did not answer in time")); });
     req.on("error", (error: NodeJS.ErrnoException) => {
       reject(new Error(error.code === "ENOENT" || error.code === "ECONNREFUSED"
-        ? "no fleet agent on this server: run `openmausbot fleet init --domain … --operator <this user>` as root"
+        ? "no fleet agent on this server: run `bosbot fleet init --domain … --operator <this user>` as root"
         : error.code === "EACCES"
-          ? "this workspace's user may not open the fleet socket: re-run `openmausbot fleet init` with --operator set to it"
+          ? "this workspace's user may not open the fleet socket: re-run `bosbot fleet init` with --operator set to it"
           : `fleet agent: ${error.message}`));
     });
     if (payload) req.write(payload);
     req.end();
   });
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

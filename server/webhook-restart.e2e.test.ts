@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -28,7 +29,7 @@ it("does not run a delivery twice after a process dies between the queue and ing
 
     const env: NodeJS.ProcessEnv = {};
     for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) {
-      if (process.env[key]) env[key] = process.env[key];
+      if (compatEnv[key]) env[key] = compatEnv[key];
     }
     Object.assign(env, {
       HOME: dataDir, USERPROFILE: dataDir, OMB_DATA_DIR: dataDir,
@@ -90,3 +91,4 @@ it("does not run a delivery twice after a process dies between the queue and ing
     await fixture.close();
   }
 }, 45_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

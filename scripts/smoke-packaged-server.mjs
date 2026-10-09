@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Prove the built server actually STARTS with no node_modules in reach.
 //
 // 0.1.24 shipped a server that died on every launch with
@@ -43,7 +44,7 @@ const port = 21000 + Math.floor(Math.random() * 9000);
 // OMB_SMOKE_DIST lets the release workflow aim this at a packaged app's
 // Resources/server tree instead of the repo build.
 try {
-  cpSync(process.env.OMB_SMOKE_DIST ?? join(root, "dist-server"), join(staging, "server"), { recursive: true });
+  cpSync(compatEnv.OMB_SMOKE_DIST ?? join(root, "dist-server"), join(staging, "server"), { recursive: true });
   if (browserBundle) cpSync(resolve(browserBundle), join(staging, "browser-engine"), { recursive: true });
 } catch (error) {
   for (const directory of [staging, home]) rmSync(directory, { recursive: true, force: true });
@@ -51,8 +52,8 @@ try {
 }
 
 const fixtureEnv = {
-  ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-  ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+  ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+  ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
   HOME: home,
   USERPROFILE: home,
   APPDATA: join(home, "AppData", "Roaming"),
@@ -65,7 +66,7 @@ const fixtureEnv = {
   ...(browserBundle ? {
     OMB_RESOURCES_PATH: staging,
     // A global engine on the developer's PATH must not make this test pass.
-    PATH: process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32") : "/usr/bin:/bin",
+    PATH: process.platform === "win32" ? join(compatEnv.SystemRoot ?? "C:\\Windows", "System32") : "/usr/bin:/bin",
   } : {}),
 };
 
@@ -292,7 +293,7 @@ if (
   mcpReport.error ||
   mcpReport.exit?.timeout ||
   mcpReport.exit?.code !== 0 ||
-  mcpReport.responses?.find((response) => response.id === 1)?.result?.serverInfo?.name !== "openmausbot-mcp" ||
+  mcpReport.responses?.find((response) => response.id === 1)?.result?.serverInfo?.name !== "bosbot-mcp" ||
   mcpReport.responses?.find((response) => response.id === 2)?.result?.structuredContent?.status !== "connected" ||
   JSON.stringify(mcpReport.responses?.find((response) => response.id === 3)?.result) !== "{}"
 ) {
@@ -308,3 +309,4 @@ console.log(`packaged native WhatsApp runtime loads with no node_modules in reac
 console.log(`packaged native WhatsApp runtime constructs a real client ✓ [${runtimeReport.whatsapp.constructed.join(", ")}]`);
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");
 if (browserBundle) console.log(`packaged browser discovered without installation; access remains opt-in ✓ ${JSON.stringify(browserReport)}`);
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

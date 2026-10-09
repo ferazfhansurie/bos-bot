@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Stage the macOS CUA executable and native SDK outside ASAR. The npm SDK
 // deliberately does not ship the `cua-driver` CLI, so packaging must fail
 // loudly instead of producing an app whose "This computer" option can never
@@ -45,7 +46,7 @@ async function binaryVersion(candidate) {
 }
 
 async function officialBinary() {
-  const cache = join(root, "node_modules", ".cache", "openmausbot", `cua-driver-${release.version}`);
+  const cache = join(root, "node_modules", ".cache", "bosbot", `cua-driver-${release.version}`);
   const cachedBinary = join(cache, "cua-driver");
   if ((await binaryVersion(cachedBinary)) === expectedVersion) return cachedBinary;
 
@@ -53,7 +54,7 @@ async function officialBinary() {
   await mkdir(cache, { recursive: true });
   const url = `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${release.version}/${release.file}`;
   console.log(`Downloading CUA Driver ${release.version} from the official release…`);
-  const response = await fetch(url, { headers: { "user-agent": "OpenMausBot-packager" } });
+  const response = await fetch(url, { headers: { "user-agent": "BOS-Bot-packager" } });
   if (!response.ok) throw new Error(`CUA Driver download failed: HTTP ${response.status}`);
   const bytes = Buffer.from(await response.arrayBuffer());
   const digest = createHash("sha256").update(bytes).digest("hex");
@@ -71,14 +72,14 @@ async function officialBinary() {
 }
 
 let binary;
-if (process.env.CUA_DRIVER_PATH) {
-  const suppliedVersion = await binaryVersion(process.env.CUA_DRIVER_PATH);
+if (compatEnv.CUA_DRIVER_PATH) {
+  const suppliedVersion = await binaryVersion(compatEnv.CUA_DRIVER_PATH);
   if (suppliedVersion !== expectedVersion) {
     throw new Error(
       `CUA_DRIVER_PATH must point to cua-driver ${expectedVersion}; found ${suppliedVersion ?? "an unreadable binary"}`,
     );
   }
-  binary = process.env.CUA_DRIVER_PATH;
+  binary = compatEnv.CUA_DRIVER_PATH;
 } else {
   // The locally installed app may be a single-arch build; both shipped arches
   // need it, so fall back to the official universal binary rather than fail.
@@ -108,7 +109,7 @@ if (!details.isFile() || (details.mode & 0o111) === 0) {
 // not on a user's Intel Mac); the SDK's dylib/.node are genuinely per-arch,
 // pulled from the two darwin native packages that pnpm installs because of
 // supportedArchitectures in package.json.
-const MAC_ARCHES = resolveCuaMacArches(process.env);
+const MAC_ARCHES = resolveCuaMacArches(compatEnv);
 
 const { stdout: archList } = await run("/usr/bin/lipo", ["-archs", binary]);
 for (const arch of MAC_ARCHES) {
@@ -157,7 +158,7 @@ await build({
       'export { requestMacOSPermissions, hasRequiredMacOSPermissions } from "@trycua/cua-driver/electron";',
     ].join("\n"),
     resolveDir: root,
-    sourcefile: "openmausbot-cua-entry.mjs",
+    sourcefile: "bosbot-cua-entry.mjs",
     loader: "js",
   },
   bundle: true,
@@ -165,7 +166,7 @@ await build({
   target: "node20",
   format: "esm",
   banner: {
-    js: 'import { createRequire as __openmausbotCreateRequire } from "node:module"; const require = __openmausbotCreateRequire(import.meta.url);',
+    js: 'import { createRequire as __bosbotCreateRequire } from "node:module"; const require = __bosbotCreateRequire(import.meta.url);',
   },
   outfile: bundle,
   logLevel: "silent",
@@ -189,3 +190,4 @@ for (const arch of MAC_ARCHES.slice(1)) {
 }
 
 console.log(`Staged CUA for ${MAC_ARCHES.join(" + ")} from ${binary}`);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

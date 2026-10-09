@@ -17,6 +17,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "openmausbot-android"
+rootProject.name = "bosbot-android"
 include(":core")
 include(":app")

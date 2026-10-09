@@ -52,9 +52,9 @@ const yamlEsmPlugin = {
 // Every file run as its own process. Keep in sync with the spawn sites above.
 const ENTRY_POINTS = [
   "index.ts",
-  // the `openmausbot` command (serve/pair/sessions/status) for the npm
+  // the `bosbot` command (serve/pair/sessions/status) for the npm
   // package, the container image and checkouts; pair-cli.ts stays as an alias
-  "openmausbot.ts",
+  "bosbot.ts",
   "pair-cli.ts",
   // The packaged smoke probe imports this manifest directly. Importing the
   // shared avatar contract widens TypeScript's inferred emit root to the repo,
@@ -157,7 +157,7 @@ await build({
   plugins: [yamlEsmPlugin],
 });
 
-// `openmausbot serve --tunnel` (server/tunnel.ts) spawns the connector guardian
+// `bosbot serve --tunnel` (server/tunnel.ts) spawns the connector guardian
 // as its own process, so it has to exist as a file beside the server, not only
 // as code inlined into the bundle that imports its neighbours. Bundled under
 // its own name: the same code the desktop app runs from
@@ -205,7 +205,7 @@ if (existsSync(join(root, "enterprise", "server", "index.ts"))) {
   });
 }
 
-// pi-mcp-extension.ts is NOT an OpenMausBot entry point: it is loaded by the
+// pi-mcp-extension.ts is NOT an BOS Bot entry point: it is loaded by the
 // external `pi` process (pi's own jiti), which resolves its
 // @earendil-works/pi-coding-agent and typebox imports from pi's install. Ship
 // it verbatim as .ts so the packaged app has it too — never bundle it, or

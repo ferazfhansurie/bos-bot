@@ -549,3 +549,4 @@ it("starts from env only in a dev build with every setting present and a safe ur
   expect(cloudHostBaseUrl("https://rooms.example.test/?token=x")).toBeNull();
   expect(cloudHostBaseUrl("ws://127.0.0.1:8787")).toBeNull();
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

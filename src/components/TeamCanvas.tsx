@@ -434,3 +434,4 @@ export function TeamCanvas({ sections, canManage, onMove, onInstructions, onEdit
     </div>
   </div>;
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

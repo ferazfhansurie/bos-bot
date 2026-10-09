@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -36,7 +37,7 @@ const now=Date.now.bind(Date);Date.now=()=>existsSync(${JSON.stringify(clockFile
 const fetch=globalThis.fetch;globalThis.fetch=async(url,...args)=>{if(String(url)!=='https://api.anthropic.com/api/oauth/usage')return fetch(url,...args);writeFileSync(${JSON.stringify(usageGate)}+'.waiting','1');while(!existsSync(${JSON.stringify(usageGate)}))await new Promise(r=>setTimeout(r,20));return new Response(existsSync(${JSON.stringify(usageFile)})?readFileSync(${JSON.stringify(usageFile)},'utf8'):'{}',{headers:{'content-type':'application/json'}});};
 await import(${JSON.stringify(pathToFileURL(join(root,"server/index.ts")).href)});`);
   child = spawn(process.execPath, [bootstrap], { cwd: root,
-    env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_STATIC_DIR: staticDir }, stdio: ["ignore", "pipe", "pipe"] });
+    env: { PATH: compatEnv.PATH, HOME: home, USERPROFILE: home, OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_STATIC_DIR: staticDir }, stdio: ["ignore", "pipe", "pipe"] });
   child.stderr!.on("data", chunk => { stderr += chunk; });
   const deadline = Date.now() + 20_000;
   while (true) {
@@ -143,3 +144,4 @@ it("configured fallback lookup cannot admit a guarded send after permissions cha
   const final = (await api("GET", `/api/threads/${bot.threadId}/messages?limit=100`)).body;
   expect(final.messages.some((m: any) => m.role === "user" && m.text === "STALE GUARDED REQUEST")).toBe(false);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

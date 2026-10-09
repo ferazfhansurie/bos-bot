@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // A pass-through MCP server that keeps one tool result from eating a
 // conversation.
 //
@@ -25,16 +26,16 @@ import { killCliTree } from "./procs.ts";
 
 type Json = Record<string, unknown>;
 
-const NAME = process.env.OMB_GATE_NAME || "mcp";
-const SPILL_DIR = process.env.OMB_GATE_SPILL_DIR || "";
-const BUDGET = Number(process.env.OMB_GATE_BUDGET) > 0 ? Number(process.env.OMB_GATE_BUDGET) : DEFAULT_RESULT_BUDGET;
+const NAME = compatEnv.OMB_GATE_NAME || "mcp";
+const SPILL_DIR = compatEnv.OMB_GATE_SPILL_DIR || "";
+const BUDGET = Number(compatEnv.OMB_GATE_BUDGET) > 0 ? Number(compatEnv.OMB_GATE_BUDGET) : DEFAULT_RESULT_BUDGET;
 /** Spilled results older than this are swept at startup: they exist for the
  * turn that produced them, not forever. */
 const SPILL_MAX_AGE_MS = 24 * 60 * 60_000;
 /** Whether the model is told where the untrimmed result was saved. Off by
  * default: offering the path measured WORSE than no trimming, because the
  * model reads the file back in. See TrimInput.spillHint. */
-const SPILL_HINT = process.env.OMB_GATE_SPILL_HINT === "1";
+const SPILL_HINT = compatEnv.OMB_GATE_SPILL_HINT === "1";
 
 /** The gate's own settings never reach the upstream server's environment. */
 const GATE_ENV_KEYS = ["OMB_GATE_NAME", "OMB_GATE_SPILL_DIR", "OMB_GATE_BUDGET", "OMB_GATE_UPSTREAM", "OMB_GATE_SPILL_HINT"];
@@ -53,7 +54,7 @@ interface Upstream {
 function upstreamSpec(): Upstream {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(process.env.OMB_GATE_UPSTREAM ?? "");
+    parsed = JSON.parse(compatEnv.OMB_GATE_UPSTREAM ?? "");
   } catch {
     fail("OMB_GATE_UPSTREAM is not valid JSON");
   }
@@ -143,7 +144,7 @@ function trimCallResult(result: Json, tool: string): boolean {
 const spec = upstreamSpec();
 if (SPILL_DIR) sweepSpill(SPILL_DIR);
 
-const childEnv: NodeJS.ProcessEnv = { ...process.env, ...spec.env };
+const childEnv: NodeJS.ProcessEnv = { ...compatEnv, ...spec.env };
 for (const key of GATE_ENV_KEYS) delete childEnv[key];
 
 // The CLI used to spawn this server itself, on every platform, so the gate
@@ -239,3 +240,4 @@ createInterface({ input: child.stdout }).on("line", (line) => {
 });
 
 child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

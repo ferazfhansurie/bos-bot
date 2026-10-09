@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // attachments.ts: save + read-back, the mime allowlist, size ceiling, and
 // the name-lock that keeps the serving route inside the attachments dir.
 import {
@@ -38,7 +39,7 @@ afterEach(() => {
 // The module reads DATA_DIR at import time, so the env var must be set
 // before the import is evaluated.
 const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-attachments-"));
-process.env.OMB_DATA_DIR = join(DATA_ROOT, "data");
+compatEnv.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
 const {
   ATTACHMENTS_DIR,
@@ -210,8 +211,8 @@ describe("aggregate attachment storage", () => {
 
   it("cleans only stale upload partials, never committed or active-looking files", () => {
     saveImage(Buffer.from("kept"), "image/png", UPLOAD_A);
-    const stale = `${ATTACHMENTS_DIR}/.openmaus-upload-${UPLOAD_A}-${UPLOAD_B}.partial`;
-    const fresh = `${ATTACHMENTS_DIR}/.openmaus-upload-${UPLOAD_B}-${UPLOAD_A}.partial`;
+    const stale = `${ATTACHMENTS_DIR}/.bos-upload-${UPLOAD_A}-${UPLOAD_B}.partial`;
+    const fresh = `${ATTACHMENTS_DIR}/.bos-upload-${UPLOAD_B}-${UPLOAD_A}.partial`;
     const unrelated = `${ATTACHMENTS_DIR}/notes.partial`;
     writeFileSync(stale, "stale");
     writeFileSync(fresh, "fresh");
@@ -231,7 +232,7 @@ describe("aggregate attachment storage", () => {
     const existing = saveImage(Buffer.from("x"), "image/png");
     truncateSync(existing.path, ATTACHMENTS_MAX_BYTES - 2);
     __resetAttachmentAccountingForTests();
-    const orphan = `${ATTACHMENTS_DIR}/.openmaus-upload-${UPLOAD_A}-${UPLOAD_B}.partial`;
+    const orphan = `${ATTACHMENTS_DIR}/.bos-upload-${UPLOAD_A}-${UPLOAD_B}.partial`;
     writeFileSync(orphan, "xx");
 
     expect(() => saveImage(Buffer.from("y"), "image/png")).toThrow(/storage is full/);
@@ -249,7 +250,7 @@ describe("aggregate attachment storage", () => {
     const existing = saveImage(Buffer.from("x"), "image/png");
     truncateSync(existing.path, ATTACHMENTS_MAX_BYTES - 3);
     __resetAttachmentAccountingForTests();
-    const orphan = `${ATTACHMENTS_DIR}/.openmaus-upload-${UPLOAD_A}-${UPLOAD_B}.partial`;
+    const orphan = `${ATTACHMENTS_DIR}/.bos-upload-${UPLOAD_A}-${UPLOAD_B}.partial`;
     writeFileSync(orphan, "old");
 
     const saved = await saveFile((async function* () {
@@ -497,3 +498,4 @@ describe("shared files", () => {
     expect(readdirSync(ATTACHMENTS_DIR)).toEqual([`${UPLOAD_A}.pdf`]);
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

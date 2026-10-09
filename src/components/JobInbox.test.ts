@@ -50,7 +50,7 @@ const section = (html: string, marker: string) => {
 describe("jobs page", () => {
   it("shows loading, unsupported and empty states under your move", () => {
     expect(body(undefined)).toContain("data-jobs-loading");
-    expect(body(null)).toContain("Update the OpenMausBot server to see jobs here.");
+    expect(body(null)).toContain("Update the BOS Bot server to see jobs here.");
     const empty = body({ items: [] });
     expect(empty).toContain("No jobs yet");
     expect(empty).toContain("Nothing on you");

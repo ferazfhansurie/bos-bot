@@ -16,7 +16,7 @@ An operator must first verify the exact installed executable, channel and data d
 node scripts/host-recovery.mjs --config /absolute/private/recovery-config.json
 ```
 
-This is a future activation procedure, not evidence of an installed supervisor. Staging bootstrap chooses its isolated staging data directory; a configuration must match that actual channel directory. A mismatch fails the recovery generation check. The runner pins `OMB_DATA_DIR` to its configured canonical path and never uses a shell command or installs software.
+This is a future activation procedure, not evidence of an installed supervisor. Staging bootstrap chooses its isolated staging data directory; a configuration must match that actual channel directory. A mismatch fails the recovery generation check. The runner pins `BOS_DATA_DIR` to its configured canonical path and never uses a shell command or installs software.
 
 The runner claims a separate durable owner lease. It requires a valid host generation and checks the existing parent/delegated-child lease identities with the same conservative rules as normal acquisition. It never kills a surviving host, utility child or provider. Foreign, corrupt or unverifiable ownership holds recovery. PID reuse can conservatively hold recovery rather than start a competing instance.
 

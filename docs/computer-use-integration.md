@@ -1,6 +1,6 @@
-# Computer use & browser use in OpenMausBot
+# Computer use & browser use in BOS Bot
 
-Decision doc, 2026-08-12. How bots in OpenMausBot get local computer use and
+Decision doc, 2026-08-12. How bots in BOS Bot get local computer use and
 browser use. macOS and packaged Ubuntu x64 builds use an out-of-the-box,
 release-pinned provider; source/dev Ubuntu may use a separately installed provider. Based
 on a survey of OSS chat-app MCP hosts, macOS control servers,
@@ -47,12 +47,12 @@ does not replace remote/cloud boxes or the isolated Local VM provider. Local
 alternatives evaluated and rejected:
 
 The Ubuntu GNOME beta uses the same official CUA provider with the Phase 5
-supply-chain contract tracked in [#113](https://github.com/milind-soni/OpenMausBot/issues/113): pinned archive
+supply-chain contract tracked in [#113](https://github.com/firazfhansurie/bos-bot/issues/113): pinned archive
 and inner hashes, exact archive allowlist, outside-ASAR resources, full notices/SBOM, no runtime download/update,
 and fail-closed packaged discovery. Electron still owns a private embedded daemon/socket, and the harness only
-receives the validated MCP proxy contract. Xorg is tracked in [#79](https://github.com/milind-soni/OpenMausBot/issues/79);
+receives the validated MCP proxy contract. Xorg is tracked in [#79](https://github.com/firazfhansurie/bos-bot/issues/79);
 GNOME/Wayland additionally requires WinRects v8 plus the exact Cua health-report contract tracked in
-[#109](https://github.com/milind-soni/OpenMausBot/issues/109).
+[#109](https://github.com/firazfhansurie/bos-bot/issues/109).
 
 | Option | Verdict |
 | --- | --- |
@@ -64,8 +64,8 @@ GNOME/Wayland additionally requires WinRects v8 plus the exact Cua health-report
 
 1. **Spawn from the Electron main process, never from the server/gateway
    layer.** macOS TCC attributes a spawned child to its "responsible process".
-   Spawned from Electron main → the grant is OpenMausBot's, users see ONE
-   prompt named OpenMausBot, and the bundled driver inherits it. Spawned from
+   Spawned from Electron main → the grant is BOS Bot's, users see ONE
+   prompt named BOS Bot, and the bundled driver inherits it. Spawned from
    a Node gateway/daemon → the identity silently becomes the gateway's and
    `check_permissions` cannot detect the misattribution. The harness must ask
    Electron main for the driver socket path over IPC, not spawn the driver.
@@ -82,7 +82,7 @@ GNOME/Wayland additionally requires WinRects v8 plus the exact Cua health-report
 
 ### macOS packaging target
 
-- Ship the binary at `OpenMausBot.app/Contents/Resources/cua-driver`,
+- Ship the binary at `BOS Bot.app/Contents/Resources/cua-driver`,
   **outside the ASAR**, executable bit preserved (electron-builder
   `extraResources`).
 - **Re-sign it with our Team ID** before signing + notarizing the app (the

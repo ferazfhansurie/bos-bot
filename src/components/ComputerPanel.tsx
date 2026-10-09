@@ -1818,3 +1818,4 @@ export function ComputerPanel({
     </>
   );
 }
+// branding compatibility (electron/branding-compat.json): browser-storage: existing localStorage and native attestation records keep their keys

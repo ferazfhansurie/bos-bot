@@ -3,13 +3,13 @@ $ErrorActionPreference = 'Stop'
 if (-not $args.Count -or $args[0] -in @('--help', '-h', 'help')) {
     Write-Output 'Usage: .\deploy\podman\maus.ps1 setup | <compose arguments>'
     Write-Output 'Example: .\deploy\podman\maus.ps1 up -d --build'
-    Write-Output 'Options: OMB_PODMAN_MACHINE (default openmausbot), OMB_PODMAN_ENV_FILE (default .env)'
+    Write-Output 'Options: BOS_PODMAN_MACHINE (default bosbot), BOS_PODMAN_ENV_FILE (default .env)'
     exit 0
 }
 $podmanCommand = Get-Command podman.exe -ErrorAction SilentlyContinue
 $podman = if ($podmanCommand) { $podmanCommand.Source } else { 'C:\Program Files\RedHat\Podman\podman.exe' }
 if (-not (Test-Path -LiteralPath $podman)) { throw 'Install Podman and WSL2 first; then reopen PowerShell.' }
-$machine = if ($env:OMB_PODMAN_MACHINE) { $env:OMB_PODMAN_MACHINE } else { 'openmausbot' }
+$machine = if ($env:BOS_PODMAN_MACHINE) { $env:BOS_PODMAN_MACHINE } else { 'bosbot' }
 if ($machine -notmatch '^[a-zA-Z0-9_-]+$') { throw 'Invalid Podman machine name.' }
 if ($PSScriptRoot -notmatch '^([A-Za-z]):\\(.+)$') { throw 'Place the repository on a Windows drive accessible to WSL2.' }
 $linuxProject = '/mnt/' + $Matches[1].ToLower() + '/' + $Matches[2].Replace('\', '/')
@@ -37,7 +37,7 @@ if ($args[0] -eq 'setup') {
 }
 if (-not $selected -or -not $selected.Running) { throw 'Start the selected machine with podman machine start, or run this script with setup first.' }
 if ($selected.VMType -ne 'wsl') { throw 'This launcher requires a WSL2 Podman machine.' }
-$envFile = if ($env:OMB_PODMAN_ENV_FILE) { $env:OMB_PODMAN_ENV_FILE } else { '.env' }
+$envFile = if ($env:BOS_PODMAN_ENV_FILE) { $env:BOS_PODMAN_ENV_FILE } else { '.env' }
 # Podman machine ssh uses a remote POSIX shell. Quote each argument separately,
 # including paths containing spaces or apostrophes; never concatenate raw input.
 $command = 'cd ' + $quotedProject + ' && PODMAN_COMPOSE_PROVIDER=podman-compose podman compose --env-file ' + (Quote-Posix $envFile) + ' -f compose.yaml ' + (($args | ForEach-Object { Quote-Posix $_ }) -join ' ')

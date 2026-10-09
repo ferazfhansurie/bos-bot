@@ -21,3 +21,4 @@ export function moveFolder(ids: readonly string[], id: string, direction: -1 | 1
   const target = ids[index + direction];
   return index < 0 || !target ? [...ids] : placeFolder(ids, id, target, direction < 0 ? "before" : "after");
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

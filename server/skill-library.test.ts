@@ -38,7 +38,7 @@ describe("bundled skill library", () => {
   });
 
   it("loads a user skill without letting a broken sibling disable it", () => {
-    const root = mkdtempSync(join(tmpdir(), "openmausbot-skills-"));
+    const root = mkdtempSync(join(tmpdir(), "bosbot-skills-"));
     const valid = join(root, "file-expense");
     mkdirSync(valid);
     writeFileSync(join(valid, "manifest.json"), JSON.stringify({
@@ -59,7 +59,7 @@ describe("bundled skill library", () => {
   });
 
   it("treats a non-directory user skill root as empty", () => {
-    const root = mkdtempSync(join(tmpdir(), "openmausbot-skills-root-"));
+    const root = mkdtempSync(join(tmpdir(), "bosbot-skills-root-"));
     const file = join(root, "not-a-directory");
     writeFileSync(file, "nope");
     expect(loadUserSkills(file)).toEqual([]);
@@ -102,3 +102,4 @@ describe("bundled verification skill", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

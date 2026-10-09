@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The sidecar in front of a real harness.
 //
 // These boot the actual server and talk to it through the actual proxy,
@@ -139,8 +140,8 @@ beforeAll(async () => {
   harness = spawn(process.execPath, [join(ROOT, "server", "index.ts")], {
     cwd: ROOT,
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(HARNESS_PORT),
@@ -749,7 +750,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: registry,
       companionPort: port,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "BOS Bot" }),
       connectedDeviceIds: connections.ids,
       disconnectDevice: connections.disconnect,
     });
@@ -872,7 +873,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: new DeviceRegistry(),
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "BOS Bot" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -903,7 +904,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: new DeviceRegistry(),
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "BOS Bot" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -937,7 +938,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: registry,
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "BOS Bot" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -986,7 +987,7 @@ describe("pairing, end to end", () => {
     const control = createControlServer({
       devices: registry,
       companionPort: 8800,
-      discovery: () => ({ advertising: false, name: "OpenMausBot" }),
+      discovery: () => ({ advertising: false, name: "BOS Bot" }),
     });
     await new Promise<void>((r) => control.listen(0, "127.0.0.1", r));
     // SAFETY: address() is AddressInfo — an object with a port — for any
@@ -1017,3 +1018,4 @@ describe("pairing, end to end", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling; paired-mdns-host: saved phone fallback routes continue resolving the same stable LAN hostname

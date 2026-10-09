@@ -146,3 +146,4 @@ test("owner-confirmed remote environment pin survives saved bookmark parsing", (
   assert.equal(state.environments[0].environmentId, "00000000-0000-4000-8000-000000000001");
   assert.equal(env.parseEnvironments({ environments: [{ ...state.environments[0], environmentId: "broken" }] }).environments.length, 0);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

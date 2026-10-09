@@ -673,3 +673,4 @@ test("server-only start is bounded and reports a stop requested while starting",
   const second = await pending;
   assert.equal(second.stopRequested(), true, "launcher must skip the server import");
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

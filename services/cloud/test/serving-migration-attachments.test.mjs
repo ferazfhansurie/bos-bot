@@ -336,3 +336,4 @@ test("attachment transfer: verified ready objects bound to the message, specific
     assert.deepEqual(await stored(objects), keys);
     assert.equal((await c.query("SELECT count(*)::int n FROM cloud.invocations")).rows[0].n, 0);
   }));
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

@@ -117,7 +117,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fleet
   });
 
   it("updates managed models through the real tenant helper and refuses a symlink without touching its target", async () => {
-    fixture.home = join(root, "var/lib/openmausbot/acme");
+    fixture.home = join(root, "var/lib/bosbot/acme");
     mkdirSync(fixture.home, { recursive: true, mode: 0o700 });
     const directory = join(fixture.home, ".config", "opencode");
     mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -126,7 +126,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fleet
     writeFileSync(path, JSON.stringify({ provider: { [MANAGED_OPENROUTER]: managed, other: { keep: true } }, model: "keep/default" }), { mode: 0o600 });
     const layout = fleetLayout(root);
     const registry = { ...emptyRegistry("example.test"), workspaces: { acme: { slug: "acme", host: "acme.example.test", port: 8810, webhookPort: 8811, status: "running", createdAt: "" } } };
-    const files = new Map([[layout.registryFile, JSON.stringify(registry)], [join(layout.instancesDir, "acme.env"), "OMB_ADMIN_URL=https://admin.example.test\nOMB_ADMIN_WORKSPACE=acme\n"]]);
+    const files = new Map([[layout.registryFile, JSON.stringify(registry)], [join(layout.instancesDir, "acme.env"), "OMB_ADMIN_URL=https://admin.example.test\nBOS_ADMIN_WORKSPACE=acme\n"]]);
     const fixtureDeps = { ...deps, isRoot: () => true, readText: (name: string, owner?: string) => owner ? deps.readText(name, owner) : files.get(name) ?? null };
     const input: FleetInput = { action: "providers", slug: "acme", openrouterModels: ["provider/model"], admins: [], members: [], dryRun: false, yes: true, keepData: false, node: process.execPath, script: "/fixture/cli.js", root };
     const messages: string[] = [];
@@ -240,3 +240,4 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("fleet
     expect(readFileSync(outside, "utf8")).toBe(secret);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

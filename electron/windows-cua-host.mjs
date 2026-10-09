@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 // Electron-independent owner for the official Windows EmbeddedCuaDriverHost.
 //
 // electron/cua.mjs starts the same staged SDK from Electron main. A
@@ -195,7 +196,7 @@ export async function verifyStagedWindowsCua({ resourcesPath, identity, probe, f
 }
 
 /** Load the staged SDK exactly as electron/cua.mjs does in a packaged app. */
-export async function loadStagedWindowsSdk(staged, environment = process.env) {
+export async function loadStagedWindowsSdk(staged, environment = compatEnv) {
   environment.OPENMAUSBOT_CUA_SDK_LIBRARY = staged.library;
   environment.CUA_DRIVER_RS_TELEMETRY_ENABLED = "0";
   return import(pathToFileURL(staged.bundle).href);
@@ -1005,7 +1006,7 @@ export function parseWindowsProbeOutput(op, stdout) {
 const PROBE_ENV_KEYS = ["SystemRoot", "windir", "SystemDrive", "ComSpec", "PATH", "PATHEXT", "TEMP", "TMP", "PSModulePath",
   "USERPROFILE", "USERNAME", "USERDOMAIN", "COMPUTERNAME", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS"];
 
-export function probeEnvironment(source = process.env) {
+export function probeEnvironment(source = compatEnv) {
   const out = {};
   for (const key of PROBE_ENV_KEYS) if (typeof source[key] === "string") out[key] = source[key];
   return Object.freeze(out);
@@ -1054,3 +1055,4 @@ export function createPowerShellWindowsProbe({ run = execFile, timeoutMs = 20_00
     restrictDirectory: restrict,
   });
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; browser-storage: existing localStorage and native attestation records keep their keys; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

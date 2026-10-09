@@ -256,3 +256,4 @@ it("runs native Codex with Company Responses routing, isolated home and no OAuth
     await expect(native.adapter.sendTurn({ threadId: "blocked", text: "No fallback", model: "gpt-personal" })).rejects.toThrow("personal billing");
   } finally { await native?.dispose(); }
 });
+// branding compatibility (electron/branding-compat.json): engine-config: stored engine provider and built-in MCP identities remain reserved and cleanable; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

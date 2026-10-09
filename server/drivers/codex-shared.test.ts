@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { createServer, type Server } from "node:http";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { recordEvents } from "../testing/events.ts";
 import { CodexDriver } from "./codex.ts";
 
 const fakeAppServer = join(dirname(fileURLToPath(import.meta.url)), "../testing/fake-codex-app-server.ts");
-const nativeCli = process.env.BOS_TEST_NATIVE_CODEX;
+const nativeCli = compatEnv.BOS_TEST_NATIVE_CODEX;
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 
 describe.skipIf(process.platform !== "darwin")("Codex shared isolation", () => {
@@ -128,3 +129,4 @@ else {console.log(JSON.stringify({type:'item.completed',item:{type:'agent_messag
     expect(events.events.some((event) => event.type === "content.delta" && event.delta === "safe native reply")).toBe(true);
   }, 30_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

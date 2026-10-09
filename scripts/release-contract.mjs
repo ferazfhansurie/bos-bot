@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -32,7 +33,7 @@ export function releaseSigning(platform, env) {
 }
 export function signingPrerequisites(platform, env) {
  const required = platform === 'win' ? ['WIN_CSC_LINK','WIN_CSC_KEY_PASSWORD','BOS_WINDOWS_PUBLISHER'] : platform === 'mac' ? ['MAC_CERT_P12_BASE64','MAC_CERT_PASSWORD','APPLE_API_KEY_P8_BASE64','APPLE_API_KEY_ID','APPLE_API_ISSUER_ID'] : [];
- for(const key of required) assert.ok(env[key]?.trim(), `missing release signing prerequisite: ${key}`);
+ for(const key of required) assert.ok(compatEnvironment(env)[key]?.trim(), `missing release signing prerequisite: ${key}`);
 }
 export function validatePackaged(pkg, feed, channel, sha, expectedFeed = DEFAULT_FEED) {
  assert.match(sha,/^[a-f0-9]{40}$/);
@@ -62,10 +63,10 @@ if(process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])
  validateConfig(c,channel);
  if(channel === 'live') assert.match(JSON.parse(readFileSync('package.json','utf8')).version,/^\d+\.\d+\.\d+$/, 'stable release requires a stable semantic version');
  const sha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
- if(command === 'check') { if(channel === 'live') { releaseSigning(platform,process.env); releaseFeed(process.env); assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),'','live packaging requires a clean source commit'); } }
+ if(command === 'check') { if(channel === 'live') { releaseSigning(platform,compatEnv); releaseFeed(compatEnv); assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),'','live packaging requires a clean source commit'); } }
  else if(command === 'package') {
-  if(channel === 'live') { releaseSigning(platform,process.env); assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),'','live packaging requires a clean source commit'); }
-  const result=spawnSync('pnpm',['exec','electron-builder','--config',channel === 'live' ? 'electron-builder.live.cjs' : 'electron-builder.staging.yml',`--${platform}`,'--publish','never',`--config.extraMetadata.bosSourceCommit=${sha}`],{stdio:'inherit',env:packageEnvironment(channel,platform,process.env)});
+  if(channel === 'live') { releaseSigning(platform,compatEnv); assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),'','live packaging requires a clean source commit'); }
+  const result=spawnSync('pnpm',['exec','electron-builder','--config',channel === 'live' ? 'electron-builder.live.cjs' : 'electron-builder.staging.yml',`--${platform}`,'--publish','never',`--config.extraMetadata.bosSourceCommit=${sha}`],{stdio:'inherit',env:packageEnvironment(channel,platform,compatEnv)});
   process.exit(result.status ?? 1);
  } else if(command === 'packaged') {
   const res=arg;
@@ -74,8 +75,8 @@ if(process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])
   const asar=JSON.parse(builderRequire('@electron/asar').extractFile(join(res,'app.asar'),'package.json').toString());
   const feedPath=join(res,'app-update.yml');
   const feed=existsSync(feedPath)?parse(readFileSync(feedPath,'utf8')):null;
-  validatePackaged(asar,feed,channel,sha,releaseFeed(process.env));
-  if(platform === 'win' && channel === 'live') validateWindowsUpdateSigning(feed,releaseSigning(platform,process.env),process.env.BOS_WINDOWS_PUBLISHER);
+  validatePackaged(asar,feed,channel,sha,releaseFeed(compatEnv));
+  if(platform === 'win' && channel === 'live') validateWindowsUpdateSigning(feed,releaseSigning(platform,compatEnv),compatEnv.BOS_WINDOWS_PUBLISHER);
   writeFileSync(join(c.directories.output,`release-contract-${platform}.json`),JSON.stringify({channel,sha,version:asar.version,appId:c.appId},null,2));
  } else throw new Error('use check|package|packaged channel platform [resources]');
  console.log(`release contract verified: ${command} ${channel} ${platform}`);

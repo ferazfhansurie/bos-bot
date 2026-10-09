@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // pi — the pi coding agent (@earendil-works/pi-coding-agent) as a native engine.
 //
 // pi exposes a JSON-RPC mode over stdio (`pi --mode rpc --no-session`) rather
@@ -201,7 +202,7 @@ export function preferPiInjectRows(catalog: ModelCatalog): ModelCatalog {
 
 export async function applyPiLocalCatalog(
   catalog: ModelCatalog,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = compatEnv,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ModelCatalog> {
   return preferPiInjectRows(await mergeLocalInject(catalog, env, fetchImpl));
@@ -217,7 +218,7 @@ function piAgentDir(env: Record<string, string | undefined>): string {
  *  id is not a model at all. */
 export function ensurePiInjectModel(
   modelId: string,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = compatEnv,
 ): { provider: string; modelId: string } | null {
   const split = splitPiModel(modelId);
   if (!split) return null;
@@ -453,7 +454,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
 
   async create(input: DriverCreateInput<PiConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
-    const catalogEnv = piEnvironment({ ...process.env, ...input.environment });
+    const catalogEnv = piEnvironment({ ...compatEnv, ...input.environment });
     let models = EMPTY;
     const readModels = async () => {
       let base = models;
@@ -524,7 +525,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       // MCP temp files. If model setup fails, there is nothing sensitive to
       // clean up yet.
       if (typeof turn.model === "string" && turn.model) {
-        ensurePiInjectModel(turn.model, { ...process.env, ...input.environment });
+        ensurePiInjectModel(turn.model, { ...compatEnv, ...input.environment });
       }
 
       // integrations → stdio MCP servers for the pi-mcp-extension. The config
@@ -558,7 +559,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
             stdio: ["pipe", "pipe", "pipe"],
             cwd: turn.cwd,
             env: piEnvironment({
-              ...process.env,
+              ...compatEnv,
               ...input.environment,
               ...(mcpServers && mcpTempDir ? { OMB_MCP_CONFIG: join(mcpTempDir, "mcp.json") } : {}),
             }),
@@ -843,7 +844,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       const version = await new Promise<string | null>((resolve) => {
         const child = spawnCli(config.cli, ["--version"], {
           stdio: ["ignore", "pipe", "pipe"],
-          env: piEnvironment({ ...process.env, ...input.environment }),
+          env: piEnvironment({ ...compatEnv, ...input.environment }),
         });
         let out = "";
         child.stdout?.setEncoding("utf8");
@@ -940,3 +941,4 @@ export const PiDriver: ProviderDriver<PiConfig> = {
     };
   },
 };
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

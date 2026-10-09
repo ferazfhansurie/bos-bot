@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The Thinking elapsed readout must count from the server's turn-start stamp,
 // not from when the conversation was last selected. This is the recipe for
 // docs/verification/chat-ui.md's harness, run by a machine against the real
@@ -31,8 +32,8 @@ import { fixtureApi } from "./preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const CLI = join(ROOT, "scripts", "control-omb.ts");
-const forced = process.env.OMB_UI_E2E === "1";
-const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
+const forced = compatEnv.OMB_UI_E2E === "1";
+const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv });
 const enabled = forced || Boolean(binary);
 if (!enabled) {
   console.log(`skipping thinking-timer ui e2e: no agent-browser binary resolves (looked in ${UI_TOOLS_DIR}, OMB_AGENT_BROWSER_PATH and PATH); set OMB_UI_E2E=1 to install the pinned release`);
@@ -42,8 +43,8 @@ const run = enabled ? it : it.skip;
 const LAUNCH_TIMEOUT_MS = forced ? 600_000 : 180_000;
 
 // OMB_UI_EVIDENCE_DIR keeps the screenshot (CI uploads it); otherwise it is temporary.
-const evidenceDir = process.env.OMB_UI_EVIDENCE_DIR ? resolve(ROOT, process.env.OMB_UI_EVIDENCE_DIR) : mkdtempSync(join(tmpdir(), "omb-ui-evidence-"));
-const ownsEvidenceDir = !process.env.OMB_UI_EVIDENCE_DIR;
+const evidenceDir = compatEnv.OMB_UI_EVIDENCE_DIR ? resolve(ROOT, compatEnv.OMB_UI_EVIDENCE_DIR) : mkdtempSync(join(tmpdir(), "omb-ui-evidence-"));
+const ownsEvidenceDir = !compatEnv.OMB_UI_EVIDENCE_DIR;
 
 interface Launched {
   child: ReturnType<typeof spawn>;
@@ -57,7 +58,7 @@ function launch(args: string[]): Promise<Launched> {
     // Own process group: a timeout must take the launch AND whatever it is
     // running (an `agent-browser install` mid-download) down with it.
     const child = spawn(process.execPath, ["--experimental-strip-types", CLI, "ui", "launch", ...args], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
+      cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
     });
     const killGroup = (signal: NodeJS.Signals) => {
       if (child.pid && process.platform !== "win32") {
@@ -313,3 +314,4 @@ describe("the thinking timer stays anchored across a thread switch", () => {
     expect(existsSync(info.dataDir)).toBe(false);
   }, LAUNCH_TIMEOUT_MS + 120_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

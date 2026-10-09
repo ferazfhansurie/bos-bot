@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../../electron/branding-env.cjs";
 // First-party Android phone MCP server. It deliberately accepts physical USB
 // devices only: no emulators, wireless debugging, network ADB, or Tailscale.
 import { spawn } from "node:child_process";
@@ -38,7 +39,8 @@ function executableName(platform = process.platform) {
   return platform === "win32" ? "adb.exe" : "adb";
 }
 
-export function resolveAdbPath(env: NodeJS.ProcessEnv = process.env, platform = process.platform): string | null {
+export function resolveAdbPath(env: NodeJS.ProcessEnv = compatEnv, platform = process.platform): string | null {
+  env = compatEnvironment(env);
   const executable = executableName(platform);
   const home = homedir();
   const candidates = [
@@ -61,7 +63,7 @@ export function resolveAdbPath(env: NodeJS.ProcessEnv = process.env, platform = 
 
 async function runAdb(args: string[], options: { binary?: boolean; timeoutMs?: number } = {}): Promise<Buffer> {
   const adb = resolveAdbPath();
-  if (!adb) throw new Error("Android platform tools are unavailable. Reopen OpenMausBot or install adb.");
+  if (!adb) throw new Error("Android platform tools are unavailable. Reopen BOS Bot or install adb.");
   return new Promise((resolve, reject) => {
     const child = spawn(adb, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const stdout: Buffer[] = [];
@@ -123,7 +125,7 @@ async function usbDevices() {
 
 async function readySerial(requested?: unknown): Promise<string> {
   const devices = await usbDevices();
-  const serial = typeof requested === "string" && requested ? requested : process.env.PH_ANDROID_SERIAL;
+  const serial = typeof requested === "string" && requested ? requested : compatEnv.PH_ANDROID_SERIAL;
   const candidates = serial ? devices.filter((device) => device.serial === serial) : devices;
   if (!candidates.length) throw new Error("No physical USB Android device is connected");
   if (candidates.length > 1 && !serial) throw new Error("Multiple USB Android devices are connected; pass serial");
@@ -213,7 +215,7 @@ async function readNodes(serial: string) {
   const streamedStart = streamed.indexOf("<?xml");
   if (streamedStart >= 0) return parseUiNodes(streamed.slice(streamedStart));
 
-  const remotePath = "/data/local/tmp/openmaus-window.xml";
+  const remotePath = "/data/local/tmp/bos-window.xml";
   await onDevice(serial, ["shell", "uiautomator", "dump", remotePath]);
   const saved = (await onDevice(serial, ["shell", "cat", remotePath])).toString("utf8");
   void onDevice(serial, ["shell", "rm", "-f", remotePath]).catch(() => undefined);
@@ -331,7 +333,7 @@ async function handle(message: Json) {
   const id = message.id;
   const method = message.method;
   const params = (message.params ?? {}) as Json;
-  if (method === "initialize") return ok(id, { protocolVersion: String(params.protocolVersion ?? "2024-11-05"), capabilities: { tools: {} }, serverInfo: { name: "openmausbot-phone", version: "1" } });
+  if (method === "initialize") return ok(id, { protocolVersion: String(params.protocolVersion ?? "2024-11-05"), capabilities: { tools: {} }, serverInfo: { name: "bosbot-phone", version: "1" } });
   if (method === "notifications/initialized" || method === "notifications/cancelled") return;
   if (method === "ping") return ok(id, {});
   if (method === "tools/list") return ok(id, { tools: TOOLS });
@@ -356,3 +358,4 @@ if (process.argv[1] && existsSync(process.argv[1]) && /phone-proxy\.(?:ts|js)$/.
     } catch {}
   });
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

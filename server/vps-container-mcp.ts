@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Transparent stdio bridge to the official Cua MCP server in a VPS
 // container. Docker's SSH transport handles authentication through the
 // user's normal SSH config and agent; this process stores no credentials.
@@ -18,8 +19,8 @@ try {
 
 // The who-is-driving pair rides in env, not argv — argv is world-readable
 // through `ps`, and the token guards a loopback endpoint.
-const controlUrl = process.env.OMB_CONTROL_URL ?? "";
-const controlToken = process.env.OMB_CONTROL_TOKEN ?? "";
+const controlUrl = compatEnv.OMB_CONTROL_URL ?? "";
+const controlToken = compatEnv.OMB_CONTROL_TOKEN ?? "";
 
 runMcpBridge({
   command: "docker",
@@ -31,3 +32,4 @@ runMcpBridge({
   liveness: { command: "docker", args: vpsDockerArgs(sshAlias, ["version", "--format", "{{.Server.Version}}"]) },
   ...(controlUrl && controlToken ? { gate: { url: controlUrl, token: controlToken } } : {}),
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Engine hooks, end to end (Phase 0, item 0.2): the real harness server with
 // the fake Claude CLI honouring the hooks block of its private --settings
 // file. A PostToolUse hook delivers the full tool result to the harness,
@@ -75,7 +76,7 @@ function harness(label: string, serverEnv: Record<string, string>, instanceEnv: 
       },
     }));
     const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home, OMB_PORT: String(PORT), ...serverEnv };
-    if (process.env.PATH) env.PATH = process.env.PATH;
+    if (compatEnv.PATH) env.PATH = compatEnv.PATH;
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], { cwd: join(SERVER_DIR, ".."), env, stdio: ["ignore", "pipe", "pipe"] });
     child.stderr!.on("data", (c) => (stderr += c));
     const deadline = Date.now() + 20_000;
@@ -189,3 +190,4 @@ posixOnly("engine hooks e2e with OMB_HOOKS=0", () => {
     expect(digest.digest?.hookCoverage).toBe("preview");
   }, 60_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

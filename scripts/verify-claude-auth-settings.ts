@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real Claude CLI through the OMB driver, synthetic account and loopback API.
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -13,12 +14,12 @@ const account = join(home, ".claude");
 const workspace = join(home, "workspace");
 mkdirSync(account);
 mkdirSync(workspace);
-process.env = {
+compatEnv = {
   HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config"),
-  PATH: process.env.PATH, OMB_DATA_DIR: join(home, "omb"),
+  PATH: compatEnv.PATH, OMB_DATA_DIR: join(home, "omb"),
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
-  ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+  ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
 };
 const requests: { authenticated: boolean; model: string }[] = [];
 const server = createServer(async (req, res) => {
@@ -74,3 +75,4 @@ try {
   await new Promise<void>(done => server.close(() => done()));
   rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

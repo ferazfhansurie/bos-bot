@@ -1,6 +1,7 @@
-// `openmausbot service install`: keep the server running across reboots.
+import { compatEnv } from "../electron/branding-env.cjs";
+// `bosbot service install`: keep the server running across reboots.
 // Renders a systemd unit (Linux) or a launchd agent (macOS) that runs the
-// same `openmausbot serve …` the operator just used, and either installs it
+// same `bosbot serve …` the operator just used, and either installs it
 // (when allowed to) or writes it next to the data and prints the two
 // commands that install it. Pure rendering lives here so it is testable;
 // the CLI decides where the file goes.
@@ -44,9 +45,9 @@ export function serviceCommand(spec: Pick<ServiceSpec, "node" | "script" | "serv
 
 export function systemdUnit(spec: ServiceSpec): string {
   const lines = [
-    "# Written by `openmausbot service install`. Re-run it to change the options.",
+    "# Written by `bosbot service install`. Re-run it to change the options.",
     "[Unit]",
-    `Description=OpenMausBot${spec.label ? ` (${spec.label})` : ""}`,
+    `Description=BOS Bot${spec.label ? ` (${spec.label})` : ""}`,
     "After=network-online.target",
     "Wants=network-online.target",
     "",
@@ -117,7 +118,7 @@ export function launchdPlist(spec: ServiceSpec): string {
 export function unstableInstallWarning(script: string): string | null {
   const normalized = script.replace(/\\/g, "/");
   if (/\/_npx\//.test(normalized) || /\/\.npm\/_npx\//.test(normalized)) {
-    return `this command runs from an npx cache (${dirname(script)}), which npm may delete at any time. Install it permanently first (npm install -g openmausbot) and run \`openmausbot service install\` from that install.`;
+    return `this command runs from an npx cache (${dirname(script)}), which npm may delete at any time. Install it permanently first (npm install -g bosbot) and run \`bosbot service install\` from that install.`;
   }
   return null;
 }
@@ -149,6 +150,7 @@ export function currentUser(): string {
   try {
     return userInfo().username;
   } catch {
-    return process.env.USER || process.env.USERNAME || "openmausbot";
+    return compatEnv.USER || compatEnv.USERNAME || "openmausbot";
   }
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; fleet-service: existing launchd/systemd units, fleet roots and firewall tables continue addressing the same installation; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

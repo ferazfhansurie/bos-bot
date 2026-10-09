@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 // ACP driver contract tests, run against the scripted fake ACP CLI in
 // server/testing/fake-acp-cli.ts. Covers the shared acp/core.ts runtime via
 // its two harness shims (grok = fail-closed auth, gemini = lenient auth):
@@ -199,7 +200,7 @@ describe("ACP turns (fake CLI)", () => {
   let scratch: string;
 
   const create = async (driver = GrokAgentDriver, mode?: string) => {
-    if (mode) process.env.FAKE_ACP_MODE = mode;
+    if (mode) compatEnv.FAKE_ACP_MODE = mode;
     instance = await driver.create({
       instanceId: "acp-test",
       displayName: "ACP Test",
@@ -217,23 +218,23 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   afterEach(async () => {
-    delete process.env.FAKE_ACP_MODE;
-    delete process.env.FAKE_ACP_DUMP;
-    delete process.env.FAKE_ACP_ALLOW_ALWAYS;
-    delete process.env.FAKE_ACP_PERMISSION_ANSWER;
-    delete process.env.XAI_API_KEY;
-    delete process.env.OPENCODE_API_KEY;
-    delete process.env.CURSOR_API_KEY;
-    delete process.env.CURSOR_AUTH_TOKEN;
-    delete process.env.BOX_TOKEN;
-    delete process.env.OMB_TTS_KEY;
-    delete process.env.FAKE_ACP_MODELS;
-    delete process.env.FAKE_ACP_MODEL_STICKS;
-    delete process.env.FAKE_ACP_USAGE_ROOT;
-    delete process.env.FAKE_ACP_LOAD_NULL;
-    delete process.env.FAKE_ACP_IMAGE_CAPABILITY;
-    delete process.env.FAKE_ACP_GROK_VERSION;
-    delete process.env.FAKE_ACP_DUMP_PROMPT;
+    delete compatEnv.FAKE_ACP_MODE;
+    delete compatEnv.FAKE_ACP_DUMP;
+    delete compatEnv.FAKE_ACP_ALLOW_ALWAYS;
+    delete compatEnv.FAKE_ACP_PERMISSION_ANSWER;
+    delete compatEnv.XAI_API_KEY;
+    delete compatEnv.OPENCODE_API_KEY;
+    delete compatEnv.CURSOR_API_KEY;
+    delete compatEnv.CURSOR_AUTH_TOKEN;
+    delete compatEnv.BOX_TOKEN;
+    delete compatEnv.OMB_TTS_KEY;
+    delete compatEnv.FAKE_ACP_MODELS;
+    delete compatEnv.FAKE_ACP_MODEL_STICKS;
+    delete compatEnv.FAKE_ACP_USAGE_ROOT;
+    delete compatEnv.FAKE_ACP_LOAD_NULL;
+    delete compatEnv.FAKE_ACP_IMAGE_CAPABILITY;
+    delete compatEnv.FAKE_ACP_GROK_VERSION;
+    delete compatEnv.FAKE_ACP_DUMP_PROMPT;
     recorder?.stop();
     await instance?.dispose();
     await removeTempDir(scratch);
@@ -300,9 +301,9 @@ describe("ACP turns (fake CLI)", () => {
     const bytes = Buffer.from("private-acp-image-bytes");
     const base64 = bytes.toString("base64");
     writeFileSync(imagePath, bytes);
-    process.env.FAKE_ACP_DUMP = dump;
-    process.env.FAKE_ACP_DUMP_PROMPT = "1";
-    process.env.FAKE_ACP_IMAGE_CAPABILITY = "1";
+    compatEnv.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP_PROMPT = "1";
+    compatEnv.FAKE_ACP_IMAGE_CAPABILITY = "1";
     await create(NativeImageDriver);
 
     const { turnId } = await instance.adapter.sendTurn({
@@ -341,8 +342,8 @@ describe("ACP turns (fake CLI)", () => {
 
   it("keeps text-path fallback for adapters that do not advertise image input", async () => {
     const dump = join(scratch, "text-fallback.json");
-    process.env.FAKE_ACP_DUMP = dump;
-    process.env.FAKE_ACP_DUMP_PROMPT = "1";
+    compatEnv.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP_PROMPT = "1";
     await create(SelectModelDriver);
 
     const text = '<attached-image path="/private/image.png" name="image.png" />';
@@ -362,9 +363,9 @@ describe("ACP turns (fake CLI)", () => {
     const imagePath = join(scratch, "grok.png");
     const bytes = Buffer.from("synthetic-private-image");
     writeFileSync(imagePath, bytes);
-    process.env.FAKE_ACP_DUMP = dump;
-    process.env.FAKE_ACP_DUMP_PROMPT = "1";
-    process.env.FAKE_ACP_GROK_VERSION = "1.0.25";
+    compatEnv.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP_PROMPT = "1";
+    compatEnv.FAKE_ACP_GROK_VERSION = "1.0.25";
     await create(GrokAgentDriver);
     expect(instance.adapter.capabilities.images).toBe(true);
     const { turnId } = await instance.adapter.sendTurn({
@@ -432,7 +433,7 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("reads token usage from the root of the prompt result", async () => {
-    process.env.FAKE_ACP_USAGE_ROOT = "1";
+    compatEnv.FAKE_ACP_USAGE_ROOT = "1";
     await create();
     await instance.adapter.sendTurn({ threadId: "t-usage-root", text: "go" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -444,15 +445,15 @@ describe("ACP turns (fake CLI)", () => {
   it("passes ACP stdio flags and strips foreign provider keys from the child env", async () => {
     await create();
     const dump = join(scratch, "dump.json");
-    process.env.FAKE_ACP_DUMP = dump;
-    process.env.XAI_API_KEY = "xai-should-not-leak";
-    process.env.OPENCODE_API_KEY = "opencode-should-not-leak";
-    process.env.CURSOR_API_KEY = "cursor-should-not-leak";
-    process.env.CURSOR_AUTH_TOKEN = "cursor-token-should-not-leak";
+    compatEnv.FAKE_ACP_DUMP = dump;
+    compatEnv.XAI_API_KEY = "xai-should-not-leak";
+    compatEnv.OPENCODE_API_KEY = "opencode-should-not-leak";
+    compatEnv.CURSOR_API_KEY = "cursor-should-not-leak";
+    compatEnv.CURSOR_AUTH_TOKEN = "cursor-token-should-not-leak";
     // workspace credentials with no CLI consumer at all — held by the
     // harness (env-injected at boot by the desktop shell), used in-process
-    process.env.BOX_TOKEN = "box-should-not-leak";
-    process.env.OMB_TTS_KEY = "tts-should-not-leak";
+    compatEnv.BOX_TOKEN = "box-should-not-leak";
+    compatEnv.OMB_TTS_KEY = "tts-should-not-leak";
 
     await instance.adapter.sendTurn({ threadId: "t-hygiene", text: "go" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -474,7 +475,7 @@ describe("ACP turns (fake CLI)", () => {
   it("mounts connected apps as a stdio MCP server", async () => {
     await create();
     const dump = join(scratch, "composio.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     expect(instance.adapter.capabilities.composioMcp).toBe(true);
     await instance.adapter.sendTurn({
       threadId: "t-composio",
@@ -508,7 +509,7 @@ describe("ACP turns (fake CLI)", () => {
     });
     recorder = recordEvents(instance.adapter);
     const dump = join(scratch, "droid-dump.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-droid", text: "go", model: "claude-sonnet-5" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -534,7 +535,7 @@ describe("ACP turns (fake CLI)", () => {
     });
     recorder = recordEvents(instance.adapter);
     const dump = join(scratch, "droid-safe.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
 
     await instance.adapter.sendTurn({ threadId: "t-droid-safe", text: "go" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -552,7 +553,7 @@ describe("ACP turns (fake CLI)", () => {
     // The realistic failure is version skew: an older droid answers -32601 to
     // session/set_mode, and core surfaces the RPC message verbatim. A bare
     // "method not found" tells the user nothing, so the driver wraps it.
-    process.env.FAKE_ACP_MODE = "no-session-config";
+    compatEnv.FAKE_ACP_MODE = "no-session-config";
     instance = await DroidAgentDriver.create({
       instanceId: "droid-old-cli",
       displayName: "Droid Old CLI",
@@ -578,7 +579,7 @@ describe("ACP turns (fake CLI)", () => {
   it("mounts local CUA only on an approval-capable ACP instance", async () => {
     await create();
     const dump = join(scratch, "local-dump.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "t-local",
       text: "inspect",
@@ -607,7 +608,7 @@ describe("ACP turns (fake CLI)", () => {
   it("mounts user-configured custom MCP servers after the built-ins", async () => {
     await create();
     const dump = join(scratch, "custom-dump.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "t-custom-mcp",
       text: "go",
@@ -637,7 +638,7 @@ describe("ACP turns (fake CLI)", () => {
   it("keeps url servers out of a session with an agent that advertises no remote transport", async () => {
     await create();
     const dump = join(scratch, "remote-plain.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-remote-plain", text: "go", integrations: { custom: remoteServers } });
     await recorder.until((event) => event.type === "turn.completed");
     const seen = JSON.parse(readFileSync(dump, "utf8"));
@@ -645,11 +646,11 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("lists a url server in ACP's shape for an agent that advertises its transport", async () => {
-    process.env.FAKE_ACP_MCP_TRANSPORTS = "http";
+    compatEnv.FAKE_ACP_MCP_TRANSPORTS = "http";
     try {
       await create();
       const dump = join(scratch, "remote-http.json");
-      process.env.FAKE_ACP_DUMP = dump;
+      compatEnv.FAKE_ACP_DUMP = dump;
       await instance.adapter.sendTurn({ threadId: "t-remote-http", text: "go", integrations: { custom: remoteServers } });
       await recorder.until((event) => event.type === "turn.completed");
       const seen = JSON.parse(readFileSync(dump, "utf8"));
@@ -662,7 +663,7 @@ describe("ACP turns (fake CLI)", () => {
       // the agent said http only, so the SSE entry stays out
       expect(seen.mcpServers.map((server: { name: string }) => server.name)).toEqual(["docs", "notes"]);
     } finally {
-      delete process.env.FAKE_ACP_MCP_TRANSPORTS;
+      delete compatEnv.FAKE_ACP_MCP_TRANSPORTS;
     }
   });
 
@@ -700,9 +701,9 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("per-bot Ask surfaces permissions from a legacy full-auto instance", async () => {
-    process.env.FAKE_ACP_MODE = "permission";
+    compatEnv.FAKE_ACP_MODE = "permission";
     const dump = join(scratch, "ask-permission-overrides-full-auto.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     instance = await GrokAgentDriver.create({
       instanceId: "grok-ask-override",
       displayName: "Grok Ask Override",
@@ -732,7 +733,7 @@ describe("ACP turns (fake CLI)", () => {
   it("maps Auto-accept edits to Grok's native acceptEdits", async () => {
     await create(GrokAgentDriver);
     const dump = join(scratch, "grok-edits.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-grok-edits", text: "go", approvalMode: "edits" });
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId);
     const argv = JSON.parse(readFileSync(dump, "utf8")).argv as string[];
@@ -740,9 +741,9 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("hands 'Always allow this session' to the agent's own allow_always option", async () => {
-    process.env.FAKE_ACP_ALLOW_ALWAYS = "1";
+    compatEnv.FAKE_ACP_ALLOW_ALWAYS = "1";
     const answer = join(scratch, "permission-answer.txt");
-    process.env.FAKE_ACP_PERMISSION_ANSWER = answer;
+    compatEnv.FAKE_ACP_PERMISSION_ANSWER = answer;
     await create(GrokAgentDriver, "permission");
     await instance.adapter.sendTurn({ threadId: "t-always-native", text: "go", approvalMode: "ask" });
     const opened = await recorder.until((e) => e.type === "request.opened");
@@ -758,7 +759,7 @@ describe("ACP turns (fake CLI)", () => {
     // and repeats the person's answer for that exact operation on the
     // resumed session — and only that operation, and only that session.
     const answer = join(scratch, "permission-answer-once.txt");
-    process.env.FAKE_ACP_PERMISSION_ANSWER = answer;
+    compatEnv.FAKE_ACP_PERMISSION_ANSWER = answer;
     await create(GrokAgentDriver, "permission");
     await instance.adapter.sendTurn({ threadId: "t-always-memory", text: "go", approvalMode: "ask" });
     const opened = await recorder.until((e) => e.type === "request.opened");
@@ -788,7 +789,7 @@ describe("ACP turns (fake CLI)", () => {
       for (const resumeCursor of [undefined, "fake-acp-session"]) {
         const dump = join(scratch, `grok-auto-${resumeCursor ? "resume" : "new"}.json`);
         const threadId = `t-grok-auto-${model}-${resumeCursor ? "resume" : "new"}`;
-        process.env.FAKE_ACP_DUMP = dump;
+        compatEnv.FAKE_ACP_DUMP = dump;
         const { turnId } = await instance.adapter.sendTurn({
           threadId,
           text: "read the roster",
@@ -836,7 +837,7 @@ describe("ACP turns (fake CLI)", () => {
     });
     recorder = recordEvents(instance.adapter);
     const dump = join(scratch, "grok-mode-override.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     await instance.adapter.sendTurn({
       threadId: "t-grok-mode-override",
       text: "continue",
@@ -877,7 +878,7 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("grok local inject does not require grok.com login", async () => {
-    process.env.FAKE_ACP_MODE = "no-auth";
+    compatEnv.FAKE_ACP_MODE = "no-auth";
     mkdirSync(join(scratch, ".grok"), { recursive: true });
     instance = await GrokAgentDriver.create({
       instanceId: "acp-test",
@@ -907,7 +908,7 @@ describe("ACP turns (fake CLI)", () => {
 
   it("starts Gemini CLI on its stable ACP surface", async () => {
     const dump = join(scratch, "gemini-acp.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     await create(GeminiAgentDriver);
     await instance.adapter.sendTurn({ threadId: "t-gemini-acp", text: "go", model: "gemini-test" });
     await recorder.until((e) => e.type === "turn.completed");
@@ -953,7 +954,7 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("selectModel confirms the requested model before prompting", async () => {
-    process.env.FAKE_ACP_MODELS = "m-one,m-two";
+    compatEnv.FAKE_ACP_MODELS = "m-one,m-two";
     await create(SelectModelDriver);
     await instance.adapter.sendTurn({ threadId: "t-model", text: "go", model: "m-two" });
 
@@ -964,7 +965,7 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("a model the session does not advertise fails the turn instead of running another", async () => {
-    process.env.FAKE_ACP_MODELS = "m-one,m-two";
+    compatEnv.FAKE_ACP_MODELS = "m-one,m-two";
     await create(SelectModelDriver);
     await instance.adapter.sendTurn({ threadId: "t-bad-model", text: "go", model: "m-nope" });
 
@@ -981,8 +982,8 @@ describe("ACP turns (fake CLI)", () => {
   // guard was written for: the agent acknowledges the switch and keeps its old
   // model, which no error surfaces.
   it("a model switch acknowledged but not applied fails the turn", async () => {
-    process.env.FAKE_ACP_MODELS = "m-one,m-two";
-    process.env.FAKE_ACP_MODEL_STICKS = "1";
+    compatEnv.FAKE_ACP_MODELS = "m-one,m-two";
+    compatEnv.FAKE_ACP_MODEL_STICKS = "1";
     await create(SelectModelDriver);
     await instance.adapter.sendTurn({ threadId: "t-stuck-model", text: "go", model: "m-two" });
 
@@ -995,7 +996,7 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("selects the model on a resumed session too, not just a new one", async () => {
-    process.env.FAKE_ACP_MODELS = "m-one,m-two";
+    compatEnv.FAKE_ACP_MODELS = "m-one,m-two";
     await create(SelectModelDriver);
     await instance.adapter.sendTurn({
       threadId: "t-resume-model",
@@ -1030,7 +1031,7 @@ describe("ACP turns (fake CLI)", () => {
   });
 
   it("falls through to session/new when session/load returns null", async () => {
-    process.env.FAKE_ACP_LOAD_NULL = "1";
+    compatEnv.FAKE_ACP_LOAD_NULL = "1";
     await create(GrokAgentDriver);
     await instance.adapter.sendTurn({
       threadId: "t-resume-null",
@@ -1046,7 +1047,7 @@ describe("ACP turns (fake CLI)", () => {
 
   it("applyTurnEnv sees the picker model after resolveTurnModel", async () => {
     const dump = join(scratch, "turn-env.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     const TurnEnvDriver = createAcpDriver({
       ...SELECT_MODEL_SUPPORT,
       driverKind: "turnEnvTest",
@@ -1079,7 +1080,7 @@ describe("ACP turns (fake CLI)", () => {
 
   it("transformEnv sees the instance config", async () => {
     const dump = join(scratch, "policy.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     instance = await EnvPolicyDriver.create({
       instanceId: "policy-test",
       displayName: undefined,
@@ -1097,7 +1098,7 @@ describe("ACP turns (fake CLI)", () => {
 
   it("per-bot Ask overrides a legacy full-auto instance for the whole turn", async () => {
     const dump = join(scratch, "ask-overrides-full-auto.json");
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     instance = await EnvPolicyDriver.create({
       instanceId: "policy-override-test",
       displayName: undefined,
@@ -1131,7 +1132,7 @@ describe("ACP turns (fake CLI)", () => {
   it("passes effort to Grok, and omits the flag when unset", async () => {
     const withEffort = join(scratch, "grok-effort.json");
     await create(GrokAgentDriver);
-    process.env.FAKE_ACP_DUMP = withEffort;
+    compatEnv.FAKE_ACP_DUMP = withEffort;
     await instance.adapter.sendTurn({ threadId: "t-effort", text: "hi", effort: "high" });
     await recorder.until((e) => e.type === "turn.completed");
 
@@ -1141,7 +1142,7 @@ describe("ACP turns (fake CLI)", () => {
 
     const without = join(scratch, "grok-no-effort.json");
     await create(GrokAgentDriver);
-    process.env.FAKE_ACP_DUMP = without;
+    compatEnv.FAKE_ACP_DUMP = without;
     await instance.adapter.sendTurn({ threadId: "t-no-effort", text: "hi" });
     await recorder.until((e) => e.type === "turn.completed");
 
@@ -1151,7 +1152,7 @@ describe("ACP turns (fake CLI)", () => {
   it("puts Grok -m after agent so ACP stdio binds the local slug", async () => {
     const dump = join(scratch, "grok-argv-order.json");
     await create(GrokAgentDriver);
-    process.env.FAKE_ACP_DUMP = dump;
+    compatEnv.FAKE_ACP_DUMP = dump;
     await instance.adapter.sendTurn({ threadId: "t-argv", text: "hi", model: "grok-4.5", effort: "high" });
     await recorder.until((e) => e.type === "turn.completed");
 
@@ -1364,3 +1365,4 @@ describe("ACP snapshot", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

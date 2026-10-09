@@ -1,3 +1,4 @@
+const { compatEnv, compatEnvironment } = require("../electron/branding-env.cjs");
 // Release-build inputs shared by electron-builder.live.cjs and
 // scripts/release-contract.mjs, so the packaged app-update.yml and the
 // contract that verifies it can never disagree.
@@ -21,11 +22,11 @@ const DEFAULT_FEED = Object.freeze({ provider: 'github', owner: 'firazfhansurie'
 const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/;
 
 function value(env, key) {
-  const text = env[key];
+  const text = compatEnvironment(env)[key];
   return typeof text === 'string' && text.trim() ? text.trim() : null;
 }
 
-function releaseFeed(env = process.env) {
+function releaseFeed(env = compatEnv) {
   const url = value(env, 'BOS_UPDATE_FEED_URL');
   const owner = value(env, 'BOS_UPDATE_GITHUB_OWNER');
   const repo = value(env, 'BOS_UPDATE_GITHUB_REPO');
@@ -44,7 +45,7 @@ function releaseFeed(env = process.env) {
   return feed;
 }
 
-function windowsSigning(env = process.env) {
+function windowsSigning(env = compatEnv) {
   const mode = value(env, 'BOS_WINDOWS_SIGNING') ?? 'signed';
   if (mode !== 'signed' && mode !== 'unsigned') throw new Error('BOS_WINDOWS_SIGNING must be "signed" or "unsigned"');
   return mode;

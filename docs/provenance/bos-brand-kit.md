@@ -3,9 +3,9 @@
 - supplied by: Firaz F. Hansurie for the BOS product
 - source directory: `/Users/firazfhansurie/aios-firaz/outputs/2026-09-20-bos-brand-kit`
 - generated: 2026-09-20
-- status: first-party BOS project artwork; not derived from OpenMausBot source or assets
+- status: first-party BOS project artwork; not derived from BOS Bot source or assets
 
-The source prompt used an existing BOS mascot as the identity reference and a supplied Grok Bot icon only as a material/restraint reference. BOS outputs must remain visually distinct and must not reuse Grok Bot or OpenMausBot trademarks, source, or artwork.
+The source prompt used an existing BOS mascot as the identity reference and a supplied Grok Bot icon only as a material/restraint reference. BOS outputs must remain visually distinct and must not reuse Grok Bot or BOS Bot trademarks, source, or artwork.
 
 ## deterministic mapping
 

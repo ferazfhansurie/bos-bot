@@ -1,4 +1,5 @@
-// `openmausbot serve --domain maus.example.com`: HTTPS on your own domain
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
+// `bosbot serve --domain maus.example.com`: HTTPS on your own domain
 // with nothing to configure. The server downloads a pinned Caddy once into
 // the data dir (the same way it fetches cloudflared and the browser engine),
 // writes the Caddyfile the Docker stack ships, and runs Caddy as its child:
@@ -38,10 +39,10 @@ export function pinnedCaddyPath(dataDir: string, platform: NodeJS.Platform = pro
 
 /** OMB_CADDY_PATH, then the pinned download, then a `caddy` on PATH. */
 export function resolveCaddyBinary(options: { dataDir: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; arch?: string; exists?: (p: string) => boolean } ): string | null {
-  const env = options.env ?? process.env;
+  const env = options.env ?? compatEnv;
   const exists = options.exists ?? existsSync;
   const platform = options.platform ?? process.platform;
-  const override = env.OMB_CADDY_PATH?.trim();
+  const override = compatEnvironment(env).OMB_CADDY_PATH?.trim();
   if (override) return resolve(override) === override && exists(override) ? override : null;
   const pinned = pinnedCaddyPath(options.dataDir, platform, options.arch);
   if (exists(pinned)) return pinned;
@@ -91,7 +92,7 @@ export async function ensureCaddy(options: {
   }
   const digest = createHash("sha512").update(body).digest("hex");
   if (digest !== asset.sha512) throw new Error("the Caddy download failed its SHA-512 check; nothing was installed");
-  const scratch = mkdtempSync(join(tmpdir(), "openmaus-caddy-"));
+  const scratch = mkdtempSync(join(tmpdir(), "bos-caddy-"));
   try {
     const archive = join(scratch, asset.name);
     writeFileSync(archive, body, { mode: 0o600 });
@@ -111,7 +112,7 @@ export async function ensureCaddy(options: {
  * state live under the data dir so they survive restarts and upgrades. */
 export function caddyfileFor(input: { domain: string; appPort: number; webhookPort: number }): string {
   return [
-    "# Written by openmausbot serve --domain. Edit the command, not this file.",
+    "# Written by bosbot serve --domain. Edit the command, not this file.",
     "{",
     "\tadmin off",
     "\tlog {",
@@ -173,7 +174,7 @@ export async function startCaddy(options: {
   const configFile = join(home, "Caddyfile");
   writeFileSync(configFile, caddyfileFor(options), { mode: 0o600 });
   const child: ChildProcess = spawn(options.binary, ["run", "--config", configFile, "--adapter", "caddyfile"], {
-    env: { ...(options.env ?? process.env), XDG_DATA_HOME: join(home, "data"), XDG_CONFIG_HOME: join(home, "config") },
+    env: { ...(options.env ?? compatEnv), XDG_DATA_HOME: join(home, "data"), XDG_CONFIG_HOME: join(home, "config") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -219,3 +220,4 @@ export function normalizeDomainOption(raw: string): string | { error: string } {
   if (/(?:^|\.)(?:localhost|local|internal|invalid)$/.test(value)) return { error: "--domain needs a public domain name that resolves to this machine" };
   return value;
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

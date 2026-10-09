@@ -1,6 +1,7 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Fish Audio text to speech. The API key stays on the harness: the renderer
 // receives only voice metadata and synthesized audio bytes.
-const API = (process.env.OMB_FISH_AUDIO_API || "https://api.fish.audio").replace(/\/+$/, "");
+const API = (compatEnv.OMB_FISH_AUDIO_API || "https://api.fish.audio").replace(/\/+$/, "");
 const MODEL = "s2.1-pro";
 const MAX_ERROR_LENGTH = 240;
 const PAGE_SIZE = 100;
@@ -161,3 +162,4 @@ export async function synthesize(text: string, voiceId: string, key: string): Pr
   if (!res.ok) throw new Error(errorMessage(res.status, "speaking", await safeBody(res)));
   return { bytes: new Uint8Array(await res.arrayBuffer()), mime: "audio/mpeg" };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

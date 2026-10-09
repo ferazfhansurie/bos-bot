@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "./branding-env.cjs";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -32,14 +33,14 @@ function executableName(platform) {
 
 export function resolveAdbBinary({
   platform = process.platform,
-  env = process.env,
+  env = compatEnv,
   homeDir = os.homedir(),
   resourcesPath = process.resourcesPath,
   exists = fs.existsSync,
 } = {}) {
   const executable = executableName(platform);
   const candidates = [
-    env.OMB_ADB_PATH,
+    compatEnvironment(env).OMB_ADB_PATH,
     resourcesPath && path.join(resourcesPath, "android-platform-tools", platform, executable),
     ...String(env.PATH ?? "")
       .split(path.delimiter)
@@ -118,7 +119,7 @@ export function createAndroidDeviceController(options = {}) {
       timeout: extra.timeout ?? 6_000,
       maxBuffer: extra.maxBuffer ?? 32 * 1024 * 1024,
       encoding: extra.encoding ?? "utf8",
-      env: { ...process.env, ADB_TRACE: "" },
+      env: { ...compatEnv, ADB_TRACE: "" },
     });
     return result;
   };
@@ -248,3 +249,4 @@ export function createAndroidDeviceController(options = {}) {
 
   return { frame, input, registerIpc, status };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

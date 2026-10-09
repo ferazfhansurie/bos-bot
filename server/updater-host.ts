@@ -143,3 +143,4 @@ export function createSandboxUpdaterHost(options: { jobsDir: string; port: numbe
     async appProcess() { return { pid: process.pid, identity: await identityOf(process.pid) }; },
   };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

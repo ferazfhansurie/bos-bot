@@ -1,6 +1,6 @@
 // BOS Bot's personal edition never sends product analytics: there is no
 // opt-in, so every entry point must stay off and leave storage untouched,
-// whatever a previous OpenMaus install left behind.
+// whatever a previous Bos install left behind.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {

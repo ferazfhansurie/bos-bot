@@ -13,7 +13,7 @@ Status: plan (Sep 14, 2026). First phase of the harness-upgrade programme descri
 Touches no bot-to-bot behaviour: delegation, rooms, peer comms and shared memory are untouched
 until Phase 6.
 
-**Standing rule (owner, Sep 14): OpenMausBot is model- and CLI-agnostic, and every item here must
+**Standing rule (owner, Sep 14): BOS Bot is model- and CLI-agnostic, and every item here must
 hold for every engine.** The engine families on main are: **Claude Code** (stream-json,
 `drivers/claude.ts`), **Codex** (app-server JSON-RPC, `drivers/codex.ts`), **pi** (rpc mode,
 `drivers/pi.ts`), the **ACP family** sharing `drivers/acp/core.ts` (Cursor, Gemini, Droid, Grok
@@ -183,7 +183,7 @@ Conventions, enforced by `omb-hook.ts` and its tests: exit 0 on every path; 5 s 
 stdin JSON parsed leniently; no network calls except loopback; no writes outside `DATA_DIR`. The
 `--settings` file is part of `privateFileFlags` already, so a changed hooks block does not change
 `argsKey` (no respawn of a healthy session) — but the hook *helper path* and the harness port are
-stable for the life of the server, so this is safe. Feature flag `OMB_HOOKS=0` disables all of it;
+stable for the life of the server, so this is safe. Feature flag `BOS_HOOKS=0` disables all of it;
 Codex bots are unaffected (their digest stays `hookCoverage: "chips"`), and Phase 1 decides what
 the Codex equivalent is.
 
@@ -201,7 +201,7 @@ so 0.2's spill-to-file is generalised: every driver's `item.completed` may carry
 `"full" | "preview" | "none"`. Compaction observation: Claude via hooks; Codex, pi and ACP have
 their own compaction the harness cannot observe today (`hookCoverage` stays `"preview"` and the
 compaction-record path in 0.7 is used when the harness rebuilds); HTTP family — the harness *is*
-the compactor (0.7). *Not supported:* box agent (no process on this machine). `OMB_HOOKS` is a
+the compactor (0.7). *Not supported:* box agent (no process on this machine). `BOS_HOOKS` is a
 Claude-driver flag; no other driver reads it.
 
 ### 0.3 Typed turns (`SendTurnInput.outputSchema`, drivers)
@@ -355,7 +355,7 @@ baseline run in step 10 is executed for at least Claude, Codex and one ACP engin
 
 - **F1 (Phase 1, prefix and cache discipline): the Claude CLI is respawned on every turn
   whenever the agents tools are mounted.** `drivers/claude.ts` keys the live process on
-  `argsKey`, which embeds `mcpServers` verbatim; `mcpServers.agents.env.OMB_COMMS_TOKEN` (and the
+  `argsKey`, which embeds `mcpServers` verbatim; `mcpServers.agents.env.BOS_COMMS_TOKEN` (and the
   computer/browser tokens) are minted per turn generation, so the key never matches and the
   "reuse the live process when it is idle and unchanged" branch is dead in practice. Proven in
   the hooks e2e: a `FAKE_CLAUDE_DUMP` (first prompt per process) written by the second turn held
@@ -436,7 +436,7 @@ Follow `docs/verification/README.md`: every claim below is proven against an iso
 ## Risks and how each is bounded
 
 - **Hooks change CLI behaviour.** Mitigation: hooks only observe and inject `additionalContext`;
-  `OMB_HOOKS=0` kill switch; the `--settings` file is already private per launch.
+  `BOS_HOOKS=0` kill switch; the `--settings` file is already private per launch.
 - **`--json-schema` may not compose with a long-lived stream-json process.** Mitigation: version
   gate plus the one-shot fallback on the same session; the contract makes "unsupported" explicit.
 - **A second checkpoint per turn doubles git work on big folders.** Mitigation: the settle snapshot

@@ -13,8 +13,9 @@ for (const m of [md, md2]) {
 }
 // markdownImageName behaviour
 const name = (src) => {
-  try { const p = decodeURIComponent(new URL(src, "https://openmausbot.invalid").pathname); return [p, p.split(/[\\/]/).filter(Boolean).at(-1), p.split("/").filter(Boolean).at(-1)]; } catch (e) { return ["THREW", String(e)]; }
+  try { const p = decodeURIComponent(new URL(src, "https://bosbot.invalid").pathname); return [p, p.split(/[\\/]/).filter(Boolean).at(-1), p.split("/").filter(Boolean).at(-1)]; } catch (e) { return ["THREW", String(e)]; }
 };
 console.log("name C:\\..\\chart.png ->", name("C:\\Users\\Maus\\chart.png"));
 console.log("name C:\\..\\my chart.png ->", name("C:\\Users\\Maus\\my%20chart.png"));
 console.log("name D:\\.hidden\\a.png ->", name("D:\\.hidden\\a.png"));
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

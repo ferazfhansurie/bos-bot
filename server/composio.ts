@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // A project API key (ak_…) creates/reuses one Composio Session. That
 // Session owns connection state, auth links and the MCP endpoint.
 import { saveConfig, type AppConfig } from "./config.ts";
@@ -9,11 +10,11 @@ import { managedConnectorUnavailableReason } from "../shared/connector-availabil
 const DEFAULT_BACKEND_ORIGIN = "https://backend.composio.dev";
 
 function apiBase() {
-  return (process.env.OMB_COMPOSIO_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3.1`).replace(/\/$/, "");
+  return (compatEnv.OMB_COMPOSIO_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3.1`).replace(/\/$/, "");
 }
 
 function toolkitBase() {
-  return (process.env.OMB_COMPOSIO_TOOLKITS_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3`).replace(/\/$/, "");
+  return (compatEnv.OMB_COMPOSIO_TOOLKITS_API ?? `${DEFAULT_BACKEND_ORIGIN}/api/v3`).replace(/\/$/, "");
 }
 
 const sessionResponseSchema = z.object({
@@ -190,8 +191,8 @@ export function setManagedBrokerAccess(access: unknown): void {
 function brokerAccess(): { url: string; token: string } | null {
   if (managedBrokerAccess !== undefined) return managedBrokerAccess;
   // No hosted default: the broker is used only when an operator configures one.
-  const url = process.env.BOS_COMPOSIO_BROKER_URL?.trim() || process.env.OMB_COMPOSIO_BROKER_URL?.trim();
-  const token = process.env.OMB_COMPOSIO_BROKER_TOKEN?.trim();
+  const url = compatEnv.BOS_COMPOSIO_BROKER_URL?.trim() || compatEnv.OMB_COMPOSIO_BROKER_URL?.trim();
+  const token = compatEnv.OMB_COMPOSIO_BROKER_TOKEN?.trim();
   if (!url || !token) return null;
   if (!managedBrokerToken.test(token)) throw new Error("The connected-apps service token is invalid");
   return { url: normalizeManagedBrokerUrl(url), token };
@@ -273,7 +274,7 @@ export type ConnectorAvailability = "configured" | "unconfigured" | "unreadable"
 
 export function connectorAvailability(
   cfg: AppConfig,
-  storeState: string | undefined = process.env.OMB_CREDENTIAL_STORE,
+  storeState: string | undefined = compatEnv.OMB_CREDENTIAL_STORE,
 ): ConnectorAvailability {
   if (configured(cfg)) return "configured";
   return storeState === "unavailable" ? "unreadable" : "unconfigured";
@@ -451,7 +452,7 @@ export async function prepareProjectSession(
     ) {
       return {
         apiKey: trimmed,
-        userId: existing.config?.user_id ?? current.userId ?? `openmausbot_${randomUUID()}`,
+        userId: existing.config?.user_id ?? current.userId ?? `bosbot_${randomUUID()}`,
         sessionId: existing.session_id,
       };
     }
@@ -461,7 +462,7 @@ export async function prepareProjectSession(
     priorUserId = existing?.config?.user_id ?? priorUserId;
   }
 
-  const userId = priorUserId ?? `openmausbot_${randomUUID()}`;
+  const userId = priorUserId ?? `bosbot_${randomUUID()}`;
   const sessionRequest: SessionCreateRequest = {
     user_id: userId,
     manage_connections: {
@@ -1123,3 +1124,4 @@ export async function toolkitCard(cfg: AppConfig, slug: string): Promise<Toolkit
 }
 
 export const CURATED_SLUGS = CURATED.map((c) => c.slug);
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

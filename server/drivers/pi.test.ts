@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // pi driver contract tests, run against the scripted fake `pi` CLI in
 // server/testing/fake-pi-cli.ts: parse the live catalog, normalize a full
 // RPC turn into canonical events, ride the toolUse→end_turn auto-continue,
@@ -158,7 +159,7 @@ describe("PiDriver catalog (fake CLI)", () => {
   });
 
   it("probes the live catalog and flags every option custom", async () => {
-    const catalog = await fetchPiModels(FAKE_CLI, { PATH: process.env.PATH ?? "", HOME: join(tmpdir(), "omb-pi-no-settings") });
+    const catalog = await fetchPiModels(FAKE_CLI, { PATH: compatEnv.PATH ?? "", HOME: join(tmpdir(), "omb-pi-no-settings") });
     expect(catalog.options).toEqual([
       { id: "ollama-cloud/glm-5.2", label: "glm-5.2", custom: true, provider: "ollama-cloud" },
       { id: "openai/gpt-4o", label: "gpt-4o", custom: true, provider: "openai" },
@@ -169,7 +170,7 @@ describe("PiDriver catalog (fake CLI)", () => {
 
   it("keeps an empty catalog when the probe reports no models", async () => {
     const catalog = await fetchPiModels(FAKE_CLI, {
-      PATH: process.env.PATH ?? "",
+      PATH: compatEnv.PATH ?? "",
       HOME: join(tmpdir(), "omb-pi-empty"),
       FAKE_PI_MODE: "no-models",
     });
@@ -204,11 +205,11 @@ describe("PiDriver catalog (fake CLI)", () => {
 
   it("reports update failure without preventing a cached catalog probe", async () => {
     expect(await updatePiModelCatalog(FAKE_CLI, {
-      PATH: process.env.PATH ?? "",
+      PATH: compatEnv.PATH ?? "",
       FAKE_PI_MODE: "update-error",
     })).toBe(false);
     const catalog = await fetchPiModels(FAKE_CLI, {
-      PATH: process.env.PATH ?? "",
+      PATH: compatEnv.PATH ?? "",
       HOME: join(tmpdir(), "omb-pi-update-error"),
       FAKE_PI_MODE: "update-error",
     });
@@ -398,10 +399,10 @@ describe("PiDriver turns (fake CLI)", () => {
     const dump = join(dir, "dump.jsonl");
     // Plant a workspace credential on the harness process itself — the leak
     // path is `...process.env`, not just input.environment.
-    const savedBox = process.env.BOX_TOKEN;
-    const savedXai = process.env.XAI_API_KEY;
-    process.env.BOX_TOKEN = "box-secret-value";
-    process.env.XAI_API_KEY = "xai-secret-value";
+    const savedBox = compatEnv.BOX_TOKEN;
+    const savedXai = compatEnv.XAI_API_KEY;
+    compatEnv.BOX_TOKEN = "box-secret-value";
+    compatEnv.XAI_API_KEY = "xai-secret-value";
     try {
       await create(undefined, {
         FAKE_PI_DUMP: dump,
@@ -410,10 +411,10 @@ describe("PiDriver turns (fake CLI)", () => {
       });
       await instance.dispose();
     } finally {
-      if (savedBox === undefined) delete process.env.BOX_TOKEN;
-      else process.env.BOX_TOKEN = savedBox;
-      if (savedXai === undefined) delete process.env.XAI_API_KEY;
-      else process.env.XAI_API_KEY = savedXai;
+      if (savedBox === undefined) delete compatEnv.BOX_TOKEN;
+      else compatEnv.BOX_TOKEN = savedBox;
+      if (savedXai === undefined) delete compatEnv.XAI_API_KEY;
+      else compatEnv.XAI_API_KEY = savedXai;
     }
 
     const rows = readFileSync(dump, "utf8")
@@ -792,3 +793,4 @@ describe("PiDriver snapshot", () => {
     await instance.dispose();
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

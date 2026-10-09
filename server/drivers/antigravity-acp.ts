@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -48,7 +49,7 @@ const REMOVED_ENVIRONMENT_KEYS = new Set([
   "ELECTRON_RUN_AS_NODE",
 ]);
 
-const BROWSER_MARKER = "__OPENMAUS_ANTIGRAVITY_AUTH_URL__";
+const BROWSER_MARKER = "__BOS_ANTIGRAVITY_AUTH_URL__";
 const browserHelperSource =
   `process.stderr.on("error",()=>process.exit(0)).write(` +
   `"${BROWSER_MARKER}"+JSON.stringify(process.argv[1])+"\\n",` +
@@ -130,13 +131,13 @@ export async function prepareAntigravityProfile(input: {
 
   const executable = process.platform === "win32" ? process.execPath.replaceAll("\\", "/") : process.execPath;
   if (/\r|\n|\0|%s/u.test(executable) || executable.includes(delimiter)) {
-    throw new Error("The OpenMausBot runtime path cannot safely suppress Antigravity browser launches.");
+    throw new Error("The BOS Bot runtime path cannot safely suppress Antigravity browser launches.");
   }
   const browserCommand = [executable, "-e", browserHelperSource, "--", "%s"]
     .map(quoteBrowserArgument)
     .join(" ");
   const environment: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(input.baseEnv ?? process.env)) {
+  for (const [key, value] of Object.entries(input.baseEnv ?? compatEnv)) {
     if (!REMOVED_ENVIRONMENT_KEYS.has(key.toUpperCase())) environment[key] = value;
   }
   stripWorkspaceCredentialEnv(environment);
@@ -303,7 +304,7 @@ export class AntigravityAcpClient {
             "The executable was found, but did not finish starting. " +
             (this.nativeStartupHint ? `${this.nativeStartupHint} ` : "") +
             `Startup output: ${this.startupOutputBytes} bytes; diagnostic output: ${this.startupDiagnosticBytes} bytes. ` +
-            "Retry setup. If it still fails, share this error and your OpenMausBot version; do not paste Google sign-in links or tokens.",
+            "Retry setup. If it still fails, share this error and your BOS Bot version; do not paste Google sign-in links or tokens.",
           ));
         } else reject(new Error(`${method} timed out.`));
       }, timeoutMs);
@@ -316,7 +317,7 @@ export class AntigravityAcpClient {
   async initialize(timeoutMs = STARTUP_TIMEOUT_MS): Promise<any> {
     const initialized = await this.request("initialize", {
       protocolVersion: 1,
-      clientInfo: { name: "openmausbot", version: "0.0.0" },
+      clientInfo: { name: "bosbot", version: "0.0.0" },
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
     }, timeoutMs);
     this.initializationComplete = true;
@@ -529,7 +530,7 @@ export function isValidAntigravityInitializeResult(
  * @returns A promise that resolves when verification succeeds, or rejects if initialization fails.
  */
 export async function validateAntigravityRuntime(runtime: AntigravityRuntime, expectedVersion: string): Promise<void> {
-  const profileDirectory = await mkdtemp(join(tmpdir(), "openmaus-antigravity-verify-"));
+  const profileDirectory = await mkdtemp(join(tmpdir(), "bos-antigravity-verify-"));
   let client: AntigravityAcpClient | undefined;
   let failed = false;
   let failure: unknown;
@@ -542,7 +543,7 @@ export async function validateAntigravityRuntime(runtime: AntigravityRuntime, ex
       // into TEMP. Forced shutdown skips its own cleanup. Keep verification's
       // extraction inside the profile we already remove after confirmed close.
       baseEnv: process.platform === "win32"
-        ? { ...process.env, TEMP: profileDirectory, TMP: profileDirectory }
+        ? { ...compatEnv, TEMP: profileDirectory, TMP: profileDirectory }
         : undefined,
     });
     client = new AntigravityAcpClient(runtime, profile, profileDirectory);

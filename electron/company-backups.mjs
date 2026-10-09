@@ -256,3 +256,4 @@ async function readUploadReceipt(response, signal) {
   try { const value = JSON.parse(Buffer.concat(chunks).toString("utf8")); if (record(value)) return value; } catch {}
   fail("invalid_response", "The local workspace returned an invalid upload receipt.");
 }
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

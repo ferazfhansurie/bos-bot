@@ -9,7 +9,7 @@ export class WorkspaceBackupMaintenance {
   assertAvailable(): void {
     if (this.active && this.updateOwner) throw Object.assign(new Error("An update is prepared. Cancel it or finish restarting before starting new work."), { status: 503 });
     if (this.active) throw Object.assign(new Error(this.pendingRestore
-      ? "A workspace restore is ready. Fully quit and reopen OpenMausBot (or restart the hosted server) to finish."
+      ? "A workspace restore is ready. Fully quit and reopen BOS Bot (or restart the hosted server) to finish."
       : "A workspace backup is in progress. Try again when it finishes."), { status: 503 });
   }
 

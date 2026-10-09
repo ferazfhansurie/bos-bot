@@ -1,3 +1,4 @@
+import { compatEnvironment } from "./branding-env.cjs";
 // Windows close-to-tray, kept Electron-free so the rules stay unit-testable.
 //
 // On Windows the window IS the app: closing it fired window-all-closed and
@@ -9,7 +10,7 @@
 
 export function closeToTrayEnabled({ platform, env }) {
   // Smoke runs close the window to end the app; keep that path intact.
-  return platform === "win32" && env.OMB_SMOKE_TEST !== "1";
+  return platform === "win32" && compatEnvironment(env).OMB_SMOKE_TEST !== "1";
 }
 
 export function createCloseToTray({ createTray, buildMenu, title, onOpen, onQuit, log = () => {} }) {
@@ -62,3 +63,4 @@ export function createCloseToTray({ createTray, buildMenu, title, onOpen, onQuit
     },
   };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

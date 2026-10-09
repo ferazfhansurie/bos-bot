@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { request as httpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFileSync, readFileSync } from "node:fs";
@@ -16,7 +17,7 @@ it("desktop update endpoint refuses busy work and retains exclusive maintenance 
   // Only the fixture emulates Electron's private utility channel, never a
   // production environment variable or HTTP route supplying the capability.
   writeFileSync(preload, `process.parentPort={on(name,fn){if(name==='message')setImmediate(()=>fn({data:{type:'openmausbot:desktop-mutation-token',token:'${token}'}}));},postMessage(){}};`);
-  const env=verificationServerEnvironment({...process.env,FAKE_CLAUDE_MODE:"slow",FAKE_CLAUDE_SLOW_FINISH_GATE:finish},dataDir,Number(new URL(url).port));
+  const env=verificationServerEnvironment({...compatEnv,FAKE_CLAUDE_MODE:"slow",FAKE_CLAUDE_SLOW_FINISH_GATE:finish},dataDir,Number(new URL(url).port));
   env.OMB_DESKTOP_PARENT="1";
   env.OMB_DESKTOP_LIFECYCLE_GENERATION="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
   child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
@@ -88,3 +89,4 @@ it("desktop update endpoint refuses busy work and retains exclusive maintenance 
   expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"new explicit host generation may continue"})).status).toBe(202);
  } finally {await waitForExit(child,{signal:"SIGTERM"});await fixture.close();}
 },60000);
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

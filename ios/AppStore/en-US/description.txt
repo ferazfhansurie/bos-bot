@@ -24,4 +24,4 @@ REQUIREMENTS
 
 Requires BOS for macOS, available at bos.aihlete.com. The phone connects over your local network, or from elsewhere over Tailscale (optional, not affiliated with BOS). Your Mac must be awake with BOS running. Spoken replies use your own ElevenLabs API key, stored in the phone's Keychain.
 
-BOS is based on the open-source OpenMausBot project.
+BOS is based on the open-source BOS Bot project.

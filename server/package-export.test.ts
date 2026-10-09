@@ -233,3 +233,4 @@ describe("package export", () => {
   });
 
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

@@ -164,3 +164,4 @@ export function groupGoalWorkerInstructions(args: {
 export function groupGoalAssignmentKey(memberId: string, instruction: string): string {
   return `${memberId}:${instruction.trim().toLocaleLowerCase().replace(/\s+/g, " ")}`;
 }
+// branding compatibility (electron/branding-compat.json): stored-prompt-tags: existing message and skill delimiters are still readable by the current parsers

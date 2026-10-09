@@ -459,3 +459,4 @@ export function remarkThreadRefs(threads: ThreadRefCandidate[], currentBotId?: s
     visit(tree);
   };
 }
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; escaped-links: escaped link parsers and desktop scheme registration keep accepting saved links

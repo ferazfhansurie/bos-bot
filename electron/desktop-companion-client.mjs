@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "./branding-env.cjs";
 // Desktop companion client.
 //
 // The remote device credential stays in Electron's OS-encrypted credential
@@ -54,8 +55,8 @@ const cleanLabel = (value, fallback) => {
  * of the configured control plane (accounts.example.com -> example.com, which
  * issues c-<id>.example.com). Nothing configured means no hosted endpoint is
  * trusted; there is no upstream default. */
-export function managedCompanionHostSuffix(environment = process.env) {
-  const explicit = String(environment?.BOS_COMPANION_HOST_SUFFIX ?? "")
+export function managedCompanionHostSuffix(environment = compatEnv) {
+  const explicit = String(compatEnvironment(environment)?.BOS_COMPANION_HOST_SUFFIX ?? "")
     .trim()
     .toLowerCase()
     .replace(/^\.+/, "");
@@ -73,7 +74,7 @@ export function managedCompanionHostSuffix(environment = process.env) {
  * an explicit Tailscale MagicDNS name. WireGuard protects cleartext HTTP on
  * the latter; accepting LAN IPs there would silently turn the long-lived
  * bearer into plaintext Wi-Fi traffic. */
-export function normalizeDesktopCompanionEndpoint(value, environment = process.env) {
+export function normalizeDesktopCompanionEndpoint(value, environment = compatEnv) {
   let raw = String(value ?? "").trim();
   if (!raw) return "";
   if (!/^https?:\/\//i.test(raw)) {
@@ -152,7 +153,7 @@ export async function pairDesktopCompanion({
 }) {
   const endpoint = normalizeDesktopCompanionEndpoint(rawEndpoint);
   if (!endpoint) {
-    throw new Error("Enter the OpenMausBot HTTPS companion address or full Tailscale name ending in .ts.net");
+    throw new Error("Enter the BOS Bot HTTPS companion address or full Tailscale name ending in .ts.net");
   }
   const code = String(rawCode ?? "").trim();
   if (!PAIRING_CODE.test(code)) throw new Error("Enter the six-digit code shown on the other computer");
@@ -413,3 +414,4 @@ export async function startDesktopCompanionRelay({
   }
   throw new Error("Every desktop companion relay port is already in use");
 }
+// branding compatibility (electron/branding-compat.json): ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

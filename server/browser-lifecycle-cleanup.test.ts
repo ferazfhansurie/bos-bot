@@ -12,7 +12,7 @@ import {
 
 const folders: string[] = [];
 const journal = () => {
-  const folder = mkdtempSync(join(tmpdir(), "openmaus-browser-cleanup-"));
+  const folder = mkdtempSync(join(tmpdir(), "bos-browser-cleanup-"));
   folders.push(folder);
   return join(folder, "browser-cleanups.json");
 };
@@ -223,3 +223,4 @@ describe("durable browser lifecycle cleanup", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual([request]);
   });
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Actual browser + actual BrowserPanel, always in a disposable fixture HOME.
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
@@ -6,10 +7,10 @@ import { launchVerificationServer, runControlOmb } from "./control-omb.ts";
 import { mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
 
 
-const binaryPath = process.env.OMB_VERIFY_BROWSER_BINARY;
-const executablePath = process.env.OMB_VERIFY_BROWSER_CHROME;
+const binaryPath = compatEnv.OMB_VERIFY_BROWSER_BINARY;
+const executablePath = compatEnv.OMB_VERIFY_BROWSER_CHROME;
 if (!binaryPath || !executablePath) throw new Error("Set OMB_VERIFY_BROWSER_BINARY and OMB_VERIFY_BROWSER_CHROME to explicit installed binaries.");
-const fixture = await launchVerificationServer(process.env, undefined, undefined, { binaryPath, executablePath });
+const fixture = await launchVerificationServer(compatEnv, undefined, undefined, { binaryPath, executablePath });
 let ui: MountedPreview | undefined;
 try {
   await runControlOmb(["new-bot", "--name", "Pepper", "--url", fixture.info.url]);
@@ -36,6 +37,7 @@ try {
 } finally {
   await ui?.close();
   // close --all is scoped to this fixture's HOME, never the operator's.
-  await promisify(execFile)(binaryPath, ["close", "--all"], { env: { HOME: fixture.info.dataDir, USERPROFILE: fixture.info.dataDir, PATH: process.env.PATH }, timeout: 15_000 }).catch(() => {});
+  await promisify(execFile)(binaryPath, ["close", "--all"], { env: { HOME: fixture.info.dataDir, USERPROFILE: fixture.info.dataDir, PATH: compatEnv.PATH }, timeout: 15_000 }).catch(() => {});
   await fixture.close();
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

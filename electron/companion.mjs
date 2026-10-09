@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 // The companion sidecar's lifecycle, as seen by the desktop app.
 //
 // The sidecar is a separate process on purpose — it is the only thing here
@@ -219,7 +220,7 @@ async function start({ resourcesPath, harnessPort, mutationToken, hostedUrl = nu
   // passes this value only after it has verified the managed connector, and
   // an inherited value would bypass that gate and make Settings claim a dead
   // or attacker-selected route is ready.
-  const childEnvironment = { ...process.env };
+  const childEnvironment = { ...compatEnv };
   delete childEnvironment.OMB_COMPANION_HOSTED_URL;
   delete childEnvironment.OMB_COMPANION_INTERNAL_ORIGIN;
   delete childEnvironment.OMB_PHONE_SECRET_PUBLIC_KEY;
@@ -421,7 +422,7 @@ export async function companionState() {
 }
 
 /** Re-read Tailscale without restarting the sidecar or dropping connected
- * phones. Tailscale may be installed, signed in, or enabled after OpenMausBot
+ * phones. Tailscale may be installed, signed in, or enabled after BOS Bot
  * starts, so startup-only detection makes an otherwise healthy route look
  * permanently unavailable. */
 export async function companionRefreshTailscale() {
@@ -488,3 +489,4 @@ export async function companionCloudDesktopAccess(deviceId, allowed) {
   await control(allowed ? "POST" : "DELETE", `/devices/${deviceId}/cloud-desktop`).catch(() => {});
   return companionState();
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

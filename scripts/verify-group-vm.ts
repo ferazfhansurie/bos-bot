@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -6,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import { launchVerificationServer, runControlOmb } from "./control-omb.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const podman = process.env.OMB_VERIFY_PODMAN;
-const machine = process.env.OMB_VERIFY_MACHINE;
+const podman = compatEnv.OMB_VERIFY_PODMAN;
+const machine = compatEnv.OMB_VERIFY_MACHINE;
 if (!podman || !isAbsolute(podman) || !machine) {
   throw new Error("Set OMB_VERIFY_PODMAN to an absolute executable path and OMB_VERIFY_MACHINE explicitly");
 }
@@ -21,7 +22,7 @@ const controller = new AbortController();
 const cancel = () => controller.abort();
 process.once("SIGINT", cancel);
 process.once("SIGTERM", cancel);
-const fixture = await launchVerificationServer(process.env, controller.signal, {
+const fixture = await launchVerificationServer(compatEnv, controller.signal, {
   binDir: dirname(podman), host: connection.URI, sshKey: connection.Identity, staticDir: join(ROOT, "dist"),
 });
 async function api(path: string, body?: unknown, method = body === undefined ? "GET" : "POST", cleanup = false): Promise<any> {
@@ -104,3 +105,4 @@ const evidenceDir = join(ROOT, ".omb-scratch/verification-logs");
 mkdirSync(evidenceDir, { recursive: true });
 writeFileSync(join(evidenceDir, "group-vm-routing.json"), JSON.stringify(receipt, null, 2));
 console.log(JSON.stringify(receipt));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

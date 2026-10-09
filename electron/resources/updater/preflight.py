@@ -106,3 +106,4 @@ res["checks"] = {
 c = res["checks"]
 res["ok"] = c["health_ok"] and c["health_pid_is_server"] and c["single_main_app"] and not c["blocking_jobs"]
 print(json.dumps(res, indent=2))
+# branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; installer-preflight: restart preflight must still recognize old server processes

@@ -1,9 +1,10 @@
+import { compatEnv } from "./branding-env.cjs";
 // CUA computer-use wiring for the Electron main process.
 //
 // Two modes, per cua-driver's EMBEDDING.md:
 //  - "embedded" (packaged app): spawn our own private daemon via
-//    EmbeddedCuaDriverHost so TCC grants attribute to OpenMausBot and the
-//    driver inherits them. One prompt, named OpenMausBot, out of the box.
+//    EmbeddedCuaDriverHost so TCC grants attribute to BOS Bot and the
+//    driver inherits them. One prompt, named BOS Bot, out of the box.
 //  - "standalone" (dev): attach to an already-installed CuaDriver.app daemon
 //    (its own TCC identity, typically already granted on a dev machine).
 //
@@ -50,7 +51,7 @@ const STANDALONE_SOCKET = path.join(
 const HOST_BUNDLE_ID = "com.openmausbot.app";
 const CUA_ENV = { CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" };
 const execFileAsync = promisify(execFile);
-process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED ??= "0";
+compatEnv.CUA_DRIVER_RS_TELEMETRY_ENABLED ??= "0";
 
 // Where cua-driver installs itself on Windows: under the user profile, with
 // the packages directory holding the versioned releases. The installer's own
@@ -72,7 +73,7 @@ const connectionStore = createCuaConnectionStore({
 
 function ensureLinuxRuntime() {
   if (!linuxRuntime) {
-    const support = linuxLocalControlSupport(process.platform, process.env);
+    const support = linuxLocalControlSupport(process.platform, compatEnv);
     if (!support.available) {
       linuxRuntime = createUnavailableLinuxRuntime({
         connectionStore,
@@ -88,13 +89,13 @@ function ensureLinuxRuntime() {
     }
     try {
       let bundledDriverPath;
-      if (app.isPackaged && !process.env.CUA_DRIVER_PATH) {
+      if (app.isPackaged && !compatEnv.CUA_DRIVER_PATH) {
         bundledDriverPath = path.join(process.resourcesPath, "cua-linux-x64", "cua-driver");
         // AppImage builders may normalize the read-only resource tree to 0755
         // or 0775. Always copy only the pinned binaries to a fresh 0700
         // process-owned directory and verify their hashes after the copy, so
         // every AppImage follows the same execution invariant.
-        if (process.env.APPIMAGE) {
+        if (compatEnv.APPIMAGE) {
           reapStaleAppImageCuaBundles();
           linuxBundleStage ??= stageAppImageCuaBundle({ resourcesPath: process.resourcesPath });
           bundledDriverPath = linuxBundleStage.driverPath;
@@ -135,7 +136,7 @@ export function resolveWindowsDriver() {
 }
 
 export function resolveDriverBinary() {
-  if (process.env.CUA_DRIVER_PATH) return process.env.CUA_DRIVER_PATH;
+  if (compatEnv.CUA_DRIVER_PATH) return compatEnv.CUA_DRIVER_PATH;
   if (app.isPackaged) {
     const bundled = path.join(process.resourcesPath, "cua-driver" + (process.platform === "win32" ? ".exe" : ""));
     if (fs.existsSync(bundled)) return bundled;
@@ -175,7 +176,7 @@ async function loadEmbeddedSdk() {
     return { ...embedded, ...permissions };
   }
   const isWindows = process.platform === "win32";
-  process.env.OPENMAUSBOT_CUA_SDK_LIBRARY = path.join(
+  compatEnv.OPENMAUSBOT_CUA_SDK_LIBRARY = path.join(
     process.resourcesPath,
     "cua-sdk",
     "native",
@@ -193,7 +194,7 @@ async function attachStandalone(signal) {
     signal.throwIfAborted();
     // Launch CuaDriver.app through LaunchServices so Accessibility /
     // Screen Recording stay on com.trycua.driver — the identity this
-    // machine already granted — instead of the freshly signed OpenMausBot.
+    // machine already granted — instead of the freshly signed BOS Bot.
     const launch = execFileAsync("/usr/bin/open", ["-a", "CuaDriver"], {
       timeout: 8_000, killSignal: "SIGKILL", maxBuffer: 8_192,
     });
@@ -227,7 +228,7 @@ async function startEmbedded(binary, signal) {
   signal.throwIfAborted();
   // CUA's embedding contract requires grants before the child daemon starts;
   // these SDK calls execute in Electron main so macOS attributes them to
-  // OpenMausBot rather than to a terminal or helper process.
+  // BOS Bot rather than to a terminal or helper process.
   if (process.platform === "darwin") {
     const permissionStatus = sdk.requestMacOSPermissions();
     if (!sdk.hasRequiredMacOSPermissions(permissionStatus)) {
@@ -235,7 +236,7 @@ async function startEmbedded(binary, signal) {
         !permissionStatus.accessibility && "Accessibility",
         !permissionStatus.screenRecording && "Screen Recording",
       ].filter(Boolean).join(" and ");
-      throw new Error(`${missing || "macOS permissions"} required; grant access in System Settings and restart OpenMausBot`);
+      throw new Error(`${missing || "macOS permissions"} required; grant access in System Settings and restart BOS Bot`);
     }
   }
   const host = new sdk.EmbeddedCuaDriverHost(binary, HOST_BUNDLE_ID);
@@ -276,7 +277,7 @@ export async function startCua() {
   }
 
   const wantEmbedded =
-    process.platform === "win32" || app.isPackaged || process.env.OPENMAUSBOT_CUA_EMBEDDED === "1";
+    process.platform === "win32" || app.isPackaged || compatEnv.OPENMAUSBOT_CUA_EMBEDDED === "1";
   let nextConnection;
 
   if (wantEmbedded) {
@@ -331,7 +332,7 @@ export async function cuaPermissionsStatus() {
     timeout: 5000,
     killSignal: "SIGKILL",
     maxBuffer: 65_536,
-    env: { ...process.env, ...CUA_ENV },
+    env: { ...compatEnv, ...CUA_ENV },
   }).catch((error) => ({ stdout: error.stdout }));
   try {
     return { available: true, ...JSON.parse(out.stdout) };
@@ -439,3 +440,4 @@ export function registerCuaIpc() {
     return ensureLinuxRuntime().getStatus();
   }));
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

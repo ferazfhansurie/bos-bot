@@ -25,13 +25,13 @@ Fish Audio and ElevenLabs keys are stored separately, so switching engines does 
 
 ### Chatterbox (local)
 
-OpenMausBot speaks through any OpenAI-compatible server that runs [Chatterbox](https://github.com/resemble-ai/chatterbox) behind `POST /v1/audio/speech` — for example LocalAI with a Chatterbox model installed, or a small wrapper service around `pip install chatterbox-tts`.
+BOS Bot speaks through any OpenAI-compatible server that runs [Chatterbox](https://github.com/resemble-ai/chatterbox) behind `POST /v1/audio/speech` — for example LocalAI with a Chatterbox model installed, or a small wrapper service around `pip install chatterbox-tts`.
 
 1. Start your Chatterbox server locally and note its address, for example `http://127.0.0.1:4123`.
 2. In App Settings, pick **Chatterbox (local)** as the voice engine, paste the server address, and set the model id your server expects (the default is `chatterbox-turbo`).
 3. Pick a voice. Voice ids come from the server's `/v1/models` listing when it has one; otherwise a **Default** entry uses the server's built-in voice.
 
-There is no API key. OpenMausBot sends the text to the configured server address, so synthesis stays on your machine only when that server is local. Per-agent voice overrides work the same as with the other engines, and a dead or unreachable server is reported as a clear error instead of a hang.
+There is no API key. BOS Bot sends the text to the configured server address, so synthesis stays on your machine only when that server is local. Per-agent voice overrides work the same as with the other engines, and a dead or unreachable server is reported as a clear error instead of a hang.
 
 ## Call mode
 
@@ -45,4 +45,4 @@ The composer microphone uses Apple's local speech recognition in the macOS deskt
 
 ## Memory
 
-Each bot can keep plain-text memory that you can inspect, correct, or delete. Memory is not a hidden remote profile; it lives with the local OpenMausBot data.
+Each bot can keep plain-text memory that you can inspect, correct, or delete. Memory is not a hidden remote profile; it lives with the local BOS Bot data.

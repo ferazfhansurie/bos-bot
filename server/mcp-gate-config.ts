@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // Turning a bot's own MCP server into a gated one.
 //
 // Shared by every driver that mounts external MCP servers, so the rule about
@@ -12,8 +13,8 @@ import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 /** Characters of a single tool result allowed into context, or 0 to mount
  * bot servers directly as before. `OMB_MCP_RESULT_BUDGET=0` is the escape
  * hatch for a bot that genuinely needs whole payloads in the conversation. */
-export function resultBudget(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.OMB_MCP_RESULT_BUDGET;
+export function resultBudget(env: NodeJS.ProcessEnv = compatEnv): number {
+  const raw = compatEnvironment(env).OMB_MCP_RESULT_BUDGET;
   if (raw === undefined || raw === "") return DEFAULT_RESULT_BUDGET;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : DEFAULT_RESULT_BUDGET;
@@ -69,3 +70,4 @@ export function gateServer(input: {
     },
   };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

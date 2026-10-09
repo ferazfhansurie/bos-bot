@@ -15,7 +15,7 @@ const legacyNameFor = (botId: string) => {
   return `ogb-${prefix}-${hash}`;
 };
 
-describe("OpenMaus-managed Box inventory", () => {
+describe("Bos-managed Box inventory", () => {
   let api: Server;
   let boxes: ProviderBox[] = [];
   let listStatus = 200;
@@ -278,7 +278,7 @@ describe("OpenMaus-managed Box inventory", () => {
     const inventory = await box.listManagedBoxes(cfg, [{ botId, name: "Conflict", inUse: false }]);
 
     expect(inventory).toMatchObject({ available: false, instances: [] });
-    expect(inventory.problem).toMatch(/no longer has its OpenMausBot owner name/i);
+    expect(inventory.problem).toMatch(/no longer has its BOS Bot owner name/i);
     expect(journal.boxCreateRecoverySnapshot()).toContainEqual({ botId, boxId, resolved: true });
     expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
       "GET /api/box/v1/boxes",
@@ -705,3 +705,4 @@ describe("OpenMaus-managed Box inventory", () => {
     );
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

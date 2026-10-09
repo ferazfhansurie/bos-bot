@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 // First dependency of main: isolate paths before imports capture Electron state.
 import { app } from "electron";
 import { lstatSync, mkdirSync } from "node:fs";
@@ -17,11 +18,12 @@ if (STAGING) {
   app.setPath("userData", userData);
   app.setPath("sessionData", userData);
   app.setAppLogsPath(path.join(userData, "logs"));
-  process.env.OMB_DATA_DIR = data;
-  process.env.OMB_COMPANION_DIR = path.join(data, "companion");
-  process.env.OMB_COMPANION_NAME = "BOS Staging";
-  process.env.OMB_DISABLE_LEGACY_MIGRATION = "1";
+  compatEnv.OMB_DATA_DIR = data;
+  compatEnv.OMB_COMPANION_DIR = path.join(data, "companion");
+  compatEnv.OMB_COMPANION_NAME = "BOS Staging";
+  compatEnv.OMB_DISABLE_LEGACY_MIGRATION = "1";
   // Explicitly override inherited routing variables from a live shell.
-  delete process.env.OMB_WEBHOOK_PORT;
-  delete process.env.OGB_PORT;
+  delete compatEnv.OMB_WEBHOOK_PORT;
+  delete compatEnv.OGB_PORT;
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

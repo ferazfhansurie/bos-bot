@@ -4,7 +4,7 @@ Ask a bot in ordinary language, for example:
 
 > Prepare a report at 9 am on the first of every month, in Asia/Kolkata.
 
-The bot turns calendar timing into a cron expression, and OpenMausBot validates
+The bot turns calendar timing into a cron expression, and BOS Bot validates
 it. The existing confirmation card shows the rule, its timezone and the next
 three dates. Nothing is scheduled until you confirm. The scheduler wakes the
 bot at the matching time; no model runs in the background to check the date.
@@ -57,7 +57,7 @@ use an appropriate event/webhook workflow instead of a fake weekly schedule.
   to the Box runner. The agent tools call these `run_on: "maus"` and
   `run_on: "box"`; legacy stored `runOn: "cloud"` still means Box and is not
   migrated to a different runner.
-- OpenMausBot must be running to dispatch routines, including cloud-targeted
+- BOS Bot must be running to dispatch routines, including cloud-targeted
   routines. There is no external always-on scheduling service: the schedule
   runs inside the app on your computer — it is not Grok's or anyone's cloud —
   so a sleeping computer or a quit app runs nothing, and the app cannot wake
@@ -65,7 +65,7 @@ use an appropriate event/webhook workflow instead of a fake weekly schedule.
   in, it keeps the computer from idle-sleeping for the hour before a due
   routine and while one runs (Automations → *Keep this computer awake for
   routines*, on by default; a closed lid still sleeps). For true 24/7, run
-  OpenMausBot on a VPS — see [deploy-vps.md](deploy-vps.md).
+  BOS Bot on a VPS — see [deploy-vps.md](deploy-vps.md).
 - Existing catch-up policy remains: up to 12 hours late, one missed occurrence
   can be dispatched; older work receives a missed-run receipt. The next date
   advances without replaying every missed minute. Queued/running/waiting work

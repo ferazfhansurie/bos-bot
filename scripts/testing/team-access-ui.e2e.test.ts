@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -8,11 +9,11 @@ import { runControlOmb } from "../control-omb.ts";
 import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const enabled = process.env.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env }));
+const enabled = compatEnv.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv }));
 
 (enabled ? it : it.skip)("lets an owner select and revoke exactly the Chief's additional teams in the real settings UI", async () => {
   const child = spawn(process.execPath, ["--experimental-strip-types", "scripts/control-omb.ts", "ui", "launch"], {
-    cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+    cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
   let error = "";
@@ -96,3 +97,4 @@ const enabled = process.env.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBin
     await waitForExit(child, { signal: "SIGINT", graceMs: 30_000 });
   }
 }, 240_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

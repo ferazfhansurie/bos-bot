@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Opt-in acceptance against disposable containers only. No app or provider data.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -5,17 +6,17 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const podman = process.env.OMB_VERIFY_PODMAN;
-const machine = process.env.OMB_VERIFY_MACHINE;
+const podman = compatEnv.OMB_VERIFY_PODMAN;
+const machine = compatEnv.OMB_VERIFY_MACHINE;
 if (!podman || !machine) throw new Error("Set OMB_VERIFY_PODMAN and OMB_VERIFY_MACHINE to an explicit test engine");
-const output = resolve(process.env.OMB_VERIFY_OUTPUT || ".omb-scratch/firefox");
+const output = resolve(compatEnv.OMB_VERIFY_OUTPUT || ".omb-scratch/firefox");
 mkdirSync(output, { recursive: true });
 // Keep Podman's connection/config lookup intact while isolating app imports.
-const engineEnv = { ...process.env };
+const engineEnv = { ...compatEnv };
 const fixtureHome = mkdtempSync(resolve(output, "home-"));
-process.env.HOME = fixtureHome;
-process.env.USERPROFILE = fixtureHome;
-process.env.OMB_DATA_DIR = resolve(fixtureHome, "app-data");
+compatEnv.HOME = fixtureHome;
+compatEnv.USERPROFILE = fixtureHome;
+compatEnv.OMB_DATA_DIR = resolve(fixtureHome, "app-data");
 const { containerRunArgs, perBotLocalVmTarget, IMAGE } = await import("../server/container-computer.ts");
 const run = (args: string[]) => execFileSync(podman, ["--connection", machine, ...args], { env: engineEnv, encoding: "utf8", timeout: 90_000 }).trim();
 const sandboxProbe = readFileSync(new URL("./testing/firefox-sandbox.py", import.meta.url), "utf8");
@@ -73,3 +74,4 @@ for (const mode of ["before", "after"] as const) {
   }
 }
 writeFileSync(resolve(output, "receipt.json"), JSON.stringify({ passed: true, receipt }, null, 2));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

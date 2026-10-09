@@ -75,3 +75,4 @@ test("invalid snapshot requests are ignored and schedule settings use only their
   await f.bridge.companyBackups.configureSchedule(input);
   assert.deepEqual(f.invoked, [["company-backups:configure-schedule", input]]);
 });
+// branding compatibility (electron/branding-compat.json): ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

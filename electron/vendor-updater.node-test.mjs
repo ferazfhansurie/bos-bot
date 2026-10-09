@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 // The vendored electron-updater bundle is a build artifact, but it is also the
 // code that actually runs in the packaged app. An AppImage update must land on
 // the path the user launches and wait for the old desktop to exit before it
@@ -103,7 +104,7 @@ test("the shipped installer replaces the AppImage and queues its original path f
   let relaunchEnvironment = null;
   const electron = { app: { relaunch(options) {
     relaunched = options;
-    relaunchEnvironment = { appImage: process.env.APPIMAGE, silent: process.env.APPIMAGE_SILENT_INSTALL };
+    relaunchEnvironment = { appImage: compatEnv.APPIMAGE, silent: compatEnv.APPIMAGE_SILENT_INSTALL };
     return true;
   } }, autoUpdater: new EventEmitter() };
   const load = Module._load;
@@ -118,18 +119,18 @@ test("the shipped installer replaces the AppImage and queues its original path f
   t.after(() => { lease.release(); rmSync(workspace, { recursive: true, force: true }); });
 
   // The user launches a versioned filename — the case upstream renames.
-  const launched = join(workspace, "OpenMausBot-0.1.43-x86_64.AppImage");
-  const staged = join(workspace, "pending", "OpenMausBot-0.1.44-x86_64.AppImage");
+  const launched = join(workspace, "BOS-Bot-0.1.43-x86_64.AppImage");
+  const staged = join(workspace, "pending", "BOS-Bot-0.1.44-x86_64.AppImage");
   mkdirSync(join(workspace, "pending"));
   writeFileSync(launched, "old", { mode: 0o755 });
   writeFileSync(staged, "new", { mode: 0o755 });
 
-  const previous = process.env.APPIMAGE;
-  const previousSilent = process.env.APPIMAGE_SILENT_INSTALL;
-  process.env.APPIMAGE = launched;
+  const previous = compatEnv.APPIMAGE;
+  const previousSilent = compatEnv.APPIMAGE_SILENT_INSTALL;
+  compatEnv.APPIMAGE = launched;
   t.after(() => {
-    if (previous === undefined) delete process.env.APPIMAGE;
-    else process.env.APPIMAGE = previous;
+    if (previous === undefined) delete compatEnv.APPIMAGE;
+    else compatEnv.APPIMAGE = previous;
   });
 
   const renames = [];
@@ -146,10 +147,10 @@ test("the shipped installer replaces the AppImage and queues its original path f
 
   assert.equal(readFileSync(launched, "utf8"), "new", "the update must land on the launched path");
   assert.equal(existsSync(staged), false, "the staged download must be consumed");
-  assert.deepEqual(readdirSync(workspace).sort(), ["OpenMausBot-0.1.43-x86_64.AppImage", "data", "pending"]);
+  assert.deepEqual(readdirSync(workspace).sort(), ["BOS-Bot-0.1.43-x86_64.AppImage", "data", "pending"]);
   assert.deepEqual(relaunched, { execPath: launched, args: [] });
   assert.deepEqual(relaunchEnvironment, { appImage: launched, silent: "true" });
-  assert.equal(process.env.APPIMAGE_SILENT_INSTALL, previousSilent, "the old process keeps its environment");
+  assert.equal(compatEnv.APPIMAGE_SILENT_INSTALL, previousSilent, "the old process keeps its environment");
   assert.throws(() => acquireDataDirLease(join(workspace, "data")), /already using this data directory/);
   assert.deepEqual(renames, [], "no filename change means no appimage-filename-updated event");
 });
@@ -162,19 +163,19 @@ test("a rejected AppImage relaunch is reported without quitting the desktop", (t
   const { AppImageUpdater, BaseUpdater } = createRequire(import.meta.url)("./vendor/electron-updater.cjs");
   const workspace = mkdtempSync(join(tmpdir(), "omb-appimage-relaunch-failed-"));
   t.after(() => rmSync(workspace, { recursive: true, force: true }));
-  const launched = join(workspace, "OpenMausBot.AppImage");
+  const launched = join(workspace, "BOS-Bot.AppImage");
   const staged = join(workspace, "pending.AppImage");
   writeFileSync(launched, "old");
   writeFileSync(staged, "new");
-  const previous = process.env.APPIMAGE;
-  const previousSilent = process.env.APPIMAGE_SILENT_INSTALL;
-  process.env.APPIMAGE = launched;
-  process.env.APPIMAGE_SILENT_INSTALL = "previous";
+  const previous = compatEnv.APPIMAGE;
+  const previousSilent = compatEnv.APPIMAGE_SILENT_INSTALL;
+  compatEnv.APPIMAGE = launched;
+  compatEnv.APPIMAGE_SILENT_INSTALL = "previous";
   t.after(() => {
-    if (previous === undefined) delete process.env.APPIMAGE;
-    else process.env.APPIMAGE = previous;
-    if (previousSilent === undefined) delete process.env.APPIMAGE_SILENT_INSTALL;
-    else process.env.APPIMAGE_SILENT_INSTALL = previousSilent;
+    if (previous === undefined) delete compatEnv.APPIMAGE;
+    else compatEnv.APPIMAGE = previous;
+    if (previousSilent === undefined) delete compatEnv.APPIMAGE_SILENT_INSTALL;
+    else compatEnv.APPIMAGE_SILENT_INSTALL = previousSilent;
   });
   const errors = [];
   const updater = {
@@ -190,7 +191,7 @@ test("a rejected AppImage relaunch is reported without quitting the desktop", (t
   BaseUpdater.prototype.quitAndInstall.call(updater, true, true);
   assert.deepEqual(errors, ["Could not schedule the updated AppImage to restart"]);
   assert.equal(updater.quitAndInstallCalled, false);
-  assert.equal(process.env.APPIMAGE_SILENT_INSTALL, "previous");
+  assert.equal(compatEnv.APPIMAGE_SILENT_INSTALL, "previous");
   assert.equal(readFileSync(launched, "utf8"), "new", "the installed replacement remains available for a manual restart");
 });
 
@@ -206,14 +207,14 @@ test("the running AppImage is never removed before its replacement is in place",
   const workspace = mkdtempSync(join(tmpdir(), "omb-appimage-failed-"));
   t.after(() => rmSync(workspace, { recursive: true, force: true }));
 
-  const launched = join(workspace, "OpenMausBot-0.1.43-x86_64.AppImage");
+  const launched = join(workspace, "BOS-Bot-0.1.43-x86_64.AppImage");
   writeFileSync(launched, "the app the user has", { mode: 0o755 });
 
-  const previous = process.env.APPIMAGE;
-  process.env.APPIMAGE = launched;
+  const previous = compatEnv.APPIMAGE;
+  compatEnv.APPIMAGE = launched;
   t.after(() => {
-    if (previous === undefined) delete process.env.APPIMAGE;
-    else process.env.APPIMAGE = previous;
+    if (previous === undefined) delete compatEnv.APPIMAGE;
+    else compatEnv.APPIMAGE = previous;
   });
 
   // A staged download that is not there stands in for every way the move can
@@ -239,25 +240,25 @@ test("the running AppImage is never removed before its replacement is in place",
   assert.deepEqual(readdirSync(workspace), [basename(launched)], "a partial download was left behind");
 });
 
-const xvfb = process.platform === "linux" && !process.env.DISPLAY
+const xvfb = process.platform === "linux" && !compatEnv.DISPLAY
   ? spawnSync("which", ["xvfb-run"], { encoding: "utf8" }).stdout?.trim()
   : "";
-const dbusRunSession = process.platform === "linux" && !process.env.DBUS_SESSION_BUS_ADDRESS
+const dbusRunSession = process.platform === "linux" && !compatEnv.DBUS_SESSION_BUS_ADDRESS
   ? spawnSync("which", ["dbus-run-session"], { encoding: "utf8" }).stdout?.trim()
   : "";
 
 test("Electron relaunch waits for deferred cleanup and the replacement acquires the same data directory", {
-  skip: process.platform === "win32" || (process.platform === "linux" && !process.env.DISPLAY && !xvfb)
+  skip: process.platform === "win32" || (process.platform === "linux" && !compatEnv.DISPLAY && !xvfb)
     ? true
-    : process.platform === "linux" && !process.env.DBUS_SESSION_BUS_ADDRESS && !dbusRunSession
+    : process.platform === "linux" && !compatEnv.DBUS_SESSION_BUS_ADDRESS && !dbusRunSession
       ? "no session bus and no dbus-run-session; single-instance lock cannot be tested"
       : false,
   timeout: 20_000,
 }, async (t) => {
   const workspace = mkdtempSync(join(tmpdir(), "omb-appimage-relaunch-"));
   t.after(() => rmSync(workspace, { recursive: true, force: true }));
-  const launched = join(workspace, "OpenMausBot-1.0.0.AppImage");
-  const staged = join(workspace, "OpenMausBot-2.0.0.AppImage");
+  const launched = join(workspace, "BOS-Bot-1.0.0.AppImage");
+  const staged = join(workspace, "BOS-Bot-2.0.0.AppImage");
   const receipt = join(workspace, "restarted.json");
   const fixture = join(workspace, "main.cjs");
   mkdirSync(join(workspace, "user-data"));
@@ -314,10 +315,10 @@ test("Electron relaunch waits for deferred cleanup and the replacement acquires 
   `);
   const electron = createRequire(import.meta.url)("electron");
   const args = ["--no-sandbox", fixture];
-  const env = { ...process.env };
+  const env = { ...compatEnv };
   delete env.ELECTRON_RUN_AS_NODE;
   const run = xvfb ? [xvfb, "-a", electron, ...args] : [electron, ...args];
-  const launch = process.env.DBUS_SESSION_BUS_ADDRESS || !dbusRunSession ? run : [dbusRunSession, "--", ...run];
+  const launch = compatEnv.DBUS_SESSION_BUS_ADDRESS || !dbusRunSession ? run : [dbusRunSession, "--", ...run];
   const child = spawn(launch[0], launch.slice(1), { env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", chunk => { output += chunk; });
@@ -337,3 +338,4 @@ test("Electron relaunch waits for deferred cleanup and the replacement acquires 
   });
   assert.equal(readFileSync(launched, "utf8"), `#!${process.execPath}\n${replacement}`);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

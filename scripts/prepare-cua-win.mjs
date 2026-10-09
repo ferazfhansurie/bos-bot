@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Stage the Windows CUA executable and native SDK outside ASAR.
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -42,7 +43,7 @@ async function binaryVersion(candidate) {
 }
 
 async function officialBinary() {
-  const cache = join(root, "node_modules", ".cache", "openmausbot", `cua-driver-${release.version}-win`);
+  const cache = join(root, "node_modules", ".cache", "bosbot", `cua-driver-${release.version}-win`);
   const cachedBinary = join(cache, "cua-driver.exe");
   if ((await binaryVersion(cachedBinary)) === expectedVersion) return cachedBinary;
 
@@ -51,7 +52,7 @@ async function officialBinary() {
   const url = `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${release.version}/${release.file}`;
   console.log(`Downloading CUA Driver ${release.version} from the official release…`);
   const response = await fetch(url, {
-    headers: { "user-agent": "OpenMausBot-packager" },
+    headers: { "user-agent": "BOS-Bot-packager" },
     signal: AbortSignal.timeout(120_000),
   });
   if (!response.ok) throw new Error(`CUA Driver download failed: HTTP ${response.status}`);
@@ -64,7 +65,7 @@ async function officialBinary() {
   await writeFile(archive, bytes);
   await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
     "Expand-Archive -LiteralPath $env:OMB_CUA_ARCHIVE -DestinationPath $env:OMB_CUA_EXTRACT"], {
-    env: { ...process.env, OMB_CUA_ARCHIVE: archive, OMB_CUA_EXTRACT: cache },
+    env: { ...compatEnv, OMB_CUA_ARCHIVE: archive, OMB_CUA_EXTRACT: cache },
     timeout: 60_000,
   });
   if ((await binaryVersion(cachedBinary)) !== expectedVersion) {
@@ -74,14 +75,14 @@ async function officialBinary() {
 }
 
 let binary;
-if (process.env.CUA_DRIVER_PATH) {
-  const suppliedVersion = await binaryVersion(process.env.CUA_DRIVER_PATH);
+if (compatEnv.CUA_DRIVER_PATH) {
+  const suppliedVersion = await binaryVersion(compatEnv.CUA_DRIVER_PATH);
   if (suppliedVersion !== expectedVersion) {
     throw new Error(
       `CUA_DRIVER_PATH must point to cua-driver ${expectedVersion}; found ${suppliedVersion ?? "an unreadable binary"}`,
     );
   }
-  binary = process.env.CUA_DRIVER_PATH;
+  binary = compatEnv.CUA_DRIVER_PATH;
 } else {
   const nativePackage = join(dependencyRoot, "@trycua", "cua-driver-win32-x64-msvc");
   if (!existsSync(nativePackage)) {
@@ -129,7 +130,7 @@ await build({
       'export { EmbeddedCuaDriverHost } from "@trycua/cua-driver/embedded";',
     ].join("\n"),
     resolveDir: root,
-    sourcefile: "openmausbot-cua-entry.mjs",
+    sourcefile: "bosbot-cua-entry.mjs",
     loader: "js",
   },
   bundle: true,
@@ -137,7 +138,7 @@ await build({
   target: "node20",
   format: "esm",
   banner: {
-    js: 'import { createRequire as __openmausbotCreateRequire } from "node:module"; const require = __openmausbotCreateRequire(import.meta.url);',
+    js: 'import { createRequire as __bosbotCreateRequire } from "node:module"; const require = __bosbotCreateRequire(import.meta.url);',
   },
   outfile: bundle,
   logLevel: "silent",
@@ -178,3 +179,4 @@ await writeFile(
 );
 
 console.log(`Staged CUA for win32-x64 from ${binary}`);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

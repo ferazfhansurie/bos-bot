@@ -290,3 +290,4 @@ test("linked-mac mention routing preserves sender peer approval", async () => {
     expect((await f.messages()).filter(m => m.from?.botId === f.local.id && m.kind === "text")).toHaveLength(0);
   } finally { await f.close(); }
 }, 90_000);
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

@@ -184,7 +184,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
     const beginsBeforeApp = begins;
     win.setSize(1180, 850);
     await win.loadURL(`${url}?app=1`);
-    await until(() => evaluate("document.body.textContent.includes('Welcome to OpenMausBot')"), "normal optional welcome flow");
+    await until(() => evaluate("document.body.textContent.includes('Welcome to BOS Bot')"), "normal optional welcome flow");
     assert.equal(await evaluate(`Boolean(${button("Sign in with your organisation")})`), false);
     assert.equal(begins, beginsBeforeApp);
     win.webContents.send("app:open-settings");
@@ -242,3 +242,4 @@ if (process.versions.electron && process.argv.includes(flag)) {
     for (const name of ["home", "user-data"]) rmSync(join(output, name), { recursive: true, force: true });
   }
 }
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

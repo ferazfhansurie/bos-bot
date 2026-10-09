@@ -24,10 +24,10 @@ describe("private managed origin", () => {
     ).toBe("/tmp/omb-companion-origin-test/origin.sock");
     expect(
       companionOriginSocket(
-        "\\\\.\\pipe\\openmausbot-companion-origin-42-12345678-1234-1234-1234-123456789abc",
+        "\\\\.\\pipe\\bosbot-companion-origin-42-12345678-1234-1234-1234-123456789abc",
         "win32",
       ),
-    ).toContain("openmausbot-companion-origin-42");
+    ).toContain("bosbot-companion-origin-42");
     expect(companionOriginSocket("\\\\.\\pipe\\foreign", "win32")).toBeNull();
   });
 
@@ -83,3 +83,4 @@ describe("private managed origin", () => {
     },
   );
 });
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

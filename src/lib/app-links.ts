@@ -3,7 +3,7 @@
 // answer rather than one per call site.
 export const APP_NAME = "BOS Bot";
 export const SUPPORT_EMAIL = "ferazfhansurie@gmail.com";
-export const APP_REPOSITORY = "https://github.com/milind-soni/OpenMausBot";
+export const APP_REPOSITORY = "https://github.com/firazfhansurie/bos-bot";
 /** The docs tree is the help centre, and it is where openmausbot.com sends
  * people too — one destination, not two competing ones. */
 export const DOCS_URL = `${APP_REPOSITORY}/tree/main/docs`;
@@ -43,3 +43,4 @@ export async function openExternalLink(url: string): Promise<void> {
   }
   window.open(url, "_blank", "noopener,noreferrer");
 }
+// branding compatibility (electron/branding-compat.json): deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

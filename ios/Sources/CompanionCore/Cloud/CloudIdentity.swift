@@ -352,3 +352,4 @@ public actor CloudIdentityCoordinator {
         return identity
     }
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; keychain: existing paired and cloud credentials stay addressable, including the plist access-group selector

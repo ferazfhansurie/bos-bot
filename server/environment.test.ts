@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,7 +43,7 @@ function importComputerProvidersInChild(dataDir: string): Promise<void> {
       process.execPath,
       ["--experimental-strip-types", "--input-type=module", "--eval", source],
       {
-        env: { ...process.env, OMB_DATA_DIR: dataDir },
+        env: { ...compatEnv, OMB_DATA_DIR: dataDir },
         stdio: ["ignore", "ignore", "pipe"],
       },
     );
@@ -60,8 +61,8 @@ function importComputerProvidersInChild(dataDir: string): Promise<void> {
 
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-  delete process.env.OMB_APP_VERSION;
-  delete process.env.OMB_ENVIRONMENT_LABEL;
+  delete compatEnv.OMB_APP_VERSION;
+  delete compatEnv.OMB_ENVIRONMENT_LABEL;
 });
 
 describe("environment identity", () => {
@@ -115,8 +116,8 @@ describe("environment identity", () => {
   });
 
   it("describes the server for clients without leaking anything secret", () => {
-    process.env.OMB_APP_VERSION = "0.1.99";
-    process.env.OMB_ENVIRONMENT_LABEL = "cab mini";
+    compatEnv.OMB_APP_VERSION = "0.1.99";
+    compatEnv.OMB_ENVIRONMENT_LABEL = "cab mini";
     const d = environmentDescriptor({ environmentId: "abc", desktopManaged: true });
     expect(d).toEqual({
       environmentId: "abc",
@@ -149,7 +150,8 @@ describe("environment identity", () => {
   });
 
   it("falls back to the checkout's package.json version, then to unknown", () => {
-    delete process.env.OMB_APP_VERSION;
+    delete compatEnv.OMB_APP_VERSION;
     expect(serverVersion()).toMatch(/^\d+\.\d+\.\d+/);
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

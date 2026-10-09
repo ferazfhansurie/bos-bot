@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Owns two disposable fake-engine workspaces; accepts no live URL or home.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -21,7 +22,7 @@ async function restartFixture(fixture: VerificationServer): Promise<ChildProcess
   assert.equal(resolve(config.instances.claude.config.cli), join(ROOT, "server", "testing", "fake-claude-cli.ts"));
   const env: NodeJS.ProcessEnv = {};
   for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) {
-    if (process.env[key]) env[key] = process.env[key];
+    if (compatEnv[key]) env[key] = compatEnv[key];
   }
   const temp = join(dataDir, "tmp");
   const home = join(dataDir, "providers", "fixture-home");
@@ -244,3 +245,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 1;
   });
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

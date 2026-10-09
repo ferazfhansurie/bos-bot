@@ -175,3 +175,4 @@ export async function nativeHostScenarios(c, { server, model = 'claude-sonnet-4-
     close: async () => { host.stop(); await instance.dispose(); },
   };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

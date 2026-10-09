@@ -1,4 +1,4 @@
-/** Identities and ordered messages shared by separate OpenMausBot homes.
+/** Identities and ordered messages shared by separate BOS Bot homes.
  * Display names never act as keys or authorization. */
 
 export type ContactKind = "person" | "bot";

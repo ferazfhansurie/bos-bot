@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Pairing codes, sessions and stream tickets for clients that are not on
 // this machine. The shape the iOS companion already proved (short-lived
 // pairing → durable per-device credential, hashed at rest), generalized.
@@ -33,12 +34,12 @@ export function daysMs(value: string | undefined, fallbackDays: number): number 
  * the term or less left is renewed for the full term again (see `renew`), so
  * a device in regular use keeps working; one that goes quiet lapses.
  * OMB_SESSION_TTL_DAYS overrides the 30-day default. */
-export const SESSION_TTL_MS = daysMs(process.env.OMB_SESSION_TTL_DAYS, 30);
+export const SESSION_TTL_MS = daysMs(compatEnv.OMB_SESSION_TTL_DAYS, 30);
 /** The most a session may live from the day it was paired, however often it
  * is used. Renewal never pushes a session past this, so a stolen cookie has a
  * bounded life and every device re-pairs occasionally. OMB_SESSION_MAX_DAYS
  * overrides the 180-day default. */
-export const SESSION_MAX_AGE_MS = daysMs(process.env.OMB_SESSION_MAX_DAYS, 180);
+export const SESSION_MAX_AGE_MS = daysMs(compatEnv.OMB_SESSION_MAX_DAYS, 180);
 /** Renewal is due once half the term or less is left. */
 export const SESSION_RENEW_WHEN_LEFT_MS = SESSION_TTL_MS / 2;
 
@@ -583,3 +584,4 @@ export class SessionRegistry {
     return record && record.expiresAt > now ? record : null;
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

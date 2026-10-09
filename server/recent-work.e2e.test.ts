@@ -95,3 +95,4 @@ it("carries a bot's recent 1:1 work into a room turn, tells the room, logs the t
     await fixture.close();
   }
 }, 180_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

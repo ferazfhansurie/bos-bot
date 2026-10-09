@@ -236,3 +236,4 @@ export async function fetchGithubTeam(input: string, fetcher: Fetcher = fetch): 
   }
   throw lastError ?? new Error("No botmrr.md, team.md, or legacy team file was found in that repository");
 }
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; upstream-team-library: the existing upstream playbook library remains the configured source until a BOS library is published

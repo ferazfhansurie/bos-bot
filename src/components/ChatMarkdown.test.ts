@@ -572,3 +572,4 @@ describe("streamed word fade", () => {
     expect(html).not.toContain("stream-word");
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support

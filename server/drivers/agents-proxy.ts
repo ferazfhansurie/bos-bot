@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Agent-to-agent comms MCP proxy — spawned as an MCP server inside a bot's
 // agent process (via the "agents" integration). Exposes peer, routine, and
 // skill tools routed back through the harness so the harness stays the
@@ -44,15 +45,15 @@ import { agentToolAnnotations } from "../agent-tool-policy.ts";
 import { peerName } from "../peer-roster.ts";
 import { boundedAgentResult } from "./agents-result.ts";
 
-const HARNESS = process.env.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
-const BOT_ID = process.env.OMB_BOT_ID ?? "";
-const THREAD_ID = process.env.OMB_THREAD_ID ?? "";
-const TOKEN = process.env.OMB_COMMS_TOKEN ?? "";
-const DEPTH = Number(process.env.OMB_TURN_DEPTH ?? "0") || 0;
-const SKILL_AUTHORING_ENABLED = process.env.OMB_SKILL_AUTHORING_ENABLED === "1";
+const HARNESS = compatEnv.OMB_HARNESS_URL ?? "http://127.0.0.1:8799";
+const BOT_ID = compatEnv.OMB_BOT_ID ?? "";
+const THREAD_ID = compatEnv.OMB_THREAD_ID ?? "";
+const TOKEN = compatEnv.OMB_COMMS_TOKEN ?? "";
+const DEPTH = Number(compatEnv.OMB_TURN_DEPTH ?? "0") || 0;
+const SKILL_AUTHORING_ENABLED = compatEnv.OMB_SKILL_AUTHORING_ENABLED === "1";
 // Opt-in computer sharing (server features.sharedComputers). Off unless the
 // harness says "1", the same way skill authoring is gated above.
-const SHARED_COMPUTERS_ENABLED = process.env.OMB_SHARED_COMPUTERS_ENABLED === "1";
+const SHARED_COMPUTERS_ENABLED = compatEnv.OMB_SHARED_COMPUTERS_ENABLED === "1";
 const MAX_CREATED_PER_TURN = 4;
 let createdThisTurn = 0;
 // Same spirit as MAX_CREATED_PER_TURN above and MAX_QUEUED_PER_THREAD in
@@ -440,12 +441,12 @@ const TOOLS = [
   },
   {
     name: "list_room_targets",
-    description: "Discover actual OpenMausBot teammates and rooms in your allowed teams. Works in a normal bot conversation too; no room is required. Returns bot and room IDs, roles and working folders, never other conversations' history. Use these bots, not native coding helpers with similar names, when the user asks their team to work together.",
+    description: "Discover actual BOS Bot teammates and rooms in your allowed teams. Works in a normal bot conversation too; no room is required. Returns bot and room IDs, roles and working folders, never other conversations' history. Use these bots, not native coding helpers with similar names, when the user asks their team to work together.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "coordinate_bots",
-    description: "Ask existing OpenMausBot teammates for advice or assign concrete work. From normal chat every assignment you send a teammate continues your one standing conversation with that teammate, so they keep the context of what you asked before; from a room it defaults to this room. Use group_id from list_room_targets for a specific room. Give one or more bot_ids — teammate ids as list_bots or your roster prints them; a unique teammate name also resolves: they receive only your brief and use their own model, tools and permissions. Busy bots queue. They can consult their specialists; all results return here and resume you automatically. Include exact file paths, constraints and what must be verified. After sending all assignments, END your turn; do not poll or wait. On return, resolve tradeoffs, verify the requested outcome and request concrete corrections if necessary before giving one final answer. Do not send acknowledgements as new work.",
+    description: "Ask existing BOS Bot teammates for advice or assign concrete work. From normal chat every assignment you send a teammate continues your one standing conversation with that teammate, so they keep the context of what you asked before; from a room it defaults to this room. Use group_id from list_room_targets for a specific room. Give one or more bot_ids — teammate ids as list_bots or your roster prints them; a unique teammate name also resolves: they receive only your brief and use their own model, tools and permissions. Busy bots queue. They can consult their specialists; all results return here and resume you automatically. Include exact file paths, constraints and what must be verified. After sending all assignments, END your turn; do not poll or wait. On return, resolve tradeoffs, verify the requested outcome and request concrete corrections if necessary before giving one final answer. Do not send acknowledgements as new work.",
     inputSchema: { type: "object", additionalProperties: false, properties: {
       group_id: { type: "string", description: "Optional destination room. Omit for this room, or your standing conversation with each teammate when chatting directly." },
       bot_ids: { type: "array", items: { type: "string", description: "A teammate's id exactly as list_bots or your roster prints it ([id: …]). A teammate's unique display name also resolves; a name shared by two reachable teammates is refused." }, minItems: 1, uniqueItems: true },
@@ -522,7 +523,7 @@ const TOOLS = [
   {
     name: "select_computer",
     description:
-      "Choose where this conversation does computer work. Call with no arguments to inspect actual available choices and the current place. For a task needing computer interaction, select the requested place, or auto to choose a suitable configured computer without asking the user to use menus. OpenMausBot reuses an existing computer first; with a configured provider it can start or provision one when needed. Do not provision for ordinary chat or just to inspect availability. A pending result means end this turn immediately: OpenMausBot updates the conversation selector and resumes the original request with that computer's real tools. Do not use the old tools after requesting a switch, repeat the task, or claim the action is done. This cannot change permissions, override Off, or switch a teammate/routine/channel.",
+      "Choose where this conversation does computer work. Call with no arguments to inspect actual available choices and the current place. For a task needing computer interaction, select the requested place, or auto to choose a suitable configured computer without asking the user to use menus. BOS Bot reuses an existing computer first; with a configured provider it can start or provision one when needed. Do not provision for ordinary chat or just to inspect availability. A pending result means end this turn immediately: BOS Bot updates the conversation selector and resumes the original request with that computer's real tools. Do not use the old tools after requesting a switch, repeat the task, or claim the action is done. This cannot change permissions, override Off, or switch a teammate/routine/channel.",
     inputSchema: { type: "object", additionalProperties: false, properties: {
       surface: { type: "string", enum: ["auto", "cloud", "vm", "local", "browser"],
         description: "auto = suitable configured computer, cloud = remote Box/VPS, vm = isolated Local VM, local = user's own desktop, browser = built-in browser. Omit to list." },
@@ -683,7 +684,7 @@ const TOOLS = [
   {
     name: "request_credential",
     description:
-      "Ask the user for a supported API key through OpenMausBot's secure credential flow. The desktop app and a freshly QR-paired mobile app show a secure entry card; older mobile pairings show how to pair again or finish on the computer. Never claim a secure field opened unless this request succeeds, and never ask the user to paste a secret into chat. The secret is saved by the desktop app and is never returned to you. After calling this tool, end the turn; OpenMausBot resumes the task after the user saves or declines.",
+      "Ask the user for a supported API key through BOS Bot's secure credential flow. The desktop app and a freshly QR-paired mobile app show a secure entry card; older mobile pairings show how to pair again or finish on the computer. Never claim a secure field opened unless this request succeeds, and never ask the user to paste a secret into chat. The secret is saved by the desktop app and is never returned to you. After calling this tool, end the turn; BOS Bot resumes the task after the user saves or declines.",
     inputSchema: {
       type: "object",
       properties: {
@@ -918,7 +919,7 @@ const TOOLS = [
   return annotations ? { ...tool, annotations } : tool;
 });
 
-const WORK_CONTINUITY_ENABLED = process.env.OMB_WORK_CONTINUITY === "1";
+const WORK_CONTINUITY_ENABLED = compatEnv.OMB_WORK_CONTINUITY === "1";
 const WORK_TOOL_NAMES = new Set(["get_work_plan", "update_work_plan"]);
 const SKILL_TOOL_NAMES = new Set(["skills_list", "skill_manage"]);
 const AUTHORING_TOOLS = (SKILL_AUTHORING_ENABLED
@@ -937,8 +938,8 @@ const SHAREABLE_TOOLS = SHARED_COMPUTERS_ENABLED
 // retain their independent loop and cannot start a second coordinator.
 const ROOM_ONLY_TOOLS = new Set(["list_room_targets", "coordinate_bots", "list_lead_actions", "report_lead_action", "resolve_lead_action"]);
 const ROOM_REPLACED_TOOLS = new Set(["ask_bot", "delegate_bot", "check_delegation", "wait_delegation", "start_thread", "send_to_thread", "wait_thread"]);
-const COORDINATING = process.env.OMB_ROOM_TURN === "1";
-const OWN_THREAD_CREATION = process.env.OMB_OWN_THREAD_CREATION === "1";
+const COORDINATING = compatEnv.OMB_ROOM_TURN === "1";
+const OWN_THREAD_CREATION = compatEnv.OMB_OWN_THREAD_CREATION === "1";
 const AVAILABLE_TOOLS = COORDINATING
   ? SHAREABLE_TOOLS.filter(tool => !ROOM_REPLACED_TOOLS.has(tool.name) || (tool.name === "start_thread" && OWN_THREAD_CREATION))
     .map(tool => tool.name === "start_thread" ? {
@@ -1506,7 +1507,7 @@ async function callTool(name: string, args: Json): Promise<{ text: string; isErr
       return { text: `${r.label ?? CREDENTIAL_TARGETS[credentialId].label} is already configured. Continue the task.` };
     }
     return {
-      text: `A secure ${r.label ?? CREDENTIAL_TARGETS[credentialId].label} request is ready. The desktop app and a freshly QR-paired mobile app show its secure entry card; older mobile pairings explain how to pair again or finish on the computer. End this turn; OpenMausBot will resume the task after the user saves or declines. Never ask them to paste the key into chat.`,
+      text: `A secure ${r.label ?? CREDENTIAL_TARGETS[credentialId].label} request is ready. The desktop app and a freshly QR-paired mobile app show its secure entry card; older mobile pairings explain how to pair again or finish on the computer. End this turn; BOS Bot will resume the task after the user saves or declines. Never ask them to paste the key into chat.`,
     };
   }
   if (name === "list_routines") {
@@ -1883,3 +1884,4 @@ rl.on("line", (line) => {
   });
 });
 rl.on("close", () => process.exit(0));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

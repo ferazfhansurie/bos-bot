@@ -802,3 +802,4 @@ describe("resolveWhatsAppBrowser", () => {
     expect(resolveWhatsAppBrowser({ ...base, env: { OMB_WHATSAPP_CHROME_PATH: "/nope" }, exists: (path) => path === chrome })).toBeNull();
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

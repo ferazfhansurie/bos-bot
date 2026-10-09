@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // server/updater-build.ts: the build half of the update button. Driven with
 // a throwaway git repo that carries the real no-downgrade.py, a fake live
 // bundle, and build commands replaced by a shell script that writes the
@@ -38,7 +39,7 @@ interface Repo { dir: string; a: string; b: string; g: (...args: string[]) => st
 function makeRepo(root: string): Repo {
   const dir = join(root, "repo");
   mkdirSync(dir);
-  const g = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
+  const g = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env: { ...compatEnv, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
   g("init", "-q", "-b", DEFAULT_RELEASE_BRANCH);
   mkdirSync(join(dir, "electron", "resources", "updater"), { recursive: true });
   writeFileSync(join(dir, "electron", "resources", "updater", "no-downgrade.py"), readFileSync(SCRIPT));
@@ -185,7 +186,7 @@ describe.skipIf(!hasPython)("update build", () => {
     let failSpeech = false;
     const run: RunCommand = async (file, args, opts) => {
       if (file === "/usr/bin/codesign") {
-        const speech = args.at(-1)!.endsWith("OpenMausBot Speech.app");
+        const speech = args.at(-1)!.endsWith("BOS Bot Speech.app");
         const requirement = `identifier "${speech ? "ai.bos.speech" : "ai.bos.bot"}" and anchor trusted`;
         // Exercise the production child-process runner's separate stdout/stderr
         // capture, while replacing only the platform executable in this fixture.
@@ -315,3 +316,4 @@ describe.skipIf(!hasPython)("update build", () => {
     await expect(buildCandidate({ dataDir, liveApp: live, source, target: { ...target, sha: c }, codesign: false, commands: FAKE_BUILD })).rejects.toMatchObject({ step: "stamp", message: /predates the install guard/ });
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

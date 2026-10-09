@@ -329,3 +329,4 @@ describe("connected-apps broker boundaries", () => {
     expect(() => normalizeAccountAlias("bad\nalias")).toThrow(/printable/i);
   });
 });
+// branding compatibility (electron/branding-compat.json): upstream-crypto-test-vector: published SHA-256 fixture input and expected digest must stay paired

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --experimental-strip-types
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // Thin, agent-friendly CLI over the same guarded MCP operations exposed to
 // external clients. It deliberately owns no second API client or wait loop.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -52,7 +53,7 @@ export const HELP_UI = `renderer (needs a ui launch handle; every verb takes --u
   ui wait-settle --ui HANDLE [--timeout 30]
   ui help`;
 
-export const HELP = `control-omb — verify a running OpenMausBot instance through its shared MCP core
+export const HELP = `control-omb — verify a running BOS Bot instance through its shared MCP core
 
 read-only:
   doctor [--url URL]
@@ -123,11 +124,11 @@ function positiveInteger(value: unknown, name: string, fallback: number, maximum
 function configuredUrl(raw: unknown, env: NodeJS.ProcessEnv, requiredForMutation: boolean): string | undefined {
   const explicit = typeof raw === "string" && raw.trim()
     ? raw.trim()
-    : env.OPENMAUSBOT_URL?.trim() || (env.OMB_PORT ? `http://127.0.0.1:${env.OMB_PORT}` : "");
+    : compatEnvironment(env).OPENMAUSBOT_URL?.trim() || (compatEnvironment(env).OMB_PORT ? `http://127.0.0.1:${compatEnvironment(env).OMB_PORT}` : "");
   if (!explicit) {
     if (requiredForMutation) {
       throw new ControlOmbError(
-        "mutating commands require an explicit OpenMausBot instance",
+        "mutating commands require an explicit BOS Bot instance",
         "start `control-omb launch`, then pass its URL with --url",
       );
     }
@@ -160,7 +161,7 @@ export async function runControlOmb(
   // The first positional after `ui` is the verb; its tail is parsed strictly per verb.
   if (command === "ui") return runControlOmbUi(args);
 
-  const env = dependencies.env ?? process.env;
+  const env = dependencies.env ?? compatEnv;
   const callTool = dependencies.callTool ?? handleToolCall;
   const requester = dependencies.request ?? request;
   const mutation = MUTATING.has(command);
@@ -377,7 +378,7 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
 
 /** Start one foreground-owned, fake-engine server with no access to user data. */
 export async function launchVerificationServer(
-  parentEnv: NodeJS.ProcessEnv = process.env,
+  parentEnv: NodeJS.ProcessEnv = compatEnv,
   signal?: AbortSignal,
   localVm?: { binDir: string; host: string; sshKey: string; staticDir: string },
   browser?: { binaryPath: string; executablePath: string },
@@ -412,11 +413,11 @@ export async function launchVerificationServer(
   const url = `http://127.0.0.1:${port}`;
   // Native browser daemons use UNIX sockets; a macOS temp home can exceed
   // their path limit. This is still an owned, randomly named fixture only.
-  const dataDir = mkdtempSync(join(browser && process.platform !== "win32" ? "/tmp" : tmpdir(), "openmausbot-verify-data-"));
+  const dataDir = mkdtempSync(join(browser && process.platform !== "win32" ? "/tmp" : tmpdir(), "bosbot-verify-data-"));
   const fixtureTemp = join(dataDir, "tmp");
   const fixtureDumpPath = join(dataDir, "fake-claude-dump.json");
   mkdirSync(fixtureTemp, { recursive: true });
-  const evidenceDir = join(tmpdir(), "openmausbot-verification-evidence");
+  const evidenceDir = join(tmpdir(), "bosbot-verification-evidence");
   mkdirSync(evidenceDir, { recursive: true });
   const logPath = join(evidenceDir, `server-${Date.now()}-${process.pid}.log`);
   writeFileSync(join(dataDir, "config.json"), JSON.stringify({
@@ -516,7 +517,7 @@ export function controlResultSucceeded(command: string, result: unknown): boolea
 
 /** pnpm swallows Ctrl-C; a launcher that owns processes must get the signal itself. */
 function requireForegroundTerminal(command: string): void {
-  if (process.env.npm_lifecycle_event === "control:omb") {
+  if (compatEnv.npm_lifecycle_event === "control:omb") {
     throw new ControlOmbError(
       `${command} must own the terminal directly so Ctrl-C can clean up its children`,
       `run \`node --experimental-strip-types scripts/control-omb.ts ${command}\``,
@@ -539,7 +540,7 @@ async function main() {
     process.once("SIGTERM", cancelStartup);
     let session: VerificationServer;
     try {
-      session = await launchVerificationServer(process.env, startup.signal);
+      session = await launchVerificationServer(compatEnv, startup.signal);
     } finally {
       process.removeListener("SIGINT", cancelStartup);
       process.removeListener("SIGTERM", cancelStartup);
@@ -582,3 +583,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 1;
   });
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ async function fixture(test: (f: Awaited<ReturnType<typeof setup>>) => Promise<v
 }
 
 async function setup(hang: boolean, fakeEnv: NodeJS.ProcessEnv) {
-  const env = { ...process.env, ...fakeEnv, FAKE_CLAUDE_VERSION: "2.1.270", ...(hang ? { FAKE_CLAUDE_TEXT_HANG: "1" } : {}) };
+  const env = { ...compatEnv, ...fakeEnv, FAKE_CLAUDE_VERSION: "2.1.270", ...(hang ? { FAKE_CLAUDE_TEXT_HANG: "1" } : {}) };
   const session = await launchVerificationServer(env, undefined, undefined, undefined, undefined, { scripted: true });
   let ready = false;
   try {
@@ -181,3 +182,4 @@ it.each([
     expect(f.turns().at(-1).resumed).toBe(false);
   }
 }, false, { FAKE_CLAUDE_CONTEXT_TOKENS: String(tokens) }), 90_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

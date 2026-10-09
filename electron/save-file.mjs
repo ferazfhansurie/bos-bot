@@ -140,3 +140,4 @@ export function collisionFreeDownloadPath(dir, sourcePath, { existsSync = fs.exi
     if (!existsSync(candidate)) return candidate;
   }
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

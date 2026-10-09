@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Stage Google's official Android Platform Tools beside the packaged app so
 // USB phone support works on a clean machine without Homebrew or an SDK.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -14,8 +15,8 @@ const archive = archiveNames[process.platform];
 if (!platform || !archive) throw new Error(`Android Platform Tools are unsupported on ${process.platform}`);
 
 const finalDir = join(root, "dist-native", "android-platform-tools", platform);
-const override = process.env.OMB_ANDROID_PLATFORM_TOOLS_SOURCE;
-const temporary = mkdtempSync(join(tmpdir(), "openmaus-android-tools-"));
+const override = compatEnv.OMB_ANDROID_PLATFORM_TOOLS_SOURCE;
+const temporary = mkdtempSync(join(tmpdir(), "bos-android-tools-"));
 const staged = join(temporary, platform);
 
 try {
@@ -37,7 +38,7 @@ try {
     // name the System32 binary absolutely — it extracts zips and understands
     // C:\ paths from any shell. unzip is the fallback for the rare Windows
     // without System32 tar, and the norm everywhere else.
-    const systemTar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+    const systemTar = join(compatEnv.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
     const extractors = process.platform === "win32"
       ? [[systemTar, ["-xf", zip, "-C", extraction]], ["unzip", ["-q", zip, "-d", extraction]]]
       : [["unzip", ["-q", zip, "-d", extraction]]];
@@ -63,3 +64,4 @@ try {
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

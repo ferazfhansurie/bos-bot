@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -9,7 +10,7 @@ import { waitForExit } from "./testing/cleanup.ts";
 
 // Deliberate opt-in: never discover the user's CLI or install a dependency.
 // The supplied binary runs against synthetic config and an owned loopback API.
-const cli = process.env.OMB_OPENCODE_E2E_CLI;
+const cli = compatEnv.OMB_OPENCODE_E2E_CLI;
 const test = cli ? it : it.skip;
 
 type Receipt = { marker?: string; endpoint: string; model: string; effort?: string; effortPresent: boolean };
@@ -82,7 +83,7 @@ test("persists per-conversation OpenCode efforts and sends them through ACP afte
     PATH: dirname(process.execPath), FAKE_CLAUDE_MODE: "happy",
   };
   for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) {
-    if (process.env[key]) isolatedEnv[key] = process.env[key];
+    if (compatEnv[key]) isolatedEnv[key] = compatEnv[key];
   }
   const restart = async () => {
     await waitForExit(restarted ?? fixture.child, { signal: "SIGTERM" });
@@ -185,3 +186,4 @@ test("persists per-conversation OpenCode efforts and sends them through ACP afte
     console.info(JSON.stringify({ logPath, evidencePath, fixtureRemoved: !existsSync(dataDir) }));
   }
 }, 180_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

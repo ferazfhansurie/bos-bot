@@ -12,7 +12,7 @@ const validPackage: any = {
     tagline: "Turn a question into a sourced brief.",
     summary: "A small research team.",
     category: "Research",
-    author: { name: "OpenMausBot" },
+    author: { name: "BOS Bot" },
     license: "MIT",
     outcomes: ["Produce a sourced brief."],
     setupMinutes: 3,
@@ -294,3 +294,4 @@ describe("bot packages", () => {
     })).toThrow("unknown playbook");
   });
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

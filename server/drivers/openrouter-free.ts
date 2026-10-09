@@ -1,9 +1,10 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Explicit, tool-capable zero-price OpenRouter connection. Never inherits keys.
 import type { ModelCatalog, ProviderDriver } from '../contracts.ts';
 import { createOpenAIChatRuntime } from './openai-chat.ts';
 const API='https://openrouter.ai/api/v1';
 // BOS-hosted relay: owner key stays server-side; installs hold a capped per-install token.
-export const BOS_FREE_API=process.env.BOS_FREE_URL||'https://bos-free.aihlete.com/api/v1';
+export const BOS_FREE_API=compatEnv.BOS_FREE_URL||'https://bos-free.aihlete.com/api/v1';
 const DEFAULT_MODEL='openrouter/free';
 // the hosted relay serves one model; its id keeps the :free shape older installs accept
 export const BOS_FREE_MODEL='bos-free/deepseek-v4-flash:free';

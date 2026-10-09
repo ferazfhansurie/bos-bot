@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "./branding-env.cjs";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -128,7 +129,7 @@ function parseRecord(path, invalidMessage, validate) {
     raw = readFileSync(path, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") return null;
-    throw leaseError("OpenMausBot cannot read the data-directory lease; refusing to start to protect its state.", error);
+    throw leaseError("BOS Bot cannot read the data-directory lease; refusing to start to protect its state.", error);
   }
   let record;
   try {
@@ -143,7 +144,7 @@ function parseRecord(path, invalidMessage, validate) {
 function readOwner(path) {
   return parseRecord(
     path,
-    "The OpenMausBot data-directory lease is invalid; refusing to start to protect its state.",
+    "The BOS Bot data-directory lease is invalid; refusing to start to protect its state.",
     isLeaseOwner,
   );
 }
@@ -151,7 +152,7 @@ function readOwner(path) {
 function readReaper(path, targetToken) {
   return parseRecord(
     path,
-    "The OpenMausBot stale-lease recovery record is invalid; refusing to start to protect its state.",
+    "The BOS Bot stale-lease recovery record is invalid; refusing to start to protect its state.",
     (value) => isReaperOwner(value, targetToken),
   );
 }
@@ -164,7 +165,7 @@ function processIsAlive(pid) {
     if (error?.code === "ESRCH") return false;
     // EPERM means the pid exists but this account cannot signal it.
     if (error?.code === "EPERM") return true;
-    throw leaseError("OpenMausBot could not verify the data-directory lease owner; refusing to start.", error);
+    throw leaseError("BOS Bot could not verify the data-directory lease owner; refusing to start.", error);
   }
 }
 
@@ -250,7 +251,7 @@ function publishRecord(path, record, prepareMessage, acquireMessage) {
       throw leaseError(acquireMessage, error);
     }
   } finally {
-    unlinkExact(candidatePath, "OpenMausBot could not remove its lease candidate.");
+    unlinkExact(candidatePath, "BOS Bot could not remove its lease candidate.");
   }
 }
 
@@ -284,21 +285,21 @@ function claimReaperAuthority(leasePath, expected) {
     if (publishRecord(
       reaperPath,
       candidate,
-      "OpenMausBot could not prepare stale-lease recovery.",
-      "OpenMausBot could not safely recover the stale data-directory lease.",
+      "BOS Bot could not prepare stale-lease recovery.",
+      "BOS Bot could not safely recover the stale data-directory lease.",
     )) return true;
 
     const current = readReaper(reaperPath, expected.token);
     if (!current) continue;
     if (current.host !== candidate.host) {
       throw leaseError(
-        `A stale OpenMausBot data-directory lease is being recovered on another machine. Recovery record: ${JSON.stringify(reaperPath)}.`,
+        `A stale BOS Bot data-directory lease is being recovered on another machine. Recovery record: ${JSON.stringify(reaperPath)}.`,
       );
     }
     if (ownerIsAlive(current)) return false;
     reaperPath = successorReaperPath(leasePath, expected.token, current.token);
   }
-  throw leaseError("OpenMausBot could not recover the stale data-directory lease after repeated interrupted attempts.");
+  throw leaseError("BOS Bot could not recover the stale data-directory lease after repeated interrupted attempts.");
 }
 
 function retireDeadOwner(leasePath, expected) {
@@ -307,17 +308,17 @@ function retireDeadOwner(leasePath, expected) {
   if (!current || current.token !== expected.token) return true;
   if (current.host !== hostname()) {
     throw leaseError(
-      `The stale OpenMausBot data-directory lease changed ownership to another machine. Lease record: ${JSON.stringify(leasePath)}.`,
+      `The stale BOS Bot data-directory lease changed ownership to another machine. Lease record: ${JSON.stringify(leasePath)}.`,
     );
   }
   if (ownerIsAlive(current)) return false;
-  unlinkExact(leasePath, "OpenMausBot could not retire the stale data-directory lease.");
+  unlinkExact(leasePath, "BOS Bot could not retire the stale data-directory lease.");
   return true;
 }
 
 function validateDataDir(dataDir) {
   if (typeof dataDir !== "string" || dataDir.trim().length === 0 || /[\r\n\0]/.test(dataDir)) {
-    throw leaseError("OpenMausBot cannot lease an invalid data directory.");
+    throw leaseError("BOS Bot cannot lease an invalid data directory.");
   }
   return dataDir;
 }
@@ -341,7 +342,7 @@ function prepareDataDir(dataDir, legacyDataDir) {
   try {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   } catch (error) {
-    throw leaseError("OpenMausBot cannot create its data directory.", error);
+    throw leaseError("BOS Bot cannot create its data directory.", error);
   }
   return join(dataDir, LEASE_NAME);
 }
@@ -352,12 +353,12 @@ function assertNoLiveDelegatedChild(dataDir) {
   if (!child) return;
   if (child.host !== hostname()) {
     throw leaseError(
-      `This OpenMausBot data directory still has a delegated server on another machine. Delegated server lease: ${JSON.stringify(childLeasePath)}.`,
+      `This BOS Bot data directory still has a delegated server on another machine. Delegated server lease: ${JSON.stringify(childLeasePath)}.`,
     );
   }
   if (ownerIsAlive(child)) {
     throw leaseError(
-      `OpenMausBot's previous server process ${child.pid} is still shutting down. Try again shortly.`,
+      `BOS Bot's previous server process ${child.pid} is still shutting down. Try again shortly.`,
     );
   }
 }
@@ -375,15 +376,15 @@ function parseCapability(value) {
 }
 
 function consumeChildCapability(environment) {
-  const value = environment[CHILD_LEASE_ENV];
+  const value = compatEnvironment(environment)[CHILD_LEASE_ENV];
   if (value === undefined) return null;
   try {
     delete environment[CHILD_LEASE_ENV];
   } catch (error) {
-    throw leaseError("OpenMausBot could not consume its private desktop lease delegation.", error);
+    throw leaseError("BOS Bot could not consume its private desktop lease delegation.", error);
   }
-  if (environment[CHILD_LEASE_ENV] !== undefined) {
-    throw leaseError("OpenMausBot could not consume its private desktop lease delegation.");
+  if (compatEnvironment(environment)[CHILD_LEASE_ENV] !== undefined) {
+    throw leaseError("BOS Bot could not consume its private desktop lease delegation.");
   }
   return value;
 }
@@ -391,7 +392,7 @@ function consumeChildCapability(environment) {
 function validateChildDelegation(dataDir, encoded) {
   validateDataDir(dataDir);
   const capability = parseCapability(encoded);
-  const invalid = () => leaseError("The OpenMausBot desktop lease delegation is invalid; refusing to start to protect its state.");
+  const invalid = () => leaseError("The BOS Bot desktop lease delegation is invalid; refusing to start to protect its state.");
   if (!capability) throw invalid();
   const parentLeasePath = join(dataDir, LEASE_NAME);
   const matchesLiveParent = (owner) => Boolean(owner
@@ -440,7 +441,7 @@ function acquireDataDirLeaseInternal(dataDir, options = {}) {
   try {
     writeFileSync(candidatePath, `${JSON.stringify(owner)}\n`, { flag: "wx", mode: 0o600, flush: true });
   } catch (error) {
-    throw leaseError("OpenMausBot cannot prepare its data-directory lease.", error);
+    throw leaseError("BOS Bot cannot prepare its data-directory lease.", error);
   }
 
   let acquired = false;
@@ -452,7 +453,7 @@ function acquireDataDirLeaseInternal(dataDir, options = {}) {
         break;
       } catch (error) {
         if (error?.code !== "EEXIST") {
-          throw leaseError("OpenMausBot cannot acquire its data-directory lease.", error);
+          throw leaseError("BOS Bot cannot acquire its data-directory lease.", error);
         }
       }
 
@@ -460,23 +461,23 @@ function acquireDataDirLeaseInternal(dataDir, options = {}) {
       if (!current) continue;
       if (current.host !== owner.host) {
         throw leaseError(
-          `This OpenMausBot data directory is already owned by a process on another machine. Lease record: ${JSON.stringify(leasePath)}.`,
+          `This BOS Bot data directory is already owned by a process on another machine. Lease record: ${JSON.stringify(leasePath)}.`,
         );
       }
       if (ownerIsAlive(current)) {
         throw leaseError(
-          `OpenMausBot is already using this data directory (process ${current.pid}). Close the other instance first. If no OpenMausBot is running, delete this lease record and start again: ${JSON.stringify(leasePath)}.`,
+          `BOS Bot is already using this data directory (process ${current.pid}). Close the other instance first. If no BOS Bot is running, delete this lease record and start again: ${JSON.stringify(leasePath)}.`,
         );
       }
       if (!retireDeadOwner(leasePath, current)) {
-        throw leaseError("A stale OpenMausBot data-directory lease is already being recovered; try again shortly.");
+        throw leaseError("A stale BOS Bot data-directory lease is already being recovered; try again shortly.");
       }
     }
   } finally {
-    unlinkExact(candidatePath, "OpenMausBot could not remove its lease candidate.");
+    unlinkExact(candidatePath, "BOS Bot could not remove its lease candidate.");
   }
 
-  if (!acquired) throw leaseError("OpenMausBot could not acquire its data-directory lease.");
+  if (!acquired) throw leaseError("BOS Bot could not acquire its data-directory lease.");
   let released = false;
   return Object.freeze({
     ownerPid: owner.pid,
@@ -486,24 +487,24 @@ function acquireDataDirLeaseInternal(dataDir, options = {}) {
       if (options.guardDelegatedChild !== false) assertNoLiveDelegatedChild(dataDir);
       const current = readOwner(leasePath);
       if (!current || current.pid !== owner.pid || current.host !== owner.host || current.token !== owner.token) {
-        throw leaseError("OpenMausBot will not release a data-directory lease owned by another process.");
+        throw leaseError("BOS Bot will not release a data-directory lease owned by another process.");
       }
       try {
         unlinkSync(leasePath);
       } catch (error) {
-        throw leaseError("OpenMausBot could not release its data-directory lease.", error);
+        throw leaseError("BOS Bot could not release its data-directory lease.", error);
       }
       released = true;
       return true;
     },
     utilityServerLeaseEnvironment() {
-      if (released) throw leaseError("OpenMausBot cannot delegate a released data-directory lease.");
+      if (released) throw leaseError("BOS Bot cannot delegate a released data-directory lease.");
       return Object.freeze({ [CHILD_LEASE_ENV]: capabilityFor(owner) });
     },
   });
 }
 
-/** Claim exclusive ownership of one persistent OpenMausBot data directory. */
+/** Claim exclusive ownership of one persistent BOS Bot data directory. */
 export function acquireDataDirLease(dataDir, options = {}) {
   return acquireDataDirLeaseInternal(dataDir, options);
 }
@@ -525,9 +526,10 @@ export function dataDirRecoverySafe(dataDir) {
  * Server entry-point API. A standalone server claims the lease; an Electron
  * utility child consumes and validates its parent's private capability.
  */
-export function acquireDataDirLeaseForProcess(dataDir, environment = process.env) {
+export function acquireDataDirLeaseForProcess(dataDir, environment = compatEnv) {
   const encoded = consumeChildCapability(environment);
   return encoded === null
     ? acquireDataDirLease(dataDir)
     : validateChildDelegation(dataDir, encoded);
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; lease: a new server must lock the same data-directory lease as an existing process; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

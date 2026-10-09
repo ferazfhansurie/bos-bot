@@ -1,6 +1,6 @@
 # Bring your own engine
 
-Two zero-code ways to run OpenMausBot bots on an engine the app doesn't ship.
+Two zero-code ways to run BOS Bot bots on an engine the app doesn't ship.
 Both live in `~/.openmausbot/config.json` under `"instances"`; restart the app
 after editing (instance entries are read at boot).
 
@@ -42,7 +42,7 @@ instance at it:
   the instance's row. An instance without a command shows up with exactly that
   hint instead of failing at first message.
 - **Sign in first.** The driver has no auth flow of its own — run the CLI once
-  in a terminal and log in there; OpenMausBot spawns it with your login intact.
+  in a terminal and log in there; BOS Bot spawns it with your login intact.
 - **Model choice stays inside the agent.** The picker shows a single
   "Agent default" entry; whatever the CLI is configured to run is what runs.
 - **`environment`** is passed to the CLI child. Foreign provider keys
@@ -89,3 +89,4 @@ entry:
   as plaintext in that file. Prefer keys scoped to the one engine.
 - A typo'd `driver` or invalid `config` never breaks the app: the instance
   shows as unavailable with the reason, and the rest of the fleet loads.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

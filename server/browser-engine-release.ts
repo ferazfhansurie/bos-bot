@@ -73,3 +73,4 @@ export function resolveAgentBrowserReleaseAsset(
   const key = platform === "linux" && musl ? `linux-musl-${arch}` : `${platform}-${arch}`;
   return RELEASES.get(key) ?? null;
 }
+// branding compatibility (electron/branding-compat.json): upstream-artifacts: pinned third-party binaries and historical upstream provenance cannot be redirected by a product rename

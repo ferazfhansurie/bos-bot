@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -62,11 +63,11 @@ function fakeRuntime(startupDelayMs = 0): { directory: string; executable: strin
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  delete process.env.FAKE_ACP_AUTH_METHOD;
-  delete process.env.FAKE_ACP_MODELS;
-  delete process.env.FAKE_ACP_MODES;
-  delete process.env.FAKE_ACP_DUMP;
-  delete process.env.FAKE_ACP_PAD_QUESTION_OPTION;
+  delete compatEnv.FAKE_ACP_AUTH_METHOD;
+  delete compatEnv.FAKE_ACP_MODELS;
+  delete compatEnv.FAKE_ACP_MODES;
+  delete compatEnv.FAKE_ACP_DUMP;
+  delete compatEnv.FAKE_ACP_PAD_QUESTION_OPTION;
   while (scratch.length) await removeTempDir(scratch.pop()!);
 });
 
@@ -459,7 +460,7 @@ describe("official Antigravity runtime", () => {
     const runtime = await resolveAntigravityRuntime(fake.executable);
     const profile = await prepareAntigravityProfile({
       instanceId: "slow-start", runtime, baseDir: fake.directory,
-      baseEnv: { PATH: process.env.PATH, FAKE_ACP_AUTH_METHOD: "oauth-personal", FAKE_ACP_MODELS: "account-model" },
+      baseEnv: { PATH: compatEnv.PATH, FAKE_ACP_AUTH_METHOD: "oauth-personal", FAKE_ACP_MODELS: "account-model" },
     });
     await expect(probeAntigravityModels({ runtime, profile, fallbackDefault: "account-model" }))
       .resolves.toMatchObject({ options: [{ id: "account-model" }] });
@@ -550,7 +551,7 @@ describe("official Antigravity runtime", () => {
     const profile = await prepareAntigravityProfile({
       instanceId: "slow-models",
       runtime,
-      baseEnv: { ...process.env, FAKE_ACP_MODE: "hang-initialize" },
+      baseEnv: { ...compatEnv, FAKE_ACP_MODE: "hang-initialize" },
     });
     const started = Date.now();
     await expect(probeAntigravityModels({
@@ -578,7 +579,7 @@ describe("Antigravity OAuth validation", () => {
   it("reads the sign-in link from either announcement Google makes", () => {
     // The $BROWSER helper re-emits the link JSON-encoded behind this marker;
     // the plain notice is what a terminal user would have read.
-    expect(authorizationUrlFromLine(`__OPENMAUS_ANTIGRAVITY_AUTH_URL__${JSON.stringify(authorizationUrl)}`))
+    expect(authorizationUrlFromLine(`__BOS_ANTIGRAVITY_AUTH_URL__${JSON.stringify(authorizationUrl)}`))
       .toBe(authorizationUrl);
     expect(authorizationUrlFromLine(`${ANTIGRAVITY_AUTH_PREFIX}${authorizationUrl}`)).toBe(authorizationUrl);
   });
@@ -586,7 +587,7 @@ describe("Antigravity OAuth validation", () => {
   it("ignores ordinary server logs, including ones quoting a link", () => {
     expect(authorizationUrlFromLine("I0905 11:02:06.473720 8283299200 main.py:80] Starting AGY ACP Server...")).toBeNull();
     expect(authorizationUrlFromLine(`I0905 credential_manager.py:553] ${ANTIGRAVITY_AUTH_PREFIX}${authorizationUrl}`)).toBeNull();
-    expect(authorizationUrlFromLine("__OPENMAUS_ANTIGRAVITY_AUTH_URL__not-json")).toBeNull();
+    expect(authorizationUrlFromLine("__BOS_ANTIGRAVITY_AUTH_URL__not-json")).toBeNull();
     expect(authorizationUrlFromLine("")).toBeNull();
   });
 

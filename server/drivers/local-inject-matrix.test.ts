@@ -595,3 +595,4 @@ describe("Cloud vs Local catalog access", () => {
     expect(DroidAgentDriver.metadata.access ?? "subscription").toBe("subscription");
   });
 });
+// branding compatibility (electron/branding-compat.json): plugin-protocol: external engine plugin grants and stored injected model ids keep their existing labels; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,7 +1,8 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Loaded only by group-local-vm.e2e.test.ts via --import. Replace the container
 // boundary, preserving the real server, lease code, MCP config and fake driver.
 import { registerHooks } from 'node:module';
-const state = process.env.OMB_TEST_VM_STATE;
+const state = compatEnv.OMB_TEST_VM_STATE;
 if (!state) throw new Error('An explicit isolated VM state file is required');
 const actual = new URL('../container-computer.ts?actual', import.meta.url).href;
 const mock = new URL('./group-local-vm-mock.mjs', import.meta.url).href;
@@ -47,3 +48,4 @@ registerHooks({
     return result;
   },
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

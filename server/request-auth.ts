@@ -87,7 +87,7 @@ export function isProxied(req: IncomingMessage): boolean {
 
 /** A request over an IPC listener (a unix socket or a named pipe) has no peer
  * address. Only a gateway on this machine can reach such a listener, and it
- * is there to forward traffic from elsewhere (`openmausbot serve --tunnel`),
+ * is there to forward traffic from elsewhere (`bosbot serve --tunnel`),
  * so the request is remote by construction: whatever headers it carries or
  * lacks, it never gets loopback trust. */
 export function ipcPeer(req: IncomingMessage): boolean {
@@ -516,3 +516,4 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
   }
   return deny(403, "forbidden: cross-origin request");
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

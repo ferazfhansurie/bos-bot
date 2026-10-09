@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The real panels, image decoder and fetch cancellation in a disposable
 // browser/server. Only the cloud provider transport is simulated.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -12,7 +13,7 @@ import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
 import { mountPreview, type MountedPreview } from "./preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const enabled = process.env.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env }));
+const enabled = compatEnv.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv }));
 interface FixtureInfo { ui: string; url: string; dataDir: string; logPath: string }
 
 describe("cloud preview recovery in the real renderer", () => {
@@ -28,7 +29,7 @@ describe("cloud preview recovery in the real renderer", () => {
     let stderr = "";
     let info: FixtureInfo;
     child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
     child.stderr!.on("data", (chunk: Buffer) => { stderr += String(chunk); });
@@ -210,3 +211,4 @@ describe("cloud preview recovery in the real renderer", () => {
     expect(existsSync(info!.logPath)).toBe(true);
   }, 720_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

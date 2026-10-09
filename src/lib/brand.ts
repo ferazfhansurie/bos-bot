@@ -1,6 +1,6 @@
 // The deployment's brand (name, tagline, accent, logo, support link) — served
 // by GET /api/brand from a brand.json on the server, applied once before the
-// first paint so the window never shows "OpenMausBot" and then renames itself.
+// first paint so the window never shows "BOS Bot" and then renames itself.
 // Pure helpers live here so they can be unit-tested without a DOM.
 
 export interface Brand {

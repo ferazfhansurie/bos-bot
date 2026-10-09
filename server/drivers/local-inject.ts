@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../../electron/branding-env.cjs";
 // Shared local-host inject — the sidecar workflow, inside the picker.
 // Probe oMLX / Ollama / EXO / LM Studio / Unsloth, list whatever they
 // serve under Custom on every agent, and decode a pick back into a host
@@ -110,8 +111,8 @@ export function anthropicBaseUrl(host: LocalHost): string {
   return host.baseUrl.replace(/\/v1\/?$/, "");
 }
 
-export function hostApiKey(host: LocalHost, env: Record<string, string | undefined> = process.env): string {
-  if (host.apiKeyEnv && env[host.apiKeyEnv]) return env[host.apiKeyEnv]!;
+export function hostApiKey(host: LocalHost, env: Record<string, string | undefined> = compatEnv): string {
+  if (host.apiKeyEnv && compatEnvironment(env)[host.apiKeyEnv]) return compatEnvironment(env)[host.apiKeyEnv]!;
   if (host.apiKey) return host.apiKey;
   if (host.id === "unsloth" || host.id === "unsloth_api") {
     const fromFile = readUnslothKey(env);
@@ -309,7 +310,7 @@ function loadedProbeUrl(host: LocalHost): string | null {
 
 /** Live models from the same local hosts the sidecar probed. */
 export async function probeLocalInjects(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = compatEnv,
   fetchImpl: typeof fetch = fetch,
 ): Promise<InjectedModel[]> {
   const seenHosts = new Set<string>();
@@ -355,11 +356,11 @@ export async function probeLocalInjects(
 /** Append live local models as custom rows. Official rows stay first. */
 export async function mergeLocalInject(
   catalog: ModelCatalog,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = compatEnv,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ModelCatalog> {
-  const vitest = env.VITEST ?? process.env.VITEST;
-  const probe = env.OPENMAUSBOT_PROBE_LOCAL_INJECT ?? process.env.OPENMAUSBOT_PROBE_LOCAL_INJECT;
+  const vitest = env.VITEST ?? compatEnv.VITEST;
+  const probe = compatEnvironment(env).OPENMAUSBOT_PROBE_LOCAL_INJECT ?? compatEnv.OPENMAUSBOT_PROBE_LOCAL_INJECT;
   if (vitest === "true" && probe !== "1") return catalog;
   const extras = await probeLocalInjects(env, fetchImpl);
   if (!extras.length) return catalog;
@@ -420,3 +421,4 @@ export function applyClaudeInject(
   env.ANTHROPIC_MODEL = inject.model;
   return { model: inject.model, injected: true };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "./branding-env.cjs";
 // Lifecycle for the remotely-managed Cloudflare Tunnel connector.
 //
 // This module deliberately knows nothing about account UI or Electron IPC.
@@ -149,14 +150,14 @@ export function resolveCloudflaredBinary({
   appPath,
   platform = process.platform,
   arch = process.arch,
-  environment = process.env,
+  environment = compatEnv,
   exists = fs.existsSync,
 } = {}) {
   const executable = platform === "win32" ? "cloudflared.exe" : "cloudflared";
   const bundled = path.join(String(resourcesPath ?? ""), "cloudflared", executable);
   if (isPackaged) return exists(bundled) ? bundled : null;
 
-  const override = environment.OMB_CLOUDFLARED_PATH?.trim();
+  const override = compatEnvironment(environment).OMB_CLOUDFLARED_PATH?.trim();
   if (override) return path.isAbsolute(override) && exists(override) ? override : null;
 
   const staged = path.join(
@@ -212,7 +213,7 @@ function processIsAlive(pid) {
 const currentUserId = () =>
   process.platform === "win32" ? undefined : (process.getuid?.() ?? os.userInfo().uid);
 
-/** Remove only token files created by a dead OpenMausBot process. Suspicious
+/** Remove only token files created by a dead BOS Bot process. Suspicious
  * paths are preserved instead of broadening cleanup around a secret. */
 export function cleanupStaleManagedCompanionTokens(
   runtimeRoot,
@@ -412,7 +413,7 @@ export function createManagedCompanionTunnel({
   runtimeExecutable = process.execPath,
   originPort = MANAGED_COMPANION_ORIGIN_PORT,
   runtimeRoot,
-  environment = process.env,
+  environment = compatEnv,
   fileSystem = fs,
   spawnProcess = spawn,
   fetchImpl = fetchWithPublicDnsFallback,
@@ -719,3 +720,4 @@ export function createManagedCompanionTunnel({
     },
   });
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

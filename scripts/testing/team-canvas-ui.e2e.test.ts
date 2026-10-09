@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,8 +11,8 @@ import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
 import { fixtureApi } from "./preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
-const enabled = process.env.OMB_UI_E2E === "1" || Boolean(binary);
+const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv });
+const enabled = compatEnv.OMB_UI_E2E === "1" || Boolean(binary);
 if (!enabled) console.info("skipping team canvas UI e2e: set OMB_UI_E2E=1 to install the pinned browser");
 
 type BotRecord = {
@@ -27,7 +28,7 @@ type BotRecord = {
   try {
     let stdout = "", stderr = "";
     child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
     child.stderr!.on("data", (chunk: Buffer) => { stderr += String(chunk); });
@@ -383,3 +384,4 @@ type BotRecord = {
     await waitForExit(child, { signal: "SIGINT", graceMs: 30_000 });
   }
 }, binary ? 240_000 : 720_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

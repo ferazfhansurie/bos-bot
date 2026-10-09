@@ -103,3 +103,4 @@ it("ranks basename and contiguous matches above scattered deep matches", () => {
   expect(rankFilePaths(["x/y.ts", "a.ts"], "", 10)).toEqual(["a.ts", "x/y.ts"]);
   expect(rankFilePaths(["a.ts", "b.ts"], "zz", 10)).toEqual([]);
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

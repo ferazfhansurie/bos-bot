@@ -829,3 +829,4 @@ it('fresh /v1/me accepts protected cookies and revocation cannot be restored by 
   expect((await call('/v1/me',{headers:{cookie}})).status).toBe(401);
   expect((await call('/v1/me',{token:account.token})).status).toBe(401);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

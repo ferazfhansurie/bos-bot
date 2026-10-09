@@ -68,3 +68,4 @@ test("new client creation conflict never retries through rotation or account rec
   await assert.rejects(client.createNewInstallation({ accountToken: "synthetic", clientInstanceId: "new", name: "test", platform: "windows" }));
   assert.deepEqual(paths, ["/v1/installations"]);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

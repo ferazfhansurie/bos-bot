@@ -33,9 +33,9 @@ const sourceChecks = ['electron/main.mjs', 'electron/preload.cjs', 'electron/too
   assert.ok(bytes.equals(readFileSync(join(repo, p))), `archive differs: ${p}`);
   return { path: p, sha256: sha(bytes) };
 });
-const required = ['ui/index.html', 'server/index.js', 'companion', 'skills', 'licenses', 'cua-driver', 'cua-sdk/cua-sdk.mjs', 'cua-sdk/native/libcua_driver_sdk.dylib', 'cua-sdk/native/cua_driver_node_runtime.node', 'cloudflared/cloudflared', 'browser-engine/manifest.json', 'android-platform-tools/darwin/adb', 'OpenMausBot Speech.app/Contents/MacOS/speech-helper', 'updater/preflight.py', 'updater/no-downgrade.py'];
+const required = ['ui/index.html', 'server/index.js', 'companion', 'skills', 'licenses', 'cua-driver', 'cua-sdk/cua-sdk.mjs', 'cua-sdk/native/libcua_driver_sdk.dylib', 'cua-sdk/native/cua_driver_node_runtime.node', 'cloudflared/cloudflared', 'browser-engine/manifest.json', 'android-platform-tools/darwin/adb', 'BOS Bot Speech.app/Contents/MacOS/speech-helper', 'updater/preflight.py', 'updater/no-downgrade.py'];
 for (const p of required) statSync(join(resources, p));
-for (const p of ['cua-driver', 'cloudflared/cloudflared', 'android-platform-tools/darwin/adb', 'OpenMausBot Speech.app/Contents/MacOS/speech-helper']) assert.ok(statSync(join(resources, p)).mode & 0o111, `not executable: ${p}`);
+for (const p of ['cua-driver', 'cloudflared/cloudflared', 'android-platform-tools/darwin/adb', 'BOS Bot Speech.app/Contents/MacOS/speech-helper']) assert.ok(statSync(join(resources, p)).mode & 0o111, `not executable: ${p}`);
 function treeDigest(name) {
   const root = join(resources, name), files = [];
   function walk(dir) { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p); else if (e.isFile()) files.push(p); } }
@@ -54,7 +54,7 @@ const native = assertNativeCompatibility(resources, repo, commit);
 assert.equal(native.shellCommit, commit);
 const authority = 'Apple Development: Firaz Fhansurie (KL78M575FW)';
 const identities = [];
-for (const [candidate, installed] of [[app, '/Applications/BOS Bot.app'], [join(resources, 'OpenMausBot Speech.app'), '/Applications/BOS Bot.app/Contents/Resources/OpenMausBot Speech.app']]) {
+for (const [candidate, installed] of [[app, '/Applications/BOS Bot.app'], [join(resources, 'BOS Bot Speech.app'), '/Applications/BOS Bot.app/Contents/Resources/BOS Bot Speech.app']]) {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', candidate]);
   // codesign may write the designated requirement to either output stream.
   const details = spawnSync('/usr/bin/codesign', ['-d', '-r-', '--verbose=4', candidate], { encoding: 'utf8' });

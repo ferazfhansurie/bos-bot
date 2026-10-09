@@ -332,3 +332,4 @@ describe("PhoneSecretSubmissionRegistry", () => {
     }, "operation-1", async () => {})).resolves.toBeUndefined();
   });
 });
+// branding compatibility (electron/branding-compat.json): phone-crypto: HPKE labels are part of the paired phone credential protocol; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

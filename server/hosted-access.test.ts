@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Owned full server, disposable data, dynamically loaded enterprise hook.
 // The HTTPS backchannel is injected, never redirected to a real portal.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -84,8 +85,8 @@ beforeAll(async () => {
     }
   `);
   child = spawn(process.execPath, [join(ROOT, "server/index.ts")], { cwd: ROOT, env: fixtureEnv = {
-    ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-    ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+    ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
     HOME: home, USERPROFILE: home, OMB_PORT: String(PORT), OMB_WEBHOOK_PORT: String(PORT + 1),
     OMB_STATIC_DIR: join(home, "static"), OMB_BROWSER_CONNECTION: join(home, "browser-connection.json"),
     OMB_ENTERPRISE_DIR: layer, OMB_LICENSE_KEY: "fixture-only", OMB_ADMIN_URL: "https://admin.example.test",
@@ -216,3 +217,4 @@ describe("hosted bridge in the full server", () => {
     expect((await call("/api/health")).status).toBe(200);
   }, 30_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

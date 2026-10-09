@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import { createServer } from "node:http";
@@ -25,12 +26,12 @@ import {
 const ENV_KEYS = ["BOS_CONTROL_PLANE_URL", "OMB_CONTROL_PLANE_URL", "BOS_COMPANION_HOST_SUFFIX"];
 const savedEnv = {};
 beforeAll(() => {
-  for (const key of ENV_KEYS) { savedEnv[key] = process.env[key]; delete process.env[key]; }
-  process.env.BOS_CONTROL_PLANE_URL = "https://accounts.bos.example";
+  for (const key of ENV_KEYS) { savedEnv[key] = compatEnv[key]; delete compatEnv[key]; }
+  compatEnv.BOS_CONTROL_PLANE_URL = "https://accounts.bos.example";
 });
 afterAll(() => {
   for (const key of ENV_KEYS) {
-    if (savedEnv[key] === undefined) delete process.env[key]; else process.env[key] = savedEnv[key];
+    if (savedEnv[key] === undefined) delete compatEnv[key]; else compatEnv[key] = savedEnv[key];
   }
 });
 
@@ -322,3 +323,4 @@ describe("desktop companion loopback relay", () => {
     for (const socket of upgraded) socket.destroy();
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

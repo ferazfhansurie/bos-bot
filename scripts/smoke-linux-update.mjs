@@ -69,12 +69,12 @@ async function main() {
   mkdirSync(applications);
 
   // The bug shape: a version in the filename, and a launcher pinned to it.
-  const launched = path.join(installDir, "OpenMausBot-0.0.1-x86_64.AppImage");
+  const launched = path.join(installDir, "BOS-Bot-0.0.1-x86_64.AppImage");
   copyFileSync(packaged, launched);
   const desktopEntry = path.join(applications, "com.openmausbot.app.desktop");
   writeFileSync(
     desktopEntry,
-    `[Desktop Entry]\nName=OpenMausBot\nExec=${launched} %U\nType=Application\n`,
+    `[Desktop Entry]\nName=BOS Bot\nExec=${launched} %U\nType=Application\n`,
   );
 
   // Isolate every path the updater writes to.
@@ -174,3 +174,4 @@ async function main() {
 }
 
 app.whenReady().then(main).catch((error) => fail(error.stack ?? String(error)));
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same

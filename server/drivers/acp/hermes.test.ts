@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -8,39 +9,39 @@ import {
   HERMES_ACP_MODELS_TIMEOUT_ENV,
   HERMES_ACP_MODELS_DEFAULT_TIMEOUT_MS,
   HERMES_CONFIG_MODEL_ID,
-  HERMES_OPENMAUS_SCREENSHOT_COMPAT,
-  HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL,
+  HERMES_BOS_SCREENSHOT_COMPAT,
+  HERMES_BOS_SCREENSHOT_COMPAT_MODEL,
   bindHermesScreenshotCompat,
   fetchHermesAcpModels,
   hermesAcpModelId,
   hermesConfiguredModel,
 } from "./hermes.ts";
 
-describe("Hermes OpenMaus screenshot compatibility binding", () => {
+describe("Hermes Bos screenshot compatibility binding", () => {
   it("binds the exact leaf model for an injected local picker model", () => {
     const env = {
-      [HERMES_OPENMAUS_SCREENSHOT_COMPAT]: undefined,
-      [HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL]: undefined,
+      [HERMES_BOS_SCREENSHOT_COMPAT]: undefined,
+      [HERMES_BOS_SCREENSHOT_COMPAT_MODEL]: undefined,
     };
 
     bindHermesScreenshotCompat(env, "omlx::gemma-4-31b-it-bf16");
 
-    expect(env[HERMES_OPENMAUS_SCREENSHOT_COMPAT]).toBe("1");
-    expect(env[HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL]).toBe("gemma-4-31b-it-bf16");
+    expect(env[HERMES_BOS_SCREENSHOT_COMPAT]).toBe("1");
+    expect(env[HERMES_BOS_SCREENSHOT_COMPAT_MODEL]).toBe("gemma-4-31b-it-bf16");
   });
 
   it.each([undefined, "", "anthropic/claude-opus-4.6", "unknown::model"])(
     "clears inherited compatibility for an unbound model %s",
     (model) => {
       const env = {
-        [HERMES_OPENMAUS_SCREENSHOT_COMPAT]: "1",
-        [HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL]: "stale/model",
+        [HERMES_BOS_SCREENSHOT_COMPAT]: "1",
+        [HERMES_BOS_SCREENSHOT_COMPAT_MODEL]: "stale/model",
       };
 
       bindHermesScreenshotCompat(env, model);
 
-      expect(env[HERMES_OPENMAUS_SCREENSHOT_COMPAT]).toBeUndefined();
-      expect(env[HERMES_OPENMAUS_SCREENSHOT_COMPAT_MODEL]).toBeUndefined();
+      expect(env[HERMES_BOS_SCREENSHOT_COMPAT]).toBeUndefined();
+      expect(env[HERMES_BOS_SCREENSHOT_COMPAT_MODEL]).toBeUndefined();
     },
   );
 });
@@ -269,7 +270,7 @@ process.stdin.on("data", (chunk) => {
     writeFileSync(cli, FAKE_CLI_SOURCE, { mode: 0o755 });
     // The spawn gets exactly this env, so PATH has to survive for the
     // script's /usr/bin/env node shebang to resolve.
-    return { cli, env: { PATH: process.env.PATH ?? "", ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}), HOME: home, USERPROFILE: home, ...env } };
+    return { cli, env: { PATH: compatEnv.PATH ?? "", ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}), HOME: home, USERPROFILE: home, ...env } };
   }
 
   it("returns the advertised catalog when session/new answers inside the deadline", async () => {

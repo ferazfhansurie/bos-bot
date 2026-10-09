@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Transparent stdio bridge into Cua Driver's official MCP server inside the
 // Local VM. This process defines no tools and parses no MCP messages; the
 // piping, drain-safe exit, and watchdog live in mcp-bridge.ts, shared with
@@ -17,8 +18,8 @@ if (!container || !/^[a-zA-Z0-9_.-]+$/.test(container) || !socket?.startsWith("/
 
 // The who-is-driving pair rides in env, not argv — argv is world-readable
 // through `ps`, and the token guards a loopback endpoint.
-const controlUrl = process.env.OMB_CONTROL_URL ?? "";
-const controlToken = process.env.OMB_CONTROL_TOKEN ?? "";
+const controlUrl = compatEnv.OMB_CONTROL_URL ?? "";
+const controlToken = compatEnv.OMB_CONTROL_TOKEN ?? "";
 
 runMcpBridge({
   command: runtime,
@@ -28,3 +29,4 @@ runMcpBridge({
   // fast on its own — there is no silent WAN peer to wedge on.
   ...(controlUrl && controlToken ? { gate: { url: controlUrl, token: controlToken } } : {}),
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // Native WhatsApp wired for the server: one WhatsAppNative + its store under
 // <data dir>/whatsapp/, the HTTP surface the Connected apps tile uses, and the
 // read-only routes the connector bridge (connector-proxy.ts) calls for bots.
@@ -72,10 +73,10 @@ export class WhatsAppService {
   readonly native: WhatsAppNative;
 
   constructor(options: WhatsAppServiceOptions) {
-    const env = options.env ?? process.env;
+    const env = options.env ?? compatEnv;
     // OMB_WHATSAPP_NATIVE=0 turns the whole feature off (the tile falls back
     // to the generic Composio flow and nothing auto-starts).
-    this.enabled = env.OMB_WHATSAPP_NATIVE !== "0";
+    this.enabled = compatEnvironment(env).OMB_WHATSAPP_NATIVE !== "0";
     this.paths = whatsappPaths(options.dataDir);
     this.store = new WhatsAppStore(this.paths.database);
     this.native = new WhatsAppNative({
@@ -166,3 +167,4 @@ export class WhatsAppService {
     return { status: 404, body: { error: "no such WhatsApp read route" } };
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

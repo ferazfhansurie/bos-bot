@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // checkpoints.ts contract, exercised against REAL git in mkdtemp folders:
 // snapshots are commits in a shadow repo (idempotent when nothing changed),
 // restore moves the work tree back without moving HEAD (so a restore can be
@@ -16,7 +17,7 @@ import { removeTempDir } from "./testing/cleanup.ts";
 // OMB_DATA_DIR at import time — so the env var must be set before the import
 // is evaluated (same pattern as attachments.test.ts).
 const DATA_ROOT = mkdtempSync(join(tmpdir(), "omb-checkpoints-"));
-process.env.OMB_DATA_DIR = join(DATA_ROOT, "data");
+compatEnv.OMB_DATA_DIR = join(DATA_ROOT, "data");
 
 const { checkpointsEnabled, listCheckpoints, refusalReason, restore, snapshot } = await import(
   "./checkpoints.ts"
@@ -41,7 +42,7 @@ function userGit(cwd: string, ...args: string[]): string {
     cwd,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...compatEnv,
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_SYSTEM: "/dev/null",
       GIT_AUTHOR_NAME: "User",
@@ -295,7 +296,7 @@ describe("refusals", () => {
   it("lists nothing (and creates nothing) for a folder never snapshotted", async () => {
     const { bot, cwd } = workspace();
     expect(await listCheckpoints(bot, cwd)).toEqual([]);
-    const shadow = join(process.env.OMB_DATA_DIR!, "checkpoints", bot);
+    const shadow = join(compatEnv.OMB_DATA_DIR!, "checkpoints", bot);
     expect(existsSync(shadow)).toBe(false);
   });
 });
@@ -330,3 +331,4 @@ describe("diffStat", () => {
     expect(await diffStat(bot, homedir(), hash!, hash!)).toBeNull();
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

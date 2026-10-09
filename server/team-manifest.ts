@@ -69,7 +69,7 @@ const membersSchema = z
 
 const manifestSchema = z.discriminatedUnion("version", [
   z.object({
-    format: z.literal(TEAM_MANIFEST_FORMAT, { error: "This is not an OpenMaus team file" }),
+    format: z.literal(TEAM_MANIFEST_FORMAT, { error: "This is not an Bos team file" }),
     version: z.literal(LEGACY_TEAM_MANIFEST_VERSION),
     team: z.object({
       name: requiredText(100),
@@ -83,7 +83,7 @@ const manifestSchema = z.discriminatedUnion("version", [
     }),
   }),
   z.object({
-    format: z.literal(TEAM_MANIFEST_FORMAT, { error: "This is not an OpenMaus team file" }),
+    format: z.literal(TEAM_MANIFEST_FORMAT, { error: "This is not an Bos team file" }),
     version: z.literal(TEAM_MANIFEST_VERSION),
     team: z.object({
       name: requiredText(100),
@@ -331,3 +331,4 @@ export function createTeamManifest(team: ExportableTeam, bots: ExportableBot[]):
   // the exact same limits and normalization as an untrusted shared file.
   return parseTeamManifest(manifest);
 }
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

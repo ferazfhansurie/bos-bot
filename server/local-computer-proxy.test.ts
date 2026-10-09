@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
@@ -67,7 +68,7 @@ describe("local computer proxy (isolated child and control endpoint)", () => {
           const { original, control } = JSON.parse(process.env.OMB_FIXTURE_CONNECTION);
           process.stdout.write(JSON.stringify(gatedLocalComputer(original, control)));
         `], {
-          env: { ...process.env, HOME: home, USERPROFILE: home, ELECTRON_RUN_AS_NODE: "1", OMB_FIXTURE_CONNECTION: JSON.stringify({ original, control }) },
+          env: { ...compatEnv, HOME: home, USERPROFILE: home, ELECTRON_RUN_AS_NODE: "1", OMB_FIXTURE_CONNECTION: JSON.stringify({ original, control }) },
           encoding: "utf8", timeout: 10_000,
         });
         expect(bootstrap.status, bootstrap.stderr).toBe(0);
@@ -75,7 +76,7 @@ describe("local computer proxy (isolated child and control endpoint)", () => {
         expect(pathToFileURL(connection.command).href).toBe(pathToFileURL(electron).href);
       }
       expect(connection.env.ELECTRON_RUN_AS_NODE).toBe("1");
-      child = spawn(connection.command, connection.args, { env: { ...process.env, ...connection.env,
+      child = spawn(connection.command, connection.args, { env: { ...compatEnv, ...connection.env,
         HOME: home, USERPROFILE: home, OMB_EXTRA_PATH: dirname(process.execPath), PATH: "",
       }, stdio: ["pipe", "pipe", "pipe"] });
       const input = createInterface({ input: child.stdout! });
@@ -145,7 +146,7 @@ readline.createInterface({input: process.stdin}).on("line", (line) => {
       { command: process.execPath, args: ["-e", driver], env: {}, platform: "win32", scope: "local-computer" },
       { url: "http://127.0.0.1:1/control", token: "schema-fixture-token" },
     );
-    const child = spawn(connection.command, connection.args, { env: { ...process.env, ...connection.env }, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(connection.command, connection.args, { env: { ...compatEnv, ...connection.env }, stdio: ["pipe", "pipe", "pipe"] });
     try {
       const lines = createInterface({ input: child.stdout! })[Symbol.asyncIterator]();
       const rpc = async (id: number | string, method: string) => {
@@ -179,7 +180,7 @@ readline.createInterface({input: process.stdin}).on("line", (line) => {
       { OMB_CONTROL_URL: "https://outside.example/control" },
     ]) {
       const result = spawnSync(process.execPath, ["--experimental-strip-types", SPAWNED_PROXIES.localComputer], {
-        env: { ...process.env, OMB_CUA_COMMAND: process.execPath, OMB_CUA_ARGS: "[]", OMB_CONTROL_URL: "http://127.0.0.1:1/control", OMB_CONTROL_TOKEN: "private-fixture-token", ...overrides },
+        env: { ...compatEnv, OMB_CUA_COMMAND: process.execPath, OMB_CUA_ARGS: "[]", OMB_CONTROL_URL: "http://127.0.0.1:1/control", OMB_CONTROL_TOKEN: "private-fixture-token", ...overrides },
         encoding: "utf8", timeout: 5_000,
       });
       expect(result.status).toBe(2);
@@ -190,3 +191,4 @@ readline.createInterface({input: process.stdin}).on("line", (line) => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

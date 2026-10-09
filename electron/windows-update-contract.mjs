@@ -156,3 +156,4 @@ export function createWindowsUpdateHealthVerifier({ getConnection, fetch: reques
     return false;
   };
 }
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; health: legacy app health identity is checked by old clients and updater preflight

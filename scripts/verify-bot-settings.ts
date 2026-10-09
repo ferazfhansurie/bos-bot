@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real settings and store against a disposable fake-engine server.
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -26,7 +27,7 @@ try {
     const result = installSkill(${JSON.stringify(atlas.id)}, 'fixture:settings', [{path:'SKILL.md',content:'---\\nname: fixture-check\\ndescription: Check fixture settings reliably\\n---\\nRead the fixture state and summarize it.\\n'}]);
     if ('error' in result) throw new Error(result.error);
     setSkillEnabled(${JSON.stringify(atlas.id)}, 'fixture-check', true);
-  `], { cwd: REPO_ROOT, env: { ...process.env, OMB_DATA_DIR: fixture.info.dataDir } });
+  `], { cwd: REPO_ROOT, env: { ...compatEnv, OMB_DATA_DIR: fixture.info.dataDir } });
 
   ui = await mountPreview(fixture, {
     entry: "/src/testing/bot-settings.tsx", route: "/__bot-settings.html", title: "Isolated Bot Settings",
@@ -48,3 +49,4 @@ try {
   await ui?.close();
   await fixture.close();
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

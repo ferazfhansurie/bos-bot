@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ import extension, {
 
 const tempDirs: string[] = [];
 const clients: StdioMcp[] = [];
-const originalMcpConfig = process.env.OMB_MCP_CONFIG;
+const originalMcpConfig = compatEnv.OMB_MCP_CONFIG;
 
 type ExtensionApi = Parameters<typeof extension>[0];
 type RegisteredTool = Parameters<ExtensionApi["registerTool"]>[0];
@@ -53,8 +54,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   for (const client of clients.splice(0)) client.dispose();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  if (originalMcpConfig === undefined) delete process.env.OMB_MCP_CONFIG;
-  else process.env.OMB_MCP_CONFIG = originalMcpConfig;
+  if (originalMcpConfig === undefined) delete compatEnv.OMB_MCP_CONFIG;
+  else compatEnv.OMB_MCP_CONFIG = originalMcpConfig;
 });
 
 describe("Pi MCP JSON Schema conversion", () => {
@@ -255,7 +256,7 @@ describe("Pi MCP extension registration", () => {
     const dir = tempDir();
     const config = join(dir, "mcp.json");
     writeFileSync(config, JSON.stringify({ mcpServers: { test: { command: process.execPath, args: [script] } } }));
-    process.env.OMB_MCP_CONFIG = config;
+    compatEnv.OMB_MCP_CONFIG = config;
 
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const tools: RegisteredTool[] = [];
@@ -299,7 +300,7 @@ describe("Pi MCP extension registration", () => {
     const dir = tempDir();
     const config = join(dir, "mcp.json");
     writeFileSync(config, JSON.stringify({ mcpServers: { test: { command: process.execPath, args: [script] } } }));
-    process.env.OMB_MCP_CONFIG = config;
+    compatEnv.OMB_MCP_CONFIG = config;
 
     const tools: RegisteredTool[] = [];
     const handlers = new Map<string, ShutdownHandler>();
@@ -319,3 +320,4 @@ describe("Pi MCP extension registration", () => {
     await handlers.get("session_shutdown")?.();
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

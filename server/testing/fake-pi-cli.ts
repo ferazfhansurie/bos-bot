@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Fake of the pi coding agent's `--mode rpc --no-session` stdio surface, for
 // driver contract tests of server/drivers/pi.ts. Speaks pi's JSON-RPC-over-
 // stdio protocol: answers get_available_models / new_session / switch_session
@@ -12,8 +13,8 @@
 
 import { appendFileSync, readFileSync } from "node:fs";
 
-const mode = process.env.FAKE_PI_MODE ?? "happy";
-const modelPairs = (process.env.FAKE_PI_MODELS ?? "ollama-cloud/glm-5.2,openai/gpt-4o")
+const mode = compatEnv.FAKE_PI_MODE ?? "happy";
+const modelPairs = (compatEnv.FAKE_PI_MODELS ?? "ollama-cloud/glm-5.2,openai/gpt-4o")
   .split(",")
   .filter(Boolean)
   .map((pair) => {
@@ -29,26 +30,26 @@ if (argv.includes("--version") || argv.includes("-v")) {
   process.exit(0);
 }
 
-if (process.env.FAKE_PI_DUMP) {
+if (compatEnv.FAKE_PI_DUMP) {
   try {
     // When the driver mounts integrations it hands the MCP config through
     // OMB_MCP_CONFIG; read it here so a test can assert the mount contract
     // (servers, proxy wrap, credential hygiene) without racing the temp file
     // cleanup the driver runs at turn settle.
     let mcpConfig: unknown = null;
-    if (process.env.OMB_MCP_CONFIG) {
+    if (compatEnv.OMB_MCP_CONFIG) {
       try {
-        mcpConfig = JSON.parse(readFileSync(process.env.OMB_MCP_CONFIG, "utf8"));
+        mcpConfig = JSON.parse(readFileSync(compatEnv.OMB_MCP_CONFIG, "utf8"));
       } catch {
         /* unreadable config dumps as null */
       }
     }
     appendFileSync(
-      process.env.FAKE_PI_DUMP,
+      compatEnv.FAKE_PI_DUMP,
       JSON.stringify({
         argv,
         envConfigured: ["PATH", "HOME", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "BOX_TOKEN"].filter(
-          (k) => process.env[k] !== undefined,
+          (k) => compatEnv[k] !== undefined,
         ),
         mcpConfig,
       }) + "\n",
@@ -187,9 +188,9 @@ function handle(cmd: any) {
       send({ type: "response", command: "switch_session", success: true, data: { sessionId: "s-resumed", sessionFile: currentSessionFile } });
       return;
     case "set_model": {
-      if (process.env.FAKE_PI_DUMP) {
+      if (compatEnv.FAKE_PI_DUMP) {
         try {
-          appendFileSync(process.env.FAKE_PI_DUMP, JSON.stringify({ setModel: { provider: cmd.provider, modelId: cmd.modelId } }) + "\n");
+          appendFileSync(compatEnv.FAKE_PI_DUMP, JSON.stringify({ setModel: { provider: cmd.provider, modelId: cmd.modelId } }) + "\n");
         } catch {
           /* never let dumping break a run */
         }
@@ -199,9 +200,9 @@ function handle(cmd: any) {
     }
     case "set_thinking_level":
       // record the level so a test can assert what the driver pinned
-      if (process.env.FAKE_PI_DUMP) {
+      if (compatEnv.FAKE_PI_DUMP) {
         try {
-          appendFileSync(process.env.FAKE_PI_DUMP, JSON.stringify({ thinkingLevel: cmd.level }) + "\n");
+          appendFileSync(compatEnv.FAKE_PI_DUMP, JSON.stringify({ thinkingLevel: cmd.level }) + "\n");
         } catch {
           /* never let dumping break a run */
         }
@@ -209,10 +210,10 @@ function handle(cmd: any) {
       send({ type: "response", command: "set_thinking_level", success: true });
       return;
     case "prompt":
-      if (process.env.FAKE_PI_DUMP) {
+      if (compatEnv.FAKE_PI_DUMP) {
         try {
           appendFileSync(
-            process.env.FAKE_PI_DUMP,
+            compatEnv.FAKE_PI_DUMP,
             JSON.stringify({ prompt: { message: cmd.message, ...(Array.isArray(cmd.images) ? { images: cmd.images } : {}) } }) + "\n",
           );
         } catch {
@@ -237,3 +238,4 @@ function handle(cmd: any) {
       return;
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -988,7 +988,7 @@ struct ChatView: View {
         readingStore = nil; savedReading = nil; readingError = nil
         do {
             guard let connection = session.connection,
-                  let token = try OpenMausSharedKeychain.token(for: connection.id) else { return }
+                  let token = try BosSharedKeychain.token(for: connection.id) else { return }
             let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let store = ReadingPositionStore(root: root.appendingPathComponent("ReadingPositions"), connectionID: connection.id,
                 accountIdentity: token, conversationID: current.id, threadID: threadId)
@@ -1044,7 +1044,7 @@ struct ChatView: View {
     private func restoreDraft() {
         do {
             guard let connection = session.connection,
-                  let token = try OpenMausSharedKeychain.token(for: connection.id) else {
+                  let token = try BosSharedKeychain.token(for: connection.id) else {
                 composerDraft.pendingCheckpoint?.cancel(); composerDraft.onEdit = nil
                 activeArchive = nil; activeScope = nil
                 draft = ""; attachments = []; replyTarget = nil

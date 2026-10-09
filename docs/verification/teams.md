@@ -10,9 +10,9 @@ Run the isolated lifecycle checks:
 
 ```sh
 pnpm exec vitest run server/team-lifecycle.e2e.test.ts server/section-context.test.ts server/store.test.ts src/lib/team-map.test.ts --maxWorkers=2
-OMB_UI_E2E=1 pnpm exec vitest run scripts/testing/team-lifecycle-ui.e2e.test.ts scripts/testing/team-template-ui.e2e.test.ts --maxWorkers=1
-OMB_UI_E2E=1 pnpm exec vitest run scripts/testing/team-canvas-ui.e2e.test.ts --maxWorkers=1
-OMB_UI_E2E=1 pnpm exec vitest run scripts/testing/team-computers-ui.e2e.test.ts --maxWorkers=1
+BOS_UI_E2E=1 pnpm exec vitest run scripts/testing/team-lifecycle-ui.e2e.test.ts scripts/testing/team-template-ui.e2e.test.ts --maxWorkers=1
+BOS_UI_E2E=1 pnpm exec vitest run scripts/testing/team-canvas-ui.e2e.test.ts --maxWorkers=1
+BOS_UI_E2E=1 pnpm exec vitest run scripts/testing/team-computers-ui.e2e.test.ts --maxWorkers=1
 pnpm exec vitest run scripts/testing/team-computers-fixture.test.ts
 pnpm exec vitest run server/index.test.ts -t "creates team computers|shares one team computer" --maxWorkers=1
 ```

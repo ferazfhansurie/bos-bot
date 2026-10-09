@@ -132,3 +132,4 @@ describe("Tailscale from a shell-less standalone macOS app", () => {
     expect(fixture.calls.every(({ options }) => options.env?.TAILSCALE_BE_CLI === "1" && !options.shell)).toBe(true);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

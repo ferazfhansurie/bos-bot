@@ -15,7 +15,7 @@ describe("provider icon upload", () => {
   it("rejects unsupported and undecodable files before save", async () => {
     await expect(providerIconFromFile(new File(["<svg/>"] , "unsupported.svg", { type: "image/svg+xml" }), vi.fn()))
       .rejects.toThrow("PNG, JPEG, or WebP");
-    const decode = vi.fn(async () => { throw new Error("OpenMausBot could not decode that image."); });
+    const decode = vi.fn(async () => { throw new Error("BOS Bot could not decode that image."); });
     await expect(providerIconFromFile(new File([png], "invalid.png", { type: "image/png" }), decode))
       .rejects.toThrow("could not decode");
     expect(decode).toHaveBeenCalledOnce();

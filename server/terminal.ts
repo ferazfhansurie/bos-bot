@@ -174,3 +174,4 @@ export class TerminalService {
   }
   async close() {this.closed = true; this.tickets.clear(); await Promise.all([...this.active].map(stop => stop())); this.wss.close();}
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

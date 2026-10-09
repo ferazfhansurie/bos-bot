@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real Electron utilityProcess + built server, never the operator's desktop.
 // Run after pnpm build:server. Evidence remains; fixture homes are removed.
 import assert from "node:assert/strict";
@@ -232,7 +233,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
     mkdirSync(home, { recursive: true });
     const child = spawn(electron, [fileURLToPath(import.meta.url), flag, scenario, output, process.execPath], {
       cwd: home, env: { HOME: home, USERPROFILE: home, PATH: dirname(process.execPath), TMPDIR: home, TEMP: home, TMP: home,
-        XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, XDG_DATA_HOME: home, DISPLAY: process.env.DISPLAY },
+        XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, XDG_DATA_HOME: home, DISPLAY: compatEnv.DISPLAY },
       stdio: ["ignore", "pipe", "pipe"],
     });
     for (const stream of [child.stdout, child.stderr]) stream.on("data", (data) => appendFileSync(join(output, `${scenario}.log`), data));
@@ -246,3 +247,4 @@ if (process.versions.electron && process.argv.includes(flag)) {
   rmSync(join(output, "server"), { recursive: true, force: true });
   rmSync(join(output, "ui"), { recursive: true, force: true });
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; lease: a new server must lock the same data-directory lease as an existing process; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

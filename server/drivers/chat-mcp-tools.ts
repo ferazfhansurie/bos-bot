@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Per-turn MCP transport for the shared Chat Completions runtime. Approval is
 // owned by the caller; only registered, schema-validated calls reach this file.
 import { Ajv, type ValidateFunction } from "ajv";
@@ -23,7 +24,7 @@ export interface ChatToolSession {
 
 type Server = { command: string; args: string[]; env: Record<string, string> };
 // A cold tool server can be slow while the machine is busy; startup has no side effects, so one fresh retry is safe.
-const startupMs = () => Math.max(100, Number(process.env.OMB_MCP_STARTUP_MS) || 15_000);
+const startupMs = () => Math.max(100, Number(compatEnv.OMB_MCP_STARTUP_MS) || 15_000);
 const STARTUP_ATTEMPTS = 2;
 class McpStartupTimeout extends Error {}
 const CALL_MS = 10 * 60_000;
@@ -52,7 +53,7 @@ class ChatMcpClient {
   constructor(server: Server) {
     try {
       this.child = spawnCli(server.command, server.args, {
-        stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...server.env },
+        stdio: ["pipe", "pipe", "pipe"], env: { ...compatEnv, ...server.env },
       });
     } catch { throw new Error("MCP server could not start; check its command and installation"); }
     this.child.stdout.setEncoding("utf8");
@@ -165,7 +166,7 @@ class ChatMcpClient {
       throw error;
     });
     const initialized = await startup("initialize", {
-      protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "openmausbot-chat", version: "1" },
+      protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "bosbot-chat", version: "1" },
     });
     if (!object(initialized)) throw new Error("MCP initialization returned an invalid result");
     if (signal.aborted) throw aborted();
@@ -318,3 +319,4 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
     },
   };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

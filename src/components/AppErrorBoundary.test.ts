@@ -15,7 +15,7 @@ describe("the app-wide crash screen", () => {
     // the raw error is tucked away, not the headline
     expect(html).toContain("<details");
     expect(html).toContain("Cannot read properties of undefined");
-    expect(html).not.toContain("OpenMaus");
+    expect(html).not.toContain("Bos");
   });
 
   it("turns any thrown value into the crash state", () => {

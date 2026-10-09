@@ -372,3 +372,4 @@ describe("originIsLoopback", () => {
     expect(originIsLoopback("https://localhost.evil.example")).toBe(false);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; paired-mdns-host: saved phone fallback routes continue resolving the same stable LAN hostname; paired-host-fixture: case normalization uses the same synthetic legacy hostname on input and output

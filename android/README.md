@@ -1,11 +1,11 @@
-# OpenMausBot Android companion
+# BOS Bot Android companion
 
 The Android counterpart to the iOS companion app: pair a phone with a computer
-running OpenMausBot, then read and answer from the phone.
+running BOS Bot, then read and answer from the phone.
 
 - `applicationId` — `com.openmausbot.companion`
 - `minSdk` 26 (Android 8.0), `targetSdk` / `compileSdk` 37
-- Deep-link scheme — `openmausbot`
+- Deep-link scheme — `bosbot`
 - Two modules: `:core` (protocol, ported from `ios/Sources/CompanionCore`) and
   `:app` (Compose UI, Android platform)
 
@@ -35,7 +35,7 @@ cd android
 ```
 
 Install `app/build/outputs/apk/preview/app-preview.apk`. Its launcher name is
-**OpenMausBot Preview**, its application ID is `com.openmausbot.companion.preview`,
+**BOS Bot Preview**, its application ID is `com.openmausbot.companion.preview`,
 and its version ends in `-threads-preview`. Gradle signs it with the local debug
 key, so no release signing material is needed. It installs beside the released
 app with separate pairing, preferences and messages; it does not update that app.
@@ -85,8 +85,8 @@ The signing key belongs to the maintainer and never enters this repository.
 Create a key once, outside any clone of this repository:
 
 ```sh
-keytool -genkeypair -v -keystore ~/openmausbot-release.jks \
-  -storetype PKCS12 -alias openmausbot -keyalg RSA -keysize 4096 -validity 10000
+keytool -genkeypair -v -keystore ~/bosbot-release.jks \
+  -storetype PKCS12 -alias bosbot -keyalg RSA -keysize 4096 -validity 10000
 ```
 
 Then, for each release:
@@ -95,7 +95,7 @@ Then, for each release:
 # whichever build-tools version is installed; any recent one works
 APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | tail -1)/apksigner"
 
-"$APKSIGNER" sign --ks ~/openmausbot-release.jks --ks-key-alias openmausbot \
+"$APKSIGNER" sign --ks ~/bosbot-release.jks --ks-key-alias bosbot \
   --out app-release.apk app-release-unsigned.apk
 
 "$APKSIGNER" verify --verbose --print-certs app-release.apk
@@ -117,19 +117,19 @@ silently inherit a stale `keystore.properties` from a cached workspace.
 `android/keystore.properties` (gitignored):
 
 ```properties
-storeFile=/absolute/path/to/openmausbot-release.jks
+storeFile=/absolute/path/to/bosbot-release.jks
 storePassword=…
-keyAlias=openmausbot
+keyAlias=bosbot
 keyPassword=…
 ```
 
 or the environment, for CI secrets:
 
 ```
-OPENMAUSBOT_KEYSTORE_FILE
-OPENMAUSBOT_KEYSTORE_PASSWORD
-OPENMAUSBOT_KEY_ALIAS
-OPENMAUSBOT_KEY_PASSWORD   # optional; PKCS12 reuses the store password
+BOSBOT_KEYSTORE_FILE
+BOSBOT_KEYSTORE_PASSWORD
+BOSBOT_KEY_ALIAS
+BOSBOT_KEY_PASSWORD   # optional; PKCS12 reuses the store password
 ```
 
 Supply all of it or none of it. A build handed only part of the material stops
@@ -173,3 +173,4 @@ Turning it on means writing keep rules *and testing them* against a real pairing
 and a real session, because no unit test reaches that failure mode and a
 minified APK that launches proves nothing. Until someone does that work, `false`
 is the tested state, and roughly 34 MB is its price.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support -->

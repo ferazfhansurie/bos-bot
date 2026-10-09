@@ -105,7 +105,7 @@ struct CompanionApp: App {
                     }
                 }
                 .onAppear {
-                    OpenMausSharedInbox.removeDirectories(olderThan: 60 * 60)
+                    BosSharedInbox.removeDirectories(olderThan: 60 * 60)
                     session.connect()
                     liveActivities.attach(to: session)
                 }
@@ -113,7 +113,7 @@ struct CompanionApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:
-                        OpenMausSharedInbox.removeDirectories(olderThan: 60 * 60)
+                        BosSharedInbox.removeDirectories(olderThan: 60 * 60)
                         session.connect()
                         Task { await session.refreshNotificationAuthorization() }
                     case .background: session.linger()
@@ -309,7 +309,7 @@ private struct FirstLaunchIntro: View {
 
             VStack {
                 Spacer()
-                Text("Created by OpenMausBot")
+                Text("Created by BOS Bot")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 32)

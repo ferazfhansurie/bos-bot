@@ -20,7 +20,7 @@
 ## Global Constraints
 
 - Branch: `feat/mascot-shape-catalog`. Do not push; do not open a PR.
-- Repo root: `/Users/omkar/Desktop/openmaus/OpenGrokBot`. Desktop and iOS are the same repo (`ios/` is a subdirectory).
+- Repo root: `/Users/omkar/Desktop/bos/OpenGrokBot`. Desktop and iOS are the same repo (`ios/` is a subdirectory).
 - **No new dependencies.** The generator is plain Node plus what already ships.
 - Face box is `228.541` units. Face centre is `[120, 122.5]`. These are existing constants — never redefine them, import them.
 - Generated paths use **absolute `M`, `C`, `Z` only**. The iOS parser in `MausSilhouette.parse()` understands nothing else.

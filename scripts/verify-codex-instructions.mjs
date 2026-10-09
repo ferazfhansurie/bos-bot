@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Optional native protocol smoke: requires a Codex binary, no credentials.
 // Synthetic model responses verify request shape, not model quality or token cost.
 import assert from 'node:assert/strict';
@@ -9,7 +10,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { once } from 'node:events';
 const root = mkdtempSync(join(tmpdir(), 'omb-native-instructions-'));
-process.env.OMB_DATA_DIR = join(root, 'omb');
+compatEnv.OMB_DATA_DIR = join(root, 'omb');
 const { codexDeveloperInstructions, syncCodexInstructions } = await import('../server/drivers/codex-instructions.ts');
 const captures = [];
 const server = createServer(async (req, res) => {
@@ -47,7 +48,7 @@ async function start() {
     pending = new Map();
     events = [];
     waiters = [];
-    child = spawn(process.env.PROBE_CODEX ?? 'codex', ['app-server'], { env: { PATH: process.env.PATH, HOME: root, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(compatEnv.PROBE_CODEX ?? 'codex', ['app-server'], { env: { PATH: compatEnv.PATH, HOME: root, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stderr.on('data', c => writeFileSync(join(root, 'stderr.log'), c, { flag: 'a' }));
     createInterface({ input: child.stdout }).on('line', line => { let m; try {
         m = JSON.parse(line);
@@ -80,11 +81,11 @@ try {
         const configured = await rpc('config/read', { cwd, includeLayers: false });
         const developerInstructions = codexDeveloperInstructions(configured.config, instructions);
         const method = cursor ? 'thread/resume' : 'thread/start';
-        const t = await rpc(method, { ...(cursor ? { threadId: cursor } : { cwd, model: 'gpt-5.6-sol', ephemeral: false }), ...(process.env.PROBE_BEFORE ? {} : { developerInstructions }), approvalPolicy: 'never', sandbox: 'read-only' });
+        const t = await rpc(method, { ...(cursor ? { threadId: cursor } : { cwd, model: 'gpt-5.6-sol', ephemeral: false }), ...(compatEnv.PROBE_BEFORE ? {} : { developerInstructions }), approvalPolicy: 'never', sandbox: 'read-only' });
         cursor = t.thread.id;
-        if (!process.env.PROBE_BEFORE)
+        if (!compatEnv.PROBE_BEFORE)
             await syncCodexInstructions("native-probe", cursor, developerInstructions, index > 0, rpc);
-        await rpc('turn/start', { threadId: cursor, input: [{ type: 'text', text: (process.env.PROBE_BEFORE ? instructions + '\n\n' : '') + (index === 0 ? 'Remember ALPHA.' : 'Continue ' + index) }] });
+        await rpc('turn/start', { threadId: cursor, input: [{ type: 'text', text: (compatEnv.PROBE_BEFORE ? instructions + '\n\n' : '') + (index === 0 ? 'Remember ALPHA.' : 'Continue ' + index) }] });
         const completed = await event('turn/completed');
         assert.equal(completed.params?.turn?.status, 'completed');
         console.log(JSON.stringify({ index, method, status: completed.params?.turn?.status, captures: captures.length }));
@@ -101,7 +102,7 @@ try {
         assert(text(i, 'developer').includes('NATIVE_RULE: Preserve configured instructions.'));
         assert(!text(i, 'user').includes('NATIVE_RULE'));
     }
-    if (!process.env.PROBE_BEFORE) {
+    if (!compatEnv.PROBE_BEFORE) {
         for (let i = 0; i < captures.length; i++) {
             assert(!text(i, 'user').includes('BOT_RULE_'));
             assert(text(i, 'user').includes('Remember ALPHA.'));
@@ -111,7 +112,7 @@ try {
         assert(text(5, 'developer').includes('BOT_RULE_B'));
         assert(text(5, 'developer').indexOf('BOT_RULE_B') > text(5, 'developer').indexOf('BOT_RULE_A'));
         assert(!text(7, 'developer').includes('BOT_RULE_A') && text(7, 'developer').includes('BOT_RULE_B'));
-        assert(text(8, 'developer').includes('No OpenMausBot bot-specific instructions remain.'));
+        assert(text(8, 'developer').includes('No BOS Bot bot-specific instructions remain.'));
         assert(!text(10, 'developer').includes('BOT_RULE_'));
     }
     else {
@@ -133,3 +134,4 @@ finally {
         console.log(JSON.stringify({ request: index + 1, userA: count(text('user'), 'BOT_RULE_A'), developerA: count(text('developer'), 'BOT_RULE_A'), userB: count(text('user'), 'BOT_RULE_B'), developerB: count(text('developer'), 'BOT_RULE_B') }));
     }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

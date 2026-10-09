@@ -1,10 +1,10 @@
 # iOS companion architecture
 
-The iOS app is a thin, native client for the OpenMausBot instance running on
+The iOS app is a thin, native client for the BOS Bot instance running on
 your Mac. The Mac remains the only machine that persists agent processes,
 credentials, SQLite data, transcripts, and computers. The iPhone trusts a Mac
 by scanning the QR code shown in desktop **Settings → Remote access**; it does not need
-an OpenMausBot account of its own.
+an BOS Bot account of its own.
 
 ## Current status
 
@@ -37,7 +37,7 @@ automation are not part of this version. The optional hosted transport connects
 to the user's own computer; it is not a cloud transcript store and cannot wake
 a terminated iOS app.
 
-The Mac must be running OpenMausBot and must not be asleep. Desktop
+The Mac must be running BOS Bot and must not be asleep. Desktop
 **Settings → Remote access** offers an off-by-default **Keep this computer awake**
 switch that prevents system sleep while device access is on; the display may
 still turn off. A sleeping or powered-off computer cannot receive phone
@@ -63,7 +63,7 @@ transport.
  credential ciphertext only)
             │ loopback only
             ▼
- OpenMausBot harness :8799
+ BOS Bot harness :8799
    HTTP API + event stream
    agent processes and approvals
             │ private Electron utility-process channel
@@ -132,7 +132,7 @@ card is only for people who already use Tailscale. Install or open Tailscale
 on both devices, sign in to the same tailnet, leave MagicDNS enabled, and
 choose **Turn on device access & check** followed by **Pair over Tailscale**.
 That first action explicitly starts Remote access so the phone has a listener
-to reach. OpenMausBot then places the computer's MagicDNS name in that
+to reach. BOS Bot then places the computer's MagicDNS name in that
 dedicated QR; it never silently replaces the default hosted HTTPS route.
 Manual entry remains available as a fallback.
 
@@ -141,7 +141,7 @@ WireGuard inside the tailnet. Use the MagicDNS name rather than the
 `100.64.0.0/10` address: App Transport Security exceptions are domain-based,
 and `ios/project.yml` narrowly allows insecure HTTP for `ts.net` subdomains.
 
-Tailscale is optional. The direct path does not use an OpenMausBot-operated
+Tailscale is optional. The direct path does not use an BOS-Bot-operated
 relay or create a cloud copy of local transcript data.
 
 ### Optional hosted HTTPS
@@ -159,7 +159,7 @@ waits for that HTTPS address instead of silently substituting Tailscale;
 Tailscale pairing remains an explicit choice in its own optional card.
 
 Cloudflare terminates and proxies the encrypted connection to the connector.
-The OpenMausBot control plane stores account and installation metadata plus
+The BOS Bot control plane stores account and installation metadata plus
 opaque tunnel/DNS identifiers in D1, but not bots, transcripts, approvals,
 screen frames, pairing tokens, or connector tokens. See `docs/ios-privacy.md`
 for data and deletion details.
@@ -193,7 +193,7 @@ event stream and in-memory chat state, but keeps every saved pairing; removing
 one computer deletes only that computer's Keychain credential from the phone.
 An app upgrade migrates the previous single saved pairing automatically.
 
-The Mac must remain awake with OpenMausBot running for chats, approvals, and
+The Mac must remain awake with BOS Bot running for chats, approvals, and
 routines to work, including through hosted HTTPS or Tailscale.
 
 After pairing, the phone periodically reads the authenticated, sidecar-owned
@@ -202,7 +202,7 @@ new hosted address—or its withdrawal—without another pairing ceremony. The
 route never reaches the harness and returns only the computer name plus a
 bounded list of connection origins.
 
-An OpenMausBot account is not required for nearby, manual, or Tailscale
+An BOS Bot account is not required for nearby, manual, or Tailscale
 connections. Only the desktop owner signs in when enabling the optional hosted
 HTTPS route; the iPhone always uses the same QR trust flow.
 
@@ -210,7 +210,7 @@ HTTPS route; the iPhone always uses the same QR trust flow.
 
 This is Password AutoFill, not a password-vault integration. A native
 `SecureField` marked as a password lets the user explicitly choose Apple
-Passwords or any enabled third-party AutoFill provider. OpenMausMobile does
+Passwords or any enabled third-party AutoFill provider. BosBot does
 not enumerate a vault, receive a provider token, or save the entered value in
 its own Keychain.
 
@@ -343,8 +343,8 @@ pnpm check:electron
 cd ios
 swift test
 xcodegen generate
-xcodebuild -project OpenMausCompanion.xcodeproj \
-  -scheme OpenMausCompanion \
+xcodebuild -project BosBot.xcodeproj \
+  -scheme BosBot \
   -sdk iphonesimulator \
   -destination 'generic/platform=iOS Simulator' \
   CODE_SIGNING_ALLOWED=NO build
@@ -374,3 +374,4 @@ distribution scope:
    simulator build already run in the repository CI.
 5. **Optional expansion:** voice/call mode or Local VM/host-computer
    interaction. Each requires its own threat-model review.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; phone-crypto: HPKE labels are part of the paired phone credential protocol -->

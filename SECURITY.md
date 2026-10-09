@@ -24,3 +24,4 @@ response as soon as possible, normally within a few days.
   routines, skills, or peer communication.
 - Spawning must never route user-influenced strings through a shell. Report any `shell: true` /
   `cmd.exe` string-building you find.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

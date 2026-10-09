@@ -130,7 +130,7 @@ test("an invalid child capability fails closed without acquisition or secret log
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     assert.deepEqual(JSON.parse(result.stdout), {
-      error: "The OpenMausBot desktop lease delegation is invalid; refusing to start to protect its state.",
+      error: "The BOS Bot desktop lease delegation is invalid; refusing to start to protect its state.",
       consumed: true,
     });
     assert.equal(result.stdout.includes(invalidCapability), false);
@@ -603,3 +603,4 @@ test("a live but unrelated Windows pid reused within the same boot is treated as
     lease.release();
   }
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; lease: a new server must lock the same data-directory lease as an existing process

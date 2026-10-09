@@ -1,3 +1,5 @@
+import { compatEnv } from "../electron/branding-env.cjs";
+import { expandEnvNames } from "../electron/branding-env.cjs";
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"apiKey":"ak_…"}, "box": {"token":"…"},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
@@ -767,7 +769,7 @@ export function providerReloadKeys(patch: object): string[] {
 }
 
 // OMB_DATA_DIR isolates test/soak rigs from the user's real fleet.
-export const DATA_DIR = process.env.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
+export const DATA_DIR = compatEnv.OMB_DATA_DIR ?? join(homedir(), ".openmausbot");
 const LEGACY_DATA_DIR = join(homedir(), ".opengrokbot");
 export const EVENTS_DIR = join(DATA_DIR, "events");
 export const NATIVE_DIR = join(DATA_DIR, "native");
@@ -775,7 +777,7 @@ export const NATIVE_DIR = join(DATA_DIR, "native");
 export function ensureDirs() {
   // one-time migration from the pre-rename data dir — bots, transcripts,
   // config and keys all carry over
-  if (process.env.OMB_DISABLE_LEGACY_MIGRATION !== "1" && !existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
+  if (compatEnv.OMB_DISABLE_LEGACY_MIGRATION !== "1" && !existsSync(DATA_DIR) && existsSync(LEGACY_DATA_DIR)) {
     try {
       renameSync(LEGACY_DATA_DIR, DATA_DIR);
     } catch {
@@ -828,38 +830,38 @@ export function loadConfig(): AppConfig {
   // step (syncCredentialEnv below), or the value injected at boot would
   // shadow the save until the next launch.
   cfg.xai = { ...cfg.xai };
-  if (process.env.XAI_API_KEY !== undefined) cfg.xai.key = process.env.XAI_API_KEY;
-  if (process.env.OMB_XAI_MANAGEMENT_KEY !== undefined) cfg.xai.managementKey = process.env.OMB_XAI_MANAGEMENT_KEY;
+  if (compatEnv.XAI_API_KEY !== undefined) cfg.xai.key = compatEnv.XAI_API_KEY;
+  if (compatEnv.OMB_XAI_MANAGEMENT_KEY !== undefined) cfg.xai.managementKey = compatEnv.OMB_XAI_MANAGEMENT_KEY;
   // Deliberately not ANTHROPIC_API_KEY: a key in the server's own env is
   // never the workspace key, so an operator's stray variable cannot flip
   // every Claude bot onto pay-as-you-go billing.
   cfg.anthropic = { ...cfg.anthropic };
-  if (process.env.OMB_ANTHROPIC_API_KEY !== undefined) cfg.anthropic.key = process.env.OMB_ANTHROPIC_API_KEY;
-  if (process.env.OMB_ANTHROPIC_API_URL !== undefined) cfg.anthropic.url = process.env.OMB_ANTHROPIC_API_URL;
+  if (compatEnv.OMB_ANTHROPIC_API_KEY !== undefined) cfg.anthropic.key = compatEnv.OMB_ANTHROPIC_API_KEY;
+  if (compatEnv.OMB_ANTHROPIC_API_URL !== undefined) cfg.anthropic.url = compatEnv.OMB_ANTHROPIC_API_URL;
   cfg.openaiCompat = { ...cfg.openaiCompat };
-  if (process.env.OPENAI_COMPAT_API_KEY !== undefined) cfg.openaiCompat.key = process.env.OPENAI_COMPAT_API_KEY;
-  if (process.env.OPENAI_COMPAT_URL !== undefined) cfg.openaiCompat.url = process.env.OPENAI_COMPAT_URL;
-  if (process.env.OPENAI_COMPAT_MODEL !== undefined) cfg.openaiCompat.model = process.env.OPENAI_COMPAT_MODEL;
-  if (process.env.OPENAI_COMPAT_PROVIDER !== undefined) cfg.openaiCompat.provider = process.env.OPENAI_COMPAT_PROVIDER;
+  if (compatEnv.OPENAI_COMPAT_API_KEY !== undefined) cfg.openaiCompat.key = compatEnv.OPENAI_COMPAT_API_KEY;
+  if (compatEnv.OPENAI_COMPAT_URL !== undefined) cfg.openaiCompat.url = compatEnv.OPENAI_COMPAT_URL;
+  if (compatEnv.OPENAI_COMPAT_MODEL !== undefined) cfg.openaiCompat.model = compatEnv.OPENAI_COMPAT_MODEL;
+  if (compatEnv.OPENAI_COMPAT_PROVIDER !== undefined) cfg.openaiCompat.provider = compatEnv.OPENAI_COMPAT_PROVIDER;
   cfg.composio = { ...cfg.composio };
-  if (process.env.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = process.env.COMPOSIO_API_KEY;
+  if (compatEnv.COMPOSIO_API_KEY !== undefined) cfg.composio.apiKey = compatEnv.COMPOSIO_API_KEY;
   cfg.box = { ...cfg.box };
-  if (process.env.BOX_TOKEN !== undefined) cfg.box.token = process.env.BOX_TOKEN;
+  if (compatEnv.BOX_TOKEN !== undefined) cfg.box.token = compatEnv.BOX_TOKEN;
   cfg.opencodeGo = { ...cfg.opencodeGo };
-  if (process.env.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = process.env.OPENCODE_API_KEY;
+  if (compatEnv.OPENCODE_API_KEY !== undefined) cfg.opencodeGo.apiKey = compatEnv.OPENCODE_API_KEY;
   cfg.tts = { ...cfg.tts };
-  if (process.env.OMB_TTS_KEY !== undefined) cfg.tts.key = process.env.OMB_TTS_KEY;
-  if (process.env.OMB_FISH_AUDIO_API_KEY !== undefined) cfg.tts.fishKey = process.env.OMB_FISH_AUDIO_API_KEY;
+  if (compatEnv.OMB_TTS_KEY !== undefined) cfg.tts.key = compatEnv.OMB_TTS_KEY;
+  if (compatEnv.OMB_FISH_AUDIO_API_KEY !== undefined) cfg.tts.fishKey = compatEnv.OMB_FISH_AUDIO_API_KEY;
   cfg.imageGen = { ...cfg.imageGen };
-  if (process.env.OMB_OPENAI_IMAGE_KEY !== undefined) cfg.imageGen.key = process.env.OMB_OPENAI_IMAGE_KEY;
-  if (process.env.OMB_CUSTOM_IMAGE_KEY !== undefined) cfg.imageGen.customApiKey = process.env.OMB_CUSTOM_IMAGE_KEY;
+  if (compatEnv.OMB_OPENAI_IMAGE_KEY !== undefined) cfg.imageGen.key = compatEnv.OMB_OPENAI_IMAGE_KEY;
+  if (compatEnv.OMB_CUSTOM_IMAGE_KEY !== undefined) cfg.imageGen.customApiKey = compatEnv.OMB_CUSTOM_IMAGE_KEY;
   // The sign-in allow-list: env is how a headless box or a container is
   // bootstrapped before anyone can reach Settings.
   const splitEmails = (value: string) => value.split(/[,\s]+/).map((entry) => entry.trim().toLowerCase()).filter(Boolean);
-  if (process.env.OMB_SIGNIN_EMAILS !== undefined || process.env.OMB_SIGNIN_MEMBER_EMAILS !== undefined) {
+  if (compatEnv.OMB_SIGNIN_EMAILS !== undefined || compatEnv.OMB_SIGNIN_MEMBER_EMAILS !== undefined) {
     cfg.signIn = { ...cfg.signIn };
-    if (process.env.OMB_SIGNIN_EMAILS !== undefined) cfg.signIn.admins = splitEmails(process.env.OMB_SIGNIN_EMAILS);
-    if (process.env.OMB_SIGNIN_MEMBER_EMAILS !== undefined) cfg.signIn.members = splitEmails(process.env.OMB_SIGNIN_MEMBER_EMAILS);
+    if (compatEnv.OMB_SIGNIN_EMAILS !== undefined) cfg.signIn.admins = splitEmails(compatEnv.OMB_SIGNIN_EMAILS);
+    if (compatEnv.OMB_SIGNIN_MEMBER_EMAILS !== undefined) cfg.signIn.members = splitEmails(compatEnv.OMB_SIGNIN_MEMBER_EMAILS);
   }
   return cfg;
 }
@@ -887,8 +889,8 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
   ];
   for (const [value, name] of secrets) {
     if (value === undefined) continue;
-    if (value) process.env[name] = value;
-    else delete process.env[name];
+    if (value) compatEnv[name] = value;
+    else delete compatEnv[name];
   }
   // loadConfig() also prefers env for url/model/provider, so a saved value
   // must follow the same set-when-truthy / delete-when-cleared rule as keys.
@@ -900,8 +902,8 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
   ];
   for (const [value, name] of settings) {
     if (value === undefined) continue;
-    if (value) process.env[name] = value;
-    else delete process.env[name];
+    if (value) compatEnv[name] = value;
+    else delete compatEnv[name];
   }
 }
 
@@ -910,7 +912,7 @@ export function syncCredentialEnv(patch: Partial<AppConfig>): void {
  * engine CLIs must never inherit them: the one driver that consumes a given
  * secret receives it through instanceConfigs() narrowing, and to every other
  * child these are someone else's keys riding along in `...process.env`. */
-export const WORKSPACE_CREDENTIAL_ENV = [
+export const WORKSPACE_CREDENTIAL_ENV = expandEnvNames([
   "XAI_API_KEY",
   "OMB_XAI_MANAGEMENT_KEY",
   "OMB_ANTHROPIC_API_KEY",
@@ -932,7 +934,7 @@ export const WORKSPACE_CREDENTIAL_ENV = [
   "OMB_USER_DATA",
   "OMB_CUA_WINDOWS_DESCRIPTOR",
   "OMB_CUA_WINDOWS_SUPERVISED",
-] as const;
+] as const);
 
 /** Drop every workspace credential from a child-process env (in place). */
 export function stripWorkspaceCredentialEnv(env: Record<string, string | undefined>): void {
@@ -1272,3 +1274,4 @@ export function customMcpServers(cfg: AppConfig, only?: string[]): Record<string
   }
   return out;
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

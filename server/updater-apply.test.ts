@@ -271,3 +271,4 @@ describe.skipIf(!hasPython)("detached updater script (sandboxed swap)", () => {
     }, 90_000);
   });
 });
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

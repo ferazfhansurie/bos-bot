@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // Which Chrome/Chromium the native WhatsApp client drives.
 //
 // puppeteer's own downloaded Chromium usually does not exist: the packaged
@@ -60,7 +61,7 @@ const PUPPETEER_EXECUTABLES: Record<string, string[]> = {
 };
 
 export function resolveWhatsAppBrowser(lookup: BrowserLookup = {}): BrowserResolution | null {
-  const env = lookup.env ?? process.env;
+  const env = compatEnvironment(lookup.env ?? compatEnv);
   const platform = lookup.platform ?? process.platform;
   const arch = lookup.arch ?? process.arch;
   const home = lookup.home ?? homedir();
@@ -102,9 +103,11 @@ export function resolveWhatsAppBrowser(lookup: BrowserLookup = {}): BrowserResol
   return null;
 }
 
-export function noBrowserReason(env: NodeJS.ProcessEnv = process.env): string {
+export function noBrowserReason(env: NodeJS.ProcessEnv = compatEnv): string {
+  env = compatEnvironment(env);
   const override = env.OMB_WHATSAPP_CHROME_PATH?.trim();
   return override
     ? `OMB_WHATSAPP_CHROME_PATH points to ${override}, which does not exist.`
     : "No Chrome or Chromium was found. Install Google Chrome, or set OMB_WHATSAPP_CHROME_PATH.";
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

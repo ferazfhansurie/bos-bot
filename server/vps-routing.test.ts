@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Turn routing for the BYO-VPS backend, end to end on the real harness
 // server: a bot patched to cloudBackend:"vps" must get the managed container
 // mounted as its computer (integrations.localComputer → the "computer" MCP
@@ -224,8 +225,8 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
       FAKE_DOCKER_DIR: fakeBin,
       FAKE_DOCKER_LOG: dockerLog,
     };
-    if (process.env.PATH) env.PATH = process.env.PATH;
-    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    if (compatEnv.PATH) env.PATH = compatEnv.PATH;
+    if (compatEnv.SystemRoot) env.SystemRoot = compatEnv.SystemRoot;
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env,
@@ -615,3 +616,4 @@ createServer(socket => socket.end()).listen(port, '127.0.0.1');
     60_000,
   );
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

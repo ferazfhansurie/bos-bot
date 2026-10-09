@@ -45,23 +45,23 @@ jobs:
           # npm attaches its lowercase tarball independently after publishing.
           # The legacy updater bridge mirrors only the desktop/feed assets.
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
-            --pattern '*.yml' --pattern 'OpenMausBot*' --pattern 'SHA256SUMS-ubuntu-x64.txt'
+            --pattern '*.yml' --pattern 'BOS Bot*' --pattern 'SHA256SUMS-ubuntu-x64.txt'
           required=(
             latest-linux.yml latest-mac.yml latest.yml
-            "OpenMausBot-$version-amd64.deb"
-            "OpenMausBot-$version-arm64.dmg"
-            "OpenMausBot-$version-arm64.dmg.blockmap"
-            "OpenMausBot-$version-arm64.zip"
-            "OpenMausBot-$version-arm64.zip.blockmap"
-            "OpenMausBot-$version-setup.exe"
-            "OpenMausBot-$version-setup.exe.blockmap"
-            "OpenMausBot-$version-x64.dmg"
-            "OpenMausBot-$version-x64.dmg.blockmap"
-            "OpenMausBot-$version-x64.zip"
-            "OpenMausBot-$version-x64.zip.blockmap"
-            "OpenMausBot-$version-x86_64.AppImage"
-            OpenMausBot-amd64.deb OpenMausBot-intel.dmg OpenMausBot-setup.exe
-            OpenMausBot.AppImage OpenMausBot.dmg SHA256SUMS-ubuntu-x64.txt
+            "BOS-Bot-$version-amd64.deb"
+            "BOS-Bot-$version-arm64.dmg"
+            "BOS-Bot-$version-arm64.dmg.blockmap"
+            "BOS-Bot-$version-arm64.zip"
+            "BOS-Bot-$version-arm64.zip.blockmap"
+            "BOS-Bot-$version-setup.exe"
+            "BOS-Bot-$version-setup.exe.blockmap"
+            "BOS-Bot-$version-x64.dmg"
+            "BOS-Bot-$version-x64.dmg.blockmap"
+            "BOS-Bot-$version-x64.zip"
+            "BOS-Bot-$version-x64.zip.blockmap"
+            "BOS-Bot-$version-x86_64.AppImage"
+            BOS-Bot-amd64.deb BOS-Bot-intel.dmg BOS-Bot-setup.exe
+            BOS-Bot.AppImage BOS-Bot.dmg SHA256SUMS-ubuntu-x64.txt
           )
           for file in "${required[@]}"; do
             test -s "assets/$file" || { echo "::error::$TAG is missing $file"; exit 1; }
@@ -80,15 +80,15 @@ jobs:
           const sha512 = (file) => createHash("sha512").update(readFileSync(file)).digest("base64");
           const expected = new Map([
             ["latest-mac.yml", [
-              `OpenMausBot-${version}-x64.zip`,
-              `OpenMausBot-${version}-arm64.zip`,
-              `OpenMausBot-${version}-x64.dmg`,
-              `OpenMausBot-${version}-arm64.dmg`,
+              `BOS-Bot-${version}-x64.zip`,
+              `BOS-Bot-${version}-arm64.zip`,
+              `BOS-Bot-${version}-x64.dmg`,
+              `BOS-Bot-${version}-arm64.dmg`,
             ]],
-            ["latest.yml", [`OpenMausBot-${version}-setup.exe`]],
+            ["latest.yml", [`BOS-Bot-${version}-setup.exe`]],
             ["latest-linux.yml", [
-              `OpenMausBot-${version}-x86_64.AppImage`,
-              `OpenMausBot-${version}-amd64.deb`,
+              `BOS-Bot-${version}-x86_64.AppImage`,
+              `BOS-Bot-${version}-amd64.deb`,
             ]],
           ]);
           let bad = 0;
@@ -127,7 +127,7 @@ jobs:
             `sha256:${createHash("sha256").update(readFileSync(join("assets", name))).digest("hex")}`,
           ]));
           const inventory = JSON.parse(execFileSync("gh", ["release", "view", tag, "--repo", process.env.GITHUB_REPOSITORY, "--json", "assets"], { encoding: "utf8" })).assets;
-          const npmTarball = `openmausbot-${tag.slice(1)}.tgz`;
+          const npmTarball = `bosbot-${tag.slice(1)}.tgz`;
           const remote = inventory.filter((asset) => asset.name !== npmTarball);
           if (inventory.length - remote.length > 1) throw new Error(`duplicate canonical npm asset: ${npmTarball}`);
           if (remote.length !== expected.size) throw new Error(`canonical release has ${remote.length} assets but ${expected.size} downloaded`);
@@ -172,7 +172,7 @@ jobs:
           const canonical = assets(process.env.GITHUB_REPOSITORY, process.env.CANONICAL_TOKEN);
           // The npm job may attach this optional asset between our download
           // and comparison. It is canonical-only, never an updater artifact.
-          canonical.delete(`openmausbot-${tag.slice(1)}.tgz`);
+          canonical.delete(`bosbot-${tag.slice(1)}.tgz`);
           const legacy = assets("milind-soni/openmausbot-releases", process.env.LEGACY_TOKEN);
           if (canonical.size !== legacy.size) throw new Error(`legacy mirror has ${legacy.size} assets; canonical has ${canonical.size}`);
           for (const [name, digest] of canonical) {
@@ -200,3 +200,4 @@ jobs:
           fi
           curl --fail-with-body --silent --show-error --request POST "$DOCS_DEPLOY_HOOK_URL" > /dev/null
           echo "requested a docs rebuild"
+# branding compatibility (electron/branding-compat.json): upstream-artifacts: pinned third-party binaries and historical upstream provenance cannot be redirected by a product rename

@@ -1,4 +1,4 @@
-# OpenMausBot documentation
+# BOS Bot documentation
 
 The public documentation site is a Next.js 16 + Fumadocs app. User-facing content lives in `content/docs`; the repository's top-level `docs` folder remains available for implementation notes and detailed platform records.
 
@@ -17,11 +17,11 @@ The site opens at `http://localhost:3000`.
 
 ```bash
 pnpm docs:build
-pnpm --filter @openmausbot/docs types:check
-pnpm --filter @openmausbot/docs lint
+pnpm --filter @bosbot/docs types:check
+pnpm --filter @bosbot/docs lint
 ```
 
-The changelog reads published releases from `milind-soni/OpenMausBot` plus the
+The changelog reads published releases from `milind-soni/BOS Bot` plus the
 legacy updater archive, deduplicates them into one complete history, and caches
 the result for five minutes. If one repository is temporarily unavailable, the
 other still renders; if both fail, the page links directly to GitHub.
@@ -34,7 +34,7 @@ incremental regeneration so published releases appear without a source commit.
 
 Create a second Vercel project beside the existing `openmausbot.com` project:
 
-1. Import the `milind-soni/OpenMausBot` repository.
+1. Import the `milind-soni/BOS Bot` repository.
 2. Set **Root Directory** to `apps/docs`.
 3. Keep the detected **Next.js** framework settings.
 4. Set the production branch to `main` and deploy.
@@ -49,3 +49,4 @@ Vercel will build the Next.js docs app, publish every push to `main`, and create
 preview URLs for documentation pull requests. Keep `openmausbot.com` on the
 existing marketing project and add a Docs link there after the new domain is
 live.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service -->

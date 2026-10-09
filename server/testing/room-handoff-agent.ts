@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Scripted provider fixture that exercises the REAL injected agents MCP proxy.
 // The plan and evidence are confined to the isolated launcher's temporary home.
 import { spawn } from "node:child_process";
@@ -34,7 +35,7 @@ export async function runRoomHandoffAgent(argv: string[], planPath: string, prom
   for (const expected of plan.expectSystemIncludes ?? []) if (!system.includes(expected)) throw new Error(`Missing discussion context: ${expected}`);
   for (const expected of plan.expectContextIncludes ?? []) if (!turnContext.includes(expected)) throw new Error(`Missing conversation context: ${expected}`);
   const steps = basePlan.turns ? plan.steps ?? [] : resumed ? plan.resumeSteps ?? [] : plan.steps ?? [];
-  const child = spawn(integration.command, integration.args, { env: { ...process.env, ...integration.env }, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(integration.command, integration.args, { env: { ...compatEnv, ...integration.env }, stdio: ["pipe", "pipe", "pipe"] });
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
   let serial = 0;
   let closing = false;
@@ -106,3 +107,4 @@ export async function runRoomHandoffAgent(argv: string[], planPath: string, prom
       resumed, system, prompt, evidence, ...launch?.evidence }) + "\n");
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

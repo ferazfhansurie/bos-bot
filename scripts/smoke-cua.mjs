@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Read-only end-to-end smoke for the staged, packaged CUA path: native SDK
 // host -> private embedded daemon -> official stdio MCP proxy -> desktop frame.
 import { spawn } from "node:child_process";
@@ -8,9 +9,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // staging is per-arch since the Intel build (dist-native/<arch>/…); default to
 // the host arch, which is the only one whose native SDK can load in-process
 const hostArch = process.arch === "arm64" ? "arm64" : "x64";
-const resources = process.env.OMB_CUA_RESOURCES ?? join(root, "dist-native", hostArch);
-process.env.OPENMAUSBOT_CUA_SDK_LIBRARY = join(resources, "cua-sdk/native/libcua_driver_sdk.dylib");
-process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED = "0";
+const resources = compatEnv.OMB_CUA_RESOURCES ?? join(root, "dist-native", hostArch);
+compatEnv.OPENMAUSBOT_CUA_SDK_LIBRARY = join(resources, "cua-sdk/native/libcua_driver_sdk.dylib");
+compatEnv.CUA_DRIVER_RS_TELEMETRY_ENABLED = "0";
 const sdk = pathToFileURL(join(resources, "cua-sdk/cua-sdk.mjs")).href;
 const binary = join(resources, "cua-driver");
 const { EmbeddedCuaDriverHost } = await import(sdk);
@@ -21,7 +22,7 @@ try {
   const connection = await host.start();
   proxy = spawn(connection.mcp.command, connection.mcp.args, {
     env: {
-      ...process.env,
+      ...compatEnv,
       ...Object.fromEntries(connection.mcp.environment.map(({ name, value }) => [name, value])),
       CUA_DRIVER_EMBEDDED: "1",
       CUA_DRIVER_HOST_BUNDLE_ID: "com.openmausbot.app",
@@ -65,7 +66,7 @@ try {
   await rpc("initialize", {
     protocolVersion: "2024-11-05",
     capabilities: {},
-    clientInfo: { name: "openmausbot-package-smoke", version: "1" },
+    clientInfo: { name: "bosbot-package-smoke", version: "1" },
   });
   proxy.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const listed = await rpc("tools/list");
@@ -81,3 +82,4 @@ try {
   await host.stop().catch(() => {});
   host.uniffiDestroy();
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

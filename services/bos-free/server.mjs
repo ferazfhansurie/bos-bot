@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // BOS Free: hosted relay to DeepSeek V4 Flash via OpenRouter. Holds the owner key server-side;
 // installs get per-install tokens with daily caps. Only the one BOS Free model is ever called.
 import http from 'node:http';
@@ -5,22 +6,22 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const PORT = Number(process.env.PORT || 3370);
-const KEY = process.env.OPENROUTER_API_KEY || '';
-const DATA = process.env.BOS_FREE_DATA || path.join(process.cwd(), 'data.json');
-const PER_INSTALL = Number(process.env.PER_INSTALL_DAILY || 100);
+const PORT = Number(compatEnv.PORT || 3370);
+const KEY = compatEnv.OPENROUTER_API_KEY || '';
+const DATA = compatEnv.BOS_FREE_DATA || path.join(process.cwd(), 'data.json');
+const PER_INSTALL = Number(compatEnv.PER_INSTALL_DAILY || 100);
 // owner budget: at ~$0.0003-0.001 a turn, 2000 turns/day stays within a couple of dollars
-const GLOBAL = Number(process.env.GLOBAL_DAILY || 2000);
-const REG_PER_IP = Number(process.env.REGISTER_PER_IP_DAILY || 2);
-const CHAT_PER_IP = Number(process.env.CHAT_PER_IP_DAILY || 150);
-const UPSTREAM = process.env.UPSTREAM || 'https://openrouter.ai/api/v1';
-const UPSTREAM_MODEL = process.env.BOS_FREE_MODEL || 'deepseek/deepseek-v4.1-flash';
+const GLOBAL = Number(compatEnv.GLOBAL_DAILY || 2000);
+const REG_PER_IP = Number(compatEnv.REGISTER_PER_IP_DAILY || 2);
+const CHAT_PER_IP = Number(compatEnv.CHAT_PER_IP_DAILY || 150);
+const UPSTREAM = compatEnv.UPSTREAM || 'https://openrouter.ai/api/v1';
+const UPSTREAM_MODEL = compatEnv.BOS_FREE_MODEL || 'deepseek/deepseek-v4.1-flash';
 // $ per million tokens; OpenRouter refuses any provider priced above this, so a reroute can't overspend
-const MAX_PRICE = { prompt: Number(process.env.MAX_PROMPT_PRICE || 0.1), completion: Number(process.env.MAX_COMPLETION_PRICE || 0.5) };
+const MAX_PRICE = { prompt: Number(compatEnv.MAX_PROMPT_PRICE || 0.1), completion: Number(compatEnv.MAX_COMPLETION_PRICE || 0.5) };
 const MAX_BODY = 4 * 1024 * 1024;
 const MAX_TOKENS = 4096;
-const ATTEMPTS = Math.max(1, Math.floor(Number(process.env.UPSTREAM_ATTEMPTS) || 3));
-const BACKOFF_MS = Number(process.env.RETRY_BACKOFF_MS ?? 800);
+const ATTEMPTS = Math.max(1, Math.floor(Number(compatEnv.UPSTREAM_ATTEMPTS) || 3));
+const BACKOFF_MS = Number(compatEnv.RETRY_BACKOFF_MS ?? 800);
 if (!KEY) { console.error('OPENROUTER_API_KEY missing'); process.exit(1); }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -43,8 +44,8 @@ const upstreamReason = (text) => { try { const e = JSON.parse(text).error || {};
 const exhausted = (text) => /insufficient_quota|credit_balance_exhausted|billing_hard_limit|insufficient credits/i.test(text);
 const wait = (ms, signal) => new Promise((resolve) => { const t = setTimeout(resolve, ms); signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true }); });
 
-const KEEPALIVE_MS = Math.max(1000, Number(process.env.KEEPALIVE_MS) || 10_000);
-const HOLD_MS = Math.max(1000, Number(process.env.HOLD_MS) || 40_000);
+const KEEPALIVE_MS = Math.max(1000, Number(compatEnv.KEEPALIVE_MS) || 10_000);
+const HOLD_MS = Math.max(1000, Number(compatEnv.HOLD_MS) || 40_000);
 const HOLD_BYTES = 512 * 1024;
 const bodyError = (text) => { try { const j = JSON.parse(text); return j && j.error ? (upstreamReason(text) || 'error') : ''; } catch { return ''; } };
 // 'error' = the provider failed this attempt; 'answer' = real output started, stream it through

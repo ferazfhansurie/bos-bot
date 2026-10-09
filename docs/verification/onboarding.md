@@ -9,7 +9,7 @@ node --experimental-strip-types scripts/control-omb.ts ui launch --tool-calls '[
 In a second terminal, pass its exact printed handle:
 
 ```sh
-node --experimental-strip-types scripts/verify-recruitment-ui.ts /tmp/openmausbot-verify-data-XXXXXX/ui.json
+node --experimental-strip-types scripts/verify-recruitment-ui.ts /tmp/bosbot-verify-data-XXXXXX/ui.json
 ```
 
 To verify creation when no chief exists, launch another fresh fixture and run

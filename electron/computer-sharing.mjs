@@ -120,7 +120,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
       bytes += chunk.length; if (bytes > 4_000_000) throw new Error("Workspace response exceeded limit");
       chunks.push(Buffer.from(chunk));
     }
-    let json; try { json = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new Error("This server does not support computer sharing. Update its OpenMausBot installation."); }
+    let json; try { json = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new Error("This server does not support computer sharing. Update its BOS Bot installation."); }
     if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? "Pair this desktop again before sharing computer access." : `Workspace request failed (${response.status}). Update the server if needed.`);
     return json;
   };
@@ -260,3 +260,4 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
     close() { disposed = true; for (const id of running.keys()) stop(id); },
   };
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

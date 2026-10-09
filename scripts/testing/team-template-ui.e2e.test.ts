@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,8 +10,8 @@ import { request } from "../mcp-server.ts";
 import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
-const forced = process.env.OMB_UI_E2E === "1";
+const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv });
+const forced = compatEnv.OMB_UI_E2E === "1";
 const enabled = forced || Boolean(binary);
 const launchTimeout = forced && !binary ? 600_000 : 180_000;
 if (!enabled) console.log("skipping template UI e2e: set OMB_UI_E2E=1 to install the pinned browser");
@@ -24,7 +25,7 @@ describe("additive template imports in the real renderer", () => {
     let stderr = "";
     let info: { ui: string; url: string; botId: string; logPath: string };
     child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
     child.stderr!.on("data", (chunk: Buffer) => { stderr += String(chunk); });
@@ -90,3 +91,4 @@ describe("additive template imports in the real renderer", () => {
     process.stdout.write(`${JSON.stringify({ fixture: info!, screenshot: evidence, libraryAndFileImports: true, originalConversationUnchanged: true })}\n`);
   }, launchTimeout + 120_000);
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

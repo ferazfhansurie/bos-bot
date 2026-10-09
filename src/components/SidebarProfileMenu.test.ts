@@ -160,7 +160,7 @@ describe("outward links", () => {
   // app-links does not quietly send Help back to the README
   it("sends Help Center to the docs the website also links to", () => {
     expect(HELP_CENTER_URL).toBe(DOCS_URL);
-    expect(DOCS_URL).toBe("https://github.com/milind-soni/OpenMausBot/tree/main/docs");
+    expect(DOCS_URL).toBe("https://github.com/firazfhansurie/bos-bot/tree/main/docs");
   });
 
   it("uses the BOS alpha support address for feedback", () => {

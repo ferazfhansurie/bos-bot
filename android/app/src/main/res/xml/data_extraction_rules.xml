@@ -35,3 +35,4 @@
             path="openmaus.onboarding.xml" />
     </device-transfer>
 </data-extraction-rules>
+<!-- branding compatibility (electron/branding-compat.json): android-preferences: phone preferences and already posted notification intents survive the namespace move -->

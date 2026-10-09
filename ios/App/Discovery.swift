@@ -191,3 +191,4 @@ final class Discovery: ObservableObject {
         Connection.urlHost("\(host)")
     }
 }
+// branding compatibility (electron/branding-compat.json): bonjour: old phone clients continue discovering the existing server service

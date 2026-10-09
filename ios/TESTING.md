@@ -30,8 +30,8 @@ Use current `main` after the companion lands. While reviewing the feature PR,
 GitHub CLI can create the correct local branch:
 
 ```sh
-git clone https://github.com/milind-soni/OpenMausBot
-cd OpenMausBot
+git clone https://github.com/firazfhansurie/bos-bot
+cd bos-bot
 gh pr checkout 161        # omit after the PR is merged
 ```
 
@@ -109,7 +109,7 @@ This is the likeliest snag on macOS, and it is not a bug in the phone.
   and normally shares it fine, but if something else grabbed it exclusively the
   advertisement cannot start. `sudo lsof -i :5353` shows who.
 - **The firewall is prompting.** System Settings → Network → Firewall. Incoming
-  connections to `node`/OpenMausBot must be allowed, or the phone reaches
+  connections to `node`/BOS Bot must be allowed, or the phone reaches
   nothing on 8810 even with a correct address.
 - Neither blocks testing: use the typed address instead. Discovery failing is
   designed to be a fallback, not a dead end — that is worth confirming too.
@@ -120,15 +120,15 @@ This is the likeliest snag on macOS, and it is not a bug in the phone.
 
 ```sh
 brew install xcodegen
-cd ios && xcodegen generate && open OpenMausCompanion.xcodeproj
+cd ios && xcodegen generate && open BosBot.xcodeproj
 ```
 
 Build for the simulator first — it is a faster loop for compile errors.
 The same gate can run without opening Xcode:
 
 ```sh
-xcodebuild -project OpenMausCompanion.xcodeproj \
-  -scheme OpenMausCompanion \
+xcodebuild -project BosBot.xcodeproj \
+  -scheme BosBot \
   -sdk iphonesimulator \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   CODE_SIGNING_ALLOWED=NO build
@@ -141,7 +141,7 @@ device token with "A required entitlement isn't present", right after the
 code is accepted:
 
 ```sh
-xcodebuild -project OpenMausCompanion.xcodeproj -scheme OpenMausCompanion \
+xcodebuild -project BosBot.xcodeproj -scheme BosBot \
   -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   DEVELOPMENT_TEAM=<your team id> CODE_SIGN_IDENTITY="-" CODE_SIGN_STYLE=Manual build
 ```
@@ -176,8 +176,8 @@ paid account is required to run on your own phone.
 
 On the phone, in order:
 
-1. **Pair.** In OpenMausBot → Settings → Phone, choose **Pair a phone**.
-   Scan the QR code with the phone's Camera, open OpenMausMobile,
+1. **Pair.** In BOS Bot → Settings → Phone, choose **Pair a phone**.
+   Scan the QR code with the phone's Camera, open BosBot,
    confirm that the computer and six-digit code are filled in, then tap
    **Connect**. The computer should also appear by name for the manual path:
    tap it and type the same code.
@@ -186,7 +186,7 @@ On the phone, in order:
      into Keychain rather than only living in memory.
    - If the list stays empty, check in this order:
      1. **Local Network permission.** iOS asks once, and a denial is
-        permanent and silent. Settings → OpenMausBot → Local Network. If the
+        permanent and silent. Settings → BOS Bot → Local Network. If the
         toggle is not even there, the prompt never fired — which points at the
         Info.plist. Deleting the app and reinstalling resets the decision and
         asks again.
@@ -255,7 +255,7 @@ so this is also how the phone reaches the Mac over cellular.
    App Store build) and sign in.
 2. **On the phone:** install Tailscale from the App Store, sign in to the *same*
    account, and turn the VPN on.
-3. **In OpenMausBot → Settings → Phone:** with Phone access on, the panel now
+3. **In BOS Bot → Settings → Phone:** with Phone access on, the panel now
    shows a separate **Tailscale pairing** card. Choose **Turn on phone access &
    check** (or **Check again** when Phone access is already on); it should
    report a tailnet name such as `macbook.tail1234.ts.net`. If it
@@ -324,3 +324,4 @@ For Swift errors, the compiler's own output is the most useful thing — file,
 line, and message. For runtime problems, the harness log is usually more
 informative than the phone: it is where the pairing, auth and stream decisions
 are actually made.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; bonjour: old phone clients continue discovering the existing server service -->

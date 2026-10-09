@@ -248,3 +248,4 @@ export function importTeamBackup(store: Store, routines: RoutineManager, input: 
     throw error;
   }
 }
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

@@ -7,7 +7,7 @@
 // status SUCCESS. Deterministic, no network.
 //
 //   FAKE_AGY_MODE=ask-peer
-//     reads OpenMausBot's temporary `openmausbot-agents` entry from agy's
+//     reads BOS Bot's temporary `openmausbot-agents` entry from agy's
 //     global MCP config, calls list_bots then ask_bot, and returns the peer's
 //     real reply. This pins the Antigravity/Gemini comms path end to end.
 //
@@ -121,7 +121,7 @@ function driveMcp(
       params: {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "openmausbot-fake-antigravity", version: "1.0.0" },
+        clientInfo: { name: "bosbot-fake-antigravity", version: "1.0.0" },
       },
     });
   });
@@ -220,3 +220,4 @@ if (Number.isFinite(postResultDelayMs) && postResultDelayMs > 0) {
   await new Promise((resolve) => setTimeout(resolve, postResultDelayMs));
 }
 process.exit(0);
+// branding compatibility (electron/branding-compat.json): engine-config: stored engine provider and built-in MCP identities remain reserved and cleanable

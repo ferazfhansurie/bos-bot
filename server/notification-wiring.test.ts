@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Notification policy has pure unit coverage; this pins the production wiring
 // from a real failed routine turn through RoutineManager and the server's SSE
 // stream. A generic `done` frame for the same failure would produce two desktop
@@ -79,8 +80,8 @@ posixOnly("routine failure notification wiring", () => {
       OMB_PORT: String(PORT),
       OMB_WEBHOOK_PORT: String(WEBHOOK_PORT),
     };
-    if (process.env.PATH) env.PATH = process.env.PATH;
-    if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    if (compatEnv.PATH) env.PATH = compatEnv.PATH;
+    if (compatEnv.SystemRoot) env.SystemRoot = compatEnv.SystemRoot;
 
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
@@ -193,3 +194,4 @@ posixOnly("routine failure notification wiring", () => {
     60_000,
   );
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

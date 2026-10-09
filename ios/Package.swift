@@ -17,7 +17,7 @@ let package = Package(
         .library(name: "CompanionCore", targets: ["CompanionCore"])
     ],
     targets: [
-        .target(name: "PairingPersistence", dependencies: ["CompanionCore"], path: "AppShared", sources: ["OpenMausSharedConnectionStore.swift", "OpenMausSharedConfiguration.swift", "OpenMausSharedKeychain.swift"]),
+        .target(name: "PairingPersistence", dependencies: ["CompanionCore"], path: "AppShared", sources: ["BosSharedConnectionStore.swift", "BosSharedConfiguration.swift", "BosSharedKeychain.swift"]),
         .testTarget(name: "PairingPersistenceTests", dependencies: ["PairingPersistence", "CompanionCore"]),
         // Resources/glyph-faces.json is generated from shared/glyph-faces.ts
         // (`pnpm gen:glyphs`); read it with Bundle.module.

@@ -96,3 +96,4 @@ test("a destroyed window is left alone", () => {
   assert.equal(close.handleClose(event, fakeWindow({ destroyed: true })), false);
   assert.equal(event.prevented, false);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

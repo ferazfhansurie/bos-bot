@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 // Generic ACP (Agent Client Protocol) driver core — one JSON-RPC-2.0-over-
 // stdio session runtime that every ACP CLI harness (Grok Build, Gemini CLI,
 // …) rides. Modeled on t3code's AcpSessionRuntime + per-agent AcpSupport
@@ -182,7 +183,7 @@ export interface AcpSupport {
   }): Promise<void>;
 }
 
-const envOr = (key: string, fallback: number): number => Number(process.env[key] ?? fallback);
+const envOr = (key: string, fallback: number): number => Number(compatEnv[key] ?? fallback);
 const INIT_TIMEOUT = envOr("OPENMAUS_ACP_INIT_TIMEOUT_MS", 300_000);
 const SESSION_CONFIG_TIMEOUT = envOr("OPENMAUS_ACP_SESSION_CONFIG_TIMEOUT_MS", 300_000); // configureSession's per-request default
 const NEW_SESSION_TIMEOUT = envOr("OPENMAUS_ACP_NEW_SESSION_TIMEOUT_MS", 300_000);
@@ -299,7 +300,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
   const SOURCE = support.nativeSource;
   const decodeConfig = decodeAcpConfig(support.defaultCli);
   const DENY_TIMEOUT_NOTE =
-    "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+    "BOS Bot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 
   return {
     driverKind: DRIVER_KIND,
@@ -317,7 +318,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
       const { instanceId, config } = input;
       const childEnv = (activeConfig = config) => {
         const env: Record<string, string | undefined> = {
-          ...process.env,
+          ...compatEnv,
           ...input.environment,
           PATH: augmentedPath(),
         };
@@ -945,7 +946,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               "initialize",
               {
                 protocolVersion: 1,
-                clientInfo: { name: "openmausbot", version: "0.0.0" },
+                clientInfo: { name: "bosbot", version: "0.0.0" },
                 clientCapabilities: {
                   fs: {
                     readTextFile: support.clientFileSystem === true,
@@ -1187,7 +1188,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             nativeImageInput: support.images === true,
             effortLevels: support.effortLevels,
             modelVariants: support.modelVariants === true,
-            // OpenMausBot supplies a per-bot approvalMode on every harness
+            // BOS Bot supplies a per-bot approvalMode on every harness
             // turn, which safely overrides a legacy instance fullAuto value.
             // Direct adapter calls that omit it still fail closed in sendTurn.
             localComputerMcp: true,
@@ -1222,3 +1223,4 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
     },
   };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

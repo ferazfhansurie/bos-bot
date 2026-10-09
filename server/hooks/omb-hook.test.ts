@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The hook helper Claude Code runs at PostToolUse etc. (Phase 0, item 0.2).
 // Contract, learned the hard way by others: it ALWAYS exits 0, never takes
 // longer than its budget, speaks only to the loopback harness, and prints a
@@ -25,7 +26,7 @@ afterAll(async () => {
 function run(stdin: string, env: Record<string, string>): Promise<{ code: number | null; stdout: string; stderr: string; ms: number }> {
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = spawn(process.execPath, [HELPER], { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [HELPER], { env: { ...compatEnv, ...env }, stdio: ["pipe", "pipe", "pipe"] });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     let stdout = "";
@@ -144,3 +145,4 @@ describe("omb-hook helper: SessionStart context", () => {
     expect(result.stdout).toBe("");
   }, 15_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

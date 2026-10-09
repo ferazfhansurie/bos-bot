@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../../electron/branding-env.cjs";
 // Claude driver — upstream ClaudeDriver skeleton over agentcal's
 // drivers/claude.js runtime (stream-json both directions, prompt over
 // stdin, completion from a real `result` event — verified against
@@ -123,7 +124,7 @@ export const CLAUDE_ACCOUNT_ENV_KEYS = [
 ] as const;
 
 /** Resolve the CLI's config location without changing HOME or Keychain. */
-export function resolveClaudeConfigDir(configDir?: string, env: NodeJS.ProcessEnv = process.env): string {
+export function resolveClaudeConfigDir(configDir?: string, env: NodeJS.ProcessEnv = compatEnv): string {
   const home = env.HOME || env.USERPROFILE || homedir();
   const configured = configDir?.trim() || env.CLAUDE_CONFIG_DIR?.trim() || join(home, ".claude");
   const expanded = configured === "~" ? home : configured.startsWith("~/") ? join(home, configured.slice(2)) : configured;
@@ -159,7 +160,7 @@ export function claudeAuthFailure(
  */
 function claudeEnvironment(
   model?: string | null,
-  source: NodeJS.ProcessEnv = process.env,
+  source: NodeJS.ProcessEnv = compatEnv,
   configDir?: string,
   instanceEnvironment: NodeJS.ProcessEnv = {},
 ): NodeJS.ProcessEnv {
@@ -196,7 +197,7 @@ function claudeEnvironment(
  * to give a bot a server is the app's own `mcpServers` config or the bot
  * project's `.mcp.json`. */
 function inheritsUserConfig(env: NodeJS.ProcessEnv): boolean {
-  return env.OMB_CLAUDE_INHERIT_USER_CONFIG === "1";
+  return compatEnvironment(env).OMB_CLAUDE_INHERIT_USER_CONFIG === "1";
 }
 
 /** The Engines-page warning while the escape hatch is set. The flag is a
@@ -209,7 +210,7 @@ export function claudeInheritWarning(env: NodeJS.ProcessEnv): ProviderSnapshot["
   return {
     title: "Bots inherit this machine's Claude Code setup",
     message:
-      "OMB_CLAUDE_INHERIT_USER_CONFIG=1 is set on the OpenMausBot process, so every Claude bot also loads this " +
+      "OMB_CLAUDE_INHERIT_USER_CONFIG=1 is set on the BOS Bot process, so every Claude bot also loads this " +
       "computer's own MCP servers, connectors, skills, hooks and personal CLAUDE.md on every turn — often thousands " +
       "of extra tokens per model call, and tools nobody gave the bot. Unless a bot genuinely needs a server from " +
       "your user-scope Claude config, remove the variable and restart; add the server under Settings → MCP servers " +
@@ -283,7 +284,7 @@ function projectMcpServers(cwd: string): Record<string, unknown> {
  * outside 100k-1M as a hard argument error, so a configured value is clamped
  * rather than passed through: a mistyped setting must not fail every turn. */
 export function autoCompactWindow(env: NodeJS.ProcessEnv): string | null {
-  const raw = (env.OMB_CLAUDE_AUTOCOMPACT ?? "").trim().toLowerCase();
+  const raw = (compatEnvironment(env).OMB_CLAUDE_AUTOCOMPACT ?? "").trim().toLowerCase();
   if (raw === "off") return null;
   if (raw === "auto") return "auto";
   const parsed = raw ? Number(raw) : DEFAULT_AUTOCOMPACT_TOKENS;
@@ -355,7 +356,7 @@ export function claudeCliUpdate(version: string | null, cli: string): ProviderSn
   const missing = (Object.keys(CLAUDE_FLAG_FLOORS) as (keyof typeof CLAUDE_FLAG_FLOORS)[])
     .filter((flag) => !claudeCliSupports(parsed, flag));
   const effects = [
-    ...(missing.includes("--autocompact") ? ["no compaction window picked by OpenMausBot"] : []),
+    ...(missing.includes("--autocompact") ? ["no compaction window picked by BOS Bot"] : []),
     ...(missing.includes("--setting-sources") ? ["bots still see this machine's own Claude Code setup"] : []),
     ...(missing.includes("--system-prompt-snapshot") ? ["coordinated resumed turns cannot refresh stale system prompts"] : []),
   ];
@@ -433,7 +434,7 @@ function extrasFromUnknown(value: unknown): Array<{ id: string; label: string }>
  *  Custom put a non-inject id in the picker and the turn then had no
  *  ANTHROPIC_API_KEY ("Not logged in · Please run /login"). Live injects
  *  come from mergeLocalInject. */
-export function readClaudeModelCatalog(env: Record<string, string | undefined> = process.env) {
+export function readClaudeModelCatalog(env: Record<string, string | undefined> = compatEnv) {
   // A missing or unreadable settings.json is not fatal: an instance whose
   // environment sets ANTHROPIC_MODEL (a Claude Code install pointed at an
   // Anthropic-compatible host) still lists that model as Custom.
@@ -501,17 +502,17 @@ type AskBehavior = "allow" | "deny" | "answer";
 type AskResolutionSource = "user" | "timeout" | "system";
 
 const DENY_TIMEOUT_NOTE =
-  "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
-const QUESTION_TIMEOUT_NOTE = "OpenMausBot: nobody answered in time. Use your best judgment and continue.";
-const DUPLICATE_ASK_ID_NOTE = "OpenMausBot: duplicate ask id — skipping this request.";
+  "BOS Bot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const QUESTION_TIMEOUT_NOTE = "BOS Bot: nobody answered in time. Use your best judgment and continue.";
+const DUPLICATE_ASK_ID_NOTE = "BOS Bot: duplicate ask id — skipping this request.";
 
 /** The system-source reply for an ask that outlives the turn — used both to
  * drain in-flight `pending` asks on close() and to answer one that arrives
  * on an already-closed broker (see the `closed` branch below). */
 function systemEndedReply(kind: Ask["kind"]): { behavior: AskBehavior; message: string } {
   return kind === "question"
-    ? { behavior: "answer", message: "OpenMausBot: the turn is ending — wrap up." }
-    : { behavior: "deny", message: "OpenMausBot: the turn ended" };
+    ? { behavior: "answer", message: "BOS Bot: the turn is ending — wrap up." }
+    : { behavior: "deny", message: "BOS Bot: the turn ended" };
 }
 
 /** The structured questions behind an ask, when it is one. Claude's own
@@ -927,7 +928,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
   async create(input: DriverCreateInput<ClaudeConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
     const environment = (model?: string | null) =>
-      claudeEnvironment(config.managed ? undefined : model, { ...process.env, ...input.environment }, config.configDir, input.environment);
+      claudeEnvironment(config.managed ? undefined : model, { ...compatEnv, ...input.environment }, config.configDir, input.environment);
     const catalogEnv = environment();
     // Say it once where a headless or source run reads its logs; the Engines
     // page carries the same warning for the desktop (claudeInheritWarning).
@@ -1006,11 +1007,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       finishClose?: () => Promise<void>;
     }
     const sessions = new Map<string, Session>();
-    const configuredIdleMinimum = Number(process.env.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
+    const configuredIdleMinimum = Number(compatEnv.OMB_CLAUDE_SESSION_IDLE_MIN_MS);
     const sessionIdleMinimum = Number.isFinite(configuredIdleMinimum) && configuredIdleMinimum > 0
       ? configuredIdleMinimum
       : 10_000;
-    const SESSION_IDLE_MS = Math.max(sessionIdleMinimum, Number(process.env.OMB_CLAUDE_SESSION_IDLE_MS) || 10 * 60_000);
+    const SESSION_IDLE_MS = Math.max(sessionIdleMinimum, Number(compatEnv.OMB_CLAUDE_SESSION_IDLE_MS) || 10 * 60_000);
 
     const stopSession = (session: Session) => {
       void killCliTree(session.child).then((stopped) => {
@@ -1149,7 +1150,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       retryState.set(threadId, retry);
       // a retry relaunches the whole CLI; the backoff is scaled down in tests
       // so a fake's transient failures don't stall real seconds
-      const retryScale = Number(process.env.FAKE_CLAUDE_RETRY_SCALE ?? "1");
+      const retryScale = Number(compatEnv.FAKE_CLAUDE_RETRY_SCALE ?? "1");
       const sessionId = !turn.sessionReset && typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
       const newSessionId = sessionId ? null : newId();
 
@@ -1237,7 +1238,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
           env: local.env,
         };
         // The isolated Local VM preserves the established pre-allow behavior.
-        // Host tools always route through OpenMausBot's permission broker.
+        // Host tools always route through BOS Bot's permission broker.
         if (!controlsHost) allowed.push("mcp__computer");
       }
       // peer-agent comms (list_bots/ask_bot) — the harness builds the whole
@@ -1390,7 +1391,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // Rotating an account's key/helper must not reuse the old process.
         auth: createHash("sha256").update(JSON.stringify({
           settings: authSettings,
-          env: Object.fromEntries(CLAUDE_ACCOUNT_ENV_KEYS.map((key) => [key, env[key]])),
+          env: Object.fromEntries(CLAUDE_ACCOUNT_ENV_KEYS.map((key) => [key, compatEnvironment(env)[key]])),
         })).digest("hex"),
       });
 
@@ -2166,3 +2167,4 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     };
   },
 };
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

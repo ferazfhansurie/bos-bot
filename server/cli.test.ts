@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +15,7 @@ const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const setup = vi.hoisted(() => ({ runSetup: vi.fn(), isSetupComplete: vi.fn(), readCliStartup: vi.fn(), saveCliStartup: vi.fn() }));
 vi.mock("./cli-setup.ts", () => setup);
 
-describe("openmausbot command line", () => {
+describe("bosbot command line", () => {
   it("parses commands and flags, and explains mistakes", () => {
     const serve = parseArgs(["serve", "--port", "9001", "--data-dir", "/tmp/x", "--label", "cab mini", "--tailscale", "--no-pair"], {});
     // --data-dir is resolved against the platform: C:\tmp\x on Windows.
@@ -92,7 +93,7 @@ describe("openmausbot command line", () => {
       const out = block({ phone: "android" });
       expect(out).toContain(qrToString(invite));
       expect(out).not.toContain(qrToString(url));
-      expect(out).toContain("Scan that in the OpenMausBot app");
+      expect(out).toContain("Scan that in the BOS Bot app");
       // The web link is still offered, but not as the thing to scan.
       expect(out).toContain(`web browser:   ${url}`);
       expect(out).not.toContain("open or scan:");
@@ -114,7 +115,7 @@ describe("openmausbot command line", () => {
       expect(out).toContain("The Android app needs the phone-app link");
       expect(out).toContain("OMB_PUBLIC_URL");
       // It must not claim the QR is scannable in the app when it is not.
-      expect(out).not.toContain("Scan that in the OpenMausBot app");
+      expect(out).not.toContain("Scan that in the BOS Bot app");
     });
   });
 
@@ -141,9 +142,9 @@ describe("openmausbot command line", () => {
   it("serve: starts the server, prints the pairing link, and stops on SIGTERM", async () => {
     const home = mkdtempSync(join(tmpdir(), "omb-cli-serve-"));
     const port = 21000 + Math.floor(Math.random() * 9000);
-    const child = spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "openmausbot.ts"), "serve", "--port", String(port), "--data-dir", join(home, "data"), "--label", "cli test", "--public-url", "https://mini.example"], {
+    const child = spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "bosbot.ts"), "serve", "--port", String(port), "--data-dir", join(home, "data"), "--label", "cli test", "--public-url", "https://mini.example"], {
       cwd: join(SERVER_DIR, ".."),
-      env: { PATH: process.env.PATH ?? "", HOME: home, USERPROFILE: home, OMB_WEBHOOK_PORT: String(port + 1), OMB_BROWSER_CONNECTION: join(home, "browser-connection.json") },
+      env: { PATH: compatEnv.PATH ?? "", HOME: home, USERPROFILE: home, OMB_WEBHOOK_PORT: String(port + 1), OMB_BROWSER_CONNECTION: join(home, "browser-connection.json") },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -152,7 +153,7 @@ describe("openmausbot command line", () => {
     try {
       const deadline = Date.now() + 60_000;
       while (!out.includes("open or scan:") && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 200));
-      expect(out).toContain(`OpenMausBot is running on http://127.0.0.1:${port}, reachable at https://mini.example`);
+      expect(out).toContain(`BOS Bot is running on http://127.0.0.1:${port}, reachable at https://mini.example`);
       expect(out).toMatch(/pairing code:  [A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}/);
       expect(out).toContain("open or scan:  https://mini.example/pair#code=");
       expect(out).toMatch(/[▀▄█]/);
@@ -190,9 +191,9 @@ describe("terminal onboarding commands", () => {
     vi.unstubAllEnvs();
     vi.resetAllMocks();
   });
-  const command = (name: "setup" | "start") => parseArgs([name, "--data-dir", join(process.env.HOME!, "onboarding"), "--port", "18451"], {}) as CliOptions;
+  const command = (name: "setup" | "start") => parseArgs([name, "--data-dir", join(compatEnv.HOME!, "onboarding"), "--port", "18451"], {}) as CliOptions;
   const io = () => ({ log: vi.fn(), error: vi.fn(), ask: vi.fn() });
-  const preserveEnv = () => vi.stubEnv("OMB_DATA_DIR", process.env.OMB_DATA_DIR);
+  const preserveEnv = () => vi.stubEnv("OMB_DATA_DIR", compatEnv.OMB_DATA_DIR);
   const phoneSetup = vi.fn<NonNullable<NonNullable<Parameters<typeof runOnboardingCommand>[3]>["phoneSetup"]>>();
   const running = vi.fn().mockResolvedValue(false);
   const open = vi.fn().mockResolvedValue(true);
@@ -210,14 +211,14 @@ describe("terminal onboarding commands", () => {
     const output = io();
     const serve = vi.fn();
     setup.runSetup.mockImplementation(async () => {
-      expect(process.env.OMB_DATA_DIR).toBe(options.dataDir);
+      expect(compatEnv.OMB_DATA_DIR).toBe(options.dataDir);
       return true;
     });
     expect(await runOnboardingCommand(options, output, serve, flow)).toBe(0);
     expect(setup.runSetup).toHaveBeenCalledWith({ dataDir: options.dataDir, port: options.port });
     expect(setup.isSetupComplete).not.toHaveBeenCalled();
     expect(serve).not.toHaveBeenCalled();
-    expect(output.log).toHaveBeenCalledWith(expect.stringContaining("Start with: openmausbot"));
+    expect(output.log).toHaveBeenCalledWith(expect.stringContaining("Start with: bosbot"));
     expect(phoneSetup).toHaveBeenCalledOnce();
     expect(setup.saveCliStartup).toHaveBeenCalledWith(options.dataDir, { access: "local" });
   });
@@ -383,9 +384,9 @@ const exited = (child: ChildProcess) => (child.exitCode !== null ? Promise.resol
 
 describe.skipIf(process.platform === "win32")("serve --tunnel", () => {
   const cli = (args: string[], env: NodeJS.ProcessEnv) =>
-    spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "openmausbot.ts"), ...args], {
+    spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "bosbot.ts"), ...args], {
       cwd: join(SERVER_DIR, ".."),
-      env: { PATH: process.env.PATH ?? "", ...env },
+      env: { PATH: compatEnv.PATH ?? "", ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -397,7 +398,7 @@ describe.skipIf(process.platform === "win32")("serve --tunnel", () => {
     child.stderr?.on("data", (chunk) => (err += String(chunk)));
     try {
       expect(await exited(child)).toBe(1);
-      expect(err).toContain("run `openmausbot login` first");
+      expect(err).toContain("run `bosbot login` first");
       let dead = false;
       try {
         await fetch(`http://127.0.0.1:${port}/api/health`);
@@ -448,7 +449,7 @@ describe.skipIf(process.platform === "win32")("serve --tunnel", () => {
     const gateway = `http://127.0.0.1:${originPort}`;
     try {
       const deadline = Date.now() + 60_000;
-      while (!out.includes("OpenMausBot is running") && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 200));
+      while (!out.includes("BOS Bot is running") && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 200));
       expect(out).toContain("using the installation credential from OMB_INSTALLATION_CREDENTIAL");
       expect(out).toContain(`reachable at ${stub.endpointUrl}`);
       expect(existsSync(join(dataDir, "tunnel-account.json"))).toBe(false);
@@ -501,7 +502,7 @@ describe.skipIf(process.platform === "win32")("serve --tunnel", () => {
     try {
       const deadline = Date.now() + 60_000;
       while (!out.includes("open or scan:") && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 200));
-      expect(out).toContain(`OpenMausBot is running on http://127.0.0.1:${port}, reachable at ${stub.endpointUrl}`);
+      expect(out).toContain(`BOS Bot is running on http://127.0.0.1:${port}, reachable at ${stub.endpointUrl}`);
       expect(out).toContain(`open or scan:  ${stub.endpointUrl}/pair#code=`);
       // a fresh connector token was fetched for this run
       expect(stub.calls).toContain("POST /v1/installations/self/endpoint");
@@ -555,7 +556,7 @@ describe.skipIf(process.platform === "win32")("serve --tunnel", () => {
   }, 120_000);
 });
 
-describe("openmausbot access", () => {
+describe("bosbot access", () => {
   it("edits the sign-in allow-list in config.json without a running server", async () => {
     const home = mkdtempSync(join(tmpdir(), "omb-cli-access-"));
     const dataDir = join(home, "data");
@@ -594,9 +595,9 @@ describe.skipIf(process.platform === "win32")("serve --domain", () => {
     const fake = join(home, "fake-caddy");
     writeFileSync(fake, `#!/bin/sh\necho "$@" > "${join(home, "caddy-args.txt")}"\necho $$ > "${join(home, "caddy.pid")}"\nexec sleep 300\n`, { mode: 0o755 });
     const port = 21000 + Math.floor(Math.random() * 9000);
-    const child = spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "openmausbot.ts"), "serve", "--domain", "omb.example.test", "--port", String(port), "--data-dir", dataDir], {
+    const child = spawn(process.execPath, ["--experimental-strip-types", join(SERVER_DIR, "bosbot.ts"), "serve", "--domain", "omb.example.test", "--port", String(port), "--data-dir", dataDir], {
       cwd: join(SERVER_DIR, ".."),
-      env: { PATH: process.env.PATH ?? "", HOME: home, USERPROFILE: home, OMB_WEBHOOK_PORT: String(port + 1), OMB_BROWSER_CONNECTION: join(home, "browser-connection.json"), OMB_CADDY_PATH: fake },
+      env: { PATH: compatEnv.PATH ?? "", HOME: home, USERPROFILE: home, OMB_WEBHOOK_PORT: String(port + 1), OMB_BROWSER_CONNECTION: join(home, "browser-connection.json"), OMB_CADDY_PATH: fake },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -605,7 +606,7 @@ describe.skipIf(process.platform === "win32")("serve --domain", () => {
     try {
       const deadline = Date.now() + 60_000;
       while (!out.includes("open or scan:") && Date.now() < deadline && child.exitCode === null) await new Promise((r) => setTimeout(r, 200));
-      expect(out).toContain(`OpenMausBot is running on http://127.0.0.1:${port}, reachable at https://omb.example.test`);
+      expect(out).toContain(`BOS Bot is running on http://127.0.0.1:${port}, reachable at https://omb.example.test`);
       expect(out).toContain("https: Caddy serves https://omb.example.test");
       expect(out).toContain("open or scan:  https://omb.example.test/pair#code=");
       const args = readFileSync(join(home, "caddy-args.txt"), "utf8").trim();
@@ -624,3 +625,4 @@ describe.skipIf(process.platform === "win32")("serve --domain", () => {
     }
   }, 120_000);
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

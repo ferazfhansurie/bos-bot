@@ -609,3 +609,4 @@ export function memorySystemPrompt(botId: string, opts: { managedWrites?: boolea
     : "";
   return `${guidance}\n\nYour memory (MEMORY.md):\n${memory.text}${truncatedNote}`;
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

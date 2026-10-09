@@ -539,7 +539,7 @@ export async function stageWorkspaceBackup(dataDir: string, archivePath: string,
     const versions = [manifest.summary.appVersion, options.currentAppVersion ?? ""].map((version) => /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version)?.slice(1).map(Number));
     if (versions[0] && versions[1]) {
       for (let i = 0; i < 3; i++) {
-        if (versions[0][i] > versions[1][i]) throw new Error("This backup was made by a newer OpenMausBot version. Update the app before restoring it.");
+        if (versions[0][i] > versions[1][i]) throw new Error("This backup was made by a newer BOS Bot version. Update the app before restoring it.");
         if (versions[0][i] < versions[1][i]) break;
       }
     }
@@ -924,3 +924,4 @@ export function removeWorkspaceBackupJob(dataDir: string, id: string): void {
   if (!lstatSync(path).isDirectory() || lstatSync(path).isSymbolicLink()) throw new Error("Unsafe workspace backup cleanup target.");
   rmSync(path, { recursive: true, force: true });
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; lease: a new server must lock the same data-directory lease as an existing process

@@ -119,3 +119,4 @@ tests; phone builds do not prove a physical-device workflow.
 
 Deferred: bundled setup-plan cards, undo beyond soul, per-bot MCP grants, and
 live prompt receipts. Each needs its own product and safety decision.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, appendFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -16,8 +17,8 @@ const git = args => execFileSync('git', args, { cwd: server, encoding: 'utf8' })
 assert.equal(git(['status','--porcelain','--','services/cloud', 'server/cloud-host.ts', 'server/drivers/claude.ts', 'shared/cloud-protocol', ':!services/cloud/acceptance']), '', 'dirty SUT');
 mkdirSync(evidence, { mode: 0o700 });
 const data = mkdtempSync(resolve(tmpdir(), 'bos-native-host-data-'));
-process.env.OMB_DATA_DIR = data;
-process.env.OMB_DISABLE_LEGACY_MIGRATION = '1';
+compatEnv.OMB_DATA_DIR = data;
+compatEnv.OMB_DISABLE_LEGACY_MIGRATION = '1';
 mkdirSync(data + '/native', { mode: 0o700 });
 const candidate = git(['rev-parse','HEAD']);
 const record = entry => appendFileSync(evidence + '/raw.jsonl', JSON.stringify(redact({ at: new Date().toISOString(), ...entry })) + '\n', { mode: 0o600, flush: true });
@@ -47,3 +48,4 @@ finally {
   writeFileSync(evidence + '/summary.json', JSON.stringify(summary, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
 }
 console.log(JSON.stringify(summary));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { homedir } from "node:os";
@@ -438,12 +439,12 @@ function readWindowsSupervisedConnection(
 
 export function readCuaConnection({
   platform = process.platform,
-  userData = process.env.OMB_USER_DATA,
+  userData = compatEnv.OMB_USER_DATA,
   home = homedir(),
   validateLinuxRuntime = validateLinuxDescriptorRuntime,
   validateLegacyRuntime = validateLegacyDescriptorRuntime,
-  windowsSupervised = process.env.OMB_CUA_WINDOWS_SUPERVISED === "1",
-  windowsDescriptor = process.env.OMB_CUA_WINDOWS_DESCRIPTOR,
+  windowsSupervised = compatEnv.OMB_CUA_WINDOWS_SUPERVISED === "1",
+  windowsDescriptor = compatEnv.OMB_CUA_WINDOWS_DESCRIPTOR,
   windowsAttestation = processWindowsAttestation(),
 }: {
   platform?: NodeJS.Platform;
@@ -461,7 +462,7 @@ export function readCuaConnection({
   const candidates = userData ? [join(userData, "cua-connection.json")] : [];
   if (platform === "darwin") {
     // Legacy/dev fallback. Packaged Electron passes its exact userData path.
-    for (const directory of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
+    for (const directory of ["BOS Bot", "bosbot", "OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
       candidates.push(join(home, "Library", "Application Support", directory, "cua-connection.json"));
     }
   }
@@ -482,3 +483,4 @@ export function readCuaConnection({
   }
   return null;
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; browser-storage: existing localStorage and native attestation records keep their keys; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling; legacy-credential-path-denylist: credential access checks must deny both legacy and renamed app directories

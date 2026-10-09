@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 // External, opt-in host supervision. There is deliberately no service installer.
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -111,7 +112,7 @@ export function createHostRecovery(config, { now = Date.now, isAlive = alive, sp
       }
       let child;
       try {
-        child = spawn(executable, config.args, { shell: false, stdio: 'ignore', env: { ...process.env, OMB_DATA_DIR: dataDir, OMB_RECOVERY_GENERATION: host.generation, OMB_RECOVERY_TOKEN: token } });
+        child = spawn(executable, config.args, { shell: false, stdio: 'ignore', env: { ...compatEnv, OMB_DATA_DIR: dataDir, OMB_RECOVERY_GENERATION: host.generation, OMB_RECOVERY_TOKEN: token } });
         child.on('error', () => { /* durable attempt remains held/limited */ });
         if (!Number.isInteger(child.pid) || child.pid < 1) throw new Error('Recovery spawn identity unavailable.');
         save({ pending: { ...pending, pid: child.pid } });
@@ -126,3 +127,4 @@ export function createHostRecovery(config, { now = Date.now, isAlive = alive, sp
     close() { if (!closed) { lease.release(); closed = true; } },
   });
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; lease: a new server must lock the same data-directory lease as an existing process; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

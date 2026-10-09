@@ -235,3 +235,4 @@ export function createPhoneSecretSaveCoordinator(save, maximumCompleted = 512) {
     return operation.promise;
   };
 }
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

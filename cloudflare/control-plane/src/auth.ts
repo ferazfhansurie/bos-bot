@@ -18,7 +18,7 @@ export function createAuth(
     prepare: primary.prepare.bind(primary), batch: primary.batch.bind(primary),
   });
   return betterAuth({
-    appName: "OpenMausBot",
+    appName: "BOS Bot",
     baseURL: config.authBaseURL,
     basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,7 +24,7 @@ function runBridge(bin: string, input: string) {
         vpsContainerName("bridge-test"),
       ],
       {
-        env: { ...process.env, OMB_EXTRA_PATH: bin, NODE_NO_WARNINGS: "1" },
+        env: { ...compatEnv, OMB_EXTRA_PATH: bin, NODE_NO_WARNINGS: "1" },
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
@@ -70,3 +71,4 @@ describe.skipIf(process.platform === "win32")("VPS Cua MCP bridge", () => {
     expect(result.code).toBe(0);
   });
 });
+// branding compatibility (electron/branding-compat.json): container-identity: existing managed containers, labels and pinned image entry points remain recognized; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

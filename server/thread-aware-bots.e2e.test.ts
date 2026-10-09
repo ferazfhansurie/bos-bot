@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Thread-aware bots, end to end against the real harness server.
 //
 // A bot can open a real thread — on itself for separate work, or on a
@@ -88,7 +89,7 @@ const heldTurn = async (bot: { id: string; threadId: string }, text: string): Pr
 const proxyCall = async (threadId: string, name: string, args: Record<string, unknown>) => {
   await liveToken(threadId);
   const server = dumpOf(threadId)!.mcpConfig.mcpServers.agents;
-  const proxy = spawn(server.command, server.args, { cwd: ROOT, env: { ...process.env, ...server.env }, stdio: ["pipe", "pipe", "pipe"] });
+  const proxy = spawn(server.command, server.args, { cwd: ROOT, env: { ...compatEnv, ...server.env }, stdio: ["pipe", "pipe", "pipe"] });
   const lines = createInterface({ input: proxy.stdout });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -228,8 +229,8 @@ beforeAll(async () => {
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
-      ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home,
       USERPROFILE: home,
       OMB_PORT: String(port),
@@ -678,3 +679,4 @@ describe("thread state, reopen, needs-me and digest", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

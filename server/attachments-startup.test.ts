@@ -48,3 +48,4 @@ it("starts despite attachment cleanup failure and initializes quota after the di
   }
   expect(existsSync(session.info.dataDir)).toBe(false);
 }, 30_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

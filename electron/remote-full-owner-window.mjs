@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
@@ -5,7 +6,7 @@ import { controlPlaneUnavailableReason, resolveCompanionControlPlaneURL } from "
 /** The owner authority is the configured control plane (BOS_CONTROL_PLANE_URL
  * or legacy OMB_CONTROL_PLANE_URL). No hosted default: unset disables remote
  * owner sign-in and nothing is fetched. */
-export function remoteOwnerAuthorityOrigin(environment = process.env) {
+export function remoteOwnerAuthorityOrigin(environment = compatEnv) {
   return resolveCompanionControlPlaneURL({ environment });
 }
 /** Separate ephemeral sign-in: never changes the Mac's existing BOS account,
@@ -101,3 +102,4 @@ export async function authorizeRemoteFull(accountToken, body, { authorityOrigin 
     headers: { authorization: `Bearer ${accountToken}`, "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) throw new Error("This account is not the verified installation owner, or confirmation expired");
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

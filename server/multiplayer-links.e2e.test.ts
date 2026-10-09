@@ -97,3 +97,4 @@ it("pairs a chat-only workspace and forwards its shared room", async () => {
     rmSync(folder, { recursive: true, force: true });
   }
 }, 45_000);
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

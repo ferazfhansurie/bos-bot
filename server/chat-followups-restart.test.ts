@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -38,7 +39,7 @@ it("survives a real server crash: queued sends keep receipts, cancellation and u
   };
   const restart = async () => {
     const env: NodeJS.ProcessEnv = {};
-    for (const [key, value] of Object.entries(process.env)) {
+    for (const [key, value] of Object.entries(compatEnv)) {
       if (["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"].includes(key.toUpperCase()) && value) env[key.toUpperCase()] = value;
     }
     Object.assign(env, {
@@ -181,3 +182,4 @@ it("survives a real server crash: queued sends keep receipts, cancellation and u
     await fixture.close();
   }
 }, 90_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

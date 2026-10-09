@@ -1,4 +1,4 @@
-// A stand-in for cloudflare/control-plane for tests of `openmausbot login`
+// A stand-in for cloudflare/control-plane for tests of `bosbot login`
 // and `serve --tunnel`: the routes the desktop's control-plane client uses,
 // answering in the shapes its validators accept. Authorization is only "is
 // this a credential this stub issued". Records every call so a test can
@@ -157,3 +157,4 @@ export async function startControlPlaneStub(options: { otp?: string; endpointUrl
     close: () => new Promise<void>((done) => server.close(() => done())),
   };
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

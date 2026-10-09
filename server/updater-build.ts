@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // The build half of the update button: turn the commit prod points at into a
 // staged, stamped, signed candidate bundle that `UpdateCoordinator.apply`
 // then hands to the existing installer. Nothing here stops, swaps or
@@ -38,15 +39,16 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 }
 const str = (value: unknown): string | undefined => typeof value === "string" && value.trim() ? value.trim() : undefined;
 
-export function readUpdateSource(dataDir: string, env: NodeJS.ProcessEnv = process.env): UpdateSource {
+export function readUpdateSource(dataDir: string, env: NodeJS.ProcessEnv = compatEnv): UpdateSource {
+  env = compatEnvironment(env);
   const file = readJsonFile(join(updatesDir(dataDir), "source.json")) ?? {};
   const ledger = readJsonFile(join(updatesDir(dataDir), "live-build.json")) ?? {};
-  const repo = str(env.OMB_UPDATE_REPO) ?? str(file.repo) ?? str(ledger.repo);
-  const releaseBranch = str(env.OMB_UPDATE_RELEASE_BRANCH) ?? str(file.releaseBranch) ?? str(ledger.release_branch) ?? DEFAULT_RELEASE_BRANCH;
+  const repo = str(compatEnvironment(env).OMB_UPDATE_REPO) ?? str(file.repo) ?? str(ledger.repo);
+  const releaseBranch = str(compatEnvironment(env).OMB_UPDATE_RELEASE_BRANCH) ?? str(file.releaseBranch) ?? str(ledger.release_branch) ?? DEFAULT_RELEASE_BRANCH;
   // "" means the prod check is off; only an explicit empty env value may say that.
   const prodBranch = env.OMB_UPDATE_PROD_BRANCH !== undefined ? env.OMB_UPDATE_PROD_BRANCH.trim()
     : str(file.prodBranch) ?? (typeof ledger.prod_branch === "string" ? ledger.prod_branch : undefined) ?? DEFAULT_PROD_BRANCH;
-  const nodeModules = str(env.OMB_UPDATE_NODE_MODULES) ?? str(file.nodeModules);
+  const nodeModules = str(compatEnvironment(env).OMB_UPDATE_NODE_MODULES) ?? str(file.nodeModules);
   return { ...(repo ? { repo } : {}), releaseBranch, prodBranch, ...(nodeModules ? { nodeModules } : {}) };
 }
 
@@ -57,7 +59,7 @@ export type RunCommand = (file: string, args: string[], options: { cwd?: string;
  * `onLine` (the build log) and also collected. Non-zero exit is a result, not
  * a rejection; spawn failures reject. */
 export const runCommand: RunCommand = (file, args, options) => new Promise((resolve, reject) => {
-  const child = spawn(file, args, { cwd: options.cwd, env: options.env ?? process.env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(file, args, { cwd: options.cwd, env: options.env ?? compatEnv, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = ""; let stderr = "";
   const pump = (chunk: Buffer, which: "stdout" | "stderr") => {
     const text = chunk.toString();
@@ -167,7 +169,7 @@ export async function validateFullCandidate(options: PreviewOptions, candidate: 
   };
   // Keep both the outer application and speech helper's installed signing
   // requirements: replacing either with ad-hoc/different identity loses TCC.
-  for (const suffix of ["", "Contents/Resources/OpenMausBot Speech.app"]) {
+  for (const suffix of ["", "Contents/Resources/BOS Bot Speech.app"]) {
     const live = suffix ? join(options.liveApp, suffix) : options.liveApp;
     const staged = suffix ? join(candidate.appPath, suffix) : candidate.appPath;
     await checked("/usr/bin/codesign", ["--verify", "--deep", "--strict", staged]);
@@ -214,8 +216,8 @@ export async function stageFullCandidate(options: PreviewOptions & { dataDir: st
 /** PATH for the build tools. The packaged server runs on Electron's node, so
  * the build needs a real node (>= 22) and pnpm from the machine:
  * OMB_UPDATE_TOOLCHAIN_PATH wins, else the newest nvm node plus homebrew. */
-export function toolchainPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
-  const explicit = str(env.OMB_UPDATE_TOOLCHAIN_PATH);
+export function toolchainPath(env: NodeJS.ProcessEnv = compatEnv, home = homedir()): string {
+  const explicit = str(compatEnvironment(env).OMB_UPDATE_TOOLCHAIN_PATH);
   const parts: string[] = [];
   if (explicit) parts.push(...explicit.split(":").filter(Boolean));
   else {
@@ -283,7 +285,7 @@ export function missingPackages(nodeModules: string, packageJson: string): strin
 }
 
 async function signingIdentity(liveApp: string, run: RunCommand, env: NodeJS.ProcessEnv): Promise<string> {
-  const explicit = str(env.OMB_UPDATE_SIGN_IDENTITY);
+  const explicit = str(compatEnvironment(env).OMB_UPDATE_SIGN_IDENTITY);
   if (explicit) return explicit;
   const result = await run("/usr/bin/codesign", ["-dvv", liveApp], { timeoutMs: 30_000 }).catch(() => null);
   const authority = /^Authority=(.+)$/m.exec(result?.stderr ?? "")?.[1]?.trim();
@@ -297,7 +299,7 @@ async function signingIdentity(liveApp: string, run: RunCommand, env: NodeJS.Pro
 export async function buildCandidate(options: BuildOptions): Promise<BuildOutcome> {
   const run = options.run ?? runCommand;
   const log = options.log ?? (() => {});
-  const env = { ...(options.env ?? process.env) };
+  const env = { ...(options.env ?? compatEnv) };
   env.PATH = toolchainPath(env);
   delete env.ELECTRON_RUN_AS_NODE;
   const { target, source } = options;
@@ -437,3 +439,4 @@ export async function buildCandidate(options: BuildOptions): Promise<BuildOutcom
   log(`build: staged ${target.version} at ${join(candidateDir, appName)}`);
   return { candidate: { ...manifest, dir: candidateDir, appPath: join(candidateDir, appName) }, buildDir, stamp, signed };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

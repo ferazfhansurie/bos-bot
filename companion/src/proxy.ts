@@ -293,7 +293,7 @@ export function createProxyHandler(options: ProxyOptions) {
     // The computer owner enables this capability per device, off by default.
     if (isCloudDesktopAccess(method, path) && !device?.cloudDesktopAccess) {
       return sendJson(res, 403, {
-        error: "cloud desktop access is off for this device — enable it in OpenMausBot → Settings → Remote access",
+        error: "cloud desktop access is off for this device — enable it in BOS Bot → Settings → Remote access",
       });
     }
 
@@ -375,7 +375,7 @@ export function createProxyHandler(options: ProxyOptions) {
           const fail = () => {
             if (finished) return;
             finished = true;
-            sendJson(res, 502, { error: "OpenMausBot is not ready on this computer" });
+            sendJson(res, 502, { error: "BOS Bot is not ready on this computer" });
           };
           harness.on("data", (chunk: Buffer) => {
             size += chunk.length;
@@ -538,7 +538,7 @@ export function createProxyHandler(options: ProxyOptions) {
           if (size > MAX_JSON_BODY_BYTES) {
             harness.destroy();
             if (res.headersSent) res.destroy();
-            else sendJson(res, 502, { error: "the response from OpenMausBot was too large" });
+            else sendJson(res, 502, { error: "the response from BOS Bot was too large" });
             return;
           }
           chunks.push(chunk);
@@ -637,8 +637,8 @@ export function createProxyHandler(options: ProxyOptions) {
         res,
         timedOut ? 504 : 502,
         timedOut
-          ? { error: "OpenMausBot did not respond" }
-          : { error: "OpenMausBot is not running on this computer" },
+          ? { error: "BOS Bot did not respond" }
+          : { error: "BOS Bot is not running on this computer" },
       );
     });
     req.pipe(upstream);
@@ -656,3 +656,4 @@ export function createProxyHandler(options: ProxyOptions) {
   handle.disconnectDevice = (deviceId: string): void => viewers.closeDevice(deviceId);
   return handle;
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight

@@ -41,7 +41,7 @@ See [the roadmap](2026-08-31-00-control-plane-roadmap.md#global-constraints). Th
 
 The consequence: `loadMemory()` silently truncates at 200 lines, and nothing tells the user that the memory they are relying on stopped loading forty lines ago. That is the single highest-value thing this plan fixes.
 
-**Explicitly NOT in scope: pluggable third-party memory providers** (Mem0, Honcho, Supermemory and friends). OpenMausBot's memory is plain markdown the user can open in any editor, and that is a product position, not a limitation. Routing memory through a hosted service would trade it for a vendor dependency and a second place secrets live. If it is ever wanted, it is its own plan with its own argument.
+**Explicitly NOT in scope: pluggable third-party memory providers** (Mem0, Honcho, Supermemory and friends). BOS Bot's memory is plain markdown the user can open in any editor, and that is a product position, not a limitation. Routing memory through a hosted service would trade it for a vendor dependency and a second place secrets live. If it is ever wanted, it is its own plan with its own argument.
 
 ---
 
@@ -928,3 +928,4 @@ git commit -m "docs(memory): what memory is, where it lives, and what the budget
 **Placeholders.** None: every code step carries the code, every test step carries the test. Two steps say "read the neighbouring handler and match it" rather than inventing an HTTP helper the file may not have — that is a deliberate instruction to follow an existing pattern, not a deferred decision. Task 3 Step 1 and Step 5 name a test-harness helper that may not exist under that name and tell the engineer to reuse whatever `server/index.test.ts` already does.
 
 **Type consistency.** `MemoryOverview`, `MemoryCapacity`, `MemoryTopic`, `MemoryChange`, `MemorySnapshot` are defined once in Tasks 1–2 and mirrored in `src/lib/memory.ts` in Task 4. `resolveMemoryPath` / `memoryOverview` / `readMemoryDoc` / `writeMemoryDoc` / `deleteMemoryDoc` / `snapshotMemory` / `recordMemoryChanges` / `readMemoryJournal` / `revertMemoryChange` keep the same names from definition through routes through client.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

@@ -174,7 +174,7 @@ describe("companionPairingLink", () => {
       port: 8810,
       tailnetName: "mac.tail1234.ts.net",
       lan: "192.168.1.42",
-      hosts: ["mac.tail1234.ts.net", "192.168.1.42", "openmausbot-aa.local"],
+      hosts: ["mac.tail1234.ts.net", "192.168.1.42", "bosbot-aa.local"],
       endpoints: [
         { url: "http://mac.tail1234.ts.net:8810", kind: "tailnet" as const, priority: 0 },
         { url: "http://192.168.1.42:8810", kind: "lan" as const, priority: 100 },
@@ -255,12 +255,12 @@ describe("companionPairingLink", () => {
       port: 8810,
       tailnetName: "mac.tail1234.ts.net",
       lan: "192.168.1.42",
-      hosts: ["mac.tail1234.ts.net", "192.168.1.42", "openmausbot-aa.local"],
+      hosts: ["mac.tail1234.ts.net", "192.168.1.42", "bosbot-aa.local"],
       endpoints: [
         { url: "https://device.openmausbot.com", kind: "hosted", priority: 0 },
         { url: "http://mac.tail1234.ts.net:8810", kind: "tailnet", priority: 100 },
         { url: "http://192.168.1.42:8810", kind: "lan", priority: 200 },
-        { url: "http://openmausbot-aa.local:8810", kind: "bonjour", priority: 300 },
+        { url: "http://bosbot-aa.local:8810", kind: "bonjour", priority: 300 },
       ],
     }, "local");
 
@@ -268,14 +268,14 @@ describe("companionPairingLink", () => {
     expect(route?.port).toBe(8810);
     expect(route?.hosts).toEqual([
       "192.168.1.42",
-      "openmausbot-aa.local",
+      "bosbot-aa.local",
     ]);
     const link = companionPairingLink({ ...route!, code: "004209", token });
     expect(new URL(link!).searchParams.get("address")).toBe("192.168.1.42:8810");
     expect(decodedEndpoints(link!)).toEqual([
       { url: "http://192.168.1.42:8810", kind: "lan", priority: 0 },
       { url: "https://device.openmausbot.com", kind: "hosted", priority: 100 },
-      { url: "http://openmausbot-aa.local:8810", kind: "bonjour", priority: 200 },
+      { url: "http://bosbot-aa.local:8810", kind: "bonjour", priority: 200 },
     ]);
   });
 
@@ -284,12 +284,12 @@ describe("companionPairingLink", () => {
       port: 8810,
       tailnetName: "mac.tail1234.ts.net",
       lan: "192.168.1.42",
-      hosts: ["mac.tail1234.ts.net", "192.168.1.42", "openmausbot-aa.local"],
+      hosts: ["mac.tail1234.ts.net", "192.168.1.42", "bosbot-aa.local"],
       endpoints: [
         { url: "https://device.openmausbot.com", kind: "hosted", priority: 0 },
         { url: "http://mac.tail1234.ts.net:8810", kind: "tailnet", priority: 100 },
         { url: "http://192.168.1.42:8810", kind: "lan", priority: 200 },
-        { url: "http://openmausbot-aa.local:8810", kind: "bonjour", priority: 300 },
+        { url: "http://bosbot-aa.local:8810", kind: "bonjour", priority: 300 },
       ],
     }, "tailscale");
 
@@ -331,28 +331,29 @@ describe("companionPairingLink", () => {
   it("uses an advertised Bonjour route when no LAN address is available", () => {
     const route = companionPairingRoute({
       port: 8810,
-      hosts: ["mac.tail1234.ts.net", "openmausbot-aa.local"],
-      discovery: { advertising: true, name: "openmausbot-aa.local" },
+      hosts: ["mac.tail1234.ts.net", "bosbot-aa.local"],
+      discovery: { advertising: true, name: "bosbot-aa.local" },
       endpoints: [
         { url: "https://device.openmausbot.com", kind: "hosted", priority: 0 },
-        { url: "http://openmausbot-aa.local:8810", kind: "bonjour", priority: 300 },
+        { url: "http://bosbot-aa.local:8810", kind: "bonjour", priority: 300 },
       ],
     }, "local");
 
-    expect(route?.address).toBe("openmausbot-aa.local");
-    expect(route?.hosts?.[0]).toBe("openmausbot-aa.local");
+    expect(route?.address).toBe("bosbot-aa.local");
+    expect(route?.hosts?.[0]).toBe("bosbot-aa.local");
     expect(route?.endpoints?.map((endpoint) => endpoint.kind)).toEqual(["bonjour", "hosted"]);
   });
 
   it("does not treat an inactive synthetic Bonjour name as a reachable local route", () => {
     expect(companionPairingRoute({
       port: 8810,
-      hosts: ["mac.tail1234.ts.net", "openmausbot-aa.local"],
-      discovery: { advertising: false, name: "openmausbot-aa.local" },
+      hosts: ["mac.tail1234.ts.net", "bosbot-aa.local"],
+      discovery: { advertising: false, name: "bosbot-aa.local" },
       endpoints: [
         { url: "https://device.openmausbot.com", kind: "hosted", priority: 0 },
-        { url: "http://openmausbot-aa.local:8810", kind: "bonjour", priority: 300 },
+        { url: "http://bosbot-aa.local:8810", kind: "bonjour", priority: 300 },
       ],
     }, "local")).toBeNull();
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service; paired-mdns-host: saved phone fallback routes continue resolving the same stable LAN hostname

@@ -12,7 +12,7 @@ if [ -n "${OPENMAUSBOT_POSTINSTALL_TEST_ROOT:-}" ]; then
   TEST_ROOT="$(realpath -e -- "$OPENMAUSBOT_POSTINSTALL_TEST_ROOT")"
   case "$TEST_ROOT" in
     /tmp/*) ;;
-    *) echo "OpenMausBot test install root must stay under /tmp" >&2; exit 1 ;;
+    *) echo "BOS Bot test install root must stay under /tmp" >&2; exit 1 ;;
   esac
   APPARMOR_DIR=$TEST_ROOT/test-system/apparmor.d
   APPARMOR_PARSER=$TEST_ROOT/test-system/apparmor_parser
@@ -40,7 +40,7 @@ fi
 profile=$APPARMOR_DIR/bos-bot-browser
 if [ ! -e "$profile" ] && [ ! -L "$profile" ]; then exit 0; fi
 if [ -L "$APPARMOR_DIR" ] || [ -L "$profile" ] || [ ! -f "$profile" ]; then
-  echo "OpenMausBot AppArmor profile is unsafe; refusing to remove it: $profile" >&2
+  echo "BOS Bot AppArmor profile is unsafe; refusing to remove it: $profile" >&2
   exit 1
 fi
 if [ "$TEST_MODE" -eq 0 ] && [ -x /usr/bin/ischroot ] && /usr/bin/ischroot; then
@@ -54,11 +54,12 @@ elif [ -x "$APPARMOR_PARSER" ]; then
   # Keep the policy file if unloading genuinely fails so an administrator can
   # inspect/retry the exact rule instead of leaving an invisible kernel rule.
   if ! "$APPARMOR_PARSER" -R "$profile"; then
-    echo "OpenMausBot could not unload its browser AppArmor profile: $profile" >&2
+    echo "BOS Bot could not unload its browser AppArmor profile: $profile" >&2
     exit 1
   fi
 elif [ -r "$APPARMOR_PROFILES" ]; then
-  echo "OpenMausBot needs apparmor_parser to unload its browser profile: $profile" >&2
+  echo "BOS Bot needs apparmor_parser to unload its browser profile: $profile" >&2
   exit 1
 fi
 rm -- "$profile"
+# branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

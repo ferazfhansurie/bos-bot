@@ -1,6 +1,7 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Sign in with your email on a hosted server. The emailed code comes from the
-// OpenMausBot control plane (the account service the desktop companion and
-// `openmausbot login` already use), and this server decides who is welcome
+// BOS Bot control plane (the account service the desktop companion and
+// `bosbot login` already use), and this server decides who is welcome
 // with an allow-list its owner controls. The result is an ordinary local
 // session, the same thing a pairing code produces, so every gate applies.
 //
@@ -60,7 +61,7 @@ export function createEmailSignIn(options: {
   fetchImpl?: typeof fetch;
   client?: ControlPlaneClient;
 }): EmailSignIn {
-  const env = options.env ?? process.env;
+  const env = options.env ?? compatEnv;
   const allow = () => (typeof options.allow === "function" ? options.allow() : options.allow);
   let client: ControlPlaneClient | null = options.client ?? null;
   const controlPlane = (): ControlPlaneClient => {
@@ -122,3 +123,4 @@ function unavailable(error: unknown): SignInFailure {
   const detail = error instanceof ControlPlaneError ? `${error.code}${error.status ? ` (${error.status})` : ""}` : error instanceof Error ? error.message : String(error);
   return { ok: false, status: 502, error: `the sign-in service could not be reached (${detail}); try again in a moment` };
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -73,9 +74,9 @@ export async function requestWelcome(
   body: { installId: string; name: string },
   options: { fetch?: typeof fetch; env?: NodeJS.ProcessEnv; now?: () => number } = {},
 ): Promise<WelcomeResult> {
-  const env = options.env ?? process.env;
+  const env = options.env ?? compatEnv;
   // Until bos-server serves /api/welcome: a fake link for local testing only.
-  if (env.BOS_WELCOME_STUB === "1") {
+  if (compatEnvironment(env).BOS_WELCOME_STUB === "1") {
     return {
       status: 201,
       url: `https://hi.aihlete.com/pair#code=stub-${body.installId.slice(0, 8)}`,

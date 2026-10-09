@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Where the sidecar keeps its own state, and how it writes it.
 //
 // Its own directory, not the harness's. The two processes have separate
@@ -20,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** OMB_COMPANION_DIR isolates a test rig from a real paired fleet. */
-export const DATA_DIR = process.env.OMB_COMPANION_DIR ?? join(homedir(), ".openmausbot-companion");
+export const DATA_DIR = compatEnv.OMB_COMPANION_DIR ?? join(homedir(), ".openmausbot-companion");
 
 /** 0700 on the directory, 0600 on the files it holds.
  *
@@ -86,3 +87,4 @@ export function writeFileAtomic(path: string, data: string): void {
     throw e;
   }
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

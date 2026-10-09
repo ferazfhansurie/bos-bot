@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "./branding-env.cjs";
 const TOKEN = /^[0-9a-f]{64}$/;
 
 export function normalizeManagedComposioBrokerUrl(value) {
@@ -17,9 +18,9 @@ export function normalizeManagedComposioBrokerUrl(value) {
 /** BOS_COMPOSIO_BROKER_URL wins over the legacy OMB_COMPOSIO_BROKER_URL.
  * There is deliberately no hosted default: unset means the managed broker is
  * off and no request is made to any broker. */
-export function resolveManagedComposioBrokerUrl(environment = process.env) {
+export function resolveManagedComposioBrokerUrl(environment = compatEnv) {
   const configured =
-    environment?.BOS_COMPOSIO_BROKER_URL?.trim() || environment?.OMB_COMPOSIO_BROKER_URL?.trim() || "";
+    compatEnvironment(environment)?.BOS_COMPOSIO_BROKER_URL?.trim() || compatEnvironment(environment)?.OMB_COMPOSIO_BROKER_URL?.trim() || "";
   return normalizeManagedComposioBrokerUrl(configured);
 }
 
@@ -100,3 +101,4 @@ export async function ensureManagedComposioCredentials({
   }
   return credentials;
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

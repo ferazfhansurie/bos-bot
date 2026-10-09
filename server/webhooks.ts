@@ -234,7 +234,7 @@ function serializePayload(payload: JsonValue): string {
     }
   }
   if (text.length <= MAX_EVENT_CHARS) return text;
-  return `${text.slice(0, MAX_EVENT_CHARS)}\n\n[Payload truncated by OpenMausBot]`;
+  return `${text.slice(0, MAX_EVENT_CHARS)}\n\n[Payload truncated by BOS Bot]`;
 }
 
 function previewPayload(payload: JsonValue): string {
@@ -414,15 +414,15 @@ export class WebhookManager {
     }
   }
 
-  test(id: string, payload: JsonValue = { event: "openmaus.test", message: "Test webhook delivery" }): WebhookReceiveResult | null {
+  test(id: string, payload: JsonValue = { event: "bos.test", message: "Test webhook delivery" }): WebhookReceiveResult | null {
     const trigger = this.webhooks.find((candidate) => candidate.id === id);
     if (!trigger) return null;
-    const eventName = trigger.eventTypes?.[0] ?? "openmaus.test";
+    const eventName = trigger.eventTypes?.[0] ?? "bos.test";
     return this.dispatch(trigger, {
       payload,
       contentType: "application/json",
       eventName,
-      userAgent: "OpenMausBot webhook tester",
+      userAgent: "BOS Bot webhook tester",
       deliveryId: `test-${randomUUID()}`,
     });
   }

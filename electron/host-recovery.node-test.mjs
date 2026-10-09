@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -147,7 +148,7 @@ process.on('SIGTERM',()=>{host.quit();child.once('exit',()=>{host.childExited(ch
   writeFileSync(configPath, JSON.stringify({ dataDir: dir, executable: process.execPath, args: [fixture] }));
   let host, runner, successor, childPid;
   try {
-    host = spawn(process.execPath, [fixture], { stdio: 'ignore', env: { ...process.env, OMB_DATA_DIR: dir } });
+    host = spawn(process.execPath, [fixture], { stdio: 'ignore', env: { ...compatEnv, OMB_DATA_DIR: dir } });
     const first = await poll(() => { const state = readHostLifecycle(dir); return state?.phase === 'running' && state; });
     childPid = first.children[0];
     runner = spawn(process.execPath, [fileURLToPath(new URL('../scripts/host-recovery.mjs', import.meta.url)), '--config', configPath], { stdio: 'ignore' });
@@ -172,3 +173,4 @@ process.on('SIGTERM',()=>{host.quit();child.once('exit',()=>{host.childExited(ch
     await delay(200); rmSync(dir, { recursive: true, force: true });
   }
 });
+// branding compatibility (electron/branding-compat.json): lease: a new server must lock the same data-directory lease as an existing process; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

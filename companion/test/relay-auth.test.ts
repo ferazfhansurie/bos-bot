@@ -58,3 +58,4 @@ it("adds the private capability only after authenticating and authorizing, never
   await call("/api/health", "unpaired", "GET");
   expect(received[1]["x-openmausbot-companion-auth"]).toBeUndefined();
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

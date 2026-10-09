@@ -66,3 +66,4 @@ export function setupSystemPrompt(active: boolean, options?: { skills?: boolean;
   if (!active) return "";
   return buildSetupPrompt(options?.skills ? SKILL_MANAGE_ASIDE : NO_SKILL_MANAGE_ASIDE, options?.cwd);
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

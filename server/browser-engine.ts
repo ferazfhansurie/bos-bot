@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // The bots' browser engine: agent-browser (docs/plans/browser-engine.md).
 //
 // One engine on every platform. This module answers three questions for the
@@ -211,7 +212,7 @@ interface BrowserLookupOptions {
   platform?: NodeJS.Platform;
   arch?: string;
   exists?: (p: string) => boolean;
-  /** Count only the runtimes OpenMausBot itself configured (the explicit
+  /** Count only the runtimes BOS Bot itself configured (the explicit
    * override, the desktop bundle) or downloaded (the pinned asset). The
    * ambient PATH is skipped: whatever it turns up — a repo's
    * node_modules/.bin, a dev machine's global wrapper — is not the engine
@@ -220,7 +221,7 @@ interface BrowserLookupOptions {
 }
 
 function packagedBrowser(options: BrowserLookupOptions) {
-  const resources = (options.env ?? process.env).OMB_RESOURCES_PATH;
+  const resources = (options.env ?? compatEnv).OMB_RESOURCES_PATH;
   if (!resources) return null;
   try {
     return browserBundlePaths(join(resolve(resources), "browser-engine"), `${options.platform ?? process.platform}-${options.arch ?? process.arch}`);
@@ -236,10 +237,10 @@ function completePackage(bundle: NonNullable<ReturnType<typeof packagedBrowser>>
 /** OMB_AGENT_BROWSER_PATH, then the complete desktop bundle, pinned download, then
  * PATH (a package or image that installed it globally). */
 export function resolveAgentBrowserBinary(options: BrowserLookupOptions = {}): string | null {
-  const env = options.env ?? process.env;
+  const env = options.env ?? compatEnv;
   const platform = options.platform ?? process.platform;
   const exists = options.exists ?? existsSync;
-  const override = env.OMB_AGENT_BROWSER_PATH?.trim();
+  const override = compatEnvironment(env).OMB_AGENT_BROWSER_PATH?.trim();
   if (override) return resolve(override) && exists(resolve(override)) ? resolve(override) : null;
   const bundle = packagedBrowser(options);
   if (bundle && exists(bundle.directory)) return completePackage(bundle, exists) ? bundle.engine : null;
@@ -328,7 +329,7 @@ export function ensureChrome(binaryPath: string, options: { withDeps?: boolean; 
   }
   const args = ["install", ...(options.withDeps ? ["--with-deps"] : [])];
   return new Promise((done, fail) => {
-    const child = spawn(binaryPath, args, { env: options.env ?? process.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(binaryPath, args, { env: options.env ?? compatEnv, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let output = "";
     // Keep only the tail: the failure path quotes the last lines, so a chatty
     // installer cannot grow the buffer without bound while it hangs.
@@ -392,7 +393,7 @@ export function browserEngineStatus(options: BrowserLookupOptions = {}): Browser
     return { kind: "ready", binaryPath, version };
   }
   if (bundle && (options.exists ?? existsSync)(bundle.directory)) {
-    return { kind: "unavailable", reason: "The desktop browser bundle is incomplete. Reinstall or update OpenMausBot to repair it.", installable: false };
+    return { kind: "unavailable", reason: "The desktop browser bundle is incomplete. Reinstall or update BOS Bot to repair it.", installable: false };
   }
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
@@ -421,7 +422,7 @@ export function agentBrowserIntegration(input: {
    * otherwise never forwards AGENT_BROWSER_CDP at all (#1396). */
   attachCdpUrl?: string;
 }): { command: string; args: string[]; env: Record<string, string> } {
-  const sourceEnv = input.env ?? process.env;
+  const sourceEnv = input.env ?? compatEnv;
   const env: Record<string, string> = {
     AGENT_BROWSER_SESSION: input.session,
     // The MCP server invokes child CLI commands without forwarding its own
@@ -474,7 +475,7 @@ export function agentBrowserFrame(input: {
   env: Record<string, string>;
   timeoutMs?: number;
 }): Promise<{ png: string; format: string }> {
-  const file = join(tmpdir(), `openmausbot-browser-${randomUUID()}.png`);
+  const file = join(tmpdir(), `bosbot-browser-${randomUUID()}.png`);
   return new Promise((settle, fail) => {
     const child = spawn(input.binaryPath, ["screenshot", file], {
         env: browserRuntimeEnv(input.env),
@@ -573,3 +574,4 @@ export async function clearBrowserSessionState(
     return true;
   } catch { return false; }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

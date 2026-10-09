@@ -471,7 +471,7 @@ struct SharedChatView: View {
         savedReading = nil; readingStore = nil; readingError = nil
         do {
             guard let connection = session.connection,
-                  let token = try OpenMausSharedKeychain.token(for: connection.id) else { return }
+                  let token = try BosSharedKeychain.token(for: connection.id) else { return }
             let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let store = ReadingPositionStore(root: root.appendingPathComponent("ReadingPositions"), connectionID: connection.id,
                 accountIdentity: token, conversationID: "shared:" + room.id + ":" + selfID, threadID: room.id)

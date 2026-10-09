@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // 1.3 updater acceptance suite (qa). Written against the shared contract in
 // release/v1.3-build/handout-2026-10-03.md, before the backend lands:
 //
@@ -97,7 +98,7 @@ function makeHarness(prefix: string, extraEnv: () => Record<string, string> = ()
     boots++;
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
-      env: { ...(process.env.PATH ? { PATH: process.env.PATH } : {}), HOME: home, USERPROFILE: home, OMB_PORT: String(port), ...extraEnv() },
+      env: { ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}), HOME: home, USERPROFILE: home, OMB_PORT: String(port), ...extraEnv() },
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stderr!.on("data", (c) => (stderr += c));
@@ -460,3 +461,4 @@ describe.skipIf(!posixOnly || !backendPresent)("updater acceptance: contract (ne
     }
   }, 150_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

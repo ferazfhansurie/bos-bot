@@ -47,3 +47,4 @@ body:
         event logs in `~/.openmausbot/events/`. Redact anything that looks like
         a key or token before pasting.
       render: text
+# branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

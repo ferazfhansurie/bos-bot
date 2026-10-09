@@ -1,4 +1,4 @@
-# Voice in OpenMausBot
+# Voice in BOS Bot
 
 Historical decision doc, 2026-08-14. It records the original ElevenLabs-only
 shape; the current product also supports Fish Audio, built-in Mac voices, and

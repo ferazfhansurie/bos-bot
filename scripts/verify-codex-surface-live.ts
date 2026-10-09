@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Opt-in real-model acceptance. No personal chats, skills, browser profiles,
 // or provider configuration are loaded. Only the explicitly supplied Codex
 // sign-in is copied into the disposable home; cleanup removes that copy.
@@ -7,11 +8,11 @@ import { launchVerificationServer } from "./control-omb.ts";
 import { ensureUiBrowser } from "./testing/control-omb-ui.ts";
 import { fixtureApi, mountPreview, parkUntilSignal } from "./testing/preview-fixture.ts";
 
-const cli = process.env.OMB_VERIFY_CODEX_CLI;
-const auth = process.env.OMB_VERIFY_CODEX_AUTH;
-const model = process.env.OMB_VERIFY_CODEX_MODEL;
+const cli = compatEnv.OMB_VERIFY_CODEX_CLI;
+const auth = compatEnv.OMB_VERIFY_CODEX_AUTH;
+const model = compatEnv.OMB_VERIFY_CODEX_MODEL;
 if (!cli || !auth || !model) throw new Error("Supply OMB_VERIFY_CODEX_CLI, OMB_VERIFY_CODEX_AUTH and OMB_VERIFY_CODEX_MODEL explicitly. This test uses real model quota.");
-const browser = await ensureUiBrowser(process.env, console.error);
+const browser = await ensureUiBrowser(compatEnv, console.error);
 const fixture = await launchVerificationServer({}, undefined, undefined,
   { binaryPath: browser.binary, executablePath: browser.chrome ?? "" }, undefined, undefined, ["codex"]);
 let preview: Awaited<ReturnType<typeof mountPreview>> | undefined;
@@ -44,3 +45,4 @@ try {
   await preview?.close();
   await fixture.close();
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -14,11 +14,11 @@ shared control surface. Stop that fixture with Ctrl-C.
 Build the candidate Podman image from the same checkout. On Windows, enter the
 selected machine with `podman machine ssh MACHINE`, then run the Linux commands
 below. `repo` must be the candidate checkout's absolute Linux path, for example
-`/mnt/c/Projects/OpenMausBot`:
+`/mnt/c/Projects/BOS Bot`:
 
 ```sh
 cd "$repo"
-podman build -f deploy/podman/Containerfile -t localhost/openmausbot-podman:verify .
+podman build -f deploy/podman/Containerfile -t localhost/bosbot-podman:verify .
 fixture=$(mktemp -d /tmp/omb-podman-verify-XXXXXXXX)
 mkdir -m 700 "$fixture/.openmausbot"
 cp server/testing/fake-claude-cli.ts "$fixture/fake-claude-cli.ts"
@@ -32,14 +32,14 @@ cd deploy/podman
 umask 077
 cat > .env.fixture <<EOF
 COMPOSE_PROJECT_NAME=omb-podman-verify
-OMB_IMAGE_TAG=verify
-OMB_DATA_ROOT=$fixture
+BOS_IMAGE_TAG=verify
+BOS_DATA_ROOT=$fixture
 PODMAN_SOCKET=/run/user/$(id -u)/podman/podman.sock
-OMB_PORT=28799
-OMB_WEBHOOK_PORT=28800
-OMB_HTTP_PORT=28880
-OMB_PUBLIC_URL=http://localhost:28880
-OMB_HTTPS_HOST=https-disabled.invalid
+BOS_PORT=28799
+BOS_WEBHOOK_PORT=28800
+BOS_HTTP_PORT=28880
+BOS_PUBLIC_URL=http://localhost:28880
+BOS_HTTPS_HOST=https-disabled.invalid
 ENGINES=
 EOF
 PODMAN_COMPOSE_PROVIDER=podman-compose podman compose --env-file .env.fixture -f compose.yaml up -d --no-build
@@ -96,3 +96,4 @@ is running. Then run `podman compose --env-file .env.fixture -f compose.yaml
 down -v` with the same provider and project. Compose does not own the bot
 desktops. Retain the printed temporary fixture directory and local evidence
 until reviewed, then remove only that exact directory and `.env.fixture`.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->

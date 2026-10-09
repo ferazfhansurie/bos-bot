@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { stampNativeContract } from "../electron/native-contract.mjs";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -121,7 +122,7 @@ export function stampBuildCommitSync(resources, commit) {
 export function packagedSourceCommit(context) {
   const metadata = context.packager?.metadata ?? {};
   const extra = context.packager?.config?.extraMetadata ?? {};
-  return metadata.bosSourceCommit ?? extra.bosSourceCommit ?? process.env.BOS_SOURCE_COMMIT ?? null;
+  return metadata.bosSourceCommit ?? extra.bosSourceCommit ?? compatEnv.BOS_SOURCE_COMMIT ?? null;
 }
 
 // electron-builder normalizes copied resource directories to 0775. That is
@@ -131,7 +132,7 @@ export function packagedSourceCommit(context) {
 export default async function afterPack(context) {
   const resources = context.packager?.getResourcesDir?.(context.appOutDir) ?? (
     context.electronPlatformName === "darwin"
-      ? path.join(context.appOutDir, "OpenMausBot.app", "Contents", "Resources")
+      ? path.join(context.appOutDir, "BOS Bot.app", "Contents", "Resources")
       : path.join(context.appOutDir, "resources")
   );
   await validateCloudflared(resources, context.electronPlatformName, Boolean(context.packager));

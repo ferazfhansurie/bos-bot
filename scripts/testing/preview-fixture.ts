@@ -128,3 +128,4 @@ export function fixtureApi(baseUrl: string, options: FixtureApiOptions = {}) {
     return result;
   };
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real OpenCode, disposable home, deterministic loopback model. No user data,
 // real credentials or external model requests are used.
 import assert from "node:assert/strict";
@@ -14,13 +15,13 @@ const external = join(home, "outside", "receipt.txt");
 mkdirSync(workspace);
 mkdirSync(join(home, "outside"));
 writeFileSync(external, "OMB_EXTERNAL_READ_RECEIPT");
-process.env = {
-  PATH: process.env.PATH, HOME: home, USERPROFILE: home,
+compatEnv = {
+  PATH: compatEnv.PATH, HOME: home, USERPROFILE: home,
   XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"),
   XDG_CACHE_HOME: join(home, "cache"), XDG_STATE_HOME: join(home, "state"),
   OMB_DATA_DIR: join(home, "omb"), OPENCODE_DISABLE_DEFAULT_PLUGINS: "true",
   OPENCODE_DISABLE_MODELS_FETCH: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "0",
-  ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+  ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
 };
 let calls = 0;
 let readSucceeded = false;
@@ -78,3 +79,4 @@ try {
   await new Promise<void>(done => server.close(() => done()));
   rmSync(home, { recursive:true, force:true });
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

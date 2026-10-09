@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { killCliTree, spawnCli } from "./procs.ts";
 import { DEFAULT_BROWSER_RESULT_BUDGET, shapeBrowserToolResult, slimBrowserToolList, stripHarnessOwnedArguments } from "./browser-tool-shape.ts";
 
@@ -18,7 +19,7 @@ const HOST_ENV = ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATH", "Pat
 /** MCP, viewer commands, and cleanup must resolve the same HOME/socket paths.
  * Inherit OS plumbing, never the harness's model-provider credentials. */
 export function browserRuntimeEnv(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
-  const env = Object.fromEntries(HOST_ENV.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
+  const env = Object.fromEntries(HOST_ENV.flatMap((key) => compatEnv[key] === undefined ? [] : [[key, compatEnv[key]]]));
   return { ...env, ...overrides };
 }
 
@@ -65,7 +66,7 @@ class BrowserClient {
     this.child.on("close", () => { void this.stop(new TransportError("Browser connection closed.")); });
     this.ready = this.rpc("initialize", {
       protocolVersion: "2024-11-05", capabilities: {},
-      clientInfo: { name: "openmausbot-browser", version: "1" },
+      clientInfo: { name: "bosbot-browser", version: "1" },
     }, Math.max(this.requestTimeoutMs, HANDSHAKE_TIMEOUT_MS)).then((result) => {
       if (!result || typeof result !== "object" || !("protocolVersion" in result)) {
         throw new TransportError("Browser engine returned an invalid handshake.");
@@ -209,7 +210,7 @@ export class BrowserRuntime {
   private options: { requestTimeoutMs: number; takeoverTimeoutMs: number; idleMs: number; maxPending: number; resultBudget: number };
 
   constructor(options: Partial<BrowserRuntime["options"]> = {}) {
-    const budget = Number(process.env.OMB_BROWSER_RESULT_BUDGET);
+    const budget = Number(compatEnv.OMB_BROWSER_RESULT_BUDGET);
     this.options = { requestTimeoutMs: 120_000, takeoverTimeoutMs: 15_000, idleMs: 60_000, maxPending: 16, resultBudget: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BROWSER_RESULT_BUDGET, ...options };
   }
 
@@ -413,3 +414,4 @@ export class BrowserRuntime {
     await Promise.all([...new Set([...this.clients.keys(), ...this.gates.keys()])].map((session) => this.close(session)));
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

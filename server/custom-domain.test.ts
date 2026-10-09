@@ -272,6 +272,7 @@ describe("HTTPS transport", () => {
   it("rejects HTML and malformed JSON without returning their contents", async () => {
     const verifier = createCustomDomainVerifier({ environmentId, lookup: async () => [publicAddress] });
     responder = () => ({ status: 200, body: "<html>private error page</html>" });
-    await expect(verifier.verify("bots.company.com")).rejects.toThrow("did not return OpenMausBot data");
+    await expect(verifier.verify("bots.company.com")).rejects.toThrow("did not return BOS Bot data");
   });
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

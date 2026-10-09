@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Conversation branching, end to end: boots the real harness server with
 // the grokAgent driver on the fake ACP CLI, runs a real turn, edits the
 // user message, and asserts the conversation forks — the old branch stays
@@ -96,7 +97,7 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
       USERPROFILE: home,
       OMB_PORT: String(PORT),
     };
-    if (process.env.PATH) env.PATH = process.env.PATH;
+    if (compatEnv.PATH) env.PATH = compatEnv.PATH;
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env,
@@ -302,3 +303,4 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
     40_000,
   );
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

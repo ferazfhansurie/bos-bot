@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // PATH augmentation for GUI launches — the fix for "CLI not found" when
 // the app is opened from Finder (issues #8, #12).
 //
@@ -57,8 +58,8 @@ function knownDirs(): string[] {
  * every engine we ship an install command for. */
 function windowsKnownDirs(): string[] {
   const home = homedir();
-  const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
-  const localAppData = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
+  const appData = compatEnv.APPDATA ?? join(home, "AppData", "Roaming");
+  const localAppData = compatEnv.LOCALAPPDATA ?? join(home, "AppData", "Local");
   return [
     join(appData, "npm"), // npm -g shims: claude, codex
     join(home, ".grok", "bin"), // x.ai installer
@@ -105,8 +106,8 @@ export function augmentedPath(): string {
   if (cached === null) {
     cached = mergePaths([
       ...registeredDirs.filter((d) => existsSync(d)),
-      ...(process.env.OMB_EXTRA_PATH ? process.env.OMB_EXTRA_PATH.split(delimiter) : []),
-      ...(process.env.PATH ? process.env.PATH.split(delimiter) : []),
+      ...(compatEnv.OMB_EXTRA_PATH ? compatEnv.OMB_EXTRA_PATH.split(delimiter) : []),
+      ...(compatEnv.PATH ? compatEnv.PATH.split(delimiter) : []),
       // Keep the last successful login-shell result while a rescan starts a
       // fresh asynchronous probe. Otherwise resetPathCache() would make
       // rc-only CLIs disappear again for the response that triggered it.
@@ -120,7 +121,7 @@ export function augmentedPath(): string {
   // belt-and-braces: fold in the login shell's PATH once, in the
   // background — catches anything the known-dirs list doesn't (custom
   // rc exports). Never blocks a spawn; the next one benefits.
-  if (!probed && !process.env.VITEST && process.platform !== "win32") {
+  if (!probed && !compatEnv.VITEST && process.platform !== "win32") {
     probed = true;
     probeLoginShellPath();
   }
@@ -132,16 +133,16 @@ function mergePaths(parts: string[]): string {
 }
 
 function probeLoginShellPath(): void {
-  const shell = process.env.SHELL || "/bin/zsh";
+  const shell = compatEnv.SHELL || "/bin/zsh";
   // -l -i: nvm and friends live in .zshrc/.bashrc, which only interactive
   // shells read. A marker isolates $PATH from any rc-file noise.
   execFile(
     shell,
-    ["-l", "-i", "-c", 'printf "__OMB_PATH__%s" "$PATH"'],
+    ["-l", "-i", "-c", 'printf "__BOS_PATH__%s" "$PATH"'],
     { timeout: 5000 },
     (err, stdout) => {
       if (err || !stdout) return;
-      const m = /__OMB_PATH__([^\n]*)/.exec(stdout);
+      const m = /__BOS_PATH__([^\n]*)/.exec(stdout);
       if (!m || !m[1]) return;
       loginShellPath = m[1];
       cached = mergePaths([...(cached ?? "").split(delimiter), ...m[1].split(delimiter)]);
@@ -164,7 +165,7 @@ export function resetPathCacheForTests(): void {
 export function findCliCandidates(name: string): string[] {
   if (!name || /[\n\r]/.test(name)) return [];
   if (/[/\\]/.test(name) || /^[a-zA-Z]:/.test(name)) return [name];
-  const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
+  const exts = process.platform === "win32" ? (compatEnv.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
   const out: string[] = [];
   for (const dir of augmentedPath().split(delimiter)) {
     if (!dir) continue;
@@ -233,7 +234,7 @@ function isFile(p: string): boolean {
 
 /** PATHEXT-aware `which`. A path-ish cli is probed where it points. */
 function whichWin(cli: string, env?: NodeJS.ProcessEnv): string | null {
-  const exts = ((env ?? process.env).PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const exts = ((env ?? compatEnv).PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   // an extensionless name is not runnable on Windows, so PATHEXT wins over
   // the bare file — npm installs both `claude` (a sh script) and `claude.cmd`
   const probe = (base: string) => {
@@ -359,3 +360,4 @@ export function resolveCliSpawn(cli: string, args: string[], env?: NodeJS.Proces
   }
   return resolveWord(cli, args, env);
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

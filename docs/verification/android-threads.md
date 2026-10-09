@@ -49,7 +49,7 @@ protocol changes are needed for the Android UI.
 ## Installable preview
 
 The output is `android/app/build/outputs/apk/preview/app-preview.apk`. This is
-a debug-signed **OpenMausBot Preview** with its own application ID, so it does
+a debug-signed **BOS Bot Preview** with its own application ID, so it does
 not overwrite the released app or inherit its saved connections. Pair from
 inside Preview using the scanner or manual form. The preview intentionally
 does not register system share or pairing-link entrypoints.

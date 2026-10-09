@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compatEnv } from "../electron/branding-env.cjs";
 // Interactive enrollment on the server host. Verified account + exact server
 // credential/key + independently reviewed CP permit form the authority boundary.
 // TTY avoids code logging; no secrets on argv/env or BOS HTTP. Starts no turn.
@@ -23,8 +24,8 @@ let muted = false;
 const output = new Writable({ write(chunk, _encoding, done) { if (!muted) process.stdout.write(chunk); done(); } });
 const rl = createInterface({ input: process.stdin, output, terminal: true });
 // Same authority the server checks (BOS_CONTROL_PLANE_URL); no hosted default.
-const controlPlane = resolveCompanionControlPlaneURL({ environment: process.env });
-if (!controlPlane) { console.error(controlPlaneUnavailableReason(process.env)); process.exit(1); }
+const controlPlane = resolveCompanionControlPlaneURL({ environment: compatEnv });
+if (!controlPlane) { console.error(controlPlaneUnavailableReason(compatEnv)); process.exit(1); }
 const client = createControlPlaneClient({ baseURL: controlPlane });
 const dir = join(dataDir, ".remote-full"), file = join(dir, "owner.json");
 let ownerSession;

@@ -79,7 +79,7 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
       child.once("exit", () => { clearTimeout(timer); reject(new Error(`Fixture exited: ${stderr}`)); });
       child.stdout!.on("data", (chunk) => {
         output += chunk;
-        if (output.includes(`openmausbot server on ${base}`)) { clearTimeout(timer); resolve(); }
+        if (output.includes(`bosbot server on ${base}`)) { clearTimeout(timer); resolve(); }
       });
     });
     events = await openSse(`${base}/api/events`);
@@ -132,3 +132,4 @@ describe.skipIf(process.platform === "win32")("Codex browser turns with a minima
     expect(dump.calls.some((call: any) => call.method === "turn/start")).toBe(true);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

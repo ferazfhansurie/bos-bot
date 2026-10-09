@@ -104,3 +104,4 @@ describe("spend cap inside a team goal run", () => {
     expect(usage.total.turns).toBe(1);
   }, 150_000);
 });
+// branding compatibility (electron/branding-compat.json): stored-prompt-tags: existing message and skill delimiters are still readable by the current parsers

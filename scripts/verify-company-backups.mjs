@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Disposable real Electron/preload/renderer/native-transfer smoke. No live URLs.
 // The Admin and object store are deliberately tiny loopback test doubles, not R2.
 // Run: node scripts/verify-company-backups.mjs
@@ -299,7 +300,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
     await evaluate("document.querySelector('dialog input').scrollIntoView({block:'center'}); document.querySelector('dialog input').focus();");
     await screenshot("company-backup-replace-narrow.png");
     await click("Replace workspace");
-    await until(() => evaluate("document.body.textContent.includes('Fully quit OpenMausBot') && !document.querySelector('dialog[open]')"), "restart-required confirmation");
+    await until(() => evaluate("document.body.textContent.includes('Fully quit BOS Bot') && !document.querySelector('dialog[open]')"), "restart-required confirmation");
     const restoreId = await evaluate(`localStorage.getItem(${JSON.stringify(MARKER)})`);
     assert.match(restoreId, /^[a-f0-9-]{36}$/); assert.equal(restoreCalls, 1);
     assert.equal((await localJson("/api/workspace-backup/status")).pendingRestore, true);
@@ -309,7 +310,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
 
     // A new renderer instance, not the component's transient restart state.
     win.destroy(); win = await open(true); await win.loadURL(url);
-    await until(() => evaluate("document.body.textContent.includes('Fully quit OpenMausBot')"), "pending restore on reopen");
+    await until(() => evaluate("document.body.textContent.includes('Fully quit BOS Bot')"), "pending restore on reopen");
     assert.equal(await evaluate("document.body.textContent.includes('Back up this workspace')"), false);
     checks.push("pending restore survives closing and reopening the renderer");
     const restarted = new Promise((done, reject) => {
@@ -410,7 +411,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
       TEMP: temporary, TMP: temporary, TMPDIR: temporary, HERMES_HOME: join(home, ".hermes"), OMB_DATA_DIR: fixture.info.dataDir,
       OMB_PORT: new URL(fixture.info.url).port, OMB_WEBHOOK_PORT: String(Number(new URL(fixture.info.url).port) + 1),
       FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: fixture.fixtureDumpPath };
-    for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) if (process.env[key]) env[key] = process.env[key];
+    for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) if (compatEnv[key]) env[key] = compatEnv[key];
     const log = openSync(fixture.info.logPath, "a", 0o600);
     runtime = spawn(process.execPath, ["--experimental-strip-types", join(root, "server/index.ts")], { cwd: root, env, stdio: ["ignore", log, log] }); closeSync(log);
     for (let attempt = 0; attempt < 300; attempt++) {
@@ -438,7 +439,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
     await ui.listen(); const url = `${ui.resolvedUrls.local[0]}__company-backups.html`;
     console.log(JSON.stringify({ previewUrl: url, evidence: output, runtime: fixture.info, actualPid: runtime.pid }));
     child = spawn(createRequire(import.meta.url)("electron"), [fileURLToPath(import.meta.url), flag, url, output, fixture.info.url, seeded.bot.id, fixture.info.dataDir], {
-      env: { PATH: process.env.PATH, HOME: join(output, "home"), XDG_CONFIG_HOME: join(output, "home"), TMPDIR: output, TEMP: output, TMP: output, DISPLAY: process.env.DISPLAY, SystemRoot: process.env.SystemRoot },
+      env: { PATH: compatEnv.PATH, HOME: join(output, "home"), XDG_CONFIG_HOME: join(output, "home"), TMPDIR: output, TEMP: output, TMP: output, DISPLAY: compatEnv.DISPLAY, SystemRoot: compatEnv.SystemRoot },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     for (const stream of [child.stdout, child.stderr]) stream.on("data", data => { appendFileSync(join(output, "electron.log"), data); process.stdout.write(data); });
@@ -460,3 +461,4 @@ if (process.versions.electron && process.argv.includes(flag)) {
     console.log(JSON.stringify({ evidence: output, cleanup: true }));
   }
 }
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

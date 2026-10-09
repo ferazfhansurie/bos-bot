@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Real Settings controls against simulated backup endpoints in a disposable
 // full-app browser. Archive encryption/restart are separate server tests.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -11,8 +12,8 @@ import { runControlOmb } from "../control-omb.ts";
 import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
-const forced = process.env.OMB_UI_E2E === "1";
+const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: compatEnv });
+const forced = compatEnv.OMB_UI_E2E === "1";
 const enabled = forced || Boolean(binary);
 if (!enabled) console.log("skipping workspace backup UI e2e: no agent-browser; set OMB_UI_E2E=1 to install the pinned release");
 const LAUNCH_TIMEOUT_MS = forced && !binary ? 600_000 : 180_000;
@@ -27,7 +28,7 @@ describe("full backup Settings in the real renderer", () => {
     let stdout = "";
     let stderr = "";
     child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: ROOT, env: compatEnv, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
     child.stderr!.on("data", (chunk: Buffer) => { stderr += String(chunk); });
@@ -124,7 +125,7 @@ describe("full backup Settings in the real renderer", () => {
     const evidence = join(ROOT, ".omb-scratch", "verify-evidence", "workspace-backup-preview.png");
     await ui("screenshot", "--out", evidence);
     await click("Replace workspace");
-    await expect.poll(snapshot, { timeout: 10_000 }).toContain("Fully quit OpenMausBot");
+    await expect.poll(snapshot, { timeout: 10_000 }).toContain("Fully quit BOS Bot");
     expect(await evaluate("window.backupFixture.calls.find(call => call.path.endsWith('/restore')).body")).toEqual({ id: "validated-stage", confirmation: "REPLACE" });
     expect(await evaluate("window.backupFixture.calls.find(call => call.path.endsWith('/upload')).rawFile")).toBe(true);
     expect(await evaluate("localStorage.getItem('omb-pending-workspace-restore')")).toBe("validated-stage");
@@ -134,3 +135,4 @@ describe("full backup Settings in the real renderer", () => {
     expect(existsSync(info.dataDir)).toBe(false);
   }, LAUNCH_TIMEOUT_MS + 120_000);
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

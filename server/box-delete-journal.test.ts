@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -26,7 +27,7 @@ function worker(dataDir: string, source: string) {
     "--eval",
     source,
   ], {
-    env: { ...process.env, OMB_DATA_DIR: dataDir },
+    env: { ...compatEnv, OMB_DATA_DIR: dataDir },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stderr = "";
@@ -290,3 +291,4 @@ describe("Box deletion journal", () => {
     expect(readFileSync(lockPath, "utf8")).toBe("not-json\n");
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

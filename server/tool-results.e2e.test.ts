@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Actual mounted agents MCP -> live capability -> bounded cache -> paged read.
 // All profiles, turns and transcripts belong to the shared disposable fixture.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -31,7 +32,7 @@ it("bounds a real roster, retrieves its tail, isolates owners and expires stoppe
     const mounted = JSON.parse(readFileSync(dumpFile, "utf8")).mcpConfig.mcpServers.agents;
     expect(mounted.env.OMB_THREAD_ID).toBe(threadId);
     const proxy = spawn(mounted.command, mounted.args, { cwd: process.cwd(),
-      env: { ...mounted.env, PATH: process.env.PATH, HOME: fixture.info.dataDir }, stdio: ["pipe", "pipe", "pipe"] });
+      env: { ...mounted.env, PATH: compatEnv.PATH, HOME: fixture.info.dataDir }, stdio: ["pipe", "pipe", "pipe"] });
     proxies.push(proxy);
     proxy.stderr!.resume();
     let sequence = 0;
@@ -116,3 +117,4 @@ it("bounds a real roster, retrieves its tail, isolates owners and expires stoppe
     } finally { await fixture.close(); }
   }
 }, 90_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

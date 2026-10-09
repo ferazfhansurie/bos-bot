@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { ShieldAlert } from "lucide-react";
 
 export const FULL_ACCESS_WARNING =
-  "This bot can read, edit, delete files, use the internet, and control its selected computer without asking—even for potentially destructive or sensitive actions. This also applies to scheduled work and tasks delegated by your Chief or other bots. It does not enable Full access on other bots. Some providers may still require approval. Questions and separate OpenMausBot confirmations still wait for you. This does not grant operating-system permissions or access to accounts you have not connected.";
+  "This bot can read, edit, delete files, use the internet, and control its selected computer without asking—even for potentially destructive or sensitive actions. This also applies to scheduled work and tasks delegated by your Chief or other bots. It does not enable Full access on other bots. Some providers may still require approval. Questions and separate BOS Bot confirmations still wait for you. This does not grant operating-system permissions or access to accounts you have not connected.";
 
 export function FullAccessWarning({
   open,
@@ -70,7 +70,7 @@ export function FullAccessWarning({
             </h2>
             <p id="full-access-warning-body" className="mt-1.5 text-[13px] leading-relaxed text-ink-secondary">
               {scope === "thread"
-                ? "Enable Full access for this thread only, including work delegated here. It can read, edit and delete files, use the internet, and control its selected computer without asking—even for destructive or sensitive actions. The bot default and other threads keep their approval levels. Provider safety restrictions, questions and separate OpenMausBot confirmations still apply."
+                ? "Enable Full access for this thread only, including work delegated here. It can read, edit and delete files, use the internet, and control its selected computer without asking—even for destructive or sensitive actions. The bot default and other threads keep their approval levels. Provider safety restrictions, questions and separate BOS Bot confirmations still apply."
                 : FULL_ACCESS_WARNING}
             </p>
           </div>

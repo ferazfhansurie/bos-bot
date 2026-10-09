@@ -86,3 +86,4 @@ test('email OTP sign-in issues a signed bearer that /v1/me validates fresh; sign
     await app.close(); await db.stop();
   }
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

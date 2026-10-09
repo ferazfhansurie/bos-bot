@@ -267,7 +267,7 @@ describe("finding the browser engine", () => {
     expect(asset).toEqual({
       target: "win32-x64", version: "0.36.0-omb.1",
       asset: "agent-browser-win32-x64-0.36.0-omb.1.exe",
-      url: "https://github.com/milind-soni/OpenMausBot/releases/download/browser-engine-v0.36.0-omb.1/agent-browser-win32-x64-0.36.0-omb.1.exe",
+      url: "https://github.com/firazfhansurie/bos-bot/releases/download/browser-engine-v0.36.0-omb.1/agent-browser-win32-x64-0.36.0-omb.1.exe",
       bytes: 13806080, sha256: "33bee834f6a6072ec8688b0914726e0262874d758f69f27e8baf7eaac6b5ed15",
     });
     expect(agentBrowserReleaseVersion(asset)).toBe("0.36.0-omb.1");
@@ -567,3 +567,4 @@ describe("agentBrowserFrame", () => {
     await expect(agentBrowserFrame({ binaryPath, env: {}, timeoutMs: 150 })).rejects.toThrow(/in time/);
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -401,7 +401,7 @@ describe("resolveRequestAuth", () => {
   });
 });
 
-describe("an IPC listener (openmausbot serve --tunnel) is remote by construction", () => {
+describe("an IPC listener (bosbot serve --tunnel) is remote by construction", () => {
   // SAFETY: only headers, method and the socket peer are read; a unix-socket peer has no address
   const overSocket = (headers: Record<string, string>) => ({ headers, method: "GET", socket: {} }) as unknown as IncomingMessage;
 
@@ -436,3 +436,4 @@ describe("an IPC listener (openmausbot serve --tunnel) is remote by construction
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

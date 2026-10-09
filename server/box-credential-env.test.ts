@@ -4,7 +4,7 @@ import { boxCredentialEnv } from "./box.ts";
 import type { AppConfig } from "./config.ts";
 
 // The box is created with `noEnv: true`, so the only keys its agents ever see
-// are the ones this OpenMausBot forwards. Forward exactly what the user
+// are the ones this BOS Bot forwards. Forward exactly what the user
 // already configured here; never invent, never leak unrelated variables.
 describe("boxCredentialEnv", () => {
   it("forwards the workspace Anthropic key and the known agent keys from the environment", () => {
@@ -31,3 +31,4 @@ describe("boxCredentialEnv", () => {
     expect(boxCredentialEnv({} as AppConfig, { ANTHROPIC_API_KEY: "sk-ant-stray" })).toEqual({});
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

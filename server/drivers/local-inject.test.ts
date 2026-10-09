@@ -794,9 +794,9 @@ describe("applyDroidLocalAuthEnv", () => {
   it("fills a placeholder Factory key only for a local inject pick", () => {
     const env: Record<string, string | undefined> = {};
     applyDroidLocalAuthEnv(env, "ollama::ornith:35b-bf16");
-    expect(env.FACTORY_API_KEY).toBe("openmausbot-local");
+    expect(env.FACTORY_API_KEY).toBe("bosbot-local");
     applyDroidLocalAuthEnv(env, "ollama::ornith:35b-bf16");
-    expect(env.FACTORY_API_KEY).toBe("openmausbot-local");
+    expect(env.FACTORY_API_KEY).toBe("bosbot-local");
   });
 
   it("leaves a real Factory key and cloud slugs alone", () => {
@@ -839,7 +839,7 @@ describe("applyDroidLocalAuthEnv", () => {
         model: "ollama::ornith:35b-bf16",
       });
       await recorder.until((e) => e.type === "turn.completed");
-      expect(JSON.parse(readFileSync(dump, "utf8")).env.FACTORY_API_KEY).toBe("openmausbot-local");
+      expect(JSON.parse(readFileSync(dump, "utf8")).env.FACTORY_API_KEY).toBe("bosbot-local");
 
       await instance.adapter.sendTurn({
         threadId: "t-cloud",
@@ -848,7 +848,7 @@ describe("applyDroidLocalAuthEnv", () => {
       });
       await recorder.until((e) => e.type === "turn.completed" && e.threadId === "t-cloud");
       expect(JSON.parse(readFileSync(dump, "utf8")).env.FACTORY_API_KEY).not.toBe(
-        "openmausbot-local",
+        "bosbot-local",
       );
     } finally {
       await instance.dispose();
@@ -1027,3 +1027,4 @@ describe("live Custom lists on every local CLI harness", () => {
     }
   });
 });
+// branding compatibility (electron/branding-compat.json): plugin-protocol: external engine plugin grants and stored injected model ids keep their existing labels; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

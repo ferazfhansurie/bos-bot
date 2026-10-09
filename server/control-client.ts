@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // The proxy-side half of computer control. The harness keeps the record of
 // who is driving (server/computer-control.ts); the per-turn computer
 // processes consult it through this client before acting, because the
@@ -44,8 +45,8 @@ export function createControlClient(options?: {
   cacheMs?: number;
   fetchImpl?: typeof fetch;
 }): ControlClient {
-  const url = options?.url ?? process.env.OMB_CONTROL_URL ?? "";
-  const token = options?.token ?? process.env.OMB_CONTROL_TOKEN ?? "";
+  const url = options?.url ?? compatEnv.OMB_CONTROL_URL ?? "";
+  const token = options?.token ?? compatEnv.OMB_CONTROL_TOKEN ?? "";
   const cacheMs = options?.cacheMs ?? 750;
   const fetchImpl = options?.fetchImpl ?? fetch;
   const configured = Boolean(url && token);
@@ -130,3 +131,4 @@ export const CONTROL_REFUSAL_PLAIN =
   "Do not retry it — the screen is changing under their hands. " +
   "Pause this task, tell the person you are waiting for them to hand control back, " +
   "and take a fresh screenshot before your next action once they have.";
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

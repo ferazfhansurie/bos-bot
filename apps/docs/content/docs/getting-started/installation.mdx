@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install OpenMausBot on macOS, Windows, or Ubuntu.
+description: Install BOS Bot on macOS, Windows, or Ubuntu.
 icon: Download
 ---
 
@@ -16,16 +16,16 @@ Choose your computer below. Each link always downloads the latest published buil
 | Ubuntu 24.04 x64 | [Download `.deb`](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-amd64.deb) · [AppImage](https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot.AppImage) | The `.deb` is recommended; the AppImage is portable. |
 
 <Callout type="warn" title="Windows SmartScreen">
-  The Windows installer is not code-signed yet. Windows may show “Unknown publisher.” Verify that you downloaded it from the official OpenMausBot releases repository before choosing **More info → Run anyway**.
+  The Windows installer is not code-signed yet. Windows may show “Unknown publisher.” Verify that you downloaded it from the official BOS Bot releases repository before choosing **More info → Run anyway**.
 </Callout>
 
 ## Install an agent CLI
 
-OpenMausBot needs at least one supported agent engine installed and signed in. Claude and Codex are the most common starting points.
+BOS Bot needs at least one supported agent engine installed and signed in. Claude and Codex are the most common starting points.
 
 1. Install the CLI from its official provider.
 2. Run it once in a terminal and complete sign-in.
-3. Restart OpenMausBot.
+3. Restart BOS Bot.
 4. Open the model picker. Available engines appear normally; unavailable engines explain what is missing.
 
 See [Agent engines](../providers/index.mdx) for the complete list and explicit path overrides.
@@ -36,7 +36,7 @@ Requirements: Node.js 24 or newer, pnpm 10.33.0, and at least one authenticated 
 
 ```bash
 git clone https://github.com/milind-soni/OpenMausBot.git
-cd OpenMausBot
+cd bos-bot
 corepack enable
 pnpm install --frozen-lockfile
 ```
@@ -51,4 +51,5 @@ pnpm dev:desktop
 
 ## Where data lives
 
-OpenMausBot stores its application data under `~/.openmausbot`. Electron window and browser data use the normal per-platform application data directory.
+BOS Bot stores its application data under `~/.openmausbot`. Electron window and browser data use the normal per-platform application data directory.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; upstream-artifacts: pinned third-party binaries and historical upstream provenance cannot be redirected by a product rename -->

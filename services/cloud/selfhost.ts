@@ -18,7 +18,7 @@ import { ControlPlaneIssuer } from './identity.ts';
 import { startCloud } from './http.ts';
 import { LocalObjects } from './objects.ts';
 
-const HOSTED_ISSUER = /(^|\.)openmausbot\.com$/i;
+const HOSTED_ISSUER = /(^|\.)bosbot\.com$/i;
 
 export type SelfHostConfig = {
   databaseURL: string;

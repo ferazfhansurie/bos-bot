@@ -564,7 +564,7 @@ function createLinuxCuaRuntime({
           stat.uid === currentUid &&
           (stat.mode & 0o077) === 0
         ) {
-          const root = ensurePrivateDirectory(path.join(configured, "openmausbot-cua"));
+          const root = ensurePrivateDirectory(path.join(configured, "bosbot-cua"));
           cleanupStaleRuntimeDirectories(root);
           return root;
         }
@@ -574,7 +574,7 @@ function createLinuxCuaRuntime({
     // directly under the system temp root keeps the fallback deterministic
     // and short when XDG_RUNTIME_DIR is missing or unsafe.
     const currentUid = process.getuid?.() ?? os.userInfo().uid;
-    const root = ensurePrivateDirectory(path.join(os.tmpdir(), `openmausbot-cua-${currentUid}`));
+    const root = ensurePrivateDirectory(path.join(os.tmpdir(), `bosbot-cua-${currentUid}`));
     cleanupStaleRuntimeDirectories(root);
     return root;
   };
@@ -923,3 +923,4 @@ module.exports = {
   validateWaylandHealthReport,
   writePrivateJson,
 };
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; native-helper-id: existing OS permission identity of the native control and speech helpers stays the same

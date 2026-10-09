@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,7 +80,7 @@ describe("Codex server-owned device authentication", () => {
   let controllers: CodexDeviceAuthController[];
   const create = (mode = "success", overrides: Partial<ConstructorParameters<typeof CodexDeviceAuthController>[0]> = {}) => {
     const controller = new CodexDeviceAuthController({
-      cli, environment: () => ({ ...process.env, HOME: home, CODEX_HOME: join(home, ".codex"), INSTANCE_MARKER: "own-instance", FAKE_AUTH_MODE: mode }),
+      cli, environment: () => ({ ...compatEnv, HOME: home, CODEX_HOME: join(home, ".codex"), INSTANCE_MARKER: "own-instance", FAKE_AUTH_MODE: mode }),
       // The code is surfaced the moment the CLI writes it; these windows only
       // bound a CLI that never does. Fake-CLI spawns can take seconds on a
       // loaded machine, so a tight window reports a slow machine as a missing
@@ -122,7 +123,7 @@ describe("Codex server-owned device authentication", () => {
   it("drives the reusable browser fixture only when its local approval marker is created", async () => {
     const controller = create("waiting", {
       cli: fileURLToPath(new URL("../testing/fake-codex-login-cli.ts", import.meta.url)),
-      environment: () => ({ ...process.env, HOME: home, CODEX_HOME: join(home, ".codex"), OMB_DEVICE_AUTH_FIXTURE: "1" }),
+      environment: () => ({ ...compatEnv, HOME: home, CODEX_HOME: join(home, ".codex"), OMB_DEVICE_AUTH_FIXTURE: "1" }),
     });
     const start = await controller.start();
     expect(start.userCode).toBe("TEST-12345");
@@ -347,3 +348,4 @@ describe("Codex server-owned device authentication", () => {
     await expect(two.start()).rejects.toThrow("provider was removed");
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

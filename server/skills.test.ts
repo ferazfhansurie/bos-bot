@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { createHash } from "node:crypto";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
@@ -59,7 +60,7 @@ let bot: string;
 
 beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), "omb-skills-"));
-  process.env.OMB_TEST_UNUSED = scratch; // keep cleanup symmetrical
+  compatEnv.OMB_TEST_UNUSED = scratch; // keep cleanup symmetrical
   bot = `test-bot-${Math.random().toString(36).slice(2, 10)}`;
 });
 
@@ -1069,3 +1070,4 @@ describe("parseSkillSource", () => {
     expect("error" in parseSkillSource("")).toBe(true);
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

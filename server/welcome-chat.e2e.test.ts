@@ -1,8 +1,9 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { expect, it } from "vitest";
 import { launchVerificationServer } from "../scripts/control-omb.ts";
 
 it("says hi through the stub for the owner only", async () => {
-  const fixture = await launchVerificationServer({ ...process.env, BOS_WELCOME_STUB: "1" });
+  const fixture = await launchVerificationServer({ ...compatEnv, BOS_WELCOME_STUB: "1" });
   const api = async (path: string, body?: unknown, token?: string) => {
     const response = await fetch(fixture.info.url + path, {
       method: body === undefined ? "GET" : "POST",

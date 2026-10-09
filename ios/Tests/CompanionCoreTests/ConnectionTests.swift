@@ -2,6 +2,13 @@ import XCTest
 @testable import CompanionCore
 
 final class ConnectionTests: XCTestCase {
+    func testBothBrandingSchemesKeepTheSamePairingCredential() throws {
+        let legacy = try XCTUnwrap(PairingInvite.parse(URL(string: "openmausbot://pair?address=mac.local&code=123456")!))
+        let renamed = try XCTUnwrap(PairingInvite.parse(URL(string: "bosbot://pair?address=mac.local&code=123456")!))
+        XCTAssertEqual(legacy.credential, renamed.credential)
+        XCTAssertEqual(legacy.connection.host, renamed.connection.host)
+    }
+
     func testParsesHostnamesAndPorts() {
         let implicit = Connection.parse("macbook.tailnet.ts.net")
         XCTAssertEqual(implicit?.host, "macbook.tailnet.ts.net")
@@ -117,7 +124,7 @@ final class ConnectionTests: XCTestCase {
     func testLegacyTailnetInviteDropsUnselectedLocalFallbackKinds() throws {
         let url = try XCTUnwrap(URL(string:
             "openmausbot://pair?address=macbook.tail1234.ts.net%3A8810&code=004209" +
-            "&hosts=macbook.tail1234.ts.net,192.168.1.42,openmausbot-aa.local"))
+            "&hosts=macbook.tail1234.ts.net,192.168.1.42,bosbot-aa.local"))
         let invite = try XCTUnwrap(PairingInvite.parse(url))
         XCTAssertEqual(invite.connection.hosts, ["macbook.tail1234.ts.net"])
         XCTAssertEqual(invite.connection.allowedRouteKinds, [.tailnet, .hosted])
@@ -246,3 +253,4 @@ final class ConnectionTests: XCTestCase {
             .replacingOccurrences(of: "=", with: "")
     }
 }
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support

@@ -1,4 +1,5 @@
-// omb-hook — the one command OpenMausBot registers for Claude Code hooks
+import { compatEnv } from "../../electron/branding-env.cjs";
+// omb-hook — the one command BOS Bot registers for Claude Code hooks
 // (PostToolUse, PreCompact, SessionStart, Stop). Claude Code runs it with the
 // hook's JSON on stdin and waits for it, so it obeys three rules learned
 // the hard way by other harnesses:
@@ -17,11 +18,11 @@
 import { readFileSync } from "node:fs";
 
 const CONTEXT_EVENTS = new Set(["SessionStart", "UserPromptSubmit"]);
-const requestedBudget = Number(process.env.OMB_HOOK_TIMEOUT_MS);
+const requestedBudget = Number(compatEnv.OMB_HOOK_TIMEOUT_MS);
 const budgetMs = Number.isFinite(requestedBudget) && requestedBudget > 0 ? Math.min(requestedBudget, 4_000) : 4_000;
 const MAX_INPUT_BYTES = 1024 * 1024;
-const url = process.env.OMB_HOOK_URL ?? "";
-const tokenFile = process.env.OMB_HOOK_TOKEN_FILE ?? "";
+const url = compatEnv.OMB_HOOK_URL ?? "";
+const tokenFile = compatEnv.OMB_HOOK_TOKEN_FILE ?? "";
 
 const done = (out?: string) => {
   if (out === undefined) process.exit(0);
@@ -96,3 +97,4 @@ async function main(): Promise<void> {
 }
 
 void main();
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

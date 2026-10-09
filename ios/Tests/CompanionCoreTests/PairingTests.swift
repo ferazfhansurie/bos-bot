@@ -114,7 +114,7 @@ final class PairingTests: XCTestCase {
             name: "Mac",
             host: "mac.tail1234.ts.net",
             port: 8810,
-            hosts: ["mac.tail1234.ts.net", "192.168.1.42", "openmausbot-aa.local"]
+            hosts: ["mac.tail1234.ts.net", "192.168.1.42", "bosbot-aa.local"]
         )
 
         await XCTAssertThrowsErrorAsync(
@@ -376,7 +376,7 @@ final class PairingTests: XCTestCase {
         XCTAssertTrue(PairingRequestStub.captured().allSatisfy { $0.url?.path == "/api/health" })
     }
 
-    func testRejectsAServiceThatDoesNotIdentifyAsOpenMausBot() async throws {
+    func testRejectsAServiceThatDoesNotIdentifyAsBosBot() async throws {
         PairingRequestStub.reset { _ in .response(200, Data(#"{"app":"something-else"}"#.utf8)) }
         let connection = Connection(name: "Mac", host: "192.168.1.42", port: 8810)
 
@@ -403,7 +403,7 @@ final class PairingTests: XCTestCase {
             name: "Mac",
             host: "192.168.1.42",
             port: 8810,
-            hosts: ["openmausbot-aa.local"]
+            hosts: ["bosbot-aa.local"]
         )
 
         do {
@@ -458,3 +458,4 @@ private func XCTAssertThrowsErrorAsync<T>(
         errorHandler(error)
     }
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

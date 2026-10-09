@@ -1,4 +1,4 @@
-// A small MCP client for servers OpenMausBot does not start itself: the
+// A small MCP client for servers BOS Bot does not start itself: the
 // current streamable HTTP transport and the older SSE one. The engines
 // speak to these servers natively; this client exists for the Test button
 // (prove the handshake, list the tools) and for anything else the harness

@@ -1,3 +1,4 @@
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // Box (box.ascii.dev) provider — the bot's cloud computer. Ported from
 // agentcal-api src/providers/box.js, reshaped per-bot instead of
 // per-customer: every bot gets one persistent box (deterministic name),
@@ -58,7 +59,7 @@ export function isolatedRemoteCommand(command: string): string {
 }
 
 // overridable so tests can point at a stub instead of the live provider
-const BOX_API = process.env.OMB_BOX_API || "https://ascii.dev/api/box/v1";
+const BOX_API = compatEnv.OMB_BOX_API || "https://ascii.dev/api/box/v1";
 const READY = new Set(["idle", "ready", "running"]);
 const SLEEPING = new Set(["archived", "archiving", "stopped", "stopping"]);
 const DEFAULT_BOX_TTL_SECONDS = 8 * 60 * 60;
@@ -91,7 +92,7 @@ const BOX_STATES = new Set([
   "error",
 ]);
 // Provider listings are account-wide. Hash the durable local environment id
-// into every new name so another OpenMausBot installation using the same Box
+// into every new name so another BOS Bot installation using the same Box
 // account cannot mistake this installation's computers for abandoned ones.
 // The environment UUID itself never leaves the local data directory.
 let scopedBoxPrefixCache: string | null = null;
@@ -535,7 +536,7 @@ async function listBoxPages(
 
 /**
  * One account listing for Settings and deletion guards. Only boxes
- * carrying OpenMausBot's exact deterministic name shape leave this boundary;
+ * carrying BOS Bot's exact deterministic name shape leave this boundary;
  * provider desktop links, IPs, environment details and other raw fields never
  * reach the renderer. Only names scoped to this installation may become
  * ownerless rows. Legacy names are accepted solely when a current bot proves
@@ -586,7 +587,7 @@ export async function listManagedBoxes(
     try {
       recoveries = boxCreateRecoverySnapshot();
     } catch {
-      return invalidInventory("OpenMausBot could not safely read its cloud computer recovery records");
+      return invalidInventory("BOS Bot could not safely read its cloud computer recovery records");
     }
     for (const recovery of recoveries) {
       if (!recovery.resolved || !recovery.boxId) continue;
@@ -595,12 +596,12 @@ export async function listManagedBoxes(
 
       const matchingRows = candidates.filter((candidate) => candidate?.id === recovery.boxId);
       if (matchingRows.length > 1) {
-        return invalidInventory("ascii.dev returned a conflicting id for an OpenMaus-managed cloud computer — refresh or repair it in ascii.dev");
+        return invalidInventory("ascii.dev returned a conflicting id for an Bos-managed cloud computer — refresh or repair it in ascii.dev");
       }
       if (matchingRows.length === 1) {
         const listedName = typeof matchingRows[0]?.name === "string" ? matchingRows[0].name : "";
         if (listedName !== namedOwner.currentName && listedName !== namedOwner.legacyName) {
-          return invalidInventory("A remembered cloud computer no longer has its OpenMausBot owner name — repair it in ascii.dev before continuing");
+          return invalidInventory("A remembered cloud computer no longer has its BOS Bot owner name — repair it in ascii.dev before continuing");
         }
         continue;
       }
@@ -619,7 +620,7 @@ export async function listManagedBoxes(
         inspected.identity.name !== namedOwner.currentName
         && inspected.identity.name !== namedOwner.legacyName
       ) {
-        return invalidInventory("A remembered cloud computer no longer has its OpenMausBot owner name — repair it in ascii.dev before continuing");
+        return invalidInventory("A remembered cloud computer no longer has its BOS Bot owner name — repair it in ascii.dev before continuing");
       }
       const directCandidate = {
         id: inspected.identity.boxId,
@@ -633,7 +634,7 @@ export async function listManagedBoxes(
     try {
       deletions = boxDeletionSnapshot();
     } catch {
-      return invalidInventory("OpenMausBot could not safely read its cloud computer deletion records");
+      return invalidInventory("BOS Bot could not safely read its cloud computer deletion records");
     }
     for (const deletion of deletions) {
       let state: BoxDeletionReconciliation;
@@ -699,11 +700,11 @@ export async function listManagedBoxes(
     if (!owner) continue;
     const boxId = typeof candidate.id === "string" ? candidate.id : "";
     if (!BOX_ID.test(boxId)) {
-      return invalidInventory("ascii.dev returned an invalid id for an OpenMaus-managed cloud computer — refresh or repair it in ascii.dev");
+      return invalidInventory("ascii.dev returned an invalid id for an Bos-managed cloud computer — refresh or repair it in ascii.dev");
     }
     const existing = ownedBoxByBot.get(owner.botId);
     if (existing && existing !== boxId) {
-      return invalidInventory("ascii.dev returned conflicting cloud computers for one OpenMaus bot — repair them in ascii.dev before continuing");
+      return invalidInventory("ascii.dev returned conflicting cloud computers for one Bos bot — repair them in ascii.dev before continuing");
     }
     ownedBoxByBot.set(owner.botId, boxId);
   }
@@ -735,16 +736,16 @@ export async function listManagedBoxes(
     // deterministic name), silently skipping a malformed/duplicated identity
     // could let bot deletion mistake provider corruption for absence.
     if (!BOX_ID.test(boxId)) {
-      return invalidInventory("ascii.dev returned an invalid id for an OpenMaus-managed cloud computer — refresh or repair it in ascii.dev");
+      return invalidInventory("ascii.dev returned an invalid id for an Bos-managed cloud computer — refresh or repair it in ascii.dev");
     }
     if ((boxIdCounts.get(boxId) ?? 0) !== 1 || seenBoxIds.has(boxId)) {
-      return invalidInventory("ascii.dev returned a conflicting id for an OpenMaus-managed cloud computer — refresh or repair it in ascii.dev");
+      return invalidInventory("ascii.dev returned a conflicting id for an Bos-managed cloud computer — refresh or repair it in ascii.dev");
     }
     if (legacyOwner && owner && options.adoptLegacy !== false) {
       try {
         adoptResolvedBox(owner.botId, boxId);
       } catch {
-        return invalidInventory("OpenMausBot could not safely remember this legacy cloud computer's owner — repair it in ascii.dev before continuing");
+        return invalidInventory("BOS Bot could not safely remember this legacy cloud computer's owner — repair it in ascii.dev before continuing");
       }
     }
     seenBoxIds.add(boxId);
@@ -834,7 +835,7 @@ async function revalidateManagedBox(
   if (!inventory.available) throw inventoryFailure(inventory);
   const instance = inventory.instances.find((candidate) => candidate.boxId === boxId);
   if (!instance) {
-    throw Object.assign(new Error("that OpenMaus-managed cloud computer no longer exists"), { status: 404 });
+    throw Object.assign(new Error("that Bos-managed cloud computer no longer exists"), { status: 404 });
   }
   return instance;
 }
@@ -1065,11 +1066,11 @@ function idempotentCreateInProgress(result: Awaited<ReturnType<typeof boxJson>>)
   return result.status === 409 && code === "idempotency_in_progress";
 }
 
-/** The keys this OpenMausBot already holds, as the environment its bots'
+/** The keys this BOS Bot already holds, as the environment its bots'
  * agents read on the box. The box is created with `noEnv: true`, so the
  * ascii.dev account's own logins never land in the guest: the box has exactly
  * these and nothing else (see "Whose keys" in the Box integrated-agents docs). */
-export function boxCredentialEnv(cfg: AppConfig, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+export function boxCredentialEnv(cfg: AppConfig, env: NodeJS.ProcessEnv = compatEnv): Record<string, string> {
   const out: Record<string, string> = {};
   const put = (name: string, value: string | undefined) => {
     if (typeof value === "string" && value.trim()) out[name] = value.trim();
@@ -1077,7 +1078,7 @@ export function boxCredentialEnv(cfg: AppConfig, env: NodeJS.ProcessEnv = proces
   // The workspace key only: an ANTHROPIC_API_KEY in the server's own env is
   // never the workspace key (see loadConfig), so it is not forwarded either.
   put("ANTHROPIC_API_KEY", cfg.anthropic?.key);
-  for (const name of BOX_FORWARDED_CREDENTIAL_ENV) put(name, env[name]);
+  for (const name of BOX_FORWARDED_CREDENTIAL_ENV) put(name, compatEnvironment(env)[name]);
   return out;
 }
 
@@ -1097,7 +1098,7 @@ const BOX_FORWARDED_CREDENTIAL_ENV = [
 async function requestBoxCreate(cfg: AppConfig, botId: string, ttlSeconds: number, env: Record<string, string>): Promise<BoxCreateResult> {
   // The computer needs the user's desktop session, not the account owner's
   // host credentials. Keep provider-side env injection off; the only keys the
-  // guest ever has are the ones this OpenMausBot forwards (`env`), which its
+  // guest ever has are the ones this BOS Bot forwards (`env`), which its
   // agents need now that the turn runs on the box. The idempotency identity
   // stays the secret-free part: a trial-TTL retry must receive a different
   // key, and the journal on disk never carries a credential.
@@ -1350,7 +1351,7 @@ export async function execOnBox(cfg: AppConfig, botId: string, command: string) 
 // The frame is for a person: it fills the panel and opens in the chat's
 // image viewer, so it keeps the desktop's native size up to 1080p and a
 // quality where page text stays legible. (Sizing it is now the only say
-// OpenMausBot has over any frame off this box: the turn runs on the box's
+// BOS Bot has over any frame off this box: the turn runs on the box's
 // own agent, so the model's own captures never pass through here.) Only
 // wider displays are scaled down, with -resize rather than -thumbnail so
 // the resample is not the fast-and-blurry kind meant for icons. The
@@ -1432,3 +1433,4 @@ export async function screenshotBox(cfg: AppConfig, botId: string, knownBoxId?: 
   if (!data) throw new Error("could not read the frame back from the box");
   return { png: data, format: "jpeg" };
 }
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

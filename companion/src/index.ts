@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The sidecar, as one command.
 //
 //   node companion/src/index.ts
@@ -66,17 +67,17 @@ const num = (value: string | undefined, fallback: number): number => {
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : fallback;
 };
 
-const HARNESS_PORT = num(process.env.OMB_PORT, 8799);
-const WEBHOOK_PORT = num(process.env.OMB_WEBHOOK_PORT, HARNESS_PORT + 1);
-const COMPANION_PORT = num(process.env.OMB_COMPANION_PORT, 8810);
-const CONTROL_PORT = num(process.env.OMB_CONTROL_PORT, 8811);
+const HARNESS_PORT = num(compatEnv.OMB_PORT, 8799);
+const WEBHOOK_PORT = num(compatEnv.OMB_WEBHOOK_PORT, HARNESS_PORT + 1);
+const COMPANION_PORT = num(compatEnv.OMB_COMPANION_PORT, 8810);
+const CONTROL_PORT = num(compatEnv.OMB_CONTROL_PORT, 8811);
 const SERVICE_TYPE = "_openmausbot._tcp";
-let hostedUrl = hostedCompanionUrl(process.env.OMB_COMPANION_HOSTED_URL);
+let hostedUrl = hostedCompanionUrl(compatEnv.OMB_COMPANION_HOSTED_URL);
 /** Connector state and keep-awake as the desktop last reported them. */
 let reportedStatus: ReportedCompanionStatus = DEFAULT_REPORTED_STATUS;
-const PRIVATE_ORIGIN = companionOriginSocket(process.env.OMB_COMPANION_INTERNAL_ORIGIN);
+const PRIVATE_ORIGIN = companionOriginSocket(compatEnv.OMB_COMPANION_INTERNAL_ORIGIN);
 const SECRET_PUBLIC_KEY = normalizedPhoneSecretPublicKey(
-  process.env.OMB_PHONE_SECRET_PUBLIC_KEY ?? "",
+  compatEnv.OMB_PHONE_SECRET_PUBLIC_KEY ?? "",
 );
 
 /** Ports the harness takes for itself, and what it uses each for.
@@ -107,10 +108,10 @@ const conflict = (name: string, port: number): string | null => {
  * Read once at startup and cached. An override wins, and a harness that is
  * not up or has no profile falls back rather than blocking — the name is a
  * label, and no part of pairing depends on it. */
-let cachedName = process.env.OMB_COMPANION_NAME?.trim() || "";
+let cachedName = compatEnv.OMB_COMPANION_NAME?.trim() || "";
 
 /** What this computer is called on the phone. Never empty. */
-const machineName = (): string => cachedName || "OpenMausBot";
+const machineName = (): string => cachedName || "BOS Bot";
 
 /** Ask the harness whose computer this is, once, at startup. Every failure
  * is survivable: the name is a label, and no part of pairing depends on it. */
@@ -125,7 +126,7 @@ async function refreshMachineName(): Promise<void> {
     const owner = config.profile?.name?.trim();
     if (owner) cachedName = `${owner}'s computer`;
   } catch {
-    /* not up, or no profile — "OpenMausBot" is a fine thing to be called */
+    /* not up, or no profile — "BOS Bot" is a fine thing to be called */
   }
 }
 
@@ -334,3 +335,4 @@ main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
+// branding compatibility (electron/branding-compat.json): bonjour: old phone clients continue discovering the existing server service; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

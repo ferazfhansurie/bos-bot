@@ -45,3 +45,4 @@ it("passes the previous report to the real fake-engine turn only when continuity
     await fixture.close();
   }
 }, 60_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -24,7 +24,7 @@ export function validCompanionOriginTarget(target, platform = process.platform) 
   if (!Number.isSafeInteger(target?.pid) || target.pid <= 0) return false;
   if (Object.prototype.toString.call(target?.socketPath) !== "[object String]") return false;
   if (platform === "win32") {
-    return /^\\\\\.\\pipe\\openmausbot-companion-origin-[1-9][0-9]*-[0-9a-f-]{36}$/i.test(
+    return /^\\\\\.\\pipe\\bosbot-companion-origin-[1-9][0-9]*-[0-9a-f-]{36}$/i.test(
       target.socketPath,
     );
   }
@@ -47,7 +47,7 @@ export function createCompanionOriginEndpoint({
   if (platform === "win32") {
     return Object.freeze({
       pid: processId,
-      socketPath: `\\\\.\\pipe\\openmausbot-companion-origin-${processId}-${identifier()}`,
+      socketPath: `\\\\.\\pipe\\bosbot-companion-origin-${processId}-${identifier()}`,
       directory: null,
     });
   }
@@ -392,3 +392,4 @@ export function createCompanionOriginGateway({
     },
   });
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

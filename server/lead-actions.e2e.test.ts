@@ -1,10 +1,11 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
 import { handleToolCall, request } from "../scripts/mcp-server.ts";
 it("tagged blocked report persists after chat, clear and reload; evidence resolves it", async () => {
- const session = await launchVerificationServer(process.env, undefined, undefined, undefined, undefined, { scripted: true });
+ const session = await launchVerificationServer(compatEnv, undefined, undefined, undefined, undefined, { scripted: true });
  const cli = (...args: string[]) => runControlOmb(args, { env: { OPENMAUSBOT_URL: session.info.url } }) as Promise<any>;
  const api = (path: string, body?: unknown, method = "POST") => request(path, body === undefined ? {} : { method, body: JSON.stringify(body) }, session.info.url) as Promise<any>;
  try {
@@ -29,7 +30,7 @@ it("tagged blocked report persists after chat, clear and reload; evidence resolv
  } finally { await session.close(); }
 }, 60_000);
 it("explicit report tools deduplicate and only the accountable room lead resolves; revoked devices and membership are denied", async () => {
- const session = await launchVerificationServer(process.env, undefined, undefined, undefined, undefined, { scripted: true });
+ const session = await launchVerificationServer(compatEnv, undefined, undefined, undefined, undefined, { scripted: true });
  const cli = (...args: string[]) => runControlOmb(args, { env: { OPENMAUSBOT_URL: session.info.url } }) as Promise<any>;
  const api = (path: string, body?: unknown, method = "POST") => request(path, body === undefined ? {} : { method, body: JSON.stringify(body) }, session.info.url) as Promise<any>;
  try {
@@ -58,3 +59,4 @@ it("explicit report tools deduplicate and only the accountable room lead resolve
   expect((await fetch(`${session.info.url}/api/lead-actions/${action.id}/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "change", evidence: "new", expectedUpdatedAt: action.updatedAt }) })).status).toBe(403);
  } finally { await session.close(); }
 }, 60_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

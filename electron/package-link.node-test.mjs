@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
-import { PACKAGE_SCHEME } from "./release-channel.mjs";
+import { PACKAGE_SCHEME, PACKAGE_SCHEMES } from "./release-channel.mjs";
 
 describe("BotMRR package deep links", () => {
   it("accepts a public GitHub package URL", () => {
     const target = "https://raw.githubusercontent.com/acme/bots/main/reddit-lead-miner.md";
-    assert.equal(packageUrlFromDeepLink(`${PACKAGE_SCHEME}://install?url=${encodeURIComponent(target)}`), target);
+    for (const scheme of PACKAGE_SCHEMES) assert.equal(packageUrlFromDeepLink(`${scheme}://install?url=${encodeURIComponent(target)}`), target);
     assert.equal(packageUrlFromCommandLine(["BOS Bot", "--flag", `${PACKAGE_SCHEME}://install?url=${encodeURIComponent(target)}`]), target);
   });
 

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Bundled skill catalog. Skills remain isolated resources so adding or
 // disabling one does not require changing a provider driver. A future Skills
 // UI can use the same manifests; today enabled built-ins are selected by their
@@ -63,7 +64,7 @@ function loadSkillDirectory(directory: string): BundledSkill | null {
   return { manifest, instructions, directory };
 }
 
-export function loadBundledSkills(root = process.env.OMB_SKILLS_DIR || join(process.cwd(), "skills")): BundledSkill[] {
+export function loadBundledSkills(root = compatEnv.OMB_SKILLS_DIR || join(process.cwd(), "skills")): BundledSkill[] {
   if (!existsSync(root)) return [];
   const skills: BundledSkill[] = [];
   for (const name of readdirSync(root).sort()) {
@@ -138,3 +139,4 @@ export function renderSkillInstructions(
     `\n\n<openmaus-skill id=${JSON.stringify(manifest.id)} version=${JSON.stringify(manifest.version)}${includeRoot ? ` root=${JSON.stringify(directory)}` : ""}>\n${instructions}\n</openmaus-skill>`,
   ).join("");
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling; stored-prompt-tags: existing message and skill delimiters are still readable by the current parsers

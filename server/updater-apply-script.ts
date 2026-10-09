@@ -336,3 +336,4 @@ if __name__ == "__main__":
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     sys.exit(code)
 `.trimStart();
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

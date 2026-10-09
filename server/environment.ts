@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // What a client learns about this server before it authenticates: a stable
 // identity, a label, the version, and what it can do. Served without auth at
 // /.well-known/openmausbot/environment so a saved connection can check it is
@@ -116,7 +117,7 @@ export function loadEnvironmentId(dataDir: string): string {
 /** The desktop app passes its own version; a checkout reads package.json;
  * an image sets OMB_APP_VERSION at build time. */
 export function serverVersion(): string {
-  const fromEnv = process.env.OMB_APP_VERSION?.trim();
+  const fromEnv = compatEnv.OMB_APP_VERSION?.trim();
   if (fromEnv) return fromEnv;
   try {
     const pkg: unknown = JSON.parse(readFileSync(join(SERVER_ROOT, "..", "package.json"), "utf8"));
@@ -131,7 +132,7 @@ export function serverVersion(): string {
 export function environmentDescriptor(input: { environmentId: string; desktopManaged: boolean; emailSignIn?: boolean; sharedComputers?: boolean; authority?: EnvironmentAuthority | null }): EnvironmentDescriptor {
   return {
     environmentId: input.environmentId,
-    label: process.env.OMB_ENVIRONMENT_LABEL?.trim() || hostname(),
+    label: compatEnv.OMB_ENVIRONMENT_LABEL?.trim() || hostname(),
     platform: process.platform,
     version: serverVersion(),
     multiplayerProtocol: 1,
@@ -149,3 +150,4 @@ export function environmentDescriptor(input: { environmentId: string; desktopMan
     authority: input.authority ? { state: input.authority.state, epoch: input.authority.epoch } : null,
   };
 }
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

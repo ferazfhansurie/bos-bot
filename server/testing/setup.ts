@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Vitest setup — every test file gets a throwaway home directory so
 // DATA_DIR (~/.openmausbot) never touches the real one. os.homedir()
 // reads HOME (POSIX) / USERPROFILE (Windows) at call time, and this file
@@ -10,19 +11,19 @@ import { afterAll, afterEach } from "vitest";
 import { removeTempDir } from "./cleanup.ts";
 
 const home = mkdtempSync(join(tmpdir(), "omb-test-home-"));
-process.env.HOME = home;
-process.env.USERPROFILE = home;
+compatEnv.HOME = home;
+compatEnv.USERPROFILE = home;
 // OMB_DATA_DIR is an intentional production override, but tests must never
 // let it escape the throwaway home they are about to delete.
-delete process.env.OMB_DATA_DIR;
+delete compatEnv.OMB_DATA_DIR;
 // Do not let a developer's Hermes global config path leak into per-test homes.
-delete process.env.HERMES_HOME;
+delete compatEnv.HERMES_HOME;
 // The companion keeps its paired devices in its own directory, and resolves
 // it from homedir() the same way — so the redirect above already covers it.
 // Named explicitly all the same: the device tests delete this directory
 // wholesale, and "it is safe because of a line in another file" is not the
 // footing that delete should stand on.
-process.env.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
+compatEnv.OMB_COMPANION_DIR = join(home, ".openmausbot-companion");
 
 // Product code follows navigator.language, which makes English assertions
 // depend on the developer or CI host locale. Keep the shared default stable;
@@ -41,3 +42,4 @@ afterAll(async () => {
   closeMessageDb();
   await removeTempDir(home);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

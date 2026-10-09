@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // The voice, driven against a stub rather than the live service — same
 // rule as the box and computer-proxy contract tests: what we send, and how
 // a refusal is reported, are the things that break.
@@ -98,8 +99,8 @@ beforeAll(async () => {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;
   stubBase = `http://127.0.0.1:${port}`;
-  process.env.OMB_ELEVENLABS_API = `${stubBase}/v1`;
-  process.env.OMB_FISH_AUDIO_API = stubBase;
+  compatEnv.OMB_ELEVENLABS_API = `${stubBase}/v1`;
+  compatEnv.OMB_FISH_AUDIO_API = stubBase;
 });
 
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
@@ -498,3 +499,4 @@ describe("Chatterbox (local server)", () => {
     expect(() => speak(cfg(chatCfg({ baseUrl: stubBase })), "hi")).toThrow("Pick a voice in the agent profile.");
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

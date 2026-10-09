@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Fake of an ACP (Agent Client Protocol) CLI's stdio surface, for driver
 // tests of acp/core.ts + its harness shims (grok, gemini). Speaks JSON-RPC
 // 2.0 over stdin/stdout: answers initialize / authenticate / session/new /
@@ -49,27 +50,27 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
-const mode = process.env.FAKE_ACP_MODE ?? "happy";
+const mode = compatEnv.FAKE_ACP_MODE ?? "happy";
 const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 // opencode-shaped surface: the session carries its own model catalog and the
 // model is chosen with session/set_config_option, because `opencode acp` takes
 // no -m. Off unless FAKE_ACP_MODELS is set, so every existing mode is byte-
 // identical to before.
-const models = (process.env.FAKE_ACP_MODELS ?? "").split(",").filter(Boolean);
+const models = (compatEnv.FAKE_ACP_MODELS ?? "").split(",").filter(Boolean);
 let currentModel: string | null = models[0] ?? null;
 const variantConfigs: Record<string, { id?: string; currentValue?: string; options: any[] }> =
-  JSON.parse(process.env.FAKE_ACP_VARIANTS ?? "{}");
+  JSON.parse(compatEnv.FAKE_ACP_VARIANTS ?? "{}");
 let currentVariant = variantConfigs[currentModel ?? ""]?.currentValue;
 const variantValues = (entries: any[]): string[] => entries.flatMap((entry) => (
   typeof entry?.value === "string" ? [entry.value] : Array.isArray(entry?.options) ? variantValues(entry.options) : []
 ));
-const modes = (process.env.FAKE_ACP_MODES ?? "").split(",").filter(Boolean);
+const modes = (compatEnv.FAKE_ACP_MODES ?? "").split(",").filter(Boolean);
 let currentMode: string | null = modes[0] ?? null;
 // task id captured from the last delegate_bot reply, for a later
 // check_delegation call. Each turn is a fresh process, so the id is passed
 // through a file (same state-passing pattern as FAKE_ACP_GATE_FILE).
-const taskIdFile = process.env.FAKE_ACP_TASKID_FILE ?? "";
-const logFile = process.env.FAKE_ACP_LOG_FILE ?? "";
+const taskIdFile = compatEnv.FAKE_ACP_TASKID_FILE ?? "";
+const logFile = compatEnv.FAKE_ACP_LOG_FILE ?? "";
 function fakeLog(line: string): void {
   if (!logFile) return;
   try {
@@ -130,7 +131,7 @@ const configOptions = () => {
 // parameterised ids (`default[]`) that differ from the argv `--model` slugs
 // (`auto`). Off unless FAKE_ACP_SESSION_MODELS is set, so every existing mode
 // stays byte-identical. Format: "id|Name,id|Name" — the name is optional.
-const acpModels = (process.env.FAKE_ACP_SESSION_MODELS ?? "")
+const acpModels = (compatEnv.FAKE_ACP_SESSION_MODELS ?? "")
   .split(",")
   .filter(Boolean)
   .map((entry) => {
@@ -175,11 +176,11 @@ const dumpEnv = Object.fromEntries(
     "GEMINI_HOME",
     "AGY_ACP_FORCE_FILE_STORAGE",
     "ANTIGRAVITY_HARNESS_PATH",
-  ].flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]] as const)),
+  ].flatMap((key) => (compatEnv[key] === undefined ? [] : [[key, compatEnv[key]]] as const)),
 );
 const dumpState: Record<string, unknown> = { argv, env: dumpEnv };
-if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: dumpEnv }, null, 2));
+if (compatEnv.FAKE_ACP_DUMP) {
+  writeFileSync(compatEnv.FAKE_ACP_DUMP, JSON.stringify({ argv, env: dumpEnv }, null, 2));
 }
 if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
@@ -189,7 +190,7 @@ if (argv.includes("--version")) {
 // it later spawns for ACP. Answer those without entering the JSON-RPC loop
 // so catalog/auth tests do not hang on stdin.
 if (argv[0] === "status" || argv[0] === "whoami") {
-  const authenticated = process.env.FAKE_ACP_AUTH !== "0";
+  const authenticated = compatEnv.FAKE_ACP_AUTH !== "0";
   console.log(JSON.stringify({ isAuthenticated: authenticated }));
   process.exit(0);
 }
@@ -227,7 +228,7 @@ if (argv[0] === "models" || argv.includes("--list-models")) {
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const result = (id: unknown, res: unknown) => out({ jsonrpc: "2.0", id, result: res });
-const configUpdates = JSON.parse(process.env.FAKE_ACP_CONFIG_UPDATES ?? "[]") as Array<{
+const configUpdates = JSON.parse(compatEnv.FAKE_ACP_CONFIG_UPDATES ?? "[]") as Array<{
   after: string; sessionId?: string; configOptions: unknown[]; replay?: boolean;
 }>;
 const emitConfigUpdates = (after: string, sessionId: string) => {
@@ -256,7 +257,7 @@ const resultAndConfigUpdates = (id: unknown, res: unknown, after: string, sessio
 const rpcMethods: string[] = [];
 const recordMethod = (method: string) => {
   rpcMethods.push(method);
-  if (process.env.FAKE_ACP_RPC_DUMP) writeFileSync(process.env.FAKE_ACP_RPC_DUMP, JSON.stringify(rpcMethods));
+  if (compatEnv.FAKE_ACP_RPC_DUMP) writeFileSync(compatEnv.FAKE_ACP_RPC_DUMP, JSON.stringify(rpcMethods));
 };
 
 // session/set_mode + session/set_model calls seen this run
@@ -274,7 +275,7 @@ let agentsMcp: McpEntry | null = null;
  * sequence, return the text of the last result. Dependency-free. */
 function driveMcp(entry: McpEntry, calls: Array<{ name: string; args: (prev: string) => object }>, strict = false): Promise<string> {
   return new Promise((resolve, reject) => {
-    const env = { ...process.env };
+    const env = { ...compatEnv };
     for (const { name, value } of entry.env ?? []) env[name] = value;
     const child = spawn(entry.command, entry.args ?? [], { env, stdio: ["pipe", "pipe", "inherit"] });
     child.on("error", reject);
@@ -370,7 +371,7 @@ function handle(msg: any) {
     pendingPermissionId = null;
     const chosen = msg.result?.outcome?.optionId;
     // which option the client picked, for tests asserting allow_always
-    if (process.env.FAKE_ACP_PERMISSION_ANSWER) writeFileSync(process.env.FAKE_ACP_PERMISSION_ANSWER, String(chosen ?? "cancelled"));
+    if (compatEnv.FAKE_ACP_PERMISSION_ANSWER) writeFileSync(compatEnv.FAKE_ACP_PERMISSION_ANSWER, String(chosen ?? "cancelled"));
     onPermissionAnswered?.(typeof chosen === "string" && chosen.startsWith("allow"));
     return;
   }
@@ -387,16 +388,16 @@ function handle(msg: any) {
         process.stderr.write("fake-acp: simulated crash before result\n");
         process.exit(3);
       }
-      const authMethods = mode === "no-auth" ? [] : [{ id: process.env.FAKE_ACP_AUTH_METHOD ?? "cached_token" }];
-      const agentName = process.env.FAKE_ACP_AGENT_NAME;
-      const acceptsImages = process.env.FAKE_ACP_IMAGE_CAPABILITY === "1";
+      const authMethods = mode === "no-auth" ? [] : [{ id: compatEnv.FAKE_ACP_AUTH_METHOD ?? "cached_token" }];
+      const agentName = compatEnv.FAKE_ACP_AGENT_NAME;
+      const acceptsImages = compatEnv.FAKE_ACP_IMAGE_CAPABILITY === "1";
       // which remote MCP transports this agent advertises, e.g. "http,sse"
-      const mcpTransports = (process.env.FAKE_ACP_MCP_TRANSPORTS ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+      const mcpTransports = (compatEnv.FAKE_ACP_MCP_TRANSPORTS ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
       result(msg.id, {
         protocolVersion: 1,
         authMethods,
         agentInfo: agentName
-          ? { name: agentName, version: process.env.FAKE_ACP_AGENT_VERSION ?? "test" }
+          ? { name: agentName, version: compatEnv.FAKE_ACP_AGENT_VERSION ?? "test" }
           : undefined,
         agentCapabilities: agentName || acceptsImages || mcpTransports.length
           ? {
@@ -407,7 +408,7 @@ function handle(msg: any) {
           : undefined,
         _meta: {
           modelState: { currentModelId: "fake-acp-model" },
-          ...(process.env.FAKE_ACP_GROK_VERSION ? { grokShell: true, agentVersion: process.env.FAKE_ACP_GROK_VERSION } : {}),
+          ...(compatEnv.FAKE_ACP_GROK_VERSION ? { grokShell: true, agentVersion: compatEnv.FAKE_ACP_GROK_VERSION } : {}),
         },
       });
       break;
@@ -425,13 +426,13 @@ function handle(msg: any) {
         break;
       }
       const servers: McpEntry[] = Array.isArray(msg.params?.mcpServers) ? msg.params.mcpServers : [];
-      if (process.env.FAKE_ACP_DUMP) {
+      if (compatEnv.FAKE_ACP_DUMP) {
         dumpState.mcpServers = servers;
-        writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
+        writeFileSync(compatEnv.FAKE_ACP_DUMP, JSON.stringify(dumpState, null, 2));
       }
       agentsMcp = servers.find((s: any) => s?.name === "agents") ?? null;
-      if (process.env.FAKE_ACP_DUMP) {
-        writeFileSync(`${process.env.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(servers, null, 2));
+      if (compatEnv.FAKE_ACP_DUMP) {
+        writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(servers, null, 2));
       }
       const opts = configOptions();
       const mdls = sessionModels();
@@ -443,15 +444,15 @@ function handle(msg: any) {
       break;
     }
     case "session/load": {
-      if (process.env.FAKE_ACP_LOAD_NULL) {
+      if (compatEnv.FAKE_ACP_LOAD_NULL) {
         result(msg.id, null);
         break;
       }
       if (mode === "safe-agent-reads") {
         agentsMcp = (msg.params?.mcpServers ?? []).find((server: any) => server.name === "agents") ?? null;
       }
-      if (process.env.FAKE_ACP_DUMP) {
-        writeFileSync(`${process.env.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(msg.params?.mcpServers ?? []));
+      if (compatEnv.FAKE_ACP_DUMP) {
+        writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(msg.params?.mcpServers ?? []));
       }
       const opts = configOptions();
       const mdls = sessionModels();
@@ -459,8 +460,8 @@ function handle(msg: any) {
       break;
     }
     case "session/resume": {
-      if (process.env.FAKE_ACP_DUMP) {
-        writeFileSync(`${process.env.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(msg.params?.mcpServers ?? []));
+      if (compatEnv.FAKE_ACP_DUMP) {
+        writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.mcp.json`, JSON.stringify(msg.params?.mcpServers ?? []));
       }
       const opts = configOptions();
       const mdls = sessionModels();
@@ -492,8 +493,8 @@ function handle(msg: any) {
         break;
       }
       configCalls.push({ method: msg.method, params: msg.params });
-      if (process.env.FAKE_ACP_DUMP) {
-        writeFileSync(`${process.env.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
+      if (compatEnv.FAKE_ACP_DUMP) {
+        writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
       }
       result(msg.id, {});
       break;
@@ -502,21 +503,21 @@ function handle(msg: any) {
       const { configId, value } = msg.params ?? {};
       const variant = variantConfigs[currentModel ?? ""];
       if (variant && configId === (variant.id ?? "effort") && variantValues(variant.options).includes(value)) {
-        if (!process.env.FAKE_ACP_VARIANT_STICKS) currentVariant = value;
+        if (!compatEnv.FAKE_ACP_VARIANT_STICKS) currentVariant = value;
         configCalls.push({ method: msg.method, params: msg.params });
-        if (process.env.FAKE_ACP_DUMP) {
-          writeFileSync(`${process.env.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
+        if (compatEnv.FAKE_ACP_DUMP) {
+          writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
         }
-        resultAndConfigUpdates(msg.id, process.env.FAKE_ACP_EMPTY_VARIANT_ACK ? {} : { configOptions: configOptions() }, "effort", msg.params.sessionId);
+        resultAndConfigUpdates(msg.id, compatEnv.FAKE_ACP_EMPTY_VARIANT_ACK ? {} : { configOptions: configOptions() }, "effort", msg.params.sessionId);
         break;
       }
       if (configId === "mode" && modes.includes(value)) {
         currentMode = value;
         configCalls.push({ method: msg.method, params: msg.params });
-        if (process.env.FAKE_ACP_DUMP) {
-          writeFileSync(`${process.env.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
+        if (compatEnv.FAKE_ACP_DUMP) {
+          writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
         }
-        result(msg.id, process.env.FAKE_ACP_EMPTY_MODE_ACK ? {} : { configOptions: configOptions() });
+        result(msg.id, compatEnv.FAKE_ACP_EMPTY_MODE_ACK ? {} : { configOptions: configOptions() });
         break;
       }
       if (configId !== "model" || !models.includes(value)) {
@@ -530,26 +531,26 @@ function handle(msg: any) {
       // FAKE_ACP_MODEL_STICKS: answer OK and keep the old model anyway. Nothing
       // in the protocol forbids it, and it is the shape core.ts's confirmation
       // guard exists for — an error is loud, this is silent.
-      if (!process.env.FAKE_ACP_MODEL_STICKS) {
+      if (!compatEnv.FAKE_ACP_MODEL_STICKS) {
         currentModel = value;
         currentVariant = variantConfigs[value]?.currentValue;
       }
       configCalls.push({ method: msg.method, params: msg.params });
-      if (process.env.FAKE_ACP_DUMP) {
-        writeFileSync(`${process.env.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
+      if (compatEnv.FAKE_ACP_DUMP) {
+        writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.config.json`, JSON.stringify(configCalls, null, 2));
       }
       resultAndConfigUpdates(msg.id, { configOptions: configOptions() }, "model", msg.params.sessionId);
       break;
     }
     case "session/prompt": {
       emitConfigUpdates("session/prompt", msg.params.sessionId);
-      if (process.env.FAKE_ACP_DUMP && process.env.FAKE_ACP_VARIANTS) {
-        writeFileSync(`${process.env.FAKE_ACP_DUMP}.selection.json`, JSON.stringify({
+      if (compatEnv.FAKE_ACP_DUMP && compatEnv.FAKE_ACP_VARIANTS) {
+        writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.selection.json`, JSON.stringify({
           sessionId: msg.params.sessionId, model: currentModel, variant: currentVariant,
         }));
       }
-      if (process.env.FAKE_ACP_DUMP && process.env.FAKE_ACP_DUMP_PROMPT === "1") {
-        writeFileSync(`${process.env.FAKE_ACP_DUMP}.prompt.json`, JSON.stringify(msg.params?.prompt ?? null, null, 2));
+      if (compatEnv.FAKE_ACP_DUMP && compatEnv.FAKE_ACP_DUMP_PROMPT === "1") {
+        writeFileSync(`${compatEnv.FAKE_ACP_DUMP}.prompt.json`, JSON.stringify(msg.params?.prompt ?? null, null, 2));
       }
       if (mode === "hang") {
         // never resolve the prompt — lets tests exercise interrupt
@@ -572,7 +573,7 @@ function handle(msg: any) {
           msg.id,
           // FAKE_ACP_USAGE_ROOT reproduces opencode 1.18.18's shape: usage at
           // the result root with an empty _meta, instead of usage under _meta.
-          process.env.FAKE_ACP_USAGE_ROOT
+          compatEnv.FAKE_ACP_USAGE_ROOT
             ? { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5 }, _meta: {} }
             : { stopReason: "end_turn", _meta: { inputTokens: 10, outputTokens: 5 } },
         );
@@ -740,11 +741,11 @@ function handle(msg: any) {
           out({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { text: `echo: ${promptText}` } } } });
           complete();
         };
-        const gate = process.env.FAKE_ACP_GATE_FILE;
+        const gate = compatEnv.FAKE_ACP_GATE_FILE;
         // FAKE_ACP_STARTED_FILE: written the moment the prompt arrives, so a
         // test can act "during the turn" (after the harness's pre-turn
         // checkpoint) without racing the busy flag, which flips at claim.
-        const started = process.env.FAKE_ACP_STARTED_FILE;
+        const started = compatEnv.FAKE_ACP_STARTED_FILE;
         if (started) writeFileSync(started, String(Date.now()));
         if (gate && !existsSync(gate)) {
           const poll = setInterval(() => {
@@ -832,14 +833,14 @@ function handle(msg: any) {
           id: pendingPermissionId,
           method: "session/request_permission",
           params: {
-            toolCall: process.env.FAKE_ACP_PERMISSION_TOOL_CALL
-              ? JSON.parse(process.env.FAKE_ACP_PERMISSION_TOOL_CALL)
+            toolCall: compatEnv.FAKE_ACP_PERMISSION_TOOL_CALL
+              ? JSON.parse(compatEnv.FAKE_ACP_PERMISSION_TOOL_CALL)
               : { kind: "execute", rawInput: { command: "echo hi" }, title: "echo hi" },
             options: [
               { optionId: "allow-once", kind: "allow_once" },
               // Grok offers a session-wide allow on some requests and omits
               // it on others; the driver must cope with both.
-              ...(process.env.FAKE_ACP_ALLOW_ALWAYS ? [{ optionId: "allow-always", kind: "allow_always" }] : []),
+              ...(compatEnv.FAKE_ACP_ALLOW_ALWAYS ? [{ optionId: "allow-always", kind: "allow_always" }] : []),
               { optionId: "reject", kind: "reject_once" },
             ],
           },
@@ -860,7 +861,7 @@ function handle(msg: any) {
               {
                 optionId: "green-id",
                 kind: "allow_once",
-                name: process.env.FAKE_ACP_PAD_QUESTION_OPTION ? " Green " : "Green",
+                name: compatEnv.FAKE_ACP_PAD_QUESTION_OPTION ? " Green " : "Green",
               },
             ],
           },
@@ -877,3 +878,4 @@ function handle(msg: any) {
       if (msg.id !== undefined) out({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

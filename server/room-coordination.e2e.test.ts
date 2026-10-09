@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -6,7 +7,7 @@ import { handleToolCall, request } from "../scripts/mcp-server.ts";
 import { PEER_ACCESS_HELP } from "./peer-roster.ts";
 
 async function withRooms(test: (f: any) => Promise<void>) {
-  const session = await launchVerificationServer(process.env, undefined, undefined, undefined, undefined, { scripted: true });
+  const session = await launchVerificationServer(compatEnv, undefined, undefined, undefined, undefined, { scripted: true });
   const env = { OPENMAUSBOT_URL: session.info.url };
   const cli = (...args: string[]) => runControlOmb(args, { env }) as Promise<any>;
   const api = (path: string, body?: unknown, method = "POST") => request(path, body === undefined ? {} : { method, body: JSON.stringify(body) }, session.info.url) as Promise<any>;
@@ -34,7 +35,7 @@ async function withRooms(test: (f: any) => Promise<void>) {
     const wait = async () => cli("wait", "--channel", source.id, "--timeout", "30");
     const provider = () => readFileSync(`${planPath}.evidence.jsonl`, "utf8").trim().split("\n").map(line => JSON.parse(line));
     const recordWake = async (label: string) => {
-      const dir = process.env.WAKE_EVIDENCE_DIR;
+      const dir = compatEnv.WAKE_EVIDENCE_DIR;
       if (!dir) return;
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, `${label}.json`), JSON.stringify({ fixture: session.info,
@@ -609,3 +610,4 @@ it("posts a same-room assignment as one visible brief when sent, and never re-po
   expect(posts.filter((m: any) => m.text.includes("Review CSV"))).toHaveLength(1);
   expect(posts.filter((m: any) => m.text.includes("also check the totals"))).toHaveLength(1);
 }), 45_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

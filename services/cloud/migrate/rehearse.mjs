@@ -1,3 +1,4 @@
+import { compatEnv } from "../../../electron/branding-env.cjs";
 import {
   mkdtemp,
   writeFile,
@@ -21,12 +22,12 @@ const node = process.execPath;
 const root = await mkdtemp(join(tmpdir(), "bos-migration-rehearsal-"));
 let server, c;
 const source = join(root, "copy");
-const evidenceDir = process.env.BOS_MIGRATION_EVIDENCE;
+const evidenceDir = compatEnv.BOS_MIGRATION_EVIDENCE;
 if (!evidenceDir) throw new Error("BOS_MIGRATION_EVIDENCE required");
 const evidence = {
   date: new Date().toISOString(),
   mode:
-    process.env.BOS_MIGRATION_REAL_COPY === "1" ? "local-copy" : "fictional",
+    compatEnv.BOS_MIGRATION_REAL_COPY === "1" ? "local-copy" : "fictional",
   serving_projection: false,
   checks: {},
 };
@@ -158,7 +159,7 @@ try {
       "-c",
       "max_wal_size=128MB",
     ],
-    { stdio: "ignore", env: { ...process.env, LC_ALL: "C" } },
+    { stdio: "ignore", env: { ...compatEnv, LC_ALL: "C" } },
   );
   const url = `postgres://bos_owner@127.0.0.1:${port}/bos_migration_rehearsal_${process.pid}`;
   for (let n = 0; ; n++) {
@@ -191,7 +192,7 @@ try {
     ],
     {
       stdio: ["ignore", "ignore", "ignore", "ipc"],
-      env: { ...process.env, BOS_MIGRATION_URL: url, COPY: source },
+      env: { ...compatEnv, BOS_MIGRATION_URL: url, COPY: source },
     },
   );
   await new Promise((r, j) => {

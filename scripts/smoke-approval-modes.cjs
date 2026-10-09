@@ -1,3 +1,4 @@
+const { compatEnv } = require("../electron/branding-env.cjs");
 // Run with `pnpm exec electron scripts/smoke-approval-modes.cjs`.
 // Exercises the real private Electron utility-process grant protocol using
 // only a disposable home and fake Claude/Antigravity/Codex/Grok CLIs. Never uses the live app.
@@ -85,7 +86,7 @@ app.whenReady().then(async () => {
     execArgv: ["--experimental-strip-types"],
     env: {
       HOME: home, USERPROFILE: home, OMB_DATA_DIR: home, PATH: "",
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(webhookPort),
       OMB_TEST_INTERNAL_CAPABILITY_KEY: testCapabilityKey,
       FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_DUMP: dump,
@@ -362,3 +363,4 @@ app.whenReady().then(async () => {
   rmSync(home, { recursive: true, force: true });
   app.exit(process.exitCode || 0);
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

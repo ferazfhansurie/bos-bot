@@ -1,7 +1,7 @@
 // The "every chat is a real agent" scene, after Recall's "Chat With Your
 // Knowledge" bento: a message goes out, the bot thinks with bouncing dots,
 // then a reply streams in and the whole exchange lifts to make room. What
-// makes it OpenMausBot is the tool chip in the reply: the bot ran a real
+// makes it BOS Bot is the tool chip in the reply: the bot ran a real
 // command on this machine before answering, which is the promise the
 // guided first conversation then keeps.
 import { useEffect, useState } from "react";

@@ -553,3 +553,4 @@ test("progress callback exceptions cannot prevent successful transfer or private
   assert.equal(ready.status, "ready");
   await f.clean();
 });
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers

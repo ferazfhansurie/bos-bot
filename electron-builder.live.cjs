@@ -1,3 +1,4 @@
+const { compatEnv } = require("./electron/branding-env.cjs");
 // Live distribution. The update feed and the Windows signing mode come from
 // scripts/release-feed.cjs (see there for the env inputs).
 //
@@ -17,8 +18,8 @@ const { parse } = require('yaml');
 const { releaseFeed, windowsSigning } = require('./scripts/release-feed.cjs');
 
 const base = parse(readFileSync(join(__dirname, 'electron-builder.yml'), 'utf8'));
-const feed = releaseFeed(process.env);
-const unsignedWindows = windowsSigning(process.env) === 'unsigned';
+const feed = releaseFeed(compatEnv);
+const unsignedWindows = windowsSigning(compatEnv) === 'unsigned';
 
 module.exports = {
   ...base,
@@ -29,6 +30,6 @@ module.exports = {
     ...base.win,
     ...(unsignedWindows
       ? { verifyUpdateCodeSignature: false }
-      : { signtoolOptions: { publisherName: process.env.BOS_WINDOWS_PUBLISHER }, verifyUpdateCodeSignature: true }),
+      : { signtoolOptions: { publisherName: compatEnv.BOS_WINDOWS_PUBLISHER }, verifyUpdateCodeSignature: true }),
   },
 };

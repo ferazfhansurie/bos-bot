@@ -1,8 +1,10 @@
-> ⚠️ **No affiliation with any cryptocurrency.** OpenMausBot has no token. Any coin using the OpenMausBot, Maus, or SupaMaus name is not created, endorsed, or affiliated with this project or its maintainer. I have received no tokens, payment, or allocation from anyone, and I will not be endorsing any token.
+> ⚠️ **No affiliation with any cryptocurrency.** BOS Bot has no token. Any coin using the BOS Bot, Maus, or SupaMaus name is not created, endorsed, or affiliated with this project or its maintainer. I have received no tokens, payment, or allocation from anyone, and I will not be endorsing any token.
 
 <div align="center">
 
-# OpenMausBot
+# BOS Bot
+
+BOS Bot is a fork of OpenMausBot. Upstream attribution is preserved in NOTICE and LICENSING.md.
 
 **Your own team of AI bots, in a chat app.**
 
@@ -32,7 +34,7 @@ Talk to them like contacts. Watch them work. Approve what matters.
 <br>
 <br>
 
-<img src="docs/screenshots/hero.png" alt="OpenMausBot — a Telegram-style chat app where every chat is a real AI agent" width="900">
+<img src="docs/screenshots/hero.png" alt="BOS Bot — a Telegram-style chat app where every chat is a real AI agent" width="900">
 
 </div>
 
@@ -40,7 +42,7 @@ Talk to them like contacts. Watch them work. Approve what matters.
 
 ## Why
 
-One assistant in one box is the wrong shape for agents. OpenMausBot is an independent, open-source project inspired by **Grok Bot** —
+One assistant in one box is the wrong shape for agents. BOS Bot is an independent, open-source project inspired by **Grok Bot** —
 it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each with its own personality,
 memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
 already have:
@@ -134,15 +136,15 @@ channel and its bots under a named context, then rename it or change its members
 
 ### 📦 Install a complete team from one Markdown file
 
-Browse outcome-driven teams on [BotMRR](https://botmrr.io), then choose **Add to OpenMausBot**. The app
+Browse outcome-driven teams on [BotMRR](https://botmrr.io), then choose **Add to BOS Bot**. The app
 opens a review screen before creating the bots, Chief of Staff, channels, playbooks, connector checklist,
 and suggested routines. You can also import the same `.md` file from disk or paste its public GitHub URL
 in **Teams → Import**.
 
-The format stays portable: OpenMausBot reads the structured YAML frontmatter for a reliable one-click
+The format stays portable: BOS Bot reads the structured YAML frontmatter for a reliable one-click
 install, while Grok, Claude, ChatGPT, and people can follow the ordinary Markdown playbook. Connections
 remain off until you approve them, routines arrive paused, and packages never carry credentials,
-conversations, permissions, memory, or computer access. The portable format comes from the upstream OpenMausBot
+conversations, permissions, memory, or computer access. The portable format comes from the upstream BOS Bot
 [playbook repository](https://github.com/milind-soni/openmausbot-teams) ([format](https://github.com/milind-soni/openmausbot-teams/blob/main/FORMAT.md)); a BOS team library is not published yet.
 
 ### 🎧 Bots that talk back
@@ -226,9 +228,9 @@ flowchart LR
 | App | `src/` | The chat shell. Server-backed store, one reducer, zero client-side transports. |
 | Desktop | `electron/` | macOS, Windows, and Ubuntu shells with an embedded harness and platform capabilities; Apple speech stays macOS-only, Ubuntu Xorg has opt-in local control, and Wayland remains fail-closed. |
 
-### Orchestrate OpenMausBot over MCP
+### Orchestrate BOS Bot over MCP
 
-OpenMausBot ships a stdio MCP server for external clients such as Claude Desktop and Cursor. It exposes a
+BOS Bot ships a stdio MCP server for external clients such as Claude Desktop and Cursor. It exposes a
 deliberately bounded team control plane: inspect bots and channels, read/search compact transcript pages,
 create and configure bots/channels/tasks, send work, wait for completion, switch models, and interrupt turns.
 It does **not** expose approval grants, deletion, arbitrary settings, credentials, or computer lifecycle.
@@ -286,10 +288,10 @@ pnpm package:linux    # Ubuntu x64: .deb + AppImage + verified CUA runtime
 The Linux preview is user-initiated and never enables local bot control or Auto routing. On Xorg, the reviewed Cua
 Driver 0.19.3 runtime starts only after explicit opt-in and without its full-screen cursor overlay. On Wayland the
 app never starts it and clears legacy opt-ins while that real-seat safety gate remains unresolved. Chat, preview,
-Cloud, and Local VM remain available on both sessions. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and upstream OpenMausBot
-tracking issues [#29](https://github.com/milind-soni/OpenMausBot/issues/29),
-[#345](https://github.com/milind-soni/OpenMausBot/issues/345), and
-[#113](https://github.com/milind-soni/OpenMausBot/issues/113).
+Cloud, and Local VM remain available on both sessions. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and upstream BOS Bot
+tracking issues [#29](https://github.com/firazfhansurie/bos-bot/issues/29),
+[#345](https://github.com/firazfhansurie/bos-bot/issues/345), and
+[#113](https://github.com/firazfhansurie/bos-bot/issues/113).
 
 The Linux packager downloads only the tag-pinned upstream archive during the build, verifies its size, SHA-256,
 complete member allowlist, and inner executable hashes, then packages only the CLI and cursor-theme sidecar. The
@@ -302,7 +304,7 @@ in the sidebar footer) when you want to enable its integration:
 
 | Credential | What it enables | Where to get it |
 |---|---|---|
-| Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [OpenMausBot Composio setup](docs/composio.md) |
+| Composio project key (`ak_…`) | Connect Gmail, GitHub, Slack, Notion, and other apps to your bots | [BOS Bot Composio setup](docs/composio.md) |
 | Box API key | Give bots an isolated remote Linux computer with a desktop and terminal | [Box API key guide](https://docs.ascii.dev/box/api-keys) |
 | ElevenLabs key | Read replies aloud, and call your bots | [ElevenLabs API keys](https://elevenlabs.io/app/settings/api-keys) |
 | Fish Audio key | Read replies aloud with Fish Audio voices, and call your bots | [Fish Audio API keys](https://fish.audio/app/api-keys/) |
@@ -329,12 +331,12 @@ The existing duration field remains calendar/display metadata. Webhook triggers 
 but reuse the same queued task executor and calendar
 receipts.
 
-OpenMausBot starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `OMB_PORT`).
-Set `OMB_WEBHOOK_PORT` to choose another port. A webhook secret is shown once when the trigger is created
+BOS Bot starts a webhook-only receiver on `127.0.0.1:8800` by default (or one port above `BOS_PORT`).
+Set `BOS_WEBHOOK_PORT` to choose another port. A webhook secret is shown once when the trigger is created
 or rotated. Bearer authentication is recommended so the secret stays out of request URLs and most access
 logs; a single capability URL remains available for senders that cannot configure headers. The receiver
 exposes only `/health` and secret `/hooks/...` endpoints; it never exposes the app's broader API.
-OpenMausBot must remain running to accept a delivery. For public internet delivery, proxy only this
+BOS Bot must remain running to accept a delivery. For public internet delivery, proxy only this
 dedicated receiver through a hosted relay or a tool such as Tailscale Funnel.
 
 ## Status
@@ -358,7 +360,7 @@ Questions, bugs and feedback: <https://bos.aihlete.com/support>.
 
 ## Run from a terminal or on a server
 
-> **Not published for BOS yet.** The `openmausbot` package on npm is the upstream
+> **Not published for BOS yet.** The `bosbot` package on npm is the upstream
 > project, not BOS — don't install it for BOS. Until a BOS terminal package ships
 > (TODO(dev): package name), run BOS from source (see Quick start). The commands
 > below describe the upstream CLI flow this will follow.
@@ -378,7 +380,7 @@ cannot use a localhost link. `--local` ignores saved remote access for one launc
 `--no-pair` suppresses phone prompts and invitations but does not disable a saved
 remote connection.
 
-Run `openmausbot setup` to reconfigure without resetting bots or conversations;
+Run `bosbot setup` to reconfigure without resetting bots or conversations;
 the saved model default applies only to new bots. Native setup confirms provider
 sign-in; API setup asks before a potentially billable test message. API keys are
 saved as plaintext, not encrypted, in private `config.json` (`0600` on Unix).
@@ -386,8 +388,8 @@ See the [short setup guide](docs/cli-onboarding.md) for account differences,
 phone choices, credential storage, and cancellation.
 
 For a background service on a VPS or an always-on computer, use
-`npx openmausbot serve` with explicit remote options: `--tunnel` after
-`npx openmausbot login` for a managed public address, `--tailscale` for your
+`npx bosbot serve` with explicit remote options: `--tunnel` after
+`npx bosbot login` for a managed public address, `--tailscale` for your
 tailnet, or the Docker stack for your own domain. These are separate from
 AI-provider sign-in. Devices pair once with a short code. The deployment guide is
 [docs/deploy-vps.md](docs/deploy-vps.md); the reference is
@@ -405,6 +407,7 @@ Packaged Cua Driver components retain their upstream MIT, SIL OFL 1.1, MPL-2.0, 
 the corresponding notices, license texts, source locations, and SBOM are in
 [`third_party/cua-driver/`](third_party/cua-driver/) and ship beside the native runtime.
 
-OpenMausBot is an independent, open-source project inspired by Grok Bot. It is
+BOS Bot is an independent, open-source project inspired by Grok Bot. It is
 not affiliated with, endorsed by, or associated with xAI; "Grok" is a trademark
 of its respective owner.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; readme-attribution: Apache attribution to upstream contributors remains intact; upstream-team-library: the existing upstream playbook library remains the configured source until a BOS library is published -->

@@ -356,3 +356,4 @@ describe("message-linked files", () => {
     expect(messageFileDownloadName("preview.jpg", "4e8d.png")).toBe("preview.png");
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

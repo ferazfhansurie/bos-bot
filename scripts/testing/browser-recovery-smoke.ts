@@ -1,3 +1,4 @@
+import { compatEnv } from "../../electron/branding-env.cjs";
 // Opt-in native acceptance. Called only by the disposable browser launcher.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -10,13 +11,13 @@ export async function verifyBrowserRecovery(input: {
   binaryPath: string; executablePath: string; dataDir: string; previewUrl: string; testPage: string;
   screenshotPath: string;
 }) {
-  const playwrightPath = process.env.OMB_VERIFY_PLAYWRIGHT;
+  const playwrightPath = compatEnv.OMB_VERIFY_PLAYWRIGHT;
   if (!playwrightPath) throw new Error("Set OMB_VERIFY_PLAYWRIGHT to an installed Playwright module for --recovery.");
   const { chromium } = await import(playwrightPath);
   const runtime = new BrowserRuntime();
   const session = `recovery-${randomUUID()}`;
   const env = {
-    HOME: input.dataDir, USERPROFILE: input.dataDir, PATH: process.env.PATH,
+    HOME: input.dataDir, USERPROFILE: input.dataDir, PATH: compatEnv.PATH,
     AGENT_BROWSER_SESSION: session, AGENT_BROWSER_HEADLESS: "1",
     AGENT_BROWSER_EXECUTABLE_PATH: input.executablePath, AGENT_BROWSER_NO_WEBMCP: "1",
   };
@@ -89,3 +90,4 @@ export async function verifyBrowserRecovery(input: {
     finally { await runtime.closeAll(); }
   }
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

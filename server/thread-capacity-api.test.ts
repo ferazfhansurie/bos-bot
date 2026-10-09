@@ -396,3 +396,4 @@ describe("per-bot thread capacity through an isolated HTTP fixture", () => {
     evidence.push({ fifoThreadOrder: [second, third, fourth], lowerLimitPreservedActiveProcesses: [launchedFirst.pid, launchedSecond.pid], approvalUsedSlot: true });
   }, 45_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

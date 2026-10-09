@@ -29,3 +29,4 @@
     "traces": { "enabled": true, "head_sampling_rate": 0.05 }
   }
 }
+// branding compatibility (electron/branding-compat.json): deployed-services: existing worker databases, service health identities and hosted addresses must not become a different service

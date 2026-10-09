@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real harness, real provider/control routes, inert browser executable and
 // throwaway home. No browser, VM, device, or user data is opened.
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -70,7 +71,7 @@ describe.skipIf(process.platform === "win32")("direct final-screen settlement", 
       '} else if (args[0] === "session") process.stdout.write(JSON.stringify({ success: true, data: { sessions: [] } }));',
       'else process.stdout.write("1.0.0\\n");',
     ].join("\n"), { mode: 0o700 });
-    session = await launchVerificationServer(process.env, undefined, undefined, { binaryPath: browser, executablePath: browser });
+    session = await launchVerificationServer(compatEnv, undefined, undefined, { binaryPath: browser, executablePath: browser });
     evidence.push({ fixture: session.info });
     const wrapper = join(fixture, "screen-claude.mjs");
     writeFileSync(wrapper, [
@@ -148,3 +149,4 @@ describe.skipIf(process.platform === "win32")("direct final-screen settlement", 
     expect(events.frames.some((frame) => frame.kind === "screen" && frame.threadId === threadId)).toBe(false);
   }, 30_000);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

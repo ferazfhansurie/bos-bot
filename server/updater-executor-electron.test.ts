@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,7 +10,7 @@ import { createElectronUpdateExecutor, type UpdatePort } from "./updater-executo
 const SHA512 = "ab".repeat(64);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 // Port's Electron side (dev/port-updater-win). Point at their worktree to run the integration half here.
-const CONTRACT_PATH = process.env.OMB_WINDOWS_UPDATE_CONTRACT || join(SERVER_DIR, "..", "electron", "windows-update-contract.mjs");
+const CONTRACT_PATH = compatEnv.OMB_WINDOWS_UPDATE_CONTRACT || join(SERVER_DIR, "..", "electron", "windows-update-contract.mjs");
 
 /** Both ends of the utility-process port: the server posts, "main" answers on the next tick. */
 function fakePort(main: (message: Record<string, unknown>, reply: (body: Record<string, unknown>) => void) => void) {
@@ -305,3 +306,4 @@ describe.skipIf(!existsSync(CONTRACT_PATH))("electron update executor against ma
     await expect(c.apply({ force: true })).resolves.toEqual({ updateId, inProgress: true });
   });
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -147,3 +147,4 @@ export function savePinnedRooms(
 ): void {
   saveStringList(SIDEBAR_PINNED_ROOMS_KEY, ids, storage);
 }
+// branding compatibility (electron/branding-compat.json): browser-storage: existing localStorage and native attestation records keep their keys

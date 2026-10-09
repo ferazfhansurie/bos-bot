@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // Run against an unpacked/signed app's Resources (macOS) or resources directory.
 // Nothing is installed or downloaded. All browser state belongs to this fixture.
 import assert from "node:assert/strict";
@@ -89,7 +90,7 @@ if (process.platform === "linux") {
 const fixture = await mkdtemp(join(tmpdir(), "omb-browser-smoke-"));
 const fixtureHome = join(fixture, "home");
 const env = {
-  PATH: process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32") : "/usr/bin:/bin",
+  PATH: process.platform === "win32" ? join(compatEnv.SystemRoot ?? "C:\\Windows", "System32") : "/usr/bin:/bin",
   HOME: fixtureHome, USERPROFILE: fixtureHome,
   APPDATA: join(fixtureHome, "AppData", "Roaming"), LOCALAPPDATA: join(fixtureHome, "AppData", "Local"),
   XDG_CONFIG_HOME: join(fixture, "config"), XDG_CACHE_HOME: join(fixture, "cache"),
@@ -102,15 +103,15 @@ const env = {
   AGENT_BROWSER_DEFAULT_TIMEOUT: "15000", LANG: "en_US.UTF-8", NO_COLOR: "1",
 };
 for (const key of ["SystemRoot", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "PATHEXT"]) {
-  if (process.platform === "win32" && process.env[key]) env[key] = process.env[key];
+  if (process.platform === "win32" && compatEnv[key]) env[key] = compatEnv[key];
 }
 for (const directory of new Set([fixtureHome, env.APPDATA, env.LOCALAPPDATA, env.XDG_CONFIG_HOME,
-  env.XDG_CACHE_HOME, env.XDG_DATA_HOME, env.XDG_RUNTIME_DIR, env.TMPDIR, env.OMB_DATA_DIR, env.AGENT_BROWSER_SOCKET_DIR])) {
+  env.XDG_CACHE_HOME, env.XDG_DATA_HOME, env.XDG_RUNTIME_DIR, env.TMPDIR, compatEnvironment(env).OMB_DATA_DIR, env.AGENT_BROWSER_SOCKET_DIR])) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
 }
 // Isolate even source-module initialization. No inherited account credentials,
 // agent-browser config, external CDP connection, profile, proxy, or launch flags.
-process.env = env;
+compatEnv = env;
 const children = new Set();
 const clients = [];
 let server;
@@ -267,7 +268,7 @@ process.once("SIGTERM", interrupt);
 try {
   const { browserEngineStatus, agentBrowserIntegration, prepareBrowserSessionState, closeBrowserSession: closeSession } = await import("../server/browser-engine.ts");
   closeBrowserSession = closeSession;
-  const status = browserEngineStatus({ dataDir: env.OMB_DATA_DIR, env });
+  const status = browserEngineStatus({ dataDir: compatEnvironment(env).OMB_DATA_DIR, env });
   assert.equal(status.kind, "ready", `Fresh-home runtime did not discover the bundle: ${JSON.stringify(status)}`);
   assert.equal(resolve(status.binaryPath), resolve(enginePath), "Runtime did not select the engine under test");
   const engineVersion = await run(enginePath, ["--version"], env);
@@ -275,7 +276,7 @@ try {
   assert.equal(engineVersion, `agent-browser ${engineVersionExpected}`, `Unexpected engine version: ${engineVersion}`);
   assert(chromeVersion.includes(spec.chrome.version), `Unexpected Chromium version: ${chromeVersion}`);
 
-  const title = `OpenMausBot bundled browser ${randomBytes(6).toString("hex")}`;
+  const title = `BOS Bot bundled browser ${randomBytes(6).toString("hex")}`;
   server = createServer((_request, response) => {
     fixtureRequests += 1;
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
@@ -366,3 +367,4 @@ finally {
 }
 if (failure) { console.error(failure.stack ?? failure); process.exitCode = 1; }
 else console.log(JSON.stringify({ ...report, cleanup: "owned browsers, local HTTP server, and isolated home removed" }, null, 2));
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

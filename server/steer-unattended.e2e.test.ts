@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // A webhook turn must not be able to un-webhook itself.
 //
 // unattended.test.ts pins that a webhook turn on an Auto-mode bot keeps
@@ -115,7 +116,7 @@ posixOnly("a steered message does not lift the unattended mark on its own", () =
     child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
       cwd: join(SERVER_DIR, ".."),
       env: {
-        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        ...(compatEnv.PATH ? { PATH: compatEnv.PATH } : {}),
         HOME: home,
         USERPROFILE: home,
         OMB_PORT: String(port),
@@ -209,3 +210,4 @@ posixOnly("a steered message does not lift the unattended mark on its own", () =
     }
   }, 60_000);
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

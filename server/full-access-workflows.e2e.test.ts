@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real server + injected MCP tools; only the provider's planning is scripted.
 // Persisted Full grants below belong exclusively to this stopped fixture.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -58,7 +59,7 @@ it("applies requested Full Access workflows through MCP without duplicate approv
   };
   const restart = async () => {
     const env: NodeJS.ProcessEnv = {};
-    for (const [key, value] of Object.entries(process.env)) {
+    for (const [key, value] of Object.entries(compatEnv)) {
       if (["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"].includes(key.toUpperCase()) && value) env[key.toUpperCase()] = value;
     }
     Object.assign(env, {
@@ -217,3 +218,4 @@ it("applies requested Full Access workflows through MCP without duplicate approv
     await fixture.close();
   }
 }, 150_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

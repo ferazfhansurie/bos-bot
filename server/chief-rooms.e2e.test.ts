@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -12,7 +13,7 @@ type Room = { id: string; name: string; memberIds: string[]; section?: string; b
 type RpcReply = { result: { isError?: boolean; content: Array<{ text: string }> } };
 
 it("creates and manages an own-section room through the mounted Chief MCP proxy", async () => {
-  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_MODE: "hang" });
+  const fixture = await launchVerificationServer({ ...compatEnv, FAKE_CLAUDE_MODE: "hang" });
   const evidence: unknown[] = [{ fixture: fixture.info }];
   let proxy: ChildProcess | undefined;
   const control = async (args: string[]) => {
@@ -48,7 +49,7 @@ it("creates and manages an own-section room through the mounted Chief MCP proxy"
     expect(mounted.env.OMB_HARNESS_URL).toBe(fixture.info.url);
     proxy = spawn(mounted.command, mounted.args, {
       cwd: process.cwd(),
-      env: { ...mounted.env, HOME: fixture.info.dataDir, USERPROFILE: fixture.info.dataDir, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
+      env: { ...mounted.env, HOME: fixture.info.dataDir, USERPROFILE: fixture.info.dataDir, ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     const pending = new Map<number, (reply: RpcReply) => void>();
@@ -131,3 +132,4 @@ it("creates and manages an own-section room through the mounted Chief MCP proxy"
     console.info(JSON.stringify({ ...fixture.info, evidencePath, fixtureRemoved: true, exitCode: fixture.child.exitCode }));
   }
 }, 60_000);
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

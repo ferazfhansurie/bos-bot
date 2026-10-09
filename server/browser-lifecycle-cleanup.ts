@@ -112,7 +112,7 @@ function unavailableJournalError(error: Error): Error & { status: number } {
 export function requireBrowserCleanupAcknowledged(ok: boolean, target: string): void {
   if (ok) return;
   const error = Object.assign(new Error(
-    `${target} was removed, but OpenMausBot could not confirm its local browser data was erased. `
+    `${target} was removed, but BOS Bot could not confirm its local browser data was erased. `
     + "Restart the desktop app before reusing it; cleanup will retry automatically.",
   ), { status: 503 });
   throw error;
@@ -392,3 +392,4 @@ export class BrowserCleanupCoordinator {
     }
   }
 }
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery

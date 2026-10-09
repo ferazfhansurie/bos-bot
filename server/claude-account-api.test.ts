@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real HTTP boundary, disposable home/data, synthetic Claude accounts only.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -104,9 +105,9 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   child = spawn(process.execPath, ["--import", offlinePrelude, join(SERVER_DIR, "index.ts")], {
     cwd: join(SERVER_DIR, ".."),
     env: {
-      PATH: process.env.PATH,
-      ...(process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {}),
-      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      PATH: compatEnv.PATH,
+      ...(compatEnv.PATHEXT ? { PATHEXT: compatEnv.PATHEXT } : {}),
+      ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
       HOME: home, USERPROFILE: home, OMB_DATA_DIR: dataDir,
       OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_SSE_HEARTBEAT_MS: "50",
     },
@@ -268,3 +269,4 @@ describe("Claude account HTTP API", () => {
     expect(saved().instances[target.id].displayName).toBe("Validation account");
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

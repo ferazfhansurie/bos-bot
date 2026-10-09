@@ -1,3 +1,4 @@
+const { compatEnv } = require("../electron/branding-env.cjs");
 // pnpm build:server && pnpm build:companion
 // pnpm exec electron scripts/smoke-phone-relay-auth.cjs
 // Real Electron children and pairing registry, disposable home, fake engine.
@@ -61,7 +62,7 @@ app.whenReady().then(async () => {
   } }));
   const env = {
     HOME: home, USERPROFILE: home, OMB_DATA_DIR: home, PATH: "",
-    ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    ...(compatEnv.SystemRoot ? { SystemRoot: compatEnv.SystemRoot } : {}),
     OMB_PORT: String(harnessPort), OMB_WEBHOOK_PORT: String(webhookPort),
     OMB_COMPANION_PORT: String(phonePort), OMB_CONTROL_PORT: String(controlPort),
     FAKE_CLAUDE_MODE: "happy",
@@ -134,3 +135,4 @@ app.whenReady().then(async () => {
   rmSync(home, { recursive: true, force: true });
   app.exit(process.exitCode || 0);
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

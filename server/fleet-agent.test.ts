@@ -58,7 +58,7 @@ describe.skipIf(process.platform === "win32")("fleet agent over its socket", () 
 
   async function boot(m: ReturnType<typeof machine>) {
     const logs: string[] = [];
-    const server = await startFleetAgent({ socketPath, node: "/usr/bin/node", script: "/usr/lib/node_modules/openmausbot/cli.js", root: m.root, deps: m.deps, auditFile: join(m.root, "audit.jsonl"), licenseKey: "omb1.k", now: () => new Date("2026-09-10T12:00:00Z") }, { log: (line) => logs.push(line) });
+    const server = await startFleetAgent({ socketPath, node: "/usr/bin/node", script: "/usr/lib/node_modules/bosbot/cli.js", root: m.root, deps: m.deps, auditFile: join(m.root, "audit.jsonl"), licenseKey: "omb1.k", now: () => new Date("2026-09-10T12:00:00Z") }, { log: (line) => logs.push(line) });
     stop = () => new Promise((resolve) => server.close(() => resolve()));
     return logs;
   }
@@ -69,10 +69,10 @@ describe.skipIf(process.platform === "win32")("fleet agent over its socket", () 
     await boot(m);
     const created = await fleetRequest(socketPath, "POST", "/workspaces", { slug: "acme", admins: ["owner@example.test"], portalUrl: "https://admin.example.test", openrouterKey: "scoped-secret", openrouterUrl: "https://admin.example.test/api/gateway/acme/openrouter/v1", openrouterModels: ["provider/first"], openrouterDefault: true });
     expect(created.status).toBe(200);
-    const configPath = join(root, "var/lib/openmausbot/acme/.openmausbot/config.json");
+    const configPath = join(root, "var/lib/bosbot/acme/.openmausbot/config.json");
     const original = m.files.get(configPath);
     expect(JSON.parse(original!).defaultModelSelection).toEqual({ instanceId: "opencodeGo", model: `${MANAGED_OPENROUTER}/provider/first` });
-    const path = join(root, "var/lib/openmausbot/acme/.config/opencode/opencode.json");
+    const path = join(root, "var/lib/bosbot/acme/.config/opencode/opencode.json");
     const count = m.calls.length;
     expect((await fleetRequest(socketPath, "POST", "/workspaces/acme/providers", { models: ["provider/second"] })).status).toBe(200);
     expect(JSON.parse(m.files.get(path)!).provider[MANAGED_OPENROUTER]).toMatchObject({ options: { apiKey: "scoped-secret" }, models: { "provider/second": { name: "provider/second" } } });
@@ -101,15 +101,15 @@ describe.skipIf(process.platform === "win32")("fleet agent over its socket", () 
 
     const created = await fleetRequest(socketPath, "POST", "/workspaces", { slug: "acme", admins: ["ada@example.test"], members: ["@acme.test"], cap: 40, anthropicKey: "sk-ant-fixture", brandJson: '{"name":"Acme"}', portalUrl: "https://admin.example.test", anthropicUrl: "https://admin.example.test/api/gateway/acme/anthropic" });
     expect(created).toMatchObject({ status: 200, body: { ok: true, log: [expect.stringContaining("https://acme.agentada.cc is ready")] } });
-    expect(m.calls).toContain("useradd --system --create-home --home-dir " + join(root, "var/lib/openmausbot/acme") + " --shell /usr/sbin/nologin --user-group omb-acme");
-    expect(JSON.parse(m.files.get(join(root, "var/lib/openmausbot/acme/.openmausbot/config.json"))!)).toMatchObject({ anthropic: { key: "sk-ant-fixture", url: "https://admin.example.test/api/gateway/acme/anthropic" }, budgets: { monthlyUsd: 40 } });
-    expect(m.files.get(join(root, "etc/openmausbot/instances/acme.env"))).toContain("OMB_LICENSE_KEY=omb1.k");
-    expect(m.files.get(join(root, "etc/openmausbot/instances/acme.env"))).toContain("OMB_ADMIN_URL=https://admin.example.test");
-    expect(m.files.get(join(root, "etc/openmausbot/instances/acme.env"))).toContain("OMB_ADMIN_WORKSPACE=acme");
+    expect(m.calls).toContain("useradd --system --create-home --home-dir " + join(root, "var/lib/bosbot/acme") + " --shell /usr/sbin/nologin --user-group omb-acme");
+    expect(JSON.parse(m.files.get(join(root, "var/lib/bosbot/acme/.openmausbot/config.json"))!)).toMatchObject({ anthropic: { key: "sk-ant-fixture", url: "https://admin.example.test/api/gateway/acme/anthropic" }, budgets: { monthlyUsd: 40 } });
+    expect(m.files.get(join(root, "etc/bosbot/instances/acme.env"))).toContain("OMB_LICENSE_KEY=omb1.k");
+    expect(m.files.get(join(root, "etc/bosbot/instances/acme.env"))).toContain("OMB_ADMIN_URL=https://admin.example.test");
+    expect(m.files.get(join(root, "etc/bosbot/instances/acme.env"))).toContain("OMB_ADMIN_WORKSPACE=acme");
 
     // The fixture's ledger is summarized by the mocked unprivileged-usage seam.
     // The filesystem suite exercises the real privilege-dropped child.
-    const dataDir = join(root, "var/lib/openmausbot/acme/.openmausbot");
+    const dataDir = join(root, "var/lib/bosbot/acme/.openmausbot");
     mkdirSync(dataDir, { recursive: true });
     appendUsage(dataDir, { at: "2026-09-03T10:00:00.000Z", botId: "b", botName: "B", threadId: "t", instanceId: "claude", driverKind: "claudeAgent", model: "m", input: 10, output: 5, costUsd: 0.25, trigger: { kind: "owner" } });
     appendUsage(dataDir, { at: "2026-08-03T10:00:00.000Z", botId: "b", botName: "B", threadId: "t", instanceId: "claude", driverKind: "claudeAgent", model: "m", input: 10, output: 5, costUsd: 9, trigger: { kind: "owner" } });
@@ -260,3 +260,4 @@ describe.skipIf(process.platform === "win32")("fleet agent over its socket", () 
     expect((await fleetRequest(socketPath, "GET", "/health")).status).toBe(200);
   });
 });
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; fleet-service: existing launchd/systemd units, fleet roots and firewall tables continue addressing the same installation; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

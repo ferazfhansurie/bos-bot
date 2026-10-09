@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real HTTP boundary with a disposable home and synthetic provider responses.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { request } from 'node:http';
@@ -51,7 +52,7 @@ globalThis.fetch=async(url,init={})=>{
  return json({error:'offline fixture'},503);
 };`);
  const port=await freePortBlock([0,1]);base=`http://127.0.0.1:${port}`;
- child=spawn(process.execPath,['--import',pathToFileURL(prelude).href,join(serverDir,'index.ts')],{cwd:join(serverDir,'..'),env:{PATH:process.env.PATH,...(process.env.PATHEXT?{PATHEXT:process.env.PATHEXT}:{}),...(process.env.SystemRoot?{SystemRoot:process.env.SystemRoot}:{}),HOME:home,USERPROFILE:home,OMB_DATA_DIR:dataDir,OMB_PORT:String(port),OMB_WEBHOOK_PORT:String(port+1),BOS_FREE_URL:'https://relay.fixture.invalid/api/v1'},stdio:['ignore','pipe','pipe']});
+ child=spawn(process.execPath,['--import',pathToFileURL(prelude).href,join(serverDir,'index.ts')],{cwd:join(serverDir,'..'),env:{PATH:compatEnv.PATH,...(compatEnv.PATHEXT?{PATHEXT:compatEnv.PATHEXT}:{}),...(compatEnv.SystemRoot?{SystemRoot:compatEnv.SystemRoot}:{}),HOME:home,USERPROFILE:home,OMB_DATA_DIR:dataDir,OMB_PORT:String(port),OMB_WEBHOOK_PORT:String(port+1),BOS_FREE_URL:'https://relay.fixture.invalid/api/v1'},stdio:['ignore','pipe','pipe']});
  child.stdout?.resume();child.stderr?.on('data',chunk=>{stderr=(stderr+chunk).slice(-16384);});
  const deadline=Date.now()+20000;
  for(;;){if(child.exitCode!==null)throw Error(stderr);try{if((await api('GET','/api/health')).body.pid===child.pid)break;}catch{}if(Date.now()>deadline)throw Error('fixture start timeout: '+stderr);await new Promise(resolve=>setTimeout(resolve,100));}
@@ -145,3 +146,4 @@ it('start free moves idle bots off engines that cannot run, keeps working ones',
  expect(bots.find((x:any)=>x.id===stuck.body.bot.id).modelSelection).toMatchObject({instanceId:'bos-free',model:'openrouter/free'});
  expect(bots.find((x:any)=>x.id===working.body.bot.id).modelSelection.instanceId).toBe('claude');
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

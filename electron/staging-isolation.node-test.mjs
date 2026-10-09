@@ -1,3 +1,4 @@
+import { compatEnv } from "./branding-env.cjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, realpathSync, rmSync } from 'node:fs';
@@ -16,7 +17,7 @@ test('packaged staging overrides inherited live paths and separates all listener
     for (const file of ['staging-bootstrap.mjs', 'release-channel.mjs', 'package-link.mjs']) copyFileSync(new URL(file, import.meta.url), join(root,'electron',file));
     const script = `import './electron/staging-bootstrap.mjs'; import {app} from 'electron'; import * as p from './electron/release-channel.mjs'; import {packageUrlFromDeepLink} from './electron/package-link.mjs'; console.log(JSON.stringify({ paths: app.paths, name: app.name, data:process.env.OMB_DATA_DIR, companion:process.env.OMB_COMPANION_DIR, migration:process.env.OMB_DISABLE_LEGACY_MIGRATION, webhook:process.env.OMB_WEBHOOK_PORT, ports:p.SERVER_PORTS, relay:p.RELAY_PORTS, control:p.CONTROL_PORT, phone:p.COMPANION_PORT, liveLink:packageUrlFromDeepLink('openmausbot://install?url=https://github.com/a/b.md'), stageLink:packageUrlFromDeepLink('bosbot-staging://install?url=https://github.com/a/b.md')}));`;
     writeFileSync(join(root,'test.mjs'),script);
-    const result = JSON.parse(execFileSync(process.execPath,[join(root,'test.mjs')],{env:{...process.env,OMB_DATA_DIR:'/live',OMB_COMPANION_DIR:'/live-phone',OMB_WEBHOOK_PORT:'8800'},encoding:'utf8'}));
+    const result = JSON.parse(execFileSync(process.execPath,[join(root,'test.mjs')],{env:{...compatEnv,OMB_DATA_DIR:'/live',OMB_COMPANION_DIR:'/live-phone',OMB_WEBHOOK_PORT:'8800'},encoding:'utf8'}));
     assert.equal(result.data,join(root,'.bos-bot-staging'));
     assert.equal(result.companion,join(root,'.bos-bot-staging/companion'));
     assert.equal(result.paths.userData,join(root,'BOS Staging'));
@@ -54,3 +55,4 @@ test('staging file saves accept own files and reject live files', async () => {
     await assert.rejects(resolveSavablePath(live,{home:root,dataDir}),/Only files/);
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

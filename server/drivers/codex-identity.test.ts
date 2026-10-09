@@ -104,3 +104,4 @@ describe("Codex account identity", () => {
     expectStopped();
   });
 });
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight

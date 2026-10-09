@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real chat renderer and harness; offline, scripted Codex protocol only.
 // No user data, provider credentials or authenticated inference are involved.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -32,9 +33,10 @@ try {
   });
   const info = { ...fixture.info, launcherPid: process.pid, previewUrl: ui.previewUrl };
   console.log(JSON.stringify(info));
-  if (process.env.OMB_HELPER_EVIDENCE) writeFileSync(process.env.OMB_HELPER_EVIDENCE, JSON.stringify(info, null, 2));
+  if (compatEnv.OMB_HELPER_EVIDENCE) writeFileSync(compatEnv.OMB_HELPER_EVIDENCE, JSON.stringify(info, null, 2));
   await parkUntilSignal();
 } finally {
   await ui?.close();
   await fixture.close();
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

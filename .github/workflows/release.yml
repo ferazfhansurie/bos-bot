@@ -184,7 +184,7 @@ jobs:
           }
           console.log(`ok: ${Object.keys(SPAWNED_PROXIES).length} proxies resolve in ${server}`);
           EOF
-            for bin in "$res/cua-driver" "$res/OpenMausBot Speech.app/Contents/MacOS/speech-helper"; do
+            for bin in "$res/cua-driver" "$res/BOS Bot Speech.app/Contents/MacOS/speech-helper"; do
               lipo -archs "$bin" | grep -q "x86_64" || { echo "::error::$bin lacks x86_64"; exit 1; }
               lipo -archs "$bin" | grep -q "arm64" || { echo "::error::$bin lacks arm64"; exit 1; }
             done
@@ -622,3 +622,4 @@ jobs:
           GH_TOKEN="$CANONICAL_TOKEN" gh release view "v$VERSION" \
             --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft | grep -q false
           echo "BOS v$VERSION published on the verified canonical feed"
+# branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

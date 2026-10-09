@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const root = mkdtempSync(join(tmpdir(), "omb-attachment-pruning-"));
-process.env.OMB_DATA_DIR = root;
+compatEnv.OMB_DATA_DIR = root;
 vi.resetModules();
 const { ATTACHMENTS_DIR, ATTACHMENTS_MAX_BYTES, __resetAttachmentAccountingForTests, saveImage, saveFile } = await import("./attachments.ts");
 const names = [1, 2, 3, 4, 5, 6].map(n => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}.png`);
@@ -70,3 +71,4 @@ it("fails closed when persisted reference data cannot be read", () => {
   expect(() => saveImage(Buffer.from("new"), "image/png")).toThrow(/could not verify.*retry/i);
   expect(existsSync(old)).toBe(true);
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

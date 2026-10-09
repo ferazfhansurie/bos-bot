@@ -268,3 +268,4 @@ describe("redactSecretsInText", () => {
     expect(redactSecrets(once)).toEqual(once);
   });
 });
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

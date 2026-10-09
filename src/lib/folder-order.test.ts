@@ -27,3 +27,4 @@ describe("folder ordering", () => {
     expect(FOLDER_DRAG_TYPE).not.toBe("application/x-openmausbot-sidebar-section");
   });
 });
+// branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1

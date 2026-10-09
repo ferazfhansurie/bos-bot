@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -69,7 +70,7 @@ it("retains empty teams, moves existing bots, and keeps legacy imports additive 
     await waitForExit(fixture.child, { signal: "SIGTERM" });
     const env: NodeJS.ProcessEnv = {};
     for (const key of ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL", "TZ"]) {
-      if (process.env[key]) env[key] = process.env[key];
+      if (compatEnv[key]) env[key] = compatEnv[key];
     }
     Object.assign(env, {
       HOME: dataDir, USERPROFILE: dataDir, OMB_DATA_DIR: dataDir,
@@ -143,3 +144,4 @@ it("retains empty teams, moves existing bots, and keeps legacy imports additive 
     console.info(JSON.stringify({ ...fixture.info, evidencePath, fixtureRemoved: true }));
   }
 }, 60_000);
+// branding compatibility (electron/branding-compat.json): wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

@@ -1,3 +1,4 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Real ToolsPanel in disposable Electron windows: a 1.6 shell (production
 // preload, webviewTag, tools-browser hardening) and a pre-1.6 shell (no
 // webviewTag, an older preload without the tools-browser partition).
@@ -79,7 +80,7 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
       result.tabTitles = await evaluate("[...document.querySelectorAll('button.truncate')].map(b => b.textContent.trim())");
       await shot("browser");
       console.error(`[${shell}] loaded`, JSON.stringify(result));
-      if (result.loaded && !process.env.SKIP_APP_ORIGIN) {
+      if (result.loaded && !compatEnv.SKIP_APP_ORIGIN) {
         await go(new URL(url).origin + "/");
         await new Promise((r) => setTimeout(r, 1200));
         result.appOriginBlockedUrl = guest()?.getURL() ?? null;
@@ -101,7 +102,7 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   const base = baseAt >= 0 ? args.splice(baseAt, 2)[1] : null;
   const oldPreload = args[0];
   assert.ok(oldPreload, "pass the pre-1.6 preload.cjs (e.g. extracted from an installed app.asar)");
-  const output = process.env.OMB_FIXTURE_OUTPUT ?? mkdtempSync(join(tmpdir(), "omb-tools-panel-"));
+  const output = compatEnv.OMB_FIXTURE_OUTPUT ?? mkdtempSync(join(tmpdir(), "omb-tools-panel-"));
   mkdirSync(output, { recursive: true });
   const userData = join(output, "user-data");
   const { build } = await import("esbuild");
@@ -136,7 +137,7 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   const pageUrl = `http://127.0.0.1:${page.address().port}/`;
   const electron = join(root, "node_modules/.bin/electron");
   // A host app may export ELECTRON_RUN_AS_NODE; the fixture needs a real Electron app.
-  const { ELECTRON_RUN_AS_NODE: _runAsNode, ...env } = process.env;
+  const { ELECTRON_RUN_AS_NODE: _runAsNode, ...env } = compatEnv;
   const variant = base ? "base" : "fix";
   // One Electron process per shell, so the two windows never share a session.
   const results = {};
@@ -167,3 +168,4 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   }
   console.log(`tools panel fixture passed (${base ? `base ${base}` : "working tree"}); evidence in ${output}`);
 }
+// branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

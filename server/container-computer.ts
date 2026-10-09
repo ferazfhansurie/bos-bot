@@ -1,6 +1,7 @@
+import { compatEnv } from "../electron/branding-env.cjs";
 // Cua-backed Local VM lifecycle and health checks.
 //
-// OpenMausBot owns only the sandbox boundary: image preparation, container
+// BOS Bot owns only the sandbox boundary: image preparation, container
 // lifecycle, resource limits, loopback viewer, and target-scoped lease in the
 // harness. Desktop automation itself is Cua Driver. Agents connect directly to
 // `cua-driver mcp` inside the container; this module never reimplements clicks,
@@ -214,7 +215,7 @@ async function sh(cmd: string, args: string[], timeout = 8000): Promise<{ stdout
     timeout,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, PATH: augmentedPath() },
+    env: { ...compatEnv, PATH: augmentedPath() },
   });
   return { stdout };
 }
@@ -381,7 +382,7 @@ function statusProblem(status: ContainerComputerStatus): string | null {
   }
   if (status.container === "missing") return "Create the Local VM";
   if (!status.imageMatches) return "The existing Local VM uses an older desktop or Cua Driver; recreate it";
-  if (!status.managed) return "The existing container was not created by OpenMausBot; recreate it";
+  if (!status.managed) return "The existing container was not created by BOS Bot; recreate it";
   if (status.network === "unsafe") return "The existing Local VM exposes its viewer publicly; recreate it";
   if (status.security === "unsafe") return "The existing Local VM is missing safety limits; recreate it";
   if (status.persistence === "unsafe") return "The existing Local VM is missing its durable workspace; recreate it";
@@ -403,7 +404,7 @@ export function imageLabelsMatch(labels: Record<string, string> | undefined): bo
 }
 
 /** Ownership is intentionally independent of the current image/driver
- * versions. An older OpenMausBot container must stay removable (and eligible
+ * versions. An older BOS Bot container must stay removable (and eligible
  * for idle cleanup), while imageMatches keeps readiness version-strict. */
 function containerOwnershipLabelsMatch(
   labels: Record<string, string> | undefined,
@@ -504,7 +505,7 @@ export async function containerComputerStatus(
     status.image = imageLabelsMatch(image.labels);
     status.image_id = image.id;
   } catch {
-    // The prepared OpenMausBot derivative has not been built yet.
+    // The prepared BOS Bot derivative has not been built yet.
   }
 
   try {
@@ -617,7 +618,7 @@ export async function containerComputerStatus(
       ) {
         throw new Error(`Cua health report is ${report.overall ?? "invalid"}`);
       }
-      const readinessShot = "/tmp/openmausbot-readiness.png";
+      const readinessShot = "/tmp/bosbot-readiness.png";
       await runner(
         status.runtime,
         cuaExecArgs([
@@ -962,7 +963,7 @@ async function ensureVmWorkspace(platform: NodeJS.Platform, target: LocalVmTarge
 
 async function prepareManagedImage(runtime: Runtime, runner: CommandRunner): Promise<void> {
   await runner(runtime, ["pull", BASE_IMAGE], 10 * 60_000);
-  const context = await mkdtemp(join(tmpdir(), "openmausbot-cua-image-"));
+  const context = await mkdtemp(join(tmpdir(), "bosbot-cua-image-"));
   try {
     await writeFile(join(context, "Dockerfile"), managedImageDockerfile(), { mode: 0o600 });
     await runner(runtime, ["build", "-t", IMAGE, context], 10 * 60_000);
@@ -1004,7 +1005,7 @@ export async function containerComputerAction(
   if (action === "remove" && !before.managed) {
     throw Object.assign(
       new Error(
-        `The existing container named ${target.containerName} was not created by OpenMausBot; remove it manually in ${runtime}`,
+        `The existing container named ${target.containerName} was not created by BOS Bot; remove it manually in ${runtime}`,
       ),
       { status: 409 },
     );
@@ -1081,7 +1082,7 @@ export async function containerComputerFrame(
   }
   if (cacheable) screenshotStatusCache.set(target.key, { status, expiresAt: now + SCREENSHOT_STATUS_TTL_MS });
   try {
-    const screenshot = "/tmp/openmausbot-preview.png";
+    const screenshot = "/tmp/bosbot-preview.png";
     await runner(
       status.runtime,
       cuaExecArgs([
@@ -1207,4 +1208,4 @@ export function setupCommands(
     view: target.viewerPort ? `http://127.0.0.1:${target.viewerPort}/vnc.html` : "",
   };
 }
-
+// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; container-identity: existing managed containers, labels and pinned image entry points remain recognized; local-container-name: existing local VM container remains recognizable rather than becoming an orphan; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

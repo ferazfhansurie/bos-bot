@@ -81,7 +81,7 @@ export function ConnectedWorkspacesSettings() {
         </ul>}
     </Card>
     {sharingOffered && computerWorkspace && <ComputerSharingSettings key={computerWorkspace.id} workspace={computerWorkspace} onClose={() => setComputerId(null)} />}
-    <Card title="Connect hosted workspace" subtitle="Already running OpenMausBot on a VPS, server, or another computer? Connect it here.">
+    <Card title="Connect hosted workspace" subtitle="Already running BOS Bot on a VPS, server, or another computer? Connect it here.">
       <form className="flex flex-col gap-3" onSubmit={(event) => {
         event.preventDefault();
         if (address.trim()) void perform(() => bridge.addFromLink(address.trim(), name.trim()));
@@ -98,7 +98,7 @@ export function ConnectedWorkspacesSettings() {
         <p className="text-[12px] leading-relaxed text-ink-secondary">Paste a pairing link from your server’s Settings → Remote access, or enter its address and sign in there. Your desktop stays connected afterward.</p>
         <details className="text-[12px] text-ink-secondary"><summary className="cursor-pointer">Need a pairing code?</summary>
           <p className="mt-2">Run this on the server and copy the link it prints:</p>
-          <code className="mt-1 block select-all break-words rounded-md bg-inset px-2 py-2 text-ink">npx openmausbot pair --label "My desktop"</code>
+          <code className="mt-1 block select-all break-words rounded-md bg-inset px-2 py-2 text-ink">npx bosbot pair --label "My desktop"</code>
         </details>
         {error && <p role="alert" className="text-[12px] text-danger">{error}</p>}
         <button type="submit" disabled={busy || !address.trim()} className="flex w-fit items-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink disabled:opacity-50">

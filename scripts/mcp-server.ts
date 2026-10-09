@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Model Context Protocol (MCP) Server for OpenMausBot
+import { compatEnv } from "../electron/branding-env.cjs";
+// Model Context Protocol (MCP) Server for BOS Bot
 // Standard JSON-RPC 2.0 stdio transport for external agent orchestration (Hermes, Claude Desktop, Cursor, etc.).
 import readline from "node:readline";
 
@@ -9,20 +10,20 @@ export function validateBaseUrl(url: string): string {
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new Error(`Invalid OpenMausBot URL: '${url}'`);
+    throw new Error(`Invalid BOS Bot URL: '${url}'`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("OpenMausBot URL must use http:// or https://");
+    throw new Error("BOS Bot URL must use http:// or https://");
   }
   if (parsed.username || parsed.password) {
-    throw new Error("OpenMausBot URL must not contain credentials; use OPENMAUSBOT_TOKEN instead");
+    throw new Error("BOS Bot URL must not contain credentials; use OPENMAUSBOT_TOKEN instead");
   }
   if ((parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
-    throw new Error("OpenMausBot URL must be an origin without a path, query, or fragment");
+    throw new Error("BOS Bot URL must be an origin without a path, query, or fragment");
   }
   const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const isLoopback = hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
-  if (parsed.protocol === "http:" && !isLoopback && process.env.ALLOW_INSECURE_HTTP !== "true") {
+  if (parsed.protocol === "http:" && !isLoopback && compatEnv.ALLOW_INSECURE_HTTP !== "true") {
     throw new Error(
       `Insecure cleartext HTTP origin '${parsed.origin}' is rejected. Use https:// or set ALLOW_INSECURE_HTTP=true.`,
     );
@@ -30,8 +31,8 @@ export function validateBaseUrl(url: string): string {
   return parsed.origin;
 }
 
-const configuredUrl = process.env.OPENMAUSBOT_URL ||
-  (process.env.OMB_PORT ? `http://127.0.0.1:${process.env.OMB_PORT}` : undefined);
+const configuredUrl = compatEnv.OPENMAUSBOT_URL ||
+  (compatEnv.OMB_PORT ? `http://127.0.0.1:${compatEnv.OMB_PORT}` : undefined);
 
 export const OMB_BASE_URL = validateBaseUrl(configuredUrl || "http://127.0.0.1:8799");
 const DISCOVERY_URLS = configuredUrl
@@ -40,18 +41,18 @@ const DISCOVERY_URLS = configuredUrl
 let discoveredBaseUrl: string | undefined;
 
 export function log(msg: string) {
-  process.stderr.write(`[openmausbot-mcp] ${msg}\n`);
+  process.stderr.write(`[bosbot-mcp] ${msg}\n`);
 }
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 function requestTimeoutMs(): number {
-  const raw = Number(process.env.OPENMAUSBOT_MCP_TIMEOUT_MS);
+  const raw = Number(compatEnv.OPENMAUSBOT_MCP_TIMEOUT_MS);
   return Number.isFinite(raw) && raw >= 1_000 && raw <= 120_000 ? Math.floor(raw) : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 function requestHeaders(options: RequestInit): NonNullable<RequestInit["headers"]> {
-  const token = process.env.OPENMAUSBOT_TOKEN?.trim();
+  const token = compatEnv.OPENMAUSBOT_TOKEN?.trim();
   const headers = new Headers(options.headers);
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
@@ -68,18 +69,18 @@ async function fetchJson(url: string, options: RequestInit = {}): Promise<any> {
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    if (response.status === 403 && !process.env.OPENMAUSBOT_TOKEN?.trim()) {
+    if (response.status === 403 && !compatEnv.OPENMAUSBOT_TOKEN?.trim()) {
       throw new Error(
-        "OpenMausBot refused this write because the installed desktop app requires a paired session token. " +
+        "BOS Bot refused this write because the installed desktop app requires a paired session token. " +
         "Set OPENMAUSBOT_TOKEN as described in docs/mcp-server.md.",
       );
     }
-    throw new Error(`OpenMausBot API error (${response.status}): ${text || response.statusText}`);
+    throw new Error(`BOS Bot API error (${response.status}): ${text || response.statusText}`);
   }
   try {
     return await response.json();
   } catch {
-    throw new Error(`OpenMausBot API returned a non-JSON response from ${url}`);
+    throw new Error(`BOS Bot API returned a non-JSON response from ${url}`);
   }
 }
 
@@ -92,7 +93,7 @@ export async function probeBaseUrls(candidates: string[]): Promise<string> {
         signal: AbortSignal.timeout(Math.min(requestTimeoutMs(), 2_000)),
       });
       if (health?.app !== "openmausbot") {
-        failures.push(`${candidate} answered, but it was not OpenMausBot`);
+        failures.push(`${candidate} answered, but it was not BOS Bot`);
         continue;
       }
       return candidate;
@@ -100,12 +101,12 @@ export async function probeBaseUrls(candidates: string[]): Promise<string> {
       failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  throw new Error(`Could not find a running OpenMausBot server. ${failures.join("; ")}`);
+  throw new Error(`Could not find a running BOS Bot server. ${failures.join("; ")}`);
 }
 
 export async function resolveBaseUrl(): Promise<string> {
   if (discoveredBaseUrl) return discoveredBaseUrl;
-  if (process.env.OPENMAUSBOT_TOKEN?.trim() && !configuredUrl) {
+  if (compatEnv.OPENMAUSBOT_TOKEN?.trim() && !configuredUrl) {
     throw new Error("Set OPENMAUSBOT_URL or OMB_PORT when using OPENMAUSBOT_TOKEN so credentials are never sent during port discovery");
   }
   discoveredBaseUrl = await probeBaseUrls(DISCOVERY_URLS);
@@ -144,7 +145,7 @@ const AGENT_ACTION = { readOnlyHint: false, destructiveHint: true, idempotentHin
 export const TOOLS: McpToolDefinition[] = [
   {
     name: "get_system_health",
-    description: "Check whether the OpenMausBot server is reachable.",
+    description: "Check whether the BOS Bot server is reachable.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -550,7 +551,7 @@ function optionalStringArg(
 
 function idArg(args: Record<string, unknown>, key: string): string {
   const value = stringArg(args, key);
-  if (!/^[\w-]+$/.test(value)) throw new ToolInputError(`${key} is not a valid OpenMausBot ID`);
+  if (!/^[\w-]+$/.test(value)) throw new ToolInputError(`${key} is not a valid BOS Bot ID`);
   return value;
 }
 
@@ -793,7 +794,7 @@ export async function handleToolCall(
   switch (name) {
     case "get_system_health": {
       const res = await fetcher("/api/health");
-      if (res?.app !== "openmausbot") throw new Error("The configured endpoint is not an OpenMausBot server");
+      if (res?.app !== "openmausbot") throw new Error("The configured endpoint is not an BOS Bot server");
       return {
         status: "connected",
         endpoint: discoveredBaseUrl ?? OMB_BASE_URL,
@@ -864,7 +865,7 @@ export async function handleToolCall(
         }),
       });
       if (!isRecord(created?.bot) || typeof created.bot.id !== "string") {
-        throw new Error("OpenMausBot did not return the created bot");
+        throw new Error("BOS Bot did not return the created bot");
       }
       return { success: true, bot: projectBot(created.bot) };
     }
@@ -882,7 +883,7 @@ export async function handleToolCall(
         body: JSON.stringify(patch),
       });
       if (!isRecord(result?.bot)) {
-        throw new Error("OpenMausBot did not return the updated bot");
+        throw new Error("BOS Bot did not return the updated bot");
       }
       return { success: true, bot: projectBot(result.bot) };
     }
@@ -949,7 +950,7 @@ export async function handleToolCall(
         }),
       });
       if (!isRecord(created?.group) || typeof created.group.id !== "string") {
-        throw new Error("OpenMausBot did not return the created channel");
+        throw new Error("BOS Bot did not return the created channel");
       }
       return { success: true, channel: projectChannel(created.group) };
     }
@@ -973,7 +974,7 @@ export async function handleToolCall(
         body: JSON.stringify(patch),
       });
       if (!isRecord(result?.group)) {
-        throw new Error("OpenMausBot did not return the updated channel");
+        throw new Error("BOS Bot did not return the updated channel");
       }
       return { success: true, channel: projectChannel(result.group) };
     }
@@ -984,7 +985,7 @@ export async function handleToolCall(
       const route = taskRoute(args.target_type, targetId);
       const result = await fetcher(route, { method: "POST", body: JSON.stringify(title ? { title } : {}) });
       if (!isRecord(result?.task) || typeof result.task.threadId !== "string") {
-        throw new Error("OpenMausBot did not return the created task");
+        throw new Error("BOS Bot did not return the created task");
       }
       const activeTaskId = result.bot?.threadId ?? result.group?.threadId ?? result.task?.threadId;
       return {
@@ -1022,7 +1023,7 @@ export async function handleToolCall(
         body: JSON.stringify({ title }),
       });
       if (!isRecord(result?.task)) {
-        throw new Error("OpenMausBot did not return the renamed task");
+        throw new Error("BOS Bot did not return the renamed task");
       }
       return {
         success: true,
@@ -1147,7 +1148,7 @@ export async function handleToolCall(
           method: "PATCH",
           body: JSON.stringify({ modelSelection: selection, requireAvailableModel: true }),
         });
-        if (!isRecord(res?.task)) throw new Error("OpenMausBot did not return the updated task");
+        if (!isRecord(res?.task)) throw new Error("BOS Bot did not return the updated task");
         return { success: true, botId, task: projectTask(res.task, bot.threadId) };
       }
       if (bot.busy) throw new Error("Interrupt the bot or let it finish before changing its model");
@@ -1318,10 +1319,10 @@ export async function processMcpMessage(
           tools: {},
         },
         serverInfo: {
-          name: "openmausbot-mcp",
+          name: "bosbot-mcp",
           version: "1.1.0",
         },
-        instructions: "Use bounded read tools before mutating the OpenMausBot team. Approval grants, deletion, and computer lifecycle are intentionally unavailable.",
+        instructions: "Use bounded read tools before mutating the BOS Bot team. Approval grants, deletion, and computer lifecycle are intentionally unavailable.",
       });
     }
 
@@ -1445,5 +1446,6 @@ if (process.argv[1] && (process.argv[1].endsWith("mcp-server.ts") || process.arg
     process.exitCode = 0;
   });
 
-  log("OpenMausBot MCP server running on stdio");
+  log("BOS Bot MCP server running on stdio");
 }
+// branding compatibility (electron/branding-compat.json): health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling

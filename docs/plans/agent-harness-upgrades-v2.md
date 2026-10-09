@@ -1,4 +1,4 @@
-# OpenMausBot Harness Upgrades v2 Implementation Plan
+# BOS Bot Harness Upgrades v2 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -6,7 +6,7 @@
 resilience and visibility primitives, and unlock local models — in an order
 where each round pays for the next.
 
-**Architecture:** OpenMausBot is itself a harness; `server/store.ts` is the
+**Architecture:** BOS Bot is itself a harness; `server/store.ts` is the
 canonical cross-engine record and every path that turns it back into model
 context is load-bearing. This plan keeps v1's reframe and rounds, but corrects
 its scope against the code as it actually is today: two items were partly
@@ -386,3 +386,4 @@ git commit -m "fix: rebuild context when a bot's engine switches mid-thread"
 - v1 coverage: every v1 item appears above as carried (1,3,4,5,6,7,8,11,13,14,15,16→3.1,17→3.2), rescoped (2→1.6/3.5, 9→2.8+3.3, 10→2.4), promoted (open question 1→1.4), or deferred with cause (12). Deferred list carried whole.
 - Task 1's `resume` flag deliberately reproduces today's cursor semantics; the only behaviour change is the `fresh` replay path.
 - Follow-on tasks (1.2 onward) get their own bite-sized plans as they are picked up, per the scope check — each is an independent subsystem with its own test cycle.
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data -->
