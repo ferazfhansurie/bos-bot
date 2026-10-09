@@ -173,6 +173,20 @@ describe("team manifests", () => {
     ).toThrow("appearance.color");
   });
 
+  it("accepts a custom #RRGGBB colour, uppercased, and rejects short hex", () => {
+    const team = (color: string) => ({
+      format: "openmaus.team",
+      version: 1,
+      team: {
+        name: "Hex",
+        members: [{ key: "one", name: "One", appearance: { color } }],
+        room: { name: "Hex", bulletin: "", defaultResponder: { kind: "everyone" } },
+      },
+    });
+    expect(parseTeamManifest(team("#a1b2c3")).team.members[0].appearance.color).toBe("#A1B2C3");
+    expect(() => parseTeamManifest(team("#abc"))).toThrow("appearance.color");
+  });
+
   it("drops privileged fields a hand-edited file smuggles onto a member", () => {
     const manifest = parseTeamManifest({
       format: "openmaus.team",

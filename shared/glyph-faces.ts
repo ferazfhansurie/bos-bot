@@ -206,6 +206,15 @@ export function resolveMausColor(color: string | null | undefined): string {
   return MAUS_COLORS.green;
 }
 
+/** A bot colour as stored: a palette name stays as is, a 6-digit hex is
+ * uppercased, anything else is null (rejected at the API boundary). */
+export function normalizeMausColor(color: unknown): string | null {
+  if (typeof color !== "string") return null;
+  if (NAMED_COLORS.has(color)) return color;
+  if (HEX_COLOR.test(color)) return color.toUpperCase();
+  return null;
+}
+
 function relativeLuminance(hex: string): number {
   const channel = (offset: number) => {
     const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;

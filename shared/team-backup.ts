@@ -7,7 +7,7 @@ export const TEAM_BACKUP_EXCLUSIONS = "Files, images, custom avatars, account co
 const key = z.string().min(1).max(200);
 const name = z.string().trim().min(1).max(200);
 const timestamp = z.number().finite().nonnegative();
-const color = z.enum(["green", "blue", "red", "orange", "purple", "cyan", "pink", "yellow", "teal", "coral", "white", "brown", "gray"]);
+const color = z.union([z.enum(["green", "blue", "red", "orange", "purple", "cyan", "pink", "yellow", "teal", "coral", "white", "brown", "gray"]), z.string().regex(/^#[0-9A-Fa-f]{6}$/).transform((hex) => hex.toUpperCase() as `#${string}`)]);
 const message = z.object({
   id: key,
   role: z.enum(["bot", "user"]),

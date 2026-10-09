@@ -5,7 +5,7 @@ import { CURSOR_STATES } from "../src/components/CursorAvatar";
 import { MAUS_MOTIONS } from "../src/lib/mascot";
 import {
   GLYPH_FACES, GLYPH_FACE_STATES, GLYPH_IDS, GLYPH_LAYOUT, GLYPH_PATHS, GLYPH_STROKE, GLYPH_TILT_DEG,
-  MAUS_COLORS, MAUS_COLOR_NAMES, glyphFacesDocument, glyphFacesJson, glyphInk, glyphStateFor, resolveMausColor,
+  MAUS_COLORS, MAUS_COLOR_NAMES, glyphFacesDocument, glyphFacesJson, glyphInk, glyphStateFor, normalizeMausColor, resolveMausColor,
 } from "./glyph-faces";
 import { MASCOT_EYE_IDS, MASCOT_EYE_STYLES, botMascotEyes, mascotEyesSchema } from "./mascot-eyes";
 import type { MascotGesture } from "./mascot-choreography";
@@ -201,6 +201,14 @@ describe("glyphInk", () => {
     expect(glyphInk("#767676")).toBe("#000000");
     expect(glyphInk("white")).toBe("#000000");
     expect(glyphInk("junk")).toBe(glyphInk("#009957"));
+  });
+});
+
+describe("any colour", () => {
+  it("stores palette names as is, hex uppercased, and rejects the rest", () => {
+    expect(normalizeMausColor("teal")).toBe("teal");
+    expect(normalizeMausColor("#a1b2c3")).toBe("#A1B2C3");
+    for (const bad of ["#abc", "a1b2c3", "#GGGGGG", "Teal", "", null, 7]) expect(normalizeMausColor(bad)).toBeNull();
   });
 });
 

@@ -55,7 +55,7 @@ const memberSchema = z.object({
     error: "standing instructions must be at most 24000 bytes",
   }).optional(),
   appearance: z.object({
-    color: z.enum(COLORS, { error: "is not supported" }),
+    color: z.union([z.enum(COLORS), z.string().regex(/^#[0-9A-Fa-f]{6}$/).transform((hex) => hex.toUpperCase() as MausColor)], { error: "is not supported" }),
     mascotExpression: optionalText(80),
     mascotBody: optionalText(40),
     mascotEyes: optionalText(40),

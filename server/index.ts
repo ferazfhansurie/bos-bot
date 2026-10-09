@@ -535,6 +535,7 @@ import {
   sessionCookieName,
 } from "./request-auth.ts";
 import { cookieMaxAgeSeconds, formatPairingCode, SessionRegistry, type Scope } from "./sessions.ts";
+import { normalizeMausColor } from "../shared/glyph-faces.ts";
 import { describeBrand, loadBrand } from "./brand.ts";
 import { deliverSseFrame } from "./sse-fanout.ts";
 import {
@@ -19412,6 +19413,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           else if (trimmed.length > 60) return json(res, 400, { error: "section must be at most 60 characters" });
           else section = trimmed;
         }
+      }
+      if (body.color !== undefined) {
+        const color = normalizeMausColor(body.color);
+        if (!color) return json(res, 400, { error: "color must be a palette name or #RRGGBB" });
+        body.color = color;
       }
       for (const key of ["unread", "cloudBackend", "color", "mascotExpression", "mascotBody", "mascotEyes", "pinned", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
