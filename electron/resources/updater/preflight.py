@@ -4,7 +4,9 @@ import json, os, plistlib, re, subprocess, urllib.request
 
 PAT = re.compile(r"bos|openmausbot", re.I)
 MAIN = "/Contents/MacOS/BOS Bot"
-HEALTH = "http://127.0.0.1:8799/api/health"
+# server moved 8799 -> 18799 (seen 2026-10-07, see bin/bos-restart-guard.py); probe both
+HEALTH_PORTS = (18799, 8799)
+HEALTH = f"http://127.0.0.1:{HEALTH_PORTS[0]}/api/health"
 
 def sh(*a):
     try:
@@ -50,22 +52,26 @@ def launchd():
 
 def ports():
     out = {}
-    for port in (8799, 8812):
+    for port in (*HEALTH_PORTS, 8812):
         rows = sh("lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN").splitlines()[1:]
         out[str(port)] = [{"cmd": r.split()[0], "pid": int(r.split()[1])} for r in rows]
     return out
 
 def health():
-    try:
-        with urllib.request.urlopen(HEALTH, timeout=5) as r:
-            body = r.read(2000).decode(errors="replace")
-            try:
-                data = json.loads(body)
-            except Exception:
-                data = None
-            return {"url": HEALTH, "status": r.status, "body": data or body}
-    except Exception as e:
-        return {"url": HEALTH, "status": None, "error": str(e)}
+    last_error = "no health port configured"
+    for port in HEALTH_PORTS:
+        url = f"http://127.0.0.1:{port}/api/health"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:
+                body = r.read(2000).decode(errors="replace")
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = None
+                return {"url": url, "status": r.status, "body": data or body}
+        except Exception as e:
+            last_error = str(e)
+    return {"url": HEALTH, "status": None, "error": last_error}
 
 def procs():
     rows = []
