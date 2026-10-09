@@ -24,11 +24,16 @@ struct VoiceCallOverlay: View {
                 VoiceCallStage(call: call, center: center, space: space)
                     .transition(.scale(scale: 0.1, anchor: .bottomTrailing).combined(with: .opacity))
             }
+            if let incoming = center.incoming {
+                IncomingVoiceCallView(incoming: incoming, center: center)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         // Full size so the pill sits at the top, not the middle; empty
         // space takes no touches.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeIn(duration: 0.25), value: center.call?.id)
+        .animation(.spring(duration: 0.35), value: center.incoming?.id)
     }
 }
 

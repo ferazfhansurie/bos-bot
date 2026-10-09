@@ -4,9 +4,10 @@
 // (`Session.startVoiceCall`); the phone opens the realtime websocket itself
 // and does all the audio, so no audio ever crosses the companion link. The
 // model talks; when it needs real work done it calls `send_task`, which this
-// object posts into the bot's chat thread exactly like a typed message, and
-// whatever the bot writes back is fed into the call as `async_update.add`
-// so the model can say it out loud. Protocol notes: plans/grok-voice.
+// object posts into the bot's chat thread as the caller's own words (tagged
+// with the call's origin), and whatever the bot settles on is fed into the
+// call as `async_update.add` so the model can say it out loud. Protocol
+// notes: plans/grok-voice, plans/voice-v2.
 import AVFoundation
 import Combine
 import CompanionCore
@@ -45,6 +46,12 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     let bot: Bot
     let threadId: String
     let levels = VoiceCallLevels()
+    /// What the call opens with instead of the plan's greeting: a call back
+    /// about finished work, or a picked-up ring.
+    let opener: String?
+    /// The origin `callId` on everything this call sends. One id per call,
+    /// across reconnects, so a done push for it can be held while it is live.
+    var callId: String { id.uuidString.lowercased() }
 
     @Published private(set) var phase: Phase = .connecting
     @Published private(set) var activity: Activity = .idle
@@ -109,6 +116,9 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     private var watchSince: Double?
     private var deliveredIds = Set<String>()
     private var lastTaskCallId = "voice"
+    /// Caller lines already posted as part of an ask.
+    private var askedLineIds = Set<String>()
+    private var lastAsk: (text: String, at: Date)?
     private var landedCount = 0
     private var stateSink: AnyCancellable?
     private var deliverTask: Task<Void, Never>?
@@ -116,10 +126,11 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
 
     private var ticker: Timer?
 
-    init(bot: Bot, threadId: String, session: Session) {
+    init(bot: Bot, threadId: String, session: Session, opener: String? = nil) {
         self.bot = bot
         self.threadId = threadId
         self.session = session
+        self.opener = opener
         self.settings = Self.savedSettings(botId: bot.id)
     }
 
@@ -346,10 +357,11 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
             startedAt = Date()
             audio.playChime(rising: true)
             Haptics.impact(.light)
-            // Open with a greeting unless they already started talking.
-            // Held at most 15 s; speaking first cancels it.
-            if !callerHasSpoken, let plan {
-                requestResponse(plan.greeting.direction,
+            // Open with a greeting (or the reason for this call) unless they
+            // already started talking. Held at most 15 s; speaking first
+            // cancels it.
+            if !callerHasSpoken, let direction = opener ?? plan?.greeting.direction {
+                requestResponse(direction,
                                 expires: Date().addingTimeInterval(RealtimeVoice.greetingGraceSeconds))
             }
         }
@@ -577,18 +589,41 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
             // A receipt, at once: the call never waits on the work.
             output(callId, ["status": "sent"])
             if !spokeThisResponse, let plan { requestResponse(plan.receiptTurn) }
-            let botId = bot.id, threadId = threadId, name = bot.name
+            let botId = bot.id, threadId = threadId, name = bot.name, origin = self.callId
             Task { [weak self] in
-                guard let session = self?.session else { return }
-                if let failure = await session.sendFromVoiceCall(request, botId: botId, threadId: threadId) {
-                    self?.landed(eventId: "\(callId).failed", text: "That job never reached \(name): \(failure) Tell them it did not go through.", at: Date())
+                // The caller's last words may still be transcribing.
+                await self?.waitForCallerTranscript()
+                guard let self, let session = self.session, !self.isOver else { return }
+                let ask = VoiceCallAsk.make(spoken: self.takeCallerWords(), request: request)
+                // The model asking twice for one thing is one message.
+                guard !ask.repeats(self.lastAsk, now: Date()) else { return }
+                self.lastAsk = (ask.text, Date())
+                if let failure = await session.sendFromVoiceCall(ask.text, job: ask.job, callId: origin,
+                                                                 botId: botId, threadId: threadId) {
+                    self.landed(eventId: "\(callId).failed", text: "That job never reached \(name): \(failure) Tell them it did not go through.", at: Date())
                 }
             }
         }
     }
 
-    /// From the first send_task on, every bot text line that lands in the
-    /// thread is fed into the call, batched so a burst is one update.
+    /// Up to 1.5 s for an in-flight caller transcript to settle.
+    private func waitForCallerTranscript() async {
+        for _ in 0..<15 {
+            let pending = lines.contains { $0.speaker == .user && !$0.final && !askedLineIds.contains($0.id) }
+            guard pending, !isOver else { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    /// What the caller said since the previous ask, verbatim, oldest first.
+    private func takeCallerWords() -> [String] {
+        let fresh = lines.filter { $0.speaker == .user && !askedLineIds.contains($0.id) && !$0.text.isEmpty }
+        fresh.forEach { askedLineIds.insert($0.id) }
+        return fresh.map(\.text)
+    }
+
+    /// From the first send_task on, every settled bot text line that lands
+    /// in the thread is fed into the call, batched so a burst is one update.
     private func watchForReplies() {
         guard watchSince == nil, let session else { return }
         watchSince = Date().timeIntervalSince1970 * 1000 - 1000
@@ -608,13 +643,15 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         }
     }
 
+    /// Only settled text: while the bot works, half-written lines and tool
+    /// chatter stay unspoken; the turn's last line, or everything once the
+    /// bot is idle, goes in.
     private func deliverLanded() {
         guard let session, let since = watchSince, !isOver else { return }
-        let fresh = session.state.transcript(forThread: threadId).filter { message in
-            message.role == .bot && message.kind == .text && message.at >= since
-                && !deliveredIds.contains(message.id)
-                && !(message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+        let current = session.state.bot(bot.id)
+        let busy = current?.projected(forThread: threadId)?.busy ?? current?.busy ?? false
+        let fresh = RealtimeVoice.landedReplies(session.state.transcript(forThread: threadId),
+                                                since: since, busy: busy, delivered: deliveredIds)
         guard !fresh.isEmpty else { return }
         fresh.forEach { deliveredIds.insert($0.id) }
         landedCount += 1
@@ -760,8 +797,12 @@ final class VoiceCallCenter: ObservableObject {
     @Published var presentation: Presentation = .splash
     @Published var showingSettings = false
     @Published private(set) var records: [VoiceCallRecord]
+    /// A bot ringing, shown full screen above the app until answered.
+    @Published private(set) var incoming: IncomingVoiceRing?
 
     private static let recordsKey = "voiceCall.records"
+    private var seenRings = Set<String>()
+    private var ringer: VoiceRinger?
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.recordsKey),
@@ -772,16 +813,16 @@ final class VoiceCallCenter: ObservableObject {
         }
     }
 
-    func start(bot: Bot, threadId: String, session: Session) {
+    func start(bot: Bot, threadId: String, session: Session, opener: String? = nil) {
         if let call, !call.isOver {
-            if call.bot.id == bot.id {
+            if call.bot.id == bot.id, opener == nil {
                 withAnimation(.spring(duration: 0.4)) { presentation = .full }
                 return
             }
             call.hangUp()
         }
         Haptics.impact(.medium)
-        let call = RealtimeVoiceCall(bot: bot, threadId: threadId, session: session)
+        let call = RealtimeVoiceCall(bot: bot, threadId: threadId, session: session, opener: opener)
         call.onEnded = { [weak self] ended in self?.ended(ended) }
         showingSettings = false
         presentation = .splash
@@ -830,6 +871,56 @@ final class VoiceCallCenter: ObservableObject {
 
     func records(botId: String, threadId: String) -> [VoiceCallRecord] {
         records.filter { $0.botId == botId && $0.threadId == threadId }
+    }
+
+    // MARK: Rings
+
+    /// Show a ring full screen. Each ring once; a ring during a live call
+    /// stays a notification, never a second call over the first.
+    func ring(_ ring: VoiceRing, bot: Bot, session: Session) {
+        guard seenRings.insert(ring.ringId).inserted, incoming == nil, liveCallId == nil else { return }
+        incoming = IncomingVoiceRing(ring: ring, bot: bot, session: session)
+        let ringer = VoiceRinger()
+        self.ringer = ringer
+        ringer.start()
+        let ringId = ring.ringId
+        // Unanswered rings stop on their own, like a phone.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard let self, self.incoming?.ring.ringId == ringId else { return }
+            self.decline()
+        }
+    }
+
+    func accept() {
+        guard let incoming else { return }
+        stopRinging()
+        start(bot: incoming.bot, threadId: incoming.ring.threadId ?? incoming.bot.threadId, session: incoming.session,
+              opener: RealtimeVoice.ringOpener(reason: incoming.ring.reason))
+    }
+
+    func decline() {
+        guard incoming != nil else { return }
+        stopRinging()
+        Haptics.impact(.light)
+    }
+
+    /// A ring already answered from its notification.
+    func markRingAnswered(_ ringId: String) {
+        seenRings.insert(ringId)
+        if incoming?.ring.ringId == ringId { stopRinging() }
+    }
+
+    private func stopRinging() {
+        ringer?.stop()
+        ringer = nil
+        withAnimation(.easeIn(duration: 0.2)) { incoming = nil }
+    }
+
+    /// The live call's origin id: its done pushes stay quiet, the call says it.
+    var liveCallId: String? {
+        guard let call, !call.isOver else { return nil }
+        return call.callId
     }
 
     /// The live call for this bot, if any.

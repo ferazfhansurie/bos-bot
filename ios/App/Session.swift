@@ -308,6 +308,12 @@ final class Session: ObservableObject {
         NotificationCoordinator.shared.responseHandler = { [weak self] target in
             Task { @MainActor in await self?.openNotification(target) }
         }
+        NotificationCoordinator.shared.foregroundVoicePresentation = { [weak self] push in
+            self?.voicePresentation(for: push) ?? .alert
+        }
+        NotificationCoordinator.shared.voiceHandler = { [weak self] action in
+            Task { @MainActor in await self?.handleVoice(action) }
+        }
         NotificationCoordinator.shared.pushTokenHandler = { [weak self] token in
             Task { @MainActor in await self?.registerPushToken(token) }
         }
@@ -1265,10 +1271,22 @@ final class Session: ObservableObject {
         if let connectionID = client?.connection.id {
             for index in NotificationPresentation.coalescedIndices(notices.map { ($0.0.threadId, $0.0.isBlocking) }) {
                 let (notification, sequence) = notices[index]
-                guard notificationEnabled(botId: notification.botId, threadId: notification.threadId) else { continue }
+                if notification.kind == "voice_work_done" {
+                    // Asked out loud: it reports whatever the bot's switch
+                    // says, except while that call is still live and says it.
+                    if let callId = notification.callId, callId == VoiceCallCenter.shared.liveCallId {
+                        Self.clearVoiceDone(callId: callId)
+                        continue
+                    }
+                } else {
+                    guard notificationEnabled(botId: notification.botId, threadId: notification.threadId) else { continue }
+                }
                 NotificationCoordinator.shared.deliver(notification, sequence: sequence, connectionId: connectionID,
                     requestId: notification.requestId, messageId: notification.messageId)
             }
+        }
+        for case let .voiceRing(ring) in batch.map(\.frame) {
+            receivedRing(ring, connectionId: client?.connection.id)
         }
         applyBadge(state.unreadCount)
     }
@@ -1896,14 +1914,16 @@ final class Session: ObservableObject {
         return try await client.voiceCall(botId: botId, language: language)
     }
 
-    /// A `send_task` from a voice call, posted into the bot's thread like a
-    /// typed message. Returns nil on success or the failure text; it never
-    /// touches `actionError`, because the call reports failures out loud.
-    func sendFromVoiceCall(_ text: String, botId: String, threadId: String) async -> String? {
+    /// A `send_task` from a voice call, posted into the bot's thread as the
+    /// caller's words with the call's origin, the model's restatement as
+    /// `job`. Returns nil on success or the failure text; it never touches
+    /// `actionError`, because the call reports failures out loud.
+    func sendFromVoiceCall(_ text: String, job: String, callId: String, botId: String, threadId: String) async -> String? {
         guard let client else { return "This computer is offline." }
         let connectionID = client.connection.id
         do {
-            let receipt = try await client.send(text: text, toBot: botId, threadId: threadId)
+            let receipt = try await client.send(text: text, toBot: botId, threadId: threadId,
+                                                origin: .voiceCall(callId: callId, job: job))
             if self.client?.connection.id == connectionID { rememberQueuedSend(from: receipt, text: text) }
             return nil
         } catch {
@@ -3068,6 +3088,77 @@ final class Session: ObservableObject {
     }
 
     func consumeNotificationChat() { notificationChat = nil }
+
+    // MARK: - Voice pushes
+
+    /// A done push for a live call is the call's to say; a ring while the app
+    /// is open becomes the incoming call screen instead of a banner.
+    private func voicePresentation(for push: VoicePush) -> NotificationPresentation {
+        switch push {
+        case let .workDone(_, threadId, callId, _):
+            if let callId, callId == VoiceCallCenter.shared.liveCallId { return .quiet }
+            let visible = UIApplication.shared.applicationState == .active
+                && notificationVisibleThreads.contains((client?.connection.id ?? "") + ":thread:" + threadId)
+            return visible ? .quiet : .alert
+        case let .ring(ring):
+            receivedRing(ring, connectionId: client?.connection.id)
+            return VoiceCallCenter.shared.liveCallId == nil ? .quiet : .alert
+        }
+    }
+
+    private func receivedRing(_ ring: VoiceRing, connectionId: String?) {
+        guard UIApplication.shared.applicationState == .active, connectionId == client?.connection.id,
+              let bot = state.bot(ring.botId) else { return }
+        VoiceCallCenter.shared.ring(ring, bot: bot, session: self)
+    }
+
+    /// The APNs copy of a done push can land while the call is live with the
+    /// screen locked; the call is already saying it, so take the banner back.
+    private static func clearVoiceDone(callId: String) {
+        Task {
+            for delay in [2, 6] {
+                try? await Task.sleep(for: .seconds(delay))
+                NotificationCoordinator.shared.removeVoiceDone(callId: callId)
+            }
+        }
+    }
+
+    func handleVoice(_ action: VoiceNotificationAction) async {
+        switch action {
+        case let .open(target):
+            await openNotification(target)
+        case let .callBack(target, result):
+            await openNotification(target)
+            guard let bot = await botAfterLaunch(target.botId) else { return }
+            let full = target.messageId.flatMap { id in
+                state.transcript(forThread: target.threadId).first { $0.id == id }?.text
+            }
+            VoiceCallCenter.shared.start(bot: bot, threadId: target.threadId, session: self,
+                                         opener: RealtimeVoice.callBackOpener(botName: bot.name, result: full ?? result))
+        case let .accept(ring, connectionId):
+            VoiceCallCenter.shared.markRingAnswered(ring.ringId)
+            let threadId = ring.threadId
+            if let threadId, let target = NotificationTarget(botId: ring.botId, threadId: threadId, connectionId: connectionId) {
+                await openNotification(target)
+            }
+            guard let bot = await botAfterLaunch(ring.botId) else { return }
+            VoiceCallCenter.shared.start(bot: bot, threadId: threadId ?? bot.threadId, session: self,
+                                         opener: RealtimeVoice.ringOpener(reason: ring.reason))
+        }
+    }
+
+    /// A tap can launch the app cold: give the connection up to 15 s to
+    /// bring the fleet in before calling.
+    private func botAfterLaunch(_ botId: String) async -> Bot? {
+        for _ in 0..<30 {
+            if client != nil, let bot = state.bot(botId) { return bot }
+            if client == nil, !restorePending { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        if let bot = state.bot(botId), client != nil { return bot }
+        actionError = "Couldn't reach this computer to start the call."
+        return nil
+    }
 
     // MARK: - Thread chips
 
