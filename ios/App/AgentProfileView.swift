@@ -211,8 +211,9 @@ struct AgentProfileView: View {
                             get: { MascotEyeStyle(stored: current.mascotEyes) },
                             set: { eyes in Task { await selectEyes(eyes) } }
                         )) {
-                            ForEach(MascotEyeStyle.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                            ForEach(MascotEyeStyle.allCases, id: \.self) { Text($0.label).tag($0) }
                         }.pickerStyle(.segmented).disabled(busy)
+                        MascotColorPicker(current: current.color, disabled: busy) { color in await selectColor(color) }
                         ForEach(FlatMascotBodies.groups, id: \.self) { group in
                             VStack(alignment: .leading, spacing: 12) {
                                 Text(group).font(.subheadline).foregroundStyle(.secondary)
@@ -615,6 +616,13 @@ struct AgentProfileView: View {
         busy = true
         defer { busy = false }
         _ = await session.updateProfile(BotProfilePatch(mascotEyes: eyes.rawValue), for: current)
+    }
+
+    private func selectColor(_ color: String) async {
+        guard color != current.color else { return }
+        busy = true
+        defer { busy = false }
+        _ = await session.updateProfile(BotProfilePatch(color: color), for: current)
     }
 
     private func selectBody(_ body: String) async {

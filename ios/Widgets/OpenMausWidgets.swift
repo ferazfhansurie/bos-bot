@@ -3,6 +3,7 @@
 // state — the system renders a snapshot, so it cannot move here, but it
 // changes with every update.
 import ActivityKit
+import CompanionCore
 import SwiftUI
 import WidgetKit
 
@@ -176,6 +177,7 @@ private struct ActivityBotFace: View {
                     state: MausState(rawValue: context.state.face) ?? .idle,
                     size: size,
                     bodyId: context.attributes.mascotBody,
+                    eyeStyle: MascotEyeStyle(stored: context.attributes.mascotEyes),
                     comets: comets,
                     at: Date()
                 )

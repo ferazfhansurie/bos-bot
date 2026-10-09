@@ -14,25 +14,11 @@ import SwiftUI
 import UIKit
 
 enum MausPalette {
-    /// src/lib/mascot.ts — MAUS_COLORS
-    private static let hex: [String: String] = [
-        "green": "#009957",
-        "blue": "#377FE6",
-        "red": "#D94B52",
-        "orange": "#E78531",
-        "purple": "#8057C8",
-        "cyan": "#0EA5C6",
-        "pink": "#D84F8B",
-        "yellow": "#D8A729",
-        "teal": "#01A492",
-        "coral": "#E5634E",
-        "white": "#FFFFFF",
-        "brown": "#885E36",
-        "gray": "#808080",
-    ]
-
+    /// A bot colour — one of the 13 names or any "#RRGGBB" — through the
+    /// desktop's `resolveMausColor` (`CompanionCore.GlyphFaces`): a name maps
+    /// to its palette hex, a hex is itself, anything else is green.
     static func color(_ name: String) -> Color {
-        Color(hex: hex[name] ?? "#8E8E93")
+        Color(hex: GlyphFaces.resolveColor(name))
     }
 
 }
@@ -69,12 +55,12 @@ extension MausSilhouette {
 struct MausAvatar: View {
     let color: String
     var size: CGFloat = 52
-    /// Which body from the catalog to draw. Anything unrecognised — an older
-    /// bot with no choice recorded, a newer desktop's body this build has not
-    /// shipped yet — falls back to the shipped `cursor`.
-    var bodyId: String? = MausSilhouette.defaultBody
+    /// Which body from the catalog to draw. Nothing recorded is the flat
+    /// circle, the glyph face's own body; an id this build has not shipped
+    /// yet falls back to it too (`FlatMascotBodies.body`).
+    var bodyId: String? = nil
     var state: MausState = .idle
-    var eyeStyle: MascotEyeStyle = .classic
+    var eyeStyle: MascotEyeStyle = .glyph
     var completedTurnID: String? = nil
     /// Animation is OPT-IN: a mounted face costs a 30fps Canvas redraw, and a
     /// roster of them once pegged the app (and SimRenderServer) all night.
@@ -91,9 +77,16 @@ struct MausAvatar: View {
     var body: some View {
         Group {
 #if WIDGET_EXTENSION
-            FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+            if eyeStyle == .glyph {
+                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size)
+            } else {
+                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+            }
 #else
-            if animated || completedTurnID != nil {
+            if eyeStyle == .glyph {
+                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size,
+                          animated: animated, completedTurnID: completedTurnID)
+            } else if animated || completedTurnID != nil {
                 MascotActivityMark(color: color, bodyID: FlatMascotBodies.body(bodyId).id,
                     activity: state.activityChoreography, size: size, eyeStyle: eyeStyle, completedTurnID: completedTurnID)
             } else {
@@ -112,15 +105,22 @@ struct MausFaceStill: View {
     let color: String
     var state: MausState = .idle
     var size: CGFloat = 52
-    var bodyId: String? = MausSilhouette.defaultBody
+    var bodyId: String? = nil
+    var eyeStyle: MascotEyeStyle = .glyph
     var comets: Bool = false
     /// The clock for the comets' phase; a different date is a different frame.
     var at: Date = Date()
 
     var body: some View {
-        FlatBotMark(color: color, bodyId: bodyId)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        Group {
+            if eyeStyle == .glyph {
+                GlyphMark(color: color, bodyId: bodyId, state: state.glyphState, size: size)
+            } else {
+                FlatBotMark(color: color, bodyId: bodyId, eyeStyle: eyeStyle)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
@@ -631,9 +631,16 @@ extension Color {
 struct FlatBotMark: View {
     let color: String
     var bodyId: String?
-    var eyeStyle: MascotEyeStyle = .classic
+    var eyeStyle: MascotEyeStyle = .glyph
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         Canvas { context, size in
+            if eyeStyle == .glyph {
+                // the resting glyph face has no accent, so it fits the frame
+                GlyphMark.draw(in: &context, slot: CGRect(origin: .zero, size: size), color: color,
+                               bodyId: bodyId, state: .idle, scheme: scheme)
+                return
+            }
             let body = FlatMascotBodies.body(bodyId)
             context.scaleBy(x: size.width / 100, y: size.height / 100)
             context.fill(Path(FlatMascotBodies.outline(bodyId)), with: .color(MausPalette.color(color)))

@@ -15,10 +15,12 @@ struct BotActivityAttributes: ActivityAttributes {
     /// Retained to decode existing activities. Routing uses ContentState.
     var threadId: String
     var name: String
-    /// MausPalette colour name.
+    /// A MausPalette colour name or "#RRGGBB".
     var color: String
     /// Optional so activities created by older app builds still decode.
     var mascotBody: String?
+    /// Optional for the same reason; nil is the glyph face.
+    var mascotEyes: String? = nil
 }
 
 /// Answer from the island or the lock screen. A `LiveActivityIntent` runs in
