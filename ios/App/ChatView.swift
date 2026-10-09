@@ -720,9 +720,9 @@ struct ChatView: View {
                       // A bot on another Mac has no settings or computer the
                       // server will open for this phone.
                       canOpenSettings: !current.isRemoteBot,
-                      canWatchComputer: current.isBot && !current.isRemoteBot, onBack: leave,
+                      onBack: leave,
                       onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
-                      onComputer: { showingComputer = true }, accessory: rosterAccessory,
+                      accessory: rosterAccessory,
                       closesPane: onClose != nil,
                       beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) },
                       onNewThread: current.supportsTasks ? { newThread() } : nil,
@@ -1820,11 +1820,9 @@ struct ChatHeaderBar<Avatar: View>: View {
     let unreadElsewhere: Int
     let canOpenThreads: Bool
     let canOpenSettings: Bool
-    let canWatchComputer: Bool
     let onBack: () -> Void
     let onThreads: () -> Void
     let onSettings: () -> Void
-    let onComputer: () -> Void
     /// A second row that belongs to the header, under the same glass: the
     /// room roster. Drawn inside so the transcript scrolls beneath it.
     var accessory: AnyView? = nil
@@ -1902,10 +1900,9 @@ struct ChatHeaderBar<Avatar: View>: View {
                     .accessibilityLabel("Call \(name)")
                     .accessibilityIdentifier("chat-call")
             }
-            if canWatchComputer {
-                GlassButton(systemImage: "display", size: 44, weight: .medium, action: onComputer)
-                    .accessibilityLabel("Watch \(name)'s computer")
-            } else if let membersCount {
+            // The live computer view lives in the + menu ("Watch computer"),
+            // not the header: Firaz found it a dead-end preview up here.
+            if let membersCount {
                 Button(action: onSettings) {
                     Label("\(membersCount)", systemImage: "person.2")
                         .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.primary)
@@ -1914,7 +1911,8 @@ struct ChatHeaderBar<Avatar: View>: View {
                 .buttonStyle(.plain).glassCapsule()
                 .accessibilityLabel(membersCount == 1 ? "1 member" : "\(membersCount) members")
                 .accessibilityIdentifier("chat-members")
-            } else {
+            } else if onNewThread == nil, onCall == nil, beside == nil {
+                // Balances the back button so the title stays centred.
                 Color.clear.frame(width: 44, height: 44)
             }
         }
