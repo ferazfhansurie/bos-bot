@@ -723,12 +723,41 @@ struct ChatView: View {
                       onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
                       onComputer: { showingComputer = true }, accessory: rosterAccessory,
                       closesPane: onClose != nil,
-                      beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) }) {
+                      beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) },
+                      threadDone: threadDone) {
             // The activity feed's face for this exact thread, so the header
             // moves while the bot works here; without a feed entry, the
             // still idle face it always had.
             let live = MausState.forThread(current, in: session.state)
             ChatAvatarView(chat: current, size: 30, state: live ?? .idle, animated: live?.showsActivity == true)
+        }
+    }
+
+    /// "Mark done" for the open thread, or "Unarchive" once it is archived.
+    /// Bot threads only; a working thread cannot be marked done.
+    private var threadDone: ThreadDoneAction? {
+        guard case let .bot(bot) = chat,
+              let task = session.state.bot(bot.id)?.tasks?.first(where: { $0.threadId == selectedThreadId })
+        else { return nil }
+        if task.isArchived {
+            return ThreadDoneAction(title: "Unarchive", systemImage: "arrow.uturn.backward", disabled: false) {
+                setArchived(task, in: bot, archivedAt: nil)
+            }
+        }
+        return ThreadDoneAction(title: "Mark done", systemImage: "checkmark.circle", disabled: !task.canMarkDone) {
+            // The desktop sends Date.now(); the server takes any epoch number.
+            setArchived(task, in: bot, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
+            // Back to the list right away: the optimistic update has already
+            // taken the thread out of it, and a failed write restores it.
+            leave()
+        }
+    }
+
+    private func setArchived(_ task: BotTask, in bot: Bot, archivedAt: Double?) {
+        let session = session
+        Task { @MainActor in
+            guard let live = session.state.bot(bot.id) else { return }
+            await session.setTaskArchived(task, for: live, archivedAt: archivedAt)
         }
     }
 
@@ -1726,6 +1755,14 @@ private struct ChannelMentionDrawerHost: View {
     }
 }
 
+/// The chat menu's done / unarchive entry for the open thread.
+struct ThreadDoneAction {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let disabled: Bool
+    let run: () -> Void
+}
+
 struct ChatHeaderBar<Avatar: View>: View {
     let name: String
     let unreadElsewhere: Int
@@ -1747,6 +1784,8 @@ struct ChatHeaderBar<Avatar: View>: View {
     var closesPane = false
     /// On a wide window, the menu that opens a second chat beside this one.
     var beside: AnyView? = nil
+    /// Mark the open thread done, or bring it back; bot threads only.
+    var threadDone: ThreadDoneAction? = nil
     @ViewBuilder let avatar: () -> Avatar
 
     var body: some View {
@@ -1780,6 +1819,10 @@ struct ChatHeaderBar<Avatar: View>: View {
             } else {
             Menu {
                 if canOpenThreads { Button("Threads", systemImage: "square.stack", action: onThreads) }
+                if let threadDone {
+                    Button(threadDone.title, systemImage: threadDone.systemImage, action: threadDone.run)
+                        .disabled(threadDone.disabled)
+                }
                 if canOpenSettings { Button("Conversation settings", systemImage: "gearshape", action: onSettings) }
             } label: {
                 HStack(spacing: 8) {
