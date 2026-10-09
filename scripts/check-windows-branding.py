@@ -9,7 +9,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 SIZES = (16, 24, 32, 48, 64, 128, 256)
-SOURCE_SHA256 = "117f8b32f48c8f2f8a8cf0b5c836bb7df2a12bab7bafc669957565f9c0257654"
+SOURCE_SHA256 = "21c59806592159d669bd5b0465c4f2ee9bdcf583f23910168a6b621d15c944e8"
 
 
 def check(root=ROOT):
