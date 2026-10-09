@@ -313,6 +313,17 @@ export interface LeadActionSummary {
   resolution?: { decision: string; evidence: string; by: string; at: number };
 }
 
+/** A user message spoken on a live voice call rather than typed. `job` is
+ * the voice model's own restatement of the request; the visible text stays
+ * the caller's words. */
+export interface VoiceCallOrigin {
+  kind: "voice_call";
+  callId: string;
+  job?: string;
+}
+/** Where a user message came from, when it did not come from a composer. */
+export type MessageOrigin = VoiceCallOrigin;
+
 export interface WireMessage {
   leadAction?: LeadActionSummary;
   /** Provenance for an inert, imported Discord transcript line. Never dispatch this as a turn. */
@@ -397,6 +408,8 @@ export interface WireMessage {
   queued?: boolean;
   /** steer-queue entry this drained user line came from. */
   queueId?: string;
+  /** user messages sent from a live voice call: the call they came from. */
+  origin?: MessageOrigin;
 }
 
 export interface OptionCardData {

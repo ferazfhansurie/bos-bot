@@ -18,6 +18,7 @@
 // listening decides what to do with it — desktop and paired-phone local
 // notifications today, and closed-app APNs delivery once a relay exists.
 
+import type { PushTarget } from "./apns-push.ts";
 import type { Notification, NotifyKind } from "../shared/notification.ts";
 
 // The notification wire shape lives in shared/notification.ts now (part of
@@ -107,4 +108,48 @@ export function buildNotification(
   if (extra?.requestId) notification.requestId = extra.requestId;
   if (extra?.messageId) notification.messageId = extra.messageId;
   return notification;
+}
+
+/** The push a caller gets when work they asked for on a live voice call
+ * settles. Unlike every kind above, the bot's notifications switch does not
+ * gate it: the caller asked out loud and may have hung up since, so this is
+ * the only way they hear the answer. A failed turn still reports — "done"
+ * means the work stopped, and the body says how. */
+export function buildVoiceWorkDone(
+  bot: Pick<NotifyBot, "id" | "name">,
+  threadId: string,
+  reply: string,
+  call: { callId: string; messageId: string },
+  extra?: { avatarUrl?: string; failure?: string },
+): Notification {
+  const failure = extra?.failure === undefined ? "" : summarize(extra.failure);
+  const body = summarize(reply) || (extra?.failure !== undefined ? `It stopped before finishing${failure ? `: ${failure}` : "."}` : "Finished.");
+  const notification: Notification = {
+    kind: "voice_work_done",
+    botId: bot.id,
+    botName: bot.name,
+    threadId,
+    title: `${bot.name} is done`,
+    body,
+    callId: call.callId,
+    messageId: call.messageId,
+  };
+  if (extra?.avatarUrl) notification.avatarUrl = extra.avatarUrl;
+  return notification;
+}
+
+/** What the owner's closed-app push carries for a notification frame: the
+ * same identities the live frame has, flattened into the APNs payload. A
+ * voice_work_done push also names its type and call, the data the phone
+ * acts on: `{ type, botId, threadId, callId, messageId }`. */
+export function ownerPushTarget(notification: Notification): PushTarget {
+  // The digest is from no bot: no sender, so no communication-style push.
+  if (notification.kind === "digest") return { kind: "digest" };
+  return {
+    kind: notification.kind, botId: notification.botId, threadId: notification.threadId,
+    senderId: `bot:${notification.botId}`, senderName: notification.title,
+    ...(notification.requestId ? { requestId: notification.requestId } : {}),
+    ...(notification.messageId ? { messageId: notification.messageId } : {}),
+    ...(notification.kind === "voice_work_done" ? { type: "voice_work_done", ...(notification.callId ? { callId: notification.callId } : {}) } : {}),
+  };
 }

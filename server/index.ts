@@ -243,7 +243,7 @@ import { fleetAvailable, fleetRequest, fleetSocketPath } from "./fleet-client.ts
 import { entitled } from "./enterprise.ts";
 import { HOSTED_CONTRACT_HEADER, HOSTED_CONTRACT_METADATA, HOSTED_CONTRACT_VERSION } from "./hosted-contract.ts";
 import { describeSpawnFailure, execCli } from "./procs.ts";
-import { blockedTarget, buildNotification, type Notification } from "./notify.ts";
+import { blockedTarget, buildNotification, buildVoiceWorkDone, ownerPushTarget, type Notification } from "./notify.ts";
 import {
   isModelVariant,
   type ModelSelection,
@@ -355,6 +355,7 @@ import {
 import * as tts from "./tts/index.ts";
 import { narrateTool, toUtterances } from "./tts/speech-text.ts";
 import { mintVoiceCallCredential, NoVoiceCallKey, VOICE_CALL_LANGUAGES, VOICE_CALL_SPEEDS, VOICE_CALL_VOICES, voiceCallPlan } from "./voice-call.ts";
+import { parseMessageOrigin, turnVoiceOrigin, withVoiceCallHint, type VoiceCallOrigin } from "./voice-origin.ts";
 import { createXaiCreditsReader, fetchXaiCredits, isVoiceCallId, recordVoiceCallEnd, recordVoiceCallStart, summarizeVoiceUsage } from "./xai-usage.ts";
 import { buildRecoveryText, buildTurnContext, engineIsFresh, peerMessageText } from "./turn-context.ts";
 import { Handoffs, handedStateUsable, recordHanded, renderUnseen, sessionStart, unseenMessages, withUnseenMessages, type ContextMessage } from "./delta-context.ts";
@@ -4189,6 +4190,16 @@ function requestBehavior(value: unknown): "allow" | "deny" | "answer" | null {
 // the last settled assistant text per thread, so a "finished" notification
 // can carry what the bot actually said
 const lastReply = new Map<string, string>();
+/** Direct turns started (or steered) by a message spoken on a live voice
+ * call, keyed by thread and pinned to the dispatch generation that carries
+ * it. Claimed once when that exact turn settles, to send the done push. */
+const voiceTurns = new Map<string, { generation: string; origin: VoiceCallOrigin; sourceMessageId: string }>();
+function claimVoiceTurn(threadId: string, generation: string | undefined) {
+  const turn = voiceTurns.get(threadId);
+  if (!turn || !generation || turn.generation !== generation) return null;
+  voiceTurns.delete(threadId);
+  return turn;
+}
 /** the model each thread's provider session announced in session.started,
  * so a fallback notice can name the model Auto is unavailable for */
 const sessionModelByThread = new Map<string, string>();
@@ -4213,11 +4224,7 @@ function notify(notification: Notification | null) {
     if (room) for (const personId of roomPushPeople(room, multiplayerActors.ownerId, id => canReadChannel(room, id), multiplayerActors.ownerId, notification.kind)) {
       void apnsPush.send(personId, notification.title, notification.body, { roomId: room.id, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title }).catch(() => {});
     }
-    // The digest is from no bot: no sender, so no communication-style push.
-    void apnsPush.send(multiplayerActors.ownerId, notification.title, notification.body,
-      notification.kind === "digest" ? { kind: "digest" }
-        : { kind: notification.kind, botId: notification.botId, threadId: notification.threadId, senderId: `bot:${notification.botId}`, senderName: notification.title,
-            ...(notification.requestId ? { requestId: notification.requestId } : {}), ...(notification.messageId ? { messageId: notification.messageId } : {}) }).catch(error =>
+    void apnsPush.send(multiplayerActors.ownerId, notification.title, notification.body, ownerPushTarget(notification)).catch(error =>
       console.warn(`bot push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
   }
 }
@@ -5751,7 +5758,9 @@ bus.subscribe((event: RuntimeEvent) => {
           });
         }
       }
-      if (completedTurnId || !event.ok) store.settleTurn(event.threadId, completedTurnId ?? undefined, { ok: event.ok, stopReason: event.stopReason ?? undefined });
+      const terminalMessage = completedTurnId || !event.ok
+        ? store.settleTurn(event.threadId, completedTurnId ?? undefined, { ok: event.ok, stopReason: event.stopReason ?? undefined })
+        : null;
       if (completedTurnId) {
         try {
           const generation = turnResourceOwners.get(event.threadId)?.generation ?? directTurnGenerationByThread.get(event.threadId);
@@ -5808,6 +5817,17 @@ bus.subscribe((event: RuntimeEvent) => {
             quotaRetryTurns.delete(event.threadId);
           }
           if (continueComputerSelection(event.threadId, generation, event.ok)) return;
+          // Work asked for on a voice call: the caller hears about it even
+          // with this bot's notifications off. Sent here, after a quota
+          // retry or a computer selection had their chance to carry the
+          // same ask into a new turn, so one ask is one push. A turn the
+          // person stopped is not news.
+          const voice = claimVoiceTurn(event.threadId, generation);
+          if (voice && event.stopReason !== "interrupted") {
+            notify(buildVoiceWorkDone(bot, event.threadId, reply,
+              { callId: voice.origin.callId, messageId: terminalMessage?.id ?? voice.sourceMessageId },
+              { avatarUrl: bot.avatarUrl, ...(event.ok ? {} : { failure: event.stopReason ?? "" }) }));
+          }
           // Ordinary completion still drains from the existing bus subscribers.
           // An asynchronous screenshot finishes after those subscribers ran.
           if (resumeQueued) {
@@ -5884,7 +5904,8 @@ bus.subscribe((event: RuntimeEvent) => {
         // A failed peer turn stays a chip too. The bot that delegated is woken
         // with the failure and answers the person in its own thread — buzzing
         // here as well would ring twice for one piece of news.
-        if ((!routineRun || routineRun.status === "completed") && !internal && !computerSelectionTurns.get(event.threadId)?.selected) {
+        const voiceTurn = generation !== undefined && voiceTurns.get(event.threadId)?.generation === generation;
+        if ((!routineRun || routineRun.status === "completed") && !internal && !voiceTurn && !computerSelectionTurns.get(event.threadId)?.selected) {
           // the frame carries the bot's avatar so every desktop client can
           // show the notification under that bot's own face
           const completionDetail = routineRun
@@ -6742,7 +6763,9 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
   if (!held) return { ok: false, queued: false, threadId: bot.threadId };
   const currentAtStart = store.projectBotForTask(bot.id, bot.threadId);
   const instance = currentAtStart?.busy ? runningTurnInstance(currentAtStart, bot.threadId) : undefined;
-  const heldPrompt = held.items.map(item => item.prompt).join("\n\n");
+  // Words spoken on a call and folded into a running turn carry the same
+  // one-line voice hint a fresh voice turn gets.
+  const heldPrompt = withVoiceCallHint(held.items.map(item => item.prompt).join("\n\n"), turnVoiceOrigin(held.items));
   let steerInput;
   try { steerInput = extractTurnImages(heldPrompt); }
   catch (error) {
@@ -6802,7 +6825,15 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
       queueId: item.messageId,
       peerAsk: item.peerAsk,
       steered: steered === "steered",
+      ...(item.origin ? { origin: item.origin } : {}),
     }));
+    // Words from a call folded into the running turn: that turn's settle is
+    // the answer the caller is waiting for.
+    const steeredVoice = turnVoiceOrigin(messages);
+    const runningGeneration = directTurnGenerationByThread.get(bot.threadId);
+    if (steered === "steered" && steeredVoice && runningGeneration && voiceTurns.get(bot.threadId)?.generation !== runningGeneration) {
+      voiceTurns.set(bot.threadId, { generation: runningGeneration, origin: steeredVoice, sourceMessageId: messages.at(-1)!.id });
+    }
     if (steered === "indeterminate") store.appendMessage(bot.threadId, {
       role: "bot", kind: "activity",
       tool: { name: "Queued message delivery outcome unknown — review before resending", ok: false },
@@ -7132,7 +7163,7 @@ function drainQueuedSends() {
 
 /** Keep a person's words off the transcript until a direct-thread slot is
  * available. Reuse the existing cancellable, idempotent composer queue. */
-async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: { name: string }, requestGuard?: () => void) {
+async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: { name: string }, requestGuard?: () => void, origin?: VoiceCallOrigin) {
   requestGuard?.();
   const capacity = botAtThreadCapacity(botId);
   if (capacity || threadBusy(botId, threadId) || parksBehindCoordination(botId, threadId)) {
@@ -7143,10 +7174,11 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
       reason,
       deferUntilIdle: true,
       prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
+      ...(origin ? { origin } : {}),
     });
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId, reason };
   }
-  const message = await startTurn(botId, text, { threadId, replyTo, sendId, sender, requestGuard });
+  const message = await startTurn(botId, text, { threadId, replyTo, sendId, sender, requestGuard, ...(origin ? { origin } : {}) });
   return { ok: true as const, threadId, message };
 }
 
@@ -8187,6 +8219,8 @@ async function startTurn(
     coordination?: { id: string; resumed: boolean; settle: (outcome: { ok: boolean; text: string }) => void };
     /** Peer-owned room context: provider-only, never a persisted user bubble. */
     roomContext?: string;
+    /** The send came from a live voice call (stored on the user message). */
+    origin?: VoiceCallOrigin;
   },
 ) {
   workspaceMaintenance.assertAvailable();
@@ -8371,8 +8405,18 @@ async function startTurn(
           sendId: opts?.sendId,
           peerAsk: opts?.peerAsk,
           sender: opts?.sender,
+          ...(opts?.origin ? { origin: opts.origin } : {}),
         });
   }
+  // A drained queue delivers several lines; any one spoken on a call makes
+  // this a voice turn. Retries and computer-selection continuations hand the
+  // same source message back, so they keep it too.
+  const voiceOrigin = opts?.compactOnly ? undefined : turnVoiceOrigin([
+    ...(opts?.excludeMessageIds?.length
+      ? store.messagesFor(threadId).filter(message => opts.excludeMessageIds!.includes(message.id) && message.role === "user")
+      : []),
+    userMessage,
+  ]);
   // A card continuation neither starts nor ends the person's ask: it
   // resumes the turn their last message began, so that record stands.
   if (!opts?.cardContinuation) {
@@ -8395,6 +8439,8 @@ async function startTurn(
   const resourceOwner = { threadId, generation: dispatchClaimId };
   turnResourceOwners.set(threadId, resourceOwner);
   directTurnGenerationByThread.set(threadId, dispatchClaimId);
+  if (voiceOrigin && !sharedContext) voiceTurns.set(threadId, { generation: dispatchClaimId, origin: voiceOrigin, sourceMessageId: userMessage.id });
+  else voiceTurns.delete(threadId);
   if (!sharedContext && !opts?.automationSource && !opts?.compactOnly) beginWorkTurn(botId, threadId, dispatchClaimId,
     () => directTurnGenerationByThread.get(threadId) !== dispatchClaimId,
     prompt => {
@@ -8544,11 +8590,12 @@ async function startTurn(
       // which also depends on the bot's soul/description — is decided below,
       // from the same bot snapshot the prompt's soul is built from.
       const setupText = agentsMounted ? expandSetupTurnText(providerText) : providerText;
-      const userTurnText = promptWithReply(
+      // A voice turn's answer is read out: one model-facing line says so.
+      const userTurnText = withVoiceCallHint(promptWithReply(
         skillAuthoring ? expandLearnTurnText(setupText) : setupText,
         opts?.replyTo,
         cfg.profile?.name?.trim() || "User",
-      );
+      ), voiceOrigin);
       // Decided again at dispatch when setup outlasted a soul edit (config).
       const decideContext = (config: string) => {
         const handedStale = Boolean(handed && (!unseen || (externalUpdate && handed.config !== config)));
@@ -9350,6 +9397,7 @@ async function startTurn(
         turnContext.delete(threadId);
       }
       if (e instanceof DirectTurnSetupCancelled) {
+        claimVoiceTurn(threadId, dispatchClaimId);
         opts?.onDispatchError?.(e.message);
         if (ownsLatestGeneration && threadBusy(bot.id, threadId)) {
           store.setTaskActivity(bot.id, threadId, "idle");
@@ -9383,8 +9431,15 @@ async function startTurn(
       // raises routine-failed; buzzing here too would ring twice for one
       // failure. A delegated sub-turn is reported to the bot that asked
       // for it, in its own thread, so it does not need a second channel.
+      // A voice turn that never started still owes the caller its push,
+      // switch or no switch; it replaces the ordinary "couldn't start".
+      const voice = claimVoiceTurn(threadId, dispatchClaimId);
+      if (voice) {
+        notify(buildVoiceWorkDone(bot, threadId, "", { callId: voice.origin.callId, messageId: voice.sourceMessageId },
+          { avatarUrl: bot.avatarUrl, failure: redactSecretsInText(message) }));
+      }
       if (opts?.automationSource === undefined && !opts?.commsDepth && !opts?.cardContinuation) {
-        notify(
+        if (!voice) notify(
           buildNotification("turn-failed", bot, threadId, redactSecretsInText(message), { avatarUrl: bot.avatarUrl }),
         );
         reportIncident({ kind: "could-not-start", bot, threadId, detail: message });
@@ -20495,6 +20550,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
+      // A phone send spoken on a live voice call says so; it rides the user
+      // message and the turn it starts (voice hint, done push).
+      const parsedOrigin = parseMessageOrigin(body.origin);
+      if (!parsedOrigin.ok) return json(res, 400, { error: parsedOrigin.error });
+      const origin = parsedOrigin.origin;
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       requirePinnedClientThread(bot.id, body.threadId);
@@ -20627,7 +20687,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
                 }
               }
               assertPrivateRequest();
-              return await startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
+              return await startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest, origin);
             } finally { priorityDirectPreemptions.delete(threadId); drainQueuedSends(); }
           }
 
@@ -20637,12 +20697,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             const queued = queueSteeredMessage(currentAtStart.id, threadId, text, {
               replyToId: replyTo?.id, sendId, deferUntilIdle: true,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
+              ...(origin ? { origin } : {}),
             });
             // A duplicate that joined a waiting item was already tried and refused.
             if (queued.joined) return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
             return { ok: true as const, queued: true as const, queueId: queued.id, threadId };
           }
-          return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest);
+          return startOrQueueDirectMessage(bot.id, threadId, text, replyTo, sendId, messageSender(auth), assertPrivateRequest, origin);
         }),
       );
       assertPrivateRequest();

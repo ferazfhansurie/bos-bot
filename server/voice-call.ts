@@ -79,14 +79,14 @@ const TOOLS = [
     type: "function",
     name: "send_task",
     description:
-      "Send a job that needs their computer, files, web, browser, or mail and chat they send. That call is a receipt, never the answer, and never the quick path. Speak a short beat on this response that names the job in how you talk, then call this. Never start that beat with a confirmation. Never say you are calling this tool. The outcome lands later as a work_landed entry. Do not use this for a take, a recap of this call, a quiz from words already on the line, a story, a joke, talk they asked you to do yourself, a fact already on the line, or a name or value they just spoke on this call — answer from that speech instead. If the useful answer needs a fact you do not have about their world, recall_text_messages first when it might already be in this written chat; use this only when it is not there.",
+      "Send a job that needs their computer, files, web, browser, or mail and chat they send. That call is a receipt, never the answer, and never the quick path. Speak a short beat on this response that names the job in how you talk, then call this. Never start that beat with a confirmation. Never say you are calling this tool. The outcome lands later as a work_landed entry. Send each job once: a job already sent on this call is running, so never send it again, even when they repeat it or ask about it. When they ask whether something is done, answer from the work_landed entries on this call, or say it is still running if nothing has landed for it; never call this to check. Do not use this for a take, a recap of this call, a quiz from words already on the line, a story, a joke, talk they asked you to do yourself, a fact already on the line, or a name or value they just spoke on this call — answer from that speech instead. If the useful answer needs a fact you do not have about their world, recall_text_messages first when it might already be in this written chat; use this only when it is not there.",
     parameters: {
       type: "object",
       properties: {
         request: {
           type: "string",
           description:
-            "The job itself: what to do or find out, and what to come back with. Not the caller's sentence. Add their exact words only where the wording itself is part of the job. Maximum 2000 characters; preserve every constraint, prohibition, and approval requirement. Overlong requests are rejected, never truncated.",
+            "What the caller asked for, restated cleanly in first person as they would type it themselves: \"check how many bots are online and tell me\", \"I want the invoice sent to Sam today\". Their own words and intent, minus filler and false starts. Never third person: never \"Firaz wants...\", \"the user asks...\", \"they want...\". Never your own plan or paraphrase of the job. Maximum 2000 characters; preserve every constraint, prohibition, and approval requirement. Overlong requests are rejected, never truncated.",
         },
       },
       required: ["request"],
@@ -150,6 +150,7 @@ export function voiceCallPlan(input: {
     "## Instruction and tools",
     "Default to talking. Small talk, a take, a recap of this call, a story, a joke, and anything you already have on this line need no tool.",
     "send_task only when they want something done or looked up that is not already here.",
+    "send_task's request is their ask in their own words, first person, as they would type it. Never third person, never \"they want\" or their name.",
     "If the answer might already be in your written chat with them, recall_text_messages first.",
     "When they say a parting greeting, one short goodbye out loud, then end_the_call, even when hanging up is the last step of another request.",
     "",
@@ -160,6 +161,8 @@ export function voiceCallPlan(input: {
     "## While work is in flight",
     "Never re-announce you are still working within about 30 seconds of your last line.",
     "Never chase or poll the work; it reports back on its own. An empty tool result is not news.",
+    "Each job goes out once. A job you already sent on this call is running: never send_task it again, even when they repeat it.",
+    "When they ask whether something is done, answer from the work_landed entries on this call. If nothing has landed for it, say it is still running. Never send_task to check.",
     "A work_landed entry is the task finished, or real progress on it. Tell them what came back, in a sentence or two.",
     "A work_overheard entry is work still in progress; never spoken.",
     "",

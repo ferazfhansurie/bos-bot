@@ -60,6 +60,20 @@ describe("voiceCallPlan", () => {
     expect(plan.greeting.direction).toContain("to Firaz");
   });
 
+  it("asks for a first-person request, one send per job, and answers status from landed work", () => {
+    const plan = voiceCallPlan({ agentName: "bos", userName: "Firaz Fhansurie" });
+    const sendTask = plan.tools.find(t => t.name === "send_task")!;
+    const request = sendTask.parameters.properties.request.description;
+    expect(request).toContain("restated cleanly in first person");
+    expect(request).toContain("Never third person");
+    expect(request).not.toContain("Not the caller's sentence");
+    expect(sendTask.description).toContain("never send it again");
+    expect(sendTask.description).toContain("answer from the work_landed entries on this call");
+    expect(plan.instructions).toContain("Each job goes out once.");
+    expect(plan.instructions).toContain("If nothing has landed for it, say it is still running. Never send_task to check.");
+    expect(plan.instructions).toContain("first person");
+  });
+
   it("leaves the language to the caller on auto", () => {
     expect(voiceCallPlan({ agentName: "x", language: "auto" }).instructions).toContain("Answer in the language they speak to you.");
   });

@@ -221,6 +221,7 @@ export interface FollowupPayload {
   deferUntilIdle?: boolean;
   unattended?: boolean;
   peerAsk?: Message["peerAsk"];
+  origin?: Message["origin"];
   mode?: "chat" | "goal";
   via?: "api";
   sender?: { name: string };

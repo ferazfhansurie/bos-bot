@@ -46,6 +46,8 @@ interface QueueEntry {
      * a queue is a delay, not a person sitting down at the keyboard. */
     unattended?: boolean;
     peerAsk?: Message["peerAsk"];
+    /** A send spoken on a live voice call keeps its call through the wait. */
+    origin?: Message["origin"];
   }>;
 }
 
@@ -112,7 +114,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; deferUntilIdle?: boolean; unattended?: boolean; peerAsk?: Message["peerAsk"] } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; deferUntilIdle?: boolean; unattended?: boolean; peerAsk?: Message["peerAsk"]; origin?: Message["origin"] } = {},
 ): QueuedSteer {
   const id = newId();
   const entry = queues.get(threadId) ?? { botId, items: [] };
@@ -136,6 +138,7 @@ export function queueSteeredMessage(
     deferUntilIdle: options.deferUntilIdle,
     unattended: options.unattended,
     peerAsk: options.peerAsk,
+    ...(options.origin ? { origin: options.origin } : {}),
   };
   saveChatFollowup({ id, kind: "bot", ownerId: botId, threadId, payload: item });
   entry.items.push(item);
@@ -230,6 +233,7 @@ export function drainSteeredMessages(
           sendId: item.sendId,
           queueId: item.messageId,
           peerAsk: item.peerAsk,
+          ...(item.origin ? { origin: item.origin } : {}),
         }),
       );
     }

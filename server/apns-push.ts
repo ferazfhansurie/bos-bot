@@ -13,6 +13,8 @@ const CONNECTION = /^[A-Za-z0-9_-]{1,128}$/;
 export interface PushTarget {
   roomId?: string; botId?: string; threadId?: string; senderId?: string;
   senderName?: string; kind?: string; requestId?: string; messageId?: string;
+  /** Typed push data the phone acts on (voice_work_done); callId names the call. */
+  type?: string; callId?: string;
 }
 
 /** Routing scope comes from this device's authenticated registration, never

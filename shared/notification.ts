@@ -13,6 +13,9 @@ export type NotifyKind =
    * there to take it: the person is the one who has to look. */
   | "incident"
   | "takeover"
+  /** A turn started from a live voice call settled. Sent whatever the
+   * bot's notifications switch says: the caller may have hung up. */
+  | "voice_work_done"
   /** The daily summary (digest.hour). Not from one bot: botId, botName and
    * threadId are empty; clients open needs-me. */
   | "digest";
@@ -35,4 +38,7 @@ export interface Notification {
    * Omitted for non-request notices and legacy producers. */
   requestId?: string;
   messageId?: string;
+  /** voice_work_done: the call the finished work was asked for on, so a
+   * phone still on that call can stay quiet (the call already says it). */
+  callId?: string;
 }

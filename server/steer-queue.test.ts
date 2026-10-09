@@ -125,6 +125,22 @@ describe("steer-queue module", () => {
     expect(run.mock.calls[0][3].peerAsk).toEqual(peerAsk);
   });
 
+  it("keeps a voice call's origin on a queued send through persistence and drain", () => {
+    const bot = fakeBot("bot-voice-origin", "thread-voice-origin", true);
+    const store = fakeStore([bot]);
+    const run = vi.fn();
+    const origin = { kind: "voice_call" as const, callId: "call-1", job: "check how many bots are online" };
+    queueSteeredMessage(bot.id, bot.threadId, "how many bots are online right now", { origin, deferUntilIdle: true });
+    queueSteeredMessage(bot.id, bot.threadId, "typed follow-up");
+    // a restart reloads the durable row; the origin must survive it
+    restoreSteeredMessages();
+    bot.busy = false;
+    drainSteeredMessages(store, run);
+    expect(store.messages.map((message) => message.origin)).toEqual([origin, undefined]);
+    expect(store.messages[0].text).toBe("how many bots are online right now");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps queue operations and other listeners working when a listener throws", () => {
     const bot = fakeBot("bot-listener-error", "thread-listener-error", false);
     const store = fakeStore([bot]);
