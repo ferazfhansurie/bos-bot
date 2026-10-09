@@ -82,6 +82,18 @@ extension Bot {
         }
     }
 
+    /// Threads the person marked done, for the collapsed "archived" section.
+    /// An archived thread that is running, waiting on someone, unread, queued
+    /// or open here is not listed: it resurfaces in the default list instead,
+    /// so a thread is never in both places.
+    public func archivedThreads(queuedThreadIds: Set<String> = []) -> [BotTask] {
+        visibleTasks.filter { task in
+            task.isArchived
+                && !task.demandsAttention(queued: queuedThreadIds.contains(task.threadId))
+                && task.threadId != threadId
+        }
+    }
+
     /// Attention outranks recency within a bot: waiting-on-you needs the
     /// person most, then working/busy, then queued, then unread. A held send
     /// is client state, so it ranks in the queued tier the way the wire
