@@ -710,6 +710,18 @@ const sessions = new SessionRegistry({
 type TeamInvite = { expiresAt: number; personId?: string; role?: Exclude<WorkspaceRole, "owner">; roomIds?: string[]; issuerId?: string };
 const teamInvites = new Map<string, TeamInvite>();
 const pendingTeamJoins = new Map<string, TeamInvite>();
+// Welcome chat (1.9.3): a stranger who just installed BOS lands in a room
+// with the owner and one granted bot. The pairing credential issues a
+// client-scope session bound to a client-guest person, so the existing guest
+// gates confine it to that room. installId keeps a retry on the same room.
+type WelcomeGuest = { installId: string; personId: string; name: string; roomId: string; createdAt: number };
+const WELCOME_FILE = join(DATA_DIR, "welcome-guests.json");
+const WELCOME_TTL_MS = 24 * 60 * 60_000;
+const welcomePairings = new Map<string, { personId: string; name: string; expiresAt: number }>();
+function welcomeGuests(): WelcomeGuest[] {
+  try { const rows = JSON.parse(readFileSync(WELCOME_FILE, "utf8")); return Array.isArray(rows) ? rows : []; }
+  catch { return []; }
+}
 const sharedComputers = new SharedComputers(id => sessions.isLive(id));
 const SESSION_COOKIE = sessionCookieName(PORT, ENVIRONMENT_ID);
 const HOSTED_WORKSPACE = hostedWorkspaceConfigured();
@@ -14180,6 +14192,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         console.warn(`pairing refused from ${requestSource(req)}: ${result.error}`);
         return json(res, result.status, { error: result.error });
       }
+      const welcome = welcomePairings.get(result.pairingId);
+      if (welcome) {
+        welcomePairings.delete(result.pairingId);
+        if (welcome.expiresAt > Date.now()) multiplayerActors.bind(result.session.id, welcome.personId, welcome.name);
+        else { sessions.revoke(result.session.id); return json(res, 401, { error: "this welcome link has expired" }); }
+      }
       const teamInvite = teamInvites.get(result.pairingId);
       if (teamInvite) {
         teamInvites.delete(result.pairingId);
@@ -14910,6 +14928,33 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const opened = sessions.openPairing({ scopes: ["peer"], label: "BOS team member" });
         teamInvites.set(opened.id, { expiresAt: opened.expiresAt, personId, role, roomIds, issuerId: actorId ?? undefined });
         return json(res, 201, { url: `${origin}/pair#code=${opened.code}`, expiresAt: opened.expiresAt });
+      }
+      if (path === "/api/multiplayer/welcome-guest" && method === "POST") {
+        if (actorId !== multiplayerActors.ownerId || !auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+        const origin = process.env.BOS_WELCOME_ORIGIN?.replace(/\/+$/, "") || await federationOrigin();
+        if (!origin) return json(res, 503, { error: "no public origin for the welcome chat" });
+        const body = await readBody(req, 4096);
+        const name = typeof body?.name === "string" ? body.name.replace(/[\u0000-\u001f\u007f]/g, "").trim() : "";
+        const installId = typeof body?.installId === "string" ? body.installId : "";
+        if (!name || name.length > 40 || !/^[\w-]{8,64}$/.test(installId)) return json(res, 400, { error: "name (1-40) and installId (8-64) required" });
+        const bot = typeof body?.botId === "string" ? store.bot(body.botId) : undefined;
+        if (!bot || bot.hidden || bot.visibility === "private") return json(res, 400, { error: "choose a shared bot to welcome guests" });
+        if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "session ended" });
+        const rows = welcomeGuests();
+        let guest = rows.find(row => row.installId === installId && store.group(row.roomId));
+        if (!guest) {
+          const personId = contactId({ homeId: ENVIRONMENT_ID, kind: "person", localId: `welcome-${randomBytes(8).toString("hex")}` });
+          const group = store.createGroup(`hi ${name}`, [bot.id], false, "welcome");
+          store.patchGroup(group.id, { peopleIds: [multiplayerActors.ownerId, personId] });
+          workspaceMembers.set(personId, "client-guest");
+          workspaceMembers.setGrants(group.id, [`${ENVIRONMENT_ID}:bot:${bot.id}`]);
+          guest = { installId, personId, name, roomId: group.id, createdAt: Date.now() };
+          writeFileAtomic(WELCOME_FILE, JSON.stringify([...rows.filter(row => row.installId !== installId), guest]), { mode: 0o600 });
+          broadcast({ kind: "group", group: publicGroupState(store.group(group.id)!) });
+        }
+        const opened = sessions.openPairing({ scopes: ["client"], label: `welcome · ${guest.name}`, ttlMs: WELCOME_TTL_MS });
+        welcomePairings.set(opened.id, { personId: guest.personId, name: guest.name, expiresAt: opened.expiresAt });
+        return json(res, 201, { url: `${origin}/pair#code=${opened.credential}`, roomId: guest.roomId, expiresAt: opened.expiresAt });
       }
       if (path === "/api/multiplayer/register" && method === "POST") {
         if (auth.kind !== "session") return json(res, 403, { error: "team invitation required" });
