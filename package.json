@@ -4,7 +4,7 @@
   "bosUpdatePolicy": {
     "mode": "offline"
   },
-  "version": "1.9.2",
+  "version": "1.9.3",
   "description": "A private, local-first multi-model AI desktop for Claude and Codex.",
   "homepage": "https://github.com/firazfhansurie/bos-bot",
   "repository": {
