@@ -693,15 +693,20 @@ export function SettingsModal() {
                   <OpenAiCompatUrl />
                   <ApiKeyRow section="xai" testProvider="xai" />
                   <div className="pt-2 text-[11.5px] font-medium uppercase tracking-wide text-ink-secondary">{t("keys.integrations.title")}</div>
+                  {/* Without a managed service the Composio key is how apps
+                      connect at all, so it leads instead of being tucked away. */}
+                  {state.config?.composio.mode !== "managed" && <ApiKeyRow section="composio" />}
                   <ApiKeyRow section="box" />
                   <VpsConnection />
                   <ApiKeyRow section="opencodeGo" />
-                  <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">
-                    <summary className="cursor-pointer text-[13px] text-ink-secondary">{t("settings.connections.selfHost")}</summary>
-                    <div className="mt-3">
-                      <ApiKeyRow section="composio" />
-                    </div>
-                  </details>
+                  {state.config?.composio.mode === "managed" && (
+                    <details className="rounded-lg border border-hairline/40 bg-inset px-3 py-2">
+                      <summary className="cursor-pointer text-[13px] text-ink-secondary">{t("settings.connections.selfHost")}</summary>
+                      <div className="mt-3">
+                        <ApiKeyRow section="composio" />
+                      </div>
+                    </details>
+                  )}
                 </div>
               </Card>
             )}

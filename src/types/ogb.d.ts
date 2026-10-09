@@ -223,6 +223,7 @@ const __APP_VERSION__: string;
       openInstallTerminal?(command: string): Promise<boolean>;
       /** Opens an http(s) link in the user's default browser. */
       openExternal?(url: string): Promise<boolean>;
+      openWelcomeChat?(url: string): Promise<boolean>;
       /** Recolor the native window chrome for a skin; absent on older builds. */
       applySkin?(skin: string): Promise<boolean>;
       /** The renderer-drawn Windows caption buttons; absent outside the

@@ -369,6 +369,8 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
   for (const [key, value] of Object.entries(parentEnv)) {
     // FAKE_CLAUDE_DUMP stays the launcher's: assertions read fixtureDumpPath.
     if (key.startsWith("FAKE_CLAUDE_") && key !== "FAKE_CLAUDE_DUMP" && value) childEnv[key] = value;
+    // "Say hi to Firaz" answers locally instead of calling bos.aihlete.com.
+    if (key === "BOS_WELCOME_STUB" && value === "1") childEnv[key] = value;
   }
   return childEnv;
 }

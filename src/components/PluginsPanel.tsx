@@ -633,15 +633,15 @@ export function PluginsPanel() {
             connection service" is advice for someone who never set one up. */}
         {!configured && !stale && (
           <div className="mx-6 mb-1 rounded-xl bg-warning/10 px-4 py-3 text-[13px] text-warning sm:mx-8">
-            {t("connectors.notConfigured")}{" "}
+            {t("connectors.needsComposioKey")}{" "}
             <button
               className={cn("font-medium underline underline-offset-2", remoteClient && "hidden")}
               onClick={() => {
                 close();
-                dispatch({ type: "toggleAppSettings", open: true });
+                dispatch({ type: "toggleAppSettings", open: true, section: "connections" });
               }}
             >
-              {t("connectors.openSettings")}
+              {t("connectors.addComposioKey")}
             </button>
           </div>
         )}

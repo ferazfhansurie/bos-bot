@@ -1,4 +1,5 @@
 import { RecruitmentWelcome } from "@/components/onboarding/RecruitmentWelcome";
+import { SayHiToFiraz } from "@/components/onboarding/SayHiToFiraz";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Menu } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
@@ -357,20 +358,32 @@ function Shell() {
 function WelcomeGate() {
   const { state, dispatch } = useStore();
   const [dismissed, setDismissed] = useState(false);
+  const [hello, setHello] = useState(false);
+  /** Only a real first run ends in "say hi to Firaz", never a replay. */
+  const firstRun = useRef(false);
   const due =
     !dismissed &&
     welcomeDue(state.config, {
       remoteClient: window.ogb?.remoteClient?.active === true,
       legacyDone: emailGateDone(),
     });
+  if (due && !state.welcomeOpen) firstRun.current = true;
+  // The hello card holds welcomeOpen so the chat tours wait behind it.
+  if (hello) return <SayHiToFiraz onDone={() => {
+    setHello(false);
+    dispatch({ type: "toggleWelcome", open: false });
+  }} />;
   // Explicit desktop connection Settings need no local provider onboarding.
   // Organisation remains optional; closing Settings resumes the normal tour.
   if (state.appSettingsOpen && ["desktopWorkspaces", "organization"].includes(state.appSettingsSection)) return null;
   if (!state.welcomeOpen && !due) return null;
   const bot = teamSetupBot(state.bots, state.config?.onboarding?.firstAssignment);
   return <RecruitmentWelcome bot={bot} onDone={() => {
+    const sayHi = firstRun.current;
+    firstRun.current = false;
     setDismissed(true);
-    dispatch({ type: "toggleWelcome", open: false });
+    setHello(sayHi);
+    dispatch({ type: "toggleWelcome", open: sayHi });
   }} />;
 }
 
