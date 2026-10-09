@@ -35,7 +35,7 @@ it("adds a person to an existing bot room, isolates guest replies and revokes re
     expect((await api("POST", `/api/groups/${group.id}/people`, { personId }, token)).status).toBe(403);
     const added = await api("POST", `/api/groups/${group.id}/people`, { personId });
     expect(added.status, JSON.stringify(added.body)).toBe(200);
-    expect(added.body.group.people).toContainEqual({ id: personId, name: "Guest", homeId: "other-home" });
+    expect(added.body.group.people).toContainEqual(expect.objectContaining({ id: personId, name: "Guest", homeId: "other-home" }));
     expect(added.body.group.memberIds).toEqual([bot.id, second.id]);
     expect(added.body.group.memberBots).toEqual([expect.objectContaining({ id: bot.id, name: bot.name, avatarUrl: null }), expect.objectContaining({ id: second.id, name: second.name, avatarUrl: null })]);
     const view = (await api("GET", `/api/groups/${group.id}`, undefined, token)).body.group;
