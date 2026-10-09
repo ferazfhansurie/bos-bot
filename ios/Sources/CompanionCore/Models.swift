@@ -237,6 +237,26 @@ public struct LeadActionSummary: Codable, Hashable, Sendable {
     }
 }
 
+/// Where a user message came from when it was not typed: today only a live
+/// voice call. `job` is the voice model's own restatement of the ask; the
+/// message text stays the caller's words.
+public struct MessageOrigin: Codable, Hashable, Sendable {
+    public var kind: String
+    public var callId: String
+    public var job: String?
+
+    public init(kind: String = "voice_call", callId: String, job: String? = nil) {
+        self.kind = kind
+        self.callId = callId
+        self.job = job
+    }
+
+    public static func voiceCall(callId: String, job: String?) -> MessageOrigin {
+        let trimmed = job?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return MessageOrigin(callId: callId, job: trimmed?.isEmpty == false ? String(trimmed!.prefix(2000)) : nil)
+    }
+}
+
 public struct Message: Codable, Hashable, Identifiable, Sendable {
     public var leadAction: LeadActionSummary?
     public enum Kind: String, Codable, Sendable {
@@ -288,6 +308,11 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     /// when it held the message, echoed back on the line that finally landed.
     /// Clients match it against their held-send rows to retire them.
     public var queueId: String?
+    /// The last message of a settled turn. A voice call reads a bot's reply
+    /// out only once it is settled, never a half-written line.
+    public var turnTerminal: Bool?
+    /// User lines spoken on a live voice call rather than typed.
+    public var origin: MessageOrigin?
     /// Rooms: which member said this.
     public var from: Sender?
     /// Rooms: which person said this, when the line is a person's.

@@ -20,6 +20,8 @@ public struct NotificationFrame: Codable, Hashable, Sendable {
     /// different request from the newest pending card on the same thread.
     public var requestId: String? = nil
     public var messageId: String? = nil
+    /// voice_work_done: the call the finished work was asked for on.
+    public var callId: String? = nil
 
     /// A bot blocked on you, as opposed to one reporting in.
     public var isBlocking: Bool { kind == "approval" || kind == "question" }
@@ -71,6 +73,8 @@ public enum Frame: Sendable {
     /// `replace` is a whole snapshot (lanes it omits are gone), otherwise
     /// the entries are updates to merge.
     case activity([ActivityFeedEntry], replace: Bool)
+    /// A bot is ringing the owner (`ring_owner`).
+    case voiceRing(VoiceRing)
     case unknown(kind: String)
 }
 
@@ -144,6 +148,10 @@ extension Frame: Decodable {
             self = .config
         case "runtime":
             self = .runtime(try container.decode(RuntimeEvent.self, forKey: .event))
+        case "voice_ring":
+            // A ring this build can't read is no ring, not a broken stream.
+            if let ring = try? VoiceRing(from: decoder) { self = .voiceRing(ring) }
+            else { self = .unknown(kind: kind) }
         case activityFeedEventName:
             // Never throws: an unreadable activity frame is an empty
             // update, not a lost one.

@@ -18,6 +18,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     var sharedRoomHandler: ((String, String?) -> Void)?
     var foregroundPresentation: (@MainActor (NotificationTarget) -> NotificationPresentation)?
     var foregroundSharedPresentation: (@MainActor (String, String?) -> NotificationPresentation)?
+    var foregroundVoicePresentation: (@MainActor (VoicePush) -> NotificationPresentation)?
     /// BOS 2.0 cloud rooms. A tap that launches the app arrives before any
     /// view sets the handler; it waits in `pendingCloudHint` until one does.
     var cloudHintHandler: (@MainActor (CloudPushHint) -> Void)? {
@@ -26,6 +27,12 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     var foregroundCloudPresentation: (@MainActor (CloudPushHint) -> NotificationPresentation)?
     var cloudTokenHandler: ((Data) -> Void)?
     private(set) var pendingCloudHint: CloudPushHint?
+    /// Voice pushes: "call back" or a tap on a done push, Accept on a ring.
+    /// A launch-tap waits here like the cloud hint does.
+    var voiceHandler: (@MainActor (VoiceNotificationAction) -> Void)? {
+        didSet { if let action = pendingVoiceAction, let voiceHandler { pendingVoiceAction = nil; Task { @MainActor in voiceHandler(action) } } }
+    }
+    private var pendingVoiceAction: VoiceNotificationAction?
     /// The last APNs token this launch, for a handler set after it arrived.
     private(set) var deviceToken: Data?
     private var replay = NotificationReplayLedger(ids: UserDefaults.standard.stringArray(forKey: "bos.notificationReplayIDs") ?? [])
@@ -33,6 +40,18 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     private override init() {
         super.init()
         center.delegate = self
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: VoicePush.workDoneCategory, actions: [
+                UNNotificationAction(identifier: VoicePush.callBackAction, title: "Call back",
+                                     options: [.foreground], icon: UNNotificationActionIcon(systemImageName: "phone.fill")),
+            ], intentIdentifiers: []),
+            UNNotificationCategory(identifier: VoicePush.ringCategory, actions: [
+                UNNotificationAction(identifier: VoicePush.acceptAction, title: "Accept",
+                                     options: [.foreground], icon: UNNotificationActionIcon(systemImageName: "phone.fill")),
+                UNNotificationAction(identifier: VoicePush.declineAction, title: "Decline",
+                                     options: [.destructive], icon: UNNotificationActionIcon(systemImageName: "phone.down.fill")),
+            ], intentIdentifiers: []),
+        ])
     }
 
     func authorizationStatus() async -> UNAuthorizationStatus {
@@ -47,14 +66,18 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
 
     func deliver(_ notification: NotificationFrame, sequence: Int?, connectionId: String,
                  requestId: String? = nil, messageId: String? = nil) {
-        let identifier = "openmaus.\(connectionId).\(notification.threadId).\(sequence.map(String.init) ?? requestId ?? notification.title)"
+        let voiceDone = notification.kind == "voice_work_done"
+        let identifier = voiceDone
+            ? "voice-done.\(connectionId).\(messageId ?? notification.callId ?? notification.threadId)"
+            : "openmaus.\(connectionId).\(notification.threadId).\(sequence.map(String.init) ?? requestId ?? notification.title)"
         guard replay.insert(identifier) else { return }
         UserDefaults.standard.set(replay.ids, forKey: "bos.notificationReplayIDs")
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.body = notification.body
         content.sound = .default
-        content.categoryIdentifier = notification.isBlocking ? "OPENMAUS_APPROVAL" : "OPENMAUS_UPDATE"
+        content.categoryIdentifier = voiceDone ? VoicePush.workDoneCategory
+            : notification.isBlocking ? "OPENMAUS_APPROVAL" : "OPENMAUS_UPDATE"
         content.threadIdentifier = notification.threadId
         content.userInfo = [
             "threadId": notification.threadId,
@@ -64,11 +87,22 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         ]
         if let requestId { content.userInfo["requestId"] = requestId }
         if let messageId { content.userInfo["messageId"] = messageId }
+        if let callId = notification.callId { content.userInfo["callId"] = callId }
         if notification.isBlocking { content.interruptionLevel = .timeSensitive }
 
         // A replay after a short disconnect must reconcile a missed alert,
         // but a repeated frame must not draw it twice.
         center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+    }
+
+    /// A done push for a call that is still live: the call already says it,
+    /// so a banner that slipped through (screen locked mid-call) goes away.
+    func removeVoiceDone(callId: String) {
+        center.getDeliveredNotifications { [center] delivered in
+            let ids = delivered.filter { ($0.request.content.userInfo["callId"] as? String) == callId }
+                .map(\.request.identifier)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
     }
 
     func receivedDeviceToken(_ token: Data) {
@@ -88,7 +122,9 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         let payload = Self.strings(notification.request.content.userInfo)
         Task { @MainActor in
             let presentation: NotificationPresentation
-            if let hint = CloudPushHint(userInfo: notification.request.content.userInfo) {
+            if let push = VoicePush(payload: payload) {
+                presentation = foregroundVoicePresentation?(push) ?? .alert
+            } else if let hint = CloudPushHint(userInfo: notification.request.content.userInfo) {
                 presentation = foregroundCloudPresentation?(hint) ?? .quiet
             } else if let roomID = payload["roomId"] {
                 presentation = foregroundSharedPresentation?(roomID, payload["connectionId"]) ?? .quiet
@@ -111,7 +147,11 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let strings = Self.strings(response.notification.request.content.userInfo)
-        if let hint = CloudPushHint(userInfo: response.notification.request.content.userInfo) {
+        if let push = VoicePush(payload: strings),
+           let action = VoiceNotificationAction(push: push, actionIdentifier: response.actionIdentifier,
+                                                body: response.notification.request.content.body, payload: strings) {
+            if let voiceHandler { Task { @MainActor in voiceHandler(action) } } else { pendingVoiceAction = action }
+        } else if let hint = CloudPushHint(userInfo: response.notification.request.content.userInfo) {
             if let cloudHintHandler { Task { @MainActor in cloudHintHandler(hint) } } else { pendingCloudHint = hint }
         } else if let roomID = strings["roomId"] { sharedRoomHandler?(roomID, strings["connectionId"]) }
         else if let target = NotificationTarget(payload: strings) { responseHandler?(target) }
@@ -126,3 +166,32 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     }
 }
 // branding compatibility (electron/branding-compat.json): notification-identity: posted phone notification and service intents keep their identity; ios-notification-category: already delivered phone notifications retain their registered action categories
+
+/// What a person did with a voice push.
+enum VoiceNotificationAction {
+    /// "Call back" on a done push: open the thread and call, opening with
+    /// the result.
+    case callBack(NotificationTarget, result: String)
+    /// A plain tap on a done push: open the thread.
+    case open(NotificationTarget)
+    /// Accept on a ring, or a tap on it.
+    case accept(VoiceRing, connectionId: String?)
+
+    init?(push: VoicePush, actionIdentifier: String, body: String, payload: [String: String]) {
+        switch push {
+        case let .workDone(botId, threadId, _, messageId):
+            guard let target = NotificationTarget(botId: botId, threadId: threadId, connectionId: payload["connectionId"],
+                                                  messageId: messageId, kind: "voice_work_done") else { return nil }
+            switch actionIdentifier {
+            case VoicePush.callBackAction: self = .callBack(target, result: body)
+            case UNNotificationDismissActionIdentifier: return nil
+            default: self = .open(target)
+            }
+        case let .ring(ring):
+            switch actionIdentifier {
+            case VoicePush.declineAction, UNNotificationDismissActionIdentifier: return nil
+            default: self = .accept(ring, connectionId: payload["connectionId"])
+            }
+        }
+    }
+}

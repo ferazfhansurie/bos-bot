@@ -336,6 +336,31 @@ final class RealtimeVoiceTests: XCTestCase {
         XCTAssertTrue(tool.jsonString().contains(#""name":"send_task""#))
     }
 
+    func testVoiceSendCarriesTheCallOrigin() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [VoiceCallStub.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = CompanionClient(connection: Connection(name: "Test", host: "127.0.0.1", port: 8810), token: "t", session: session)
+        VoiceCallStub.statusCode = 200
+        VoiceCallStub.responseBody = Data(#"{"ok":true}"#.utf8)
+        _ = try await client.send(text: "how many bots are online", toBot: "bot-1", threadId: "t-1",
+                                  origin: .voiceCall(callId: "call-1", job: "  Count the bots online. "))
+        let request = try XCTUnwrap(VoiceCallStub.capturedRequest)
+        XCTAssertEqual(request.url?.path, "/api/bots/bot-1/messages")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(VoiceCallStub.capturedBody)) as? [String: Any])
+        XCTAssertEqual(body["text"] as? String, "how many bots are online")
+        XCTAssertEqual(body["threadId"] as? String, "t-1")
+        let origin = try XCTUnwrap(body["origin"] as? [String: Any])
+        XCTAssertEqual(origin["kind"] as? String, "voice_call")
+        XCTAssertEqual(origin["callId"] as? String, "call-1")
+        XCTAssertEqual(origin["job"] as? String, "Count the bots online.")
+
+        _ = try await client.send(text: "typed", toBot: "bot-1")
+        let plain = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(VoiceCallStub.capturedBody)) as? [String: Any])
+        XCTAssertNil(plain["origin"])
+    }
+
     func testVoiceCallSurfacesTheMissingKeyMessage() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [VoiceCallStub.self]
