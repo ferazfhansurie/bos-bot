@@ -538,7 +538,7 @@ import {
   serializeSessionCookie,
   sessionCookieName,
 } from "./request-auth.ts";
-import { cookieMaxAgeSeconds, formatPairingCode, SessionRegistry, type Scope } from "./sessions.ts";
+import { cookieMaxAgeSeconds, formatPairingCode, REVIEW_PAIRING_MAX_TTL_MS, SessionRegistry, type Scope } from "./sessions.ts";
 import { normalizeMausColor } from "../shared/glyph-faces.ts";
 import { describeBrand, loadBrand } from "./brand.ts";
 import { deliverSseFrame } from "./sse-fanout.ts";
@@ -15522,7 +15522,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const requested: unknown = body?.scopes;
       const scopes = Array.isArray(requested) ? requested.filter((v): v is Scope => v === "admin" || v === "client" || v === "peer") : undefined;
-      const opened = sessions.openPairing({ label: typeof body?.label === "string" ? body.label : undefined, scopes });
+      if (body?.reusable !== undefined && typeof body.reusable !== "boolean") return json(res, 400, { error: "reusable must be a boolean" });
+      const reusable = body?.reusable === true;
+      if (body?.ttlMs !== undefined && (!reusable || !Number.isSafeInteger(body.ttlMs) || body.ttlMs <= 0 || body.ttlMs > REVIEW_PAIRING_MAX_TTL_MS)) {
+        return json(res, 400, { error: "ttlMs is only for review pairing and must be positive and at most 365 days" });
+      }
+      const opened = sessions.openPairing({ label: typeof body?.label === "string" ? body.label : undefined, scopes, reusable, ttlMs: body?.ttlMs });
       const origin = requestOrigin(req);
       const base = publicUrl() ?? (auth.kind === "session" && origin ? origin : null);
       const code = formatPairingCode(opened.code);
@@ -15539,6 +15544,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         code,
         credential: opened.credential,
         expiresAt: opened.expiresAt,
+        ...(reusable ? { reusable: true, scopes: ["client"] } : {}),
         url: base ? `${base}/pair#code=${code}` : null,
         inviteUrl: invite,
         serverName,

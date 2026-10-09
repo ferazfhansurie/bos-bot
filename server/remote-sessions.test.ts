@@ -137,6 +137,12 @@ beforeAll(async () => {
     vps: { sshAlias: "fixture-private-host" },
     browserProfiles: [{ id: "fixture", name: "Fixture browser", partitionId: "fixture-private-partition" }],
   }));
+  await startFixtureServer();
+}, 30_000);
+
+async function startFixtureServer(): Promise<void> {
+  stderr = "";
+  const staticDir = join(home, "static");
   child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: ROOT,
     env: {
@@ -169,7 +175,7 @@ beforeAll(async () => {
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`server did not start:\n${stderr}`);
-}, 30_000);
+}
 
 afterAll(async () => {
   await waitForExit(child, { signal: "SIGTERM" });
@@ -224,6 +230,39 @@ describe("before pairing", () => {
 });
 
 describe("pairing", () => {
+  it("reuses review access for three independent client devices, denies admin routes and persists cancellation", async () => {
+    const opened = await call("/api/auth/pairing", { method: "POST", body: JSON.stringify({ reusable: true, ttlMs: 30 * 86400_000, scopes: ["admin", "client"] }) });
+    expect(opened.status).toBe(200);
+    expect(opened.body).toMatchObject({ reusable: true, scopes: ["client"] });
+    const devices = [];
+    for (let i = 0; i < 3; i++) {
+      const paired = await call("/api/auth/pair", { method: "POST", headers: remote(`10.0.0.${60+i}`), body: JSON.stringify({ code: i === 2 ? opened.body.credential : opened.body.code, label: `review device ${i}`, scopes: ["admin"] }) });
+      expect(paired.status).toBe(200);
+      expect(paired.body.session.scopes).toEqual(["client"]);
+      devices.push(paired.body);
+    }
+    expect(new Set(devices.map(d => d.session.id)).size).toBe(3);
+    const headers = remote("10.0.0.60", { authorization: `Bearer ${devices[0]!.token}` });
+    for (const [method, path] of [["POST", "/api/auth/pairing"], ["GET", "/api/auth/pairing"], ["DELETE", `/api/auth/pairing/${opened.body.id}`], ["GET", "/api/auth/sessions"], ["PATCH", "/api/settings"], ["PUT", "/api/config"]]) {
+      expect((await call(path!, { method, headers, ...(method === "POST" || method === "PATCH" ? { body: "{}" } : {}) })).status).toBe(403);
+    }
+    expect((await call("/api/bots", { headers })).status).toBe(200);
+    const listed = await call("/api/auth/pairing");
+    expect(listed.body.pairings).toContainEqual(expect.objectContaining({ id: opened.body.id, label: "review", reusable: true }));
+    expect(JSON.stringify(listed.body)).not.toContain(opened.body.credential);
+    expect((await call(`/api/auth/sessions/${devices[0]!.session.id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await call("/api/bots", { headers })).status).toBe(401);
+    expect((await call("/api/bots", { headers: remote("10.0.0.61", { authorization: `Bearer ${devices[1]!.token}` }) })).status).toBe(200);
+    expect((await call(`/api/auth/pairing/${opened.body.id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await call("/api/auth/pair", { method: "POST", headers: remote("10.0.0.63"), body: JSON.stringify({ code: opened.body.code }) })).status).toBe(401);
+  });
+
+  it("rejects invalid review lifetime and reusable inputs", async () => {
+    for (const body of [{ reusable: "true" }, { reusable: true, ttlMs: 0 }, { reusable: true, ttlMs: 1.5 }, { reusable: true, ttlMs: 366 * 86400_000 }, { ttlMs: 300_000 }]) {
+      expect((await call("/api/auth/pairing", { method: "POST", body: JSON.stringify(body) })).status).toBe(400);
+    }
+  });
+
   it("mints a code on the server with a link built from the public address", async () => {
     const opened = await pairingCode();
     expect(opened.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
@@ -519,12 +558,12 @@ describe("pairing", () => {
       return opened;
     }
     function expectClientConfig(config: any) {
-      expect(config.profile).toEqual({ name: "Updated fixture", email: "" });
+      expect(config.profile).toEqual({ name: "Updated fixture", email: "", avatarUrl: "" });
       expect(config.vps).toEqual({ configured: true, sshAlias: "" });
       expect(config.browserProfiles).toEqual([{ id: "fixture", name: "Fixture browser" }]);
     }
     function expectAdminConfig(config: any) {
-      expect(config.profile).toEqual({ name: "Updated fixture", email: "updated-private@example.invalid" });
+      expect(config.profile).toEqual({ name: "Updated fixture", email: "updated-private@example.invalid", avatarUrl: "" });
       expect(config.vps).toEqual({ configured: true, sshAlias: "fixture-private-host" });
       expect(config.browserProfiles).toEqual([{ id: "fixture", name: "Fixture browser", partitionId: "fixture-private-partition" }]);
     }
@@ -585,3 +624,26 @@ describe("pairing", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+
+
+describe("durable review pairing over HTTP", () => {
+  it("keeps invitations and independent devices through real server restarts, including cancellation", async () => {
+    const opened = await call("/api/auth/pairing", { method: "POST", body: JSON.stringify({ reusable: true }) });
+    expect(opened.status).toBe(200);
+    const first = await call("/api/auth/pair", { method: "POST", headers: remote("10.0.0.80"), body: JSON.stringify({ code: opened.body.code, label: "before restart" }) });
+    expect(first.status).toBe(200);
+    await waitForExit(child, { signal: "SIGTERM" });
+    await startFixtureServer();
+    expect((await call("/api/bots", { headers: remote("10.0.0.80", { authorization: `Bearer ${first.body.token}` }) })).status).toBe(200);
+    const second = await call("/api/auth/pair", { method: "POST", headers: remote("10.0.0.81"), body: JSON.stringify({ code: opened.body.code, label: "after restart" }) });
+    expect(second.status).toBe(200);
+    expect(second.body.session.id).not.toBe(first.body.session.id);
+    expect(second.body.session.scopes).toEqual(["client"]);
+    expect((await call(`/api/auth/pairing/${opened.body.id}`, { method: "DELETE" })).status).toBe(200);
+    await waitForExit(child, { signal: "SIGTERM" });
+    await startFixtureServer();
+    expect((await call("/api/auth/pair", { method: "POST", headers: remote("10.0.0.82"), body: JSON.stringify({ code: opened.body.code }) })).status).toBe(401);
+    expect((await call("/api/bots", { headers: remote("10.0.0.81", { authorization: `Bearer ${second.body.token}` }) })).status).toBe(200);
+  });
+});

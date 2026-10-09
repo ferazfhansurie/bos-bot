@@ -517,3 +517,109 @@ describe("stream tickets", () => {
     expect(registry.redeemStreamTicket(orphan)).toBeNull();
   });
 });
+
+
+describe("reusable review pairing", () => {
+  it("gives three devices independent client-only sessions and supports individual revocation", () => {
+    const invitation = registry.openPairing({ reusable: true, scopes: ["admin", "client"], ttlMs: 30 * 86400_000 });
+    const devices = [0, 1, 2].map(i => registry.exchange({ code: i === 2 ? invitation.credential : invitation.code, label: `device ${i}`, source: `device-${i}` }));
+    const sessions = devices.map(d => { if (!d.ok) throw new Error(d.error); return d; });
+    expect(new Set(sessions.map(d => d.token)).size).toBe(3);
+    expect(new Set(sessions.map(d => d.session.id)).size).toBe(3);
+    for (const d of sessions) expect(d.session.scopes).toEqual(["client"]);
+    expect(registry.openPairings()).toEqual([expect.objectContaining({ id: invitation.id, label: "review", scopes: ["client"], reusable: true })]);
+    expect(registry.revoke(sessions[0]!.session.id)).toBe(true);
+    expect(registry.authenticate(sessions[0]!.token)).toBeNull();
+    expect(registry.authenticate(sessions[1]!.token)).not.toBeNull();
+    expect(registry.exchange({ code: invitation.code, label: "fourth", source: "fourth" }).ok).toBe(true);
+  });
+
+  it.each([false, true])("survives a restart (unclean=%s), storing hashes only and leaving ordinary invites ephemeral", (unclean) => {
+    const review = registry.openPairing({ reusable: true });
+    const ordinary = registry.openPairing();
+    const paired = registry.exchange({ code: review.code, label: "first", source: "first" });
+    if (!paired.ok) throw new Error(paired.error);
+    const raw = readFileSync(file(), "utf8");
+    for (const secret of [review.code, review.credential, paired.token, ordinary.code, ordinary.credential]) expect(raw).not.toContain(secret);
+    expect(statSync(file()).mode & 0o777).toBe(0o600);
+    if (!unclean) registry.close();
+    registry = new SessionRegistry({ file: file(), now: () => clock });
+    expect(registry.openPairings()).toHaveLength(1);
+    expect(registry.authenticate(paired.token)).not.toBeNull();
+    expect(registry.exchange({ code: ordinary.code, label: "lost", source: "lost" }).ok).toBe(false);
+    expect(registry.exchange({ code: review.credential, label: "second", source: "second" }).ok).toBe(true);
+  });
+
+  it("persists cancellation, rejects code/credential retries, and leaves existing devices individually revocable", () => {
+    const review = registry.openPairing({ reusable: true });
+    const first = registry.exchange({ code: review.code, label: "first", source: "first", attemptId: "attempt-first" });
+    registry.exchange({ code: review.credential, label: "second", source: "second", attemptId: "attempt-second" });
+    expect(registry.cancelPairing(review.id)).toBe(true);
+    expect(registry.cancelPairing(review.id)).toBe(false);
+    expect(registry.exchange({ code: review.code, label: "retry", source: "first", attemptId: "attempt-first" }).ok).toBe(false);
+    expect(registry.exchange({ code: review.credential, label: "retry", source: "second", attemptId: "attempt-second" }).ok).toBe(false);
+    if (!first.ok) throw new Error(first.error);
+    expect(registry.authenticate(first.token)).not.toBeNull();
+    registry.close();
+    registry = new SessionRegistry({ file: file(), now: () => clock });
+    expect(registry.openPairings()).toEqual([]);
+    expect(registry.exchange({ code: review.code, label: "after restart", source: "third" }).ok).toBe(false);
+  });
+
+  it("replays a lost response only while the invitation and device are live", () => {
+    const review = registry.openPairing({ reusable: true, ttlMs: 1000 });
+    const input = { code: review.code, label: "first", source: "first", attemptId: "attempt-first" };
+    const first = registry.exchange(input);
+    expect(registry.exchange(input)).toEqual(first);
+    expect(registry.list()).toHaveLength(1);
+    clock += 1000;
+    expect(registry.exchange(input).ok).toBe(false);
+    expect(registry.openPairings()).toEqual([]);
+    registry.close();
+    registry = new SessionRegistry({ file: file(), now: () => clock });
+    expect(registry.exchange({ ...input, code: review.credential }).ok).toBe(false);
+  });
+
+  it("does not replay a revoked device token or mint a replacement for the same attempt", () => {
+    const review = registry.openPairing({ reusable: true });
+    const input = { code: review.code, label: "first", source: "first", attemptId: "attempt-first" };
+    const paired = registry.exchange(input);
+    if (!paired.ok) throw new Error(paired.error);
+    registry.revoke(paired.session.id);
+    expect(registry.exchange(input).ok).toBe(false);
+    expect(registry.list()).toEqual([]);
+    expect(registry.exchange({ ...input, attemptId: "new-attempt" }).ok).toBe(true);
+  });
+
+  it("does not report cancellation as durable when the write fails", () => {
+    const review = registry.openPairing({ reusable: true });
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementation(() => { throw new Error("disk unavailable"); });
+    expect(() => registry.cancelPairing(review.id)).toThrow("disk unavailable");
+    expect(registry.openPairings()).toContainEqual(expect.objectContaining({ id: review.id }));
+    vi.restoreAllMocks();
+    registry.close();
+    registry = new SessionRegistry({ file: file(), now: () => clock });
+    expect(registry.exchange({ code: review.code, label: "later", source: "later" }).ok).toBe(true);
+  });
+
+  it("refuses to restore a persisted review invitation with admin scope", () => {
+    const review = registry.openPairing({ reusable: true });
+    registry.close();
+    const saved = JSON.parse(readFileSync(file(), "utf8"));
+    saved.reviewPairings[0].scopes = ["client", "admin"];
+    writeFileSync(file(), JSON.stringify(saved));
+    registry = new SessionRegistry({ file: file(), now: () => clock });
+    expect(registry.exchange({ code: review.code, label: "later", source: "later" }).ok).toBe(false);
+  });
+
+  it.each([0, -1, NaN, Infinity, 1.5, 366 * 86400_000])("rejects invalid lifetime %s before opening anything", ttlMs => {
+    expect(() => registry.openPairing({ reusable: true, ttlMs })).toThrow(/lifetime/);
+    expect(registry.openPairings()).toEqual([]);
+  });
+
+  it("does not return a usable invitation if persistence fails", () => {
+    vi.spyOn(atomic, "writeFileAtomic").mockImplementation(() => { throw new Error("disk unavailable"); });
+    expect(() => registry.openPairing({ reusable: true })).toThrow("disk unavailable");
+    expect(registry.openPairings()).toEqual([]);
+  });
+});

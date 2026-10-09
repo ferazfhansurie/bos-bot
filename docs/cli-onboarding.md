@@ -62,6 +62,7 @@ The examples below assume a global install; prefix them with `npx` otherwise.
 | `bosbot --local` | Ignore saved remote access for this launch; keep the saved choice for next time. |
 | `bosbot --no-pair` | Suppress phone setup prompts and pairing invitations. This does **not** turn off saved remote access; use `--local` for that. |
 | `bosbot pair` | Create another phone invitation while the configured workspace and HTTPS connection are running. |
+| `bosbot pair --review --days 30` | Create reusable, client-only access to the running review workspace. Prints the link, code and full expiry date. |
 | `bosbot sessions` | List paired devices; `bosbot sessions revoke ID` signs one out. |
 | `bosbot serve` | Start without onboarding prompts or automatic browser opening; specify remote-access flags explicitly for a service. |
 | `bosbot login` | Sign in to an BOS Bot account for `--tunnel`; this does not sign in to an AI provider or start the tunnel. |
@@ -74,6 +75,25 @@ bosbot --data-dir /path/to/omb-data --port 8799
 ```
 
 Setup needs an interactive terminal. Later starts can run without one once setup is complete. Stop a running server before changing its setup or access mode: `--local` does not turn off a remote connection belonging to a server that is already running. You do not need to delete configuration, bots, or conversations to reconfigure it.
+
+## App review access
+
+On the demo server, run `bosbot pair --review --days 30` with its existing
+`--data-dir` and `--port`. The command checks that the advertised public HTTPS address
+identifies this workspace; `--public-url https://host` can supply that address.
+It runs without a phone selection prompt. Days must be a whole number from
+1 to 365; the default is 30.
+
+Paste the printed HTTPS pairing link into the phone app. Review invitations
+can connect multiple devices and survive server restarts. Each device gets
+its own session with chat and approval access. Review devices cannot change
+server settings, list sessions, or create or cancel invitations.
+
+The admin pairing list labels these invitations `review`. Cancel an invitation
+with `DELETE /api/auth/pairing/ID` to prevent more devices connecting. Existing
+devices keep their sessions: use `bosbot sessions revoke ID` for each
+device that should lose access. Ordinary invitations still expire after five
+minutes, work once, and disappear on restart.
 
 ## Credentials and cancellation
 

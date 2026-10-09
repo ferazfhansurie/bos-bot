@@ -2,7 +2,7 @@ import { compatEnv } from "../electron/branding-env.cjs";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runPair, type CliOptions } from "./cli.ts";
+import { parseArgs, runPair, type CliOptions } from "./cli.ts";
 import { SetupCancelled } from "./cli-prompts.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
@@ -161,3 +161,45 @@ describe("guided phone pairing address discovery", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+
+
+describe("review pairing command", () => {
+  it("parses review days and rejects invalid or misplaced lifetime options", () => {
+    expect(parseArgs(["pair", "--review", "--days", "30"])).toMatchObject({ review: true, days: 30 });
+    for (const days of ["0", "-1", "1.5", "366", "NaN", "Infinity"]) expect(parseArgs(["pair", "--review", "--days", days])).toHaveProperty("error");
+    expect(parseArgs(["pair", "--days", "30"])).toHaveProperty("error");
+    expect(parseArgs(["serve", "--review"])).toHaveProperty("error");
+  });
+
+  it.each([undefined, 7])("mints client-only reusable access without a phone chooser (days=%s)", async days => {
+    const ordinary = fetchMock.getMockImplementation()!;
+    const expiresAt = Date.now() + (days ?? 30) * 86400_000;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/api/auth/pairing") && init?.method === "POST") return Response.json({ code, reusable: true, scopes: ["client"], expiresAt, url: `${advertisedOrigin}/pair#code=${code}` });
+      return ordinary(input, init);
+    });
+    expect(await runPair({ ...options, review: true, days })).toBe(0);
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]!.body))).toMatchObject({ scopes: ["client"], reusable: true, ttlMs: (days ?? 30) * 86400_000 });
+    const transcript = vi.mocked(console.log).mock.calls.flat().join("\n");
+    expect(transcript).toContain(`${advertisedOrigin}/pair#code=${code}`);
+    expect(transcript).toContain(code);
+    expect(transcript).toContain(new Date(expiresAt).toISOString());
+    expect(mocks.ui.choose).not.toHaveBeenCalled();
+  });
+
+  it("refuses an older server that silently minted a single-use invitation", async () => {
+    await expect(runPair({ ...options, review: true })).rejects.toThrow(/does not support reusable/);
+    expect(vi.mocked(console.log).mock.calls.flat().join("\n")).not.toContain(code);
+  });
+
+  it("does not mint review access if the public address is absent or belongs to another workspace", async () => {
+    publicUrl = null;
+    expect(await runPair({ ...options, review: true })).toBe(1);
+    publicUrl = advertisedOrigin;
+    remoteWorkspaceId = "other";
+    expect(await runPair({ ...options, review: true })).toBe(1);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+});

@@ -35,6 +35,9 @@ recipe from sending messages to the user's running app by accident.
 
 ## Drive
 
+The [review pairing fixture](review-pairing.md) checks reusable client-only
+invitations, real server restarts, cancellation and per-device revocation.
+
 Use only mapped, tested commands:
 
 - [Chat turns](chat-turns.md)

@@ -2,6 +2,8 @@ import { compatEnv } from "../electron/branding-env.cjs";
 // Pairing codes, sessions and stream tickets for clients that are not on
 // this machine. The shape the iOS companion already proved (short-lived
 // pairing → durable per-device credential, hashed at rest), generalized.
+// Explicit review invitations are reusable, client-only and durable until
+// their expiry or cancellation; ordinary invitations remain single-use.
 //
 // A pairing code is 12 characters from a 32-symbol alphabet with no 0/O/1/I
 // (60 bits), single use, five minutes. Exchanging it yields an opaque
@@ -21,6 +23,8 @@ export const SCOPES: readonly Scope[] = ["admin", "client", "peer"];
 export const PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const PAIRING_CODE_LENGTH = 12;
 export const PAIRING_CODE_TTL_MS = 5 * 60_000;
+export const REVIEW_PAIRING_DEFAULT_TTL_MS = 30 * 24 * 60 * 60_000;
+export const REVIEW_PAIRING_MAX_TTL_MS = 365 * 24 * 60 * 60_000;
 /** A whole number of days from an environment variable, as milliseconds.
  * Anything that is not a whole number of days between 1 and 3650 falls back
  * to the default rather than being clamped, so a typo is not silently
@@ -81,7 +85,22 @@ const sessionSchema = z.object({
   membershipAuthority: z.literal("portal").optional(),
 });
 
-const fileSchema = z.object({ version: z.literal(1), sessions: z.array(sessionSchema) });
+// Only reusable client invitations are durable. Ordinary admin invitations
+// retain their five-minute, in-memory, single-use behavior.
+const reviewPairingSchema = z.object({
+  id: z.string().min(1),
+  codeHash: z.string().regex(/^[a-f0-9]{64}$/),
+  credentialHash: z.string().regex(/^[a-f0-9]{64}$/),
+  scopes: z.tuple([z.literal("client")]),
+  label: z.string().max(80),
+  createdAt: z.number().finite(),
+  expiresAt: z.number().finite(),
+  reusable: z.literal(true),
+}).refine(p => p.expiresAt > p.createdAt && p.expiresAt - p.createdAt <= REVIEW_PAIRING_MAX_TTL_MS);
+const fileSchema = z.object({
+  version: z.literal(1), sessions: z.array(sessionSchema),
+  reviewPairings: z.array(reviewPairingSchema).optional().default([]),
+});
 
 export type SessionRecord = z.infer<typeof sessionSchema>;
 
@@ -107,6 +126,7 @@ export interface PairingCode {
   label: string;
   createdAt: number;
   expiresAt: number;
+  reusable?: true;
 }
 
 export interface PublicPairing {
@@ -115,6 +135,7 @@ export interface PublicPairing {
   scopes: Scope[];
   createdAt: number;
   expiresAt: number;
+  reusable?: true;
 }
 
 export type ExchangeResult =
@@ -237,7 +258,10 @@ export class SessionRegistry {
       return; // unreadable: start empty rather than refuse to boot; pairing again is cheap
     }
     const parsed = fileSchema.safeParse(raw);
-    if (parsed.success) this.sessions = parsed.data.sessions.filter(session => restoreAccounts || (session.email === undefined && session.userId === undefined));
+    if (parsed.success) {
+      this.sessions = parsed.data.sessions.filter(session => restoreAccounts || (session.email === undefined && session.userId === undefined));
+      this.pairings = parsed.data.reviewPairings.filter(p => p.expiresAt > this.now());
+    }
   }
 
   private syncDirectory(): void {
@@ -253,7 +277,7 @@ export class SessionRegistry {
     if (this.closed) throw new Error("Session registry is closed.");
     const dir = dirname(this.options.file);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileAtomic(this.options.file, JSON.stringify({ version: 1, sessions: this.sessions }, null, 2) + "\n", { mode: 0o600 });
+    writeFileAtomic(this.options.file, JSON.stringify({ version: 1, sessions: this.sessions, reviewPairings: this.pairings.filter(p => p.reusable) }, null, 2) + "\n", { mode: 0o600 });
     this.syncDirectory();
   }
 
@@ -277,6 +301,7 @@ export class SessionRegistry {
   private prune(): void {
     this.revalidateEmailSessions();
     const now = this.now();
+    const expiredReviewPairings = this.pairings.some(p => p.reusable && p.expiresAt <= now);
     this.pairings = this.pairings.filter((p) => p.expiresAt > now);
     this.replays = this.replays.filter((r) => r.expiresAt > now);
     for (const [hash, ticket] of this.tickets) if (ticket.expiresAt <= now) this.tickets.delete(hash);
@@ -289,6 +314,7 @@ export class SessionRegistry {
       for (const s of expired) this.forget(s.id);
       this.persist();
     }
+    if (expiredReviewPairings && !expired.length) this.persist();
   }
 
   /** Called with a session id whenever it stops being valid (revoked,
@@ -306,34 +332,51 @@ export class SessionRegistry {
 
   // ── pairing ────────────────────────────────────────────────────────────
 
-  openPairing(input: { scopes?: Scope[]; label?: string; ttlMs?: number } = {}): { id: string; code: string; credential: string; expiresAt: number } {
+  openPairing(input: { scopes?: Scope[]; label?: string; ttlMs?: number; reusable?: boolean } = {}): { id: string; code: string; credential: string; expiresAt: number } {
     this.prune();
+    const ttlMs = input.ttlMs ?? (input.reusable ? REVIEW_PAIRING_DEFAULT_TTL_MS : PAIRING_CODE_TTL_MS);
+    if (input.reusable && (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > REVIEW_PAIRING_MAX_TTL_MS)) {
+      throw new Error("Review pairing lifetime must be positive and at most 365 days.");
+    }
     const now = this.now();
     const code = generatePairingCode();
     const credential = generatePairingCredential();
-    const scopes = input.scopes?.length ? [...new Set(input.scopes)] : ["admin", "client"] satisfies Scope[];
+    const scopes: Scope[] = input.reusable ? ["client"] : input.scopes?.length ? [...new Set(input.scopes)] : ["admin", "client"];
     const pairing: PairingCode = {
       id: randomUUID(),
       codeHash: sha256(code),
       credentialHash: sha256(credential),
       scopes,
-      label: (input.label ?? "").trim().slice(0, 80),
+      label: (input.reusable ? `review${input.label?.trim() ? `: ${input.label.trim()}` : ""}` : (input.label ?? "").trim()).slice(0, 80),
       createdAt: now,
-      expiresAt: now + (input.ttlMs ?? PAIRING_CODE_TTL_MS),
+      expiresAt: now + ttlMs,
+      ...(input.reusable ? { reusable: true as const } : {}),
     };
     this.pairings.push(pairing);
+    if (pairing.reusable) {
+      try { this.persist(); } catch (error) {
+        this.pairings = this.pairings.filter(p => p.id !== pairing.id);
+        throw error;
+      }
+    }
     return { id: pairing.id, code, credential, expiresAt: pairing.expiresAt };
   }
 
   openPairings(): PublicPairing[] {
     this.prune();
-    return this.pairings.map((p) => ({ id: p.id, label: p.label, scopes: [...p.scopes], createdAt: p.createdAt, expiresAt: p.expiresAt }));
+    return this.pairings.map((p) => ({ id: p.id, label: p.label, scopes: [...p.scopes], createdAt: p.createdAt, expiresAt: p.expiresAt, ...(p.reusable ? { reusable: true as const } : {}) }));
   }
 
   cancelPairing(id: string): boolean {
-    const before = this.pairings.length;
+    const pairing = this.pairings.find(p => p.id === id);
+    if (!pairing) return false;
+    const before = this.pairings;
     this.pairings = this.pairings.filter((p) => p.id !== id);
-    return this.pairings.length !== before;
+    if (pairing.reusable) {
+      try { this.persist(); } catch (error) { this.pairings = before; throw error; }
+    }
+    this.replays = this.replays.filter(r => r.codeHash !== pairing.codeHash && r.codeHash !== pairing.credentialHash);
+    return true;
   }
 
   /** Sources with recent failures (for tests and diagnostics; never the codes). */
@@ -382,7 +425,11 @@ export class SessionRegistry {
       : sha256(normalizePairingCode(input.code));
     const attemptId = typeof input.attemptId === "string" && /^[\w-]{8,64}$/.test(input.attemptId) ? input.attemptId : null;
     const replay = attemptId ? this.replays.find((r) => r.attemptId === attemptId && sameDigest(r.codeHash, presented)) : undefined;
-    if (replay) return replay.result;
+    if (replay?.result.ok) {
+      const replaySessionId = replay.result.session.id;
+      if (this.sessions.some(s => s.id === replaySessionId)) return replay.result;
+      return { ok: false, status: 401, error: "paired device session ended; start a fresh pairing attempt" };
+    }
     const lock = this.lockState(input.source);
     if (lock.locked) {
       const seconds = Math.ceil(lock.retryAfterMs / 1000);
@@ -394,7 +441,8 @@ export class SessionRegistry {
       this.recordFailure(input.source);
       return { ok: false, status: 401, error: "pairing code is wrong or has expired; create a new one on the server" };
     }
-    const [pairing] = this.pairings.splice(index, 1); // single use
+    const pairing = this.pairings[index]!;
+    if (!pairing.reusable) this.pairings.splice(index, 1);
     this.failures.delete(input.source);
     const token = `omb_sess_${randomBytes(32).toString("base64url")}`;
     const record: SessionRecord = {
@@ -412,7 +460,7 @@ export class SessionRegistry {
     this.lastSeenWrites.set(record.id, now); // the exchange itself was the first sighting
     this.persist();
     const result: ExchangeResult = { ok: true, token, session: publicSession(record), pairingId: pairing.id };
-    if (attemptId) this.replays.push({ codeHash: presented, attemptId, result, expiresAt: now + EXCHANGE_REPLAY_MS });
+    if (attemptId) this.replays.push({ codeHash: presented, attemptId, result, expiresAt: pairing.reusable ? Math.min(now + EXCHANGE_REPLAY_MS, pairing.expiresAt) : now + EXCHANGE_REPLAY_MS });
     return result;
   }
 

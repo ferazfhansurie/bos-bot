@@ -74,6 +74,8 @@ export interface CliOptions {
   tailscale: boolean;
   tunnel: boolean;
   client: boolean;
+  review?: boolean;
+  days?: number;
   pair: boolean;
   revoke?: string;
   /** `access list|add|remove` */
@@ -152,6 +154,8 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = compatEnv): C
       }
       else if (arg === "--tunnel") options.tunnel = true;
       else if (arg === "--client") options.client = true;
+      else if (options.command === "pair" && arg === "--review") options.review = true;
+      else if (options.command === "pair" && arg === "--days") options.days = Number(value());
       // Which phone is about to scan, for a run with nobody at the keyboard.
       // `docker compose exec … pair` and any scripted pairing never reach the
       // interactive chooser, and only an Android phone needs a different QR.
@@ -197,6 +201,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = compatEnv): C
     }
   }
   if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65_535) return { error: "--port must be 1-65535" };
+  if (options.days !== undefined && (!options.review || !Number.isInteger(options.days) || options.days < 1 || options.days > 365)) return { error: "--days requires --review and a whole number from 1 to 365" };
   if (options.publicUrl && !/^https?:\/\//.test(options.publicUrl)) return { error: "--public-url must start with http:// or https://" };
   if (options.tailscale && options.tunnel) return { error: "choose one of --tailscale (your tailnet) and --tunnel (a public address)" };
   if (options.command === "access" && !options.accessAction) return { error: "access needs one of: list, add EMAIL [--chat-only], remove EMAIL" };
@@ -222,6 +227,7 @@ export const USAGE = `bosbot — your team of AI bots, ready in a few steps
                     [--public-url https://host] [--tailscale | --tunnel | --domain HOST] [--no-pair]
   bosbot pair  [--label NAME] [--client] [--phone ios|android]
                     [--public-url https://host]
+  bosbot pair --review [--days 30] [--label NAME] [--public-url https://host]
   bosbot sessions [revoke ID]
   bosbot status
   bosbot login [--email you@example.com]
@@ -239,6 +245,7 @@ setup   choose AI access and optional phone access; keep existing bots and chats
 start   same as openmausbot: use your saved settings and open the workspace
 serve   starts the server without prompts and prints a pairing link + QR code
 pair    mints a pairing code against a running server (--client: chat only)
+        --review: reusable client-only access, durable for 30 days by default
 sessions lists paired devices; "sessions revoke ID" signs one out
 status  what the server says about itself
 login   signs this machine in to an BOS Bot account (an emailed code)
@@ -430,8 +437,10 @@ export function pairingBlock(input: {
   expiresAt: number;
   hint?: string | null;
   phone?: "ios" | "android";
+  reusable?: boolean;
 }): string {
-  const lines = [`pairing code:  ${input.code}`, `expires:       ${new Date(input.expiresAt).toLocaleTimeString()} (single use)`];
+  const expiry = input.reusable ? `${new Date(input.expiresAt).toISOString()} (reusable review access)` : `${new Date(input.expiresAt).toLocaleTimeString()} (single use)`;
+  const lines = [`pairing code:  ${input.code}`, `expires:       ${expiry}`];
   if (!input.url && !input.inviteUrl) {
     lines.push(`open:          /pair on the address you use for this server, and type the code`);
     if (input.hint) lines.push(`               (${input.hint})`);
@@ -489,12 +498,20 @@ export function qrToString(text: string): string {
   return out;
 }
 
-async function mintPairing(port: number, options: { label?: string; client?: boolean; publicUrl?: string; phone?: "ios" | "android" }): Promise<string> {
-  const request: { label?: string; scopes?: string[] } = {};
+async function mintPairing(port: number, options: { label?: string; client?: boolean; publicUrl?: string; phone?: "ios" | "android"; review?: boolean; days?: number }): Promise<string> {
+  const request: { label?: string; scopes?: string[]; reusable?: boolean; ttlMs?: number } = {};
   if (options.label) request.label = options.label;
   if (options.client) request.scopes = ["client"];
+  if (options.review) {
+    request.scopes = ["client"];
+    request.reusable = true;
+    request.ttlMs = (options.days ?? 30) * 24 * 60 * 60_000;
+  }
   const { status, body } = await api(port, "/api/auth/pairing", { method: "POST", body: JSON.stringify(request) });
   if (status !== 200) throw new Error(`server refused to mint a pairing code: ${typeof body?.error === "string" ? body.error : status}`);
+  if (options.review && (body.reusable !== true || !Array.isArray(body.scopes) || body.scopes.length !== 1 || body.scopes[0] !== "client")) {
+    throw new Error("server does not support reusable client-only review pairing; upgrade it before creating review access");
+  }
   const url = options.publicUrl ? `${options.publicUrl}/pair#code=${body.code}` : typeof body.url === "string" ? body.url : null;
   // A server too old to mint a credential simply has no invite: the web link
   // still works, so an upgrade is never required to pair a browser.
@@ -510,14 +527,26 @@ async function mintPairing(port: number, options: { label?: string; client?: boo
   const invite = typeof body.credential === "string" && address
     ? `openmausbot://pair?address=${encodeURIComponent(address)}&token=${encodeURIComponent(body.credential)}${typeof body.serverName === "string" ? `&name=${encodeURIComponent(body.serverName)}` : ""}`
     : typeof body.inviteUrl === "string" ? body.inviteUrl : null;
-  return pairingBlock({ code: body.code, url, inviteUrl: invite, expiresAt: body.expiresAt, hint: typeof body.hint === "string" ? body.hint : null, phone: options.phone });
+  return pairingBlock({ code: body.code, url, inviteUrl: invite, expiresAt: body.expiresAt, hint: typeof body.hint === "string" ? body.hint : null, phone: options.phone, reusable: options.review });
 }
 
 // ── commands ───────────────────────────────────────────────────────────
 export async function runPair(options: CliOptions): Promise<number> {
+  if (options.days !== undefined && (!options.review || !Number.isInteger(options.days) || options.days < 1 || options.days > 365)) throw new Error("--days requires --review and a whole number from 1 to 365");
   if (!(await serverUp(options.port))) {
     console.error(`no BOS Bot server on http://127.0.0.1:${options.port}; start one with \`bosbot serve\` or set OMB_PORT`);
     return 1;
+  }
+  if (options.review) {
+    const advertised = await api(options.port, "/api/auth/pairing");
+    const origin = options.publicUrl ?? (typeof advertised.body?.publicUrl === "string" ? advertised.body.publicUrl : undefined);
+    if (!origin || !await verifyPhoneEndpoint(options.port, origin)) {
+      console.error("Review access needs this workspace's reachable public HTTPS address; no review pairing code was created.");
+      return 1;
+    }
+    console.log(await mintPairing(options.port, { ...options, client: true, publicUrl: origin }));
+    console.log("(review access: reusable; chat and approvals only; cancel the invitation in pairing settings and revoke each device in sessions)");
+    return 0;
   }
   if (process.stdin.isTTY && process.stdout.isTTY && !options.label && !options.client) {
     const advertised = await api(options.port, "/api/auth/pairing");
