@@ -654,6 +654,7 @@ export type ServerFrame =
   | { kind: "bot"; bot: WireBot }
   | { kind: "group"; group: WireGroup }
   | { kind: "notify"; notification: Notification }
+  | { kind: "voice_ring"; type: "voice_ring"; ringId: string; botId: string; threadId: string; reason: string }
   /** The needs-me count changed; clients refetch GET /api/inbox. */
   | { kind: "inbox"; count: number }
   | { kind: "group.deleted"; groupId: string }

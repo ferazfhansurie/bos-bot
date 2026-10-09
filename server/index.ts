@@ -74,6 +74,7 @@ import { SharedRoomTrust, isSharedRoomTrustLevel, sharedRoomTargets, sharedMenti
 import { collectSharedBotReply, type SharedBotReply } from "./shared-bot-reply.ts";
 import { SharedAttachmentStore } from "./shared-attachment-store.ts";
 import { ApnsPush } from "./apns-push.ts";
+import { VoiceRings, VoiceRingRateLimit, voiceRingInput } from "./voice-ring.ts";
 import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
 import { SharedComputerControl } from "./shared-computer-control.ts";
 import { LeadActions, taggedLeadReport, leadResolutionSchema, type LeadAction } from "./lead-actions.ts";
@@ -533,6 +534,7 @@ import {
   isProxied,
   labelFromUserAgent,
   requestOrigin,
+  bearerToken,
   requestSource,
   resolveRequestAuth,
   parseCookies,
@@ -655,6 +657,11 @@ const apnsPush = new ApnsPush(undefined, (sessionId, actorId) => {
   return bound === actorId || (actorId === multiplayerActors.ownerId && bound !== null && bound === multiplayerLinks.primaryActorId());
 });
 const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.json"), ENVIRONMENT_ID);
+const voiceRings = new VoiceRings({
+  file: join(DATA_DIR, "voice-rings.json"), ownerId: multiplayerActors.ownerId,
+  emit: frame => broadcast(frame),
+  push: (...args) => apnsPush.send(...args),
+});
 multiplayerLinks.ownBotAvatar = id => store.bot(id)?.avatarUrl;
 const crossHomeGrants = new Delegations(join(DATA_DIR, "delegations.json"));
 const delegatedJobs = new DelegatedJobs(join(DATA_DIR, "delegated-jobs.json"));
@@ -14305,11 +14312,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         serverName: environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED }).label,
       });
     }
+    // The ring route accepts the same exact-turn agents capability as the
+    // internal MCP routes. Keep their loopback/origin checks, and bypass only
+    // the desktop mutation header for a recognized capability. A stale or
+    // forged bot bearer must never fall back to loopback admin authority.
+    const ringRoute = method === "POST" && path === "/api/voice/ring";
+    const ringBearer = ringRoute ? bearerToken(req.headers.authorization) : undefined;
+    const ringCapability = ringRoute ? authorizedInternalCapability(req.headers.authorization) : null;
+    if (ringBearer && !ringBearer.startsWith("omb_sess_") && !ringCapability) return json(res, 401, { error: "the ring capability has expired or is invalid" });
     const gate = resolveRequestAuth(req, {
       sessions,
       cookieName: SESSION_COOKIE,
       streamPath: "/api/events",
-      url,
+      url: ringCapability ? new URL("/api/internal/voice-ring", url) : url,
       loopbackMutationToken: desktopMutationToken,
       companionMutationToken,
       features: { sharedComputers: sharedComputersEnabled(cfg) },
@@ -14438,6 +14453,37 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? await workspaceAccess.authorize(req, auth)
         : { status: 503, error: "Workspace sign-in is unavailable." };
       if (failure) return json(res, failure.status, { error: failure.error });
+    }
+
+    if (ringRoute) {
+      if (ringCapability) {
+        if (auth.kind !== "loopback" || ringCapability.kind !== "agents") return json(res, 403, { error: "ring requires an agents turn capability" });
+      } else if (!auth.scopes.includes("admin") || workspaceActor(auth) !== multiplayerActors.ownerId || (auth.kind === "loopback" && auth.companionDevice)) {
+        return json(res, 403, { error: "ring requires owner admin access" });
+      }
+      const parsed = voiceRingInput.safeParse(await readBody(req, 4096));
+      // A stopped turn or revoked owner session may expire while the body
+      // arrives. Recheck immediately before the synchronous reservation.
+      if (ringCapability && !internalCapabilityIsActive(ringCapability)) return json(res, 401, { error: "the ring capability has expired" });
+      if (auth.kind === "session" && (!sessions.isLive(auth.session.id) || workspaceActor(auth) !== multiplayerActors.ownerId)) return json(res, 403, { error: "owner access expired" });
+      if (!parsed.success) return json(res, 400, { error: "botId and a reason (1–500 characters) required; threadId is optional" });
+      const input = parsed.data;
+      if (ringCapability && (input.botId !== ringCapability.botId || (input.threadId !== undefined && input.threadId !== ringCapability.threadId))) {
+        return json(res, 403, { error: "a bot can ring only from its own current conversation" });
+      }
+      const bot = store.bot(input.botId);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const threadId = store.canonicalThreadId(ringCapability?.threadId ?? input.threadId ?? bot.threadId);
+      const room = store.groupByThread(threadId);
+      if (store.botByThread(threadId)?.id !== bot.id && !room?.memberIds.includes(bot.id)) return json(res, 404, { error: "no such bot conversation" });
+      try {
+        const ring = voiceRings.ring({ botId: bot.id, threadId, reason: input.reason }, bot.name);
+        return json(res, 202, { ok: true, ...ring });
+      } catch (error) {
+        if (!(error instanceof VoiceRingRateLimit)) throw error;
+        res.setHeader("retry-after", String(error.retryAfter));
+        return json(res, 429, { error: error.message, retryAfter: error.retryAfter });
+      }
     }
 
     if (peerSessionId && requestActor === multiplayerActors.ownerId && (channelIngress || joinedChannelFile || path === "/api/events" || channelManagerIngress)) return json(res, 403, { error: "a peer session cannot inherit owner room access" });

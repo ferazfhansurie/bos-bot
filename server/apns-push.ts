@@ -15,13 +15,15 @@ export interface PushTarget {
   senderName?: string; kind?: string; requestId?: string; messageId?: string;
   /** Typed push data the phone acts on (voice_work_done); callId names the call. */
   type?: string; callId?: string;
+  ringId?: string; reason?: string;
 }
 
 /** Routing scope comes from this device's authenticated registration, never
  * from the event producer. It is a navigation hint; API access still requires
  * the device's existing token for that connection. */
 export function buildApnsPayload(title: string, body: string, target: PushTarget, connectionId?: string) {
-  return { aps: { alert: { title: title.slice(0, 120), body: body.slice(0, 1000) }, sound: "default", "thread-id": target.roomId ?? target.threadId ?? "bos", ...(target.senderId ? { "mutable-content": 1 } : {}) },
+  return { aps: { alert: { title: title.slice(0, 120), body: body.slice(0, target.type === "voice_ring" ? 300 : 1000) }, sound: "default", "thread-id": target.roomId ?? target.threadId ?? "bos", ...(target.senderId ? { "mutable-content": 1 } : {}),
+      ...(target.type === "voice_ring" ? { category: "VOICE_RING", "interruption-level": "time-sensitive" } : {}) },
     ...target, ...(connectionId ? { connectionId } : {}) };
 }
 
@@ -72,7 +74,7 @@ export class ApnsPush {
     if (removed.length) this.persist();
   }
 
-  async send(actorId: string, title: string, body: string, target: PushTarget, id = randomUUID()): Promise<void> {
+  async send(actorId: string, title: string, body: string, target: PushTarget, id: string = randomUUID()): Promise<void> {
     this.pruneRevoked();
     const credential = this.credential();
     if (!credential) return;

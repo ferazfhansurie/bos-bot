@@ -10,6 +10,9 @@ describe("scoped peer events", () => {
     expect(peerAllowed("GET", "/api/events")).toBe(true);
     expect(peerAllowed("POST", "/api/multiplayer/peer-events")).toBe(false);
   });
+  it("never sends an owner's incoming voice call to peers, even on a shared thread", () => {
+    expect(peerEvent({ kind: "voice_ring", type: "voice_ring", threadId: "shared", botId: "bot", ringId: "ring", reason: "private result" }, access)).toBeNull();
+  });
   it("drops private events and rebuilds bot snapshots from scoped state", () => {
     for (const kind of ["message", "message.patch", "thread", "screen", "config", "notify", "bot.queued", "unknown"]) {
       expect(peerEvent({ kind, threadId: "private", message: { text: "secret" } }, access)).toBeNull();

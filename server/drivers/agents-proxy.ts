@@ -457,6 +457,13 @@ const TOOLS = [
     }, required: ["bot_ids", "message", "request_key"] },
   },
   {
+    name: "ring_owner",
+    description: "Call the owner in the BOS mobile app from your current conversation. Use when the user asks you to call, or their attention is needed for a result or decision. One ring per bot every ten minutes; never retry a rate limit. A sent ring does not mean they accepted or heard it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      reason: { type: "string", minLength: 1, maxLength: 500, description: "A brief reason for the call, used as the notification and spoken opener." },
+    }, required: ["reason"] },
+  },
+  {
     name: "list_bots",
     description:
       "List the other bots (agents) you may contact in your own team and any additional teams the owner has explicitly allowed you to coordinate, with their team, model and current status. Call this to discover exact teammate IDs before assigning work or requesting advice through your available coordination tools.",
@@ -1084,6 +1091,15 @@ function recallSpeaker(hit: Json): string {
 }
 
 async function callTool(name: string, args: Json): Promise<{ text: string; isError?: boolean }> {
+  if (name === "ring_owner") {
+    const parsed = z.object({ reason: z.string().trim().min(1).max(500) }).strict().safeParse(args);
+    if (!parsed.success) return { text: "ring_owner needs only a brief reason (1–500 characters).", isError: true };
+    const response = await apiResponse("/api/voice/ring", {
+      method: "POST", body: JSON.stringify({ botId: BOT_ID, threadId: THREAD_ID, reason: parsed.data.reason }),
+    });
+    if (!response.ok) return { text: String(response.body.error ?? `HTTP ${response.status}`), isError: true };
+    return { text: `Ring sent to the owner's BOS app. Acceptance is not confirmed. Ring id: ${String(response.body.ringId)}.` };
+  }
   if (name === "tool_result_read") {
     if (typeof args.id !== "string" || !/^r-[0-9a-f-]{36}$/.test(args.id) ||
       (args.offset !== undefined && (!Number.isSafeInteger(args.offset) || Number(args.offset) < 0))) {

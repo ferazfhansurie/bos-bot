@@ -16,6 +16,10 @@ node --experimental-strip-types scripts/control-omb.ts launch
 Run the foreground launcher directly rather than through `pnpm`; this ensures
 it receives Ctrl-C and can stop its child before removing the temporary data.
 
+The [owner voice-ring fixture](voice-ring.md) checks scoped bot calls,
+concurrent and restart-safe rate limits, foreground stream fields and APNs
+notification metadata without calling the user's phone.
+
 It gives the child a temporary data directory and home, chooses a free
 harness/webhook port pair, installs only the repository's fake engine, prints
 the URL, PID, data directory, and persistent log path, then stays attached to

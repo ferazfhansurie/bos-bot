@@ -28,6 +28,8 @@ let coordinateResponse: unknown = { ok: true };
 let lastRoomsQuery = "";
 let lastPostBody: any = null;
 let postCalls = 0;
+let ringBody: unknown = null;
+let ringStatus = 202;
 let postResponse: unknown = { ok: true, messageId: "msg-1", roomName: "Launch" };
 const DEFAULT_AGENTS = { bots: [{ id: "bot-helper", name: "Helper", model: "fake-model", busy: false }] };
 let agentsResponse: unknown = DEFAULT_AGENTS;
@@ -163,6 +165,16 @@ beforeAll(async () => {
     if (req.headers.authorization !== `Bearer ${TOKEN}`) {
       res.writeHead(401, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    if (req.method === "POST" && req.url === "/api/voice/ring") {
+      let raw = "";
+      req.on("data", chunk => { raw += chunk; });
+      req.on("end", () => {
+        ringBody = JSON.parse(raw);
+        res.writeHead(ringStatus, { "content-type": "application/json" });
+        res.end(JSON.stringify(ringStatus === 202 ? { ok: true, ringId: "ring-fixture" } : { error: "Already rang; wait ten minutes.", retryAfter: 600 }));
+      });
+      return;
     }
     if (req.method === "POST" && req.url === "/api/internal/tool-result") {
       savedResultWrites++;
@@ -431,6 +443,25 @@ afterAll(async () => {
 });
 
 describe("agents-proxy MCP surface", () => {
+  it("rings only as the injected bot and thread, and reports refusal without retrying", async () => {
+    const list = await rpc("tools/list");
+    const tool = list.result.tools.find((entry: { name: string }) => entry.name === "ring_owner");
+    expect(tool.inputSchema).toMatchObject({ additionalProperties: false, required: ["reason"] });
+    ringStatus = 202;
+    const response = await callTool("ring_owner", { reason: "Your build is ready." });
+    expect(response.result.isError).toBe(false);
+    expect(response.result.content[0].text).toContain("Acceptance is not confirmed");
+    expect(ringBody).toEqual({ botId: "bot-asker", threadId: "thread-asker-routine", reason: "Your build is ready." });
+    ringBody = null;
+    expect((await callTool("ring_owner", { reason: "Call", botId: "victim" })).result.isError).toBe(true);
+    expect((await callTool("ring_owner", { reason: " " })).result.isError).toBe(true);
+    expect(ringBody).toBeNull();
+    ringStatus = 429;
+    const refused = await callTool("ring_owner", { reason: "Please join." });
+    expect(refused.result.isError).toBe(true);
+    expect(refused.result.content[0].text).toContain("wait ten minutes");
+    ringStatus = 202;
+  });
   it("describes all configuration tools as result-aware without changing credential requirements", async () => {
     const list = await rpc("tools/list");
     for (const tool of new Set(proposalCases.map(entry => entry.tool))) {
@@ -568,6 +599,7 @@ describe("agents-proxy MCP surface", () => {
       "tool_result_read",
       "list_shared_computers",
       "shared_computer",
+      "ring_owner",
       "list_bots",
       "list_rooms",
       "ask_bot",
