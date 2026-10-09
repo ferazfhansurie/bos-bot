@@ -246,13 +246,13 @@ final class LiveActivityCoordinator {
                                           threadTitle: "ios: live activity polish", symbol: "terminal", otherThreads: 1)
             }
         }
-        let bots: [(String, String, String)] = [
-            ("59d5f871-db6c-4850-b966-a04ecc033279", "bos", "white"),
-            ("4c4ff223-89ea-4743-a42e-1e9d62e24ea8", "oracle", "#7C8CFF"),
+        let bots: [(String, String, String, String)] = [
+            ("59d5f871-db6c-4850-b966-a04ecc033279", "bos", "teal", "circle"),
+            ("4c4ff223-89ea-4743-a42e-1e9d62e24ea8", "oracle", "coral", "sun"),
         ]
-        for (id, name, color) in bots {
+        for (id, name, color, body) in bots {
             let attributes = BotActivityAttributes(botId: id, threadId: "demo-\(name)", name: name, color: color,
-                                                   mascotBody: nil, mascotEyes: nil)
+                                                   mascotBody: body, mascotEyes: nil)
             let state = content(name, "demo-\(name)")
             _ = try? Activity.request(attributes: attributes,
                                       content: .init(state: state, staleDate: nil),

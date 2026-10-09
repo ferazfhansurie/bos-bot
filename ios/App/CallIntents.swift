@@ -10,6 +10,7 @@ import AppIntents
 import Combine
 import CompanionCore
 import Foundation
+import SwiftUI
 
 @MainActor
 final class CallIntentRouter {
@@ -23,11 +24,19 @@ final class CallIntentRouter {
     func attach(_ session: Session) {
         self.session = session
         rosterWatch = session.stateChanges
-            .map { state in state.bots.filter { $0.hidden != true }.map { BotDirectory.Entry(id: $0.id, name: $0.name) } }
+            .map { [weak session] state in
+                let here = session?.connection?.name
+                return state.bots.filter { $0.hidden != true }.map {
+                    BotDirectory.Entry(id: $0.id, name: $0.name, home: $0.remote?.homeName ?? here,
+                                       color: $0.color, mascotBody: $0.mascotBody, mascotEyes: $0.mascotEyes)
+                }
+            }
             .removeDuplicates()
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .sink { entries in
-                guard !entries.isEmpty, BotDirectory.save(entries) else { return }
+                guard !entries.isEmpty else { return }
+                let rendered = BotDirectory.renderMissingFaces(entries)
+                guard BotDirectory.save(entries) || rendered else { return }
                 BosShortcuts.updateAppShortcutParameters()
             }
         if let pendingThread {
@@ -80,6 +89,13 @@ enum BotDirectory {
     struct Entry: Codable, Hashable {
         var id: String
         var name: String
+        /// Which computer the bot lives on, so two bots with one name differ.
+        var home: String? = nil
+        var color: String? = nil
+        var mascotBody: String? = nil
+        var mascotEyes: String? = nil
+
+        var entity: BotEntity { BotEntity(id: id, name: name, home: home, face: BotDirectory.face(for: self)) }
     }
 
     private static let key = "intents.botDirectory"
@@ -97,6 +113,37 @@ enum BotDirectory {
         UserDefaults.standard.set(data, forKey: key)
         return true
     }
+
+    /// The mascot as a PNG on disk, keyed by its look: the Shortcuts picker
+    /// asks while the app has no live session, so the face is drawn ahead of
+    /// time whenever the roster changes.
+    static func faceURL(for entry: Entry) -> URL? {
+        guard let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let look = [entry.id, entry.color ?? "", entry.mascotBody ?? "", entry.mascotEyes ?? ""].joined(separator: "|")
+        let key = look.unicodeScalars.reduce(UInt64(14_695_981_039_346_656_037)) { ($0 ^ UInt64($1.value)) &* 1_099_511_628_211 }
+        return root.appendingPathComponent("intent-faces", isDirectory: true).appendingPathComponent("\(String(key, radix: 16)).png")
+    }
+
+    static func face(for entry: Entry) -> Data? {
+        faceURL(for: entry).flatMap { try? Data(contentsOf: $0) }
+    }
+
+    /// True when at least one face was drawn.
+    @MainActor
+    static func renderMissingFaces(_ entries: [Entry]) -> Bool {
+        var drew = false
+        for entry in entries {
+            guard let url = faceURL(for: entry), !FileManager.default.fileExists(atPath: url.path) else { continue }
+            let renderer = ImageRenderer(content: MausAvatar(color: entry.color ?? "green", size: 120, bodyId: entry.mascotBody,
+                                                             eyeStyle: MascotEyeStyle(stored: entry.mascotEyes), animated: false)
+                .frame(width: 120, height: 120))
+            renderer.scale = 2
+            guard let png = renderer.uiImage?.pngData() else { continue }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if (try? png.write(to: url, options: .atomic)) != nil { drew = true }
+        }
+        return drew
+    }
 }
 
 struct BotEntity: AppEntity {
@@ -105,27 +152,33 @@ struct BotEntity: AppEntity {
 
     var id: String
     var name: String
+    var home: String? = nil
+    var face: Data? = nil
 
     var displayRepresentation: DisplayRepresentation {
-        DisplayRepresentation(title: "\(name)", image: .init(systemName: "person.wave.2.fill"))
+        DisplayRepresentation(
+            title: "\(name)",
+            subtitle: home.map { "\($0)" },
+            image: face.map { .init(data: $0) } ?? .init(systemName: "person.wave.2.fill")
+        )
     }
 }
 
 struct BotEntityQuery: EntityStringQuery {
     func entities(for identifiers: [String]) async throws -> [BotEntity] {
         let all = BotDirectory.load()
-        return identifiers.compactMap { id in all.first { $0.id == id }.map { BotEntity(id: $0.id, name: $0.name) } }
+        return identifiers.compactMap { id in all.first { $0.id == id }?.entity }
     }
 
     func entities(matching string: String) async throws -> [BotEntity] {
         let needle = string.lowercased()
         return BotDirectory.load()
-            .filter { $0.name.lowercased().contains(needle) }
-            .map { BotEntity(id: $0.id, name: $0.name) }
+            .filter { $0.name.lowercased().contains(needle) || ($0.home?.lowercased().contains(needle) ?? false) }
+            .map(\.entity)
     }
 
     func suggestedEntities() async throws -> [BotEntity] {
-        BotDirectory.load().map { BotEntity(id: $0.id, name: $0.name) }
+        BotDirectory.load().map(\.entity)
     }
 }
 

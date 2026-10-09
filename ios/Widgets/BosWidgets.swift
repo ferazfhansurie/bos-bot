@@ -25,13 +25,9 @@ struct BosWidgets: WidgetBundle {
     }
 }
 
-private let bosBotId = "59d5f871-db6c-4850-b966-a04ecc033279"
-
 private extension ActivityViewContext where Attributes == BotActivityAttributes {
-    /// bos is drawn white; every other bot wears its colour.
-    var accent: Color {
-        attributes.botId == bosBotId ? .white : MausPalette.color(attributes.color)
-    }
+    /// Every bot wears its own colour.
+    var accent: Color { MausPalette.color(attributes.color) }
 
     var link: URL? { BotActivityLink.thread(botId: attributes.botId, threadId: state.threadId) }
 
@@ -268,14 +264,13 @@ private struct AnswerButtons: View {
                 )) {
                     Text(option)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(quiet || context.attributes.botId == bosBotId ? .white : .black)
+                        .foregroundStyle(quiet ? .white : .black)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
                         .frame(height: 34)
                         .background(
                             Capsule().fill(
-                                quiet ? Color.white.opacity(0.14)
-                                    : (context.attributes.botId == bosBotId ? Color.white.opacity(0.28) : context.accent)
+                                quiet ? Color.white.opacity(0.14) : context.accent
                             )
                         )
                         .overlay(Capsule().strokeBorder(.white.opacity(quiet ? 0.12 : 0), lineWidth: 0.5))
@@ -320,53 +315,17 @@ private struct ActivityBotFace: View {
     var comets = false
 
     var body: some View {
-        Group {
-            if context.attributes.botId == bosBotId {
-                JarvisCloudFace()
-            } else {
-                MausFaceStill(
-                    color: context.attributes.color,
-                    state: MausState(rawValue: context.state.face) ?? .idle,
-                    size: size,
-                    bodyId: context.attributes.mascotBody,
-                    eyeStyle: MascotEyeStyle(stored: context.attributes.mascotEyes),
-                    comets: comets,
-                    at: Date()
-                )
-            }
-        }
+        MausFaceStill(
+            color: context.attributes.color,
+            state: MausState(rawValue: context.state.face) ?? .idle,
+            size: size,
+            bodyId: context.attributes.mascotBody,
+            eyeStyle: MascotEyeStyle(stored: context.attributes.mascotEyes),
+            comets: comets,
+            at: Date()
+        )
         .frame(width: size, height: size)
         .accessibilityLabel("\(context.attributes.name) avatar")
-    }
-}
-
-/// Vector artwork survives the widget's Live Activity snapshot renderer.
-/// Asset-catalog images can be replaced with a blank privacy placeholder here.
-private struct JarvisCloudFace: View {
-    var body: some View {
-        GeometryReader { proxy in
-            let side = min(proxy.size.width, proxy.size.height)
-            ZStack {
-                Ellipse().fill(.white)
-                    .frame(width: side * 0.86, height: side * 0.59)
-                    .offset(y: side * 0.13)
-                Circle().fill(.white)
-                    .frame(width: side * 0.60, height: side * 0.60)
-                    .offset(x: -side * 0.13, y: -side * 0.11)
-                Circle().fill(.white)
-                    .frame(width: side * 0.53, height: side * 0.53)
-                    .offset(x: side * 0.21, y: -side * 0.10)
-                Capsule().fill(.black)
-                    .frame(width: side * 0.075, height: side * 0.20)
-                    .rotationEffect(.degrees(-18))
-                    .offset(x: -side * 0.12, y: side * 0.12)
-                Capsule().fill(.black)
-                    .frame(width: side * 0.075, height: side * 0.20)
-                    .rotationEffect(.degrees(-18))
-                    .offset(x: side * 0.18, y: side * 0.10)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-        }
     }
 }
 
