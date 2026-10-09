@@ -190,9 +190,9 @@ describe("inbox state", () => {
     expect(reducer(next, { type: "inboxCount", count: -2 }).inboxCount).toBe(0);
   });
 
-  it("opens the needs-me view over any open panel", () => {
+  it("opens needs me as the jobs page over any open panel", () => {
     const next = reducer({ ...initialState, settingsOpen: true, pluginsOpen: true }, { type: "showNeedsMe" });
-    expect(next.activeView).toBe("needs-me");
+    expect(next.activeView).toBe("jobs");
     expect(next.settingsOpen).toBe(false);
     expect(next.pluginsOpen).toBe(false);
   });
