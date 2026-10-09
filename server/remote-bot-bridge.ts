@@ -136,6 +136,7 @@ interface Home {
   connected: boolean;
   availability?: RemoteBotOrigin["availability"];
   peerMigrated?: boolean;
+  hiddenRoomContext?: boolean;
   peerStreaming?: boolean;
   peerStreamRetryAt?: number;
   peerStreamAttempts?: number;
@@ -682,12 +683,14 @@ export class RemoteBotBridge {
   }
 
   private async send(home: Home, botId: string, input: Record<string, any>, room = false, shouldContinue?: () => boolean): Promise<BridgeResponse> {
-    const text = typeof input.text === "string" ? input.text : "";
+    let text = typeof input.text === "string" ? input.text : "";
     if (!text.trim()) return failure(400, "text required");
     const check = () => { if (shouldContinue && !shouldContinue()) throw new BridgeError(409, "shared request access changed"); };
     check();
     await this.requireSharedReceiver(home);
     if (this.options.replaceLinkToken && !home.peerMigrated) await this.refreshSnapshot(home);
+    const hiddenRoomContext = room && home.hiddenRoomContext === true;
+    if (room && !hiddenRoomContext && typeof input.legacyText === "string") text = input.legacyText;
     check();
     // The first real message is what opens a thread on the other Mac.
     const threadId = (await this.threadFor(home, botId, input.threadId, true, room))!;
@@ -698,6 +701,7 @@ export class RemoteBotBridge {
       check();
       const result = await this.call(home, "POST", `/api/bots/${botId}/messages`, {
         text: rewritten, threadId,
+        ...(hiddenRoomContext && typeof input.roomContext === "string" ? { roomContext: input.roomContext, exclusive: true } : {}),
         ...(sendId ? { sendId } : {}),
         ...(typeof input.replyToId === "string" && ID.test(input.replyToId) ? { replyToId: input.replyToId } : {}),
       });
@@ -738,11 +742,13 @@ export class RemoteBotBridge {
     return bot ? { ...bot, homeId: parsed.home.link.homeId, remoteBotId: parsed.remoteId, ownerName: parsed.home.link.ownerName, homeName: parsed.home.link.name } : null;
   }
 
-  /** Run one shared-room turn on a linked Mac's bot. The turn goes to a
-   * bridge thread kept for that room, so the bot's owner sees it on their own
-   * Mac under the bot, with the approval level their own side applies. */
+  /** Run one shared-room turn on a linked Mac's bot. Context and runtime
+   * stay in a dedicated room thread, with approvals on the owner's Mac. */
   async roomTurn(input: {
     homeId: string; remoteBotId: string; threadId?: string; title: string; text: string; sendId: string;
+    roomContext?: string;
+    /** Compatibility payload for receivers that store all context as text. */
+    legacyText?: string;
     onThread: (threadId: string) => void;
     onActivity: (id: string, tool: { name: string; ok?: boolean; spoken?: string }) => void;
     deadlineMs: number;
@@ -776,7 +782,10 @@ export class RemoteBotBridge {
     if (onRuntime) this.roomRuntime.set(runtimeKey, onRuntime);
     try {
       input.onDispatch?.();
-      const sent = await this.send(home, input.remoteBotId, { text: input.text, threadId: this.threadId(home, threadId), sendId: input.sendId }, true, input.shouldContinue);
+      const sent = await this.send(home, input.remoteBotId, {
+        text: input.text, legacyText: input.legacyText, roomContext: input.roomContext,
+        threadId: this.threadId(home, threadId), sendId: input.sendId,
+      }, true, input.shouldContinue);
       if (sent.status < 200 || sent.status >= 300) throw new BridgeError(sent.status, String(("json" in sent ? (sent.json as { error?: unknown } | null)?.error : undefined) ?? "the other Mac refused the message"));
       const delivered = new Map<string, string>();
       let unreachableSince: number | null = null;
@@ -1059,6 +1068,7 @@ export class RemoteBotBridge {
       this.setConnected(home, false, "update-required");
       throw Object.assign(new BridgeError(426, message), { sharedExplanation: message });
     }
+    home.hiddenRoomContext = identity.body?.hiddenRoomContext === 1;
   }
 
   private refreshSnapshot(home: Home): Promise<void> {
@@ -1220,7 +1230,10 @@ export class RemoteBotBridge {
    * owner, so the owner's previous selection is put back straight after. */
   private async createThread(home: Home, botId: string, title: string | undefined, room = false): Promise<string> {
     const previous = home.remoteSelected.get(botId);
-    const result = await this.call(home, "POST", `/api/bots/${botId}/tasks`, title ? { title } : {});
+    const result = await this.call(home, "POST", `/api/bots/${botId}/tasks`, {
+      ...(title ? { title } : {}),
+      ...(room && home.hiddenRoomContext ? { roomThread: true, activate: false } : {}),
+    });
     const task = result.body?.task;
     if (result.status !== 201 && result.status !== 200) {
       throw new BridgeError(result.status >= 400 && result.status < 500 ? result.status : 502, String(result.body?.error ?? "the other Mac could not open a thread"));

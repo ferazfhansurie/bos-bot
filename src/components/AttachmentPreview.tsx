@@ -44,10 +44,13 @@ export interface PreviewImage {
   openUrl?: string;
 }
 
-export interface MessageAttachmentContext { threadId: string; messageId: string }
+export interface MessageAttachmentContext { threadId: string; messageId: string; remoteRoom?: boolean }
 
-export function previewImage(path: string, name = attachmentBasename(path)): PreviewImage | null {
-  const src = attachmentImageUrl(path);
+export function previewImage(path: string, name = attachmentBasename(path), message?: MessageAttachmentContext): PreviewImage | null {
+  const ordinary = attachmentImageUrl(path);
+  const src = ordinary && message?.remoteRoom
+    ? `/api/threads/${encodeURIComponent(message.threadId)}/messages/${encodeURIComponent(message.messageId)}/file?attachment=${encodeURIComponent(path)}`
+    : ordinary;
   if (!src) return null;
   return {
     src,

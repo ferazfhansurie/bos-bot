@@ -106,6 +106,13 @@ export function isRoomGuestBot(bot: Pick<Bot, "roomHome"> | undefined): boolean 
   return Boolean(bot?.roomHome);
 }
 
+/** Remote providers are checked by their own home. Display-only room bots
+ * deliberately have no local instance id; that cannot turn an image into a Finder path. */
+export function roomBotSupportsImages(bot: Pick<Bot, "remote" | "roomHome" | "modelSelection"> | undefined,
+  instances: readonly { instanceId: string; capabilities?: { images?: boolean } }[]): boolean {
+  return Boolean(bot && (bot.remote || bot.roomHome || instances.find(instance => instance.instanceId === bot.modelSelection.instanceId)?.capabilities?.images));
+}
+
 /** The members that are this home's own bots — the only ones local bot
  * routes, DMs, settings and calls may use. */
 export function localRoomMembers(members: readonly Bot[]): Bot[] {

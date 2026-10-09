@@ -126,6 +126,7 @@ describe("environment identity", () => {
       multiplayerProtocol: 1,
       delegatedProtocol: 1,
       sharedConversationIsolation: 1,
+      hiddenRoomContext: 1,
       capabilities: { remoteSessions: true, selfUpdate: "desktop-managed", emailSignIn: false },
       authority: null,
     });

@@ -48,6 +48,8 @@ export function relayAvatars<T extends Record<string, unknown>>(group: T, groupI
 const GROUP_ROUTES: ReadonlyArray<{ method: string; path: RegExp }> = [
   { method: "GET", path: /^\/api\/groups(?:\/[\w-]+(?:\/tasks)?)?(?:\?[\w%+.,:~=&-]+)?$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/messages$/ },
+  { method: "GET", path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/file\?(?:attachment|preview)=[\w%+.,:~=&-]+$/ },
+  { method: "POST", path: /^\/api\/threads\/[\w-]+\/messages\/[\w-]+\/file$/ },
   { method: "POST", path: /^\/api\/groups\/[\w-]+\/people$/ },
   { method: "DELETE", path: /^\/api\/groups\/[\w-]+\/people\/[\w%.:-]{1,300}$/ },
   { method: "GET", path: /^\/api\/threads\/[\w-]+\/messages(?:\?[\w%+.,:~=&-]+)?$/ },
@@ -264,6 +266,33 @@ export class MultiplayerLinks {
     const link = this.links.get(homeId);
     if (!link) throw new Error("joined room home is unavailable");
     return this.forwardTo(link, path, method, body, GROUP_ROUTES);
+  }
+
+  /** Native room uploads use precisely the room link's chat-only token. */
+  async uploadGroupAttachment(homeId: string, groupId: string, bytes: Buffer, mime: string, name: string, uploadId: string): Promise<string> {
+    const link = this.links.get(homeId);
+    if (!link?.joinedGroups?.some(group => group.id === groupId) || !ROOM_ID.test(groupId)) throw new Error("joined room home is unavailable");
+    const query = new URLSearchParams({ uploadId, name: name.slice(0, 512) });
+    const res = await this.fetcher(new URL(`/api/groups/${groupId}/attachments?${query}`, link.origin), {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(25_000),
+      headers: { authorization: `Bearer ${link.token}`, "content-type": mime }, body: new Uint8Array(bytes),
+    });
+    const saved = await res.json() as { path?: unknown; error?: unknown };
+    if (!res.ok || typeof saved.path !== "string") throw Object.assign(new Error(String(saved.error ?? "the room's home refused the attachment")), { status: res.ok ? 502 : res.status });
+    return saved.path;
+  }
+
+  /** Exact-message file relay; membership and file capability stay on the host. */
+  async groupMessageFile(homeId: string, path: string, method: string, body?: unknown): Promise<Response> {
+    const link = this.links.get(homeId);
+    const threadId = /^\/api\/threads\/([\w-]+)\/messages\/[\w-]+\/file(?:\?|$)/.exec(path)?.[1];
+    if (!link || !threadId || !link.joinedGroups?.some(group => group.threadIds.includes(threadId)) || !remoteGroupRouteAllowed(method, path)) throw new Error("invalid joined room route");
+    const url = new URL(path, link.origin);
+    if (url.origin !== link.origin || url.pathname + url.search !== path) throw new Error("invalid joined room route");
+    return this.fetcher(url, { method, redirect: "error", signal: AbortSignal.timeout(25_000),
+      headers: { authorization: `Bearer ${link.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
   }
 
   /** One avatar image of a joined room, fetched from its canonical home with

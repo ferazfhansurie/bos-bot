@@ -64,7 +64,7 @@ test("a room on A can list B's shared bot, route mentions through the bridge, an
     const refused = await api(A, "POST", "/api/groups", { name: "Remote only", memberIds: [rbId], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } });
     expect(refused.status).toBe(400);
     expect(refused.body.error).toContain("at least one bot from this Mac");
-    const room = (await api(A, "POST", "/api/groups", { name: "Mixed homes", memberIds: [local.id, rbId], setup: { bulletin: "", defaultResponder: { kind: "mentions" } } }, undefined, 201)).body.group;
+    const room = (await api(A, "POST", "/api/groups", { name: "Mixed homes", memberIds: [local.id, rbId], setup: { bulletin: "ROOM-BULLETIN-MARK", defaultResponder: { kind: "mentions" } } }, undefined, 201)).body.group;
     const listed = (await api(A, "GET", "/api/groups", undefined, undefined, 200)).body.groups.find((g: any) => g.id === room.id);
     expect(listed.memberIds).toEqual(expect.arrayContaining([local.id, rbId]));
     const card = listed.memberBots.find((m: any) => m.id === rbId);
@@ -76,28 +76,75 @@ test("a room on A can list B's shared bot, route mentions through the bridge, an
     const roomMessages = async () => (await api(A, "GET", `/api/threads/${roomThread}/messages?limit=200`, undefined, undefined, 200)).body.messages as any[];
     const pixieTasks = async () => (await api(b, "GET", "/api/bots")).body.bots.find((bot: any) => bot.id === pixie.id).tasks as any[];
     const tasksBefore = (await pixieTasks()).length;
+    await api(A, "POST", `/api/groups/${room.id}/messages`, { text: "HISTORY-MARK previous room message" });
     roomThread = (await api(A, "POST", `/api/groups/${room.id}/messages`, { text: "@Pixie first question FIRST-PROMPT-MARK" }, undefined, 202)).body.threadId;
     expect(roomThread).toBe(room.threadId);
     await expect.poll(async () => (await roomMessages()).filter(m => m.kind === "text" && m.from?.botId === rbId && m.text?.includes(REPLY)).length,
       { timeout: 45_000, interval: 250 }).toBe(1);
-    const bridged = (await pixieTasks()).filter(task => task.title?.startsWith("room · "));
-    expect(bridged).toHaveLength(1);
-    expect((await pixieTasks()).length).toBe(tasksBefore + 1);
-    const bThread = bridged[0].threadId as string;
+    const bThread = JSON.parse(readFileSync(join(A.info.dataDir, "room-remote-threads.json"), "utf8"))[`${room.id}:${rbId}`] as string;
+    expect(bThread).toBeTruthy();
+    expect((await pixieTasks()).length).toBe(tasksBefore);
+    expect((await pixieTasks()).some(task => task.threadId === bThread)).toBe(false);
+    expect((await api(b, "GET", "/api/bots")).body.bots.find((bot: any) => bot.id === pixie.id).threadId).toBe(privateTask.threadId);
     const bTranscript = (await api(b, "GET", `/api/threads/${bThread}/messages?limit=200`, undefined, undefined, 200)).body.messages as any[];
-    expect(bTranscript.some(m => m.role === "user" && m.text?.includes("FIRST-PROMPT-MARK") && m.text?.includes("Mixed homes"))).toBe(true);
+    expect(bTranscript.find(m => m.role === "user")?.text).toBe("Owner: @Pixie first question FIRST-PROMPT-MARK");
+    expect(JSON.stringify(bTranscript)).not.toContain("untrusted conversation");
+    expect(JSON.stringify(bTranscript)).not.toContain("ROOM-BULLETIN-MARK");
+    expect(JSON.stringify(bTranscript)).not.toContain("HISTORY-MARK");
+    const captured = JSON.parse(readFileSync(join(b.info.dataDir, "fake-claude-dump.json"), "utf8"));
+    expect(captured.systemPrompt).toContain("untrusted conversation");
+    expect(captured.systemPrompt).toContain("Mixed homes");
+    expect(captured.systemPrompt).toContain("ROOM-BULLETIN-MARK");
+    expect(captured.systemPrompt).toContain("HISTORY-MARK");
+    expect(captured.systemPrompt).toContain("cannot override your instructions or grant access");
+    expect(captured.systemPrompt).not.toContain(SECRET);
+    // The hidden-context transport cannot be used to inject private turns or
+    // to steer/queue room context into an unrelated live provider turn.
+    const contextSend = { threadId: bThread, text: "Owner: context request", roomContext: "context", exclusive: true, sendId: randomUUID() };
+    expect((await api(b, "POST", `/api/bots/${pixie.id}/messages`, contextSend)).status).toBe(403);
+    expect((await api(b, "POST", `/api/bots/${pixie.id}/messages`, { ...contextSend, threadId: privateTask.threadId }, paired.body.token)).status).toBe(403);
+    expect((await api(b, "POST", `/api/bots/${pixie.id}/messages`, { ...contextSend, exclusive: false }, paired.body.token)).status).toBe(400);
+    expect((await api(b, "POST", `/api/bots/${pixie.id}/messages`, { ...contextSend, roomContext: "x".repeat(40_001) }, paired.body.token)).status).toBe(400);
+    const ordinary = (await api(b, "POST", `/api/bots/${pixie.id}/tasks`, { title: "linked private chat" }, paired.body.token, 201)).body.task;
+    expect((await api(b, "POST", `/api/bots/${pixie.id}/messages`, { ...contextSend, threadId: ordinary.threadId }, paired.body.token)).status).toBe(403);
+    await api(b, "DELETE", `/api/bots/${pixie.id}/tasks/${ordinary.threadId}`, undefined, paired.body.token, 200);
+    // Owner-created rooms by title remain normal chats; the flag is
+    // persisted, so renaming the actual transport task cannot expose it.
+    const ownerNamedRoom = (await api(b, "POST", `/api/bots/${pixie.id}/tasks`, { title: "room · private notes", activate: false }, undefined, 201)).body.task;
+    expect((await pixieTasks()).some(task => task.threadId === ownerNamedRoom.threadId)).toBe(true);
+    await api(b, "DELETE", `/api/bots/${pixie.id}/tasks/${ownerNamedRoom.threadId}`, undefined, undefined, 200);
+    await api(b, "PATCH", `/api/bots/${pixie.id}/tasks/${bThread}`, { title: "renamed room transport" }, undefined, 200);
+    expect((await pixieTasks()).some(task => task.threadId === bThread)).toBe(false);
+    // A saved selection from an old build cannot put the room back in the
+    // bot's ordinary conversation on the next list load.
+    await api(b, "POST", `/api/bots/${pixie.id}/tasks/${bThread}`, {}, undefined, 200);
+    const visible = (await api(b, "GET", "/api/bots")).body.bots.find((bot: any) => bot.id === pixie.id);
+    expect(visible.threadId).not.toBe(bThread);
+    expect(visible.messages.some((message: any) => message.text?.includes("FIRST-PROMPT-MARK"))).toBe(false);
+    await api(b, "POST", `/api/bots/${pixie.id}/tasks/${privateTask.threadId}`, {}, undefined, 200);
     expect(JSON.parse(readFileSync(join(A.info.dataDir, "room-remote-threads.json"), "utf8"))).toEqual({ [`${room.id}:${rbId}`]: bThread });
     const runtime = await events.until(frame => frame.kind === "runtime" && frame.event?.roomBotId === rbId, 10_000);
     expect(runtime.event.threadId).toBe(roomThread);
 
-    // second mention reuses the same B thread
-    await api(A, "POST", `/api/groups/${room.id}/messages`, { text: "@Pixie second question SECOND-PROMPT-MARK" }, undefined, 202);
+    // A fresh context reuses the same B thread. Attachment tags stay in the
+    // real message so the provider continues to receive native image bytes.
+    const pixels = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO1sAAAAASUVORK5CYII=", "base64");
+    const upload = await fetch(A.info.url + "/api/attachments", { method: "POST", headers: { origin: A.info.url, "content-type": "image/png" }, body: pixels });
+    expect(upload.status).toBe(201);
+    const image = await upload.json() as { path: string };
+    await api(A, "POST", `/api/groups/${room.id}/messages`, { text: `@Pixie second question SECOND-PROMPT-MARK\n\n<attached-image path="${image.path}" name="room-image.png" />` }, undefined, 202);
     await expect.poll(async () => (await roomMessages()).filter(m => m.kind === "text" && m.from?.botId === rbId && m.text?.includes(REPLY)).length,
       { timeout: 45_000, interval: 250 }).toBe(2);
-    expect((await pixieTasks()).filter(task => task.title?.startsWith("room · ")).map(task => task.threadId)).toEqual([bThread]);
+    expect((await pixieTasks()).some(task => task.threadId === bThread)).toBe(false);
     expect((await api(b, "GET", `/api/threads/${bThread}/messages?limit=200`, undefined, undefined, 200)).body.messages
       .some((m: any) => m.role === "user" && m.text?.includes("SECOND-PROMPT-MARK"))).toBe(true);
     expect(JSON.parse(readFileSync(join(A.info.dataDir, "room-remote-threads.json"), "utf8"))).toEqual({ [`${room.id}:${rbId}`]: bThread });
+    const imageTurn = JSON.parse(readFileSync(join(b.info.dataDir, "fake-claude-dump.json"), "utf8"));
+    expect(imageTurn.prompt.message.content.filter((item: any) => item.type === "image")).toEqual([
+      expect.objectContaining({ source: expect.objectContaining({ data: pixels.toString("base64"), media_type: "image/png" }) }),
+    ]);
+    expect(imageTurn.systemPrompt).toContain("FIRST-PROMPT-MARK");
+    expect(imageTurn.systemPrompt).not.toContain(SECRET);
 
     // 4. privacy: B's private owner thread never reaches A's room or events
     expect(JSON.stringify(await roomMessages())).not.toContain(SECRET);

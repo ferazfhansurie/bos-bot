@@ -359,10 +359,18 @@ export function messageAttachmentName(text: string, requested: string): string |
     return null;
   }
 
-  const tag = /^<attached-(?:image|file)[\t ]+path="([^"\r\n]*)"(?:[\t ]+name="([^"\r\n]*)")?[\t ]*\/>$/;
-  let found: string | null = null;
+  for (const attachment of messageAttachments(text)) {
+    try { if (referencedPathIdentity(attachment.path) === wanted) return safeDisplayName(attachment.name || attachment.path); }
+    catch { /* malformed paths grant no capability */ }
+  }
+  return null;
+}
+
+/** Composer transport tags only, with offsets for rewriting across homes. */
+export function messageAttachments(text: string): Array<{ kind: "image" | "file"; path: string; name?: string; start: number; end: number }> {
+  const tag = /^<attached-(image|file)[\t ]+path="([^"\r\n]*)"(?:[\t ]+name="([^"\r\n]*)")?[\t ]*\/>$/;
+  const found: ReturnType<typeof messageAttachments> = [];
   walkMarkdown(fromMarkdown(text), (node) => {
-    if (found !== null) return;
     if (node.type !== "html" || !node.value || !node.position) return;
     const start = node.position.start.offset;
     const end = node.position.end.offset;
@@ -373,15 +381,8 @@ export function messageAttachmentName(text: string, requested: string): string |
     if (text.slice(lineStart, start).trim() || text.slice(end, lineEnd).trim()) return;
     const match = tag.exec(node.value);
     if (!match) return;
-    try {
-      if (referencedPathIdentity(decodeAttachmentAttribute(match[1]!)) === wanted) {
-        found = safeDisplayName(match[2]
-          ? decodeAttachmentAttribute(match[2])
-          : decodeAttachmentAttribute(match[1]!));
-      }
-    } catch {
-      // A malformed transport tag grants no capability.
-    }
+    found.push({ kind: match[1] as "image" | "file", path: decodeAttachmentAttribute(match[2]!),
+      ...(match[3] === undefined ? {} : { name: decodeAttachmentAttribute(match[3]) }), start, end });
   });
   return found;
 }

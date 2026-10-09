@@ -1,12 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import { FILE_MAX_BYTES } from "./attachments.ts";
+import { uploadRemoteRoomAttachments } from "./remote-room-attachments.ts";
 import { relayAvatars, remoteGroupRouteAllowed, type MultiplayerLinks, type OwnBotAvatar, type RemoteGroupView } from "./multiplayer-links.ts";
 
 /** A guest home shows rooms it joined on a canonical home next to its own
  * rooms and relays their reads, sends and events over the existing link.
  * Local rooms always win: an id or thread this home owns is never relayed. */
 export interface RemoteRoomContext {
-  links: Pick<MultiplayerLinks, "joinedGroupHomes" | "joinedThreadHome" | "homeLabel" | "remoteGroups" | "forwardGroup" | "openGroupEvents" | "groupAvatar">;
+  links: Pick<MultiplayerLinks, "joinedGroupHomes" | "joinedThreadHome" | "homeLabel" | "remoteGroups" | "forwardGroup" | "openGroupEvents" | "groupAvatar" | "uploadGroupAttachment" | "groupMessageFile">;
   isLocalGroup(id: string): boolean;
   isLocalThread(id: string): boolean;
   localGroups(): Array<{ id: string }>;
@@ -41,10 +43,10 @@ export async function handleRemoteRoom(
     return true;
   }
   const groupId = /^\/api\/groups\/([\w-]+)(?:\/|$)/.exec(path)?.[1];
-  const threadId = /^\/api\/threads\/([\w-]+)\/messages$/.exec(path)?.[1];
+  const threadId = /^\/api\/threads\/([\w-]+)\/messages(?:\/[\w-]+\/file)?$/.exec(path)?.[1];
   let homeId: string | null | undefined;
   if (groupId) homeId = ctx.isLocalGroup(groupId) ? null : ctx.links.joinedGroupHomes().get(groupId);
-  else if (threadId && method === "GET") homeId = ctx.isLocalThread(threadId) ? null : ctx.links.joinedThreadHome(threadId);
+  else if (threadId) homeId = ctx.isLocalThread(threadId) ? null : ctx.links.joinedThreadHome(threadId);
   if (!homeId) return false;
 
   if (method === "GET" && path === `/api/groups/${groupId}/events`) {
@@ -68,8 +70,40 @@ export async function handleRemoteRoom(
     return true;
   }
   try {
-    const body = method === "POST" ? await ctx.readBody(req, 100_000) : undefined;
+    let body = method === "POST" ? await ctx.readBody(req, 100_000) : undefined;
     if (method !== "POST") req.resume();
+    const check = () => { if (!ctx.stillOwner()) throw Object.assign(new Error("owner session ended"), { status: 403 }); };
+    if (method === "POST" && path === `/api/groups/${groupId}/messages` && body && typeof body === "object" && typeof (body as { text?: unknown }).text === "string") {
+      const text = (body as { text: string }).text;
+      if (text.length > 20_000) throw Object.assign(new Error("a chat message of at most 20000 characters is required"), { status: 400 });
+      body = { ...body, text: await uploadRemoteRoomAttachments(ctx.links, homeId, groupId!, text, check) };
+    }
+    check();
+    if (threadId && path.endsWith("/file")) {
+      const upstream = await ctx.links.groupMessageFile(homeId, route, method, body);
+      check();
+      if (!upstream.ok) { ctx.json(res, upstream.status, await upstream.json()); return true; }
+      // Bound even a host/proxy response without Content-Length.
+      const reader = upstream.body?.getReader();
+      if (!reader) throw new Error("empty file response");
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          check();
+          if (chunk.done) break;
+          size += chunk.value.byteLength;
+          if (size > FILE_MAX_BYTES) throw Object.assign(new Error("attachment exceeds 25 MB"), { status: 413 });
+          chunks.push(chunk.value);
+        }
+      } finally { await reader.cancel().catch(() => {}); }
+      const headers: Record<string, string> = { "content-length": String(size), "cache-control": "private, no-store", "x-content-type-options": "nosniff", "cross-origin-resource-policy": "same-origin" };
+      for (const key of ["content-type", "content-disposition"]) { const value = upstream.headers.get(key); if (value) headers[key] = value; }
+      res.writeHead(200, headers);
+      res.end(Buffer.concat(chunks));
+      return true;
+    }
     const forwarded = await ctx.links.forwardGroup(homeId, route, method, body);
     if (!ctx.stillOwner()) { ctx.json(res, 403, { error: "owner session ended" }); return true; }
     let answer = forwarded.body;

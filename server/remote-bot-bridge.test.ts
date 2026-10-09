@@ -30,6 +30,7 @@ class FakeHome {
   failRoomTurn = false;
   afterSendActivityCount = 0;
   supportsIsolation = true;
+  supportsRoomContext = true;
   identityStatus = 200;
   afterThreadCreated: (() => void) | null = null;
   afterRoomSent: (() => void) | null = null;
@@ -59,7 +60,7 @@ class FakeHome {
     const method = init.method ?? "GET";
     this.calls.push({ method, path: url.pathname, search: url.search, body, headers, raw });
     const json = (status: number, value: unknown) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
-    if (url.pathname === "/.well-known/openmausbot/environment") return json(this.identityStatus, { sharedConversationIsolation: this.supportsIsolation ? 1 : undefined });
+    if (url.pathname === "/.well-known/openmausbot/environment") return json(this.identityStatus, { sharedConversationIsolation: this.supportsIsolation ? 1 : undefined, hiddenRoomContext: this.supportsRoomContext ? 1 : undefined });
     if (url.pathname === "/api/multiplayer/peer-migrate") return json(200, { scoped: true });
     if (url.pathname === "/api/multiplayer/peer-rotate") return json(200, { rotated: false });
     if (url.pathname === "/api/events") {
@@ -170,6 +171,20 @@ describe("RemoteBotBridge", () => {
     ...options,
   });
   const botId = `rb-${KEY}-pixie`;
+  it.each([true, false])("negotiates hidden room context (receiver support: %s)", async (supported) => {
+    fake.supportsRoomContext = supported;
+    await bridge.listBots(0);
+    await bridge.roomTurn({ homeId: HOME, remoteBotId: "pixie", title: "room · Test", text: "Firaz: hello",
+      roomContext: "untrusted room history and bulletin", legacyText: "untrusted room history and bulletin\nFiraz: hello",
+      sendId: "context-test", onThread: () => {}, onActivity: () => {}, deadlineMs: Date.now() + 1000 });
+    const sent = fake.calls.find(call => call.method === "POST" && call.path === "/api/bots/pixie/messages")!.body;
+    expect(sent).toMatchObject(supported ? { text: "Firaz: hello", roomContext: "untrusted room history and bulletin", exclusive: true }
+      : { text: "untrusted room history and bulletin\nFiraz: hello" });
+    if (!supported) expect(sent).not.toHaveProperty("roomContext");
+    const created = fake.calls.find(call => call.method === "POST" && call.path === "/api/bots/pixie/tasks")!.body;
+    if (supported) expect(created).toMatchObject({ roomThread: true, activate: false });
+    else expect(created).not.toHaveProperty("roomThread");
+  });
   const route = (method: string, path: string, body?: unknown, search = "") =>
     bridge.route(method, path, new URLSearchParams(search), async () => body ?? {});
   const jsonOf = (answer: BridgeResponse) => ("json" in answer ? answer.json as any : null);
