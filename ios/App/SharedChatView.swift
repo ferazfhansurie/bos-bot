@@ -196,10 +196,7 @@ struct SharedChatView: View {
                 .safeAreaInset(edge: .top, spacing: 0) { header }
                 .overlay(alignment: .bottomTrailing) {
                     if !atBottom && !messages.isEmpty {
-                        Button {
-                            followingBottom = true
-                            withAnimation { proxy.scrollTo("shared-bottom", anchor: .bottom) }
-                        } label: {
+                        Button { jumpToLatest(proxy) } label: {
                             Label("Latest messages", systemImage: "arrow.down")
                                 .font(.caption.weight(.semibold)).padding(.horizontal, 14).padding(.vertical, 10)
                                 .background(.regularMaterial, in: Capsule())
@@ -514,6 +511,25 @@ struct SharedChatView: View {
             try readingStore.save(.init(anchorID: lastReadingID, newestObservedID: newestObservedID,
                 anchorSequence: messages.first { $0.id == lastReadingID }?.sequence))
         } catch { readingError = "Couldn’t save this phone’s reading position." }
+    }
+
+    /// Rows far above the end only have estimated heights in the lazy
+    /// stack, so one animated jump in a long room stopped partway, and the
+    /// end marker isn't a ForEach row, so the stack can't find it until it's
+    /// built. Go to the newest row first, then settle on the end until it is
+    /// on screen.
+    private func jumpToLatest(_ proxy: ScrollViewProxy) {
+        followingBottom = true
+        if let newest = SharedChatMessage.visible(messages).last?.id { proxy.scrollTo(newest, anchor: .bottom) }
+        Task { @MainActor in
+            for pass in 0..<10 {
+                try? await Task.sleep(for: .milliseconds(60))
+                // the reader took the list back
+                guard followingBottom else { return }
+                proxy.scrollTo("shared-bottom", anchor: .bottom)
+                if pass >= 2, atBottom { return }
+            }
+        }
     }
 
     private func refreshBots() async {

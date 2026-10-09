@@ -418,7 +418,7 @@ struct ChatView: View {
                         JumpToLatestButton(unseen: unseenBelow) {
                             Haptics.selection()
                             unseenBelow = false
-                            jumpToLatest(proxy)
+                            jumpToLatest(proxy, lastRow: transcript.last?.id)
                         }
                         .padding(.trailing, 16).padding(.bottom, 10)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
@@ -681,14 +681,17 @@ struct ChatView: View {
 
     /// Rows far above the end only have estimated heights in the lazy stack,
     /// so a single animated jump in a long transcript stopped short or did
-    /// not move at all. Jump straight there, then settle again once the rows
-    /// near the end are built.
-    private func jumpToLatest(_ proxy: ScrollViewProxy) {
-        proxy.scrollTo(Self.bottomId, anchor: .bottom)
+    /// not move at all. The end marker isn't a ForEach row, so the lazy stack
+    /// can't find it until it's built: go to the last row first, which it
+    /// can always find, then settle on the end until it is on screen, which
+    /// also puts following back on.
+    private func jumpToLatest(_ proxy: ScrollViewProxy, lastRow: String?) {
+        if let lastRow { proxy.scrollTo(lastRow, anchor: .bottom) }
         Task { @MainActor in
-            for _ in 0..<3 {
+            for pass in 0..<10 {
                 try? await Task.sleep(for: .milliseconds(60))
                 proxy.scrollTo(Self.bottomId, anchor: .bottom)
+                if pass >= 2, follow.pinned { return }
             }
         }
     }
