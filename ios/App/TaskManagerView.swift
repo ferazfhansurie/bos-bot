@@ -16,6 +16,7 @@ struct TaskManagerView: View {
     @State private var selectedThreadIDs = Set<String>()
     @State private var confirmingBulkDelete = false
     @State private var isMutating = false
+    @State private var showingArchived = false
     @State private var errorMessage: String?
     @FocusState private var renameFocused: Bool
 
@@ -208,9 +209,7 @@ struct TaskManagerView: View {
             // they resurface in the rows above, exactly like the tree.
             let searching = !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let groups = bot.threadGroups(matching: search, includingClosed: true)
-            let archived = searching ? [] : bot.threadGroups(includingClosed: true)
-                .flatMap(\.tasks)
-                .filter { $0.isArchived && !$0.demandsAttention() && $0.threadId != bot.threadId }
+            let archived = searching ? [] : bot.archivedThreads(queuedThreadIds: session.state.queuedThreadIds)
             if groups.isEmpty {
                 emptySearch
             } else {
@@ -245,11 +244,14 @@ struct TaskManagerView: View {
                 }
                 if !archived.isEmpty {
                     Section {
-                        ForEach(archived, id: \.threadId) { task in
-                            threadButton(task)
+                        DisclosureGroup(isExpanded: $showingArchived) {
+                            ForEach(archived, id: \.threadId) { task in
+                                threadButton(task)
+                            }
+                        } label: {
+                            Text("Archived (\(archived.count))")
                         }
-                    } header: {
-                        Text("Archived (\(archived.count))")
+                        .accessibilityIdentifier("archived-threads-toggle")
                     }
                 }
             }
@@ -332,8 +334,8 @@ struct TaskManagerView: View {
                         toggleArchive(task)
                     } label: {
                         Label(
-                            task.isArchived ? "Unarchive" : "Archive",
-                            systemImage: task.isArchived ? "arrow.uturn.backward" : "archivebox"
+                            task.isArchived ? "Unarchive" : "Done",
+                            systemImage: task.isArchived ? "arrow.uturn.backward" : "checkmark.circle"
                         )
                     }
                     .disabled(isMutating || task.isWorking)
@@ -351,11 +353,11 @@ struct TaskManagerView: View {
                         toggleArchive(task)
                     } label: {
                         Label(
-                            task.isArchived ? "Unarchive" : "Archive",
-                            systemImage: task.isArchived ? "arrow.uturn.backward" : "archivebox"
+                            task.isArchived ? "Unarchive" : "Done",
+                            systemImage: task.isArchived ? "arrow.uturn.backward" : "checkmark.circle"
                         )
                     }
-                    .tint(.orange)
+                    .tint(task.isArchived ? .orange : .green)
                     .disabled(isMutating || task.isWorking)
                 }
                 Button { beginRename(task) } label: {
@@ -398,7 +400,7 @@ struct TaskManagerView: View {
         guard case let .bot(bot) = current else { return }
         // Recheck after the menu; an SSE update may have started work there.
         guard let liveTask = tasks.first(where: { $0.threadId == task.threadId }), !liveTask.isWorking else {
-            showError("This thread can't be archived while it's working.")
+            showError("This thread can't be marked done while it's working.")
             return
         }
         guard await session.setTaskArchived(liveTask, for: bot, archivedAt: archivedAt) else {
