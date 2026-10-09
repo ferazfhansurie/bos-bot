@@ -111,7 +111,7 @@ import {
 import { sidebarSectionAttention } from "@/lib/sidebar-attention";
 import { botListItemPointerIntent } from "@/lib/sidebar-selection";
 import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
-import { SidebarUpdatePill } from "./BosUpdate";
+import { SidebarVersionFooter } from "./BosUpdate";
 import { SidebarMoreMenu } from "./SidebarMoreMenu";
 import { SidebarUsageRow } from "./SidebarUsageRow";
 import { DesktopWorkspaceSwitcher } from "./DesktopWorkspaceSwitcher";
@@ -2181,7 +2181,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           className={cn("relative flex items-center", density === "icons" ? "flex-col gap-1" : "gap-1")}
           style={windowNoDragStyle}
         >
-          {!remoteClient && <SidebarUpdatePill compact={density === "icons"} />}
           <button
             type="button"
             onClick={toggleCollapsed}
@@ -2632,6 +2631,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             <SidebarProfileMenu />
           </div>
         )}
+        <SidebarVersionFooter compact={density === "icons"} showUpdate={!remoteClient} />
       </div>
 
       {menu && (

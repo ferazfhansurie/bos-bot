@@ -4,11 +4,14 @@ import {
   UPDATE_STEPS,
   applyUpdate,
   checkForUpdate,
+  availableCandidate,
+  isRunningBuild,
   isUpdateRunning,
   isUpdateSuccess,
   noteUpdateFrame,
   pollUpdateStatus,
   setUpdateTransport,
+  shortVersion,
   updateNotice,
   useBosUpdate,
   type UpdateStatus,
@@ -44,6 +47,37 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   setUpdateTransport(null);
   vi.useRealTimers();
+});
+
+describe("running-build comparison", () => {
+  const full = "a014552b64ef7b32265c5df04fd0d71a8f3d94c8";
+  const running = { version: "1.9.2", sha: full };
+  it("same sha is never an update, whatever the +build metadata says", () => {
+    expect(isRunningBuild({ version: "1.9.2+a014552b", sha: full }, running)).toBe(true);
+    expect(isRunningBuild({ version: "1.9.2+a014552b", sha: "a014552b" }, running)).toBe(true);
+    expect(isRunningBuild({ version: "1.9.2+beefcafe", sha: "beefcafe00000000" }, running)).toBe(false);
+    expect(isRunningBuild({ version: "1.9.3", sha: "unknown" }, { version: "1.9.2", sha: "unknown" })).toBe(false);
+    expect(isRunningBuild({ version: "1.9.2", sha: "unknown" }, { version: "1.9.2", sha: "unknown" })).toBe(true);
+    expect(shortVersion("1.9.2+a014552b")).toBe("1.9.2");
+  });
+
+  it("availableCandidate drops the running build and keeps a newer one", () => {
+    const same = { current: running, candidate: { version: "1.9.2+a014552b", sha: full } };
+    expect(availableCandidate(same)).toBeUndefined();
+    const newer = { current: running, candidate: { version: "1.9.3+beefcafe", sha: "beefcafe00000000" } };
+    expect(availableCandidate(newer)).toBe(newer.candidate);
+  });
+
+  it("a poll or check that returns the running build as candidate settles idle", async () => {
+    const stale: UpdateStatus = { state: "ready", current: running, candidate: { version: "1.9.2+a014552b", sha: full, branch: "prod" }, busyTurns: [] };
+    setUpdateTransport(mock({ status: vi.fn(async () => stale), check: vi.fn(async () => ({ current: running, candidate: stale.candidate })) }));
+    await pollUpdateStatus();
+    expect(useBosUpdate().state).toBe("idle");
+    expect(useBosUpdate().status?.candidate).toBeUndefined();
+    await checkForUpdate();
+    expect(useBosUpdate().state).toBe("idle");
+    expect(useBosUpdate().status?.candidate).toBeUndefined();
+  });
 });
 
 describe("bos-update", () => {

@@ -85,6 +85,35 @@ const httpTransport: UpdateTransport = {
  * first, while bots keep working; draining only starts once it is staged. */
 export const UPDATE_STEPS = ["building", "draining", "checkpointing", "stopping", "applying", "relaunching", "verifying"] as const;
 
+/** "1.9.2+a014552b" -> "1.9.2": the semver without +build metadata. */
+export function shortVersion(version: string | undefined): string {
+  return (version ?? "").split("+")[0]!.trim();
+}
+
+const HEX_SHA = /^[0-9a-f]{7,64}$/i;
+
+/** Whether `candidate` is the build already running. Same commit (a short sha
+ * matches its full one) wins; with no comparable shas, the same full version
+ * string (+build metadata included) is the same build. The +sha suffix is the
+ * commit, never a reason to call a build newer than itself. */
+export function isRunningBuild(candidate: UpdateBuild, current: UpdateBuild): boolean {
+  const a = candidate.sha?.toLowerCase() ?? "";
+  const b = current.sha?.toLowerCase() ?? "";
+  if (HEX_SHA.test(a) && HEX_SHA.test(b)) return a.startsWith(b) || b.startsWith(a);
+  return candidate.version === current.version;
+}
+
+/** The candidate to offer, or undefined when it is what is already running. */
+export function availableCandidate(status: Pick<UpdateStatus, "current" | "candidate"> | null | undefined): UpdateCandidate | undefined {
+  const candidate = status?.candidate;
+  return candidate && status && !isRunningBuild(candidate, status.current) ? candidate : undefined;
+}
+
+/** A status whose candidate is the running build, minus that candidate. */
+function pruneRunning<T extends Pick<UpdateStatus, "current" | "candidate">>(status: T): T {
+  return status.candidate && !availableCandidate(status) ? { ...status, candidate: undefined } : status;
+}
+
 export function isUpdateSuccess(state: UpdateRunState | undefined): boolean {
   return state === "done";
 }
@@ -133,7 +162,9 @@ async function poll() {
   timer = null;
   if (unsupported) return;
   try {
-    const status = await transport.status();
+    const pruned = pruneRunning(await transport.status());
+    // a stale "ready" for a build that is already running is idle
+    const status = !pruned.candidate && pruned.state === "ready" ? { ...pruned, state: "idle" as const } : pruned;
     // A frame newer than the poll can only move forward; once the poll shows
     // a run has settled, it is the truth again.
     const frameAhead = isUpdateRunning(view.state) && isUpdateRunning(status.state) && view.state !== status.state;
@@ -205,7 +236,7 @@ export async function checkForUpdate() {
   if (unsupported || view.checking || isUpdateRunning(view.state) || !view.status) return;
   set({ checking: true });
   try {
-    const found = await transport.check();
+    const found = pruneRunning(await transport.check());
     const status = view.status ?? { state: "idle" as const, busyTurns: [], current: found.current };
     set({
       checking: false,
