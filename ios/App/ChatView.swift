@@ -44,6 +44,7 @@ struct ChatView: View {
     /// same as typed mentions.
     @State private var mentionPicks: [MentionTarget] = []
     @State private var showingTasks = false
+    @State private var creatingThread = false
     @State private var showingWalkie = false
     /// Realtime voice calls live app-wide; this chat starts one and shows
     /// the rows a call leaves behind.
@@ -723,12 +724,44 @@ struct ChatView: View {
                       onThreads: { showingTasks = true }, onSettings: { showingProfile = true },
                       onComputer: { showingComputer = true }, accessory: rosterAccessory,
                       closesPane: onClose != nil,
-                      beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) }) {
+                      beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) },
+                      onNewThread: current.supportsTasks ? { newThread() } : nil,
+                      onCall: { Haptics.selection(); startVoice() }) {
             // The activity feed's face for this exact thread, so the header
             // moves while the bot works here; without a feed entry, the
             // still idle face it always had.
             let live = MausState.forThread(current, in: session.state)
             ChatAvatarView(chat: current, size: 30, state: live ?? .idle, animated: live?.showsActivity == true)
+        }
+    }
+
+    /// True when a bot's turn here has settled on its own reply, so the next
+    /// step is the person's: an empty composer offers to carry on.
+    private var canContinue: Bool {
+        guard case .bot = current, !current.busy, !sendingMessage, attachments.isEmpty,
+              let last = messages.last(where: { $0.kind != .activity }) else { return false }
+        return last.role == .bot && last.kind == .text
+    }
+
+    /// A fresh, empty thread with this chat, opened in place.
+    private func newThread() {
+        guard !creatingThread else { return }
+        Haptics.selection()
+        creatingThread = true
+        let chat = current
+        Task {
+            defer { creatingThread = false }
+            switch chat {
+            case let .bot(bot):
+                if let created = await session.createTask(for: bot, title: nil) { selectedThreadId = created.threadId }
+                else if session.actionError == nil { session.actionError = "Couldn't create a thread. Check the connection and try again." }
+            case let .room(room):
+                guard room.busyBotId == nil else {
+                    session.actionError = "Try again when the current reply finishes."
+                    return
+                }
+                _ = await session.createTask(for: room, title: nil)
+            }
         }
     }
 
@@ -1541,6 +1574,25 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            // The bot's turn ended: one tap sends "continue" to pick it back up.
+            if canContinue {
+                HStack {
+                    Button {
+                        Haptics.selection()
+                        submit(String(localized: "continue"))
+                    } label: {
+                        Label("Continue", systemImage: "arrow.forward.circle.fill")
+                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.primary)
+                            .padding(.horizontal, 14).frame(minHeight: 40)
+                    }
+                    .buttonStyle(.plain).glassCapsule()
+                    .accessibilityLabel("Continue \(current.name)'s run")
+                    .accessibilityIdentifier("chat-continue")
+                    Spacer(minLength: 0)
+                }
+                .transition(.opacity)
+            }
+
             // Work a call handed to this bot, still running.
             if current.busy, case let .bot(bot) = current, voiceCalls.call?.bot.id == bot.id,
                voiceCalls.call?.handedWork == true {
@@ -1747,6 +1799,9 @@ struct ChatHeaderBar<Avatar: View>: View {
     var closesPane = false
     /// On a wide window, the menu that opens a second chat beside this one.
     var beside: AnyView? = nil
+    /// One tap to a fresh thread with this chat, and one tap to a call.
+    var onNewThread: (() -> Void)? = nil
+    var onCall: (() -> Void)? = nil
     @ViewBuilder let avatar: () -> Avatar
 
     var body: some View {
@@ -1794,6 +1849,16 @@ struct ChatHeaderBar<Avatar: View>: View {
             }
             Spacer(minLength: 4)
             if let beside { beside }
+            if let onNewThread {
+                GlassButton(systemImage: "square.and.pencil", size: 44, weight: .medium, action: onNewThread)
+                    .accessibilityLabel("New thread with \(name)")
+                    .accessibilityIdentifier("chat-new-thread")
+            }
+            if let onCall {
+                GlassButton(systemImage: "phone.fill", size: 44, weight: .medium, action: onCall)
+                    .accessibilityLabel("Call \(name)")
+                    .accessibilityIdentifier("chat-call")
+            }
             if canWatchComputer {
                 GlassButton(systemImage: "display", size: 44, weight: .medium, action: onComputer)
                     .accessibilityLabel("Watch \(name)'s computer")
