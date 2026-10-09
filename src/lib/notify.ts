@@ -5,7 +5,10 @@ import type { Notification } from "../../shared/notification";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
 import { flatMascotBody } from "../../shared/flat-mascot-bodies";
 import type { MascotBodyId } from "../../shared/mascot-bodies";
-import { MAUS_COLORS, type MausColor } from "./mascot";
+import { resolveMausColor } from "../../shared/glyph-faces";
+import { botMascotEyes, type MascotEyes } from "../../shared/mascot-eyes";
+import { glyphFaceMarkup, glyphFaceParts } from "./glyph-face";
+import { type MausColor } from "./mascot";
 
 export type NotifyFrame = Notification;
 
@@ -41,6 +44,7 @@ export interface NotificationAvatarBot {
   avatarUrl?: string | null;
   avatarCrop?: BotAvatarCrop;
   mascotBody?: MascotBodyId | null;
+  mascotEyes?: MascotEyes | null;
 }
 
 /** The bot's photo when its profile shows one; otherwise null, and the
@@ -51,15 +55,18 @@ export function notificationPhoto(bot: Pick<NotificationAvatarBot, "avatarUrl" |
 }
 
 /** The resting mascot as standalone SVG markup: body in the bot's colour,
- * the two-stroke face. Mirrors MausAvatar's static render. */
-export function mascotSvg(color: MausColor, bodyId?: MascotBodyId | null): string {
+ * the resting glyph face (or the two-stroke face for a bot that picked
+ * another eye style). Mirrors MausAvatar's static render. */
+export function mascotSvg(color: MausColor, bodyId?: MascotBodyId | null, eyes?: MascotEyes | null): string {
   const body = flatMascotBody(bodyId ?? "circle");
-  const fill = (MAUS_COLORS as Record<string, string>)[color] ?? "#808080";
+  const fill = resolveMausColor(color);
+  const face = botMascotEyes(eyes) === "glyph"
+    ? glyphFaceMarkup(glyphFaceParts({ state: "idle", color: fill, centre: [50 + body.faceX, 50 + body.faceY], diameter: 80, pixels: 102 }))
+    : `<g transform="translate(${body.faceX} ${body.faceY})" fill="none" stroke="#151515" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">` +
+      `<path d="M 51 43 L 54 52"/><path d="M 73 39 L 76 48"/></g>`;
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 100 100">` +
-    `<path d="${body.path}" fill="${fill}"/>` +
-    `<g transform="translate(${body.faceX} ${body.faceY})" fill="none" stroke="#151515" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">` +
-    `<path d="M 51 43 L 54 52"/><path d="M 73 39 L 76 48"/></g></svg>`
+    `<path d="${body.path}" fill="${fill}"/>` + face + `</svg>`
   );
 }
 
@@ -67,8 +74,8 @@ const mascotIcons = new Map<string, Promise<string | undefined>>();
 
 /** OS notification centres do not draw SVG, so the mascot is rasterised to a
  * PNG once per look and reused. */
-function mascotIcon(color: MausColor, bodyId?: MascotBodyId | null): Promise<string | undefined> {
-  const key = `${color}|${bodyId ?? "circle"}`;
+function mascotIcon(color: MausColor, bodyId?: MascotBodyId | null, eyes?: MascotEyes | null): Promise<string | undefined> {
+  const key = `${color}|${bodyId ?? "circle"}|${botMascotEyes(eyes)}`;
   const cached = mascotIcons.get(key);
   if (cached) return cached;
   const started = new Promise<string | undefined>((resolve) => {
@@ -87,7 +94,7 @@ function mascotIcon(color: MausColor, bodyId?: MascotBodyId | null): Promise<str
       }
     };
     image.onerror = () => resolve(undefined);
-    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(mascotSvg(color, bodyId))}`;
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(mascotSvg(color, bodyId, eyes))}`;
   });
   mascotIcons.set(key, started);
   return started;
@@ -100,7 +107,7 @@ export async function notificationIcon(
   frameAvatarUrl?: string | null,
 ): Promise<string | undefined> {
   if (!bot) return frameAvatarUrl ?? undefined;
-  return notificationPhoto(bot) ?? (await mascotIcon(bot.color, bot.mascotBody));
+  return notificationPhoto(bot) ?? (await mascotIcon(bot.color, bot.mascotBody, bot.mascotEyes));
 }
 
 /** Show one unless the exact destination conversation is already visible.

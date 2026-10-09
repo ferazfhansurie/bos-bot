@@ -7,9 +7,13 @@ import {
   type ReactNode,
 } from "react";
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
+import { glyphFaceParts } from "@/lib/glyph-face";
 import { botAvatarProfile, type BotAvatarCrop } from "../../shared/bot-avatar";
 import { flatMascotBody } from "../../shared/flat-mascot-bodies";
+import { glyphStateFor, resolveMausColor, type GlyphFaceState } from "../../shared/glyph-faces";
+import { botMascotEyes, type MascotEyes } from "../../shared/mascot-eyes";
 import { type MascotBodyId } from "../../shared/mascot-bodies";
+import { GlyphAccent, GlyphEyes } from "./GlyphFace";
 
 export const EYE_SCALE = 1.12;
 export const MOUTH_WEIGHT = 11;
@@ -54,10 +58,17 @@ export type MausAvatarProps = {
   animated?: boolean;
   /** Which body the bot wears. Unknown values fall back to the cursor. */
   bodyId?: MascotBodyId;
+  /** The bot's eye style; glyph faces unless it picked another. */
+  eyes?: MascotEyes | null;
+  /** The glyph face to wear. Defaults to the face `state` maps to. */
+  face?: GlyphFaceState;
 };
 
+/** The flat bodies are drawn in a 100 box, 80 across. */
+const BODY_DIAMETER = 80;
+
 function MausAvatarComponent(
-  { size = 44, label, color, bodyId = "circle", 
+  { size = 44, label, color, bodyId = "circle", state, face, eyes: eyeStyle,
     animated = true, trackPointer = true, gaze, turn = 0 }: MausAvatarProps,
   ref: React.Ref<MausAvatarHandle>,
 ) {
@@ -70,12 +81,21 @@ function MausAvatarComponent(
     spin: () => setSpinKey(k => k + 1),
     setExpression: () => undefined,
   }));
-  const face = "idle";
   const body = flatMascotBody(bodyId);
+  const fill = resolveMausColor(color);
+  const glyph = botMascotEyes(eyeStyle) === "glyph"
+    ? glyphFaceParts({
+      state: face ?? glyphStateFor(state),
+      color: fill,
+      centre: [50 + body.faceX, 50 + body.faceY],
+      diameter: BODY_DIAMETER,
+      pixels: size * BODY_DIAMETER / 100,
+    })
+    : null;
   const eyes = ["M 51 43 L 54 52", "M 73 39 L 76 48"];
   return (
     <svg width={size} height={size} viewBox="0 0 100 100"
-      role="img" aria-label={label ?? `${bodyId} ${face} bot`}
+      role="img" aria-label={label ?? `${bodyId} ${glyph?.state ?? "idle"} bot`}
       className="inline-block shrink-0" style={{ overflow: "visible" }}
       onPointerMove={animated && trackPointer ? event => {
         const r = event.currentTarget.getBoundingClientRect();
@@ -83,14 +103,22 @@ function MausAvatarComponent(
       } : undefined}
       onPointerLeave={() => setPointer({ x: 0, y: 0 })}>
       <g key={spinKey} className={animated && spinKey ? "bos-avatar-spin" : undefined} style={{ transformOrigin: "50px 50px" }}>
-        <path d={body.path} fill={MAUS_COLORS[color] ?? "#808080"} />
-        <g transform={`translate(${body.faceX + pointer.x + (gaze?.x ?? 0)*3} ${body.faceY + pointer.y + (gaze?.y ?? 0)*3}) rotate(${turn} 50 50)`}>
-          <g key={blinkKey} className={animated && blinkKey ? "bos-avatar-blink" : undefined} style={{ transformOrigin: "50px 48px" }}
-            fill="none" stroke="#151515" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round">
-            <path d={eyes[0]} /><path d={eyes[1]} />
+        <path d={body.path} fill={fill} />
+        {glyph ? (
+          <g transform={`translate(${pointer.x + (gaze?.x ?? 0)*3} ${pointer.y + (gaze?.y ?? 0)*3}) rotate(${turn} 50 50)`}>
+            <GlyphEyes key={blinkKey} parts={glyph} animated={animated}
+              blinkClass={animated && blinkKey ? "bos-avatar-blink" : undefined} />
           </g>
-        </g>
+        ) : (
+          <g transform={`translate(${body.faceX + pointer.x + (gaze?.x ?? 0)*3} ${body.faceY + pointer.y + (gaze?.y ?? 0)*3}) rotate(${turn} 50 50)`}>
+            <g key={blinkKey} className={animated && blinkKey ? "bos-avatar-blink" : undefined} style={{ transformOrigin: "50px 48px" }}
+              fill="none" stroke="#151515" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round">
+              <path d={eyes[0]} /><path d={eyes[1]} />
+            </g>
+          </g>
+        )}
       </g>
+      {glyph && <GlyphAccent parts={glyph} animated={animated} />}
     </svg>
   );
 }
@@ -104,6 +132,7 @@ export type BotAvatarProps = Omit<MausAvatarProps, "color"> & {
     avatarUrl?: string | null;
     avatarCrop?: BotAvatarCrop;
     mascotBody?: MascotBodyId | null;
+    mascotEyes?: MascotEyes | null;
   };
 };
 
@@ -154,6 +183,7 @@ export function BotAvatar({ bot, size = 44, label, ...mascotProps }: BotAvatarPr
     return (
       <MausAvatar
         bodyId={bot.mascotBody ?? undefined}
+        eyes={bot.mascotEyes}
         {...mascotProps}
         color={bot.color}
         size={size}
@@ -343,7 +373,7 @@ export function PersonPhoto({ src, size, className = "", testId, fallback }: { s
   );
 }
 
-export interface GroupMarkMember { id: string; name: string; kind: "person" | "bot"; avatar?: string | null; color?: string | null; mascotBody?: string | null }
+export interface GroupMarkMember { id: string; name: string; kind: "person" | "bot"; avatar?: string | null; color?: string | null; mascotBody?: string | null; mascotEyes?: string | null }
 
 /** A group's face: up to three members overlapping, bare like the mascots
  * themselves. With three, one sits on top and two in front; with two, one
@@ -353,8 +383,8 @@ export function GroupMark({ members, size }: { members: GroupMarkMember[]; size:
   const face = (member: GroupMarkMember, px: number) => {
     const initial = <span style={{ width: px, height: px, fontSize: px * 0.42 }} className="flex items-center justify-center rounded-full bg-accent/20 font-semibold text-accent">{member.name.slice(0, 1).toUpperCase()}</span>;
     if (member.kind === "person") return member.avatar ? <PersonPhoto src={member.avatar} size={px} fallback={initial} /> : initial;
-    const mascot = <MausAvatar color={Object.hasOwn(MAUS_COLORS, member.color ?? "") ? member.color as MausColor : "green"}
-      bodyId={(member.mascotBody ?? undefined) as MascotBodyId | undefined} size={px} animated={false} label={member.name} />;
+    const mascot = <MausAvatar color={resolveMausColor(member.color) as MausColor}
+      bodyId={(member.mascotBody ?? undefined) as MascotBodyId | undefined} eyes={botMascotEyes(member.mascotEyes)} size={px} animated={false} label={member.name} />;
     // a bot with a photo wears it here too, matching its face everywhere else
     return member.avatar ? <PersonPhoto src={member.avatar} size={px} fallback={mascot} /> : mascot;
   };

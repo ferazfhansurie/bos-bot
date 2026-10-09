@@ -4,6 +4,9 @@ import { createRoot } from "react-dom/client";
 import { CursorAvatar, FACE_BOX, type CursorState } from "./components/CursorAvatar";
 import { flatMascotBody, FLAT_MASCOT_BODIES } from "../shared/flat-mascot-bodies";
 import { resolveGesture, type MascotGesture, type GestureReceipt, type GestureActivity } from "../shared/mascot-choreography";
+import { GlyphPreview } from "./mascot-preview-glyphs";
+import { glyphFaceParts } from "./lib/glyph-face";
+import { glyphStateFor } from "../shared/glyph-faces";
 import "./mascot-preview.css";
 const gestures: MascotGesture[] = ["thinking","searching","working","waiting","finished"];
 const descriptions = {
@@ -29,10 +32,11 @@ function Mascot({gesture,bodyId,color,size,replay,still}:Props){
   const body=flatMascotBody(bodyId),scale=FACE_BOX/100;
   const silhouette=useMemo(()=>({name:body.name,fit:"scale("+scale+")",body:'<path d="'+body.path+'" fill="{{GRADIENT}}"/>',clip:'<path d="'+body.path+'"/>',anchor:{x:(50+body.faceX*.5)*scale,y:(46+body.faceY)*scale,scale:.55}}),[body,scale]);
   const choreography=useMemo(()=>({gesture,key:replay,path:body.path,faceX:body.faceX,faceY:body.faceY,reduced:still}),[gesture,replay,body,still]);
+  const glyphFace=glyphFaceParts({state:glyphStateFor(gesture),color,centre:[50+body.faceX*.5,50+body.faceY],diameter:80,pixels:size*.8*FACE_BOX/(FACE_BOX+30)});
   return <span ref={host} className="mascot-frame" data-motion={still?"still":visible&&active?"active":"suspended"}>
     <CursorAvatar state={faces[gesture]} size={size} title={body.name+" "+gesture+" mascot"} silhouette={silhouette} gradient={[color,color,color]} eyeColor="#151515"
       showMouth={false} effects={false} glyphs={false} motion={0} lookAround={0} autoBlink={!still&&visible&&active} autoExpression={false}
-      paused={still||!visible||!active} choreography={choreography}/>
+      paused={still||!visible||!active} choreography={choreography} glyphFace={glyphFace}/>
   </span>;
 }
 function Preview(){
@@ -45,6 +49,7 @@ function Preview(){
   const simulate=(activity:GestureActivity,label:string)=>{const next=resolveGesture(activity,receipt);setReceipt(next);setGesture(next.gesture);setReplay(v=>v+1);setScenario(label);};
   const props={gesture,bodyId,color,replay,still:manualStill||osStill};
   return <main>
+    <GlyphPreview/>
     <p className="eyebrow">bos / full-body motion review</p><h1>now the whole bot moves.</h1>
     <p className="intro">the supplied motion study, with the retained face engine. no props, scenes or production changes.</p>
     <section className="hero"><div className="stage"><Mascot {...props} size={210}/></div><div className="controls">

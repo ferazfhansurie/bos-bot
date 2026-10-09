@@ -22,6 +22,8 @@
 import React, { useEffect, useId, useMemo, useRef } from 'react'
 
 import { MASCOT_BODIES } from "../../shared/mascot-bodies"
+import type { GlyphFaceParts } from "@/lib/glyph-face"
+import { GlyphAccent, GlyphEyes } from "./GlyphFace"
 import { gesturePose, IDLE_POSE, mixPose, morphBodyPath, type MascotGesture } from "../../shared/mascot-choreography"
 import {
   EXPRESSIONS,
@@ -1164,6 +1166,10 @@ export interface CursorAvatarProps {
   /** Firaz's full-body study run through this retained face/frame engine.
    * Set by the review page and by ActivityMascot on a live turn. */
   choreography?: { gesture: MascotGesture; key: number; path: string; faceX: number; faceY: number; reduced?: boolean }
+  /** Wear a glyph face (shared/glyph-faces.ts) instead of the ring eyes and
+   * mouth. Its coordinates are the silhouette's own (inside `fit`); the eyes
+   * ride the face pose and blink, the accent rides the body. */
+  glyphFace?: GlyphFaceParts
 }
 
 export interface CursorAvatarHandle {
@@ -1199,6 +1205,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       className,
       style,
       choreography,
+      glyphFace,
     },
     ref
   ) {
@@ -1216,6 +1223,8 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
     const trailLayer = useRef<SVGGElement | null>(null)
     const confettiLayer = useRef<SVGGElement | null>(null)
     const glyphLayer = useRef<SVGGElement | null>(null)
+    const glyphPose = useRef<SVGGElement | null>(null)
+    const glyphBlink = useRef<SVGGElement | null>(null)
 
     // Respect the OS setting unless the caller states a preference explicitly.
     const prefersReducedMotion = useMemo(
@@ -1400,6 +1409,25 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
           el.style.opacity = depth > 0.02 ? '1' : '0'
         })
 
+        // Glyph eyes: a blink squashes them; the face pose carries them on a
+        // morphing body the way previewFace carries the ring eyes.
+        if (glyphBlink.current) {
+          const squash = clamp(blink, 0.08, 1)
+          glyphBlink.current.style.transform = squash < 0.999 ? `scaleY(${squash.toFixed(3)})` : ''
+        }
+        if (glyphPose.current) {
+          let poseTransform = ''
+          if (choreography) {
+            const m = pose.m
+            const rest = { x: 50 + choreography.faceX * .5, y: 46 + choreography.faceY }
+            const at = { x: 50 + choreography.faceX * (1 - m) * .5, y: 46 + choreography.faceY * (1 - m) }
+            const fy = choreography.gesture === 'waiting' ? 1 / Math.max(.3, pose.sy) : 1
+            poseTransform = `translate(${at.x.toFixed(2)} ${at.y.toFixed(2)}) scale(${pose.face.toFixed(4)} ${(pose.face * fy).toFixed(4)}) translate(${-rest.x} ${-rest.y})`
+          }
+          if (poseTransform) glyphPose.current.setAttribute('transform', poseTransform)
+          else glyphPose.current.removeAttribute('transform')
+        }
+
         // Mouth: same sphere projection as the eyes, but blinking never touches it.
         const mouthEl = mouth.current
         if (mouthEl) {
@@ -1538,7 +1566,8 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
         width={dimension}
         height={dimension}
         className={className}
-        style={style}
+        // the glyph accent floats off the body, past the view box
+        style={glyphFace ? { overflow: 'visible', ...style } : style}
         role={label ? 'img' : undefined}
         aria-label={label ?? undefined}
         aria-hidden={label ? undefined : true}
@@ -1566,10 +1595,17 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
           <g ref={bodyContent}>
           {choreography ? <g transform={silhouette.fit || undefined}><path ref={previewPath} d={choreography.path} fill={gradient[0]} /></g> : <g transform={silhouette.fit || undefined} dangerouslySetInnerHTML={{ __html: body }} /> }
           <g clipPath={`url(#${uid}-clip)`}>
+            {glyphFace && (
+              <g transform={silhouette.fit || undefined}>
+                <g ref={glyphPose}>
+                  <GlyphEyes parts={glyphFace} animated={motionStrength > 0 || Boolean(choreography && !choreography.reduced)} blinkRef={glyphBlink} />
+                </g>
+              </g>
+            )}
             <g ref={previewFace} transform={anchorTransform(silhouette.anchor)}>
-              <path ref={eye0} fill={eyeColor} />
-              <path ref={eye1} fill={eyeColor} />
-              {showMouth && (
+              {!glyphFace && <path ref={eye0} fill={eyeColor} />}
+              {!glyphFace && <path ref={eye1} fill={eyeColor} />}
+              {showMouth && !glyphFace && (
                 <path
                   ref={mouth}
                   fill="none"
@@ -1581,6 +1617,11 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
             </g>
           </g>
           </g>
+          {glyphFace && (
+            <g transform={silhouette.fit || undefined}>
+              <GlyphAccent parts={glyphFace} animated={motionStrength > 0 || Boolean(choreography && !choreography.reduced)} />
+            </g>
+          )}
           <g ref={glyphLayer} style={{ opacity: 0 }} />
           </g>
           <g ref={confettiLayer} />

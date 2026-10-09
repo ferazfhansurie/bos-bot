@@ -38,7 +38,7 @@ import { api, useStore, formatTime, visibleMessages, currentTaskBot, type AppSta
 import { peerLine } from "@/lib/peer-message";
 
 import { BotAvatar, InitialsAvatar, PersonPhoto } from "./Avatar";
-import { stateForBot } from "@/lib/mascot";
+import { glyphFaceForBot, stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { SPLIT_DRAG_TYPE } from "@/lib/split-view";
 import { useSplitView } from "./SplitViewContext";
@@ -193,7 +193,7 @@ function StackedMauses({ members, density }: { members: Bot[]; density: SidebarD
     const b = members[0];
     return (
       <div className={cn("flex shrink-0 items-center justify-center", slotSize)}>
-        {b ? <BotAvatar bot={b} state="happy" size={singleSize} animated={false} /> : <Users size={24} className="text-ink-secondary" />}
+        {b ? <BotAvatar bot={b} size={singleSize} animated={false} /> : <Users size={24} className="text-ink-secondary" />}
       </div>
     );
   }
@@ -203,7 +203,7 @@ function StackedMauses({ members, density }: { members: Bot[]; density: SidebarD
     <div className={cn("flex shrink-0 items-center justify-center", slotSize)}>
       <div className="flex items-center -space-x-2.5">
         {shown.map((b) => (
-          <BotAvatar key={b.id} bot={b} state="happy" size={iconOnly ? 30 : 20} animated={false} />
+          <BotAvatar key={b.id} bot={b} size={iconOnly ? 30 : 20} animated={false} />
         ))}
         {extra > 0 && (
           <span className="z-10 flex size-4 items-center justify-center rounded-full border border-hairline/40 bg-raised text-[9px] font-medium text-ink-secondary">
@@ -605,7 +605,7 @@ function NewRoomPanel({ onClose }: { onClose: () => void }) {
               {contact.kind === "person"
                 ? contact.avatar ? <PersonPhoto src={contact.avatar} size={28} />
                   : <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent/20 text-[12px] font-semibold text-accent">{contact.name.slice(0, 1).toUpperCase()}</span>
-                : <BotAvatar bot={{ id: contact.id, name: contact.name, color: contact.color ?? "blue", mascotBody: contact.mascotBody ?? undefined, avatarUrl: undefined, avatarCrop: "mascot" } as unknown as Bot} state="happy" size={28} />}
+                : <BotAvatar bot={{ id: contact.id, name: contact.name, color: contact.color ?? "blue", mascotBody: contact.mascotBody ?? undefined, avatarUrl: undefined, avatarCrop: "mascot" } as unknown as Bot} size={28} />}
               <span className="min-w-0 flex-1 truncate text-[14px] text-ink">
                 {contact.name}
                 {contact.kind === "bot" && contact.ownerName && <span className="ml-1.5 text-[12px] text-ink-secondary">{contact.ownerName}'s bot</span>}
@@ -1255,6 +1255,7 @@ export function BotListItem({
         <BotAvatar
           bot={bot}
           state={stateForBot({ ...bot, messages: visible })}
+          face={failed ? "failed" : glyphFaceForBot({ ...bot, messages: visible })}
           size={avatarSize}
           motion={mascotMotion?.kind ?? "none"}
           motionKey={mascotMotion?.nonce ?? 0}
@@ -1451,7 +1452,7 @@ export function ArchivedBotRow({
 }) {
   return (
     <div className="flex min-h-[82px] items-center gap-3 border-b border-hairline/35 px-1 py-3">
-      <BotAvatar bot={bot} state="happy" size={42} animated={false} />
+      <BotAvatar bot={bot} size={42} animated={false} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[14px] font-medium text-ink">{bot.name}</div>
         <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary">{bot.title || t("sidebar.archived.botFallback")}</div>

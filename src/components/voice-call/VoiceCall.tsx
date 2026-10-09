@@ -9,6 +9,7 @@ import { AudioLines, ChevronsUpDown, MessageSquareMore, Mic, MicOff, Settings, T
 import { BotAvatar } from "@/components/Avatar";
 import { cn } from "@/lib/cn";
 import { MAUS_COLORS, type MausState } from "@/lib/mascot";
+import { resolveMausColor } from "../../../shared/glyph-faces";
 import type { CallActivity, VoiceCallEngine, VoiceCallSnapshot } from "@/lib/voice-call/engine";
 import { formatCallDuration } from "@/lib/voice-call/protocol";
 import {
@@ -62,7 +63,7 @@ const AVATAR_STATE: Record<CallActivity, MausState> = {
 };
 
 function agentColor(bot: Pick<Bot, "color">): string {
-  return MAUS_COLORS[bot.color] ?? MAUS_COLORS.blue;
+  return /^#[0-9A-Fa-f]{6}$/.test(bot.color) || Object.hasOwn(MAUS_COLORS, bot.color) ? resolveMausColor(bot.color) : MAUS_COLORS.blue;
 }
 
 function useDuration(startedAtMs: number | null): string {

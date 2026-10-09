@@ -40,7 +40,7 @@ export function BotPickerList({
           disabled={disabled}
           className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-raised/50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
         >
-          <BotAvatar bot={b} state="happy" size={28} />
+          <BotAvatar bot={b} size={28} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[14px] text-ink">{b.name}</span>
             {hint && <span className="block truncate text-[11px] text-ink-secondary">{hint}</span>}

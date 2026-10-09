@@ -25,7 +25,7 @@ export function remoteRoomBot(bot: RemoteRoomBot, home: { id: string; name: stri
     title: typeof bot.title === "string" ? bot.title : "",
     description: "",
     notifications: false,
-    color: COLORS.has(bot.color) ? (bot.color as MausColor) : "gray",
+    color: COLORS.has(bot.color) || /^#[0-9A-Fa-f]{6}$/.test(bot.color) ? (bot.color as MausColor) : "gray",
     mascotBody: mascotBodySchema.safeParse(bot.mascotBody).data ?? null,
     ...(avatarUrl ? { avatarUrl } : {}),
     ...(avatarCrop ? { avatarCrop } : {}),

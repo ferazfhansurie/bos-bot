@@ -4,9 +4,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CursorAvatar, FACE_BOX, type CursorState } from "./CursorAvatar";
 import { BotAvatar, resolveBotAvatarOutcome, type BotAvatarProps } from "./Avatar";
-import { MAUS_COLORS } from "@/lib/mascot";
+import { glyphFaceParts } from "@/lib/glyph-face";
 import { botAvatarProfile } from "../../shared/bot-avatar";
 import { flatMascotBody } from "../../shared/flat-mascot-bodies";
+import { glyphStateFor, resolveMausColor } from "../../shared/glyph-faces";
+import { botMascotEyes } from "../../shared/mascot-eyes";
 import type { MascotGesture } from "../../shared/mascot-choreography";
 
 const FACES: Record<MascotGesture, CursorState> = {
@@ -67,8 +69,19 @@ export function ActivityMascot({ bot, gesture, size = 36 }: {
     return <span className="flex bot-morph"><BotAvatar bot={bot} size={size} trackPointer={false} /></span>;
   }
 
-  const color = MAUS_COLORS[bot.color] ?? MAUS_COLORS.green;
+  const color = resolveMausColor(bot.color);
   const running = visible && active && !reduced;
+  // the flat bodies are 80 across in their 100 box; the face sits on the
+  // same anchor the ring eyes use, nudged to the body's middle
+  const glyphFace = botMascotEyes(bot.mascotEyes) === "glyph"
+    ? glyphFaceParts({
+      state: glyphStateFor(gesture),
+      color,
+      centre: [50 + body.faceX * .5, 50 + body.faceY],
+      diameter: 80,
+      pixels: size * (80 / 100) * (FACE_BOX / (FACE_BOX + 30)),
+    })
+    : undefined;
   return (
     <span ref={host} className="flex" data-gesture={gesture} data-motion={reduced ? "still" : running ? "active" : "suspended"}>
       <CursorAvatar
@@ -87,6 +100,7 @@ export function ActivityMascot({ bot, gesture, size = 36 }: {
         autoExpression={false}
         paused={!running}
         choreography={choreography}
+        glyphFace={glyphFace}
       />
     </span>
   );

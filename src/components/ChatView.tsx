@@ -45,7 +45,7 @@ import { TurnPresence } from "./TurnPresence";
 import { ActivityMascot } from "./ActivityMascot";
 import { turnGesture } from "../../shared/mascot-choreography";
 import { showToolCallsEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
-import { normalizeState, stateForBot } from "@/lib/mascot";
+import { glyphFaceForBot, normalizeState, stateForBot } from "@/lib/mascot";
 import { peerLine, type PeerLine } from "@/lib/peer-message";
 import { showWorkingDots } from "@/lib/turn-tail";
 import { liveActivityLabel } from "@/lib/live-activity";
@@ -411,7 +411,7 @@ function Bubble({
       {peer && <PeerLabel peer={peer} />}
       {shared && !user && message.from && <div className="mb-1 flex items-center gap-1.5 pl-0.5 text-[11px] font-medium text-ink-secondary">
         {sharedSpeaker && <BotAvatar
-          bot={sharedSpeaker} size={20} state="happy" animated={false} />}
+          bot={sharedSpeaker} size={20} animated={false} />}
         {message.from.name}
       </div>}
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
@@ -642,7 +642,7 @@ function PeerLabel({ peer }: { peer: PeerLine }) {
     <div className="mb-1 flex items-center gap-1.5 pl-0.5" data-testid="peer-label">
       <BotAvatar
         bot={author ?? { name: peer.name, color: "blue" }}
-        state={normalizeState(author?.mascotExpression) ?? "happy"}
+        state={normalizeState(author?.mascotExpression) ?? undefined}
         size={16}
         motion="none"
         motionKey={0}
@@ -671,7 +671,7 @@ function ActivityChip({ message, place = "auto" }: { message: Message; place?: E
           title={t("chat.openConversationWith", { name: comm.withName })}
           className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
         >
-          <BotAvatar bot={withBot ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} />
+          <BotAvatar bot={withBot ?? { name: comm.withName, color: comm.withColor }} size={16} />
           <span className="max-w-[480px] truncate">{tool.name}</span>
           <ChevronRight size={13} />
         </button>
@@ -1369,6 +1369,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               <BotAvatar
                 bot={bot}
                 state={stateForBot({ ...bot, messages })}
+                face={glyphFaceForBot({ ...bot, messages })}
                 size={28}
                 motion={mascotMotion?.kind ?? "none"}
                 motionKey={mascotMotion?.nonce ?? 0}

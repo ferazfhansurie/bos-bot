@@ -75,10 +75,15 @@ describe("roomMemberBots", () => {
   it("sanitizes untrusted profile fields", () => {
     const [bot] = roomMemberBots({
       memberIds: ["x"], home: partner,
-      memberBots: [{ id: "x", name: "", color: "#ff0000", mascotBody: "dragon" }, null as never, { name: "no id" } as never],
+      memberBots: [{ id: "x", name: "", color: "red; background:url(x)", mascotBody: "dragon" }, null as never, { name: "no id" } as never],
     }, []);
     expect(bot).toMatchObject({ id: "x", name: "Bot", color: "gray", mascotBody: null });
     expect(bot).not.toHaveProperty("avatarUrl");
+  });
+
+  it("keeps a free #RRGGBB colour", () => {
+    const [bot] = roomMemberBots({ memberIds: ["x"], home: partner, memberBots: [{ id: "x", name: "x", color: "#ff0000" }] }, []);
+    expect(bot?.color).toBe("#ff0000");
   });
 
   it("falls back to the local lookup when an older server sends no memberBots", () => {
