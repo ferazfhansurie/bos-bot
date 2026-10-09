@@ -240,8 +240,9 @@ it("does not add blocking subprocess calls to Electron runtime modules", () => {
   const root = dirname(fileURLToPath(import.meta.url));
   // These existing synchronous ownership checks need separate lifecycle work:
   // one cached boot ID read, one Windows process-creation-time query, and
-  // Linux's driver/private-group validation.
-  const allowed = { "data-dir-lease.mjs": 3, "cua-linux.cjs": 2 };
+  // Linux's driver/private-group validation. native-contract.mjs runs only
+  // from the packaging scripts (after-pack, mac-sign), never in the app.
+  const allowed = { "data-dir-lease.mjs": 3, "cua-linux.cjs": 2, "native-contract.mjs": 2 };
   for (const entry of readdirSync(root, { recursive: true })) {
     const name = String(entry).replaceAll("\\", "/");
     if (!/\.(?:mjs|cjs)$/.test(name) || /(?:\.test\.|\.node-test\.|^vendor\/|^build-)/.test(name)) continue;

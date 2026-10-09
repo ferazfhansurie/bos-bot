@@ -30,6 +30,8 @@ export const CREDENTIAL_ENV_NAMES = [
   // though they are not traditional API credentials.
   "OMB_BROWSER_CONNECTION",
   "OMB_USER_DATA",
+  "OMB_CUA_WINDOWS_DESCRIPTOR",
+  "OMB_CUA_WINDOWS_SUPERVISED",
 ];
 
 // Credential-shaped tokens (server/redact.ts parity): unmistakable formats
