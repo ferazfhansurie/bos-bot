@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "stroke": 3.2,
+  "tiltDeg": -12,
+  "viewBox": 24,
+  "states": [
+    "idle",
+    "thinking",
+    "searching",
+    "working",
+    "waiting",
+    "finished",
+    "happy",
+    "failed"
+  ],
+  "faces": {
+    "idle": {
+      "left": "dash",
+      "right": "dash",
+      "accent": null,
+      "anchor": null
+    },
+    "thinking": {
+      "left": "caret",
+      "right": "caret",
+      "accent": "query",
+      "anchor": "left"
+    },
+    "searching": {
+      "left": "ring",
+      "right": "ring",
+      "accent": "dots",
+      "anchor": "top-right"
+    },
+    "working": {
+      "left": "plus",
+      "right": "plus",
+      "accent": "code",
+      "anchor": "top-right"
+    },
+    "waiting": {
+      "left": "ring",
+      "right": "ring",
+      "accent": "bang",
+      "anchor": "left"
+    },
+    "finished": {
+      "left": "gt",
+      "right": "lt",
+      "accent": "spark",
+      "anchor": "split"
+    },
+    "happy": {
+      "left": "star",
+      "right": "star",
+      "accent": "heart",
+      "anchor": "top-right"
+    },
+    "failed": {
+      "left": "cross",
+      "right": "cross",
+      "accent": null,
+      "anchor": null
+    }
+  },
+  "paths": {
+    "dash": "M4.5 12L19.5 12",
+    "caret": "M6 17L12 6L18 17",
+    "ring": "M12 5.5C15.31 5.5 18 8.41 18 12C18 15.59 15.31 18.5 12 18.5C8.69 18.5 6 15.59 6 12C6 8.41 8.69 5.5 12 5.5Z",
+    "plus": "M12 5L12 19M5 12L19 12",
+    "gt": "M5 6.5L19 12L5 17.5",
+    "lt": "M19 6.5L5 12L19 17.5",
+    "star": "M12 4L12 20M5.07 8L18.93 16M5.07 16L18.93 8",
+    "cross": "M6 6L18 18M18 6L6 18",
+    "bang": "M12 3.5L12 14M12 19.8L12 20.2",
+    "query": "M7.5 8.2C7.5 5.6 9.5 3.6 12 3.6C14.5 3.6 16.5 5.4 16.5 7.8C16.5 9.9 15.1 10.9 13.6 11.8C12.5 12.5 12 13.3 12 14.6M12 19.8L12 20.2",
+    "dots": "M4.3 12L4.7 12M11.8 12L12.2 12M19.3 12L19.7 12",
+    "code": "M7 7L2.5 12L7 17M13.6 4.5L10.4 19.5M17 7L21.5 12L17 17",
+    "heart": "M12 20C12 20 3.5 15 3.5 9.2C3.5 6.4 5.6 4.4 8.1 4.4C9.9 4.4 11.3 5.4 12 6.9C12.7 5.4 14.1 4.4 15.9 4.4C18.4 4.4 20.5 6.4 20.5 9.2C20.5 15 12 20 12 20Z",
+    "spark": "M2.9 9.4C2.1 9 2 7.9 2.8 7.3M16.6 20.4C17.4 20.8 17.5 21.9 16.7 22.5"
+  },
+  "layout": {
+    "eyeBox": 0.4,
+    "eyeX": 0.22,
+    "eyeY": 0.05,
+    "accent": {
+      "left": {
+        "x": -0.76,
+        "y": -0.3,
+        "box": 0.48,
+        "stroke": 3.2
+      },
+      "top-right": {
+        "x": 0.68,
+        "y": -0.52,
+        "box": 0.52,
+        "stroke": 3.2
+      },
+      "split": {
+        "x": 0,
+        "y": 0,
+        "box": 1.5,
+        "stroke": 1.4
+      }
+    },
+    "accentMinSize": 24,
+    "minStrokePx": 1.5
+  },
+  "palette": {
+    "green": "#009957",
+    "blue": "#377FE6",
+    "red": "#D94B52",
+    "orange": "#E78531",
+    "purple": "#8057C8",
+    "cyan": "#0EA5C6",
+    "pink": "#D84F8B",
+    "yellow": "#D8A729",
+    "teal": "#01A492",
+    "coral": "#E5634E",
+    "white": "#FFFFFF",
+    "brown": "#885E36",
+    "gray": "#808080"
+  },
+  "fallbackColor": "#009957"
+}

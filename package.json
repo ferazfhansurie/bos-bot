@@ -51,6 +51,7 @@
     "check:electron": "node scripts/check-electron.mjs",
     "preview": "vite preview",
     "gen:bodies": "node --experimental-strip-types scripts/gen-mascot-bodies.ts",
+    "gen:glyphs": "node --experimental-strip-types scripts/gen-glyph-faces.ts",
     "build:server": "tsc -p tsconfig.server.build.json && node scripts/bundle-server.mjs",
     "build:companion": "tsc -p tsconfig.companion.build.json",
     "build:speech": "node electron/build-speech-helper.mjs",

@@ -9,7 +9,7 @@ it("persists eye choices through paired profile scope and refuses invalid choice
  try {
   const made=await api("POST","/api/bots",{name:"Eye fixture",modelSelection:{instanceId:"claude",model:"claude-sonnet-5"},requireAvailableModel:true});
   expect(made.status).toBe(201);const id=made.body.bot.id;
-  for(const mascotEyes of ["classic","round","arches","angled"]) {
+  for(const mascotEyes of ["glyph","classic","round","arches","angled"]) {
    const saved=await api("PATCH",`/api/bots/${id}/profile`,{mascotEyes});
    expect(saved.status,mascotEyes).toBe(200);expect(saved.body.bot.mascotEyes).toBe(mascotEyes);
   }

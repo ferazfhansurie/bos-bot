@@ -1,5 +1,6 @@
 import { CURSOR_STATES, type CursorState } from "@/components/CursorAvatar";
 import { lastNonReceipt } from "./receipts";
+import type { MausColorName } from "../../shared/glyph-faces";
 
 /** The mascot's behaviour vocabulary — CursorAvatar's 39 states, under the
  * app's historical names. */
@@ -46,39 +47,10 @@ export const STATE_GROUPS = {
   ],
 } satisfies Record<string, MausState[]>;
 
-export const MAUS_COLOR_NAMES = [
-  "green",
-  "blue",
-  "red",
-  "orange",
-  "purple",
-  "cyan",
-  "pink",
-  "yellow",
-  "teal",
-  "coral",
-  "white",
-  "brown",
-  "gray",
-] as const;
-
-export type MausColor = (typeof MAUS_COLOR_NAMES)[number];
-
-export const MAUS_COLORS = {
-  green: "#009957",
-  blue: "#377FE6",
-  red: "#D94B52",
-  orange: "#E78531",
-  purple: "#8057C8",
-  cyan: "#0EA5C6",
-  pink: "#D84F8B",
-  yellow: "#D8A729",
-  teal: "#01A492",
-  coral: "#E5634E",
-  white: "#FFFFFF",
-  brown: "#885E36",
-  gray: "#808080",
-} satisfies Record<MausColor, string>;
+/** The named palette lives in shared/ so the server, glyph faces and iOS
+ * read the same 13 colours. */
+export { MAUS_COLOR_NAMES, MAUS_COLORS } from "../../shared/glyph-faces";
+export type MausColor = MausColorName;
 
 export const MAUS_MOTIONS = [
   "arrive",

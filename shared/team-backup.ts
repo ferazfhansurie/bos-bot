@@ -76,7 +76,8 @@ const backupSchema = z.object({
     mascotExpression: z.string().max(80).optional(),
     mascotBody: z.string().max(40).optional(),
     workContinuity: z.boolean().optional(),
-    mascotEyes: z.enum(["classic", "round", "arches", "angled"]).optional(),
+    // keep in step with MASCOT_EYE_IDS (shared/mascot-eyes.ts); this schema also runs in the browser
+    mascotEyes: z.enum(["glyph", "classic", "round", "arches", "angled"]).optional(),
     chiefOfStaff: z.boolean(),
     hidden: z.boolean(),
     playbooks: z.array(playbook).max(200),
