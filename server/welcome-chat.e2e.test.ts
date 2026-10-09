@@ -15,7 +15,7 @@ it("says hi through the stub for the owner only", async () => {
   try {
     const hello = await api("/api/onboarding/welcome", { name: " Putri " });
     expect(hello.status).toBe(201);
-    expect(hello.body.url).toMatch(/^https:\/\/hi\.bos\.aihlete\.com\/pair#code=stub-[0-9a-f]{8}$/);
+    expect(hello.body.url).toMatch(/^https:\/\/hi\.aihlete\.com\/pair#code=stub-[0-9a-f]{8}$/);
     expect(Date.parse(hello.body.expiresAt)).toBeGreaterThan(Date.now());
     // the same install id every time, so bos-server can hold one room per install
     expect((await api("/api/onboarding/welcome", { name: "Putri" })).body.url).toBe(hello.body.url);

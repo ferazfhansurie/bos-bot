@@ -172,7 +172,7 @@ const bridge = {
    * this remains reliable after an asynchronous API request. */
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
   /** Open a "say hi to firaz" guest link in its own app window. Only
-   * https links under bos.aihlete.com load; anything else rejects. */
+   * https links on hi.aihlete.com or under bos.aihlete.com load; anything else rejects. */
   openWelcomeChat: (url) => ipcRenderer.invoke("welcome:open", url),
   /** Tell the window which skin the page wears, so the native chrome the
    * renderer cannot paint (the Windows caption-button overlay) matches. */

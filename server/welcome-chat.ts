@@ -9,8 +9,8 @@ import { join } from "node:path";
 
 export const WELCOME_URL = "https://bos.aihlete.com/api/welcome";
 export const WELCOME_TIMEOUT_MS = 10_000;
-/** The link must point at firaz's server behind bos.aihlete.com. */
-const WELCOME_HOST = /^(?:[a-z0-9-]+\.)*bos\.aihlete\.com$/;
+/** The link must point at firaz's server: hi.aihlete.com, or a host under bos.aihlete.com. */
+const WELCOME_HOST = /^(?:(?:[a-z0-9-]+\.)*bos\.aihlete\.com|hi\.aihlete\.com)$/;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type WelcomeResult =
@@ -78,7 +78,7 @@ export async function requestWelcome(
   if (env.BOS_WELCOME_STUB === "1") {
     return {
       status: 201,
-      url: `https://hi.bos.aihlete.com/pair#code=stub-${body.installId.slice(0, 8)}`,
+      url: `https://hi.aihlete.com/pair#code=stub-${body.installId.slice(0, 8)}`,
       expiresAt: new Date((options.now ?? Date.now)() + 15 * 60_000).toISOString(),
     };
   }

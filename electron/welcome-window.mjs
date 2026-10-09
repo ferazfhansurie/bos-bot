@@ -1,14 +1,14 @@
 // The "say hi to firaz" window loads firaz's own server (a guest session in a
-// single room), so it is remote content: only https links under
-// bos.aihlete.com load in it, and the guest cookie lives in its own
+// single room), so it is remote content: only https links on
+// hi.aihlete.com (or under bos.aihlete.com) load in it, and the guest cookie lives in its own
 // persistent partition, never the app's.
 
 export const WELCOME_PARTITION = "persist:bos-welcome";
-const WELCOME_HOST = /^(?:[a-z0-9-]+\.)*bos\.aihlete\.com$/;
+const WELCOME_HOST = /^(?:(?:[a-z0-9-]+\.)*bos\.aihlete\.com|hi\.aihlete\.com)$/;
 /** A chat page may ask to notify and to copy; nothing else. */
 const WELCOME_PERMISSIONS = new Set(["notifications", "clipboard-sanitized-write"]);
 
-/** The URL to load, or throws. Accepts only https under bos.aihlete.com. */
+/** The URL to load, or throws. Accepts only https on hi.aihlete.com or under bos.aihlete.com. */
 export function welcomeWindowUrl(raw) {
   if (Object.prototype.toString.call(raw) !== "[object String]" || raw.length > 2048) {
     throw new Error("The welcome link is invalid");
