@@ -19,8 +19,8 @@ struct BosWidgets: WidgetBundle {
     var body: some Widget {
         BotActivityWidget()
         if #available(iOS 18.0, *) {
-            CallBotControl(bot: "bos")
-            CallBotControl(bot: "oracle")
+            CallBosControl()
+            CallOracleControl()
         }
     }
 }
@@ -372,17 +372,22 @@ private struct JarvisCloudFace: View {
 
 /// "Call bos" in Control Center, on the lock screen, or on the action button.
 @available(iOS 18.0, *)
-struct CallBotControl: ControlWidget {
-    let bot: String
-
-    var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "com.aihlete.aios.call-\(bot)") {
-            ControlWidgetButton(action: OpenBotCallIntent(bot: bot)) {
-                Label("Call \(bot)", systemImage: "phone.fill")
-            }
-        }
-        .displayName("Call \(bot)")
-        .description("Start a live voice call with \(bot).")
-    }
+struct CallBosControl: ControlWidget {
+    var body: some ControlWidgetConfiguration { callControl("bos") }
 }
 
+@available(iOS 18.0, *)
+struct CallOracleControl: ControlWidget {
+    var body: some ControlWidgetConfiguration { callControl("oracle") }
+}
+
+@available(iOS 18.0, *)
+private func callControl(_ bot: String) -> some ControlWidgetConfiguration {
+    StaticControlConfiguration(kind: "com.aihlete.aios.call-\(bot)") {
+        ControlWidgetButton(action: OpenBotCallIntent(bot: bot)) {
+            Label("Call \(bot)", systemImage: "phone.fill")
+        }
+    }
+    .displayName("Call \(bot)")
+    .description("Start a live voice call with \(bot).")
+}

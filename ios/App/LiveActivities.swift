@@ -39,6 +39,12 @@ final class LiveActivityCoordinator {
         StopBotIntent.handler = { [weak session] botId, threadId in
             await session?.interrupt(botId: botId, threadId: threadId)
         }
+        #if DEBUG
+        if let demo = UserDefaults.standard.string(forKey: "demoActivity") {
+            Task { await Self.demo(demo) }
+            return
+        }
+        #endif
         cancellable = session.stateChanges
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] state in self?.sync(state) }
@@ -209,4 +215,49 @@ final class LiveActivityCoordinator {
         }
         return trimmed
     }
+
+    #if DEBUG
+    /// Simulator screenshots: launch with `-demoActivity working|needsYou|done`
+    /// to show that state for bos and oracle without a paired computer.
+    private static func demo(_ kind: String) async {
+        for activity in Activity<BotActivityAttributes>.activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        let started = Date().addingTimeInterval(-94)
+        func content(_ name: String, _ thread: String) -> BotActivityContent {
+            switch kind {
+            case "needsYou":
+                var c = BotActivityContent(face: "curious", kind: "needsYou", headline: "\(name) needs you",
+                                           line: "Allow restarting the BOS server?", threadId: thread, card: nil,
+                                           since: started, threadTitle: "ios: live activity polish", symbol: "hand.raised.fill")
+                c.requestId = "demo"
+                c.options = ["Allow", "Deny"]
+                c.isPermission = true
+                return c
+            case "done":
+                var c = BotActivityContent(face: "happy", kind: "done", headline: "\(name) is done",
+                                           line: "shipped build 74 to your iphone. action button is ready.", threadId: thread,
+                                           card: nil, since: started, threadTitle: "ios: live activity polish", symbol: "checkmark")
+                c.endedAt = Date()
+                return c
+            default:
+                return BotActivityContent(face: "working", kind: "working", headline: "\(name) is working",
+                                          line: "running a command", threadId: thread, card: nil, since: started,
+                                          threadTitle: "ios: live activity polish", symbol: "terminal", otherThreads: 1)
+            }
+        }
+        let bots: [(String, String, String)] = [
+            ("59d5f871-db6c-4850-b966-a04ecc033279", "bos", "white"),
+            ("4c4ff223-89ea-4743-a42e-1e9d62e24ea8", "oracle", "#7C8CFF"),
+        ]
+        for (id, name, color) in bots {
+            let attributes = BotActivityAttributes(botId: id, threadId: "demo-\(name)", name: name, color: color,
+                                                   mascotBody: nil, mascotEyes: nil)
+            let state = content(name, "demo-\(name)")
+            _ = try? Activity.request(attributes: attributes,
+                                      content: .init(state: state, staleDate: nil),
+                                      pushType: nil)
+        }
+    }
+    #endif
 }
