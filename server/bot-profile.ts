@@ -3,7 +3,9 @@ import { mascotEyesSchema } from "../shared/mascot-eyes.ts";
 
 import { BOT_AVATAR_CROPS, botAvatarCropSchema, botAvatarUrlSchema } from "../shared/bot-avatar.ts";
 import { BOT_PROFILE_LIMITS } from "../shared/bot-profile.ts";
+import { normalizeMausColor } from "../shared/glyph-faces.ts";
 import { MASCOT_BODY_IDS, mascotBodySchema } from "../shared/mascot-bodies.ts";
+import type { MausColor } from "../shared/wire.ts";
 
 import type { BotRecord } from "./store.ts";
 
@@ -32,10 +34,13 @@ export const BOT_PROFILE_PATCH_FIELDS = [
   "avatarCrop",
   "mascotBody",
   "mascotEyes",
+  "color",
   "voice",
   "speakReplies",
   "workContinuity",
 ] as const;
+
+const COLOR_ERROR = "color must be a palette name or #RRGGBB";
 
 const profilePatchSchema = z.object({
   name: z
@@ -68,6 +73,13 @@ const profilePatchSchema = z.object({
   avatarCrop: botAvatarCropSchema.optional(),
   mascotBody: mascotBodySchema.optional(),
   mascotEyes: mascotEyesSchema.nullable().optional(),
+  // Cosmetic, so paired clients may set it; normalized exactly like the
+  // broad desktop PATCH (palette name kept, hex uppercased).
+  color: z
+    .string({ error: COLOR_ERROR })
+    .refine((value) => normalizeMausColor(value) !== null, { error: COLOR_ERROR })
+    .transform((value) => normalizeMausColor(value) as MausColor)
+    .optional(),
   voice: z
     .string({ error: "voice must be a string" })
     .max(BOT_PROFILE_LIMITS.voice, { error: "voice must be at most 200 characters" })
@@ -90,6 +102,7 @@ export type BotProfilePatch = Partial<
     | "avatarCrop"
     | "mascotBody"
     | "mascotEyes"
+    | "color"
     | "voice"
     | "speakReplies"
     | "workContinuity"
