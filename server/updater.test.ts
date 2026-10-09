@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  UpdateCoordinator, appDigests, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
+  UpdateCoordinator, appDigests, isRunningBuild, classifyLaunchdJobs, createDarwinExecutor, discoverCandidate, jobBlocks, pendingUpdates, preflightVerdict, readCheckpoint, resumePrompt,
   updaterPlist, writeCandidateManifest, type ApplyPlan, type BusyTurn, type CheckpointTurn, type DarwinExecutorOptions, type LaunchdJobDetails, type NoDowngradeOptions, type UpdateEvent, type UpdateExecutor, type UpdateResult, type UpdaterHooks, type UpdaterHost,
 } from "./updater.ts";
 
@@ -514,6 +514,32 @@ describe("updater coordinator", () => {
     expect(plan).toMatchObject({ mode: "update", version: "0.1.86", sha: "feedface00000000", oldSha: "2d83ba23aaaaaaaa" });
     // The staged candidate still shows, now with the branch the check found.
     expect((await c.status()).candidate).toMatchObject({ sha: "feedface00000000", branch: "prod", stagedAt: expect.any(String) });
+  });
+
+  it("never offers the running build as an update (same sha, +build metadata ignored)", async () => {
+    const running = { version: "1.9.2", sha: "a014552b64ef7b32265c5df04fd0d71a8f3d94c8" };
+    expect(isRunningBuild({ version: "1.9.2+a014552b", sha: running.sha }, running)).toBe(true);
+    expect(isRunningBuild({ version: "1.9.2+a014552b", sha: "a014552b" }, running)).toBe(true);
+    expect(isRunningBuild({ version: "1.9.2", sha: "unknown" }, { version: "1.9.2", sha: "unknown" })).toBe(true);
+    expect(isRunningBuild({ version: "1.9.3+beefcafe", sha: "beefcafe00000000" }, running)).toBe(false);
+    expect(isRunningBuild({ version: "1.9.2+beefcafe", sha: "beefcafe00000000" }, running)).toBe(false);
+
+    // last-check.json from before the relaunch still names the build that is now running
+    mkdirSync(join(h.dataDir, "updates"), { recursive: true });
+    const stale = { at: "2026-10-09T22:18:59Z", current: { version: "1.9.2", sha: "83a7f16c1a08d5bd" }, candidate: { version: "1.9.2+a014552b", sha: running.sha, branch: "prod" }, reason: "allowed" };
+    writeFileSync(join(h.dataDir, "updates", "last-check.json"), JSON.stringify(stale));
+    const builder = { check: async () => stale, build: async () => {} };
+    const after = h.make({ current: () => running, builder });
+    const status = await after.status();
+    expect(status.candidate).toBeUndefined();
+    expect(status.state).toBe("idle");
+    // the same candidate is still offered to a build that is not running it
+    const before = h.make({ current: () => stale.current, builder });
+    expect(await before.status()).toMatchObject({ state: "ready", candidate: { sha: running.sha } });
+    // and a candidate that slipped through a fresh check is dropped by status
+    const fresh = h.make({ current: () => running, builder: { check: async () => ({ at: "x", current: running, candidate: stale.candidate }), build: async () => {} } });
+    await fresh.check();
+    expect((await fresh.status()).candidate).toBeUndefined();
   });
 
   it("full staged delivery bypasses the tree builder and keeps admission/checkpoint gates", async () => {

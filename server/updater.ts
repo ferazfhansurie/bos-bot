@@ -322,6 +322,25 @@ const isPending = (error: unknown): boolean => Boolean(error) && typeof error ==
 
 const BUILD_LOG_TAIL = 200;
 
+const KNOWN_SHA = /^[0-9a-f]{7,64}$/i;
+
+/** True when `candidate` is the build already running: the same commit (a
+ * short sha matches its full one), or the same version string with no commit to
+ * tell them apart. `1.9.2` and `1.9.2+a014552b` are one version; the +build
+ * metadata is the sha, never a reason to offer an update. */
+export function isRunningBuild(candidate: { version: string; sha: string }, current: { version: string; sha: string }): boolean {
+  const a = candidate.sha.toLowerCase();
+  const b = current.sha.toLowerCase();
+  if (KNOWN_SHA.test(a) && KNOWN_SHA.test(b)) return a.startsWith(b) || b.startsWith(a);
+  return candidate.version === current.version;
+}
+
+/** A persisted check is only valid for the build that ran it. */
+function checkIsStale(check: UpdateCheck, current: { version: string; sha: string }): boolean {
+  const was = check.current?.sha;
+  return Boolean(was && KNOWN_SHA.test(was) && KNOWN_SHA.test(current.sha) && was !== current.sha);
+}
+
 export class UpdateCoordinator {
   private state: UpdateState = "idle";
   private updateId: string | null = null;
@@ -372,19 +391,25 @@ export class UpdateCoordinator {
   }
 
   async status(): Promise<UpdateStatus> {
+    const current = this.hooks.current();
     const staged = await this.candidateSafe();
-    const found = this.lastCheck?.candidate;
-    const candidate: UpdateStatus["candidate"] | undefined = this.hooks.builder ? (found ? { ...found, ...(staged && staged.sha === found.sha ? { stagedAt: staged.stagedAt } : {}) } : undefined) : staged
+    // A check made while a different build was running describes that build,
+    // not this one (last-check.json outlives the relaunch it triggered).
+    const lastCheck = this.lastCheck && !checkIsStale(this.lastCheck, current) ? this.lastCheck : null;
+    const found = lastCheck?.candidate;
+    const raw: UpdateStatus["candidate"] | undefined = this.hooks.builder ? (found ? { ...found, ...(staged && staged.sha === found.sha ? { stagedAt: staged.stagedAt } : {}) } : undefined) : staged
       ? { version: staged.version, sha: staged.sha, stagedAt: staged.stagedAt, ...(found && found.sha === staged.sha ? { branch: found.branch } : {}) }
       : found ? { version: found.version, sha: found.sha, branch: found.branch } : undefined;
+    // a build is never an update to itself, whatever the +build metadata says
+    const candidate = raw && !isRunningBuild(raw, current) ? raw : undefined;
     const state: UpdateState = this.running ? this.state : candidate ? "ready" : "idle";
     return {
       state, ...(this.updateId ? { updateId: this.updateId } : {}), ...(this.detail ? { detail: this.detail } : {}),
-      current: this.hooks.current(),
-      ...(this.lastCheck ? { shellRequired: this.lastCheck.shellRequired, upToDate: this.lastCheck.upToDate, reason: this.lastCheck.reason } : {}),
+      current,
+      ...(lastCheck ? { shellRequired: lastCheck.shellRequired, upToDate: lastCheck.upToDate, reason: lastCheck.reason } : {}),
       ...(candidate ? { candidate } : {}),
       busyTurns: this.hooks.listBusyTurns().map(turn => ({ botId: turn.botId, ...(turn.botName ? { botName: turn.botName } : {}), threadId: turn.threadId })),
-      ...(this.lastCheck ? { lastCheck: { at: this.lastCheck.at, ...(this.lastCheck.reason ? { reason: this.lastCheck.reason } : {}) } } : {}),
+      ...(lastCheck ? { lastCheck: { at: lastCheck.at, ...(lastCheck.reason ? { reason: lastCheck.reason } : {}) } } : {}),
       ...(this.lastResult && !this.running ? { lastResult: this.lastResult } : {}),
     };
   }
@@ -412,8 +437,10 @@ export class UpdateCoordinator {
         try { result = await this.hooks.builder.check(); }
         catch (error) { result = { at: this.now().toISOString(), current: this.hooks.current(), reason: `check failed: ${error instanceof Error ? error.message : String(error)}` }; }
       } else {
-        const staged = await this.candidateSafe();
-        result = { at: this.now().toISOString(), current: this.hooks.current(), ...(staged ? { candidate: { version: staged.version, sha: staged.sha, branch: "staged", stagedAt: staged.stagedAt } } : { reason: "no staged update and no build source configured" }) };
+        const current = this.hooks.current();
+        const found = await this.candidateSafe();
+        const staged = found && !isRunningBuild(found, current) ? found : null;
+        result = { at: this.now().toISOString(), current, ...(staged ? { candidate: { version: staged.version, sha: staged.sha, branch: "staged", stagedAt: staged.stagedAt } } : { reason: "no staged update and no build source configured" }) };
       }
       this.lastCheck = result;
       this.log(`check: ${result.candidate ? `candidate ${result.candidate.version} (${result.candidate.sha.slice(0, 8)}) on ${result.candidate.branch}` : result.reason ?? "nothing"}`);
