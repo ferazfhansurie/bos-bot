@@ -3268,6 +3268,7 @@ const roomHandoffs: RoomHandoffs = new RoomHandoffs(join(DATA_DIR, "room-handoff
       && childTask?.openedBy?.kind === "work" && childTask.openedBy.botId === parent.botId) {
       store.setTaskClosedBy(child.botId, child.threadId,
         { botId: parent.botId, name: store.bot(parent.botId)?.name ?? childTask.openedBy.name, at: Date.now() });
+      store.patchTask(child.botId, child.threadId, { archivedAt: Date.now() });
     }
   },
   run: async (node, resumed, signal) => {
@@ -16137,6 +16138,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // Closing twice is not an error and leaves no second chip: the
         // thread is already folded away, so there is nothing more to do.
         if (task.closedBy) {
+          if (task.archivedAt === undefined) store.patchTask(owner.id, threadId, { archivedAt: Date.now() });
           return json(res, 200, { closed: true, alreadyClosed: true, threadId, title: task.title, botName: owner.name, closedBy: task.closedBy.name });
         }
         store.appendMessage(threadId, {
@@ -16149,6 +16151,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // The stamp is what the sidebar folds on and what list_threads
         // reports; the chip above is only the transcript's record of it.
         store.setTaskClosedBy(owner.id, threadId, { botId: from.id, name: from.name, at: Date.now() });
+        // A bot closing a verified-done thread also archives it, so the
+        // person never has to tidy up after a bot.
+        store.patchTask(owner.id, threadId, { archivedAt: Date.now() });
         return json(res, 200, { closed: true, threadId, title: task.title, botName: owner.name });
       }
       if (method === "GET" && path === "/api/internal/rooms") {
@@ -21261,9 +21266,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         }, patch.modelSelection, body.updateBotDefault === true, body.resetApprovalToAsk === true, body.requireAvailableModel === true);
         if (!checked.ok) return json(res, checked.status, { error: checked.error });
       }
-      if (body.closed === false) {
+      if (body.closed === false || body.archivedAt === null) {
         store.setTaskClosedBy(m[1], m[2], null);
         store.patchTask(m[1], m[2], { closeWhenDone: undefined });
+      }
+      // "Done" is one action: archiving closes the thread too, so it leaves
+      // the list and list_threads reports it closed. Unarchive reopens above.
+      const closing = store.taskByThread(m[1], m[2]);
+      if (typeof patch.archivedAt === "number" && closing && !closing.closedBy) {
+        store.setTaskClosedBy(m[1], m[2], { botId: "", name: "you", at: Date.now() });
+        store.patchTask(m[1], m[2], { closeWhenDone: undefined, ...(closing.unread ? { unread: false } : {}) });
       }
       const task = patch.modelSelection
         ? store.switchTaskModel(m[1], m[2], patch.modelSelection, body.updateBotDefault === true, body.resetApprovalToAsk === true, patch)!
@@ -23297,7 +23309,9 @@ function settleInboxThreads(now = Date.now()): void {
     if (!candidate || !(task.closeWhenDone ? inboxCanClose(candidate) : inboxShouldSettle(candidate, days, now))) continue;
     // No await between the eligibility observation and metadata commit.
     store.setTaskClosedBy(bot.id, task.threadId, task.closeWhenDone ?? { botId: bot.id, name: "Inbox", at: now });
-    if (task.closeWhenDone) store.patchTask(bot.id, task.threadId, { closeWhenDone: undefined });
+    // A bot's own close_thread lands here once its turn is read: archive it
+    // like any other bot close. The idle inbox settle only folds.
+    if (task.closeWhenDone) store.patchTask(bot.id, task.threadId, { closeWhenDone: undefined, archivedAt: now });
   }
   // Room threads settle on the same rule. Nobody closes one by hand, so the
   // stamp names the inbox; botId is empty because no bot closed it.

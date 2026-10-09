@@ -551,7 +551,32 @@ describe("close_thread", () => {
       expect((await taskOf(bot.id, bot.threadId)).unread).toBe(true);
       expect((await api("POST", `/api/bots/${bot.id}/read`, { threadId: bot.threadId })).status).toBe(200);
       expect((await taskOf(bot.id, bot.threadId)).closedBy).toMatchObject({ name: "Inbox" });
+      // a bot's own close archives the thread too, once it is read
+      expect((await taskOf(bot.id, bot.threadId)).archivedAt).toEqual(expect.any(Number));
     } finally { release(bot.threadId); }
+  });
+
+  it("marks a thread done by PATCH (closed + archived) and unarchive reopens it", async () => {
+    const bot = await createBot("Dana", "gated");
+    try {
+      const threadId = (await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Finished work" })).body.task.threadId as string;
+      expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${threadId}`, { archivedAt: Date.now() })).status).toBe(200);
+      expect(await taskOf(bot.id, threadId)).toMatchObject({ archivedAt: expect.any(Number), closedBy: { name: "you" } });
+      expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${threadId}`, { archivedAt: null })).status).toBe(200);
+      const reopened = await taskOf(bot.id, threadId);
+      expect(reopened).not.toHaveProperty("closedBy");
+      expect(reopened.archivedAt ?? undefined).toBeUndefined();
+      // a new message to a done thread brings it back
+      expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${threadId}`, { archivedAt: Date.now() })).status).toBe(200);
+      rmSync(join(gates, `${threadId}.gate`), { force: true });
+      rmSync(join(gates, `${threadId}.json`), { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "One more thing.", threadId })).status).toBe(202);
+      await expect.poll(async () => (await taskOf(bot.id, threadId))?.archivedAt ?? null, { timeout: 15_000 }).toBeNull();
+      expect(await taskOf(bot.id, threadId)).not.toHaveProperty("closedBy");
+      release(threadId);
+    } finally {
+      await cleanup([bot.id]);
+    }
   });
 
   it("closes your own thread and one you opened on a teammate, refuses a teammate's other thread and a running one", async () => {
@@ -578,6 +603,7 @@ describe("close_thread", () => {
       expect((await messages(opened.body.threadId)).some((message) => message.tool?.name === "Closed by @Parker")).toBe(true);
       // the close is stamped on the task — that is what the sidebar folds on — and list_threads says closed
       expect((await taskOf(qa.id, opened.body.threadId)).closedBy).toMatchObject({ botId: pm.id, name: "Parker" });
+      expect((await taskOf(qa.id, opened.body.threadId)).archivedAt).toEqual(expect.any(Number));
       const listed = (await api("GET", "/api/internal/threads", undefined, token)).body.threads as any[];
       expect(listed.find((row) => row.threadId === opened.body.threadId)).toMatchObject({ state: "closed" });
       // closing again is a quiet no-op: same answer, no second chip
@@ -595,6 +621,7 @@ describe("close_thread", () => {
       expect((await api("POST", `/api/bots/${pm.id}/messages`, { text: "One more thing.", threadId: own })).status).toBe(202);
       await expect.poll(async () => (await taskOf(pm.id, own))?.busy, { timeout: 15_000 }).toBe(true);
       expect(await taskOf(pm.id, own)).not.toHaveProperty("closedBy");
+      expect((await taskOf(pm.id, own)).archivedAt ?? null).toBeNull();
       release(own);
       // a running thread is refused: Quinn, speaking in its own thread, cannot close the one it speaks in,
       // nor a sibling thread of its own while a turn is held open there

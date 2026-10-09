@@ -832,6 +832,7 @@
   "task.settled": "settled",
   "task.reopen": "Reopen",
   "task.archive": "Archive",
+  "task.done": "Mark done",
   "task.copyLink": "Copy link",
   "task.unarchive": "Unarchive",
   "task.archived": "Archived",

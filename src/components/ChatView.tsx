@@ -19,6 +19,8 @@ import {
   Trash2,
   Webhook,
   X,
+  CircleCheck,
+  ArchiveRestore,
 } from "lucide-react";
 import { WorkingDots } from "@/components/WorkingIndicator";
 import { MessageActions, messageActionClass } from "@/components/MessageActions";
@@ -1438,6 +1440,20 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               <span className="@max-4xl/chathead:hidden">{t("chat.stop")}</span>
             </button>
           )}
+          {local && !remoteClient && !bot.busy && (() => {
+            // "Done" closes and archives this thread in one go; an archived
+            // thread offers unarchive instead, which also reopens it.
+            const archived = bot.tasks?.find((task) => task.threadId === bot.threadId)?.archivedAt !== undefined;
+            return <button
+              type="button"
+              onClick={() => dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { archivedAt: archived ? null : Date.now() } })}
+              aria-label={archived ? t("task.unarchive") : t("task.done")}
+              title={archived ? t("task.unarchive") : t("task.done")}
+              className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+            >
+              {archived ? <ArchiveRestore size={18} /> : <CircleCheck size={18} />}
+            </button>;
+          })()}
           {!shared && <TaskPicker bot={bot} />}
           {local && <div className="@max-3xl/chathead:hidden"><UsageChip bot={bot} /></div>}
           {local && !remoteClient && <div className="@max-3xl/chathead:hidden"><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}

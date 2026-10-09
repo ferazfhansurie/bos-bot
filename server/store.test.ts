@@ -1326,6 +1326,25 @@ describe("Store change stream", () => {
     expect(store.patchTask(bot.id, task.threadId, { closedBy: { botId: closer.id, name: closer.name, at: 1 } } as never)).not.toHaveProperty("closedBy");
   });
 
+  it("an archived (done) thread comes back on reopen or on a new unread reply", () => {
+    const store = new Store(selection);
+    const bot = store.createBot();
+    const task = store.createTask(bot.id, "Done work")!;
+    store.setTaskClosedBy(bot.id, task.threadId, { botId: "", name: "you", at: 1 });
+    store.patchTask(bot.id, task.threadId, { archivedAt: 2 });
+    const reopened = store.setTaskClosedBy(bot.id, task.threadId, null)!;
+    expect(reopened).not.toHaveProperty("closedBy");
+    expect(reopened.archivedAt).toBeUndefined();
+    store.setTaskClosedBy(bot.id, task.threadId, { botId: "", name: "you", at: 3 });
+    store.patchTask(bot.id, task.threadId, { archivedAt: 4 });
+    const replied = store.patchTask(bot.id, task.threadId, { unread: true })!;
+    expect(replied.archivedAt).toBeUndefined();
+    expect(replied).not.toHaveProperty("closedBy");
+    // a thread archived without a close (older archive) also reopens on a new turn
+    store.patchTask(bot.id, task.threadId, { unread: false, archivedAt: 5 });
+    expect(store.setTaskClosedBy(bot.id, task.threadId, null)!.archivedAt).toBeUndefined();
+  });
+
   it("every bot write emits a bot event carrying only the id (the wire shape is the caller's)", () => {
     const store = new Store(selection);
     const bot = store.createBot();
