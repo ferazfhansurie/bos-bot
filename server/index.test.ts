@@ -4017,7 +4017,10 @@ describe("harness HTTP API", () => {
       expect(frame.bot).toMatchObject({ id: bot.id, avatarUrl, avatarCrop: "circle" });
 
       for (const invalid of [
-        { color: "red" },
+        // color is allowlisted for the phone's picker, but only valid ones
+        { color: "chartreuse" },
+        { color: "#12345" },
+        { mascotExpression: "happy" },
         { avatarUrl: "https://tracker.example/avatar.png" },
         { avatarUrl: "/api/attachments/123e4567-e89b-12d3-a456-426614174000.png" },
         { avatarCrop: "hexagon" },
