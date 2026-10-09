@@ -16,6 +16,9 @@ const SKIN_CHROME = Object.freeze({
   linen: Object.freeze({ color: "#eceff3", symbolColor: "#59616c" }),
   dusk: Object.freeze({ color: "#121014", symbolColor: "#b9afbd" }),
   daylight: Object.freeze({ color: "#fcfcfc", symbolColor: "#575757" }),
+  blossom: Object.freeze({ color: "#fdf7f9", symbolColor: "#6f4c5b" }),
+  sakura: Object.freeze({ color: "#fdf7f9", symbolColor: "#6f4c5b" }),
+  velvet: Object.freeze({ color: "#141016", symbolColor: "#c4aab6" }),
 });
 
 const DEFAULT_SKIN = "midnight";
