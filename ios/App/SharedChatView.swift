@@ -402,8 +402,8 @@ struct SharedChatView: View {
 
     private var header: some View {
         ChatHeaderBar(name: conversationName, unreadElsewhere: 0,
-                      canOpenThreads: false, canOpenSettings: true, canWatchComputer: false,
-                      onBack: { dismiss() }, onThreads: {}, onSettings: { showingDetails = true }, onComputer: {},
+                      canOpenThreads: false, canOpenSettings: true,
+                      onBack: { dismiss() }, onThreads: {}, onSettings: { showingDetails = true },
                       membersCount: currentRoom.isGroup ? currentRoom.memberIds.count : nil) {
             headerAvatar
         }
