@@ -1637,13 +1637,20 @@ function openDesktopViewer(owner, rawUrl, rawTitle, contextId) {
 // cookie never meets the app's. A second hello focuses the open window.
 function openWelcomeWindow(rawUrl) {
   const url = welcomeWindowUrl(rawUrl);
-  if (welcomeWindow && !welcomeWindow.isDestroyed()) {
-    if (!sameWelcomeOrigin(welcomeWindow.webContents.getURL(), url.origin) || url.hash) void welcomeWindow.loadURL(url.toString());
-    welcomeWindow.show();
-    welcomeWindow.focus();
-    return true;
-  }
   const origin = url.origin;
+  if (welcomeWindow && !welcomeWindow.isDestroyed()) {
+    // Every guard below pins the origin the window was created with, so a
+    // hello on another accepted origin gets a fresh window, not a reload.
+    if (welcomeWindow.welcomeOrigin === origin) {
+      if (url.hash) void welcomeWindow.loadURL(url.toString());
+      welcomeWindow.show();
+      welcomeWindow.focus();
+      return true;
+    }
+    const stale = welcomeWindow;
+    welcomeWindow = null;
+    stale.destroy?.();
+  }
   const win = new BrowserWindow({
     width: 980,
     height: 760,
@@ -1661,6 +1668,7 @@ function openWelcomeWindow(rawUrl) {
       partition: WELCOME_PARTITION,
     },
   });
+  win.welcomeOrigin = origin;
   welcomeWindow = win;
   win.webContents.session.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
     welcomePermissionAllowed(permission, requestingOrigin, origin),
@@ -1692,6 +1700,12 @@ function openWelcomeWindow(rawUrl) {
     } catch {
       // Keep privileged or malformed navigation out of the window.
     }
+  });
+  // Server redirects (including on the first loadURL) skip will-navigate;
+  // a main-frame redirect off the pinned origin is dropped, not opened.
+  win.webContents.on("will-redirect", (event, target, _isInPlace, isMainFrame) => {
+    if (isMainFrame === false || sameWelcomeOrigin(target, origin)) return;
+    event.preventDefault();
   });
   void win.loadURL(url.toString()).catch(() => {
     if (!win.isDestroyed()) win.show();

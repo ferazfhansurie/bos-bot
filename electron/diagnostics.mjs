@@ -12,7 +12,7 @@ import fs from "node:fs";
 // CREDENTIAL_ENV_NAMES mirrors WORKSPACE_CREDENTIAL_ENV (server/config.ts).
 // Duplicated because the desktop shell cannot import TypeScript; a test
 // asserts the two lists never drift apart.
-export const CREDENTIAL_ENV_NAMES = [
+export const CREDENTIAL_ENV_NAMES = expandEnvNames([
   "XAI_API_KEY",
   "OMB_XAI_MANAGEMENT_KEY",
   "OMB_ANTHROPIC_API_KEY",
@@ -33,7 +33,7 @@ export const CREDENTIAL_ENV_NAMES = [
   "OMB_USER_DATA",
   "OMB_CUA_WINDOWS_DESCRIPTOR",
   "OMB_CUA_WINDOWS_SUPERVISED",
-];
+]);
 
 // Credential-shaped tokens (server/redact.ts parity): unmistakable formats
 // are masked wherever they appear, keyed or not.
