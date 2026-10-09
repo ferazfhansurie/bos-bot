@@ -31,6 +31,16 @@ export function buildApnsPayload(title: string, body: string, target: PushTarget
     ...target, ...(connectionId ? { connectionId } : {}) };
 }
 
+/** Connection errors often carry an empty message (AggregateError from
+ * happy-eyeballs), so the code and inner errors are what say what broke. */
+function describe(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown failure";
+  const code = (error as { code?: string }).code;
+  const inner = error instanceof AggregateError ? error.errors.map(item => describe(item)).join("; ") : "";
+  const cause = error.cause instanceof Error ? describe(error.cause) : "";
+  return [error.name, code, error.message, inner && `[${inner}]`, cause && `cause: ${cause}`].filter(Boolean).join(" ");
+}
+
 /** The canonical shared home owns delivery. Registration is bound to the
  * authenticated person by the HTTP handler, never to a caller-supplied id. */
 export class ApnsPush {
@@ -90,32 +100,45 @@ export class ApnsPush {
     const devices = [...this.devices.values()].filter(device => device.actorId === actorId);
     await Promise.all(devices.map(async device => {
       if (!this.active(device)) return;
-      const host = device.environment === "development" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
-      const client = connect(host);
-      client.on("error", error => console.warn(`APNs connection failed: ${error.message}`));
-      try {
-        const payload = JSON.stringify(buildApnsPayload(title, body, target, device.connectionId));
-        // A ring rings through CallKit when the phone has a PushKit token;
-        // without one, or if Apple refuses it, the alert push still goes.
-        if (target.type === "voice_ring" && device.voipToken) {
-          const voip = await this.post(client, credential, device.voipToken, `${APNS_TOPIC}.voip`, "voip", payload, id,
-            { "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 30) });
-          if (voip.status === 200) { console.info("APNs accepted a VoIP ring"); return; }
-          console.warn(`APNs rejected a VoIP ring (${voip.status}, ${voip.reason || "unknown"}); sending the alert instead`);
-          if (voip.status === 410 || voip.reason === "Unregistered" || voip.reason === "BadDeviceToken") {
-            delete device.voipToken;
-            this.persist();
-          }
+      // A connection can fail before Apple sees the push (2026-10-10: a ring
+      // died on "pending stream has been canceled"), so a fresh session retries.
+      for (let attempt = 1; ; attempt++) {
+        try { return await this.deliver(device, credential, title, body, target, id); }
+        catch (error) {
+          if (attempt >= 3) throw error;
+          console.warn(`APNs attempt ${attempt} failed (${describe(error)}); retrying`);
+          await new Promise(resolve => setTimeout(resolve, attempt * 750));
         }
-        const result = await this.post(client, credential, device.token, APNS_TOPIC, "alert", payload, id);
-        if (result.status === 410 || result.reason === "Unregistered" || result.reason === "BadDeviceToken") {
-          this.devices.delete(device.token);
-          this.persist();
-        } else if (result.status !== 200) {
-          console.warn(`APNs rejected a notification (${result.status}, ${result.reason || "unknown"})`);
-        }
-      } finally { client.close(); }
+      }
     }));
+  }
+
+  private async deliver(device: Device, credential: Credential, title: string, body: string, target: PushTarget, id: string): Promise<void> {
+    const host = device.environment === "development" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
+    const client = connect(host);
+    client.on("error", error => console.warn(`APNs connection failed: ${describe(error)}`));
+    try {
+      const payload = JSON.stringify(buildApnsPayload(title, body, target, device.connectionId));
+      // A ring rings through CallKit when the phone has a PushKit token;
+      // without one, or if Apple refuses it, the alert push still goes.
+      if (target.type === "voice_ring" && device.voipToken) {
+        const voip = await this.post(client, credential, device.voipToken, `${APNS_TOPIC}.voip`, "voip", payload, id,
+          { "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 30) });
+        if (voip.status === 200) { console.info("APNs accepted a VoIP ring"); return; }
+        console.warn(`APNs rejected a VoIP ring (${voip.status}, ${voip.reason || "unknown"}); sending the alert instead`);
+        if (voip.status === 410 || voip.reason === "Unregistered" || voip.reason === "BadDeviceToken") {
+          delete device.voipToken;
+          this.persist();
+        }
+      }
+      const result = await this.post(client, credential, device.token, APNS_TOPIC, "alert", payload, id);
+      if (result.status === 410 || result.reason === "Unregistered" || result.reason === "BadDeviceToken") {
+        this.devices.delete(device.token);
+        this.persist();
+      } else if (result.status !== 200) {
+        console.warn(`APNs rejected a notification (${result.status}, ${result.reason || "unknown"})`);
+      }
+    } finally { client.close(); }
   }
 
   private post(client: ClientHttp2Session, credential: Credential, token: string, topic: string, type: "alert" | "voip",
@@ -126,7 +149,7 @@ export class ApnsPush {
       let response = "";
       request.on("response", headers => { status = Number(headers[":status"] ?? 0); });
       request.on("data", chunk => { if (response.length < 2048) response += String(chunk); });
-      request.on("end", () => { let reason = ""; try { reason = JSON.parse(response).reason ?? ""; } catch { /* success has no body */ } resolve({ status, reason }); });
+      request.on("end", () => { if (!status) return reject(new Error("APNs stream ended without a response")); let reason = ""; try { reason = JSON.parse(response).reason ?? ""; } catch { /* success has no body */ } resolve({ status, reason }); });
       request.on("error", reject);
       request.end(payload);
     });
