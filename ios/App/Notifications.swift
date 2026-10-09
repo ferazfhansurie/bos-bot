@@ -105,6 +105,12 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         }
     }
 
+    /// Accept on a CallKit ring: the same path as Accept on the ring push.
+    @MainActor func acceptRing(_ ring: VoiceRing, connectionId: String?) {
+        let action = VoiceNotificationAction.accept(ring, connectionId: connectionId)
+        if let voiceHandler { voiceHandler(action) } else { pendingVoiceAction = action }
+    }
+
     func receivedDeviceToken(_ token: Data) {
         deviceToken = token
         cloudTokenHandler?(token)

@@ -1,11 +1,13 @@
 import { createPrivateKey, sign, randomUUID } from "node:crypto";
-import { connect } from "node:http2";
+import { connect, type ClientHttp2Session } from "node:http2";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 
-interface Device { actorId: string; token: string; environment: "development" | "production"; updatedAt: number; connectionId?: string; sessionId?: string }
+interface Device { actorId: string; token: string; environment: "development" | "production"; updatedAt: number; connectionId?: string; sessionId?: string;
+  /** PushKit token: a ring goes here as a VoIP push so CallKit shows a real incoming call. */
+  voipToken?: string }
 interface Credential { teamId: string; keyId: string; privateKey: string }
 const TOKEN = /^[a-f0-9]{64}$/i;
 const APNS_TOPIC = "com.aihlete.aios";
@@ -16,6 +18,8 @@ export interface PushTarget {
   /** Typed push data the phone acts on (voice_work_done); callId names the call. */
   type?: string; callId?: string;
   ringId?: string; reason?: string;
+  /** Caller name CallKit shows; a VoIP-launched app has no roster yet. */
+  botName?: string;
 }
 
 /** Routing scope comes from this device's authenticated registration, never
@@ -45,18 +49,23 @@ export class ApnsPush {
       if (!TOKEN.test(device.token) || !["development", "production"].includes(device.environment)) throw new Error("invalid APNs device");
       if (device.connectionId !== undefined && !CONNECTION.test(device.connectionId)) throw new Error("invalid push connection");
       if (device.sessionId !== undefined && !CONNECTION.test(device.sessionId)) throw new Error("invalid push session");
+      if (device.voipToken !== undefined && !TOKEN.test(device.voipToken)) throw new Error("invalid VoIP token");
       this.devices.set(device.token.toLowerCase(), device);
     }
   }
 
-  register(actorId: string, token: string, environment: "development" | "production", connectionId?: string, sessionId?: string): void {
+  /** `voipToken` undefined keeps the one already registered: the alert token
+   * and the PushKit token arrive separately and either may register first. */
+  register(actorId: string, token: string, environment: "development" | "production", connectionId?: string, sessionId?: string, voipToken?: string): void {
     if (!/^[A-Za-z0-9_-]+:person:[A-Za-z0-9_-]+$/.test(actorId) || !TOKEN.test(token)) throw new Error("invalid push registration");
+    if (voipToken !== undefined && !TOKEN.test(voipToken)) throw new Error("invalid VoIP token");
     if (environment !== "development" && environment !== "production") throw new Error("invalid push environment");
     if (connectionId !== undefined && !CONNECTION.test(connectionId)) throw new Error("invalid push connection");
     if (!connectionId || !sessionId || !CONNECTION.test(sessionId) || !this.authorized(sessionId, actorId)) throw new Error("push registration requires a live owned session and connection");
     const existing = this.devices.get(token.toLowerCase());
     if (existing && existing.actorId !== actorId && existing.sessionId && this.authorized(existing.sessionId, existing.actorId)) throw new Error("push token is already owned by another actor");
-    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now(), connectionId, sessionId });
+    const voip = voipToken?.toLowerCase() ?? (existing?.actorId === actorId ? existing.voipToken : undefined);
+    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now(), connectionId, sessionId, ...(voip ? { voipToken: voip } : {}) });
     this.persist();
   }
 
@@ -86,16 +95,19 @@ export class ApnsPush {
       client.on("error", error => console.warn(`APNs connection failed: ${error.message}`));
       try {
         const payload = JSON.stringify(buildApnsPayload(title, body, target, device.connectionId));
-        const result = await new Promise<{ status: number; reason: string }>((resolve, reject) => {
-          const request = client.request({ ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${this.jwt(credential)}`, "apns-topic": APNS_TOPIC, "apns-push-type": "alert", "apns-id": id, "content-type": "application/json" });
-          let status = 0;
-          let response = "";
-          request.on("response", headers => { status = Number(headers[":status"] ?? 0); });
-          request.on("data", chunk => { if (response.length < 2048) response += String(chunk); });
-          request.on("end", () => { let reason = ""; try { reason = JSON.parse(response).reason ?? ""; } catch { /* success has no body */ } resolve({ status, reason }); });
-          request.on("error", reject);
-          request.end(payload);
-        });
+        // A ring rings through CallKit when the phone has a PushKit token;
+        // without one, or if Apple refuses it, the alert push still goes.
+        if (target.type === "voice_ring" && device.voipToken) {
+          const voip = await this.post(client, credential, device.voipToken, `${APNS_TOPIC}.voip`, "voip", payload, id,
+            { "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 30) });
+          if (voip.status === 200) { console.info("APNs accepted a VoIP ring"); return; }
+          console.warn(`APNs rejected a VoIP ring (${voip.status}, ${voip.reason || "unknown"}); sending the alert instead`);
+          if (voip.status === 410 || voip.reason === "Unregistered" || voip.reason === "BadDeviceToken") {
+            delete device.voipToken;
+            this.persist();
+          }
+        }
+        const result = await this.post(client, credential, device.token, APNS_TOPIC, "alert", payload, id);
         if (result.status === 410 || result.reason === "Unregistered" || result.reason === "BadDeviceToken") {
           this.devices.delete(device.token);
           this.persist();
@@ -104,6 +116,20 @@ export class ApnsPush {
         }
       } finally { client.close(); }
     }));
+  }
+
+  private post(client: ClientHttp2Session, credential: Credential, token: string, topic: string, type: "alert" | "voip",
+               payload: string, id: string, extra: Record<string, string> = {}): Promise<{ status: number; reason: string }> {
+    return new Promise((resolve, reject) => {
+      const request = client.request({ ":method": "POST", ":path": `/3/device/${token}`, authorization: `bearer ${this.jwt(credential)}`, "apns-topic": topic, "apns-push-type": type, "apns-id": id, "content-type": "application/json", ...extra });
+      let status = 0;
+      let response = "";
+      request.on("response", headers => { status = Number(headers[":status"] ?? 0); });
+      request.on("data", chunk => { if (response.length < 2048) response += String(chunk); });
+      request.on("end", () => { let reason = ""; try { reason = JSON.parse(response).reason ?? ""; } catch { /* success has no body */ } resolve({ status, reason }); });
+      request.on("error", reject);
+      request.end(payload);
+    });
   }
 
   private credential(): Credential | null {

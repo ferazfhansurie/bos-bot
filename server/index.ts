@@ -15186,7 +15186,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const pushSession = pushSessionFor(auth);
           if (!pushSession) return json(res, 403, { error: "Push registration requires this device's live paired session" });
           if (typeof body?.token !== "string" || !["development", "production"].includes(body.environment) || typeof body.connectionId !== "string" || body.connectionId.length > 128) return json(res, 400, { error: "APNs token, environment and connection id required" });
-          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId, pushSession); }
+          if (body.voipToken !== undefined && typeof body.voipToken !== "string") return json(res, 400, { error: "voipToken must be a string" });
+          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId, pushSession, body.voipToken); }
           catch { return json(res, 400, { error: "invalid or unowned APNs registration" }); }
           // The shared home's bridge session outlives this device's session.
           // Forwarding would keep delivering after device revocation here.
@@ -15301,7 +15302,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (typeof body?.token !== "string" || (body.environment !== "development" && body.environment !== "production") || typeof body.connectionId !== "string" || body.connectionId.length > 128) {
           return json(res, 400, { error: "APNs token, environment and connection id required" });
         }
-        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId, pushSession); }
+        if (body.voipToken !== undefined && typeof body.voipToken !== "string") return json(res, 400, { error: "voipToken must be a string" });
+        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId, pushSession, body.voipToken); }
         catch { return json(res, 400, { error: "invalid APNs token" }); }
         return json(res, 200, { registered: true, deliveryConfigured: apnsPush.configured() });
       }

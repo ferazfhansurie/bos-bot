@@ -21,6 +21,18 @@ describe("account scoped push routing", () => {
       expect(() => push.register("home:person:owner", "b".repeat(64), "development", "bad scope", "session-a")).toThrow("invalid push connection");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
+  it("keeps a PushKit token across alert-only registrations and rejects a malformed one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bos-apns-voip-"));
+    try {
+      const file = join(dir, "devices.json");
+      const push = new ApnsPush(file, () => true);
+      push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a", "C".repeat(64));
+      push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a");
+      expect(JSON.parse(readFileSync(file, "utf8")).devices[0].voipToken).toBe("c".repeat(64));
+      expect(() => push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a", "nope")).toThrow("invalid VoIP token");
+      expect(() => new ApnsPush(file, () => true)).not.toThrow();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 describe("push session authority", () => {
