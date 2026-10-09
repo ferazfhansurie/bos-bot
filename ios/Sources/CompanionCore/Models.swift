@@ -1080,6 +1080,8 @@ public struct BotProfilePatch: Encodable, Sendable {
     public var avatarCrop: AvatarCrop?
     public var mascotEyes: String?
     public var mascotBody: String?
+    /// A palette name or "#RRGGBB" (`resolveMausColor` on every client).
+    public var color: String?
     public var voice: String?
     public var speakReplies: Bool?
 
@@ -1100,6 +1102,7 @@ public struct BotProfilePatch: Encodable, Sendable {
         avatarCrop: AvatarCrop? = nil,
         mascotBody: String? = nil,
         mascotEyes: String? = nil,
+        color: String? = nil,
         voice: String? = nil,
         speakReplies: Bool? = nil
     ) {
@@ -1111,12 +1114,13 @@ public struct BotProfilePatch: Encodable, Sendable {
         self.avatarCrop = avatarCrop
         self.mascotBody = mascotBody
         self.mascotEyes = mascotEyes
+        self.color = color
         self.voice = voice
         self.speakReplies = speakReplies
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, title, description, notifications, avatarUrl, avatarCrop, mascotBody, mascotEyes, voice, speakReplies
+        case name, title, description, notifications, avatarUrl, avatarCrop, mascotBody, mascotEyes, color, voice, speakReplies
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1134,6 +1138,7 @@ public struct BotProfilePatch: Encodable, Sendable {
         try values.encodeIfPresent(avatarCrop, forKey: .avatarCrop)
         try values.encodeIfPresent(mascotBody, forKey: .mascotBody)
         try values.encodeIfPresent(mascotEyes, forKey: .mascotEyes)
+        try values.encodeIfPresent(color, forKey: .color)
         try values.encodeIfPresent(voice, forKey: .voice)
         try values.encodeIfPresent(speakReplies, forKey: .speakReplies)
     }

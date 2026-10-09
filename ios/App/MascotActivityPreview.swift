@@ -36,7 +36,7 @@ struct MascotActivityPreview: View {
                         ForEach(MascotActivity.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                     }.pickerStyle(.menu)
                     Picker("Eyes", selection: $eyes) {
-                        ForEach(MascotEyeStyle.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                        ForEach(MascotEyeStyle.allCases, id: \.self) { Text($0.label).tag($0) }
                     }.pickerStyle(.segmented)
                     HStack {
                         Button(paused ? "Resume" : "Pause") { paused.toggle() }

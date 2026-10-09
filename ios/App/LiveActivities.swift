@@ -70,7 +70,8 @@ final class LiveActivityCoordinator {
                     sound: .default
                 )
                 : nil
-            if let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.id && $0.attributes.mascotBody == bot.mascotBody }) {
+            if let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.id && $0.attributes.mascotBody == bot.mascotBody
+                && $0.attributes.color == bot.color && $0.attributes.mascotEyes == bot.mascotEyes }) {
                 let newAsk = update.kind == .needsYou && (
                     lastSent[bot.id]?.threadId != content.threadId || lastSent[bot.id]?.requestId != content.requestId
                 )
@@ -79,7 +80,7 @@ final class LiveActivityCoordinator {
                 for old in Activity<BotActivityAttributes>.activities where old.attributes.botId == bot.id {
                     Task { await old.end(nil, dismissalPolicy: .immediate) }
                 }
-                let attributes = BotActivityAttributes(botId: bot.id, threadId: bot.threadId, name: bot.name, color: bot.color, mascotBody: bot.mascotBody)
+                let attributes = BotActivityAttributes(botId: bot.id, threadId: bot.threadId, name: bot.name, color: bot.color, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes)
                 _ = try? Activity.request(attributes: attributes, content: .init(state: content, staleDate: nil), pushType: nil)
                 // a fresh activity cannot alert on request; one immediate alerting update does it
                 if let alert, let activity = Activity<BotActivityAttributes>.activities.first(where: { $0.attributes.botId == bot.id }) {

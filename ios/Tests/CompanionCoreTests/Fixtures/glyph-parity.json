@@ -1,0 +1,2181 @@
+{
+ "states": [
+  {
+   "expression": "idle",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "idle",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "idle",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "idle",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "idle",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "idle",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "thinking",
+   "activity": null,
+   "state": "thinking"
+  },
+  {
+   "expression": "thinking",
+   "activity": "working",
+   "state": "thinking"
+  },
+  {
+   "expression": "thinking",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "thinking",
+   "activity": "idle",
+   "state": "thinking"
+  },
+  {
+   "expression": "thinking",
+   "activity": "no-signal",
+   "state": "thinking"
+  },
+  {
+   "expression": "thinking",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "searching",
+   "activity": null,
+   "state": "searching"
+  },
+  {
+   "expression": "searching",
+   "activity": "working",
+   "state": "searching"
+  },
+  {
+   "expression": "searching",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "searching",
+   "activity": "idle",
+   "state": "searching"
+  },
+  {
+   "expression": "searching",
+   "activity": "no-signal",
+   "state": "searching"
+  },
+  {
+   "expression": "searching",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "working",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "working",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "working",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "working",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "working",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "working",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "waiting",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "waiting",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "waiting",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "waiting",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "waiting",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "waiting",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "finished",
+   "activity": null,
+   "state": "finished"
+  },
+  {
+   "expression": "finished",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "finished",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "finished",
+   "activity": "idle",
+   "state": "finished"
+  },
+  {
+   "expression": "finished",
+   "activity": "no-signal",
+   "state": "finished"
+  },
+  {
+   "expression": "finished",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "happy",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "happy",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "happy",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "happy",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "happy",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "happy",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "failed",
+   "activity": null,
+   "state": "failed"
+  },
+  {
+   "expression": "failed",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "failed",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "failed",
+   "activity": "idle",
+   "state": "failed"
+  },
+  {
+   "expression": "failed",
+   "activity": "no-signal",
+   "state": "failed"
+  },
+  {
+   "expression": "failed",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "sleeping",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "sleeping",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "sleeping",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "sleeping",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "sleeping",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "sleeping",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "waking",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "waking",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "waking",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "waking",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "waking",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "waking",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "listening",
+   "activity": null,
+   "state": "searching"
+  },
+  {
+   "expression": "listening",
+   "activity": "working",
+   "state": "searching"
+  },
+  {
+   "expression": "listening",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "listening",
+   "activity": "idle",
+   "state": "searching"
+  },
+  {
+   "expression": "listening",
+   "activity": "no-signal",
+   "state": "searching"
+  },
+  {
+   "expression": "listening",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "excited",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "excited",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "excited",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "excited",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "excited",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "excited",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "surprised",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "surprised",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "surprised",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "surprised",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "surprised",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "surprised",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "suspicious",
+   "activity": null,
+   "state": "thinking"
+  },
+  {
+   "expression": "suspicious",
+   "activity": "working",
+   "state": "thinking"
+  },
+  {
+   "expression": "suspicious",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "suspicious",
+   "activity": "idle",
+   "state": "thinking"
+  },
+  {
+   "expression": "suspicious",
+   "activity": "no-signal",
+   "state": "thinking"
+  },
+  {
+   "expression": "suspicious",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "angry",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "angry",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "angry",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "angry",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "angry",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "angry",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "drowsy",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "drowsy",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "drowsy",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "drowsy",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "drowsy",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "drowsy",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "curious",
+   "activity": null,
+   "state": "thinking"
+  },
+  {
+   "expression": "curious",
+   "activity": "working",
+   "state": "thinking"
+  },
+  {
+   "expression": "curious",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "curious",
+   "activity": "idle",
+   "state": "thinking"
+  },
+  {
+   "expression": "curious",
+   "activity": "no-signal",
+   "state": "thinking"
+  },
+  {
+   "expression": "curious",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "confused",
+   "activity": null,
+   "state": "thinking"
+  },
+  {
+   "expression": "confused",
+   "activity": "working",
+   "state": "thinking"
+  },
+  {
+   "expression": "confused",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "confused",
+   "activity": "idle",
+   "state": "thinking"
+  },
+  {
+   "expression": "confused",
+   "activity": "no-signal",
+   "state": "thinking"
+  },
+  {
+   "expression": "confused",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "bored",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "bored",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "bored",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "bored",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "bored",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "bored",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "proud",
+   "activity": null,
+   "state": "finished"
+  },
+  {
+   "expression": "proud",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "proud",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "proud",
+   "activity": "idle",
+   "state": "finished"
+  },
+  {
+   "expression": "proud",
+   "activity": "no-signal",
+   "state": "finished"
+  },
+  {
+   "expression": "proud",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "shy",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "shy",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "shy",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "shy",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "shy",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "shy",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "sad",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "sad",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "sad",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "sad",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "sad",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "sad",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "laughing",
+   "activity": null,
+   "state": "finished"
+  },
+  {
+   "expression": "laughing",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "laughing",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "laughing",
+   "activity": "idle",
+   "state": "finished"
+  },
+  {
+   "expression": "laughing",
+   "activity": "no-signal",
+   "state": "finished"
+  },
+  {
+   "expression": "laughing",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "scared",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "scared",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "scared",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "scared",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "scared",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "scared",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "playful",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "playful",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "playful",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "playful",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "playful",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "playful",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "celebrate",
+   "activity": null,
+   "state": "finished"
+  },
+  {
+   "expression": "celebrate",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "celebrate",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "celebrate",
+   "activity": "idle",
+   "state": "finished"
+  },
+  {
+   "expression": "celebrate",
+   "activity": "no-signal",
+   "state": "finished"
+  },
+  {
+   "expression": "celebrate",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "orbit",
+   "activity": null,
+   "state": "searching"
+  },
+  {
+   "expression": "orbit",
+   "activity": "working",
+   "state": "searching"
+  },
+  {
+   "expression": "orbit",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "orbit",
+   "activity": "idle",
+   "state": "searching"
+  },
+  {
+   "expression": "orbit",
+   "activity": "no-signal",
+   "state": "searching"
+  },
+  {
+   "expression": "orbit",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "radar",
+   "activity": null,
+   "state": "searching"
+  },
+  {
+   "expression": "radar",
+   "activity": "working",
+   "state": "searching"
+  },
+  {
+   "expression": "radar",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "radar",
+   "activity": "idle",
+   "state": "searching"
+  },
+  {
+   "expression": "radar",
+   "activity": "no-signal",
+   "state": "searching"
+  },
+  {
+   "expression": "radar",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "progress",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "progress",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "progress",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "progress",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "progress",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "progress",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "thinking-dots",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "thinking-dots",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "thinking-dots",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "thinking-dots",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "thinking-dots",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "thinking-dots",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "spawning",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "spawning",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "spawning",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "spawning",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "spawning",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "spawning",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "humming",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "humming",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "humming",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "humming",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "humming",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "humming",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "loading",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "loading",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "loading",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "loading",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "loading",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "loading",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "dictating",
+   "activity": null,
+   "state": "searching"
+  },
+  {
+   "expression": "dictating",
+   "activity": "working",
+   "state": "searching"
+  },
+  {
+   "expression": "dictating",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "dictating",
+   "activity": "idle",
+   "state": "searching"
+  },
+  {
+   "expression": "dictating",
+   "activity": "no-signal",
+   "state": "searching"
+  },
+  {
+   "expression": "dictating",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "writing",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "writing",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "writing",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "writing",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "writing",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "writing",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "sending",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "sending",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "sending",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "sending",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "sending",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "sending",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "receiving",
+   "activity": null,
+   "state": "searching"
+  },
+  {
+   "expression": "receiving",
+   "activity": "working",
+   "state": "searching"
+  },
+  {
+   "expression": "receiving",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "receiving",
+   "activity": "idle",
+   "state": "searching"
+  },
+  {
+   "expression": "receiving",
+   "activity": "no-signal",
+   "state": "searching"
+  },
+  {
+   "expression": "receiving",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "uploading",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "uploading",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "uploading",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "uploading",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "uploading",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "uploading",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "notifying",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "notifying",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "notifying",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "notifying",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "notifying",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "notifying",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "alerting",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "alerting",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "alerting",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "alerting",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "alerting",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "alerting",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "dragging",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "dragging",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "dragging",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "dragging",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "dragging",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "dragging",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "bouncing",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "bouncing",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "bouncing",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "bouncing",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "bouncing",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "bouncing",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "powering-down",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "powering-down",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "powering-down",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "powering-down",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "powering-down",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "powering-down",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "deadpan",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "deadpan",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "deadpan",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "deadpan",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "deadpan",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "deadpan",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "friendly",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "friendly",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "friendly",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "friendly",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "friendly",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "friendly",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "focused",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "focused",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "focused",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "focused",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "focused",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "focused",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "sleepy",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "sleepy",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "sleepy",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "sleepy",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "sleepy",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "sleepy",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "skeptical",
+   "activity": null,
+   "state": "thinking"
+  },
+  {
+   "expression": "skeptical",
+   "activity": "working",
+   "state": "thinking"
+  },
+  {
+   "expression": "skeptical",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "skeptical",
+   "activity": "idle",
+   "state": "thinking"
+  },
+  {
+   "expression": "skeptical",
+   "activity": "no-signal",
+   "state": "thinking"
+  },
+  {
+   "expression": "skeptical",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "worried",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "worried",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "worried",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "worried",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "worried",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "worried",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "mischievous",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "mischievous",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "mischievous",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "mischievous",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "mischievous",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "mischievous",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "none",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "none",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "none",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "none",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "none",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "none",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "arrive",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "arrive",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "arrive",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "arrive",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "arrive",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "arrive",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "switch",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "switch",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "switch",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "switch",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "switch",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "switch",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "customize",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "customize",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "customize",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "customize",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "customize",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "customize",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "alert",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "alert",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "alert",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "alert",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "alert",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "alert",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "launch",
+   "activity": null,
+   "state": "working"
+  },
+  {
+   "expression": "launch",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "launch",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "launch",
+   "activity": "idle",
+   "state": "working"
+  },
+  {
+   "expression": "launch",
+   "activity": "no-signal",
+   "state": "working"
+  },
+  {
+   "expression": "launch",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "success",
+   "activity": null,
+   "state": "finished"
+  },
+  {
+   "expression": "success",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "success",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "success",
+   "activity": "idle",
+   "state": "finished"
+  },
+  {
+   "expression": "success",
+   "activity": "no-signal",
+   "state": "finished"
+  },
+  {
+   "expression": "success",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "blink",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "blink",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "blink",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "blink",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "blink",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "blink",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "surprise",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "surprise",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "surprise",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "surprise",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "surprise",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "surprise",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "failure",
+   "activity": null,
+   "state": "failed"
+  },
+  {
+   "expression": "failure",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "failure",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "failure",
+   "activity": "idle",
+   "state": "failed"
+  },
+  {
+   "expression": "failure",
+   "activity": "no-signal",
+   "state": "failed"
+  },
+  {
+   "expression": "failure",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "pending",
+   "activity": null,
+   "state": "waiting"
+  },
+  {
+   "expression": "pending",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "pending",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "pending",
+   "activity": "idle",
+   "state": "waiting"
+  },
+  {
+   "expression": "pending",
+   "activity": "no-signal",
+   "state": "waiting"
+  },
+  {
+   "expression": "pending",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "thanked",
+   "activity": null,
+   "state": "happy"
+  },
+  {
+   "expression": "thanked",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "thanked",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "thanked",
+   "activity": "idle",
+   "state": "happy"
+  },
+  {
+   "expression": "thanked",
+   "activity": "no-signal",
+   "state": "happy"
+  },
+  {
+   "expression": "thanked",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "stopped",
+   "activity": null,
+   "state": "failed"
+  },
+  {
+   "expression": "stopped",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "stopped",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "stopped",
+   "activity": "idle",
+   "state": "failed"
+  },
+  {
+   "expression": "stopped",
+   "activity": "no-signal",
+   "state": "failed"
+  },
+  {
+   "expression": "stopped",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "error",
+   "activity": null,
+   "state": "failed"
+  },
+  {
+   "expression": "error",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "error",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "error",
+   "activity": "idle",
+   "state": "failed"
+  },
+  {
+   "expression": "error",
+   "activity": "no-signal",
+   "state": "failed"
+  },
+  {
+   "expression": "error",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "dead",
+   "activity": null,
+   "state": "failed"
+  },
+  {
+   "expression": "dead",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "dead",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "dead",
+   "activity": "idle",
+   "state": "failed"
+  },
+  {
+   "expression": "dead",
+   "activity": "no-signal",
+   "state": "failed"
+  },
+  {
+   "expression": "dead",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "junk",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "junk",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "junk",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "junk",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "junk",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "junk",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": null,
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": null,
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": null,
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": null,
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": null,
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": null,
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "toString",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "toString",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "toString",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "toString",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "toString",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "toString",
+   "activity": "dead",
+   "state": "failed"
+  },
+  {
+   "expression": "constructor",
+   "activity": null,
+   "state": "idle"
+  },
+  {
+   "expression": "constructor",
+   "activity": "working",
+   "state": "working"
+  },
+  {
+   "expression": "constructor",
+   "activity": "waiting-on-you",
+   "state": "waiting"
+  },
+  {
+   "expression": "constructor",
+   "activity": "idle",
+   "state": "idle"
+  },
+  {
+   "expression": "constructor",
+   "activity": "no-signal",
+   "state": "idle"
+  },
+  {
+   "expression": "constructor",
+   "activity": "dead",
+   "state": "failed"
+  }
+ ],
+ "colors": [
+  {
+   "color": "green",
+   "resolved": "#009957",
+   "ink": "#000000"
+  },
+  {
+   "color": "white",
+   "resolved": "#FFFFFF",
+   "ink": "#000000"
+  },
+  {
+   "color": "gray",
+   "resolved": "#808080",
+   "ink": "#000000"
+  },
+  {
+   "color": "yellow",
+   "resolved": "#D8A729",
+   "ink": "#000000"
+  },
+  {
+   "color": "#1e1e2e",
+   "resolved": "#1E1E2E",
+   "ink": "#FFFFFF"
+  },
+  {
+   "color": "#ffffff",
+   "resolved": "#FFFFFF",
+   "ink": "#000000"
+  },
+  {
+   "color": "#000000",
+   "resolved": "#000000",
+   "ink": "#FFFFFF"
+  },
+  {
+   "color": "#7FDBFF",
+   "resolved": "#7FDBFF",
+   "ink": "#000000"
+  },
+  {
+   "color": "#12345",
+   "resolved": "#009957",
+   "ink": "#000000"
+  },
+  {
+   "color": "#GGGGGG",
+   "resolved": "#009957",
+   "ink": "#000000"
+  },
+  {
+   "color": "purple ",
+   "resolved": "#009957",
+   "ink": "#000000"
+  },
+  {
+   "color": "blue",
+   "resolved": "#377FE6",
+   "ink": "#000000"
+  },
+  {
+   "color": null,
+   "resolved": "#009957",
+   "ink": "#000000"
+  },
+  {
+   "color": "",
+   "resolved": "#009957",
+   "ink": "#000000"
+  },
+  {
+   "color": "#abcdef",
+   "resolved": "#ABCDEF",
+   "ink": "#000000"
+  }
+ ]
+}

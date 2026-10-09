@@ -257,6 +257,7 @@ targets:
       - path: Shared
       - path: App/MausAvatar.swift
       - path: App/MausFaceData.swift
+      - path: App/GlyphMark.swift
     dependencies:
       # MausAvatar draws whichever body a bot wears, and the body catalog and
       # its path parser live in CompanionCore. The extension shares the
