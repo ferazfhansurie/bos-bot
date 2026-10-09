@@ -1,0 +1,805 @@
+{
+  "attributionFiles": [
+    "NOTICE",
+    "LICENSING.md",
+    "LICENSE",
+    "CLA.md",
+    "third_party/**"
+  ],
+  "prefixAliases": [
+    [
+      "BOSBOT_",
+      "OPENMAUSBOT_"
+    ],
+    [
+      "BOS_",
+      "OMB_"
+    ],
+    [
+      "BOS_",
+      "OPENMAUS_"
+    ]
+  ],
+  "replacements": [
+    [
+      "testRejectsAServiceThatDoesNotIdentifyAsOpenMausBot",
+      "testRejectsAServiceThatDoesNotIdentifyAsBosBot"
+    ],
+    [
+      "cd BOS Bot",
+      "cd bos-bot"
+    ],
+    [
+      "cd OpenMausBot",
+      "cd bos-bot"
+    ],
+    [
+      "https://github.com/milind-soni/OpenMausBot",
+      "https://github.com/firazfhansurie/bos-bot"
+    ],
+    [
+      "OpenMausCompanionUITests",
+      "BosBotUITests"
+    ],
+    [
+      "OpenMausCompanionWidgets",
+      "BosBotWidgets"
+    ],
+    [
+      "OpenMausCompanion",
+      "BosBot"
+    ],
+    [
+      "OpenMausMobile",
+      "BosBot"
+    ],
+    [
+      "OpenMausBot-",
+      "BOS-Bot-"
+    ],
+    [
+      "OpenMausBot.dmg",
+      "BOS-Bot.dmg"
+    ],
+    [
+      "OpenMausBot.zip",
+      "BOS-Bot.zip"
+    ],
+    [
+      "OpenMausBot.AppImage",
+      "BOS-Bot.AppImage"
+    ],
+    [
+      "OpenMausBot.exe",
+      "BOS-Bot.exe"
+    ],
+    [
+      "OpenMausBot.deb",
+      "BOS-Bot.deb"
+    ],
+    [
+      "OpenMausBot",
+      "BOS Bot"
+    ],
+    [
+      "OpenMaus",
+      "Bos"
+    ],
+    [
+      "openMaus",
+      "bos"
+    ],
+    [
+      "openmausbot",
+      "bosbot"
+    ],
+    [
+      "openmaus",
+      "bos"
+    ],
+    [
+      "OPENMAUSBOT_",
+      "BOSBOT_"
+    ],
+    [
+      "OPENMAUS_",
+      "BOS_"
+    ],
+    [
+      "OPENMAUSBOT",
+      "BOSBOT"
+    ],
+    [
+      "OMB_",
+      "BOS_"
+    ],
+    [
+      "Bos Bot",
+      "BOS Bot"
+    ],
+    [
+      "BOS Bot.AppImage",
+      "BOS-Bot.AppImage"
+    ],
+    [
+      "BOS Bot.dmg",
+      "BOS-Bot.dmg"
+    ],
+    [
+      "BOS Bot.deb",
+      "BOS-Bot.deb"
+    ],
+    [
+      "BOS Bot.zip",
+      "BOS-Bot.zip"
+    ],
+    [
+      "BOS Bot.exe",
+      "BOS-Bot.exe"
+    ]
+  ],
+  "rules": [
+    {
+      "id": "data-home",
+      "pattern": "\\.openmausbot(?:-companion|-server-child)?",
+      "files": [
+        "**"
+      ],
+      "why": "existing desktop and companion homes, backups and lease recovery must open the same data"
+    },
+    {
+      "id": "browser-storage",
+      "pattern": "openmausbot\\.(?:sidebar[A-Za-z.0-9]*|remote-voice\\.v1|windows-cua-attestation\\.v1|settings\\.section)",
+      "files": [
+        "**"
+      ],
+      "why": "existing localStorage and native attestation records keep their keys"
+    },
+    {
+      "id": "android-preferences",
+      "pattern": "openmaus\\.(?:always_on|chat-preferences|onboarding|permissions|consumedNotification|threadId|botId|kind)",
+      "files": [
+        "**"
+      ],
+      "why": "phone preferences and already posted notification intents survive the namespace move"
+    },
+    {
+      "id": "notification-identity",
+      "pattern": "openmaus(?=\\.(?:\\$|\\\\|thread))|openmaus://notification/|com\\.openmausbot\\.companion\\.(?:OPEN_NOTIFICATION|linger\\.TOKEN)",
+      "files": [
+        "**"
+      ],
+      "why": "posted phone notification and service intents keep their identity"
+    },
+    {
+      "id": "keychain",
+      "pattern": "com\\.openmausbot\\.(?:companion\\.token|cloud\\.bearer|walkie\\.elevenlabs)|OpenMausKeychainAccessGroup",
+      "files": [
+        "**"
+      ],
+      "why": "existing paired and cloud credentials stay addressable, including the plist access-group selector"
+    },
+    {
+      "id": "android-install",
+      "pattern": "(?<=applicationId = \")com\\.openmausbot\\.companion|com\\.openmausbot\\.companion(?=/databases/)",
+      "files": [
+        "android/**"
+      ],
+      "why": "the installed Android application id and sandbox are unchanged"
+    },
+    {
+      "id": "phone-crypto",
+      "pattern": "OpenMausBot phone credential v1|openmausbot-phone-credential-v1",
+      "files": [
+        "**"
+      ],
+      "why": "HPKE labels are part of the paired phone credential protocol"
+    },
+    {
+      "id": "bonjour",
+      "pattern": "_openmausbot\\._tcp(?:\\.local)?",
+      "files": [
+        "**"
+      ],
+      "why": "old phone clients continue discovering the existing server service"
+    },
+    {
+      "id": "pairing",
+      "pattern": "openmausbot://|(?<=scheme=\")openmausbot|(?<=- )openmausbot(?=\\n)|(?<=lowercased\\(\\) == \")openmausbot|(?<=equals\\(\")openmausbot|com\\.openmausbot\\.companion\\.pairing|openmausbot(?=:\\\\\\\\?/\\\\\\\\?/)|openmausbot:",
+      "files": [
+        "**"
+      ],
+      "why": "old QR codes remain readable; server emission stays old until both native apps have shipped support"
+    },
+    {
+      "id": "peer-http",
+      "pattern": "[xX]-[Oo]pen[Mm]aus(?:[Bb]ot)?-[A-Za-z-]+|/\\.well-known/openmausbot/[a-z/-]*|OpenMausBot-domain-check|openmausbot(?=\\\\?/(?:environment|domain-check))",
+      "files": [
+        "**"
+      ],
+      "why": "HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1"
+    },
+    {
+      "id": "wire-formats",
+      "pattern": "openmaus\\.(?:workspace-backup|backup|team|catalog|package)|aos\\.openmausbot_status\\.v1|__openmaus_external_context__:",
+      "files": [
+        "**"
+      ],
+      "why": "stored backups, portable packages and peer metadata retain their schema identifiers"
+    },
+    {
+      "id": "ipc",
+      "pattern": "openmausbot:[a-z-]+|--openmausbot-remote-client|openmausbot:update-",
+      "files": [
+        "**"
+      ],
+      "why": "IPC and updater restart arguments preserve mixed-version desktop recovery"
+    },
+    {
+      "id": "lease",
+      "pattern": "openmausbot-server\\.lease",
+      "files": [
+        "**"
+      ],
+      "why": "a new server must lock the same data-directory lease as an existing process"
+    },
+    {
+      "id": "container-identity",
+      "pattern": "com\\.openmausbot\\.(?:image-layer|local-vm(?:-target)?|cua-driver|cua-base|workspace|vps(?:-viewer)?|container|environment)|openmausbot-vps(?=[-\"])|localhost/openmausbot/cua-local-vm|/usr/local/(?:bin/(?:prepare|start)-openmausbot-[a-z-]+\\.sh|libexec/openmausbot/cua-driver)|/run/user/1000/openmausbot-cua\\.sock|program:openmausbot-cua-driver",
+      "files": [
+        "**"
+      ],
+      "why": "existing managed containers, labels and pinned image entry points remain recognized"
+    },
+    {
+      "id": "fleet-service",
+      "pattern": "openmausbot(?:-fence|-fleet)?\\.service|openmausbot@|com\\.openmausbot\\.serve|(?<=RuntimeDirectory=)openmausbot|(?<=[\\\"'])openmausbot(?=[\\\"'])|(?<=inet )openmausbot",
+      "files": [
+        "server/fleet*",
+        "server/service*",
+        "server/testing/fake-systemctl*",
+        "server/fleet*test*",
+        "scripts/smoke-fleet*",
+        "docs/fleet*",
+        "docs/service*"
+      ],
+      "why": "existing launchd/systemd units, fleet roots and firewall tables continue addressing the same installation"
+    },
+    {
+      "id": "health",
+      "pattern": "(?<=[\\\"'])openmausbot(?=[\\\"'])",
+      "files": [
+        ".github/workflows/docker.yml",
+        "android/app/src/main/kotlin/com/bosbot/companion/discovery/NsdDiscovery.kt",
+        "android/app/src/main/kotlin/com/openmausbot/companion/discovery/NsdDiscovery.kt",
+        "android/core/src/**",
+        "android/core/src/main/kotlin/com/openmausbot/companion/core/Client.kt",
+        "android/core/src/test/kotlin/com/openmausbot/companion/core/PairingClientTest.kt",
+        "android/core/src/test/kotlin/com/openmausbot/companion/core/PortP104IntegratedTest.kt",
+        "companion/src/proxy*",
+        "companion/src/proxy.ts",
+        "companion/test/origin.test.ts",
+        "companion/test/proxy.test.ts",
+        "electron/companion-origin-gateway.mjs",
+        "electron/companion-origin-gateway.test.mjs",
+        "electron/managed-companion-tunnel.mjs",
+        "electron/managed-companion-tunnel.test.mjs",
+        "electron/resources/updater/preflight.py",
+        "electron/server-boot-probe.mjs",
+        "electron/server-boot-probe.node-test.mjs",
+        "electron/windows-update-contract.mjs",
+        "electron/windows-update-contract.node-test.mjs",
+        "ios/Sources/CompanionCore/Client.swift",
+        "ios/Tests/**",
+        "ios/Tests/CompanionCoreTests/PairingTests.swift",
+        "scripts/*test*",
+        "scripts/control-omb.ts",
+        "scripts/mcp-server.ts",
+        "scripts/smoke*",
+        "scripts/smoke-linux-package.mjs",
+        "scripts/verify-workspace-backup.ts",
+        "server/*test*",
+        "server/cli-lifecycle.test.ts",
+        "server/cli-pair.test.ts",
+        "server/cli.test.ts",
+        "server/cli.ts",
+        "server/control-omb.test.ts",
+        "server/index.test.ts",
+        "server/index.ts",
+        "server/mcp-server.test.ts",
+        "server/remote-sessions.test.ts",
+        "server/testing/control-plane-stub.ts",
+        "server/tunnel.test.ts",
+        "server/updater-apply-script.ts",
+        "server/updater-apply.test.ts"
+      ],
+      "why": "legacy app health identity is checked by old clients and updater preflight"
+    },
+    {
+      "id": "status-bridge",
+      "pattern": "\\.local/state/aos-session-bridge/openmausbot/latest\\.json",
+      "files": [
+        "**"
+      ],
+      "why": "external status publisher still writes its existing bridge path"
+    },
+    {
+      "id": "upstream-artifacts",
+      "pattern": "https://(?:github\\.com|raw\\.githubusercontent\\.com)/milind-soni/(?:OpenMausBot|openmausbot-teams)[^\\s\\\"'<>`)]*|milind-soni/openmausbot-releases|https://(?:docs\\.)?openmausbot\\.com[^\\s\\\"'<>`)]*",
+      "files": [
+        "server/browser-engine-release.ts",
+        "scripts/browser-engine-release.mjs",
+        "scripts/cua-linux-contract.mjs",
+        "apps/docs/**",
+        ".github/**",
+        "docs/provenance/**",
+        "docs/audits/**"
+      ],
+      "why": "pinned third-party binaries and historical upstream provenance cannot be redirected by a product rename"
+    },
+    {
+      "id": "readme-attribution",
+      "pattern": "fork of OpenMausBot|Milind Soni and OpenMausBot contributors",
+      "files": [
+        "README.md"
+      ],
+      "why": "Apache attribution to upstream contributors remains intact"
+    },
+    {
+      "id": "installer-preflight",
+      "pattern": "bos\\|openmausbot",
+      "files": [
+        "electron/resources/updater/preflight.py"
+      ],
+      "why": "restart preflight must still recognize old server processes"
+    },
+    {
+      "id": "speech-endpoint",
+      "pattern": "com\\.openmausbot\\.speech\\.endpoint",
+      "files": [
+        "**"
+      ],
+      "why": "speech keychain items and native helper endpoint keep their identity"
+    },
+    {
+      "id": "safety-env-prefixes",
+      "pattern": "(?:OPENMAUSBOT_|OPENMAUS_|OMB_)",
+      "files": [
+        "electron/branding-compat.json"
+      ],
+      "why": "old environment spellings are resolved centrally and retain the same trust boundary"
+    },
+    {
+      "id": "native-helper-id",
+      "pattern": "com\\.openmausbot\\.app(?:\\.speech-helper)?",
+      "files": [
+        "**"
+      ],
+      "why": "existing OS permission identity of the native control and speech helpers stays the same"
+    },
+    {
+      "id": "plugin-protocol",
+      "pattern": "(?<=[\\x22\\x27])HERMES_OPENMAUS_SCREENSHOT_COMPAT(?:_MODEL)?(?=[\\x22\\x27])|custom:openmausbot-",
+      "files": [
+        "**"
+      ],
+      "why": "external engine plugin grants and stored injected model ids keep their existing labels"
+    },
+    {
+      "id": "local-container-name",
+      "pattern": "openmausbot-computer(?=[-\\x22\\x27])",
+      "files": [
+        "**"
+      ],
+      "why": "existing local VM container remains recognizable rather than becoming an orphan"
+    },
+    {
+      "id": "escaped-links",
+      "pattern": "openmausbot(?=:\\\\/\\\\/)|(?<=schemes: \\[bosbot, )openmausbot(?=\\])",
+      "files": [
+        "**"
+      ],
+      "why": "escaped link parsers and desktop scheme registration keep accepting saved links"
+    },
+    {
+      "id": "deployed-services",
+      "pattern": "openmausbot-(?:control-plane|composio)|openmausbot\\.com(?![A-Za-z0-9_-])",
+      "files": [
+        "**"
+      ],
+      "why": "existing worker databases, service health identities and hosted addresses must not become a different service"
+    },
+    {
+      "id": "engine-config",
+      "pattern": "openmaus_company|openmausbot_(?:connectors|phone)|openmausbot-agents",
+      "files": [
+        "**"
+      ],
+      "why": "stored engine provider and built-in MCP identities remain reserved and cleanable"
+    },
+    {
+      "id": "service-commands",
+      "pattern": "(?<=systemctl restart )openmausbot|(?<=journalctl -u )openmausbot",
+      "files": [
+        "server/service-cli.ts"
+      ],
+      "why": "service actions continue controlling the already installed unit"
+    },
+    {
+      "id": "environment-aliases",
+      "pattern": "\\b(?:OPENMAUSBOT_|OPENMAUS_|OMB_)[A-Z0-9_]*",
+      "files": [
+        "*.ts",
+        "*.mjs",
+        "*.cjs",
+        "*.kt",
+        "*.kts",
+        "*.py",
+        "*.sh",
+        "*.jsonc",
+        ".github/**"
+      ],
+      "why": "legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling"
+    },
+    {
+      "id": "ios-notification-category",
+      "pattern": "OPENMAUS_(?:APPROVAL|UPDATE)",
+      "files": [
+        "ios/**"
+      ],
+      "why": "already delivered phone notifications retain their registered action categories"
+    },
+    {
+      "id": "stored-prompt-tags",
+      "pattern": "openmaus-(?:goal|skill)",
+      "files": [
+        "**"
+      ],
+      "why": "existing message and skill delimiters are still readable by the current parsers"
+    },
+    {
+      "id": "pairing-input-tests",
+      "pattern": "(?<=[\\x22\\x27])openmausbot(?=[\\x22\\x27])",
+      "files": [
+        "android/app/src/test/**"
+      ],
+      "why": "legacy QR scheme remains part of the native acceptance tests"
+    },
+    {
+      "id": "paired-mdns-host",
+      "pattern": "openmausbot-(?=(?:\\$\\{digest\\}|\\[0-9a-f\\]\\{8\\}|[a-f0-9]{8}))",
+      "files": [
+        "**"
+      ],
+      "why": "saved phone fallback routes continue resolving the same stable LAN hostname"
+    },
+    {
+      "id": "upstream-team-library",
+      "pattern": "https://(?:github\\.com|raw\\.githubusercontent\\.com)/milind-soni/openmausbot-teams[^\\s\\x22\\x27<>`)]*",
+      "files": [
+        "**"
+      ],
+      "why": "the existing upstream playbook library remains the configured source until a BOS library is published"
+    },
+    {
+      "id": "upstream-crypto-test-vector",
+      "pattern": "(?<=[\"'])openmausbot(?=[\"'])",
+      "files": [
+        "cloudflare/composio-broker/src/index.test.ts"
+      ],
+      "why": "published SHA-256 fixture input and expected digest must stay paired"
+    },
+    {
+      "id": "legacy-credential-path-denylist",
+      "pattern": "(?<=[\"'])(?:OpenMausBot|openmausbot)(?=[\"'])",
+      "files": [
+        "server/local-computer.ts",
+        "server/local-computer.test.ts",
+        "electron/shared-computer-access.node-test.mjs"
+      ],
+      "why": "credential access checks must deny both legacy and renamed app directories"
+    },
+    {
+      "id": "legacy-credential-path-case",
+      "pattern": "OPENMAUSBOT(?=/credentials\\.bin)",
+      "files": [
+        "electron/shared-computer-access.node-test.mjs"
+      ],
+      "why": "case-insensitive filesystem access must still deny the legacy credential directory"
+    },
+    {
+      "id": "paired-host-fixture",
+      "pattern": "(?i:openmausbot\\.test)",
+      "files": [
+        "companion/test/control.test.ts"
+      ],
+      "why": "case normalization uses the same synthetic legacy hostname on input and output"
+    },
+    {
+      "id": "container-health-check",
+      "pattern": "(?<=grep -q )openmausbot",
+      "files": [
+        "Dockerfile",
+        ".github/workflows/docker.yml"
+      ],
+      "why": "container probes must check the frozen health identity returned by old and new servers"
+    }
+  ],
+  "legacyPattern": "(?i:openmaus)|\\bOMB_",
+  "legacySchemes": [
+    "openmausbot"
+  ],
+  "newScheme": "bosbot",
+  "patches": [
+    {
+      "path": "ios/project.yml",
+      "from": "              - openmausbot\n",
+      "to": "              - openmausbot\n              - bosbot\n"
+    },
+    {
+      "path": "ios/Sources/CompanionCore/Client.swift",
+      "from": "url.scheme?.lowercased() == \"openmausbot\"",
+      "to": "[\"openmausbot\", \"bosbot\"].contains(url.scheme?.lowercased() ?? \"\")"
+    },
+    {
+      "path": "android/core/src/main/kotlin/com/bosbot/companion/core/Connection.kt",
+      "from": "!url.scheme.equals(\"openmausbot\", ignoreCase = true) ||",
+      "to": "!(url.scheme.equals(\"openmausbot\", ignoreCase = true) || url.scheme.equals(\"bosbot\", ignoreCase = true)) ||"
+    },
+    {
+      "path": "android/app/src/main/AndroidManifest.xml",
+      "from": "                    android:scheme=\"openmausbot\" />",
+      "to": "                    android:scheme=\"openmausbot\" />\n                <data android:host=\"pair\" android:scheme=\"bosbot\" />"
+    },
+    {
+      "path": "electron-builder.yml",
+      "from": "schemes: [bosbot]",
+      "to": "schemes: [bosbot, openmausbot]"
+    },
+    {
+      "path": "server/mcp-registry.ts",
+      "from": "name.startsWith(\"OMB_\")",
+      "to": "isBrandEnvName(name)"
+    },
+    {
+      "path": "src/lib/thread-refs.ts",
+      "from": "bosbot:\\/\\/thread\\/",
+      "to": "(?:bosbot|openmausbot):\\/\\/thread\\/"
+    },
+    {
+      "path": "README.md",
+      "from": "# BOS Bot\n",
+      "to": "# BOS Bot\n\nBOS Bot is a fork of OpenMausBot. Upstream attribution is preserved in NOTICE and LICENSING.md.\n"
+    },
+    {
+      "path": "android/app/src/main/kotlin/com/bosbot/companion/ui/PairingHandoff.kt",
+      "from": "scheme.equals(SCHEME, ignoreCase = true) && host.equals(HOST, ignoreCase = true)",
+      "to": "(scheme.equals(SCHEME, ignoreCase = true) || scheme.equals(\"openmausbot\", ignoreCase = true)) && host.equals(HOST, ignoreCase = true)"
+    },
+    {
+      "path": "android/app/src/test/kotlin/com/bosbot/companion/PairingLinkManifestTest.kt",
+      "from": "assertTrue(PairingLink.isInvite(\"BOS Bot\", \"PAIR\"))",
+      "to": "assertTrue(PairingLink.isInvite(\"BOSBOT\", \"PAIR\"))\n        assertTrue(PairingLink.isInvite(\"openmausbot\", \"pair\"))"
+    },
+    {
+      "path": "companion/test/control.test.ts",
+      "from": "https://C-Opaque.BOS Bot.Test/",
+      "to": "https://C-Opaque.BosBot.Test/"
+    },
+    {
+      "path": "android/app/build.gradle.kts",
+      "from": "private fun signingMaterial(",
+      "to": "private fun brandingSigningEnvironment(name: String): String? {\n    val table = groovy.json.JsonSlurper().parse(rootProject.file(\"../electron/branding-compat.json\")) as Map<*, *>\n    for (pair in table[\"prefixAliases\"] as List<*>) {\n        val prefixes = pair as List<*>\n        val current = prefixes[0] as String\n        val legacy = prefixes[1] as String\n        val prefix = if (name.startsWith(current)) current else if (name.startsWith(legacy)) legacy else continue\n        val suffix = name.removePrefix(prefix)\n        System.getenv(current + suffix)?.let { return it }\n        System.getenv(legacy + suffix)?.let { return it }\n    }\n    return System.getenv(name)\n}\n\nprivate fun signingMaterial("
+    },
+    {
+      "path": "android/app/build.gradle.kts",
+      "from": "(System.getenv(environment) ?: keystoreProperties.getProperty(property))",
+      "to": "(brandingSigningEnvironment(environment) ?: keystoreProperties.getProperty(property))"
+    },
+    {
+      "path": "server/config.ts",
+      "from": "export const WORKSPACE_CREDENTIAL_ENV = [\n  \"XAI_API_KEY\",\n  \"OMB_XAI_MANAGEMENT_KEY\",\n  \"OMB_ANTHROPIC_API_KEY\",\n  \"OMB_ANTHROPIC_API_URL\",\n  \"OPENAI_COMPAT_API_KEY\",\n  \"OPENAI_COMPAT_URL\",\n  \"BOX_TOKEN\",\n  \"OPENCODE_API_KEY\",\n  \"OMB_TTS_KEY\",\n  \"OMB_FISH_AUDIO_API_KEY\",\n  \"OMB_OPENAI_IMAGE_KEY\",\n  \"OMB_CUSTOM_IMAGE_KEY\",\n  \"COMPOSIO_API_KEY\",\n  \"OMB_COMPOSIO_BROKER_TOKEN\",\n  // Harness-private filesystem hints are not credentials themselves, but\n  // exposing them to a shell-capable agent points straight at app-owned\n  // state. The built-in browser master is delivered privately in memory.\n  \"OMB_BROWSER_CONNECTION\",\n  \"OMB_USER_DATA\",\n  \"OMB_CUA_WINDOWS_DESCRIPTOR\",\n  \"OMB_CUA_WINDOWS_SUPERVISED\",\n] as const;",
+      "to": "export const WORKSPACE_CREDENTIAL_ENV = expandEnvNames([\n  \"XAI_API_KEY\",\n  \"OMB_XAI_MANAGEMENT_KEY\",\n  \"OMB_ANTHROPIC_API_KEY\",\n  \"OMB_ANTHROPIC_API_URL\",\n  \"OPENAI_COMPAT_API_KEY\",\n  \"OPENAI_COMPAT_URL\",\n  \"BOX_TOKEN\",\n  \"OPENCODE_API_KEY\",\n  \"OMB_TTS_KEY\",\n  \"OMB_FISH_AUDIO_API_KEY\",\n  \"OMB_OPENAI_IMAGE_KEY\",\n  \"OMB_CUSTOM_IMAGE_KEY\",\n  \"COMPOSIO_API_KEY\",\n  \"OMB_COMPOSIO_BROKER_TOKEN\",\n  // Harness-private filesystem hints are not credentials themselves, but\n  // exposing them to a shell-capable agent points straight at app-owned\n  // state. The built-in browser master is delivered privately in memory.\n  \"OMB_BROWSER_CONNECTION\",\n  \"OMB_USER_DATA\",\n  \"OMB_CUA_WINDOWS_DESCRIPTOR\",\n  \"OMB_CUA_WINDOWS_SUPERVISED\",\n] as const);"
+    },
+    {
+      "path": "electron/diagnostics.mjs",
+      "from": "export const CREDENTIAL_ENV_NAMES = [\n  \"XAI_API_KEY\",\n  \"OMB_XAI_MANAGEMENT_KEY\",\n  \"OMB_ANTHROPIC_API_KEY\",\n  \"OMB_ANTHROPIC_API_URL\",\n  \"OPENAI_COMPAT_API_KEY\",\n  \"OPENAI_COMPAT_URL\",\n  \"BOX_TOKEN\",\n  \"OPENCODE_API_KEY\",\n  \"OMB_TTS_KEY\",\n  \"OMB_FISH_AUDIO_API_KEY\",\n  \"OMB_OPENAI_IMAGE_KEY\",\n  \"OMB_CUSTOM_IMAGE_KEY\",\n  \"COMPOSIO_API_KEY\",\n  \"OMB_COMPOSIO_BROKER_TOKEN\",\n  // Browser capability files and app-owned state paths are private even\n  // though they are not traditional API credentials.\n  \"OMB_BROWSER_CONNECTION\",\n  \"OMB_USER_DATA\",\n];",
+      "to": "export const CREDENTIAL_ENV_NAMES = expandEnvNames([\n  \"XAI_API_KEY\",\n  \"OMB_XAI_MANAGEMENT_KEY\",\n  \"OMB_ANTHROPIC_API_KEY\",\n  \"OMB_ANTHROPIC_API_URL\",\n  \"OPENAI_COMPAT_API_KEY\",\n  \"OPENAI_COMPAT_URL\",\n  \"BOX_TOKEN\",\n  \"OPENCODE_API_KEY\",\n  \"OMB_TTS_KEY\",\n  \"OMB_FISH_AUDIO_API_KEY\",\n  \"OMB_OPENAI_IMAGE_KEY\",\n  \"OMB_CUSTOM_IMAGE_KEY\",\n  \"COMPOSIO_API_KEY\",\n  \"OMB_COMPOSIO_BROKER_TOKEN\",\n  // Harness-private filesystem hints are not credentials themselves, but\n  // exposing them to a shell-capable agent points straight at app-owned\n  // state. The built-in browser master is delivered privately in memory.\n  \"OMB_BROWSER_CONNECTION\",\n  \"OMB_USER_DATA\",\n  \"OMB_CUA_WINDOWS_DESCRIPTOR\",\n  \"OMB_CUA_WINDOWS_SUPERVISED\",\n]);"
+    },
+    {
+      "path": "package.json",
+      "from": "\"build:companion\": \"tsc -p tsconfig.companion.build.json\"",
+      "to": "\"build:companion\": \"tsc -p tsconfig.companion.build.json && node scripts/bundle-companion.mjs\""
+    },
+    {
+      "path": "electron/diagnostics.test.mjs",
+      "from": "    const config = readFileSync(new URL(\"../server/config.ts\", import.meta.url), \"utf8\");\n    const match = config.match(/WORKSPACE_CREDENTIAL_ENV = \\[([\\s\\S]*?)\\] as const/);\n    expect(match).not.toBeNull();\n    const names = [...match[1].matchAll(/\"([A-Z0-9_]+)\"/g)].map((m) => m[1]);\n    expect(CREDENTIAL_ENV_NAMES).toEqual(names);",
+      "to": "    expect(CREDENTIAL_ENV_NAMES).toEqual(WORKSPACE_CREDENTIAL_ENV);"
+    },
+    {
+      "path": "server/fleet.ts",
+      "from": "\"openmausbot@latest\"",
+      "to": "\"bosbot@latest\""
+    },
+    {
+      "path": "server/drivers/claude.ts",
+      "from": "(?:OMB_|OGB_|OPENMAUSBOT_|",
+      "to": "(?:BOSBOT_|BOS_|OPENMAUS_|OMB_|OGB_|OPENMAUSBOT_|"
+    },
+    {
+      "path": "android/core/src/test/kotlin/com/bosbot/companion/core/ConnectionTest.kt",
+      "from": "class ConnectionTest {",
+      "to": "class ConnectionTest {\n    @Test\n    fun bothBrandingSchemesPairWithoutChangingTheCredential() {\n        val legacy = PairingInvite.parse(URI(\"openmausbot://pair?address=mac.local&code=123456\"))\n        val renamed = PairingInvite.parse(URI(\"bosbot://pair?address=mac.local&code=123456\"))\n        assertNotNull(legacy)\n        assertNotNull(renamed)\n        assertEquals(legacy.credential, renamed.credential)\n        assertEquals(legacy.connection.host, renamed.connection.host)\n    }\n"
+    },
+    {
+      "path": "ios/Tests/CompanionCoreTests/ConnectionTests.swift",
+      "from": "final class ConnectionTests: XCTestCase {",
+      "to": "final class ConnectionTests: XCTestCase {\n    func testBothBrandingSchemesKeepTheSamePairingCredential() throws {\n        let legacy = try XCTUnwrap(PairingInvite.parse(URL(string: \"openmausbot://pair?address=mac.local&code=123456\")!))\n        let renamed = try XCTUnwrap(PairingInvite.parse(URL(string: \"bosbot://pair?address=mac.local&code=123456\")!))\n        XCTAssertEqual(legacy.credential, renamed.credential)\n        XCTAssertEqual(legacy.connection.host, renamed.connection.host)\n    }\n"
+    },
+    {
+      "path": "server/local-computer.ts",
+      "from": "[\"OpenMausBot\", \"openmausbot\", \"OpenGrokBot\", \"opengrokbot\"]",
+      "to": "[\"BOS Bot\", \"bosbot\", \"OpenMausBot\", \"openmausbot\", \"OpenGrokBot\", \"opengrokbot\"]"
+    },
+    {
+      "path": "electron/release-channel.mjs",
+      "from": "export const PACKAGE_SCHEME = STAGING ? \"bosbot-staging\" : \"bosbot\";",
+      "to": "export const PACKAGE_SCHEMES = JSON.parse(readFileSync(new URL(\"./branding-compat.json\", import.meta.url), \"utf8\")).packageSchemes[STAGING ? \"staging\" : \"live\"];\nexport const PACKAGE_SCHEME = PACKAGE_SCHEMES[0];"
+    },
+    {
+      "path": "electron/package-link.mjs",
+      "from": "import { PACKAGE_SCHEME } from \"./release-channel.mjs\";",
+      "to": "import { PACKAGE_SCHEMES } from \"./release-channel.mjs\";"
+    },
+    {
+      "path": "electron/package-link.mjs",
+      "from": "link.protocol !== `${PACKAGE_SCHEME}:`",
+      "to": "!PACKAGE_SCHEMES.some(scheme => link.protocol === `${scheme}:`)"
+    },
+    {
+      "path": "electron/main.mjs",
+      "from": "STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEME",
+      "to": "STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEMES"
+    },
+    {
+      "path": "electron/main.mjs",
+      "from": "app.setAsDefaultProtocolClient(PACKAGE_SCHEME);",
+      "to": "for (const scheme of PACKAGE_SCHEMES) app.setAsDefaultProtocolClient(scheme);"
+    },
+    {
+      "path": "electron/package-link.node-test.mjs",
+      "from": "import { PACKAGE_SCHEME } from \"./release-channel.mjs\";",
+      "to": "import { PACKAGE_SCHEME, PACKAGE_SCHEMES } from \"./release-channel.mjs\";"
+    },
+    {
+      "path": "electron/package-link.node-test.mjs",
+      "from": "assert.equal(packageUrlFromDeepLink(`${PACKAGE_SCHEME}://install?url=${encodeURIComponent(target)}`), target);",
+      "to": "for (const scheme of PACKAGE_SCHEMES) assert.equal(packageUrlFromDeepLink(`${scheme}://install?url=${encodeURIComponent(target)}`), target);"
+    }
+  ],
+  "imports": [
+    {
+      "path": "server/mcp-registry.ts",
+      "line": "import { isBrandEnvName } from \"../electron/branding-env.cjs\";"
+    },
+    {
+      "path": "server/config.ts",
+      "line": "import { expandEnvNames } from \"../electron/branding-env.cjs\";"
+    },
+    {
+      "path": "electron/diagnostics.mjs",
+      "line": "import { expandEnvNames } from \"./branding-env.cjs\";"
+    },
+    {
+      "path": "electron/diagnostics.test.mjs",
+      "line": "import { WORKSPACE_CREDENTIAL_ENV } from \"../server/config.ts\";"
+    }
+  ],
+  "directoryRenames": [
+    [
+      "android/app/src/main/kotlin/com/openmausbot",
+      "android/app/src/main/kotlin/com/bosbot"
+    ],
+    [
+      "android/app/src/test/kotlin/com/openmausbot",
+      "android/app/src/test/kotlin/com/bosbot"
+    ],
+    [
+      "android/core/src/main/kotlin/com/openmausbot",
+      "android/core/src/main/kotlin/com/bosbot"
+    ],
+    [
+      "android/core/src/test/kotlin/com/openmausbot",
+      "android/core/src/test/kotlin/com/bosbot"
+    ]
+  ],
+  "postEnvPatches": [
+    {
+      "path": "server/drivers/phone-proxy.ts",
+      "from": "  const executable = executableName(platform);",
+      "to": "  env = compatEnvironment(env);\n  const executable = executableName(platform);"
+    },
+    {
+      "path": "server/drivers/phone-proxy.ts",
+      "from": "compatEnvironment(env).",
+      "to": "env."
+    },
+    {
+      "path": "server/updater-build.ts",
+      "from": "  const file = readJsonFile(join(updatesDir(dataDir), \"source.json\")) ?? {};",
+      "to": "  env = compatEnvironment(env);\n  const file = readJsonFile(join(updatesDir(dataDir), \"source.json\")) ?? {};"
+    },
+    {
+      "path": "server/updater-build.ts",
+      "from": "compatEnvironment(env).OMB_UPDATE_PROD_BRANCH",
+      "to": "env.OMB_UPDATE_PROD_BRANCH"
+    },
+    {
+      "path": "server/whatsapp-browser.ts",
+      "from": "const env = lookup.env ?? compatEnv;",
+      "to": "const env = compatEnvironment(lookup.env ?? compatEnv);"
+    },
+    {
+      "path": "server/whatsapp-browser.ts",
+      "from": "export function noBrowserReason(env: NodeJS.ProcessEnv = compatEnv): string {",
+      "to": "export function noBrowserReason(env: NodeJS.ProcessEnv = compatEnv): string {\n  env = compatEnvironment(env);"
+    },
+    {
+      "path": "server/whatsapp-browser.ts",
+      "from": "compatEnvironment(env).",
+      "to": "env."
+    }
+  ],
+  "workflow": {
+    "base": "83a7f16c1",
+    "apply": "python3 scripts/rename-bos.py && (cd ios && xcodegen generate)",
+    "verify": "python3 scripts/rename-bos.py --check",
+    "batch": "cherry-pick the infrastructure commit onto the final 1.9.3 batch, apply and regenerate, then commit the result",
+    "nativeIdentity": "iOS com.aihlete.aios* bundle identifiers, group.com.aihlete.aios.shared and keychain entitlements stay unchanged; Android applicationId stays com.openmausbot.companion",
+    "pairing": "accept both schemes in native and desktop clients; keep emitting openmausbot:// until both phone releases are installed",
+    "review": "rules protect exact matches before replacement; each generated source file records matching rule ids and reasons; JSON payload fixtures are covered here without adding invalid comments"
+  },
+  "immutableInstallIdentity": {
+    "ios/AppShared/BosSharedConfiguration.swift": [
+      "com.aihlete.aios",
+      "group.com.aihlete.aios.shared"
+    ],
+    "ios/AppShared/NotificationAvatarCache.swift": [
+      "group.com.aihlete.aios.shared"
+    ],
+    "ios/AppStore/RELEASE.md": [
+      "com.aihlete.aios",
+      "com.aihlete.aios.notification-service",
+      "com.aihlete.aios.share",
+      "com.aihlete.aios.widgets",
+      "group.com.aihlete.aios.shared"
+    ],
+    "ios/AppStore/privacy-answers.md": [
+      "group.com.aihlete.aios.shared"
+    ],
+    "ios/NotificationService/NotificationService.entitlements": [
+      "group.com.aihlete.aios.shared"
+    ],
+    "ios/project.yml": [
+      "com.aihlete.aios",
+      "com.aihlete.aios.notification-service",
+      "com.aihlete.aios.share",
+      "com.aihlete.aios.uitests",
+      "com.aihlete.aios.widgets",
+      "group.com.aihlete.aios.shared"
+    ],
+    "android/app/build.gradle.kts": [
+      "com.openmausbot.companion"
+    ]
+  },
+  "packageSchemes": {
+    "live": [
+      "bosbot",
+      "openmausbot"
+    ],
+    "staging": [
+      "bosbot-staging",
+      "openmausbot-staging"
+    ]
+  }
+}
