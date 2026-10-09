@@ -64,7 +64,7 @@ export class VoiceRings {
     for (const [botId, value] of next) this.lastRing.set(botId, value);
     const ring: VoiceRingData = { type: "voice_ring", ringId: randomUUID(), ...input };
     this.options.emit({ kind: "voice_ring", ...ring });
-    void this.options.push(this.options.ownerId, `${botName} is calling`, ring.reason, ring, ring.ringId)
+    void this.options.push(this.options.ownerId, `${botName} is calling`, ring.reason, { ...ring, botName }, ring.ringId)
       .catch(error => console.warn(`voice ring push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
     return ring;
   }
