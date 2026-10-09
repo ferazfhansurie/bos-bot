@@ -127,6 +127,16 @@ describe("threads a bot closed", () => {
     ];
     expect(visibleSidebarThreads(rows, "current").map((task) => task.threadId)).toEqual(["current", "unread", "busy"]);
   });
+  it("keeps a thread the person marked done hidden when a late reply makes it unread", () => {
+    const done = { botId: "", name: "you", at: 9 };
+    const rows = [
+      { threadId: "late", title: "Bot answered after done", closedBy: done, archivedAt: 9, unread: true },
+      { threadId: "busy", title: "Still running", closedBy: done, archivedAt: 9, busy: true },
+      { threadId: "waiting", title: "Needs me", closedBy: done, archivedAt: 9, activity: "waiting-on-you" as const },
+    ];
+    expect(visibleSidebarThreads(rows, "").map((task) => task.threadId)).toEqual(["busy", "waiting"]);
+    expect(visibleSidebarThreads(rows, "late").map((task) => task.threadId)).toEqual(["late", "busy", "waiting"]);
+  });
   it("dims running work while unread replies, human input and selection stay clear", () => {
     const running = { threadId: "h", title: "Running", busy: true };
     expect(render(running)).toContain("opacity-50");

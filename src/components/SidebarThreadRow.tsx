@@ -47,7 +47,12 @@ const isWorking = (task: Pick<Task, "activity" | "busy">): boolean => task.activ
  * the person is looking at it, it needs them, or it has something new. */
 const demandsAttention = (task: ThreadRowTask, activeId: string) =>
   task.threadId === activeId || task.activity === "waiting-on-you" || task.state === "waiting-on-you" || isWorking(task) || task.state === "running"
-  || Boolean(task.queued) || task.state === "queued" || Boolean(task.unread);
+  || Boolean(task.queued) || task.state === "queued" || (Boolean(task.unread) && !markedDone(task));
+
+/** The person pressed Done (the server stamps the closer with an empty
+ * botId). A late bot reply makes the thread unread again, but they already
+ * said they are finished with it, so unread alone does not bring it back. */
+const markedDone = (task: Pick<Task, "closedBy">): boolean => task.closedBy?.botId === "";
 
 /** The default list is the six most recent OPEN threads plus anything that
  * demands attention. A thread a bot closed is folded away — a PM bot that

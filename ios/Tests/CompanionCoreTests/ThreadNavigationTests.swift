@@ -275,6 +275,24 @@ final class ThreadNavigationTests: XCTestCase {
         XCTAssertEqual(closed.bylineLabel, "closed by Parker")
     }
 
+    func testThreadMarkedDoneStaysFoldedWhenALateReplyMakesItUnread() {
+        let done = ThreadCloser(botId: "", name: "you", at: 2)
+        var late = task("late", title: "Answered after done")
+        late.closedBy = done
+        late.archivedAt = 2
+        late.unread = true
+        XCTAssertTrue(late.isMarkedDone)
+        XCTAssertFalse(late.demandsAttention(), "unread alone does not undo the person's done")
+        var botClosed = late
+        botClosed.closedBy = ThreadCloser(botId: "pm", name: "Parker", at: 2)
+        XCTAssertTrue(botClosed.demandsAttention(), "a bot-closed thread with news still resurfaces")
+        var working = late
+        working.busy = true
+        XCTAssertTrue(working.demandsAttention())
+        let bot = makeBot(tasks: [late, task("plan")])
+        XCTAssertEqual(bot.threadGroups().flatMap(\.tasks).map(\.threadId), ["plan"])
+    }
+
     func testArchivedThreadsFoldOutOfTheTreeButResurfaceOnAttention() {
         var putAway = task("put-away", title: "Put away")
         putAway.archivedAt = 5

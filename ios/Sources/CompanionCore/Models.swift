@@ -418,6 +418,11 @@ public struct BotTask: Codable, Hashable, Sendable {
     /// A bot closed this thread and nothing has happened there since.
     public var isClosed: Bool { closedBy != nil }
 
+    /// The person pressed Done (the server stamps the closer with an empty
+    /// botId). A late bot reply makes it unread again, but unread alone does
+    /// not bring a thread they finished back into the list.
+    public var isMarkedDone: Bool { closedBy?.botId == "" }
+
     /// Archived means the field is present, not nonzero: the task API
     /// accepts any epoch number, so a thread persisted with
     /// archivedAt: 0 is archived.
@@ -456,7 +461,7 @@ public struct BotTask: Codable, Hashable, Sendable {
     /// reports out-of-band, so it arrives as an input rather than living on
     /// the wire-decoded task.
     public func demandsAttention(queued: Bool = false) -> Bool {
-        if isWorking || isWaitingOnTeammate || unread == true { return true }
+        if isWorking || isWaitingOnTeammate || (unread == true && !isMarkedDone) { return true }
         if queued { return true }
         switch activity {
         case "waiting-on-you", "waiting", "queued": return true
