@@ -5,8 +5,8 @@ const failing = (status: number) => vi.fn(async () => { throw Object.assign(new 
 
 describe("sayHi", () => {
   it("opens the link the server returns", async () => {
-    const request = vi.fn(async () => ({ url: "https://hi.bos.aihlete.com/pair#code=abc", expiresAt: "x" }));
-    expect(await sayHi("  Putri ", request)).toEqual({ kind: "open", url: "https://hi.bos.aihlete.com/pair#code=abc" });
+    const request = vi.fn(async () => ({ url: "https://hi.aihlete.com/pair#code=abc", expiresAt: "x" }));
+    expect(await sayHi("  Putri ", request)).toEqual({ kind: "open", url: "https://hi.aihlete.com/pair#code=abc" });
     expect(request).toHaveBeenCalledWith("/api/onboarding/welcome", expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Putri" }) }));
   });
 

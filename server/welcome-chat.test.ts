@@ -46,9 +46,9 @@ describe("requestWelcome", () => {
   const body = { installId: ID, name: "Putri" };
 
   it("posts the frozen body and returns the guest link", async () => {
-    const fetch = reply(201, { url: "https://hi.bos.aihlete.com/pair#code=abc", expiresAt: "2026-10-09T13:00:00.000Z" });
+    const fetch = reply(201, { url: "https://hi.aihlete.com/pair#code=abc", expiresAt: "2026-10-09T13:00:00.000Z" });
     expect(await requestWelcome(body, { fetch, env: {} })).toEqual({
-      status: 201, url: "https://hi.bos.aihlete.com/pair#code=abc", expiresAt: "2026-10-09T13:00:00.000Z",
+      status: 201, url: "https://hi.aihlete.com/pair#code=abc", expiresAt: "2026-10-09T13:00:00.000Z",
     });
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(WELCOME_URL);
@@ -65,16 +65,16 @@ describe("requestWelcome", () => {
     expect(await requestWelcome(body, { fetch: reply(503, { error: "down" }), env: {} })).toMatchObject(offline);
     expect(await requestWelcome(body, { fetch: reply(404), env: {} })).toMatchObject(offline);
     expect(await requestWelcome(body, { fetch: vi.fn(async () => { throw new Error("offline"); }), env: {} })).toMatchObject(offline);
-    for (const url of ["https://evil.test/pair", "http://hi.bos.aihlete.com/pair", "https://bos.aihlete.com.evil.test/x"]) {
+    for (const url of ["https://evil.test/pair", "http://hi.aihlete.com/pair", "https://bos.aihlete.com.evil.test/x", "https://watch.aihlete.com/pair", "https://hi.aihlete.com.evil.test/x"]) {
       expect(await requestWelcome(body, { fetch: reply(201, { url, expiresAt: "2026-10-09T13:00:00.000Z" }), env: {} })).toMatchObject(offline);
     }
-    expect(await requestWelcome(body, { fetch: reply(201, { url: "https://hi.bos.aihlete.com/pair" }), env: {} })).toMatchObject(offline);
+    expect(await requestWelcome(body, { fetch: reply(201, { url: "https://hi.aihlete.com/pair" }), env: {} })).toMatchObject(offline);
   });
 
   it("stubs a link without calling out when BOS_WELCOME_STUB=1", async () => {
     const fetch = reply(500);
     const result = await requestWelcome(body, { fetch, env: { BOS_WELCOME_STUB: "1" }, now: () => 0 });
-    expect(result).toEqual({ status: 201, url: "https://hi.bos.aihlete.com/pair#code=stub-3f2b6c1e", expiresAt: "1970-01-01T00:15:00.000Z" });
+    expect(result).toEqual({ status: 201, url: "https://hi.aihlete.com/pair#code=stub-3f2b6c1e", expiresAt: "1970-01-01T00:15:00.000Z" });
     expect(fetch).not.toHaveBeenCalled();
   });
 });
