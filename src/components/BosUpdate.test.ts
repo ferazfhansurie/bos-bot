@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateView } from "@/lib/bos-update";
-import { ConfirmUpdateLine, UpdatePill, UpdateProgress, UpdatesPanel, UpdateResultToast, busyEntries } from "./BosUpdate";
+import { ConfirmUpdateLine, UpdatePill, UpdateProgress, UpdatesPanel, UpdateResultToast, VersionFooter, busyEntries } from "./BosUpdate";
 import type { Bot } from "@/state/store";
 
 vi.mock("./Avatar", () => ({ BotAvatar: () => createElement("span", { "data-avatar": "" }) }));
@@ -17,12 +17,31 @@ const view = (patch: Partial<UpdateView> = {}): UpdateView => ({ status, state: 
 const noop = () => {};
 
 describe("BosUpdate", () => {
-  it("pill hides when idle, shows from → to when a newer build is allowed, spins while running", () => {
+  it("pill hides when idle, says update <version> when a newer build is allowed, spins while running", () => {
     expect(renderToStaticMarkup(createElement(UpdatePill, { view: view({ state: "idle" }), onOpen: noop }))).toBe("");
-    expect(renderToStaticMarkup(createElement(UpdatePill, { view: view(), onOpen: noop }))).toContain("1.2.0 → 1.3.0");
+    const ready = renderToStaticMarkup(createElement(UpdatePill, { view: view(), onOpen: noop }));
+    expect(ready).toContain('<span class="whitespace-nowrap">update 1.3.0</span>');
     const running = renderToStaticMarkup(createElement(UpdatePill, { view: view({ state: "building" }), onOpen: noop }));
     expect(running).toContain("Updating…");
     expect(running).toContain("Building");
+  });
+
+  it("never shows an update for the build that is already running", () => {
+    const sameBuild = { ...status, current: { version: "1.9.2", sha: "a014552b64ef7b32265c5df04fd0d71a8f3d94c8" }, candidate: { version: "1.9.2+a014552b", sha: "a014552b64ef7b32265c5df04fd0d71a8f3d94c8", branch: "prod" } };
+    expect(renderToStaticMarkup(createElement(UpdatePill, { view: view({ status: sameBuild }), onOpen: noop }))).toBe("");
+    // same semver, newer commit: just "update", no +sha suffix
+    const newerBuild = { ...sameBuild, candidate: { version: "1.9.2+beefcafe", sha: "beefcafe00000000", branch: "prod" } };
+    const html = renderToStaticMarkup(createElement(UpdatePill, { view: view({ status: newerBuild }), onOpen: noop }));
+    expect(html).toContain(">update<");
+    expect(html).not.toContain("beefcafe");
+  });
+
+  it("footer shows a muted bos <version>, plus the pill only when an update exists", () => {
+    const quiet = renderToStaticMarkup(createElement(VersionFooter, { view: view({ state: "idle", status: { ...status, candidate: undefined, state: "idle" } }), version: "1.9.3", onOpen: noop }));
+    expect(quiet).toContain("bos 1.9.3");
+    expect(quiet).not.toContain("update");
+    expect(renderToStaticMarkup(createElement(VersionFooter, { view: view(), version: "1.9.3", onOpen: noop }))).toContain("update 1.3.0");
+    expect(renderToStaticMarkup(createElement(VersionFooter, { view: view(), version: "1.9.3", onOpen: noop, showUpdate: false }))).not.toContain("update");
   });
 
   it("settings names both builds, what's in it, and the update button", () => {

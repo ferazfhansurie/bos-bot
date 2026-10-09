@@ -423,6 +423,11 @@ public struct BotTask: Codable, Hashable, Sendable {
     /// archivedAt: 0 is archived.
     public var isArchived: Bool { archivedAt != nil }
 
+    /// "Done" archives the thread and the server closes it with it, so a
+    /// thread that is still working cannot be marked done.
+    public var canMarkDone: Bool { !isArchived && !isWorking }
+
+
     /// Working is activity or flag: the wire can carry either alone, so the
     /// archive action's busy gate and the working status ask the same
     /// question. A run counts as work here exactly as its row already

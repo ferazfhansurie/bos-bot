@@ -309,6 +309,21 @@ final class ThreadNavigationTests: XCTestCase {
         XCTAssertEqual(bot.threadGroups().flatMap(\.tasks).count, 6)
     }
 
+    func testArchivedThreadsAreHiddenFromTheDefaultListAndCountedInTheArchivedSection() {
+        var done = task("done"); done.archivedAt = 5
+        var zero = task("zero"); zero.archivedAt = 0
+        var running = task("running"); running.archivedAt = 5; running.activity = "running"
+        var open = task("current"); open.archivedAt = 7
+        let bot = makeBot(tasks: [done, zero, running, open, task("plan")])
+
+        XCTAssertEqual(Set(bot.threadGroups().flatMap(\.tasks).map(\.threadId)), ["running", "current", "plan"])
+        XCTAssertEqual(bot.archivedThreads().map(\.threadId), ["done", "zero"])
+        XCTAssertEqual(bot.archivedThreads(queuedThreadIds: ["done"]).map(\.threadId), ["zero"])
+        XCTAssertTrue(task("plan").canMarkDone)
+        XCTAssertFalse(done.canMarkDone)
+        XCTAssertFalse(running.canMarkDone)
+    }
+
     func testSiblingNavigationProjectionsKeepTheirOwnThreadAndRuntime() throws {
         var selected = task("current", title: "Current")
         selected.unread = false

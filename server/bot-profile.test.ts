@@ -30,8 +30,25 @@ describe("parseBotProfilePatch (strict — the paired boundary)", () => {
   });
 
   it("refuses unknown cosmetic keys too — strict means the allowlist IS the contract", () => {
-    const result = parseBotProfilePatch({ color: "red" } as never, true);
-    expect(result).toEqual({ ok: false, error: "unsupported profile field: color" });
+    const result = parseBotProfilePatch({ mascotExpression: "happy" } as never, true);
+    expect(result).toEqual({ ok: false, error: "unsupported profile field: mascotExpression" });
+  });
+
+  // The phone's colour picker sends this through the paired profile route.
+  // It is cosmetic, so it is allowlisted — but validated exactly like the
+  // desktop's broad PATCH: a palette name or #RRGGBB, hex stored uppercase.
+  it("accepts a palette or hex colour and normalizes hex to uppercase", () => {
+    expect(parseBotProfilePatch({ color: "red" }, true)).toEqual({ ok: true, patch: { color: "red" } });
+    expect(parseBotProfilePatch({ color: "#1a2b3c" }, true)).toEqual({ ok: true, patch: { color: "#1A2B3C" } });
+  });
+
+  it("refuses a colour that is neither a palette name nor #RRGGBB", () => {
+    for (const bad of ["chartreuse", "#123", "#1234567", "rgb(0,0,0)", "", 12, null]) {
+      for (const strict of [true, false]) {
+        const result = parseBotProfilePatch({ color: bad } as never, strict);
+        expect(result, `${JSON.stringify(bad)} strict=${strict}`).toEqual({ ok: false, error: "color must be a palette name or #RRGGBB" });
+      }
+    }
   });
 
   it("accepts the full identity surface", () => {
@@ -71,7 +88,7 @@ describe("parseBotProfilePatch (both modes)", () => {
   });
 
   it("lenient mode drops unknown keys instead of failing — the desktop PATCH mixes fields", () => {
-    const result = parseBotProfilePatch({ name: "Mira", color: "red" } as never, false);
+    const result = parseBotProfilePatch({ name: "Mira", pinned: true } as never, false);
     expect(result).toEqual({ ok: true, patch: { name: "Mira" } });
   });
 

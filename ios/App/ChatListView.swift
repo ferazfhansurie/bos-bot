@@ -1024,6 +1024,22 @@ struct ChatListView: View {
         .contextMenu {
             pinButton(.local(summary))
             OpenBesideButton(chat: homeChat(summary.chat))
+            markDoneButton(summary.chat)
+        }
+    }
+
+    /// Done for the thread this row opens: the server archives and closes it,
+    /// and the row then opens the bot's next thread. Not offered while that
+    /// thread is working.
+    @ViewBuilder private func markDoneButton(_ chat: Chat) -> some View {
+        if case let .bot(home) = homeChat(chat),
+           let task = session.state.bot(home.id)?.tasks?.first(where: { $0.threadId == home.threadId }) {
+            Button("Mark done", systemImage: "checkmark.circle") {
+                Task {
+                    await session.setTaskArchived(task, for: home, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
+                }
+            }
+            .disabled(!task.canMarkDone)
         }
     }
 

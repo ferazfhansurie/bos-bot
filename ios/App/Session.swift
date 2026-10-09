@@ -2593,11 +2593,24 @@ final class Session: ObservableObject {
     @discardableResult
     func setTaskArchived(_ task: BotTask, for bot: Bot, archivedAt: Double?) async -> Bool {
         guard let client else { return false }
+        // Optimistic: the row leaves (or joins) the list now. The server's
+        // broadcast and the refresh below settle the real state, and a failed
+        // write puts the previous record back.
+        let previous = state.bot(bot.id)
+        if var optimistic = previous,
+           let index = optimistic.tasks?.firstIndex(where: { $0.threadId == task.threadId }) {
+            optimistic.tasks?[index].archivedAt = archivedAt
+            state.apply(.bot(optimistic))
+        }
         do {
             try await client.archiveTask(botId: bot.id, threadId: task.threadId, archivedAt: archivedAt)
             await refresh()
             return true
-        } catch { actionError = error.localizedDescription; return false }
+        } catch {
+            if let previous { state.apply(.bot(previous)) }
+            actionError = error.localizedDescription
+            return false
+        }
     }
 
     @discardableResult

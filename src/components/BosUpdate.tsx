@@ -1,5 +1,5 @@
-// One-press update, like codex: a quiet "1.2.0 → 1.3.0" pill in the sidebar
-// header that only shows when the server has a newer build that passes the
+// One-press update, like codex: a quiet "update 1.3.0" pill under the sidebar
+// profile row that only shows when the server has a newer build that passes the
 // no-downgrade guard, a Settings > Updates section, one confirm line, live
 // progress (building, waiting for named bots, installing, restarting) while
 // the server runs it, and one toast after the restart saying how it went.
@@ -9,17 +9,20 @@
 // can drive every state; the connected wrappers at the bottom read the store.
 import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, ArrowUpCircle, Check, CircleX, Loader2, RefreshCw, RotateCcw, X } from "lucide-react";
+import { appVersion } from "@/lib/app-links";
 import { cn } from "@/lib/cn";
 import {
   UPDATE_STEPS,
   acknowledgeNotice,
   applyUpdate,
+  availableCandidate,
   checkForUpdate,
   drainingLabel,
   isUpdateRunning,
   noticeAcknowledged,
   restartApp,
   shortSha,
+  shortVersion,
   stepLabel,
   updateNotice,
   useBosUpdate,
@@ -51,32 +54,49 @@ function formatStaged(at: number | string | undefined): string {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-// ── sidebar pill ─────────────────────────────────────────────────────
+// ── sidebar footer ───────────────────────────────────────────────────
 
-/** Nothing when idle; "1.2.0 → 1.3.0" when a newer build is allowed; a
- * spinner while a run is going. Clicking opens Settings > Updates. */
+/** Nothing when idle; "update 1.4.0" (or just "update" when only the build
+ * differs) when a newer build is allowed; a spinner while a run is going.
+ * Clicking opens Settings > Updates. Lives under the profile row at the
+ * bottom of the sidebar, never in the top bar. */
 export function UpdatePill({ view, onOpen, compact = false }: { view: UpdateView; onOpen: () => void; compact?: boolean }) {
   const running = isUpdateRunning(view.state) || view.pending !== null;
-  if (!running && view.state !== "ready") return null;
-  const from = view.status?.current.version;
-  const to = view.status?.candidate?.version;
-  const label = running ? stepLabel(view.pending && !isUpdateRunning(view.state) ? (view.pending === "restart" ? "draining" : "building") : view.state) : to ? `${from} → ${to}` : "Update ready";
+  const candidate = availableCandidate(view.status);
+  if (!running && (view.state !== "ready" || !candidate)) return null;
+  const from = shortVersion(view.status?.current.version);
+  const to = shortVersion(candidate?.version);
+  const step = stepLabel(view.pending && !isUpdateRunning(view.state) ? (view.pending === "restart" ? "draining" : "building") : view.state);
+  const label = running ? "Updating…" : to && to !== from ? `update ${to}` : "update";
   return (
     <button
       type="button"
       onClick={onOpen}
-      aria-label={label}
-      title={running ? `Updating · ${label}` : to ? `Update BOS ${from} → ${to}` : "Update BOS"}
+      aria-label={running ? step : label}
+      title={running ? `Updating · ${step}` : to ? `Update BOS ${from} → ${to}` : "Update BOS"}
       className={cn(
-        "animate-panel-in flex items-center justify-center gap-1.5 rounded-full text-[12px] font-medium transition-colors",
-        compact ? "size-10 rounded-md" : "h-7 px-2.5",
+        "animate-panel-in flex shrink-0 items-center justify-center gap-1 rounded-full font-medium transition-colors",
+        compact ? "size-8 rounded-md" : "h-5 px-2 text-[11px]",
         running ? "bg-control text-ink-secondary" : "bg-accent/15 text-accent hover:bg-accent/25",
       )}
     >
-      {running ? <Loader2 size={14} className="animate-spin" /> : <ArrowUpCircle size={compact ? 18 : 14} />}
-      {/* the header is tight; the step itself lives in the tooltip and Settings */}
-      {!compact && <span className="whitespace-nowrap">{running ? "Updating…" : label}</span>}
+      {running ? <Loader2 size={compact ? 16 : 11} className="animate-spin" /> : <ArrowUpCircle size={compact ? 16 : 11} />}
+      {!compact && <span className="whitespace-nowrap">{label}</span>}
     </button>
+  );
+}
+
+/** The muted "bos 1.9.3" under the profile row, with the update pill on the
+ * right when there is something to install. `compact` (icons-only sidebar)
+ * drops the text and keeps only the pill. */
+export function VersionFooter({ view, version, onOpen, showUpdate = true, compact = false }: { view: UpdateView; version: string; onOpen: () => void; showUpdate?: boolean; compact?: boolean }) {
+  const pill = showUpdate ? <UpdatePill view={view} onOpen={onOpen} compact={compact} /> : null;
+  if (compact) return pill ? <div className="flex justify-center pb-1">{pill}</div> : null;
+  return (
+    <div className="flex min-h-5 items-center justify-between gap-2 px-3 pt-1">
+      <span className="truncate text-[11px] text-ink-secondary/70" title={`BOS ${version}`}>bos {version}</span>
+      {pill}
+    </div>
   );
 }
 
@@ -363,10 +383,18 @@ export function UpdateResultToast({ notice, onDismiss }: { notice: UpdateNotice;
 
 // ── connected wrappers ───────────────────────────────────────────────
 
-export function SidebarUpdatePill({ compact }: { compact?: boolean }) {
+export function SidebarVersionFooter({ compact, showUpdate }: { compact?: boolean; showUpdate?: boolean }) {
   const view = useBosUpdate();
   const { dispatch } = useStore();
-  return <UpdatePill view={view} compact={compact} onOpen={() => dispatch({ type: "toggleAppSettings", open: true, section: "updates" })} />;
+  return (
+    <VersionFooter
+      view={view}
+      version={shortVersion(appVersion())}
+      compact={compact}
+      showUpdate={showUpdate}
+      onOpen={() => dispatch({ type: "toggleAppSettings", open: true, section: "updates" })}
+    />
+  );
 }
 
 export function UpdatesSettings() {

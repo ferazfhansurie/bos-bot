@@ -12,6 +12,7 @@ import {
   type MausState,
 } from "@/lib/mascot";
 import { resolveMausColor } from "../../shared/glyph-faces";
+import { createColorPickCommitter } from "@/lib/color-pick-commit";
 import {
   BOT_AVATAR_CROPS,
   botAvatarUrlFromStoredPath,
@@ -283,8 +284,14 @@ export function BotProfileAvatarCard({
 }
 
 /** Any colour, past the 13 presets: the system colour picker behind a
- * swatch. It previews while the picker is open and saves once it closes, so
- * dragging across the wheel is one save, not hundreds. */
+ * swatch. It previews live while the picker is open and saves once the
+ * person pauses, the picker closes, or the swatch loses focus — so dragging
+ * across the wheel is a handful of saves, not hundreds.
+ *
+ * The input holds its own draft value. Controlled by the saved colour alone,
+ * React restores the old value right after every input event, so by the
+ * time "change" fired the input read back the old colour and nothing new
+ * was ever saved (and the restore also snapped the open macOS panel back). */
 function CustomColorSwatch({ color, disabled, onDraft, onPick }: {
   color: MausColor;
   disabled: boolean;
@@ -293,16 +300,36 @@ function CustomColorSwatch({ color, disabled, onDraft, onPick }: {
 }) {
   const input = useRef<HTMLInputElement>(null);
   const custom = !Object.hasOwn(MAUS_COLORS, color);
-  const latest = useRef({ onPick });
-  latest.current = { onPick };
+  const saved = resolveMausColor(color);
+  const [draft, setDraft] = useState<string | null>(null);
+  const latest = useRef({ onPick, saved });
+  latest.current = { onPick, saved };
+  const [committer] = useState(() =>
+    createColorPickCommitter({
+      saved: () => latest.current.saved,
+      save: (value) => latest.current.onPick(value as MausColor),
+    }),
+  );
+  // Once the saved colour moves (our save landing, or another client) and
+  // nothing is waiting to be saved, show it instead of a stale draft.
+  useEffect(() => {
+    if (!committer.pending()) setDraft(null);
+  }, [saved, committer]);
   useEffect(() => {
     const el = input.current;
     if (!el) return;
     // React's onChange is the input event; "change" is the picker closing
-    const commit = () => latest.current.onPick(el.value.toUpperCase() as MausColor);
+    const commit = () => {
+      committer.draft(el.value);
+      committer.flush();
+    };
     el.addEventListener("change", commit);
-    return () => el.removeEventListener("change", commit);
-  }, []);
+    return () => {
+      el.removeEventListener("change", commit);
+      // closing the panel mid-drag still saves the last colour shown
+      committer.flush();
+    };
+  }, [committer]);
   return (
     <label
       title="Any colour"
@@ -312,8 +339,8 @@ function CustomColorSwatch({ color, disabled, onDraft, onPick }: {
         custom && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
       )}
       style={{
-        background: custom
-          ? resolveMausColor(color)
+        background: custom || draft
+          ? draft ?? saved
           : "conic-gradient(#D94B52, #D8A729, #009957, #0EA5C6, #377FE6, #8057C8, #D84F8B, #D94B52)",
       }}
     >
@@ -322,8 +349,14 @@ function CustomColorSwatch({ color, disabled, onDraft, onPick }: {
         type="color"
         disabled={disabled}
         aria-label="Pick any mascot color"
-        value={resolveMausColor(color).toLowerCase()}
-        onChange={(event) => onDraft(event.currentTarget.value.toUpperCase() as MausColor)}
+        value={(draft ?? saved).toLowerCase()}
+        onChange={(event) => {
+          const value = event.currentTarget.value.toUpperCase();
+          setDraft(value);
+          onDraft(value as MausColor);
+          committer.draft(value);
+        }}
+        onBlur={() => committer.flush()}
         className="absolute inset-0 size-full cursor-pointer opacity-0"
       />
     </label>

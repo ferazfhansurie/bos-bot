@@ -2127,6 +2127,12 @@ export class Store {
       }
     }
     if (typeof patch.title === "string") task.title = patch.title.trim().slice(0, 80) || UNTITLED_THREAD;
+    // A new unread reply in a thread marked done brings it back: done means
+    // nothing left to read, so anything new to read reopens it.
+    if (patch.unread === true && !Object.hasOwn(patch, "archivedAt") && task.archivedAt !== undefined) {
+      delete task.archivedAt;
+      if (task.closedBy) { delete task.closedBy; task.lastActivityAt = Date.now(); }
+    }
     if (bot.threadId === threadId) this.mirrorActiveTask(bot, task);
     bot.unread = bot.tasks!.some((candidate) => candidate.unread);
     this.saveBots();
@@ -2274,9 +2280,12 @@ export class Store {
     const task = this.taskByThread(botId, threadId);
     if (!bot || !task) return null;
     if (closedBy) task.closedBy = structuredClone(closedBy);
-    else if (!task.closedBy) return task;
+    else if (!task.closedBy && task.archivedAt === undefined) return task;
     else {
+      // Reopening also unarchives: a thread marked done comes back to the
+      // list the moment anyone picks it up again.
       delete task.closedBy;
+      delete task.archivedAt;
       // A reopened thread starts a fresh idle window, or the next settle
       // sweep would fold it straight back away.
       task.lastActivityAt = Date.now();
