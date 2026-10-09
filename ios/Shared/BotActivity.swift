@@ -51,3 +51,63 @@ struct AnswerApprovalIntent: LiveActivityIntent {
         return .result()
     }
 }
+
+/// Stop the bot's turn from the expanded island or the lock screen. Runs in
+/// the app's process like `AnswerApprovalIntent`.
+struct StopBotIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Stop"
+    static var isDiscoverable = false
+
+    @Parameter(title: "Bot") var botId: String
+    @Parameter(title: "Thread") var threadId: String
+
+    init() {}
+    init(botId: String, threadId: String) {
+        self.botId = botId
+        self.threadId = threadId
+    }
+
+    /// Set by the app at launch. Nil in the widget extension.
+    nonisolated(unsafe) static var handler: ((_ botId: String, _ threadId: String) async -> Void)?
+
+    func perform() async throws -> some IntentResult {
+        await Self.handler?(botId, threadId)
+        return .result()
+    }
+}
+
+/// Where tapping a bot's activity lands: that exact thread.
+enum BotActivityLink {
+    static func thread(botId: String, threadId: String?) -> URL? {
+        var parts = URLComponents()
+        parts.scheme = "bosbot"
+        parts.host = "thread"
+        parts.queryItems = [URLQueryItem(name: "bot", value: botId), URLQueryItem(name: "thread", value: threadId ?? "")]
+        return threadId?.isEmpty == false ? parts.url : nil
+    }
+
+    static func call(_ bot: String) -> URL? {
+        var parts = URLComponents()
+        parts.scheme = "bosbot"
+        parts.host = "call"
+        parts.queryItems = [URLQueryItem(name: "bot", value: bot)]
+        return parts.url
+    }
+}
+
+/// The Control Center / lock screen control's action. It only opens the app
+/// on a call link, so it works from whichever process iOS performs it in.
+@available(iOS 18.0, *)
+struct OpenBotCallIntent: AppIntent {
+    static var title: LocalizedStringResource = "Call a bot"
+    static var isDiscoverable = false
+
+    @Parameter(title: "Bot") var bot: String
+
+    init() {}
+    init(bot: String) { self.bot = bot }
+
+    func perform() async throws -> some IntentResult & OpensIntent {
+        .result(opensIntent: OpenURLIntent(BotActivityLink.call(bot) ?? URL(string: "bosbot://call")!))
+    }
+}

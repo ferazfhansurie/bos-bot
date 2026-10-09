@@ -14,6 +14,16 @@ public struct BotActivityContent: Codable, Hashable, Sendable {
     public var options: [String]
     public var isPermission: Bool
     public var since: Date
+    /// The thread the bot is on, so the lock screen says what it is about.
+    /// Optional, like every field added after the first release, so an
+    /// activity started by an older build still decodes.
+    public var threadTitle: String? = nil
+    /// SF Symbol for the current step ("terminal", "doc.text", …).
+    public var symbol: String? = nil
+    /// Other threads of the same bot doing something right now.
+    public var otherThreads: Int? = nil
+    /// When the turn finished; the done state shows a fixed duration.
+    public var endedAt: Date? = nil
 
     public init(
         face: String,
@@ -22,7 +32,10 @@ public struct BotActivityContent: Codable, Hashable, Sendable {
         line: String,
         threadId: String,
         card: OptionCard?,
-        since: Date
+        since: Date,
+        threadTitle: String? = nil,
+        symbol: String? = nil,
+        otherThreads: Int? = nil
     ) {
         self.face = face
         self.kind = kind
@@ -35,7 +48,15 @@ public struct BotActivityContent: Codable, Hashable, Sendable {
         self.options = card?.isPending == true && card?.skillRequest == nil ? (card?.options ?? []) : []
         self.isPermission = card?.isPermission ?? false
         self.since = since
+        self.threadTitle = threadTitle
+        self.symbol = symbol
+        self.otherThreads = otherThreads
     }
+
+    public var isWorking: Bool { kind == "working" }
+    public var needsYou: Bool { kind == "needsYou" }
+    /// The turn settled: shown briefly with the reply's first line, then ended.
+    public var isDone: Bool { kind == "done" }
 
     /// The widget and intent handler use the same exact request target.
     /// Legacy content can remain visible, but cannot offer approval buttons.

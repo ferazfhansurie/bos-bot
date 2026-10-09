@@ -2456,6 +2456,12 @@ final class Session: ObservableObject {
         await perform { try await $0.interrupt(botId: bot.id, threadId: bot.threadId) }
     }
 
+    /// Stop from the Live Activity, which knows the thread but not the bot's
+    /// current selection.
+    func interrupt(botId: String, threadId: String) async {
+        await perform { try await $0.interrupt(botId: botId, threadId: threadId) }
+    }
+
     func refreshInterruptedTurns() async {
         await perform(quietly: true) { client in
             let turns = try await client.interruptedTurns()
@@ -3164,6 +3170,44 @@ final class Session: ObservableObject {
             VoiceCallCenter.shared.start(bot: bot, threadId: threadId ?? bot.threadId, session: self,
                                          opener: RealtimeVoice.ringOpener(reason: ring.reason))
         }
+    }
+
+    /// The action button, a Shortcut, Siri or the Control Center control:
+    /// straight into a live call with the bot, no extra taps. A cold launch
+    /// waits up to 20 s for the paired computer to come back first.
+    func callFromShortcut(botId: String?, name: String?) async {
+        var bot: Bot?
+        for _ in 0..<40 {
+            if client != nil, let found = shortcutBot(botId: botId, name: name) { bot = found; break }
+            if client == nil, !restorePending { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        guard let bot else {
+            actionError = "Couldn't find \(name ?? "that bot") on your computer to call."
+            return
+        }
+        // bots on another mac have no realtime call; their chat still opens
+        if bot.remote == nil {
+            VoiceCallCenter.shared.start(bot: bot, threadId: bot.threadId, session: self)
+        }
+        if let target = NotificationTarget(botId: bot.id, threadId: bot.threadId,
+                                           connectionId: client?.connection.id ?? registry.activeConnectionID) {
+            await openNotification(target)
+        }
+    }
+
+    private func shortcutBot(botId: String?, name: String?) -> Bot? {
+        let bots = state.bots.filter { $0.hidden != true }
+        if let botId, let bot = bots.first(where: { $0.id == botId }) { return bot }
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !name.isEmpty else { return nil }
+        return bots.first { $0.name.lowercased() == name } ?? bots.first { $0.name.lowercased().hasPrefix(name) }
+    }
+
+    /// A tapped Live Activity: the exact thread it was showing.
+    func openThreadLink(botId: String, threadId: String) async {
+        guard let target = NotificationTarget(botId: botId, threadId: threadId,
+                                              connectionId: client?.connection.id ?? registry.activeConnectionID) else { return }
+        await openNotification(target)
     }
 
     /// A tap can launch the app cold: give the connection up to 15 s to

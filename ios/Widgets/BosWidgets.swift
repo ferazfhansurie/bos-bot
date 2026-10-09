@@ -1,8 +1,15 @@
 // The widget extension: the bot's Live Activity, in the Dynamic Island and
-// on the lock screen. The face is the mascot engine's resting face for the
-// state — the system renders a snapshot, so it cannot move here, but it
-// changes with every update.
+// on the lock screen, plus the Control Center controls that call a bot.
+//
+// The face is the mascot engine's resting face for the state — the system
+// renders a snapshot, so it cannot move here, but it changes with every
+// update. What does move is what iOS animates on its own: the timer text and
+// the timer-driven progress ring, which is the working indicator.
+//
+// Colour is meaningful, not decorative: the bot's own colour marks the bot,
+// a needs-you state wears it, everything else is white on dark glass.
 import ActivityKit
+import AppIntents
 import CompanionCore
 import SwiftUI
 import WidgetKit
@@ -11,6 +18,34 @@ import WidgetKit
 struct BosWidgets: WidgetBundle {
     var body: some Widget {
         BotActivityWidget()
+        if #available(iOS 18.0, *) {
+            CallBotControl(bot: "bos")
+            CallBotControl(bot: "oracle")
+        }
+    }
+}
+
+private let bosBotId = "59d5f871-db6c-4850-b966-a04ecc033279"
+
+private extension ActivityViewContext where Attributes == BotActivityAttributes {
+    /// bos is drawn white; every other bot wears its colour.
+    var accent: Color {
+        attributes.botId == bosBotId ? .white : MausPalette.color(attributes.color)
+    }
+
+    var link: URL? { BotActivityLink.thread(botId: attributes.botId, threadId: state.threadId) }
+
+    var status: String {
+        if state.isDone { return "done" }
+        if state.needsYou { return "needs you" }
+        return "working"
+    }
+
+    var elapsed: ClosedRange<Date> { state.since...state.since.addingTimeInterval(86_400) }
+
+    var finishedIn: String {
+        let end = state.endedAt ?? Date()
+        return elapsedLabel(Int(end.timeIntervalSince(state.since)))
     }
 }
 
@@ -18,60 +53,76 @@ struct BotActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: BotActivityAttributes.self) { context in
             LockScreenView(context: context)
-                .activityBackgroundTint(.black)
+                .activityBackgroundTint(Color.black.opacity(0.42))
                 .activitySystemActionForegroundColor(.white)
+                .widgetURL(context.link)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    OrbitingFace(context: context, size: 68)
-                        .padding(.leading, 2)
+                    RingedFace(context: context, size: 46)
+                        .padding(.leading, 4)
+                        .padding(.top, 4)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Clock(context: context)
+                        .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                        .padding(.trailing, 4)
+                        .padding(.top, 6)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(context.state.headline)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                        Text(context.state.line)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .lineLimit(2)
-                        // the one clock iOS keeps ticking for us
-                        Text(timerInterval: context.state.since...context.state.since.addingTimeInterval(86_400), countsDown: false)
-                            .font(.system(size: 12, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.5))
+                    VStack(alignment: .leading, spacing: 1) {
+                        StatusLine(context: context)
+                        if let title = context.state.threadTitle {
+                            Text(title)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                        }
                     }
-                    .padding(.top, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    if let threadId = context.state.approvalThreadId, let requestId = context.state.requestId {
-                        AnswerButtons(context: context, threadId: threadId, requestId: requestId)
-                            .padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 8) {
+                        StepLine(context: context, lines: 2)
+                        Actions(context: context)
                     }
+                    .padding(.horizontal, 4)
+                    .padding(.top, 2)
                 }
             } compactLeading: {
-                ActivityBotFace(context: context, size: 24)
-            } compactTrailing: {
-                compactTrailing(context)
-            } minimal: {
                 ActivityBotFace(context: context, size: 22)
+                    .padding(.leading, 2)
+            } compactTrailing: {
+                CompactTrailing(context: context)
+            } minimal: {
+                RingedFace(context: context, size: 18)
             }
-            .keylineTint(MausPalette.color(context.attributes.color))
+            .widgetURL(context.link)
+            .keylineTint(context.accent)
         }
     }
+}
 
-    @ViewBuilder
-    private func compactTrailing(_ context: ActivityViewContext<BotActivityAttributes>) -> some View {
-        switch context.state.kind {
-        case "needsYou":
+private struct CompactTrailing: View {
+    let context: ActivityViewContext<BotActivityAttributes>
+
+    var body: some View {
+        if context.state.needsYou {
             Image(systemName: "hand.raised.fill")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(MausPalette.color(context.attributes.color))
-        case "working":
-            Image(systemName: "circle.dotted")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
-        default:
-            Circle().fill(MausPalette.color(context.attributes.color)).frame(width: 8, height: 8)
+                .foregroundStyle(context.accent)
+        } else if context.state.isDone {
+            Image(systemName: "checkmark")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(context.accent)
+        } else {
+            // the ticking clock is the island's working indicator
+            Text(timerInterval: context.elapsed, countsDown: false)
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .foregroundStyle(context.accent)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 44, alignment: .trailing)
         }
     }
 }
@@ -80,31 +131,122 @@ private struct LockScreenView: View {
     let context: ActivityViewContext<BotActivityAttributes>
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            OrbitingFace(context: context, size: 60)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    if context.state.kind == "needsYou" {
-                        Image(systemName: "hand.raised.fill")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(MausPalette.color(context.attributes.color))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                RingedFace(context: context, size: 50)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        StatusLine(context: context)
+                        Spacer(minLength: 8)
+                        Clock(context: context)
+                            .font(.system(size: 13, weight: .medium).monospacedDigit())
                     }
-                    Text(context.state.headline)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-                Text(context.state.line)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(2)
-                if let threadId = context.state.approvalThreadId, let requestId = context.state.requestId {
-                    AnswerButtons(context: context, threadId: threadId, requestId: requestId)
-                        .padding(.top, 4)
+                    if let title = context.state.threadTitle {
+                        Text(title)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+                    StepLine(context: context, lines: context.state.isDone ? 2 : 1)
                 }
             }
-            Spacer(minLength: 0)
+            Actions(context: context)
         }
-        .padding(14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+}
+
+/// "bos · working" — the bot's name, then its state in the state's colour.
+private struct StatusLine: View {
+    let context: ActivityViewContext<BotActivityAttributes>
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(context.attributes.name)
+                .foregroundStyle(.white.opacity(0.9))
+            Text("·").foregroundStyle(.white.opacity(0.35))
+            Text(context.status)
+                .foregroundStyle(context.state.isWorking ? .white.opacity(0.55) : context.accent)
+            if let more = context.state.otherThreads, more > 0 {
+                Text("+\(more) \(more == 1 ? "thread" : "threads")")
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .lineLimit(1)
+    }
+}
+
+/// What it is doing now, or the reply's first line once it is done.
+private struct StepLine: View {
+    let context: ActivityViewContext<BotActivityAttributes>
+    let lines: Int
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: context.state.symbol ?? (context.state.needsYou ? "hand.raised.fill" : "ellipsis"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(context.state.isWorking ? .white.opacity(0.55) : context.accent)
+                .frame(width: 14)
+            Text(context.state.line)
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(context.state.isDone ? 0.85 : 0.7))
+                .lineLimit(lines)
+        }
+    }
+}
+
+/// Elapsed time that ticks without pushes, or the fixed time a done turn took.
+private struct Clock: View {
+    let context: ActivityViewContext<BotActivityAttributes>
+
+    var body: some View {
+        if context.state.isDone {
+            Text(context.finishedIn)
+                .foregroundStyle(.white.opacity(0.5))
+        } else {
+            Text(timerInterval: context.elapsed, countsDown: false)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 64, alignment: .trailing)
+                .foregroundStyle(context.state.needsYou ? context.accent : .white.opacity(0.6))
+        }
+    }
+}
+
+/// Answer buttons when the bot asked, a stop button while it works.
+private struct Actions: View {
+    let context: ActivityViewContext<BotActivityAttributes>
+
+    var body: some View {
+        if let threadId = context.state.approvalThreadId, let requestId = context.state.requestId {
+            AnswerButtons(context: context, threadId: threadId, requestId: requestId)
+        } else if context.state.isWorking, let threadId = context.state.threadId, !threadId.isEmpty {
+            HStack(spacing: 8) {
+                Link(destination: context.link ?? URL(string: "bosbot://")!) {
+                    GlassPill(title: "Open", systemImage: "arrow.up.right")
+                }
+                Button(intent: StopBotIntent(botId: context.attributes.botId, threadId: threadId)) {
+                    GlassPill(title: "Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+private struct GlassPill: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.9))
+            .frame(maxWidth: .infinity)
+            .frame(height: 32)
+            .background(Capsule().fill(.white.opacity(0.14)))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
     }
 }
 
@@ -117,6 +259,7 @@ private struct AnswerButtons: View {
     var body: some View {
         HStack(spacing: 8) {
             ForEach(context.state.options, id: \.self) { option in
+                let quiet = option.caseInsensitiveCompare("Deny") == .orderedSame
                 Button(intent: AnswerApprovalIntent(
                     threadId: threadId,
                     requestId: requestId,
@@ -125,16 +268,17 @@ private struct AnswerButtons: View {
                 )) {
                     Text(option)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(quiet || context.attributes.botId == bosBotId ? .white : .black)
+                        .lineLimit(1)
                         .frame(maxWidth: .infinity)
                         .frame(height: 34)
                         .background(
                             Capsule().fill(
-                                option.caseInsensitiveCompare("Deny") == .orderedSame
-                                    ? Color.white.opacity(0.16)
-                                    : MausPalette.color(context.attributes.color)
+                                quiet ? Color.white.opacity(0.14)
+                                    : (context.attributes.botId == bosBotId ? Color.white.opacity(0.28) : context.accent)
                             )
                         )
+                        .overlay(Capsule().strokeBorder(.white.opacity(quiet ? 0.12 : 0), lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
             }
@@ -142,23 +286,31 @@ private struct AnswerButtons: View {
     }
 }
 
-/// The face with comets around it and a rainbow ring filling up behind it.
-/// The system renders a snapshot, so the comets are a frame — a different
-/// one each update — and the ring is a timer-driven `ProgressView`, which is
-/// the one kind of motion iOS keeps animating in a Live Activity on its own.
-private struct OrbitingFace: View {
+/// The face inside a ring. While the bot works the ring is a timer-driven
+/// `ProgressView`, the one kind of motion iOS keeps animating in a Live
+/// Activity on its own; needing you or done, it is a solid ring.
+private struct RingedFace: View {
     let context: ActivityViewContext<BotActivityAttributes>
     let size: CGFloat
 
     var body: some View {
+        let ring = max(2, size * 0.06)
         ZStack {
-            ProgressView(timerInterval: context.state.since...context.state.since.addingTimeInterval(60), countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+            Circle().stroke(.white.opacity(0.12), lineWidth: ring)
+            if context.state.isWorking {
+                ProgressView(timerInterval: context.state.since...context.state.since.addingTimeInterval(60), countsDown: false) {
+                    EmptyView()
+                } currentValueLabel: {
+                    EmptyView()
+                }
                 .progressViewStyle(.circular)
-                .tint(context.attributes.botId == "59d5f871-db6c-4850-b966-a04ecc033279"
-                    ? .white : MausPalette.color(context.attributes.color))
-                .frame(width: size + 4, height: size + 4)
-            ActivityBotFace(context: context, size: size, comets: true)
+                .tint(context.accent)
+            } else {
+                Circle().stroke(context.accent.opacity(context.state.isDone ? 0.6 : 1), lineWidth: ring)
+            }
+            ActivityBotFace(context: context, size: size * 0.74, comets: context.state.isWorking && size > 30)
         }
+        .frame(width: size + ring * 2, height: size + ring * 2)
     }
 }
 
@@ -169,7 +321,7 @@ private struct ActivityBotFace: View {
 
     var body: some View {
         Group {
-            if context.attributes.botId == "59d5f871-db6c-4850-b966-a04ecc033279" {
+            if context.attributes.botId == bosBotId {
                 JarvisCloudFace()
             } else {
                 MausFaceStill(
@@ -217,3 +369,20 @@ private struct JarvisCloudFace: View {
         }
     }
 }
+
+/// "Call bos" in Control Center, on the lock screen, or on the action button.
+@available(iOS 18.0, *)
+struct CallBotControl: ControlWidget {
+    let bot: String
+
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "com.aihlete.aios.call-\(bot)") {
+            ControlWidgetButton(action: OpenBotCallIntent(bot: bot)) {
+                Label("Call \(bot)", systemImage: "phone.fill")
+            }
+        }
+        .displayName("Call \(bot)")
+        .description("Start a live voice call with \(bot).")
+    }
+}
+

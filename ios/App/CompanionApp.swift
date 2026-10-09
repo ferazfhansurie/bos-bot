@@ -110,8 +110,13 @@ struct CompanionApp: App {
                     BosSharedInbox.removeDirectories(olderThan: 60 * 60)
                     session.connect()
                     liveActivities.attach(to: session)
+                    CallIntentRouter.shared.attach(session)
                 }
-                .onOpenURL { session.receivePairingURL($0) }
+                // call/thread links from Shortcuts, controls and the Live
+                // Activity; anything else is a pairing link
+                .onOpenURL { url in
+                    if !CallIntentRouter.shared.open(url) { session.receivePairingURL(url) }
+                }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:

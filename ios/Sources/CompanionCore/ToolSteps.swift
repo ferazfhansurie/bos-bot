@@ -188,3 +188,97 @@ public func elapsedLabel(_ seconds: Int) -> String {
     if seconds < 3_600 { return "\(seconds / 60)m \(String(format: "%02d", seconds % 60))s" }
     return "\(seconds / 3_600)h \(String(format: "%02d", seconds % 3_600 / 60))m"
 }
+
+/// What a bot is doing right now, in the present tense a lock screen reads
+/// at a glance: "running a command", "reading files". Never a vendor noun.
+public struct ToolProgress: Hashable, Sendable {
+    public var phrase: String
+    public var symbol: String
+}
+
+public func toolProgress(for rawName: String) -> ToolProgress {
+    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let lower = name.lowercased()
+
+    if lower.hasPrefix("mcp__") {
+        let parts = lower.components(separatedBy: "__")
+        let server = parts.count > 1 ? parts[1] : ""
+        let tool = parts.count > 2 ? parts[2...].joined(separator: "__") : ""
+        if server == "computer" || server.contains("computer-use") || tool.hasPrefix("computer") {
+            return ToolProgress(phrase: "on the computer", symbol: "macbook")
+        }
+        if server.contains("browser") || tool.hasPrefix("agent_browser") || tool.hasPrefix("browser_") {
+            return ToolProgress(phrase: "browsing the web", symbol: "safari")
+        }
+        if server == "agents" {
+            if tool.contains("memory") { return ToolProgress(phrase: "updating its memory", symbol: "brain") }
+            if tool.contains("coordinate") || tool.contains("delegate") || tool.contains("thread") || tool.contains("room") {
+                return ToolProgress(phrase: "working with the team", symbol: "person.2")
+            }
+            if tool.contains("search") || tool.contains("session") { return ToolProgress(phrase: "checking its notes", symbol: "text.magnifyingglass") }
+            return ToolProgress(phrase: "organising things", symbol: "square.stack.3d.up")
+        }
+        if server.contains("whatsapp") || tool.contains("whatsapp") { return ToolProgress(phrase: "reading whatsapp", symbol: "message") }
+        if server.contains("postgres") || server.contains("neon") || server.contains("sql") {
+            return ToolProgress(phrase: "querying the database", symbol: "cylinder.split.1x2")
+        }
+        if server.contains("figma") { return ToolProgress(phrase: "in figma", symbol: "paintpalette") }
+        if server.contains("gmail") || server.contains("mail") { return ToolProgress(phrase: "checking email", symbol: "envelope") }
+        if server.contains("calendar") { return ToolProgress(phrase: "checking the calendar", symbol: "calendar") }
+        let label = server.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
+        return ToolProgress(phrase: label.isEmpty ? "using a tool" : "using \(label)", symbol: "puzzlepiece.extension")
+    }
+
+    switch lower {
+    case "read", "view", "notebookread", "read_file", "cat":
+        return ToolProgress(phrase: "reading files", symbol: "doc.text")
+    case "write", "create", "write_file":
+        return ToolProgress(phrase: "writing code", symbol: "square.and.pencil")
+    case "edit", "multiedit", "notebookedit", "update", "str_replace", "apply_patch", "patch":
+        return ToolProgress(phrase: "editing code", symbol: "pencil")
+    case "bash", "shell", "terminal", "run", "exec", "exec_command", "local_shell", "bashoutput", "write_stdin", "monitor":
+        return ToolProgress(phrase: "running a command", symbol: "terminal")
+    case "grep", "glob", "search", "codebase_search", "ls", "list_dir", "find", "toolsearch":
+        return ToolProgress(phrase: "searching files", symbol: "magnifyingglass")
+    case "websearch", "web_search", "web_search_call":
+        return ToolProgress(phrase: "searching the web", symbol: "globe")
+    case "webfetch", "fetch", "browser_navigate":
+        return ToolProgress(phrase: "reading a web page", symbol: "globe")
+    case "task", "agent", "dispatch_agent", "spawn_agent", "workflow":
+        return ToolProgress(phrase: "running helpers", symbol: "sparkles")
+    case "todowrite", "exitplanmode", "update_plan", "enterplanmode":
+        return ToolProgress(phrase: "planning", symbol: "list.bullet")
+    case "skill":
+        return ToolProgress(phrase: "following a skill", symbol: "gearshape")
+    case "askuserquestion":
+        return ToolProgress(phrase: "waiting for you", symbol: "hand.raised")
+    case "killshell", "killbash", "taskstop":
+        return ToolProgress(phrase: "stopping a command", symbol: "stop.circle")
+    case "image_gen", "imagegen", "generate_image":
+        return ToolProgress(phrase: "making an image", symbol: "photo")
+    case "", "tool":
+        return ToolProgress(phrase: "working", symbol: "circle.dotted")
+    default:
+        if lower.contains("computer") || lower.hasPrefix("screenshot") || lower == "click" || lower == "type_text" {
+            return ToolProgress(phrase: "on the computer", symbol: "macbook")
+        }
+        if lower.contains("browser") { return ToolProgress(phrase: "browsing the web", symbol: "safari") }
+        if lower.contains("search") { return ToolProgress(phrase: "searching", symbol: "magnifyingglass") }
+        return ToolProgress(phrase: "working", symbol: "circle.dotted")
+    }
+}
+
+/// The first readable line of a reply, for the "done" lock screen: markdown
+/// markers stripped, bounded so it never wraps more than twice.
+public func replyFirstLine(_ text: String?, limit: Int = 120) -> String {
+    guard let text else { return "" }
+    for raw in text.split(separator: "\n") {
+        var line = raw.trimmingCharacters(in: .whitespaces)
+        while let first = line.first, "#>-*`".contains(first) { line.removeFirst() }
+        line = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        guard !line.isEmpty else { continue }
+        return line.count > limit ? String(line.prefix(limit - 1)) + "…" : line
+    }
+    return ""
+}
