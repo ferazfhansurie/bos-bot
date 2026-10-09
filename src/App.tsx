@@ -34,7 +34,6 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { KeyboardShortcutsModal } from "@/components/KeyboardShortcutsModal";
 import { LocalVmWorkspace } from "@/components/LocalVmWorkspace";
 import { TeamMapPage } from "@/components/TeamMapPage";
-import { NeedsMePage } from "@/components/NeedsMe";
 import { JobInboxPage } from "@/components/JobInbox";
 import { setLocale } from "@/lib/i18n";
 import { shouldOpenKeyboardShortcuts } from "@/lib/keyboard-shortcuts";
@@ -268,8 +267,6 @@ function Shell() {
       />}
       {state.activeView === "team-map" ? (
         <TeamMapPage />
-      ) : state.activeView === "needs-me" ? (
-        <NeedsMePage />
       ) : state.activeView === "jobs" ? (
         <JobInboxPage />
       ) : state.activeView === "routines" ? (

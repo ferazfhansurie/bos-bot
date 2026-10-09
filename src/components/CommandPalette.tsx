@@ -4,7 +4,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   CalendarDays,
-  Inbox,
   ListChecks,
   Keyboard,
   Loader2,
@@ -210,8 +209,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
   const actions: PaletteAction[] = [
     { id: "new-bot", label: t("sidebar.newBot"), keywords: "create add hire", icon: Plus, hint: shortcutLabel("new-bot"), run: () => dispatch({ type: "toggleNewBot", open: true }) },
     { id: "settings", label: t("settings.title"), keywords: "preferences options config", icon: Settings, run: () => dispatch({ type: "toggleAppSettings", open: true }) },
-    { id: "needs-me", label: t("needsMe.title"), keywords: "inbox waiting approvals", icon: Inbox, run: () => dispatch({ type: "showNeedsMe" }) },
-    { id: "jobs", label: t("jobs.title"), keywords: "job inbox work plans helpers progress", icon: ListChecks, run: () => dispatch({ type: "showJobs" }) },
+    { id: "jobs", label: t("jobs.title"), keywords: "job inbox needs me waiting approvals your move work plans helpers progress", icon: ListChecks, run: () => dispatch({ type: "showJobs" }) },
     { id: "automations", label: t("sidebar.nav.automations"), keywords: "routines schedule calendar", icon: CalendarDays, run: () => dispatch({ type: "showRoutines" }) },
     { id: "team-map", label: t("sidebar.nav.teamMap"), keywords: "org chart graph", icon: Network, run: () => dispatch({ type: "showTeamMap" }) },
     { id: "apps", label: t("sidebar.nav.connectedApps"), keywords: "plugins integrations mcp", icon: Puzzle, run: () => dispatch({ type: "togglePlugins", open: true }) },

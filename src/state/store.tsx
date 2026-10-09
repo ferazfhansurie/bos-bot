@@ -806,7 +806,7 @@ export interface AppState {
   config: ConfigStatus | null;
   /** selected chat — a bot id OR a group id */
   selectedId: string;
-  activeView: "chat" | "team-map" | "routines" | "shared" | "needs-me" | "jobs";
+  activeView: "chat" | "team-map" | "routines" | "shared" | "jobs";
   selectedSharedRoomId: string | null;
   /** threads waiting on the person: the needs-me badge */
   inboxCount: number;
@@ -1395,9 +1395,8 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "showChat":
       return state.activeView === "chat" ? state : { ...state, activeView: "chat" };
+    // needs me folded into jobs: its asks are the page's "your move"
     case "showNeedsMe":
-      return { ...state, activeView: "needs-me",
-        settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
     case "showJobs":
       return { ...state, activeView: "jobs",
         settingsOpen: false, computerOpen: false, inspectorOpen: false, appSettingsOpen: false, pluginsOpen: false };
