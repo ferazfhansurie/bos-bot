@@ -1,5 +1,6 @@
 import { compatEnv } from "../electron/branding-env.cjs";
 import { roomPeople, roomPushPeople, personCanReadRoom, checkedRoomPeople, roomForPerson } from "./room-people.ts";
+import { AnonymousUsagePing, usageRoomCounts } from "./anonymous-usage-ping.ts";
 import { publicRoomMemberTurns } from "./room-member-turns.ts";
 import { WorkContinuity, assessTeamWork, workPlanInputSchema } from "./work-continuity.ts";
 import { WorkRuntimeLedger } from "./work-continuity-runtime.ts";
@@ -13537,6 +13538,7 @@ function configStatus() {
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "", avatarUrl: cfg.profile?.avatarUrl ?? "" },
     // not a secret — the settings picker shows it; "" = follow the system
     language: cfg.language ?? "",
+    anonymousUsage: { enabled: cfg.anonymousUsage?.enabled !== false, disabledByEnv: compatEnv.BOS_NO_PING === "1" },
     rooms: { turnTimeoutMinutes: roomTurnTimeoutMinutes(cfg) },
     threads: { maxConcurrentPerBot: maxConcurrentBotThreads(cfg), parallelProjectFolder: parallelProjectFolderThreads(cfg), autoSettleDays: cfg.threads?.autoSettleDays ?? 3 },
     digest: { hour: cfg.digest?.hour ?? 9 },
@@ -14141,6 +14143,27 @@ const updateCoordinator = new UpdateCoordinator({
   },
   log: line => console.log(line),
   ...(UPDATE_SANDBOX ? { resultWaitMs: 30_000 } : {}),
+});
+
+const anonymousUsagePing = new AnonymousUsagePing({
+  dataDir: DATA_DIR,
+  enabled: () => cfg.anonymousUsage?.enabled !== false,
+  version: serverVersion,
+  counts: () => ({
+    // Detect binaries without invoking them or reading provider account data.
+    engines: ["claude", "codex"].filter(name => findCliCandidates(name).length > 0),
+    bots: store.bots.length,
+    ...usageRoomCounts([
+      ...store.groups.filter(group => !group.dm).map(group => ({
+        humans: roomPeople(group, multiplayerActors.ownerId).length,
+        bots: new Set(group.memberIds).size,
+      })),
+      ...sharedRooms.allRooms().filter(room => room.kind !== "direct").map(room => ({
+        humans: room.memberIds.filter(id => parseContactId(id)?.kind === "person").length,
+        bots: room.memberIds.filter(id => parseContactId(id)?.kind === "bot").length,
+      })),
+    ]),
+  }),
 });
 
 const workspaceBackupRoutes = createWorkspaceBackupRoutes({
@@ -22711,6 +22734,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         throw error;
       }
       let browserReferenceCleanupError: unknown = null;
+      if (patch.anonymousUsage) anonymousUsagePing.settingsChanged();
       if (patch.signIn !== undefined) sessions.revalidateEmailSessions();
       if (!sharedComputersEnabled(cfg)) {
         sharedComputers.close();
@@ -23703,6 +23727,7 @@ restoreSteeredMessages();
 restoreChannelMessages();
 
 server.listen(PORT, "127.0.0.1", () => {
+  anonymousUsagePing.start();
   companyRuntimeReady();
   console.log(`bosbot server on http://127.0.0.1:${PORT}`);
   followupsReady = true;
@@ -23766,6 +23791,7 @@ if (TUNNEL_SOCKET) {
 
 const gracefulShutdown = createGracefulShutdown({
   cleanup: [
+    () => anonymousUsagePing.stop(),
     () => terminals.close(),
     () => {
       followupsReady = false;

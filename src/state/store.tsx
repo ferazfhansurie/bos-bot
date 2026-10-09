@@ -572,6 +572,7 @@ export function messageVersions(bot: Bot, message: Message): Message[] {
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
+  anonymousUsage?: { enabled: boolean; disabledByEnv?: boolean };
   xai?: { configured: boolean; managementConfigured?: boolean };
   anthropic?: { configured: boolean };
   openaiCompat?: { configured: boolean; url?: string };
@@ -650,11 +651,12 @@ export interface BrowserProfile {
 
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "composio" | "box" | "vps" | "rooms" | "threads" | "approvals" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "language" | "features" | "onboarding" | "browserEngine" | "browserProfiles" | "edition" | "budgets" | "billing"
+  "xai" | "composio" | "box" | "vps" | "rooms" | "threads" | "approvals" | "localVm" | "opencodeGo" | "tts" | "imageGen" | "profile" | "language" | "features" | "onboarding" | "browserEngine" | "browserProfiles" | "edition" | "budgets" | "billing" | "anonymousUsage"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
   return {
+    anonymousUsage: frame.anonymousUsage,
     xai: frame.xai,
     composio: frame.composio,
     box: frame.box,

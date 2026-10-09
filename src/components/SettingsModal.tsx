@@ -31,6 +31,7 @@ import { useToolCallsToggle } from "@/hooks/use-tool-calls-toggle";
 import { WorkspacesSection, workspacesAvailable } from "./WorkspacesSection";
 import { SkinPicker } from "./SkinPicker";
 import { RoomTurnTimeoutSettings } from "./RoomTurnTimeoutSettings";
+import { AnonymousUsageSettings } from "./AnonymousUsageSettings";
 import { ThreadConcurrencySettings } from "./ThreadConcurrencySettings";
 import { DefaultApprovalsSettings } from "./DefaultApprovalsSettings";
 import { WorkspaceBackupSettings } from "./WorkspaceBackupSettings";
@@ -643,6 +644,7 @@ export function SettingsModal() {
                 <div>
                   <LanguageRow />
                   <AnalyticsRow />
+                  <AnonymousUsageSettings />
                 </div>
                 <Card title={t("settings.roomTurns.title")} subtitle={t("settings.roomTurns.subtitle")}>
                   <RoomTurnTimeoutSettings />

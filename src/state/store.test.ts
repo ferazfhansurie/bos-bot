@@ -892,6 +892,16 @@ describe("notification routing", () => {
 });
 
 describe("config status frames", () => {
+  it("retains anonymous usage opt-out and the server env override across SSE hydration", () => {
+    const frame: ConfigStatusFrame = {
+      composio: { configured: false }, box: { configured: false },
+      vps: { configured: false, sshAlias: "" }, rooms: { turnTimeoutMinutes: 30 },
+      localVm: { mode: "shared", maxInstances: 2 },
+      anonymousUsage: { enabled: false, disabledByEnv: true },
+    };
+    const state = reducer(initialState, { type: "configStatus", config: configStatusFromFrame(frame) });
+    expect(state.config?.anonymousUsage).toEqual({ enabled: false, disabledByEnv: true });
+  });
   it("keeps thread capacity and room timeout with the existing config fields", () => {
     expect(
       configStatusFromFrame({

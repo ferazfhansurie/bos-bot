@@ -187,6 +187,10 @@ desktop routing, cancellation, and computer authority cleanup.
 
 ## Evidence
 
+The [anonymous usage ping fixture](anonymous-usage-ping.md) checks the frozen
+launch payload, durable daily cap, opt-outs and real server settings without
+contacting the public receiver.
+
 The [shared files fixture](shared-files.md) checks published attachments, linked-home
 routes and navigation to a source outside the initial history page.
 

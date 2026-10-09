@@ -333,6 +333,7 @@ const defaultModelSelectionSchema = z.object({
 }).refine((selection) => selection.variant === undefined || selection.effort === undefined,
   "choose either a model variant or an effort level");
 const appConfigSchema = z.object({
+  anonymousUsage: z.object({ enabled: z.boolean() }).strict().optional(),
   /** Verified by the dedicated domain endpoint, never a generic config patch. */
   customDomain: z.string().optional(),
   /** Who may sign in with an emailed code (server/account-signin.ts):
@@ -473,6 +474,7 @@ const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers:
 const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig {
+  anonymousUsage?: { enabled: boolean };
   customDomain?: string;
   signIn?: { admins?: string[]; members?: string[] };
   /** Preferred selection for newly created bots; existing bots keep theirs. */
@@ -748,6 +750,7 @@ export function llmThreadTitlesEnabled(cfg: AppConfig): boolean {
  * turns. The guided tour writes `onboarding` on every step, so it in
  * particular has to stay cheap. */
 export const FLEET_NEUTRAL_KEYS: ReadonlySet<string> = new Set([
+  "anonymousUsage",
   "profile",
   "language",
   "tts",
@@ -977,7 +980,7 @@ export function saveConfig(patch: Partial<AppConfig>, options: { replaceInstance
   // back after we have successfully recognized the legacy list.
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
-  for (const key of ["xai", "anthropic", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "approvals", "rooms", "threads", "digest", "context", "localVm", "features", "budgets", "billing", "onboarding", "browserEngine"] as const) {
+  for (const key of ["anonymousUsage", "xai", "anthropic", "openaiCompat", "composio", "box", "opencodeGo", "tts", "imageGen", "profile", "approvals", "rooms", "threads", "digest", "context", "localVm", "features", "budgets", "billing", "onboarding", "browserEngine"] as const) {
     const section = checkedPatch[key];
     if (!section) continue;
     const current = jsonObjectSchema.safeParse(disk[key]);

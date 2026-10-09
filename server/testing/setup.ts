@@ -16,6 +16,8 @@ compatEnv.USERPROFILE = home;
 // OMB_DATA_DIR is an intentional production override, but tests must never
 // let it escape the throwaway home they are about to delete.
 delete compatEnv.OMB_DATA_DIR;
+// Disposable fixtures must never contribute launch usage counts.
+compatEnv.BOS_NO_PING = "1";
 // Do not let a developer's Hermes global config path leak into per-test homes.
 delete compatEnv.HERMES_HOME;
 // The companion keeps its paired devices in its own directory, and resolves
