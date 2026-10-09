@@ -14,7 +14,7 @@ export function RoomRoster({ room, members, max, showWorking = true }: { room: R
       {roster.visible.map((member, index) => {
         const status = roomMemberStatus(room, member);
         return <span key={member.id} title={`${member.name} — ${roomMemberStatusLabel(status, member)}`} aria-label={`${member.name}: ${roomMemberStatusLabel(status, member)}`} style={{ zIndex: roster.visible.length - index }} className={cn("relative inline-flex rounded-full ring-2 ring-app", status === "working" && "bot-morph ring-accent/60", status === "offline" && "opacity-50")}>
-          <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? "happy"} size={24} animated={false} />
+          <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? undefined} size={24} animated={false} />
           {status === "working" && <span className="absolute -right-0.5 -top-0.5 size-2 animate-pulse rounded-full border border-app bg-accent" />}
         </span>;
       })}

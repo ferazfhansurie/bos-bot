@@ -97,14 +97,14 @@ function RoomFace({ group, members }: { group: Group; members: Bot[] }) {
       </span>
     );
   }
-  if (members.length === 1) return <BotAvatar bot={members[0]!} state="happy" size={AVATAR} animated={false} />;
+  if (members.length === 1) return <BotAvatar bot={members[0]!} size={AVATAR} animated={false} />;
   return (
     <span className="relative block size-[22px] shrink-0">
       <span className="absolute left-0 top-0">
-        <BotAvatar bot={members[0]!} state="happy" size={15} animated={false} />
+        <BotAvatar bot={members[0]!} size={15} animated={false} />
       </span>
       <span className="absolute bottom-0 right-0">
-        <BotAvatar bot={members[1]!} state="happy" size={15} animated={false} />
+        <BotAvatar bot={members[1]!} size={15} animated={false} />
       </span>
     </span>
   );
@@ -340,7 +340,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
         entry,
         index,
         <>
-          <BotAvatar bot={bot} state="happy" size={AVATAR} animated={false} />
+          <BotAvatar bot={bot} size={AVATAR} animated={false} />
           <span className="flex min-w-0 flex-1 items-baseline gap-2">
             <span className="min-w-0 max-w-full shrink-0 truncate text-[13.5px] text-ink">
               <Highlighted text={bot.name} match={match} field="name" />
@@ -420,7 +420,7 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
       <>
         <span className="flex items-center gap-2 truncate text-[13px] font-medium text-ink">
           {owner ? (
-            <BotAvatar bot={owner} state="happy" size={16} animated={false} />
+            <BotAvatar bot={owner} size={16} animated={false} />
           ) : (
             <MessageSquare size={13} className="shrink-0 text-ink-secondary" />
           )}

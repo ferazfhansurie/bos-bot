@@ -1,6 +1,6 @@
 import { CURSOR_STATES, type CursorState } from "@/components/CursorAvatar";
 import { lastNonReceipt } from "./receipts";
-import type { MausColorName } from "../../shared/glyph-faces";
+import { glyphStateFor, type GlyphFaceState, type MausColorName } from "../../shared/glyph-faces";
 
 /** The mascot's behaviour vocabulary — CursorAvatar's 39 states, under the
  * app's historical names. */
@@ -50,7 +50,9 @@ export const STATE_GROUPS = {
 /** The named palette lives in shared/ so the server, glyph faces and iOS
  * read the same 13 colours. */
 export { MAUS_COLOR_NAMES, MAUS_COLORS } from "../../shared/glyph-faces";
-export type MausColor = MausColorName;
+/** A bot colour: one of the 13 named presets or any "#RRGGBB". Read it
+ * through resolveMausColor (shared/glyph-faces.ts), never MAUS_COLORS[color]. */
+export type MausColor = MausColorName | `#${string}`;
 
 export const MAUS_MOTIONS = [
   "arrive",
@@ -191,5 +193,21 @@ export function stateForBot(bot: MascotBotProfile): MausState {
     return "happy";
   }
 
+  return "idle";
+}
+
+/**
+ * The glyph face a resting bot wears. Only real signals move it off idle — a
+ * pinned expression, a failed tool, a busy turn, a question waiting on the
+ * person. stateForBot's keyword moods ("code" -> working) stay out of it: a
+ * coding bot at rest should not wear the working face all day.
+ */
+export function glyphFaceForBot(bot: MascotBotProfile): GlyphFaceState {
+  const pinned = normalizeState(bot.mascotExpression);
+  if (pinned) return glyphStateFor(pinned);
+  const last = lastNonReceipt(bot.messages);
+  if (last?.kind === "activity" && last.tool?.ok === false) return "failed";
+  if (bot.busy) return "working";
+  if (last?.kind === "options") return "waiting";
   return "idle";
 }

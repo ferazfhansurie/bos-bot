@@ -23,7 +23,7 @@ export function ThreadChip({ message }: { message: Message }) {
         title={t("chat.openThread", { title: ref.title })}
         className="flex items-center gap-2 rounded-full border border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
       >
-        {bot ? <BotAvatar bot={bot} state="happy" size={16} /> : <MessagesSquare size={13} aria-hidden="true" />}
+        {bot ? <BotAvatar bot={bot} size={16} /> : <MessagesSquare size={13} aria-hidden="true" />}
         <span className="max-w-[480px] truncate">{tool.name}</span>
         <ChevronRight size={13} />
       </button>

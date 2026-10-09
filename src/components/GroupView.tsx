@@ -31,7 +31,8 @@ import { showToolCallsEnabled } from "@/lib/feature-flags";
 import { useToolCallsToggle } from "@/hooks/use-tool-calls-toggle";
 import { CompactionChip, DigestChip } from "./DigestChip";
 import { roomActivityVisible } from "@/lib/room-activity";
-import { MAUS_COLORS, normalizeState } from "@/lib/mascot";
+import { normalizeState } from "@/lib/mascot";
+import { resolveMausColor } from "../../shared/glyph-faces";
 import { effectiveDefaultResponder, groupResponseHint } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { Composer } from "./Composer";
@@ -193,7 +194,7 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
           title={t("room.openBot", { name: comm.withName })}
           className="press step-tag flex items-center gap-1.5 rounded-full px-2 py-1 text-[12px] text-ink-secondary/70 hover:bg-raised hover:text-ink"
         >
-          <BotAvatar bot={withBot ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} />
+          <BotAvatar bot={withBot ?? { name: comm.withName, color: comm.withColor }} size={16} />
           <span className="max-w-[480px] truncate">{tool.name}</span>
           <ChevronRight size={13} />
         </button>
@@ -209,7 +210,7 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
           tool.ok === false ? "text-danger" : "text-ink-secondary/70",
         )}
       >
-        {comm && <BotAvatar bot={state.bots.find(b => b.id === comm.withBotId) ?? { name: comm.withName, color: comm.withColor }} state="happy" size={16} />}
+        {comm && <BotAvatar bot={state.bots.find(b => b.id === comm.withBotId) ?? { name: comm.withName, color: comm.withColor }} size={16} />}
         <span className={cn("max-w-[480px] truncate", !comm && "font-mono")}>{tool.name}</span>
       </div>
     </div>
@@ -220,7 +221,7 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
  * Text bubbles carry the avatar beside them, so their label lines up with
  * the bubble edge; cards and tool runs keep the small avatar inline. */
 function ClusterLabel({ bot, name, color, bubble = false }: { bot?: Bot; name: string; color: string; bubble?: boolean }) {
-  const tint = (MAUS_COLORS as Record<string, string>)[bot?.color ?? color];
+  const tint = resolveMausColor(bot?.color ?? color);
   if (bubble) {
     return (
       <div className="-mb-2 mt-1 truncate pl-[42px] text-[12px] font-medium" style={{ color: tint }}>
@@ -232,7 +233,7 @@ function ClusterLabel({ bot, name, color, bubble = false }: { bot?: Bot; name: s
     <div className="mt-1 flex items-center gap-1.5 pl-0.5">
       <BotAvatar
         bot={bot ?? { name, color: color as Bot["color"] }}
-        state={normalizeState(bot?.mascotExpression) ?? "happy"}
+        state={normalizeState(bot?.mascotExpression) ?? undefined}
         size={16}
         motion="none"
         motionKey={0}
@@ -946,7 +947,7 @@ function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
                         >
                           <BotAvatar
                             bot={member}
-                            state={normalizeState(member.mascotExpression) ?? "happy"}
+                            state={normalizeState(member.mascotExpression) ?? undefined}
                             size={24}
                             animated={false}
                           />
@@ -1074,7 +1075,7 @@ const RoomStreamBubble = memo(function RoomStreamBubble({ threadId, member, memb
   return <div className="flex min-w-0 flex-col items-start" aria-label={`${member.name} is replying`}>
     <ClusterLabel bot={member} name={member.name} color={member.color} bubble />
     <div className="mt-3 flex w-full items-end gap-1.5">
-      <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? "happy"} size={24} motion="none" motionKey={0} animated={false} />
+      <BotAvatar bot={member} state={normalizeState(member.mascotExpression) ?? undefined} size={24} motion="none" motionKey={0} animated={false} />
       <div className="bubble-in w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card p-3 text-[15px] leading-relaxed text-ink">
         <ChatMarkdown text={text} streaming mentionPeers={members} everyone={everyone} />
       </div>
@@ -1562,7 +1563,7 @@ export function GroupView({ group }: { group: Group }) {
                   <BotAvatar
                     key={b.id}
                     bot={b}
-                    state="happy"
+                   
                     size={44}
                     motion="none"
                     motionKey={0}

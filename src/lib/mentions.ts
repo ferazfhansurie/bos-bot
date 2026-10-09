@@ -1,4 +1,5 @@
 import { MAUS_COLORS, type MausColor } from "./mascot";
+import { resolveMausColor } from "../../shared/glyph-faces";
 
 export type MentionPeer = { name: string; hidden?: boolean; color?: MausColor };
 export type MentionRange = { start: number; end: number; color?: string };
@@ -59,8 +60,8 @@ export function mentionRanges(text: string, peers: readonly MentionPeer[], every
     const all = everyone && /^everyone(?![\p{L}\p{N}\p{M}_])/iu.test(rest);
     const length = all ? 8 : peer?.name.length;
     if (length === undefined) continue;
-    // Only palette values enter CSS. @everyone has no individual bot identity.
-    const color = !all && peer?.color && Object.hasOwn(MAUS_COLORS, peer.color) ? MAUS_COLORS[peer.color] : undefined;
+    // Only palette names and plain #RRGGBB enter CSS. @everyone has no individual bot identity.
+    const color = !all && peer?.color && (Object.hasOwn(MAUS_COLORS, peer.color) || /^#[0-9A-Fa-f]{6}$/.test(peer.color)) ? resolveMausColor(peer.color) : undefined;
     ranges.push({ start: at, end: at + length + 1, ...(color ? { color } : {}) });
     at += length;
   }

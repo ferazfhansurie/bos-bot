@@ -18,6 +18,19 @@ describe("ActivityMascot", () => {
     expect(html).not.toContain("bot-morph");
   });
 
+  it("wears the glyph face for the gesture, accent and all, in any colour", () => {
+    const html = render({ name: "bos", color: "#7C3AED", mascotBody: "circle" }, "thinking");
+    expect(html).toContain('data-glyph-face="thinking"');
+    expect(html).toContain('data-glyph-accent="query"');
+    expect(html).toContain("#7C3AED");
+    expect(render({ name: "bos", color: "blue" }, "finished")).toContain('data-glyph-face="finished"');
+  });
+
+  it("keeps the ring eyes for a bot that picked another eye style", () => {
+    const html = render({ name: "bos", color: "blue", mascotEyes: "round" });
+    expect(html).not.toContain("data-glyph-face");
+  });
+
   it("keeps an uploaded photo and gives it the breathing squash instead", () => {
     const html = render({ name: "bos", color: "blue", avatarUrl: "/api/attachments/cat.webp", avatarCrop: "circle" }, "thinking");
     expect(html).toContain("bot-morph");

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, Trash2 } from "lucide-react";
 
 import { api, useStore, type Bot } from "@/state/store";
@@ -7,9 +7,11 @@ import { cn } from "@/lib/cn";
 import {
   MAUS_COLORS,
   MAUS_COLOR_NAMES,
+  type MausColor,
   type MausMotion,
   type MausState,
 } from "@/lib/mascot";
+import { resolveMausColor } from "../../shared/glyph-faces";
 import {
   BOT_AVATAR_CROPS,
   botAvatarUrlFromStoredPath,
@@ -53,6 +55,9 @@ export function BotProfileAvatarCard({
   const cropRef = useRef(crop);
   cropRef.current = crop;
   const busy = uploading || generating || savingConnection;
+  // the free colour while the system picker is open; saved when it closes
+  const [draftColor, setDraftColor] = useState<MausColor | null>(null);
+  const shownBot = draftColor ? { ...bot, color: draftColor } : bot;
 
   const upload = async (file: File | undefined) => {
     if (!file || busy) return;
@@ -136,7 +141,7 @@ export function BotProfileAvatarCard({
         </div>}
         <div className="flex justify-center py-3">
           <BotAvatar
-            bot={bot}
+            bot={shownBot}
             state={activeState}
             size={112}
             motion={mascotMotion?.kind ?? "none"}
@@ -220,6 +225,15 @@ export function BotProfileAvatarCard({
                   aria-label={`Use ${color} mascot color`}
                 />
               ))}
+              <CustomColorSwatch
+                color={bot.color}
+                disabled={busy}
+                onDraft={setDraftColor}
+                onPick={(color) => {
+                  setDraftColor(null);
+                  if (color !== bot.color) onPatch({ color });
+                }}
+              />
             </div>
 
             <div className="mb-2 mt-4 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
@@ -244,7 +258,7 @@ export function BotProfileAvatarCard({
                           : "text-ink-secondary hover:bg-control/60",
                       )}
                     >
-                      <MausAvatar color={bot.color} bodyId={body.id} size={52} animated={false} trackPointer={false} />
+                      <MausAvatar color={shownBot.color} eyes={bot.mascotEyes} bodyId={body.id} size={52} animated={false} trackPointer={false} />
                       <span className="mt-1 max-w-full break-words text-center text-[11px] leading-tight">{body.name}</span>
                     </button>
                   ))}
@@ -265,5 +279,53 @@ export function BotProfileAvatarCard({
         {error && <div role="alert" className="mt-3 text-[12px] text-danger">{error}</div>}
       </div>
     </div>
+  );
+}
+
+/** Any colour, past the 13 presets: the system colour picker behind a
+ * swatch. It previews while the picker is open and saves once it closes, so
+ * dragging across the wheel is one save, not hundreds. */
+function CustomColorSwatch({ color, disabled, onDraft, onPick }: {
+  color: MausColor;
+  disabled: boolean;
+  onDraft: (color: MausColor) => void;
+  onPick: (color: MausColor) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const custom = !Object.hasOwn(MAUS_COLORS, color);
+  const latest = useRef({ onPick });
+  latest.current = { onPick };
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    // React's onChange is the input event; "change" is the picker closing
+    const commit = () => latest.current.onPick(el.value.toUpperCase() as MausColor);
+    el.addEventListener("change", commit);
+    return () => el.removeEventListener("change", commit);
+  }, []);
+  return (
+    <label
+      title="Any colour"
+      className={cn(
+        "relative size-10 cursor-pointer overflow-hidden rounded-full border-2 border-transparent transition-transform hover:scale-110",
+        disabled && "pointer-events-none opacity-50",
+        custom && "ring-2 ring-accent-border ring-offset-2 ring-offset-card",
+      )}
+      style={{
+        background: custom
+          ? resolveMausColor(color)
+          : "conic-gradient(#D94B52, #D8A729, #009957, #0EA5C6, #377FE6, #8057C8, #D84F8B, #D94B52)",
+      }}
+    >
+      <input
+        ref={input}
+        type="color"
+        disabled={disabled}
+        aria-label="Pick any mascot color"
+        value={resolveMausColor(color).toLowerCase()}
+        onChange={(event) => onDraft(event.currentTarget.value.toUpperCase() as MausColor)}
+        className="absolute inset-0 size-full cursor-pointer opacity-0"
+      />
+    </label>
   );
 }

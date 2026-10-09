@@ -224,7 +224,7 @@ export function ManageMembersPanel({
             <div className="mb-1 text-[13px] font-semibold text-ink">Bots</div>
             {remoteMembers.map((member) => (
               <div key={member.id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-                <BotAvatar bot={member} state="happy" size={24} animated={false} />
+                <BotAvatar bot={member} size={24} animated={false} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[14px] text-ink">{member.name}</span>
                   {member.title && <span className="block truncate text-[11px] text-ink-secondary">{member.title}</span>}

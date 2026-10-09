@@ -146,6 +146,13 @@ describe("the sending bot's face", () => {
     expect(mascotSvg("green", "nope" as never)).toContain("M 50 10 C 72 10");
   });
 
+  it("wears the resting glyph face, in any colour", () => {
+    const svg = mascotSvg("#7c3aed");
+    expect(svg).toContain('fill="#7C3AED"');
+    expect(svg).toContain('stroke="#FFFFFF"');
+    expect(mascotSvg("green", "circle", "classic")).toContain("M 51 43 L 54 52");
+  });
+
   it("picks the sender in a room, and falls back to the frame for unknown bots", async () => {
     const sender = { id: "scout", color: "green" as const, avatarUrl: photo, avatarCrop: "rounded" as const };
     await expect(notificationIcon(sender)).resolves.toBe(photo);

@@ -1375,8 +1375,14 @@ button:disabled.bg-danger {
 @keyframes bos-avatar-spin { to { transform: rotate(360deg); } }
 .bos-avatar-blink { animation: bos-avatar-blink 180ms ease-in-out; }
 .bos-avatar-spin { animation: bos-avatar-spin 650ms ease-in-out; }
+/* glyph faces: eyes squash in when the face changes, the accent pops out
+   of the body when it appears */
+@keyframes bos-glyph-swap { from { transform: scaleY(.15); } }
+@keyframes bos-glyph-accent { from { opacity: 0; transform: scale(.55); } }
+.bos-glyph-swap { animation: bos-glyph-swap 120ms ease-out; }
+.bos-glyph-accent { animation: bos-glyph-accent 240ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 @media (prefers-reduced-motion: reduce) {
-  .bos-avatar-blink, .bos-avatar-spin { animation: none; }
+  .bos-avatar-blink, .bos-avatar-spin, .bos-glyph-swap, .bos-glyph-accent { animation: none; }
 }
 /* Putri pink skins. */
 [data-skin="sakura"] {
