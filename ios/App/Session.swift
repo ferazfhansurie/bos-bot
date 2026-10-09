@@ -1060,24 +1060,36 @@ final class Session: ObservableObject {
         }
         let paragraph = "Checked the **inbox** and grouped what matters: three invoices due this week, a contract redline from `legal@`, and two threads that need a reply today. "
         let start = Date().timeIntervalSince1970 * 1000
-        for index in 0..<50 {
-            let message: [String: Any] = [
+        // `-stream-preview-history 300`: a longer history, for the jump down
+        let args = ProcessInfo.processInfo.arguments
+        let history = args.firstIndex(of: "-stream-preview-history").flatMap { args.indices.contains($0 + 1) ? Int(args[$0 + 1]) : nil } ?? 50
+        // chained onto the thread's active branch, or a threaded fixture hides it
+        var parent = state.activeLeafIds[threadId] ?? state.bot(forThread: threadId)?.activeLeafId
+        let branched = parent != nil
+        for index in 0..<history {
+            var message: [String: Any] = [
                 "id": "stream-history-\(index)", "role": index % 2 == 0 ? "user" : "bot", "kind": "text",
-                "at": start - Double(50 - index) * 60_000,
+                "at": start - Double(history - index) * 60_000,
                 "text": index % 2 == 0 ? "check item \(index) and tell me what changed" : String(repeating: paragraph, count: 3) + "\n\n- one\n- two\n- three"
             ]
+            if let parent { message["parentId"] = parent }
+            parent = "stream-history-\(index)"
             if let seeded = frame(["kind": "message", "threadId": threadId, "message": message]) { state.apply(seeded.frame) }
         }
+        if branched { state.activeLeafIds[threadId] = parent }
         Task { @MainActor [weak self] in
             // Start on the first keystroke so the test can reach the
             // composer while the app is still idle.
             while !MainThreadProbe.shared.isTyping && !ProcessInfo.processInfo.arguments.contains("-stream-preview-autostart") { try? await Task.sleep(for: .milliseconds(50)) }
-            if let self, var bot = self.state.bot("preview-pepper") { bot.busy = true; self.state.apply(.bot(bot)) }
+            // without its stored messages, which would replace the history
+            if let self, var bot = self.state.bot("preview-pepper") { bot.busy = true; bot.messages = nil; self.state.apply(.bot(bot)) }
             // Paragraphs and a short list, the shape a real long reply has.
             let reply = String(repeating: paragraph, count: 2) + "\n\n- first thing to check\n- second thing to check\n\n"
             let words = reply.split(separator: " ", omittingEmptySubsequences: false).map { $0 + " " }
             var seq = 1, tick = 0
-            let end = ContinuousClock.now + .seconds(90)
+            // `-stream-preview-seconds n`: stream longer, for slow ui tests
+            let seconds = args.firstIndex(of: "-stream-preview-seconds").flatMap { args.indices.contains($0 + 1) ? Int(args[$0 + 1]) : nil } ?? 90
+            let end = ContinuousClock.now + .seconds(seconds)
             while ContinuousClock.now < end, let self {
                 tick += 1
                 let delta = (0..<4).map { words[(tick * 4 + $0) % words.count] }.joined()

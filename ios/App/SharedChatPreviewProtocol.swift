@@ -31,6 +31,8 @@ private final class SharedChatPreviewState: @unchecked Sendable {
     private let teammate = "preview-maya:person:owner"
     private let roomId = "preview-shared-room"
     private let at = Date().timeIntervalSince1970 * 1000 - 1_000_000
+    private let opened = Date()
+    private let arguments = ProcessInfo.processInfo.arguments
     private var image: Data { Bundle.main.url(forResource: "ImagePreview", withExtension: "png").flatMap { try? Data(contentsOf: $0) } ?? Data() }
     private var attachment: [String: Any] { ["id": "launch-board", "name": "launch-board.png", "mime": "image/png", "size": image.count] }
     private func actor(_ person: Bool = true, home: String = "preview-home") -> [String: String] {
@@ -48,8 +50,24 @@ private final class SharedChatPreviewState: @unchecked Sendable {
             if sequence == 218 { row["text"] = "@Pepper summarize our launch plan" }
             if sequence == 219 { row["text"] = "The launch plan is ready: invite the team, share the board, and review the first bot result."; row["responseTo"] = "shared-message-218" }
             if sequence == 220 { row["text"] = "Latest message — ready for the alpha walkthrough." }
+            // `-shared-chat-preview-long`: rows of uneven height, so the lazy
+            // stack's estimates above the end are wrong, like a busy room.
+            if arguments.contains("-shared-chat-preview-long"), sequence > 1, sequence < 216, sequence % 3 != 0 {
+                row["text"] = Array(repeating: row["text"] as! String, count: 2 + sequence % 6).joined(separator: "\n\n")
+            }
             return row
-        } + sentMessages
+        } + sentMessages + incoming
+    }
+    /// `-shared-chat-preview-incoming`: Maya posts every three seconds, for
+    /// checking that the room keeps following. Not combined with sending.
+    private var incoming: [[String: Any]] {
+        guard arguments.contains("-shared-chat-preview-incoming") else { return [] }
+        let count = min(80, Int(Date().timeIntervalSince(opened) / 3))
+        guard count > 0 else { return [] }
+        return (1...count).map { n in
+            ["id": "shared-incoming-\(n)", "roomId": roomId, "sequence": 220 + n, "actor": actor(true, home: "preview-maya"),
+             "text": "Incoming \(n) from Maya.", "at": at + Double((220 + n) * 1000), "sendId": "shared-incoming-send-\(n)"]
+        }
     }
     private func body(_ request: URLRequest) -> [String: Any] {
         var data = request.httpBody ?? Data()

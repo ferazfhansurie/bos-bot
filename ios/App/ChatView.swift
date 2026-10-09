@@ -103,6 +103,9 @@ struct ChatView: View {
     @State private var newMessagesBoundary: String?
     @State private var readingError: String?
     @State private var scrolledAway = false
+    /// Bumped by the jump-down button; on iOS 18 the scroll position goes to
+    /// the bottom edge.
+    @State private var jumpRequest = 0
     /// Something landed while the reader was scrolled away.
     @State private var unseenBelow = false
     /// The chat's height above the keyboard, so the @ drawer can leave the
@@ -400,7 +403,7 @@ struct ChatView: View {
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
                 .defaultScrollAnchor(.bottom)
-                .scrollPosition(id: $visibleReadingID, anchor: .top)
+                .modifier(ReadingScrollPosition(visibleID: $visibleReadingID, jumpToEnd: jumpRequest))
                 .onChange(of: visibleReadingID) { _, id in
                     if let id, messages.contains(where: { $0.id == id }) { lastReadingID = id }
                 }
@@ -418,7 +421,7 @@ struct ChatView: View {
                         JumpToLatestButton(unseen: unseenBelow) {
                             Haptics.selection()
                             unseenBelow = false
-                            jumpToLatest(proxy)
+                            jumpToLatest(proxy, lastRow: transcript.last?.id)
                         }
                         .padding(.trailing, 16).padding(.bottom, 10)
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
@@ -680,20 +683,25 @@ struct ChatView: View {
     }
 
     /// Rows far above the end only have estimated heights in the lazy stack,
-    /// so a single animated jump in a long transcript stopped short or did
-    /// not move at all. Jump straight there, then settle again once the rows
-    /// near the end are built.
-    private func jumpToLatest(_ proxy: ScrollViewProxy) {
-        proxy.scrollTo(Self.bottomId, anchor: .bottom)
+    /// so in a long transcript `proxy.scrollTo` to the end stopped short or
+    /// didn't move at all. On iOS 18 the scroll position goes to the bottom
+    /// edge, which doesn't depend on finding a row. On 17, go to the last
+    /// row, which the stack can always find, then settle on the end marker.
+    private func jumpToLatest(_ proxy: ScrollViewProxy, lastRow: String?) {
+        if #available(iOS 18.0, *) {
+            jumpRequest += 1
+            return
+        }
+        if let lastRow { proxy.scrollTo(lastRow, anchor: .bottom) }
         Task { @MainActor in
-            for _ in 0..<3 {
+            for pass in 0..<10 {
                 try? await Task.sleep(for: .milliseconds(60))
                 proxy.scrollTo(Self.bottomId, anchor: .bottom)
+                if pass >= 2, follow.pinned { return }
             }
         }
     }
 
-    /// The reader reached the newest line or left it.
     private func pinnedChanged(_ pinned: Bool) {
         guard !restoringReading else { follow.pinned = false; return }
         if pinned { newestObservedID = messages.last?.id }
@@ -3314,6 +3322,48 @@ private struct TrackPinnedToBottom: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// The transcript's scroll position, reported as the id of the row at the
+/// top. On iOS 18 it is a `ScrollPosition`, so the jump-down button can go
+/// to the bottom edge: a lazy stack only estimates the rows it hasn't built,
+/// and a jump to a row id far below stopped short or didn't move.
+struct ReadingScrollPosition: ViewModifier {
+    @Binding var visibleID: String?
+    /// Each change scrolls to the bottom edge (iOS 18).
+    let jumpToEnd: Int
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.modifier(EdgeScrollPosition(visibleID: $visibleID, jumpToEnd: jumpToEnd))
+        } else {
+            content.scrollPosition(id: $visibleID, anchor: .top)
+        }
+    }
+}
+
+@available(iOS 18.0, *)
+private struct EdgeScrollPosition: ViewModifier {
+    @Binding var visibleID: String?
+    let jumpToEnd: Int
+    @State private var position = ScrollPosition(idType: String.self)
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position, anchor: .top)
+            .onChange(of: position.viewID(type: String.self)) { _, id in
+                if let id, id != visibleID { visibleID = id }
+            }
+            .onChange(of: jumpToEnd) { _, _ in
+                position.scrollTo(edge: .bottom)
+                // rows near the end replace their estimates as they're
+                // built, which can move the end; land on it again
+                Task { @MainActor in
+                    for _ in 0..<3 {
+                        try? await Task.sleep(for: .milliseconds(80))
+                        position.scrollTo(edge: .bottom)
+                    }
+                }
+            }
     }
 }
 
