@@ -60,3 +60,14 @@ export function remoteBotNotice(bot: Pick<Bot, "remote">): string | null {
   if (remote.online === false) return `${host} is unavailable. Keep BOS open there and check its connection. Your draft stays here.`;
   return null;
 }
+
+/** Confirm copy for deleting a relayed bot: it leaves this list only and stays on its owner's Mac. */
+export function remoteBotRemoveCopy(bot: Pick<Bot, "name" | "remote">) {
+  const owner = bot.remote?.ownerName?.trim() || bot.remote?.homeName || "its owner";
+  return {
+    title: `Remove ${bot.name} from your list?`,
+    body: `This removes ${bot.name} from your list. It stays on ${owner}'s Mac, and you can add it back in Settings → General.`,
+    confirmLabel: "Remove",
+    tone: "danger" as const,
+  };
+}

@@ -18,6 +18,7 @@ import { LocalComputerSection } from "./LocalComputerSection";
 import { CompanionSection } from "./CompanionSection";
 import { ServerPairingCard } from "./ServerPairingCard";
 import { PeopleSection } from "./PeopleSection";
+import { RemovedRemoteBots } from "./RemovedRemoteBots";
 import { CustomDomainSettings } from "./CustomDomainSettings";
 import { BrowserProfilesManager } from "./BrowserProfilesManager";
 import { RemoteComputerSection } from "./RemoteComputerSection";
@@ -651,6 +652,7 @@ export function SettingsModal() {
                 </Card>
                 <ThreadConcurrencySettings />
                 <DefaultApprovalsSettings />
+                <RemovedRemoteBots />
                 <div>
                   {!remoteActive && <ReplayTourRow />}
                   <DiagnosticsRow />

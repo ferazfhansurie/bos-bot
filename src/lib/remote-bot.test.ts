@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botControlAvailable, mentionableBots, remoteBotHint, remoteBotNotice, remoteBotUnavailable, type BotControl } from "./remote-bot";
+import { botControlAvailable, mentionableBots, remoteBotHint, remoteBotNotice, remoteBotRemoveCopy, remoteBotUnavailable, type BotControl } from "./remote-bot";
 
 const remote = { homeId: "home-1", homeName: "Studio", ownerName: "Putri" };
 
@@ -64,5 +64,14 @@ describe("remoteBotUnavailable", () => {
     expect(remoteBotUnavailable({ remote: { ...remote, online: false } })).toBe(true);
     expect(remoteBotUnavailable({ remote: { ...remote, availability: "update-required" } })).toBe(true);
     expect(remoteBotUnavailable({ remote: { ...remote, availability: "reconnect-required" } })).toBe(true);
+  });
+});
+
+describe("remoteBotRemoveCopy", () => {
+  it("says the bot leaves this list only and stays on its owner's Mac", () => {
+    const copy = remoteBotRemoveCopy({ name: "Codex", remote });
+    expect(copy.title).toBe("Remove Codex from your list?");
+    expect(copy.body).toContain("It stays on Putri's Mac");
+    expect(copy.confirmLabel).toBe("Remove");
   });
 });

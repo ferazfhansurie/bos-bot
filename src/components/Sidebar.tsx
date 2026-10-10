@@ -51,7 +51,7 @@ import { nextRename } from "@/lib/rename";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { SharedContactsSidebar } from "./SharedContactsSidebar";
 import { JobInboxNavRow } from "./JobInbox";
-import { remoteBotHint } from "@/lib/remote-bot";
+import { remoteBotHint, remoteBotRemoveCopy } from "@/lib/remote-bot";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel } from "./TeamLibraryPanel";
 import { TeamDialog } from "./TeamDialog";
@@ -885,6 +885,17 @@ export function BotContextMenu({
         item(<ClipboardCopy size={16} className="text-ink-secondary" />, t("sidebar.copyConversationId"), () => {
           void navigator.clipboard?.writeText(bot.threadId);
         }),
+        divider("d2"),
+        // Takes it off this list only; the bot stays on its owner's Mac.
+        <BotDeleteMenuItem
+          key="delete"
+          deleting={deleting}
+          label="Remove from list"
+          onClick={() => {
+            onClose();
+            onDelete(bot);
+          }}
+        />,
       ] : remoteClient ? [
         item(<FolderPlus size={16} className="text-ink-secondary" />, t("sidebar.bot.moveToSection"), () => {
           onClose();
@@ -994,7 +1005,7 @@ export function archivedDeleteAllCopy() {
   };
 }
 
-export function BotDeleteMenuItem({ deleting, onClick }: { deleting: boolean; onClick: () => void }) {
+export function BotDeleteMenuItem({ deleting, onClick, label }: { deleting: boolean; onClick: () => void; label?: string }) {
   return (
     <button
       type="button"
@@ -1008,7 +1019,7 @@ export function BotDeleteMenuItem({ deleting, onClick }: { deleting: boolean; on
       )}
     >
       {deleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-      {deleting ? t("sidebar.bot.deleteChecking") : t("common.delete")}
+      {deleting ? t("sidebar.bot.deleteChecking") : label ?? t("common.delete")}
     </button>
   );
 }
@@ -2647,7 +2658,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       {showThreads && newFolderBotId && state.bots.find((bot) => bot.id === newFolderBotId) && <BotProjectDialog bot={state.bots.find((bot) => bot.id === newFolderBotId)!} onClose={() => setNewFolderBotId(null)} />}
       <ConfirmDialog
         open={confirm !== null}
-        {...(confirm ? botConfirmCopy(confirm.kind, confirm.bot.name) : botConfirmCopy("archive", ""))}
+        {...(confirm?.kind === "delete" && confirm.bot.remote ? remoteBotRemoveCopy(confirm.bot) : confirm ? botConfirmCopy(confirm.kind, confirm.bot.name) : botConfirmCopy("archive", ""))}
         icon={confirm?.kind === "delete" ? <Trash2 size={18} /> : <Archive size={18} />}
         onCancel={cancelConfirm}
         returnFocusRef={sidebarRef}
