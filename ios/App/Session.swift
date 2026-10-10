@@ -323,6 +323,13 @@ final class Session: ObservableObject {
                 if let token = UserDefaults.standard.string(forKey: "bos.apnsToken") { await self?.registerPushToken(token) }
             }
         }
+        // Live Activity tokens come and go with each island; the Mac needs
+        // the current set to drive them while the app is closed.
+        LiveActivityTokens.shared.changed = { [weak self] in
+            Task { @MainActor in
+                if let token = UserDefaults.standard.string(forKey: "bos.apnsToken") { await self?.registerPushToken(token) }
+            }
+        }
         NotificationCoordinator.shared.sharedRoomHandler = { [weak self] roomID, connectionID in
             Task { @MainActor in
                 guard let self else { return }
@@ -3378,7 +3385,9 @@ final class Session: ObservableObject {
 
     private func registerPushToken(_ token: String) async {
         guard let client else { return }
-        try? await client.registerPushToken(token, environment: Self.apnsEnvironment, voipToken: CallKitRinger.shared.voipToken)
+        let live = LiveActivityTokens.shared
+        try? await client.registerPushToken(token, environment: Self.apnsEnvironment, voipToken: CallKitRinger.shared.voipToken,
+                                            liveStartToken: live.startToken, liveActivities: live.activities)
     }
 
     func enableNotifications() async {

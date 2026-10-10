@@ -9,9 +9,12 @@
 //
 // When a bot's turn settles, its activity turns into a short "done" card
 // with the reply's first line, lingers, then ends. The stream is
-// foreground-only and there is no push path yet, so the island is exact
-// while the app is alive and goes quiet with it; an activity left over from
-// a previous run is ended on the next launch if the bot has moved on.
+// foreground-only, so once the app is closed the Mac takes over with
+// ActivityKit pushes (server/live-activity-driver.ts): every activity here is
+// requested with a push token, the push-to-start token lets the Mac start
+// one on a locked phone, and `LiveActivityTokens` keeps the Mac's copy of
+// both current. An activity left over from a previous run is ended on the
+// next launch if the bot has moved on.
 import ActivityKit
 import Combine
 import Foundation
@@ -138,7 +141,7 @@ final class LiveActivityCoordinator {
                     Task { await old.end(nil, dismissalPolicy: .immediate) }
                 }
                 let attributes = BotActivityAttributes(botId: bot.id, threadId: bot.threadId, name: bot.name, color: bot.color, mascotBody: bot.mascotBody, mascotEyes: bot.mascotEyes)
-                let started = try? Activity.request(attributes: attributes, content: .init(state: content, staleDate: nil), pushType: nil)
+                let started = try? Activity.request(attributes: attributes, content: .init(state: content, staleDate: nil), pushType: .token)
                 // a fresh activity cannot alert on request; one immediate alerting update does it
                 if let alert, let started {
                     Task { await started.update(.init(state: content, staleDate: nil), alertConfiguration: alert) }
@@ -442,4 +445,83 @@ final class LiveActivityCoordinator {
         }
     }
     #endif
+}
+
+/// The push tokens the Mac needs to drive the island while the app is
+/// closed: the push-to-start token (iOS 17.2+) and each running activity's
+/// own token, keyed by activity so a bot's replaced island drops its old one.
+@MainActor
+final class LiveActivityTokens {
+    static let shared = LiveActivityTokens()
+    private static let startKey = "bos.liveStartToken"
+    private static let activitiesKey = "bos.liveActivityTokens"
+
+    private(set) var startToken: String? = UserDefaults.standard.string(forKey: startKey)
+    /// activity id → [bot id, token]
+    private var byActivity: [String: [String]] = UserDefaults.standard.dictionary(forKey: activitiesKey) as? [String: [String]] ?? [:]
+    private var watched = Set<String>()
+    private var started = false
+    /// Set by `Session`: register again with the current tokens.
+    var changed: (() -> Void)?
+
+    /// Bot id → token, the newest island per bot.
+    var activities: [String: String] {
+        var map: [String: String] = [:]
+        for activity in Activity<BotActivityAttributes>.activities.reversed() where activity.activityState == .active || activity.activityState == .stale {
+            if let entry = byActivity[activity.id], entry.count == 2 { map[entry[0]] = entry[1] }
+        }
+        return map
+    }
+
+    func start() {
+        guard !started else { return }
+        started = true
+        let running = Set(Activity<BotActivityAttributes>.activities.map(\.id))
+        if byActivity.keys.contains(where: { !running.contains($0) }) {
+            byActivity = byActivity.filter { running.contains($0.key) }
+            save()
+        }
+        if #available(iOS 17.2, *) {
+            Task { [weak self] in
+                for await data in Activity<BotActivityAttributes>.pushToStartTokenUpdates {
+                    guard let self else { return }
+                    let token = Self.hex(data)
+                    guard token != self.startToken else { continue }
+                    self.startToken = token
+                    UserDefaults.standard.set(token, forKey: Self.startKey)
+                    self.changed?()
+                }
+            }
+        }
+        for activity in Activity<BotActivityAttributes>.activities { watch(activity) }
+        Task { [weak self] in
+            for await activity in Activity<BotActivityAttributes>.activityUpdates { self?.watch(activity) }
+        }
+    }
+
+    private func watch(_ activity: Activity<BotActivityAttributes>) {
+        guard watched.insert(activity.id).inserted else { return }
+        let id = activity.id, botId = activity.attributes.botId
+        Task { [weak self] in
+            for await data in activity.pushTokenUpdates {
+                guard let self else { return }
+                let entry = [botId, Self.hex(data)]
+                guard self.byActivity[id] != entry else { continue }
+                self.byActivity[id] = entry
+                self.save()
+                self.changed?()
+            }
+        }
+        Task { [weak self] in
+            for await state in activity.activityStateUpdates where state == .ended || state == .dismissed {
+                guard let self, self.byActivity.removeValue(forKey: id) != nil else { return }
+                self.save()
+                self.changed?()
+                return
+            }
+        }
+    }
+
+    private func save() { UserDefaults.standard.set(byActivity, forKey: Self.activitiesKey) }
+    private static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
 }

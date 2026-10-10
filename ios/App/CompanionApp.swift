@@ -16,6 +16,9 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
         _ = NotificationCoordinator.shared
         // Same for a VoIP ring that launched the app: CallKit needs it now.
         CallKitRinger.shared.start()
+        // and for an island the Mac started: iOS wakes the app to hand over
+        // its push token, which has to reach the Mac before it can end it
+        LiveActivityTokens.shared.start()
         return true
     }
 

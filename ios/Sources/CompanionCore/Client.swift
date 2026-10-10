@@ -708,9 +708,15 @@ public struct CompanionClient: Sendable {
         try await send(makeRequest("GET", "/api/multiplayer/me"), as: SharedMe.self)
     }
 
-    public func registerPushToken(_ token: String, environment: String, voipToken: String? = nil) async throws {
-        var body = ["token": token, "environment": environment, "connectionId": connection.id]
+    /// `liveActivities` maps a bot id to its running Live Activity's push
+    /// token; with `liveStartToken` the Mac can start, update and end the
+    /// island while the app is closed.
+    public func registerPushToken(_ token: String, environment: String, voipToken: String? = nil,
+                                  liveStartToken: String? = nil, liveActivities: [String: String]? = nil) async throws {
+        var body: [String: Any] = ["token": token, "environment": environment, "connectionId": connection.id]
         if let voipToken { body["voipToken"] = voipToken }
+        if let liveStartToken { body["liveStartToken"] = liveStartToken }
+        if let liveActivities { body["liveActivities"] = liveActivities }
         try await send(makeRequest("POST", "/api/multiplayer/push-token", body: body))
     }
 
