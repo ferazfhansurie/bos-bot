@@ -52,6 +52,7 @@ import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { SharedContactsSidebar } from "./SharedContactsSidebar";
 import { JobInboxNavRow } from "./JobInbox";
 import { remoteBotHint, remoteBotRemoveCopy } from "@/lib/remote-bot";
+import { homeLinkHint } from "@/lib/home-routing";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel } from "./TeamLibraryPanel";
 import { TeamDialog } from "./TeamDialog";
@@ -1259,7 +1260,7 @@ export function BotListItem({
     <>
       {/* flex, not inline: an inline wrapper adds a baseline gap under the
           avatar and makes the row taller than before the presence dot */}
-      <span className="relative flex shrink-0">
+      <span className={cn("relative flex shrink-0", bot.homeLink?.online === false && "opacity-50 grayscale")}>
         <SidebarActivityAvatar bot={bot} gesture={live.gesture} size={avatarSize}>
         <span className={cn("flex", working && "bot-morph")}>
         <BotAvatar
@@ -1297,12 +1298,12 @@ export function BotListItem({
           className={cn("absolute -right-0.5 -bottom-0.5 rounded-full border-2 border-panel bg-danger", iconOnly ? "size-3" : "size-2.5")} />}
       </span>
       <div className={cn("min-w-0 flex-1", iconOnly && "hidden")}>
-        {(title || bot.remote) && !renaming && (
+        {(title || bot.remote || bot.homeLink) && !renaming && (
           // Its own line above the name: a badge or tooltip beside the name
           // (#866, #871) always traded the name's width against the title's —
           // stacking the two removes the competition entirely, so both can
           // truncate independently against the full row width.
-          <div className="truncate text-[11px] font-medium leading-4 text-ink-secondary">{[title, remoteBotHint(bot)].filter(Boolean).join(" · ")}</div>
+          <div className="truncate text-[11px] font-medium leading-4 text-ink-secondary">{[title, remoteBotHint(bot), homeLinkHint(bot)].filter(Boolean).join(" · ")}</div>
         )}
         <div className="flex items-baseline justify-between gap-2">
           <span className="flex min-w-0 grow items-center gap-1.5 truncate text-[14px] font-semibold text-ink">

@@ -46,6 +46,7 @@ import { t } from "@/lib/i18n";
 import { createBotPatchQueue, type BotUpdatePatch } from "./bot-patch-queue";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import { openLiveEvents } from "@/lib/live-events";
+import { homeForRequest, homeProxyPath, installHomeFetch, type HomeLink, type LinkedHome } from "@/lib/home-routing";
 import { remoteRoomFrame, remoteRoomListPatches, remoteRoomNeedsListing } from "@/lib/remote-room-frames";
 import { noteUpdateFrame } from "@/lib/bos-update";
 import { fetchInbox, inboxCountOf } from "@/lib/inbox";
@@ -492,6 +493,9 @@ export interface Bot {
    * that room (roomMemberBots). Never in state.bots; its id is that home's,
    * so no local bot route, DM or settings may use it. */
   roomHome?: { id: string; name: string };
+  /** Renderer-only: this bot lives on another BOS server this one is linked
+   * to (server/homes.ts). Its calls go through lib/home-routing.ts. */
+  homeLink?: HomeLink;
 }
 
 export interface BotProject {
@@ -799,6 +803,8 @@ export interface ModelVariantSession {
 
 export interface AppState {
   bots: Bot[];
+  /** Other BOS servers whose bots this roster also shows. */
+  homes?: LinkedHome[];
   groups: Group[];
   /** Persisted named teams; older servers omit this, so clients also derive labels. */
   sections?: string[];
@@ -964,6 +970,9 @@ function replaceBotQueues(state: AppState, queues: AppState["pendingQueued"]): A
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
 
 export type Action =
+  | { type: "homes"; homes: LinkedHome[] }
+  | { type: "homeHydrate"; home: LinkedHome; bots: Bot[] }
+  | { type: "homeOnline"; homeId: string; online: boolean }
   | {
       type: "hydrate";
       bots: Bot[];
@@ -1328,14 +1337,54 @@ export function reducer(state: AppState, action: Action): AppState {
     }
   }
   switch (action.type) {
+    case "homes": {
+      const kept = new Set(action.homes.map((home) => home.id));
+      const bots = state.bots
+        .filter((bot) => !bot.homeLink || kept.has(bot.homeLink.id))
+        .map((bot) => {
+          const home = bot.homeLink && action.homes.find((entry) => entry.id === bot.homeLink!.id);
+          return home && home.name !== bot.homeLink!.name ? { ...bot, homeLink: { ...bot.homeLink!, name: home.name } } : bot;
+        });
+      const selectedId = bots.some((bot) => bot.id === state.selectedId) || state.groups.some((group) => group.id === state.selectedId)
+        ? state.selectedId : (bots[0]?.id ?? "");
+      return { ...state, homes: action.homes, bots, selectedId };
+    }
+    case "homeHydrate": {
+      const link: HomeLink = { id: action.home.id, name: action.home.name, online: true };
+      const before = new Map(state.bots.filter((bot) => bot.homeLink?.id === link.id).map((bot) => [bot.id, bot]));
+      // A bot that server only relays from somewhere else is not its own.
+      const incoming = action.bots.filter((bot) => !bot.remote).map((bot) => ({
+        ...bot,
+        messages: bot.messages ?? before.get(bot.id)?.messages ?? [],
+        homeLink: link,
+      }));
+      const ids = new Set(incoming.map((bot) => bot.id));
+      // Never let a home shadow a bot this computer already owns.
+      const local = state.bots.filter((bot) => bot.homeLink?.id !== link.id);
+      const own = new Set(local.map((bot) => bot.id));
+      const bots = [...local, ...incoming.filter((bot) => !own.has(bot.id))];
+      const selectedId = before.has(state.selectedId) && !ids.has(state.selectedId) ? (bots[0]?.id ?? "") : state.selectedId;
+      return { ...state, bots, selectedId };
+    }
+    case "homeOnline":
+      return {
+        ...state,
+        bots: state.bots.map((bot) =>
+          bot.homeLink?.id === action.homeId && bot.homeLink.online !== action.online
+            ? { ...bot, homeLink: { ...bot.homeLink, online: action.online } }
+            : bot,
+        ),
+      };
     case "hydrate": {
-      const known = (id: string) => action.bots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
+      // Bots from linked servers come from their own snapshots; keep them.
+      const homeBots = state.bots.filter((bot) => bot.homeLink && !action.bots.some((local) => local.id === bot.id));
+      const known = (id: string) => action.bots.some((b) => b.id === id) || homeBots.some((b) => b.id === id) || action.groups.some((g) => g.id === id);
       const selectedId =
         state.selectedId && known(state.selectedId) ? state.selectedId : (action.bots[0]?.id ?? "");
       const hydrated = {
         ...state,
         rosterLoaded: true,
-        bots: action.bots,
+        bots: [...action.bots, ...homeBots],
         groups: action.groups,
         sections: action.sections ?? [],
         computerControl: action.computerControl,
@@ -2656,6 +2705,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   /** True for a room this home joined on another home (see `Group.home`). */
   const onAnotherHome = (groupId: string) => Boolean(stateRef.current.groups.find((g) => g.id === groupId)?.home);
   stateRef.current = state;
+  /** Frames from a linked server's own stream (lib/home-routing.ts). */
+  const homeFrame = useRef<(homeId: string, frame: ServerFrame) => void>(() => {});
+  // Every /api/bots/<id> and /api/threads/<id> call for a linked server's bot
+  // goes to that server; the rest of the app never needs to know.
+  installHomeFetch((path, method) => homeForRequest(path, method, stateRef.current.bots, stateRef.current.selectedId));
   // per-frame stream-delta batching (see the "runtime" SSE case); stream
   // state is intentionally OUTSIDE the reducer so token frames re-render
   // only StreamContext consumers
@@ -3865,6 +3919,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
       }
     };
+    // A linked server's stream carries its whole home. Only frames about its
+    // bots and their threads belong here; its rooms, routines, inbox,
+    // settings and updates stay on that server.
+    homeFrame.current = (homeId, frame) => {
+      if (!hydrated) return;
+      switch (frame.kind) {
+        case "bot": {
+          const bot = frame.bot as BotAnnouncement & { remote?: unknown };
+          if (bot.remote) return;
+          const mine = stateRef.current.bots.find((candidate) => candidate.id === bot.id);
+          if (mine && mine.homeLink?.id !== homeId) return;
+          const home = stateRef.current.homes?.find((entry) => entry.id === homeId);
+          handleFrame({ ...frame, bot: { ...bot, homeLink: { id: homeId, name: home?.name ?? mine?.homeLink?.name ?? "", online: true } } } as unknown as ServerFrame);
+          return;
+        }
+        case "bot.deleted":
+          if (stateRef.current.bots.find((candidate) => candidate.id === frame.botId)?.homeLink?.id === homeId) handleFrame(frame);
+          return;
+        case "message":
+        case "message.patch":
+        case "thread":
+        case "runtime":
+        case "screen":
+        case "computer":
+        case "computer-control":
+        case "notify":
+          handleFrame(frame);
+          return;
+        default:
+          return;
+      }
+    };
     remoteFrame.current = (homeId, frame) => {
       if (!hydrated) return;
       const scoped = remoteRoomFrame(stateRef.current.groups, homeId, frame);
@@ -3927,9 +4013,64 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       stopLive();
       if (relistTimer) clearTimeout(relistTimer);
       remoteFrame.current = () => {};
+      homeFrame.current = () => {};
       remoteRelist.current = () => {};
     };
   }, []);
+
+  // Linked servers (server/homes.ts): one snapshot + event stream each,
+  // straight from that server through the local proxy. A server that can't
+  // be reached shows its last known bots asleep instead of dropping them.
+  useEffect(() => {
+    let alive = true;
+    const load = () => api<{ homes: LinkedHome[] }>("/api/homes")
+      .then(({ homes }) => { if (alive) rawDispatch({ type: "homes", homes: homes ?? [] }); })
+      .catch(() => {});
+    void load();
+    window.addEventListener("bos:homes-changed", load);
+    return () => { alive = false; window.removeEventListener("bos:homes-changed", load); };
+  }, []);
+  const homeKeys = useMemo(() => (state.homes ?? []).map((home) => `${home.id}\u0000${home.origin}`).join("\n"), [state.homes]);
+  useEffect(() => {
+    const homes = stateRef.current.homes ?? [];
+    let alive = true;
+    const stops = homes.map((home) => {
+      const cacheKey = `bos.homeRoster.${home.id}`;
+      const snapshot = async (): Promise<boolean> => {
+        try {
+          const { bots } = await api<{ bots: Bot[] }>(homeProxyPath(home.id, `/api/bots?messages=${MESSAGE_PAGE_SIZE}`), { timeoutMs: 20_000 });
+          if (!alive) return false;
+          rawDispatch({ type: "homeHydrate", home, bots: bots ?? [] });
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify((bots ?? []).map(({ messages: _messages, ...bot }) => bot)));
+          } catch { /* storage full: the next snapshot tries again */ }
+          return true;
+        } catch {
+          if (!alive) return false;
+          if (!stateRef.current.bots.some((bot) => bot.homeLink?.id === home.id)) {
+            try {
+              const cached = JSON.parse(localStorage.getItem(cacheKey) ?? "[]") as Bot[];
+              if (Array.isArray(cached) && cached.length) rawDispatch({ type: "homeHydrate", home, bots: cached });
+            } catch { /* nothing cached */ }
+          }
+          rawDispatch({ type: "homeOnline", homeId: home.id, online: false });
+          return false;
+        }
+      };
+      void snapshot();
+      return openLiveEvents({
+        path: homeProxyPath(home.id, "/api/events"),
+        onFrame: (frame) => homeFrame.current(home.id, frame as ServerFrame),
+        onSnapshotRequired: snapshot,
+        onOpen: () => rawDispatch({ type: "homeOnline", homeId: home.id, online: true }),
+        onError: () => rawDispatch({ type: "homeOnline", homeId: home.id, online: false }),
+      });
+    });
+    return () => {
+      alive = false;
+      for (const stop of stops) stop();
+    };
+  }, [homeKeys]);
 
   // Rooms joined on another home stream from that home through
   // /api/groups/:id/events. The relay carries every room this guest shares
