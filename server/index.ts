@@ -621,10 +621,13 @@ const multiplayerActors = new MultiplayerActors(join(DATA_DIR, "multiplayer-acto
 /** Device pairing already grants access to this home. Account sign-ins and
  * peer links require explicit actor binding and never inherit its owner. */
 // A headless server (`bosbot serve`, no desktop parent) has no packaged app to
-// run the trusted Full/Custom transition, so without this its owner could never
-// grant Full access at all. There the owner's own paired admin session stands in
-// for the desktop dialog. Loopback never qualifies: any bot with a shell on the
-// box reaches loopback, and that is the caller these transitions exist to stop.
+// run the trusted Full transition, so without this its owner could never grant
+// Full access at all. There the owner's own paired admin session stands in for
+// the desktop dialog, for Full only (Custom stays a desktop setting). A bare
+// loopback call does not qualify, so a stray curl from a tool call is refused.
+// This is not a wall against a bot that sets out to escalate: on a headless box
+// a bot with an unrestricted shell can mint itself a session over loopback, or
+// rewrite its own data files, so there the real boundary is the shell itself.
 function headlessOwnerMayElevate(auth: RequestAuth): boolean {
   return !DESKTOP_MANAGED && auth.kind === "session" && auth.scopes.includes("admin") &&
     !auth.scopes.includes("peer") && sessions.isLive(auth.session.id) &&
@@ -19865,7 +19868,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ((requestedApprovalMode === "full" || requestedApprovalMode === "custom") &&
           currentApprovalMode !== requestedApprovalMode) ||
         (currentApprovalMode === "custom" && requestedApprovalMode !== "custom");
-      if (requiresPrivateApprovalTransition && !headlessOwnerMayElevate(auth)) {
+      if (requiresPrivateApprovalTransition && !(requestedApprovalMode === "full" && headlessOwnerMayElevate(auth))) {
         return json(res, 403, {
           error: "This approval-level change can only be made from the packaged desktop app",
         });
@@ -21257,7 +21260,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         // Elevated modes still require the trusted desktop transition. A
         // thread settings PATCH cannot manufacture that grant.
         if (mode !== "ask" && mode !== "auto" && mode !== "edits" && !(mode === "full" && headlessOwnerMayElevate(auth))) return json(res, 403, { error: "Full and Custom access require trusted desktop confirmation" });
-        if (approvalModeFor(current) === "custom" && !headlessOwnerMayElevate(auth)) return json(res, 403, { error: "Leaving Custom approval requires confirmation in the packaged desktop app" });
+        if (approvalModeFor(current) === "custom" && !(mode === "full" && headlessOwnerMayElevate(auth))) return json(res, 403, { error: "Leaving Custom approval requires confirmation in the packaged desktop app" });
         if (!supportsApprovalMode(registry.cliTarget((patch.modelSelection ?? current.modelSelection).instanceId)?.driverKind, mode)) {
           return json(res, 400, { error: "This provider does not support the selected approval level" });
         }

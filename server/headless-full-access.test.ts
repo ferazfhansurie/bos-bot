@@ -110,5 +110,8 @@ describe("Full access on a headless server", () => {
 
     // Custom stays a desktop-only (Codex config) level even here.
     expect((await call(`/api/bots/${bot.id}/tasks/${threadId}`, { method: "PATCH", headers: owner, body: { approvalMode: "custom" } })).status).toBe(403);
+    expect((await call(`/api/bots/${bot.id}`, { method: "PATCH", headers: owner, body: { approvalMode: "custom" } })).status).toBe(403);
+    const after = await call("/api/bots?messages=0");
+    expect(after.body.bots.find((candidate: { id: string }) => candidate.id === bot.id).approvalMode).toBe("full");
   }, 30_000);
 });
