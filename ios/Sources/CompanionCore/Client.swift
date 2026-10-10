@@ -1688,10 +1688,21 @@ public struct CompanionClient: Sendable {
     /// Mint a realtime voice call for a bot: a short-lived xAI secret plus
     /// the call plan. Called again for every reconnect. 409 means the
     /// computer has no xAI key; its message says where to add one.
-    public func voiceCall(botId: String, language: String?) async throws -> VoiceCallStart {
+    /// `callId` stays the same across reconnects so the computer books the
+    /// call once.
+    public func voiceCall(botId: String, language: String?, callId: String? = nil) async throws -> VoiceCallStart {
         var body: [String: Any] = ["botId": botId]
         if let language, !language.isEmpty { body["language"] = language }
+        if let callId { body["callId"] = callId }
         return try await send(try makeRequest("POST", "/api/voice/call", body: body), as: VoiceCallStart.self)
+    }
+
+    /// The call hung up after `seconds` connected (Settings → Usage, xAI voice).
+    public func reportVoiceCallUsage(callId: String, seconds: Int) async throws {
+        _ = try await send(
+            try makeRequest("POST", "/api/voice/call/usage", body: ["callId": callId, "seconds": max(0, seconds)]),
+            as: JSONValue.self
+        )
     }
 
     @discardableResult

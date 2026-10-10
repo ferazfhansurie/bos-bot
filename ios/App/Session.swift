@@ -1915,9 +1915,16 @@ final class Session: ObservableObject {
 
     /// Mint a realtime voice call for a bot. Throws the server's own message
     /// (409 means no xAI key on the computer).
-    func startVoiceCall(botId: String, language: String?) async throws -> VoiceCallStart {
+    func startVoiceCall(botId: String, language: String?, callId: String) async throws -> VoiceCallStart {
         guard let client else { throw APIError.transport("This computer is offline.") }
-        return try await client.voiceCall(botId: botId, language: language)
+        return try await client.voiceCall(botId: botId, language: language, callId: callId)
+    }
+
+    /// Book how long a call was connected. Best effort: a miss only leaves
+    /// that call "without a length" in Settings → Usage.
+    func reportVoiceCallUsage(callId: String, seconds: Int) {
+        guard let client else { return }
+        Task { try? await client.reportVoiceCallUsage(callId: callId, seconds: seconds) }
     }
 
     /// A `send_task` from a voice call, posted into the bot's thread as the

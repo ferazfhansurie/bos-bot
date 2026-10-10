@@ -213,7 +213,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         let token = dialToken
         do {
             let language = settings.language == VoiceCallSettings.autoLanguage ? nil : settings.language
-            let start = try await session.startVoiceCall(botId: bot.id, language: language)
+            let start = try await session.startVoiceCall(botId: bot.id, language: language, callId: callId)
             guard token == dialToken, !isOver else { return }
             if plan == nil || !reconnect { plan = start.plan }
             options = start.options
@@ -729,7 +729,10 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         } else {
             audio.stop()
         }
-        if let startedAt { elapsed = Int(Date().timeIntervalSince(startedAt)) }
+        if let startedAt {
+            elapsed = Int(Date().timeIntervalSince(startedAt))
+            session?.reportVoiceCallUsage(callId: callId, seconds: elapsed)
+        }
         activity = .idle
         levels.mic = 0
         levels.speaker = 0
