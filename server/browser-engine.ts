@@ -116,6 +116,13 @@ export async function closeBrowserSession(binaryPath: string, env: NodeJS.Proces
   return false;
 }
 
+/** The browser recovery barrier shared by a person's restart (browser-live)
+ * and an agent's own agent_browser_open (BrowserRuntime): close exactly this
+ * session's native browser with the launch spec its tools use. */
+export function closeAgentBrowser(session: string, spec: { command: string; env?: Record<string, string | undefined> }): Promise<boolean> {
+  return closeBrowserSession(spec.command, browserRuntimeEnv({ ...spec.env, AGENT_BROWSER_SESSION: session }));
+}
+
 const preparedBrowserSessions = new Map<string, Promise<void>>();
 
 /** Preserve only this profile's exact old file before adopting a collision-

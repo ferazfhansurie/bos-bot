@@ -96,7 +96,7 @@ describe("browser takeover gate", () => {
     await value.take("s", "owner");
     await expect(value.withHumanAction("s", "owner", async () => { throw new Error("navigation timed out"); })).rejects.toThrow(/timed out/);
     value.release("s", "owner");
-    await expect(value.withAgentAction("s", async () => "snapshot")).rejects.toThrow(/Restart/);
+    await expect(value.withAgentAction("s", async () => "snapshot")).rejects.toThrow(/agent_browser_open/);
     await expect(value.take("s", "owner")).rejects.toThrow(/may still be running/);
     await value.close("s");
     value.release("s", "owner");
@@ -111,7 +111,7 @@ describe("browser takeover gate", () => {
     value.abandonHumanInput("s", "owner");
     expect(value.canControl("s", "owner")).toBe(false);
     value.release("s", "owner");
-    await expect(value.withAgentAction("s", async () => "click with stuck modifier")).rejects.toThrow(/Restart/);
+    await expect(value.withAgentAction("s", async () => "click with stuck modifier")).rejects.toThrow(/agent_browser_open/);
     await value.restart("s", "new-viewer", async () => {});
     value.abandonHumanInput("s", "owner");
     await expect(value.withAgentAction("s", async () => "fresh input state")).resolves.toBe("fresh input state");
@@ -154,9 +154,11 @@ lines.on('line', line => {
   if (m.method === 'notifications/initialized') { initialized = true; return; }
   let result;
   if (m.method === 'initialize') result = { protocolVersion:'2024-11-05',capabilities:{tools:{}} };
+  else if (m.method === 'tools/list' && m.params && m.params.hang) return;
   else if (m.method === 'tools/list') result = { tools:[{name:'echo'}],pid:process.pid,initialized };
   else if (m.params.name === 'hang') return;
   else if (m.params.name === 'crash') process.exit(23);
+  else if (m.params.name === 'exit-idle') { process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{content:[]}})+'\\n'); setTimeout(() => process.exit(0), 20); return; }
   else if (m.params.name === 'oversized') { process.stdout.write('x'.repeat(16777217)); return; }
   else if (m.params.name === 'bulky') result = { content:[{type:'text',text:'x'.repeat(50000)},{type:'image',data:'AAAA',mimeType:'image/png'}], structuredContent:{ huge: 'y'.repeat(200000) } };
   else if (m.params.name === 'rpc-error') { process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,error:{code:-1,message:'Expected refusal'}})+'\\n'); return; }
@@ -203,7 +205,7 @@ describe("server-owned browser MCP runtime", () => {
       await observed;
       // The real daemon detaches from its MCP parent. Transport exit is not
       // proof that a navigation or submission stopped; do not replay it.
-      await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).rejects.toThrow(/Restart/);
+      await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).rejects.toThrow(/agent_browser_open/);
       await expect(value.take("s", "owner")).rejects.toThrow(/Restart/);
       await value.restart("s", "owner", async () => {});
       await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo", arguments: { text: "back" } }))
@@ -225,7 +227,7 @@ describe("server-owned browser MCP runtime", () => {
     await value.take("s", "owner");
     await expect(value.withHumanAction("s", "owner", async () => { throw new Error("navigation timed out"); })).rejects.toThrow(/timed out/);
     value.release("s", "owner");
-    await expect(value.withAgentAction("s", async () => "snapshot")).rejects.toThrow(/Restart/);
+    await expect(value.withAgentAction("s", async () => "snapshot")).rejects.toThrow(/agent_browser_open/);
   });
 
   it("initializes once, reuses its own session client, and supports concurrent ids", async () => {
@@ -326,6 +328,128 @@ describe("server-owned browser MCP runtime", () => {
     } finally {
       try { process.kill(first.browserPid, "SIGKILL"); } catch { /* fixture exited */ }
     }
+  });
+});
+
+describe("agent self-recovery from an uncertain browser", () => {
+  async function latched(closeBrowser = vi.fn(async (_session: string, _spec: BrowserSpawnSpec) => true)) {
+    const value = runtime({ requestTimeoutMs: 250, closeBrowser });
+    const before = await value.agentRpc("s", spec(), "tools/list", {}) as { pid: number };
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "crash" })).rejects.toThrow(/Browser/);
+    return { value, closeBrowser, before };
+  }
+
+  it("refuses other tools with a hint the model can act on, and keeps tools/list available", async () => {
+    const { value, closeBrowser } = await latched();
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_snapshot" })).rejects.toThrow(/Call agent_browser_open/);
+    await expect(value.agentRpc("s", spec(), "tools/list", {})).resolves.toMatchObject({ tools: [{ name: "echo" }] });
+    expect(closeBrowser).not.toHaveBeenCalled();
+  });
+
+  it("agent_browser_open closes the native browser and the old transport, then opens fresh", async () => {
+    const { value, closeBrowser } = await latched();
+    const stale = await value.agentRpc("s", spec(), "tools/list", {}) as { pid: number };
+    const order: string[] = [];
+    const check = vi.fn(() => { order.push("check"); });
+    closeBrowser.mockImplementationOnce(async (session, launch) => {
+      order.push("close");
+      expect(session).toBe("s");
+      expect(launch.command).toBe(process.execPath);
+      // Nothing else is admitted while the browser closes.
+      await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).rejects.toThrow(/agent_browser_open/);
+      await expect(value.take("s", "owner")).rejects.toThrow(/changing/);
+      return true;
+    });
+    const opened = await value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open", arguments: { url: "https://example.com" } }, check) as { pid: number; content: Array<{ text: string }> };
+    expect(order[0]).toBe("check"); // the turn's claim is checked before anything is closed
+    expect(order).toContain("close");
+    expect(closeBrowser).toHaveBeenCalledTimes(1);
+    expect(opened.content[0].text).toContain("example.com");
+    expect(opened.pid).not.toBe(stale.pid);
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).resolves.toMatchObject({ content: [{ type: "text" }] });
+    await value.take("s", "owner");
+    expect(value.canControl("s", "owner")).toBe(true);
+  });
+
+  it("agent_browser_close recovers without dispatching to the engine", async () => {
+    const { value, closeBrowser } = await latched();
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_close" }))
+      .resolves.toMatchObject({ content: [{ type: "text", text: expect.stringContaining("Browser closed") }] });
+    expect(closeBrowser).toHaveBeenCalledTimes(1);
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).resolves.toMatchObject({ content: [{ type: "text" }] });
+  });
+
+  it("stays latched when the native close fails or the turn may not use the browser", async () => {
+    const { value, closeBrowser } = await latched(vi.fn(async () => false));
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open" })).rejects.toThrow(/could not be restarted/);
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).rejects.toThrow(/agent_browser_open/);
+    closeBrowser.mockClear();
+    const otherThread = () => { throw new Error("another thread is using this browser"); };
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open" }, otherThread)).rejects.toThrow(/another thread/);
+    expect(closeBrowser).not.toHaveBeenCalled();
+    closeBrowser.mockResolvedValueOnce(true);
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open" })).resolves.toMatchObject({ content: [{ type: "text" }] });
+  });
+
+  it("never steals a person's control or restarts over running work", async () => {
+    const closeBrowser = vi.fn(async () => true);
+    const value = runtime({ closeBrowser });
+    await value.take("s", "owner");
+    await expect(value.withHumanAction("s", "owner", async () => { throw new Error("navigation timed out"); })).rejects.toThrow(/timed out/);
+    // A person still holds the uncertain browser: refused, their hold kept.
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open" })).rejects.toThrow(/paused/);
+    expect(value.heldBy("s")).toBe("owner");
+    // Held input drains first: releasing with a human action still running is busy.
+    const typing = deferred();
+    const value2 = runtime({ closeBrowser });
+    await value2.take("t", "owner");
+    const human = value2.withHumanAction("t", "owner", () => typing.promise);
+    value2.abandonHumanInput("t", "owner");
+    value2.release("t", "owner");
+    await expect(value2.agentRpc("t", spec(), "tools/call", { name: "agent_browser_open" })).rejects.toThrow(/paused/);
+    typing.resolve();
+    await human;
+    expect(closeBrowser).not.toHaveBeenCalled();
+    // Once the person's hold is gone, closing the browser clears their held keys.
+    value.release("s", "owner");
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open" })).resolves.toMatchObject({ content: [{ type: "text" }] });
+    expect(closeBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses while another agent action is still in flight", async () => {
+    const closeBrowser = vi.fn(async () => true);
+    const value = runtime({ closeBrowser });
+    const running = deferred();
+    const agent = value.withAgentAction("s", () => running.promise);
+    // Model the latch from another source while that action runs.
+    (value as unknown as { gate(s: string): { uncertain: boolean } }).gate("s").uncertain = true;
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open" })).rejects.toThrow(/busy/);
+    expect(closeBrowser).not.toHaveBeenCalled();
+    running.resolve();
+    await agent;
+  });
+
+  it("without a configured native close, an agent cannot recover and is told how", async () => {
+    const value = runtime({ requestTimeoutMs: 250 });
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "crash" })).rejects.toThrow(/Browser/);
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "agent_browser_open" })).rejects.toThrow(/agent_browser_open/);
+  });
+});
+
+describe("uncertainty latches only for an in-flight action", () => {
+  it("does not latch when the transport exits idle", async () => {
+    const value = runtime();
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "exit-idle" })).resolves.toMatchObject({ content: [] });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).resolves.toMatchObject({ content: [{ type: "text" }] });
+    await value.take("s", "owner");
+    expect(value.canControl("s", "owner")).toBe(true);
+  });
+
+  it("does not latch when a tools/list times out", async () => {
+    const value = runtime({ requestTimeoutMs: 200 });
+    await expect(value.agentRpc("s", spec(), "tools/list", { hang: true })).rejects.toThrow(/timed out/);
+    await expect(value.agentRpc("s", spec(), "tools/call", { name: "echo" })).resolves.toMatchObject({ content: [{ type: "text" }] });
   });
 });
 

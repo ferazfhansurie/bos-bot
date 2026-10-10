@@ -9,6 +9,13 @@ export interface BrowserSpawnSpec {
 }
 
 export const BROWSER_CONTROL_REFUSAL = "Browser tools are paused while a person controls this browser. Wait for them to hand control back; do not try another browser or execution tool.";
+/** The model cannot press the viewer's restart button; agent_browser_open is
+ * its recovery path (see agentRpc). */
+export const BROWSER_INTERRUPTED = "A browser action was interrupted and may still be running. Call agent_browser_open to restart the browser (it closes and reopens it), then continue.";
+const BROWSER_CLOSING = "The browser is closing. Try again shortly.";
+const BROWSER_BUSY = "The browser is busy. Wait for current work to finish before restarting.";
+/** Tools that may restart an uncertain browser on an agent's behalf. */
+const AGENT_RECOVERY_TOOLS = new Set(["agent_browser_open", "agent_browser_close"]);
 const MAX_REQUEST_BYTES = 1_048_576;
 const MAX_RESPONSE_BYTES = 16_777_216;
 /** Startup, not per-request work: a cold engine spawn can exceed a tight
@@ -41,7 +48,7 @@ class BrowserClient {
   private idleMs: number;
   private maxPending: number;
   private onClose: () => void;
-  private onRequestTimeout: () => void;
+  private onRequestTimeout: (method: string) => void;
 
   constructor(
     spec: BrowserSpawnSpec,
@@ -49,7 +56,7 @@ class BrowserClient {
     idleMs: number,
     maxPending: number,
     onClose: () => void,
-    onRequestTimeout: () => void,
+    onRequestTimeout: (method: string) => void,
   ) {
     this.requestTimeoutMs = requestTimeoutMs;
     this.idleMs = idleMs;
@@ -120,7 +127,9 @@ class BrowserClient {
   }
 
   rpc(method: string, params: unknown, timeoutMs: number = this.requestTimeoutMs): Promise<unknown> {
-    if (this.stopped) return Promise.reject(new TransportError("Browser connection closed."));
+    // Nothing was sent: a plain error, so a transport that died idle between
+    // admission and dispatch is not mistaken for an interrupted action.
+    if (this.stopped) return Promise.reject(new Error("Browser connection closed. Try again."));
     if (this.pending.size >= this.maxPending) return Promise.reject(new Error("Too many pending browser requests. Try again when the current action finishes."));
     const id = this.nextId++;
     const message = { jsonrpc: "2.0", id, method, params };
@@ -131,7 +140,7 @@ class BrowserClient {
         // Seal the gate synchronously with the timer, before stop() teardown:
         // the rejection can surface through the ready handshake, which sits
         // outside agentRpc's uncertainty classifier.
-        this.onRequestTimeout();
+        this.onRequestTimeout(method);
         void this.stop(new TransportError("Browser request timed out; restart the browser before taking control."));
       }, timeoutMs);
       timer.unref();
@@ -207,7 +216,12 @@ interface Gate {
 export class BrowserRuntime {
   private gates = new Map<string, Gate>();
   private clients = new Map<string, { key: string; client: BrowserClient }>();
-  private options: { requestTimeoutMs: number; takeoverTimeoutMs: number; idleMs: number; maxPending: number; resultBudget: number };
+  private options: {
+    requestTimeoutMs: number; takeoverTimeoutMs: number; idleMs: number; maxPending: number; resultBudget: number;
+    /** Closes the native browser (daemon) for a session; resolves true once it
+     * is gone. Without it, agents cannot self-recover an uncertain browser. */
+    closeBrowser?: (session: string, spec: BrowserSpawnSpec) => Promise<boolean>;
+  };
 
   constructor(options: Partial<BrowserRuntime["options"]> = {}) {
     const budget = Number(compatEnv.OMB_BROWSER_RESULT_BUDGET);
@@ -235,8 +249,8 @@ export class BrowserRuntime {
   async withAgentAction<T>(session: string, fn: () => Promise<T>): Promise<T> {
     const gate = this.gate(session);
     if (gate.owner !== null) throw new Error(BROWSER_CONTROL_REFUSAL);
-    if (gate.uncertain) throw new Error("A browser action was interrupted. Restart this browser before continuing.");
-    if (gate.closing) throw new Error("The browser is closing. Try again shortly.");
+    if (gate.uncertain) throw new Error(BROWSER_INTERRUPTED);
+    if (gate.closing) throw new Error(BROWSER_CLOSING);
     gate.agents++;
     try {
       const result = await fn();
@@ -253,10 +267,21 @@ export class BrowserRuntime {
     if (method !== "tools/list" && method !== "tools/call") throw new Error("Unsupported browser method.");
     // tools/list bypasses withAgentAction (a human may hold control), so it
     // must refuse the closing window itself or its client outlives restart().
-    if (method !== "tools/call" && this.gate(session).closing) throw new Error("The browser is closing. Try again shortly.");
-    // Uncertainty survives client replacement and never self-resolves: refuse
-    // every new browser request until an explicit restart clears it.
-    if (this.gate(session).uncertain) throw new Error("A browser action was interrupted. Restart this browser before continuing.");
+    if (method !== "tools/call" && this.gate(session).closing) throw new Error(BROWSER_CLOSING);
+    // Uncertainty survives client replacement and never self-resolves. Listing
+    // tools dispatches nothing to the daemon, so it stays available: a fresh
+    // turn must be able to see agent_browser_open to recover. Every other
+    // call is refused until the browser is closed, by a person's restart or
+    // by the agent's own agent_browser_open/close below.
+    const toolName = method === "tools/call" && params && typeof params === "object" && typeof (params as { name?: unknown }).name === "string"
+      ? (params as { name: string }).name : undefined;
+    if (method === "tools/call" && this.gate(session).uncertain) {
+      if (!toolName || !AGENT_RECOVERY_TOOLS.has(toolName)) throw new Error(BROWSER_INTERRUPTED);
+      await this.recoverForAgent(session, spec, beforeDispatch);
+      if (toolName === "agent_browser_close") {
+        return { content: [{ type: "text", text: "Browser closed. Call agent_browser_open to start a fresh browser." }] };
+      }
+    }
     const invoke = async () => {
       const key = JSON.stringify([spec.command, spec.args, Object.entries(spec.env).sort(([a], [b]) => a.localeCompare(b))]);
       let entry = this.clients.get(session);
@@ -264,9 +289,11 @@ export class BrowserRuntime {
       if (!entry) {
         const client = new BrowserClient(spec, this.options.requestTimeoutMs, this.options.idleMs, this.options.maxPending, () => {
           if (this.clients.get(session)?.client === client) this.clients.delete(session);
-        }, () => {
+        }, (timedOut) => {
+          // Only an accepted action can still be running in the daemon. A
+          // handshake or tools/list timeout dispatched nothing to the browser.
           const gate = this.gate(session);
-          if (!gate.closing) gate.uncertain = true;
+          if (timedOut === "tools/call" && !gate.closing) gate.uncertain = true;
         });
         entry = { key, client };
         this.clients.set(session, entry);
@@ -281,7 +308,6 @@ export class BrowserRuntime {
         const result = await entry.client.rpc(method, request);
         beforeDispatch?.(); // A turn revoked while the tool ran receives no result.
         if (method === "tools/list") return slimBrowserToolList(result);
-        const toolName = request && typeof request === "object" && typeof (request as { name?: unknown }).name === "string" ? (request as { name: string }).name : undefined;
         return shapeBrowserToolResult(result, { toolName, budget: this.options.resultBudget });
       }
       catch (error) {
@@ -296,6 +322,38 @@ export class BrowserRuntime {
       }
     };
     return method === "tools/call" ? this.withAgentAction(session, invoke) : invoke();
+  }
+
+  /** An agent's own recovery from an uncertain browser: the same barrier as a
+   * person's restart (a confirmed native close), without taking ownership.
+   * It never steals a person's control or acts beside running work. */
+  private async recoverForAgent(session: string, spec: BrowserSpawnSpec, beforeDispatch?: () => void): Promise<void> {
+    const gate = this.gate(session);
+    if (gate.owner !== null) throw new Error(BROWSER_CONTROL_REFUSAL);
+    if (gate.closing) throw new Error(BROWSER_CLOSING);
+    if (gate.releasing || gate.agents || gate.humans) throw new Error(BROWSER_BUSY);
+    const closeBrowser = this.options.closeBrowser;
+    if (!closeBrowser) throw new Error(BROWSER_INTERRUPTED);
+    // This turn must hold the browser before it may close it; another
+    // thread's live browser work is not this turn's to discard.
+    beforeDispatch?.();
+    gate.ready = false;
+    gate.closing = true;
+    this.changed(gate);
+    try {
+      let closed = false;
+      try { closed = await closeBrowser(session, spec); }
+      catch { closed = false; }
+      if (!closed) throw new Error("The browser could not be restarted. Try agent_browser_open again shortly.");
+      await this.clients.get(session)?.client.stop();
+      // Same single re-check as restart(): a tools/list may register a client
+      // while the first stop awaits.
+      await this.clients.get(session)?.client.stop();
+      gate.uncertain = false;
+    } finally {
+      gate.closing = false;
+      this.changed(gate);
+    }
   }
 
   async take(session: string, owner: string): Promise<void> {

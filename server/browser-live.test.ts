@@ -7,7 +7,11 @@ import { BrowserLive, browserStreamPort, normalizeBrowserLiveMessage, parseBrows
 const execute = vi.hoisted(() => vi.fn());
 const nativeClose = vi.hoisted(() => vi.fn());
 const nativeInput = vi.fn();
-vi.mock("./browser-engine.ts", () => ({ closeBrowserSession: nativeClose }));
+vi.mock("./browser-engine.ts", () => ({
+  closeBrowserSession: nativeClose,
+  closeAgentBrowser: (session: string, spec: { command: string; env?: Record<string, string | undefined> }) =>
+    nativeClose(spec.command, { ...spec.env, AGENT_BROWSER_SESSION: session }),
+}));
 vi.mock("node:child_process", async (original) => {
   const actual = await original<typeof import("node:child_process")>();
   const { promisify } = await import("node:util");
@@ -383,7 +387,7 @@ describe("authenticated browser viewer relay", () => {
     await a.action({ type: "input_keyboard", eventType: "keyDown", key: "Tab", code: "Tab", modifiers: 8 });
     await a.action({ type: "input_keyboard", eventType: "keyUp", key: "Tab", code: "Tab", modifiers: 8 });
     await a.action({ type: "release" });
-    await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("Restart");
+    await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("agent_browser_open");
   });
   it("keeps uncertain discrete key presses behind the existing restart barrier and hides raw failures", async () => {
     runtime = new BrowserRuntime(); live = new BrowserLive({ runtime });
@@ -392,7 +396,7 @@ describe("authenticated browser viewer relay", () => {
     await expect(a.action({ type: "input_keyboard", eventType: "keyDown", key: "Enter" })).rejects.toThrow("could not confirm this input");
     expect(JSON.parse(nativeInput.mock.calls[0]![1].body)).toEqual({ action: "press", key: "Enter" });
     await a.action({ type: "release" });
-    await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("Restart");
+    await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("agent_browser_open");
   });
   it("releases Shift-only printable keys even when keyUp contains no text", async () => {
     const a = await open(); await a.action({ type: "take" });
@@ -409,7 +413,7 @@ describe("authenticated browser viewer relay", () => {
     await a.action({ type: "input_keyboard", eventType: "keyDown", key: "Shift", code: "ShiftLeft", modifiers: 8 });
     await a.action({ type: "input_mouse", eventType: "mousePressed", x: 12, y: 20, button: "left" });
     if (ending === "release") await a.action({ type: "release" }); else a.socket.close();
-    await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("Restart");
+    await expect(runtime.withAgentAction("profile-a", async () => true)).rejects.toThrow("agent_browser_open");
     const b = ending === "release" ? a : await open();
     await b.action({ type: "restart" });
     await expect(runtime.withAgentAction("profile-a", async () => true)).resolves.toBe(true);

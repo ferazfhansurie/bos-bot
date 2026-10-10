@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { promisify } from "node:util";
 import { browserRuntimeEnv, type BrowserRuntime } from "./browser-runtime.ts";
-import { closeBrowserSession } from "./browser-engine.ts";
+import { closeAgentBrowser } from "./browser-engine.ts";
 
 const execute = promisify(execFile);
 const MAX_FRAME = 3 * 1024 * 1024;
@@ -396,8 +396,7 @@ export class BrowserLive {
       try {
         const restarting = this.runtime.restart(viewer.session, viewer.id, async () => {
           if (!this.current(viewer)) throw new Error("stale viewer");
-          const env = browserRuntimeEnv({ ...viewer.spec.env, AGENT_BROWSER_SESSION: viewer.session });
-          if (!await closeBrowserSession(viewer.spec.command, env)) throw new Error("browser close failed");
+          if (!await closeAgentBrowser(viewer.session, viewer.spec)) throw new Error("browser close failed");
         });
         this.control(viewer.session);
         await restarting;

@@ -466,6 +466,7 @@ import {
   browserEngineEncryptionKey,
   prepareBrowserSessionState,
   clearBrowserSessionState,
+  closeAgentBrowser,
   ensureChrome,
   installAgentBrowserBinary,
   resolveAgentBrowserBinary,
@@ -1537,7 +1538,9 @@ function cancelDirectTurnDispatch(botId: string, expectedThreadId?: string): Dir
 /** The bot's browser for this turn: agent-browser, one isolated session per
  * browser profile or per bot (docs/plans/browser-engine.md). Null, with the
  * reason logged once, when the engine is not on this machine. */
-const browserRuntime = new BrowserRuntime();
+// Agents recover an interrupted browser through agent_browser_open with the
+// same native close a person's restart uses.
+const browserRuntime = new BrowserRuntime({ closeBrowser: closeAgentBrowser });
 // Native read-only WhatsApp capture (whatsapp-service.ts): one linked-device
 // client under <data dir>/whatsapp, resumed at boot when a session exists.
 const whatsapp = new WhatsAppService({ dataDir: DATA_DIR });
