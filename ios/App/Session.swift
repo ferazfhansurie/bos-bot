@@ -354,7 +354,14 @@ final class Session: ObservableObject {
                withExtension: "json"
            ),
            let data = try? Data(contentsOf: url),
-           let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
+           var fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
+            // `-empty-thread-preview`: Scout's thread starts empty, for the
+            // empty thread's mascot; `-empty-thread-body bean` dresses it.
+            if arguments.contains("-empty-thread-preview"), let i = fleet.bots.firstIndex(where: { $0.id == "preview-scout" }) {
+                fleet.bots[i].messages = []
+                fleet.bots[i].activeLeafId = nil
+                if let b = arguments.firstIndex(of: "-empty-thread-body"), b + 1 < arguments.count { fleet.bots[i].mascotBody = arguments[b + 1] }
+            }
             let preview = Connection(
                 id: "preview-current",
                 name: "Milind’s MacBook Pro",
@@ -390,6 +397,8 @@ final class Session: ObservableObject {
                 for (threadID, page) in pages { state.merge(page, intoThread: threadID) }
             }
             status = .live
+            if let i = arguments.firstIndex(of: "-empty-thread-send-after"), i + 1 < arguments.count,
+               let seconds = Double(arguments[i + 1]) { startEmptyThreadSendPreview(after: seconds) }
             if arguments.contains("-stream-preview-bots") { startMultiStreamPreview() }
             else if arguments.contains("-stream-preview") { startStreamPreview() }
             return
@@ -1064,6 +1073,25 @@ final class Session: ObservableObject {
     /// Offline stand-in for a long run, for measuring the chat while it
     /// streams: a long history, then a reply typed at provider speed with a
     /// tool step every 700ms, all through the same batching as the wire.
+    /// `-empty-thread-send-after n`: n seconds in, a message lands in
+    /// Scout's empty thread and a turn starts, the way a real first send
+    /// does, so the mascot's trip up into the header can be recorded.
+    private func startEmptyThreadSendPreview(after seconds: Double) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self, var bot = self.state.bot("preview-scout") else { return }
+            bot.busy = true
+            bot.messages = nil
+            self.state.apply(.bot(bot))
+            let message: [String: Any] = ["id": "empty-send-1", "role": "user", "kind": "text",
+                                          "at": Date().timeIntervalSince1970 * 1000, "text": "what changed in the testflight checklist"]
+            if let data = try? JSONSerialization.data(withJSONObject: ["kind": "message", "threadId": bot.threadId, "message": message]),
+               let frame = try? JSONDecoder().decode(StreamFrame.self, from: data) {
+                self.state.apply(frame.frame)
+            }
+        }
+    }
+
     private func startStreamPreview() {
         let threadId = "preview-gmail"
         func frame(_ json: [String: Any]) -> StreamFrame? {

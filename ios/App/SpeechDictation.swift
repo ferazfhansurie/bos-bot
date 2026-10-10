@@ -177,6 +177,7 @@ final class SpeechDictation: ObservableObject {
         }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             request.append(buffer)
+            MicLevel.measure(buffer)
         }
         tapInstalled = true
         engine.prepare()
@@ -235,6 +236,7 @@ final class SpeechDictation: ObservableObject {
     }
 
     private func teardown() {
+        MicLevel.reset()
         // Drop the tap before ending the request: a buffer that arrives
         // after endAudio() can fail the task instead of being ignored.
         if let engine = audioEngine {
@@ -262,4 +264,33 @@ final class SpeechDictation: ObservableObject {
         "Dictation needs Speech Recognition access. Enable it in Settings → BOS."
     static let micDeniedMessage: LocalizedStringKey =
         "Dictation needs Microphone access. Enable it in Settings → BOS."
+}
+
+/// How loud the mic is right now, 0...1, for the empty thread's mascot to
+/// pulse with. Not published: it changes with every buffer, and the only
+/// reader is a canvas that is already drawing each frame.
+enum MicLevel {
+    private static let lock = NSLock()
+    private static var value: Float = 0
+
+    static var current: Float {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    static func reset() {
+        lock.lock(); value = 0; lock.unlock()
+    }
+
+    /// RMS of the first channel, mapped from about -50...-10 dB onto 0...1.
+    static func measure(_ buffer: AVAudioPCMBuffer) {
+        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
+        let count = Int(buffer.frameLength)
+        var sum: Float = 0
+        for i in 0..<count { sum += samples[i] * samples[i] }
+        let rms = (sum / Float(count)).squareRoot()
+        let db = 20 * log10(max(rms, 1e-6))
+        let level = min(max((db + 50) / 40, 0), 1)
+        lock.lock(); value = level; lock.unlock()
+    }
 }

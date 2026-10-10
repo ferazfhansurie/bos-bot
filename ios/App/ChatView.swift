@@ -35,6 +35,8 @@ struct ChatView: View {
     /// The draft lives in its own object so a keystroke redraws the
     /// composer, not this whole view and every row of the transcript.
     @State private var composerDraft = ComposerDraft()
+    /// Where the header and its face sit, for the empty thread's mascot.
+    @State private var mascotDock = MascotDock()
     private var draft: String {
         get { composerDraft.text }
         nonmutating set { composerDraft.text = newValue }
@@ -405,7 +407,22 @@ struct ChatView: View {
                 // The blur is only the top strip — back, computer — the way
                 // a system bar is; the transcript starts on that line and
                 // scrolls under the face and name, which float over it.
-                .safeAreaInset(edge: .top, spacing: 0) { headerBar }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    headerBar
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mascotDock.header = $0 }
+                }
+                // A fresh thread is the bot itself, alive in the middle of
+                // it, until the first message sends it up into the header.
+                .overlay {
+                    if case let .bot(bot) = current {
+                        EmptyThreadMascot(bot: bot, threadId: threadId, isEmpty: showsEmptyMascot,
+                                          draft: composerDraft, focused: composerFocused,
+                                          dictating: dictation.isListening,
+                                          unread: onClose == nil ? unreadElsewhere : 0,
+                                          others: session.state.bots, dock: mascotDock)
+                            .id(threadId)
+                    }
+                }
                 // A conversation grows from the bottom: a transcript shorter
                 // than the screen rests at the bottom, and opening a chat
                 // starts on the newest message rather than the oldest.
@@ -750,7 +767,15 @@ struct ChatView: View {
             // still idle face it always had.
             ThreadHeaderFace(chat: current, size: 30, live: MausState.forThread(current, in: session.state),
                              director: mascot, draft: composerDraft, typing: composerFocused)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mascotDock.avatar = $0 }
         }
+    }
+
+    /// A bot thread that has loaded and has nothing in it yet: no messages,
+    /// no turn running, nothing on its way.
+    private var showsEmptyMascot: Bool {
+        guard case .bot = current else { return false }
+        return session.state.hasLoadedPage(forThread: threadId) && messages.isEmpty && !current.busy && !sendingMessage
     }
 
     /// True when a bot's turn here has settled on its own reply, so the next
@@ -1575,7 +1600,7 @@ struct ChatView: View {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if attachments.isEmpty && !current.busy
-                        && !hasPendingApproval && !storedChips.isEmpty {
+                        && !hasPendingApproval && !storedChips.isEmpty && !showsEmptyMascot {
                 EmptyDraftOnly(composer: composerDraft) {
                     PredictiveActionChipsView(chips: storedChips, accentColor: MausPalette.color(current.color)) { chip in
                         submit(chip.prompt)

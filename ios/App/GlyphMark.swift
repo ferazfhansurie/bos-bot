@@ -173,7 +173,7 @@ struct GlyphMark: View {
     }()
 
     /// Area centroid of every body in its 100 box, sampled once.
-    private static let massCentre: [String: CGPoint] = Dictionary(uniqueKeysWithValues: FlatMascotBodies.all.map { body in
+    static let massCentre: [String: CGPoint] = Dictionary(uniqueKeysWithValues: FlatMascotBodies.all.map { body in
         let outline = FlatMascotBodies.outline(body.id)
         var sum = CGPoint.zero, count = 0.0
         for y in stride(from: 1.0, to: 100, by: 2) {
