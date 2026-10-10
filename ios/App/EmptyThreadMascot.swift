@@ -27,9 +27,20 @@
 // in the background.
 // The view is gone entirely the moment the thread has a message in it.
 //
+// It is also a fidget toy, and it moves like a real ball: it has spin, so it
+// rolls along the floor, rubs off the walls, curves a little through the air
+// and rights itself like a roly-poly when it settles, with a shadow on the
+// floor as it comes down. Brush its top or bottom sideways and it spins in
+// place like a spinner, clicking every quarter turn; press and hold and it
+// squishes like a stress ball, then pops up when let go; tip the phone and
+// it rolls off its spot and around the floor. Pulled out during a run, it
+// thinks along with the bot, twitches with every step and celebrates when
+// the turn is done before going back up.
+//
 // What a mood looks like and what the mascot says is `EmptyMascotBrain` in
 // CompanionCore, where it is tested.
 import CompanionCore
+import CoreMotion
 import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
@@ -73,6 +84,10 @@ struct EmptyThreadMascot: View {
     /// The person's other bots, one of which may drop by.
     let others: [Bot]
     let dock: MascotDock
+    /// A turn is running in this thread.
+    var working = false
+    /// Grows with every new line in the thread: a step of the run landed.
+    var pulse = 0
     /// It is out over the transcript (pulled out during a run), so the
     /// header can hide its face.
     var onRecess: (Bool) -> Void = { _ in }
@@ -109,6 +124,8 @@ struct EmptyThreadMascot: View {
         }
         .onChange(of: dictating) { _, value in creature?.dictating = value }
         .onChange(of: unread) { _, value in creature?.unread = value }
+        .onChange(of: working) { _, value in creature?.working = value }
+        .onChange(of: pulse) { old, new in if new > old { creature?.stepLanded() } }
         .onReceive(NotificationCenter.default.publisher(for: .bosDeviceShaken)) { _ in creature?.shake() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
             creature?.pose()
@@ -119,6 +136,7 @@ struct EmptyThreadMascot: View {
         .onAppear { syncClock() }
         .onDisappear {
             clock.stop()
+            MascotTilt.stop()
             puller.uninstall()
             onRecess(false)
         }
@@ -140,7 +158,13 @@ struct EmptyThreadMascot: View {
     }
 
     private func syncClock() {
-        if creature != nil, scenePhase == .active { clock.run(rate) } else { clock.pause() }
+        if creature != nil, scenePhase == .active {
+            clock.run(rate)
+            if !reduceMotion { MascotTilt.start() }
+        } else {
+            clock.pause()
+            MascotTilt.stop()
+        }
     }
 
     private func live(_ creature: MascotCreature, stage: CGSize) -> some View {
@@ -218,6 +242,7 @@ struct EmptyThreadMascot: View {
         fresh.focused = focused
         fresh.dictating = dictating
         fresh.unread = unread
+        fresh.working = working
         fresh.onRate = { rate = $0 }
         fresh.onLine = { line = $0 }
         fresh.onGame = { game.apply($0) }
@@ -310,6 +335,39 @@ private struct MascotFrame: View {
         let action: (CADisplayLink) -> Void
         init(_ action: @escaping (CADisplayLink) -> Void) { self.action = action }
         @objc func fire(_ link: CADisplayLink) { action(link) }
+    }
+}
+
+/// Which way the phone is tipped, for rolling the mascot. Device motion,
+/// read on the mascot's own frames rather than pushed, and only while it is
+/// out and the app is in front.
+enum MascotTilt {
+    nonisolated(unsafe) private static let manager = CMMotionManager()
+    nonisolated(unsafe) private static var orientation = UIInterfaceOrientation.portrait
+
+    @MainActor static func start() {
+        orientation = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }?.interfaceOrientation ?? .portrait
+        guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
+        manager.deviceMotionUpdateInterval = 1.0 / 60
+        manager.startDeviceMotionUpdates()
+    }
+
+    @MainActor static func stop() {
+        guard manager.isDeviceMotionActive else { return }
+        manager.stopDeviceMotionUpdates()
+    }
+
+    /// Gravity along the screen's right, in g: + when the right edge is
+    /// down. Nil before the first reading.
+    static var sideways: CGFloat? {
+        guard let gravity = manager.deviceMotion?.gravity else { return nil }
+        switch orientation {
+        case .landscapeLeft: return CGFloat(gravity.y)
+        case .landscapeRight: return CGFloat(-gravity.y)
+        case .portraitUpsideDown: return CGFloat(-gravity.x)
+        default: return CGFloat(gravity.x)
+        }
     }
 }
 
@@ -663,6 +721,14 @@ final class MascotCreature {
     }
     var dictating = false { didSet { if dictating != oldValue { poke() } } }
     var unread = 0
+    /// The bot's turn is running. Out during a run, it thinks along; when
+    /// the turn ends it celebrates and goes back up.
+    var working = false {
+        didSet {
+            guard working != oldValue else { return }
+            if working { runDoneAt = nil } else if recess, started, mode != .leaving { runDone() }
+        }
+    }
 
     var onRate: ((Rate) -> Void)?
     var onLine: ((String?) -> Void)?
@@ -729,6 +795,51 @@ final class MascotCreature {
     private var hopping = false
     private var lastBump: TimeInterval = -1
     private var tapCount = 0
+    private var touchDownAt: TimeInterval = 0
+
+    // A real ball: how far round it has turned and how fast it is turning,
+    // in radians, + clockwise on screen. Contact with the floor and the
+    // walls trades spin for slide, so it rolls; at home a weighted bottom
+    // brings it upright with a wobble.
+    private var angle: CGFloat = 0
+    private var spin: CGFloat = 0
+    private var lastQuarter = 0
+    private var lastClick: TimeInterval = -1
+    /// Seconds spent spinning hard in place: long enough and it reels.
+    private var fastSpin: TimeInterval = 0
+    /// Held and swung round in circles: which way the finger is heading,
+    /// and how fast that heading turns. The ball spins up with it.
+    private var heading: CGFloat?
+    private var headingFrom = CGPoint.zero
+    private var headingAt: TimeInterval = 0
+    private var swirl: CGFloat = 0
+    private var frameDt: CGFloat = 0
+
+    // Fidgets.
+    /// Brushed sideways across its top or bottom: it turns with the finger
+    /// like a dial, and spins on when let go.
+    private var dialing = false
+    private var dialLast: CGFloat = 0
+    private var dialAngle: CGFloat = 0
+    private var dialFollowed: CGFloat = 0
+    /// Pressed and held: how squished it is, 0 ... 1.
+    private var squeezing = false
+    private var press: CGFloat = 0
+    private var nextSqueezeTick: TimeInterval = 0
+    private var squeezedFull = false
+    /// The phone's tip, less the way it is usually held (a slow average),
+    /// so lying on your side does not roll it away.
+    private var tilt: CGFloat = 0
+    private var tiltBase: CGFloat?
+    private var tippedSince: TimeInterval?
+    /// It rolled off its spot because the phone tipped: it stays on the
+    /// floor while the phone is tipped.
+    private var tiltRolling = false
+
+    // The run.
+    private var pings: [(at: TimeInterval, big: Bool)] = []
+    private var lastPing: TimeInterval = -1
+    private var runDoneAt: TimeInterval?
 
     // Keepy-uppy: a flick starts a run, every hit while it is up scores, the
     // floor ends it. A wall bank and a ceiling bonk each score once between
@@ -896,8 +1007,14 @@ final class MascotCreature {
             grab = CGVector(dx: p.x - start.x, dy: p.y - start.y)
             finger = start
             touchStart = start
+            touchDownAt = t
+            heading = nil
+            headingFrom = start
+            headingAt = t
+            swirl = 0
             homeHopAt = nil
             hopping = false
+            tiltRolling = false
             if playing, mode == .flung {
                 // a hit counts on touch-down; a near miss does nothing at all
                 if hits(start) { swat(at: start) } else { whiffed = true }
@@ -905,9 +1022,36 @@ final class MascotCreature {
             poke()
         }
         finger = location
+        if dialing {
+            let a = atan2(location.y - p.y, location.x - p.x)
+            dialAngle += remainder(a - dialLast, 2 * .pi)
+            dialLast = a
+            return
+        }
         if !swatting, !whiffed, !moved, !reduceMotion, hypot(location.x - start.x, location.y - start.y) > 10 {
             moved = true
-            mode = .held
+            let r = side * 0.46 * scale.value
+            let dx = location.x - start.x, dy = location.y - start.y
+            // the move split into round the centre and away from it
+            let ox = start.x - p.x, oy = start.y - p.y
+            let off = max(hypot(ox, oy), 1)
+            let around = abs(ox * dy - oy * dx) / off
+            let along = abs(ox * dx + oy * dy) / off
+            // held down first then turned, or brushed sideways across its
+            // top or bottom: a spinner. A quick flick is still a throw.
+            let held = squeezing && around > along * 0.8
+            let brushed = abs(oy) > r * 0.3 && abs(dx) > abs(dy) * 1.5
+            if mode == .home, !playing, off > r * 0.28, held || brushed {
+                squeezing = false
+                dialing = true
+                dialLast = atan2(location.y - p.y, location.x - p.x)
+                let from = atan2(start.y - p.y, start.x - p.x)
+                dialAngle = remainder(dialLast - from, 2 * .pi)
+                dialFollowed = 0
+            } else {
+                squeezing = false
+                mode = .held
+            }
         }
     }
 
@@ -915,7 +1059,16 @@ final class MascotCreature {
         guard touching else { return }
         touching = false
         poke()
-        if whiffed {
+        if dialing {
+            // it keeps the finger's speed and spins on
+            dialing = false
+            spin = max(min(spin, 70), -70)
+            haptic(.light, min(0.4 + Double(abs(spin)) / 60, 1))
+        } else if squeezing {
+            squeezing = false
+            squeezedFull = false
+            if press > 0.2, !reduceMotion { popOut(press) } else { tap() }
+        } else if whiffed {
             whiffed = false
         } else if swatting {
             swatting = false
@@ -925,6 +1078,10 @@ final class MascotCreature {
             let cap: CGFloat = 5000
             let k = speed > cap ? cap / speed : 1
             v = CGVector(dx: velocity.width * k, dy: velocity.height * k)
+            // a throw rolls off the fingertips with a little spin, on top of
+            // whatever spin a swing round gave it
+            spin += v.dx * 0.003
+            spin = max(min(spin, 60), -60)
             mode = .flung
             flungAt = t
             if speed > 500, !focused { startGame() }
@@ -990,6 +1147,50 @@ final class MascotCreature {
         haptic(.soft, 0.9)
     }
 
+    /// Let go after a squeeze: it springs up off its spot, higher the
+    /// harder it was squished, and comes back down.
+    private func popOut(_ k: CGFloat) {
+        mode = .flung
+        flungAt = t
+        v = CGVector(dx: CGFloat(roll() - 0.5) * 120, dy: -(420 + 1250 * k))
+        spin += CGFloat(roll() - 0.5) * 8 * k
+        sy.velocity += 7 * k
+        sx.velocity -= 4.5 * k
+        press = 0
+        moment = (k > 0.85 ? .excited : .happy, nil, t + 0.9)
+        haptic(.medium, 0.55 + 0.45 * Double(k))
+    }
+
+    /// A step of the run landed: a ripple leaves it and it twitches.
+    func stepLanded() {
+        guard working, started, mode != .leaving, mode != .birth, t - lastPing > 0.22 else { return }
+        lastPing = t
+        pings.append((t, false))
+        poke()
+        guard !reduceMotion else { return }
+        sy.velocity -= 1.6
+        sx.velocity += 1.1
+        if mode == .home, !touching { v.dy -= 70 }
+        // during a game the hits own the haptics
+        if !playing, !touching { haptic(.light, 0.35) }
+    }
+
+    /// The turn it was thinking along with is done: a twirl, two rings,
+    /// a success tap, then it goes back up to show the reply.
+    private func runDone() {
+        runDoneAt = t
+        pings.append((t, true))
+        pings.append((t + 0.12, true))
+        poke()
+        moment = (.excited, nil, t + 1.6)
+        DispatchQueue.main.async { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+        guard !reduceMotion, mode == .home, !touching else { return }
+        v.dy -= 560
+        spin += (roll() > 0.5 ? 1 : -1) * 16
+        sy.velocity -= 4.5
+        sx.velocity += 3.2
+    }
+
     func leave() {
         guard mode != .leaving else { return }
         // a first message before it was ever born: nothing to send up
@@ -1053,6 +1254,8 @@ final class MascotCreature {
         // A late frame advances at most two frames' worth: a hitch slows the
         // motion for a beat instead of teleporting it.
         let dt = min(max(elapsed, 0), 1.0 / 30)
+        frameDt = CGFloat(dt)
+        if dt > 0 { feel(CGFloat(dt)) }
         if dt > 0 {
             let steps = max(1, Int((dt * 240).rounded(.up)))
             let h = dt / Double(steps)
@@ -1146,6 +1349,8 @@ final class MascotCreature {
             var target = home
             if !reduceMotion {
                 target = homeTarget(home)
+                target.x += tilt * 36
+                target.y += press * r * 0.3
             }
             if reduceMotion { p = home; v = .zero } else { springTo(target, stiffness: 120, damping: 12.5, dt: dt) }
             if cheers > 0, t >= cheerAt { cheer() }
@@ -1172,12 +1377,21 @@ final class MascotCreature {
                 let drag = exp(-0.35 * dt)
                 v.dx *= drag
                 v.dy *= drag
+                // the phone's tip pulls it sideways
+                v.dx += tilt * 2200 * dt
+                // a spinning ball curves (Magnus); on the floor it rolls instead
+                if p.y < stage.height - r - 1 {
+                    let k: CGFloat = 0.025 * spin * dt
+                    let vx = v.dx
+                    v.dx -= k * v.dy
+                    v.dy += k * vx
+                }
             }
             p.x += v.dx * dt
             p.y += v.dy * dt
             collide(radius: r)
             let speed = hypot(v.dx, v.dy)
-            if !playing { headHome(home, radius: r, speed: speed) }
+            if !playing, !tiltRolling { headHome(home, radius: r, speed: speed) }
         case .leaving:
             let since = t - (leftAt ?? t)
             let avatar = dock.avatar == .zero
@@ -1195,6 +1409,8 @@ final class MascotCreature {
                 DispatchQueue.main.async { [weak self] in self?.onGone?() }
             }
         }
+
+        if !reduceMotion { turnBall(dt, home: home, radius: r) }
 
         // Squash and stretch: volume kept, the long side along the motion.
         let speedX = abs(v.dx), speedY = abs(v.dy)
@@ -1215,6 +1431,9 @@ final class MascotCreature {
             }
         }
         if mode == .leaving, let leftAt, t - leftAt < 0.08 { stretchY = 0.86; stretchX = 1.1 }
+        // squished flat under the finger, bulging out at the sides
+        stretchY -= press * 0.36
+        stretchX += press * 0.3
         sx.target = stretchX
         sy.target = stretchY
         voice.target = dictating ? CGFloat(MicLevel.current) : 0
@@ -1328,8 +1547,9 @@ final class MascotCreature {
         let bottom = stage.height - r
         // positions are clamped every 240hz substep, so nothing tunnels
         let wall: CGFloat = playing ? 0.7 : 0.62
-        if p.x < r { p.x = r; if v.dx < 0 { bank(-v.dx); bump(-v.dx, horizontal: true); v.dx = -v.dx * wall } }
-        if p.x > stage.width - r { p.x = stage.width - r; if v.dx > 0 { bank(v.dx); bump(v.dx, horizontal: true); v.dx = -v.dx * wall } }
+        let grip: CGFloat = playing ? 0.3 : 0.5
+        if p.x < r { p.x = r; if v.dx < 0 { bank(-v.dx); bump(-v.dx, horizontal: true); v.dx = -v.dx * wall; rub(CGVector(dx: -1, dy: 0), radius: r, grip: grip) } }
+        if p.x > stage.width - r { p.x = stage.width - r; if v.dx > 0 { bank(v.dx); bump(v.dx, horizontal: true); v.dx = -v.dx * wall; rub(CGVector(dx: 1, dy: 0), radius: r, grip: grip) } }
         if p.y < top {
             p.y = top
             if v.dy < 0 {
@@ -1337,6 +1557,7 @@ final class MascotCreature {
                 if playing, bonkFree, speed > 450 { bonkFree = false; scored(1, trick: "bonk") }
                 bump(speed, horizontal: false)
                 v.dy = -v.dy * 0.6
+                rub(CGVector(dx: 0, dy: -1), radius: r, grip: grip)
                 if speed > 850 {
                     // a hard bonk on the ceiling: a blink, no dizzy spirals (firaz hates them on a throw)
                     blinkAt = t
@@ -1355,7 +1576,123 @@ final class MascotCreature {
                 // a miss lands soft: it plops down instead of bouncing away
                 v.dy = -v.dy * (missed ? 0.32 : 0.55)
                 if missed { v.dx *= 0.5 }
+                rub(CGVector(dx: 0, dy: 1), radius: r, grip: grip)
             }
+        }
+    }
+
+    /// Friction at a contact, facing `out` from the centre: the slip between
+    /// the surface and the ball's skin is traded between slide and spin, the
+    /// way a solid ball's is, so it comes off a wall turning and lands
+    /// rolling.
+    private func rub(_ out: CGVector, radius r: CGFloat, grip: CGFloat) {
+        guard !reduceMotion else { return }
+        let tx = -out.dy, ty = out.dx
+        let slip = v.dx * tx + v.dy * ty + spin * r
+        let j = slip / 3 * grip
+        v.dx -= j * tx
+        v.dy -= j * ty
+        spin -= 2 * j / max(r, 1)
+    }
+
+    /// The ball's turn, every substep: dialled round by a finger, swung up
+    /// in the hand, rolling on the floor, or righting itself at home on its
+    /// weighted bottom with a wobble.
+    private func turnBall(_ dt: CGFloat, home: CGPoint, radius r: CGFloat) {
+        press = squeezing ? min(press + dt / 0.9, 1) : press * exp(-6 * dt)
+        if dialing {
+            // it turns with the finger, a hair behind it
+            let take = (dialAngle - dialFollowed) * min(dt * 40, 1)
+            dialFollowed += take
+            angle += take
+            spin += (take / dt - spin) * min(dt * 14, 1)
+            return
+        }
+        switch mode {
+        case .home:
+            let target = (p.x - home.x) / max(r, 1)
+            let damping: CGFloat = abs(spin) > 6 ? 0.45 : 2.4
+            spin += (-45 * sin(angle - target) - damping * spin) * dt
+        case .held:
+            // swung round in circles it spins up with the swing; held
+            // still it settles back upright in the hand
+            let want = max(min(swirl, 40), -40)
+            spin += (want - spin) * min(dt * (abs(want) > 1 ? 5 : 3), 1)
+            if abs(want) < 1 { spin -= 18 * sin(angle) * dt }
+        case .flung:
+            let floor = stage.height - r
+            if p.y >= floor - 0.5, abs(v.dy) < 80 {
+                // on the floor: it rolls, slowing a little
+                let slip = -v.dx + spin * r
+                let j = slip / 3 * min(dt * 30, 1)
+                v.dx += j
+                spin -= 2 * j / max(r, 1)
+                let resist = exp(-0.7 * dt)
+                v.dx *= resist
+                spin *= resist
+            } else {
+                spin *= exp(-0.15 * dt)
+            }
+        default:
+            spin *= exp(-4 * dt)
+        }
+        angle += spin * dt
+        if abs(angle) > 4 * .pi { angle = remainder(angle, 2 * .pi) }
+    }
+
+    /// Once a frame: the phone's tip, a squeeze starting, the hand's swing.
+    private func feel(_ dt: CGFloat) {
+        guard !reduceMotion else { tilt = 0; return }
+        if let g = MascotTilt.sideways {
+            let base = tiltBase ?? g
+            let next = base + (g - base) * min(dt / (tiltRolling ? 6 : 1.6), 1)
+            tiltBase = next
+            tilt = g - next
+        } else {
+            tilt = 0
+            tiltBase = nil
+        }
+        // tipped hard for a moment, it rolls off its spot downhill
+        if mode == .home, !touching, !playing, landedAt != nil, abs(tilt) > 0.35 {
+            let since = tippedSince ?? t
+            tippedSince = since
+            if t - since > 0.25 {
+                tippedSince = nil
+                tiltRolling = true
+                mode = .flung
+                flungAt = t
+                v.dx += tilt * 260
+                moment = (.surprised, nil, t + 0.7)
+                haptic(.light, 0.5)
+                poke()
+            }
+        } else if mode == .home {
+            tippedSince = nil
+        }
+        if tiltRolling, mode != .flung || abs(tilt) < 0.12 {
+            tiltRolling = false
+            flungAt = t - 0.5
+        }
+        if touching, !moved, !dialing, !playing, !squeezing, mode == .home, t - touchDownAt > 0.2 {
+            squeezing = true
+            nextSqueezeTick = t
+        }
+        if mode == .held {
+            let dx = finger.x - headingFrom.x, dy = finger.y - headingFrom.y
+            if hypot(dx, dy) > 3 {
+                let h = atan2(dy, dx)
+                let turned = heading.map { remainder(h - $0, 2 * .pi) } ?? 0
+                // a sharp reversal is a shake, not a circle
+                let rate = abs(turned) < 1.2 ? turned / max(CGFloat(t - headingAt), dt) : 0
+                swirl += (rate - swirl) * min(dt * 9, 1)
+                heading = h
+                headingFrom = finger
+                headingAt = t
+            } else {
+                swirl *= exp(-5 * dt)
+            }
+        } else {
+            swirl = 0
         }
     }
 
@@ -1440,7 +1777,7 @@ final class MascotCreature {
         v.dx = v.dx * 0.3 + off * 240
         sy.velocity -= 3.4
         sx.velocity += 2.4
-        rot.velocity -= off * 5
+        spin += off * 9
         blinkAt = t
     }
 
@@ -1625,7 +1962,9 @@ final class MascotCreature {
     }
 
     private func rotationTarget() -> CGFloat {
-        if mode == .held || mode == .flung { return max(min(v.dx / 4000, 0.35), -0.35) }
+        // in the air the ball's own spin turns it; in the hand it leans
+        if mode == .flung { return 0 }
+        if mode == .held { return max(min(v.dx / 4000, 0.35), -0.35) }
         if t < rattleUntil { return CGFloat(sin(t * 53)) * 0.16 }
         if moodNow == .dizzy { return CGFloat(sin(t * 6)) * 0.12 }
         if t < poseUntil { return 0.14 }
@@ -1672,7 +2011,12 @@ final class MascotCreature {
     private func think() {
         // A recess ends on its own: left alone at rest for a few seconds, it
         // goes back up into the header, the end card done first.
-        if recess, mode == .home, !touching, !playing, cheers == 0, t - lastPoke > 3.4 { leave() }
+        // During a run it waits longer, and a spinning ball spins down first.
+        if recess, mode == .home, !touching, !playing, cheers == 0, abs(spin) < 1, press < 0.05,
+           t - lastPoke > (working ? 9 : 3.4) { leave() }
+        // The run it was thinking along with is done: a beat to enjoy it, up.
+        if let runDoneAt, recess, mode == .home, !touching, !playing, abs(spin) < 2, t - runDoneAt > 1.4 { leave() }
+        fidgetFeel()
         // The draft, read once per frame. A big cut is suspicious.
         let text = draft.text
         if text != lastDraft {
@@ -1691,6 +2035,12 @@ final class MascotCreature {
 
         if mode == .leaving {
             next = .thinking
+            line = nil
+        } else if squeezing, press > 0.08 {
+            next = press > 0.96 ? .scared : .purr
+            line = nil
+        } else if abs(spin) > 12, mode == .home || mode == .held {
+            next = .excited
             line = nil
         } else if let moment {
             next = moment.mood
@@ -1713,7 +2063,7 @@ final class MascotCreature {
                 case .asleep: next = .asleep; line = .asleep
                 case .drowsy: next = day.late ? .late : .drowsy; line = .drowsy
                 case .awake:
-                    next = day.late ? .late : .idle
+                    next = working ? .thinking : day.late ? .late : .idle
                     if nudged, unread > 0 { line = .unread(unread) }
                 }
             }
@@ -1858,6 +2208,45 @@ final class MascotCreature {
         }
     }
 
+    /// The fidget's haptics, once a frame: a click every quarter turn, the
+    /// squeeze getting firmer, and a reel after a long hard spin.
+    private func fidgetFeel() {
+        pings.removeAll { t - $0.at > 0.7 }
+        let quarter = Int(floor(angle / (.pi / 2))) & 3
+        if quarter != lastQuarter {
+            lastQuarter = quarter
+            if !playing, mode == .home || mode == .held, abs(spin) > 1.5, t - lastClick > 0.035 {
+                lastClick = t
+                haptic(.rigid, min(0.3 + Double(abs(spin)) / 40, 0.9))
+            }
+        }
+        if squeezing {
+            if press >= 1, !squeezedFull {
+                squeezedFull = true
+                haptic(.rigid, 1)
+            } else if press < 1, t >= nextSqueezeTick {
+                nextSqueezeTick = t + 0.16 - Double(press) * 0.08
+                haptic(.soft, 0.25 + Double(press) * 0.5)
+            }
+        }
+        // spun hard at home for a while: when it slows it reels for a beat
+        // (a surprised blink and a wobble, never spirals)
+        if mode == .home, !dialing, abs(spin) > 20 {
+            fastSpin += Double(frameDt)
+        } else if abs(spin) < 3 {
+            if fastSpin > 1.2, mode == .home {
+                moment = (.surprised, nil, t + 0.9)
+                blinkAt = t
+                sx.velocity += 2
+                sy.velocity -= 2.4
+                haptic(.soft, 0.7)
+                poke()
+            }
+            fastSpin = 0
+        }
+        if abs(spin) > 0.5 || squeezing { poke() }
+    }
+
     private func publishLine(_ line: String?) {
         // over a transcript a line is clutter
         let line = recess ? nil : line
@@ -1868,6 +2257,7 @@ final class MascotCreature {
 
     private func publishRate() {
         let moving = mode != .home || touching || moment != nil || dictating || hypot(v.dx, v.dy) > 4
+            || abs(spin) > 0.2 || press > 0.01 || !pings.isEmpty
         let rate: Rate = !moving && rest == .asleep ? .sleepy : .fast
         guard rate != shownRate else { return }
         shownRate = rate
@@ -1935,14 +2325,38 @@ final class MascotCreature {
             }
         }
 
+        // Its shadow on the floor, darker and tighter the lower it gets.
+        if mode != .birth, mode != .leaving, !reduceMotion {
+            let r = side * 0.46 * scale.value
+            let height = max(stage.height - (p.y + r), 0)
+            let near = max(1 - height / 420, 0)
+            if near > 0.01 {
+                let w = r * 2 * (0.55 + 0.45 * near)
+                let h = max(w * 0.16, 3)
+                let rect = CGRect(x: p.x - w / 2, y: stage.height - h * 0.7, width: w, height: h)
+                let ink = scheme == .dark ? paint.body : Color.black
+                context.fill(Path(ellipseIn: rect), with: .color(ink.opacity(Double(near) * (scheme == .dark ? 0.22 : 0.12))))
+            }
+        }
+        // A step of the run landing: a ring leaves the body.
+        for ping in pings where t >= ping.at {
+            let k = min((t - ping.at) / 0.6, 1)
+            let r = side * 0.46 * scale.value * (1 + CGFloat(k) * (ping.big ? 1.3 : 0.7))
+            let ring = Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
+            context.stroke(ring, with: .color(paint.body.opacity((1 - k) * (ping.big ? 0.7 : 0.45))),
+                           lineWidth: (ping.big ? 4 : 2.5) * CGFloat(1 - k) + 0.5)
+        }
+
+        // A fast spin blurs where it is looking.
+        let still = max(1 - abs(spin) / 6, 0)
         if let old = oldAccent, t - old.at < 0.2 {
-            drawAccent(in: &context, centre: p, side: side * scale.value, sx: sx.value, sy: sy.value, rotation: rot.value,
+            drawAccent(in: &context, centre: p, side: side * scale.value, sx: sx.value, sy: sy.value, rotation: rot.value + angle,
                        face: old.face, grow: CGFloat(1 - (t - old.at) / 0.2), color: color, scheme: scheme)
         }
         drawBody(in: &context, centre: p, side: side * scale.value, sx: sx.value, sy: sy.value, rotation: rot.value,
-                 shear: shear.value, color: color, bodyId: bodyId, face: EmptyMascotBrain.face(mood),
+                 shear: shear.value, spun: angle, color: color, bodyId: bodyId, face: EmptyMascotBrain.face(mood),
                  left: eyes.left, right: eyes.right, open: min(eyeOpenness, eyeSquash),
-                 gaze: CGPoint(x: gazeX.value, y: gazeY.value),
+                 gaze: CGPoint(x: gazeX.value * still, y: gazeY.value * still),
                  lead: CGPoint(x: leadX.value, y: leadY.value), changedAt: moodChangedAt, scheme: scheme)
 
         // The island swells to let it out, then closes behind it.
@@ -2004,7 +2418,7 @@ final class MascotCreature {
     /// slides across the body to look, and the rim clips it, so a look to
     /// the side reads as the whole round body turning.
     private func drawBody(in context: inout GraphicsContext, centre: CGPoint, side: CGFloat, sx: CGFloat, sy: CGFloat,
-                          rotation: CGFloat, shear: CGFloat, color: String, bodyId: String?, face: MascotMoodFace,
+                          rotation: CGFloat, shear: CGFloat, spun: CGFloat = 0, color: String, bodyId: String?, face: MascotMoodFace,
                           left: String, right: String, open: CGFloat, gaze: CGPoint, lead: CGPoint,
                           changedAt: TimeInterval, scheme: ColorScheme) {
         guard side > 1 else { return }
@@ -2025,6 +2439,9 @@ final class MascotCreature {
             c.concatenate(CGAffineTransform(a: 1, b: 0, c: shear, d: 1, tx: 0, ty: 0))
             c.translateBy(x: 0, y: -base)
         }
+        // the ball's own turn, after the squash so the squash stays along
+        // the motion while the body and face go round
+        if spun != 0 { c.rotate(by: .radians(spun)) }
 
         let shape = Path(outline).applying(CGAffineTransform(translationX: -bounds.midX, y: -bounds.midY)
             .concatenating(CGAffineTransform(scaleX: k, y: k)))
