@@ -46,6 +46,10 @@ struct ChatListView: View {
     @State private var groupPendingDeletion: SharedRoomSummary?
     @State private var groupDeleteError: String?
     @State private var botPendingRemoval: Chat?
+    /// Rows hidden on this phone only, by conversation id; nothing changes on
+    /// the computer that holds the bot.
+    @AppStorage("bos.hiddenChats") private var hiddenChatsRaw = ""
+    @State private var showHidden = false
     @State private var botRemoveError: String?
     @FocusState private var searchFocused: Bool
     /// The chat rows' order on screen, held while a finger is on the list.
@@ -748,6 +752,35 @@ struct ChatListView: View {
                 }
             }
         }
+        hiddenFooter
+    }
+
+    private var hiddenChats: Set<String> {
+        Set(hiddenChatsRaw.split(separator: "\n").map(String.init))
+    }
+
+    private func toggleHidden(_ id: String) {
+        var ids = hiddenChats
+        if ids.remove(id) == nil { ids.insert(id) }
+        withAnimation(.smooth(duration: 0.3)) { hiddenChatsRaw = ids.sorted().joined(separator: "\n") }
+        Haptics.selection()
+    }
+
+    /// "3 hidden" under the list; tapping shows them so one can be put back.
+    @ViewBuilder private var hiddenFooter: some View {
+        let ids = Set(orderedConversations.map(\.id))
+        let count = hiddenChats.intersection(ids).count
+        if count > 0 {
+            Button {
+                withAnimation(.smooth(duration: 0.3)) { showHidden.toggle() }
+            } label: {
+                Text(showHidden ? "Hide them again" : "\(count) hidden")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("hidden-chats-footer")
+        }
     }
 
     private var pinnedConversations: [ConversationEntry] {
@@ -942,7 +975,8 @@ struct ChatListView: View {
     /// are while touched and move at most every 1.5s, so a tap opens the
     /// chat that was under the finger.
     private var shownConversations: [ConversationEntry] {
-        let live = orderedConversations.filter(matchesConversationFilter)
+        let hidden = hiddenChats
+        let live = orderedConversations.filter { (showHidden || !hidden.contains($0.id)) && matchesConversationFilter($0) }
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-roster-order-live") { return live }
 #endif
@@ -1143,9 +1177,14 @@ struct ChatListView: View {
             markDone(summary.chat, after: 0)
         }
         .contextMenu {
-            pinButton(home.map { .home(summary, $0, connectionID: $0.connection?.id ?? "") } ?? .local(summary))
+            let entry: ConversationEntry = home.map { .home(summary, $0, connectionID: $0.connection?.id ?? "") } ?? .local(summary)
+            pinButton(entry)
             OpenBesideButton(chat: homeChat(summary.chat))
             markDoneButton(summary.chat)
+            if home != nil || summary.chat.isRemoteBot {
+                let hidden = hiddenChats.contains(entry.id)
+                Button(hidden ? "Show in list" : "Hide", systemImage: hidden ? "eye" : "eye.slash") { toggleHidden(entry.id) }
+            }
             if summary.chat.isRemoteBot {
                 Button("Remove from list", systemImage: "minus.circle", role: .destructive) {
                     botPendingRemoval = summary.chat
