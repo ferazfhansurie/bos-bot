@@ -107,7 +107,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
 
     /// The communication-style banner: the sender's face instead of the app
     /// icon. Falls back to the plain content when no face was drawn.
-    private static func withSenderFace(_ content: UNMutableNotificationContent, senderID: String, name: String, mood: String,
+    static func withSenderFace(_ content: UNMutableNotificationContent, senderID: String, name: String, mood: String,
                                        then deliver: @escaping (UNNotificationContent) -> Void) {
         guard let imageURL = NotificationAvatarCache.bestURL(for: senderID, mood: mood),
               FileManager.default.fileExists(atPath: imageURL.path) else { deliver(content); return }

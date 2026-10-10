@@ -16,6 +16,7 @@ import ActivityKit
 import Combine
 import Foundation
 import SwiftUI
+import UserNotifications
 import WidgetKit
 import CompanionCore
 
@@ -267,20 +268,24 @@ final class LiveActivityCoordinator {
         for bot in bots where (bot.avatarCrop ?? .mascot) == .mascot && MascotEyeStyle(stored: bot.mascotEyes) == .glyph {
             let look = [bot.color, bot.mascotBody ?? "", "v1"].joined(separator: "|")
             guard moodFacesDrawn[bot.id] != look else { continue }
-            for mood in NotificationMood.all {
-                let face = GlyphMark(color: bot.color, bodyId: bot.mascotBody, state: GlyphFaceState(rawValue: mood) ?? .happy, size: 64)
-                    .frame(width: 128, height: 128)
-                    .environment(\.colorScheme, .dark)
-                let renderer = ImageRenderer(content: face)
-                renderer.scale = 2
-                if let png = renderer.uiImage?.pngData() {
-                    NotificationAvatarCache.storeMood(png, for: "bot:\(bot.id)", mood: mood)
-                }
-            }
+            Self.drawMoodFaces(id: bot.id, color: bot.color, body: bot.mascotBody)
             moodFacesDrawn[bot.id] = look
             drew = true
         }
         if drew { UserDefaults.standard.set(moodFacesDrawn, forKey: "glance.moodFaces") }
+    }
+
+    private static func drawMoodFaces(id: String, color: String, body: String?) {
+        for mood in NotificationMood.all {
+            let face = GlyphMark(color: color, bodyId: body, state: GlyphFaceState(rawValue: mood) ?? .happy, size: 64)
+                .frame(width: 128, height: 128)
+                .environment(\.colorScheme, .dark)
+            let renderer = ImageRenderer(content: face)
+            renderer.scale = 2
+            if let png = renderer.uiImage?.pngData() {
+                NotificationAvatarCache.storeMood(png, for: "bot:\(id)", mood: mood)
+            }
+        }
     }
 
     private static func title(_ chat: Chat) -> String? {
@@ -341,7 +346,7 @@ final class LiveActivityCoordinator {
                 c.isPermission = true
                 return c
             case "done":
-                var c = BotActivityContent(face: "happy", kind: "done", headline: "\(name) is done",
+                var c = BotActivityContent(face: "celebrate", kind: "done", headline: "\(name) is done",
                                            line: "shipped build 74 to your iphone. action button is ready.", threadId: thread,
                                            card: nil, since: started, threadTitle: "ios: live activity polish", symbol: "checkmark")
                 c.endedAt = Date()
@@ -356,13 +361,84 @@ final class LiveActivityCoordinator {
             ("59d5f871-db6c-4850-b966-a04ecc033279", "bos", "teal", "circle"),
             ("4c4ff223-89ea-4743-a42e-1e9d62e24ea8", "oracle", "coral", "sun"),
         ]
+        var running: [(Activity<BotActivityAttributes>, BotActivityContent)] = []
         for (id, name, color, body) in bots {
             let attributes = BotActivityAttributes(botId: id, threadId: "demo-\(name)", name: name, color: color,
                                                    mascotBody: body, mascotEyes: nil)
             let state = content(name, "demo-\(name)")
-            _ = try? Activity.request(attributes: attributes,
-                                      content: .init(state: state, staleDate: nil),
-                                      pushType: nil)
+            if let activity = try? Activity.request(attributes: attributes,
+                                                    content: .init(state: state, staleDate: nil),
+                                                    pushType: nil) {
+                running.append((activity, state))
+            }
+        }
+        // the same beats a real turn plays: done celebrates, then settles;
+        // working moves through what it is doing
+        if kind == "done" {
+            try? await Task.sleep(for: celebrateInIsland)
+            for (activity, state) in running {
+                var settled = state
+                settled.face = MausState.happy.rawValue
+                await activity.update(.init(state: settled, staleDate: nil))
+            }
+        } else if kind == "working" {
+            let steps: [(String, String, String)] = [("thinking", "ellipsis", "thinking it through"),
+                                                     ("searching", "magnifyingglass", "searching the web"),
+                                                     ("working", "terminal", "running a command")]
+            for round in 0..<40 {
+                try? await Task.sleep(for: .seconds(4))
+                let step = steps[round % steps.count]
+                for (activity, state) in running {
+                    var next = state
+                    next.face = step.0
+                    next.symbol = step.1
+                    next.line = step.2
+                    await activity.update(.init(state: next, staleDate: nil))
+                }
+            }
+        }
+    }
+
+    /// The widgets' and notifications' half of the demo: a roster snapshot
+    /// for the widgets, mood faces, and (with -demoNotification) a bot
+    /// notification a few seconds later, to open while the app is away.
+    private static func demoGlances(_ kind: String) {
+        let now = Date()
+        let bos = BotGlance(id: "59d5f871-db6c-4850-b966-a04ecc033279", name: "bos", color: "teal", body: "circle", eyes: nil,
+                            status: kind == "done" ? "done" : "working", face: kind == "done" ? "celebrate" : "working",
+                            line: kind == "done" ? "shipped build 79 to your iphone" : "running a command",
+                            threadId: "demo-bos", threadTitle: "ios: live activity polish", since: now.addingTimeInterval(-94))
+        let oracle = BotGlance(id: "4c4ff223-89ea-4743-a42e-1e9d62e24ea8", name: "oracle", color: "coral", body: "sun", eyes: nil,
+                               status: "needsYou", face: "listening", line: "Ship the nightly run?",
+                               threadId: "demo-oracle", threadTitle: "nightly assignment", since: now.addingTimeInterval(-30))
+        let extras = [("mint", "green", "blob"), ("pix", "violet", "star")].map { name, color, body in
+            BotGlance(id: "demo-\(name)", name: name, color: color, body: body, eyes: nil, status: "idle", face: "idle",
+                      line: "", threadId: nil, threadTitle: nil, since: nil)
+        }
+        BotRosterStore.save(BotRosterSnapshot(bots: [bos, oracle] + extras, updatedAt: now))
+        WidgetCenter.shared.reloadAllTimelines()
+        for glance in [bos, oracle] { drawMoodFaces(id: glance.id, color: glance.color, body: glance.body) }
+
+        guard let mood = UserDefaults.standard.string(forKey: "demoNotification") else { return }
+        let content = UNMutableNotificationContent()
+        let fromOracle = mood == "waiting"
+        content.title = fromOracle ? "oracle" : "bos"
+        content.body = switch mood {
+        case "waiting": "the nightly run is ready. ship it tonight?"
+        case "failed": "couldn't reach the build server, trying again in a minute"
+        default: "shipped build 79 to your iphone. try the new widget."
+        }
+        content.sound = .default
+        content.categoryIdentifier = BotNotificationCategory.bot
+        content.threadIdentifier = fromOracle ? "demo-oracle" : "demo-bos"
+        let botId = fromOracle ? oracle.id : bos.id
+        content.userInfo = ["botId": botId, "threadId": content.threadIdentifier, "kind": mood == "waiting" ? "question" : "done"]
+        let glyph = NotificationMood.glyph(kind: content.userInfo["kind"] as? String, title: content.title, body: content.body)
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
+            NotificationCoordinator.withSenderFace(content, senderID: "bot:\(botId)", name: content.title, mood: glyph) { final in
+                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 8, repeats: false)
+                UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "demo-\(mood)", content: final, trigger: trigger))
+            }
         }
     }
     #endif
