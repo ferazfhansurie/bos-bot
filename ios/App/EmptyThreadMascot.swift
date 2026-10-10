@@ -4,7 +4,7 @@
 // Calm when left alone, wild when touched. It squeezes out of the dynamic
 // island and drops into place; it breathes, blinks, glances around, gets
 // drowsy and falls asleep; it reacts to the draft as it is typed, pulses with
-// the mic, can be flung off the walls, petted (it purrs), shaken (it gets
+// the mic, can be grabbed and flung off the walls, shaken (it gets
 // dizzy) and screenshotted (it poses). On the first send it turns to thinking
 // and gets sucked up into the header's face, where the turn's own animation
 // takes over.
@@ -22,16 +22,17 @@
 //
 // Everything that moves is a spring stepped once per frame on a plain
 // object — no SwiftUI state per frame, so the transcript never re-renders for
-// it. The timeline runs at 120hz while it is awake, 60hz asleep, and stops
-// with the app in the background.
+// it. Its clock is a display link that runs at 120hz while it is awake, 60hz
+// asleep, keeps ticking while the transcript scrolls, and stops with the app
+// in the background.
 // The view is gone entirely the moment the thread has a message in it.
 //
 // What a mood looks like and what the mascot says is `EmptyMascotBrain` in
 // CompanionCore, where it is tested.
 import CompanionCore
-import CoreHaptics
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// Where the header and its face are, measured by ChatView. Written from
 /// geometry callbacks and read by the mascot each frame; nothing re-renders
@@ -81,6 +82,7 @@ struct EmptyThreadMascot: View {
     @State private var origin: CGPoint = .zero
     @State private var line: String?
     @State private var rate = MascotCreature.Rate.fast
+    @State private var clock = MascotClock()
 
     var body: some View {
         GeometryReader { proxy in
@@ -101,34 +103,21 @@ struct EmptyThreadMascot: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
             creature?.pose()
         }
-        .onDisappear { creature?.stopPurr() }
+        .onChange(of: rate) { _, _ in syncClock() }
+        .onChange(of: scenePhase) { _, _ in syncClock() }
+        .onChange(of: creature == nil) { _, _ in syncClock() }
+        .onAppear { syncClock() }
+        .onDisappear { clock.stop() }
+    }
+
+    private func syncClock() {
+        if creature != nil, scenePhase == .active { clock.run(rate) } else { clock.pause() }
     }
 
     private func live(_ creature: MascotCreature, stage: CGSize) -> some View {
         let home = creature.home(in: stage, origin: origin)
-        return TimelineView(.animation(minimumInterval: rate.interval, paused: scenePhase != .active)) { timeline in
-            let frame = creature.step(to: timeline.date, stage: stage, origin: origin)
-            ZStack(alignment: .topLeading) {
-                Canvas { context, _ in creature.draw(in: &context, scheme: scheme) }
-                    .allowsHitTesting(false)
-                Color.clear
-                    .frame(width: frame.hit, height: frame.hit)
-                    .contentShape(Circle())
-                    .position(frame.centre)
-                    .gesture(
-                        DragGesture(minimumDistance: 0, coordinateSpace: .named("mascot-stage"))
-                            .onChanged { value in creature.touch(at: value.location, from: value.startLocation) }
-                            .onEnded { value in creature.release(velocity: value.velocity) }
-                    )
-                    .allowsHitTesting(frame.touchable)
-                    .accessibilityElement()
-                    .accessibilityLabel(bot.name)
-                    .accessibilityHint("Tap to say hi")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction { creature.tap() }
-            }
-            .coordinateSpace(.named("mascot-stage"))
-        }
+        return MascotFrame(creature: creature, clock: clock, stage: stage, origin: origin,
+                           name: bot.name, scheme: scheme)
         .overlay(alignment: .topLeading) {
             if let line {
                 Text(line)
@@ -149,7 +138,6 @@ struct EmptyThreadMascot: View {
     }
 
     private func arrive() {
-        creature?.stopPurr()
         let pool = others.filter { $0.id != bot.id && $0.hidden != true }
         let seed = EmptyMascotBrain.seed(threadId)
         let fresh = MascotCreature(bot: bot, seed: seed, reduceMotion: reduceMotion,
@@ -167,6 +155,186 @@ struct EmptyThreadMascot: View {
         line = nil
         rate = .fast
         creature = fresh
+    }
+}
+
+/// One frame of the mascot: steps the creature to the clock and draws it,
+/// with its touch surface on top. Its own view so that only it re-renders
+/// on every tick, not the line or the thread around it.
+private struct MascotFrame: View {
+    let creature: MascotCreature
+    let clock: MascotClock
+    let stage: CGSize
+    let origin: CGPoint
+    let name: String
+    let scheme: ColorScheme
+
+    var body: some View {
+        let frame = creature.step(to: clock.now, stage: stage, origin: origin)
+        ZStack(alignment: .topLeading) {
+            Canvas { context, _ in creature.draw(in: &context, scheme: scheme) }
+                // flattened on the gpu: the canvas spans the whole thread and
+                // is redrawn every frame
+                .drawingGroup()
+                .allowsHitTesting(false)
+            MascotTouchSurface(origin: origin,
+                               onTouch: { creature.touch(at: $0, from: $1) },
+                               onRelease: { creature.release(velocity: $0) })
+                .frame(width: frame.hit, height: frame.hit)
+                .position(frame.centre)
+                .allowsHitTesting(frame.touchable)
+                .accessibilityElement()
+                .accessibilityLabel(name)
+                .accessibilityHint("Tap to say hi")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { creature.tap() }
+        }
+    }
+}
+
+/// The mascot's frame clock: a display link in the common run loop modes.
+/// A TimelineView stopped ticking while the transcript's scroll view tracked
+/// a finger, so the mascot froze mid-drag and then jumped to where it was let
+/// go.
+@MainActor @Observable final class MascotClock {
+    private(set) var now = Date()
+    @ObservationIgnored private var link: CADisplayLink?
+    @ObservationIgnored private var target: Tick?
+
+    func run(_ rate: MascotCreature.Rate) {
+        if link == nil {
+            let tick = Tick { [weak self] in self?.now = Date() }
+            let link = CADisplayLink(target: tick, selector: #selector(Tick.fire))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+            target = tick
+        }
+        let fps = Float((1 / rate.interval).rounded())
+        link?.preferredFrameRateRange = CAFrameRateRange(minimum: fps / 2, maximum: fps, preferred: fps)
+        link?.isPaused = false
+    }
+
+    func pause() { link?.isPaused = true }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+        target = nil
+    }
+
+    private final class Tick: NSObject {
+        let action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
+        @objc func fire() { action() }
+    }
+}
+
+/// Where a finger grabs the mascot. UIKit, because a SwiftUI DragGesture over
+/// the transcript lost the finger to the scroll view's pan and the throw
+/// never reached the mascot. This recognizer begins on touch-down and every
+/// other recognizer waits for it to fail, so a finger on the mascot stays the
+/// mascot's until it lifts.
+struct MascotTouchSurface: UIViewRepresentable {
+    /// Points are reported in the stage's space: the window point less this.
+    var origin: CGPoint
+    var onTouch: (CGPoint, CGPoint) -> Void
+    var onRelease: (CGSize) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        let grab = GrabRecognizer(target: context.coordinator, action: #selector(Coordinator.grabbed(_:)))
+        grab.delegate = context.coordinator
+        view.addGestureRecognizer(grab)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) { context.coordinator.surface = self }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var surface: MascotTouchSurface
+        private var start: CGPoint = .zero
+
+        init(_ surface: MascotTouchSurface) { self.surface = surface }
+
+        @objc func grabbed(_ grab: GrabRecognizer) {
+            let window = grab.location(in: nil)
+            let point = CGPoint(x: window.x - surface.origin.x, y: window.y - surface.origin.y)
+            switch grab.state {
+            case .began:
+                start = point
+                surface.onTouch(point, start)
+            case .changed:
+                surface.onTouch(point, start)
+            case .ended, .cancelled:
+                surface.onRelease(grab.velocity)
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+/// One finger, from touch-down to lift, with a pan's velocity.
+final class GrabRecognizer: UIGestureRecognizer {
+    private var finger: UITouch?
+    private var samples: [(time: TimeInterval, point: CGPoint)] = []
+
+    /// Points per second over the last few hundredths of a second. A finger
+    /// that stopped before it lifted throws nothing.
+    var velocity: CGSize {
+        guard let last = samples.last,
+              let first = samples.first(where: { last.time - $0.time <= 0.08 }),
+              last.time - first.time > 0.004
+        else { return .zero }
+        let dt = last.time - first.time
+        return CGSize(width: (last.point.x - first.point.x) / dt, height: (last.point.y - first.point.y) / dt)
+    }
+
+    override func location(in view: UIView?) -> CGPoint {
+        finger?.location(in: view) ?? super.location(in: view)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if finger == nil, let touch = touches.first {
+            finger = touch
+            record(touch)
+            state = .began
+        }
+        for touch in touches where touch !== finger { ignore(touch, for: event) }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let finger, touches.contains(finger) else { return }
+        record(finger)
+        state = .changed
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let finger, touches.contains(finger) else { return }
+        record(finger)
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let finger, touches.contains(finger) else { return }
+        state = .cancelled
+    }
+
+    override func reset() {
+        super.reset()
+        finger = nil
+        samples = []
+    }
+
+    private func record(_ touch: UITouch) {
+        samples.append((touch.timestamp, touch.location(in: nil)))
+        if let last = samples.last { samples.removeAll { last.time - $0.time > 0.2 } }
     }
 }
 
@@ -323,15 +491,11 @@ final class MascotCreature {
     // Touch.
     private var touching = false
     private var moved = false
-    private var petting = false
-    private var touchStart: TimeInterval = 0
     private var finger = CGPoint.zero
     private var grab = CGVector.zero
     private var flungAt: TimeInterval = 0
-    private var wiggleUntil: TimeInterval = 0
     private var lastBump: TimeInterval = -1
     private var tapCount = 0
-    private let purr = MascotPurr()
 
     // Life.
     private var lastPoke: TimeInterval = 0
@@ -395,7 +559,6 @@ final class MascotCreature {
         if reduceMotion { opacity = Spring(0, stiffness: 60, damping: 16); opacity.target = 1 }
     }
 
-    deinit { purr.stop() }
 
     // MARK: Geometry
 
@@ -436,7 +599,6 @@ final class MascotCreature {
         if !touching {
             touching = true
             moved = false
-            touchStart = t
             grab = CGVector(dx: p.x - start.x, dy: p.y - start.y)
             if rest == .asleep { wake() }
             poke()
@@ -444,7 +606,6 @@ final class MascotCreature {
         finger = location
         if !moved, !reduceMotion, hypot(location.x - start.x, location.y - start.y) > 10 {
             moved = true
-            if petting { petting = false; purr.stop() }
             mode = .held
         }
     }
@@ -460,15 +621,6 @@ final class MascotCreature {
             v = CGVector(dx: velocity.width * k, dy: velocity.height * k)
             mode = .flung
             flungAt = t
-        } else if petting {
-            petting = false
-            purr.stop()
-            // a happy wiggle
-            wiggleUntil = t + 0.9
-            rot.velocity += (roll() > 0.5 ? 1 : -1) * 7
-            sx.velocity += 2.5
-            moment = (.happy, .purr, t + 1.3)
-            haptic(.soft, 0.7)
         } else {
             tap()
         }
@@ -535,8 +687,6 @@ final class MascotCreature {
         mode = .leaving
         leftAt = t
         touching = false
-        petting = false
-        purr.stop()
         moment = nil
         cameoLeaving = true
         publishLine(nil)
@@ -544,8 +694,6 @@ final class MascotCreature {
         sy.velocity -= 2.5
         sx.velocity += 2
     }
-
-    func stopPurr() { purr.stop() }
 
     /// The keyboard is coming up (it ducks and watches it come) or going
     /// down (it stretches up, relieved, and looks back at you).
@@ -663,12 +811,6 @@ final class MascotCreature {
                 target = homeTarget(home)
             }
             if reduceMotion { p = home; v = .zero } else { springTo(target, stiffness: 120, damping: 12.5, dt: dt) }
-            if petting {
-                // lean into the finger
-                let pull = CGVector(dx: (finger.x - p.x) * 0.1, dy: (finger.y - p.y) * 0.06)
-                p.x += pull.dx * dt * 8
-                p.y += pull.dy * dt * 8
-            }
         case .held:
             // Stuck to the finger, not chasing it: a spring here trailed the
             // finger by a beat and made dragging feel laggy. The velocity is
@@ -720,7 +862,6 @@ final class MascotCreature {
             let breath = CGFloat(sin(t * 2 * .pi / period))
             stretchY += breath * depth
             stretchX -= breath * depth * 0.6
-            if petting { stretchY -= 0.05 + CGFloat(sin(t * 2 * .pi * 9)) * 0.012; stretchX += 0.04 }
             if dictating {
                 stretchY += voice.value * 0.16 + CGFloat(sin(t * 2 * .pi * 6)) * voice.value * 0.03
                 stretchX += voice.value * 0.12
@@ -731,7 +872,7 @@ final class MascotCreature {
         sy.target = stretchY
         voice.target = dictating ? CGFloat(MicLevel.current) : 0
 
-        rot.damping = t < wiggleUntil ? 3.5 : 11
+        rot.damping = 11
         rot.target = reduceMotion ? 0 : rotationTarget()
         let gaze = gazeTarget(home)
         // Reduce Motion keeps the eyes looking, a little, and stills the rest.
@@ -862,7 +1003,6 @@ final class MascotCreature {
 
     private func rotationTarget() -> CGFloat {
         if mode == .held || mode == .flung { return max(min(v.dx / 4000, 0.35), -0.35) }
-        if petting { return max(min((finger.x - p.x) / side * 0.4, 0.3), -0.3) }
         if t < rattleUntil { return CGFloat(sin(t * 53)) * 0.16 }
         if moodNow == .dizzy { return CGFloat(sin(t * 6)) * 0.12 }
         if t < poseUntil { return 0.14 }
@@ -916,14 +1056,6 @@ final class MascotCreature {
         }
         if dictating { poke() }
 
-        // A finger resting on it is petting: it purrs.
-        if touching, !moved, !petting, !reduceMotion, mode == .home, t - touchStart > 0.42 {
-            petting = true
-            moment = nil
-            purr.start()
-            haptic(.soft, 0.5)
-        }
-
         if let current = moment, current.until <= t { moment = nil }
 
         let reaction = EmptyMascotBrain.reaction(to: text, focused: focused)
@@ -934,9 +1066,6 @@ final class MascotCreature {
         if mode == .leaving {
             next = .thinking
             line = nil
-        } else if petting {
-            next = .purr
-            line = .purr
         } else if let moment {
             next = moment.mood
             line = moment.line ?? line
@@ -1359,50 +1488,5 @@ final class MascotCreature {
             let generator = UIImpactFeedbackGenerator(style: style)
             generator.impactOccurred(intensity: CGFloat(intensity))
         }
-    }
-}
-
-// MARK: - Purr
-
-/// A low continuous rumble that swells and settles like breathing, for as
-/// long as the mascot is being petted.
-final class MascotPurr {
-    private var engine: CHHapticEngine?
-    private var player: CHHapticAdvancedPatternPlayer?
-
-    func start() {
-        guard player == nil, CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
-        do {
-            let engine = try engine ?? CHHapticEngine()
-            self.engine = engine
-            engine.isAutoShutdownEnabled = true
-            try engine.start()
-            let duration: TimeInterval = 30
-            let rumble = CHHapticEvent(eventType: .hapticContinuous, parameters: [
-                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.5),
-                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.06),
-            ], relativeTime: 0, duration: duration)
-            // a curve holds at most 16 points, so the swell is laid out in runs
-            var curves: [CHHapticParameterCurve] = []
-            var start: TimeInterval = 0
-            while start < duration {
-                let points = (0..<15).map { i in
-                    CHHapticParameterCurve.ControlPoint(relativeTime: Double(i) * 0.45, value: i % 2 == 0 ? 0.35 : 0.85)
-                }
-                curves.append(CHHapticParameterCurve(parameterID: .hapticIntensityControl, controlPoints: points, relativeTime: start))
-                start += 15 * 0.45
-            }
-            let pattern = try CHHapticPattern(events: [rumble], parameterCurves: curves)
-            let player = try engine.makeAdvancedPlayer(with: pattern)
-            try player.start(atTime: CHHapticTimeImmediate)
-            self.player = player
-        } catch {
-            player = nil
-        }
-    }
-
-    func stop() {
-        try? player?.stop(atTime: CHHapticTimeImmediate)
-        player = nil
     }
 }
