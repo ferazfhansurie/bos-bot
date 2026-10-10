@@ -25,7 +25,9 @@ only ever moves forward from what is running.
            (git merge-base --is-ancestor): never older, never a sibling;
         4. the candidate is reachable from the release branch;
         5. the candidate is exactly the prod branch head (what dev/firaz
-           accepted). --prod-branch "" turns 5 off; it is on by default.
+           accepted), or an ancestor of it that differs only in paths the
+           desktop app never ships (the ios app). --prod-branch "" turns 5
+           off; it is on by default.
       Refuse (exit 2) with a reason naming both commits otherwise.
       --rollback is the only escape hatch: it skips the git checks, but the
       candidate must be byte-identical (server + ui digests) to the ledger's
@@ -164,6 +166,19 @@ def is_ancestor(repo: Path, older: str, newer: str) -> bool:
     if r.returncode not in (0, 1):
         raise Refuse(f"git merge-base failed: {r.stderr.strip()[:200]}")
     return r.returncode == 0
+
+
+# Prod moves with iphone-only commits far faster than a desktop package can be
+# built, so a package of a prod ancestor is still "the prod build" when every
+# commit after it only touched these paths.
+DESKTOP_IRRELEVANT = ("ios/",)
+
+
+def desktop_equivalent(repo: Path, commit: str, head: str) -> bool:
+    if not is_ancestor(repo, commit, head):
+        return False
+    changed = [p for p in git(repo, "diff", "--name-only", commit, head).stdout.splitlines() if p]
+    return all(p.startswith(DESKTOP_IRRELEVANT) for p in changed)
 
 
 def branch_head(repo: Path, branch: str):
@@ -308,7 +323,7 @@ def judge(repo: Path, branch: str, prod: str, running: str, commit: str) -> dict
         head = branch_head(repo, prod)
         if head is None:
             raise Refuse(f"candidate refused: prod branch {prod} not found in {repo}; nothing is accepted for install")
-        if head != commit:
+        if head != commit and not desktop_equivalent(repo, commit, head):
             raise Refuse(f"candidate refused: {commit[:8]} is not what {prod} points at ({head[:8]}); only the accepted prod build goes live (running {running[:8]})")
     same = commit == running
     return {"ok": True, "up_to_date": same,

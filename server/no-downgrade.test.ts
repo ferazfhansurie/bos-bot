@@ -136,6 +136,19 @@ describe.skipIf(!hasPython)("no-downgrade guard", () => {
       expect(gone.code).toBe(2); expect(gone.out.reason).toMatch(/prod branch prod not found/);
     });
 
+    it("allows a prod ancestor when every later prod commit only touched ios/, and refuses it once one did not", () => {
+      const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+      const g = (...args: string[]) => execFileSync("git", ["-C", repo.dir, ...args], { encoding: "utf8", env }).trim();
+      const touch = (file: string) => { mkdirSync(dirname(join(repo.dir, file)), { recursive: true }); writeFileSync(join(repo.dir, file), file); g("add", file); g("commit", "-q", "-m", file); const head = g("rev-parse", "HEAD"); g("branch", "-f", "prod", head); return head; };
+      const cand = fakeApp(root, "Cand.app", "cand-C"); stamp(cand, repo.c);
+      touch("ios/App/Mascot.swift");
+      expect(check(cand).code).toBe(0);
+      const d = touch("server/index.ts");
+      const r = check(cand);
+      expect(r.code).toBe(2);
+      expect(r.out.reason).toMatch(`is not what prod points at (${d.slice(0, 8)})`);
+    });
+
     it("refuses a commit that is on prod but not on the release branch", () => {
       execFileSync("git", ["-C", repo.dir, "branch", "-f", "prod", repo.s]);
       // S descends from the running B, so the ancestor check passes; the release check is what refuses it

@@ -149,16 +149,30 @@ export async function previewUpdate(options: PreviewOptions): Promise<UpdateChec
   return { at, current: options.current, candidate: { version: target.version, sha: target.sha, branch: target.branch, ...(target.subject ? { subject: target.subject } : {}) }, reason };
 }
 
+/** Paths the desktop package never ships. Prod moves with iphone-only commits
+ * far faster than a full package builds, so a package of a prod ancestor is
+ * still the prod build when everything after it only touched these. Mirrors
+ * desktop_equivalent in no-downgrade.py. */
+const DESKTOP_IRRELEVANT = ["ios/"];
+export async function desktopEquivalent(repo: string, commit: string, head: string): Promise<boolean> {
+  if (!/^[0-9a-f]{40}$/.test(commit) || !/^[0-9a-f]{40}$/.test(head)) return false;
+  try { await gitOut(repo, ["merge-base", "--is-ancestor", commit, head]); } catch { return false; }
+  const changed = (await gitOut(repo, ["diff", "--name-only", commit, head])).split("\n").filter(Boolean);
+  return changed.every(path => DESKTOP_IRRELEVANT.some(prefix => path.startsWith(prefix)));
+}
+
 /** A full candidate comes from the local package lane, never a feed. The
  * existing manifest is its adapter to /api/update. Validate it read-only on
  * every check; apply then runs the same executor/guard as a tree candidate. */
 export async function validateFullCandidate(options: PreviewOptions, candidate: Candidate): Promise<void> {
   const refuse = (reason: string): never => { throw Object.assign(new Error(reason), { status: 409 }); };
-  if (candidate.sha !== options.target.sha || candidate.version !== options.target.version) refuse("staged full candidate does not match the release target");
+  const base = (version: string) => version.split("+")[0];
+  if (candidate.sha !== options.target.sha && !await desktopEquivalent(options.source.repo!, candidate.sha, options.target.sha)) refuse("staged full candidate does not match the release target");
+  if (base(candidate.version) !== base(options.target.version) || candidate.version !== `${base(candidate.version)}+${candidate.sha.slice(0, 8)}`) refuse("staged full candidate version does not match the release target");
   const resources = join(candidate.appPath, "Contents", "Resources");
   if (!existsSync(join(resources, "app.asar"))) refuse("full candidate has no Electron archive");
   const native = assertNativeCompatibility(resources, options.source.repo!, options.target.sha);
-  if (native.shellCommit !== options.target.sha) refuse("candidate is a tree build, not a full package of the target");
+  if (native.shellCommit !== candidate.sha) refuse("candidate is a tree build, not a full package of the target");
   const digest = appDigests(candidate.appPath);
   if (digest.server !== candidate.serverSha256 || digest.ui !== candidate.uiSha256) refuse("candidate manifest digest mismatch");
   const run = options.run ?? runCommand;
@@ -203,7 +217,10 @@ export async function stageFullCandidate(options: PreviewOptions & { dataDir: st
   try {
     mkdirSync(slot, { recursive: true, mode: 0o700 });
     cpSync(options.appPath, join(slot, app), { recursive: true, verbatimSymlinks: true });
-    const manifest = writeCandidateManifest(slot, { version: options.target.version, sha: options.target.sha, app });
+    // The package names its own commit; it may trail prod by iphone-only commits.
+    const sha = (JSON.parse(readFileSync(join(slot, app, "Contents", "Resources", "build-commit.json"), "utf8")) as { commit?: string }).commit ?? "";
+    if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("full candidate has no build stamp");
+    const manifest = writeCandidateManifest(slot, { version: `${options.target.version.split("+")[0]}+${sha.slice(0, 8)}`, sha, app });
     await validateFullCandidate(options, { ...manifest, dir: slot, appPath: join(slot, app) });
     const destination = join(updatesDir(options.dataDir), CANDIDATE_DIRNAME);
     // Apply owns this lock before admission/drain. Never replace its input.
