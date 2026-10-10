@@ -370,9 +370,13 @@ struct ChatView: View {
                             }
                         } else {
                             LiveReplyRow(live: session.liveText.entry(threadId), color: current.color, busy: current.busy) {
+                                // the desktop's TurnPresence: the bot's own face, moving,
+                                // leads the working line in a 1:1
+                                let face = MausState.forThread(current, in: session.state) ?? .thinking
                                 WorkingSteps(
                                     items: liveSteps,
-                                    startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000)
+                                    startedAt: Date(timeIntervalSince1970: (liveSteps.first?.at ?? messages.last?.at ?? Date().timeIntervalSince1970 * 1000) / 1000),
+                                    avatar: AnyView(ChatAvatarView(chat: current, size: 22, state: face, animated: true))
                                 )
                             }
                         }
@@ -2013,9 +2017,11 @@ struct SendPriorityToggle: View {
         } label: {
             Label(title, systemImage: icon)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(selected ? Color.white : Color.secondary)
+                // ink on its opposite, not the bot's colour: a white or
+                // pale bot (bos) painted white text on a white pill
+                .foregroundStyle(selected ? Color(uiColor: .systemBackground) : Color.secondary)
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(selected ? (value == .block ? Color.red : color) : Color.clear))
+                .background(Capsule().fill(selected ? Color.primary : Color.clear))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
