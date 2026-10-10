@@ -82,10 +82,14 @@ struct GlyphMark: View {
     /// One frame. `slot` is where the body sits (the size the caller asked
     /// for); the accent may land outside it. `now` nil is a still frame.
     static func draw(in context: inout GraphicsContext, slot: CGRect, color: String, bodyId: String?,
-                     state: GlyphFaceState, scheme: ColorScheme, now: Date? = nil, changedAt: Date? = nil) {
+                     state: GlyphFaceState, scheme: ColorScheme, now: Date? = nil, changedAt: Date? = nil,
+                     look: GlyphLook = GlyphLook()) {
         let layout = GlyphFaces.layout
         let paint = colors(color, scheme: scheme)
-        let face = GlyphFaces.face(state)
+        let base = GlyphFaces.face(state)
+        let face = (left: look.left ?? base.left, right: look.right ?? base.right,
+                    accent: look.accent ?? (look.hidesAccent ? nil : base.accent),
+                    anchor: look.accent != nil ? look.anchor : base.anchor)
         let side = min(slot.width, slot.height)
 
         // The body, from the same 100-box catalog the flat mark draws.
@@ -115,7 +119,7 @@ struct GlyphMark: View {
         let sinceChange = now.flatMap { now in changedAt.map { now.timeIntervalSince($0) } } ?? .infinity
 
         // Eyes: a quick squash when the face changes, and a blink to `- -`.
-        let squash = sinceChange < 0.12 ? max(0.15, abs(1 - 2 * sinceChange / 0.12)) : 1
+        let squash = (sinceChange < 0.12 ? max(0.15, abs(1 - 2 * sinceChange / 0.12)) : 1) * look.eyeSquash
         // each bot blinks on its own beat, not the whole list at once
         let beat = Double(color.unicodeScalars.reduce(0) { $0 &+ Int($1.value) } % 17) / 4
         let blinking = now != nil && sinceChange > 0.4 && (t + beat).truncatingRemainder(dividingBy: 4.3) < 0.11
@@ -127,7 +131,7 @@ struct GlyphMark: View {
         eyes.rotate(by: .degrees(GlyphFaces.tiltDegrees))
         for (glyph, x) in [(face.left, -layout.eyeX), (face.right, layout.eyeX)] {
             var eye = eyes
-            eye.translateBy(x: x * diameter, y: layout.eyeY * diameter)
+            eye.translateBy(x: (x + look.eyeShift.width) * diameter, y: (layout.eyeY + look.eyeShift.height) * diameter)
             eye.scaleBy(x: eyeScale, y: eyeScale * squash)
             eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
             eye.stroke(Path(GlyphFaces.path(blinking ? "dash" : glyph)), with: .color(paint.ink),
@@ -166,6 +170,19 @@ struct GlyphMark: View {
         let c = 1.7, u = min(max(t, 0), 1) - 1
         return 1 + (c + 1) * u * u * u + c * u * u
     }
+}
+
+/// A face drawn off its state's table: other eye glyphs, another accent, the
+/// eyes shifted (a glance, in body diameters, before the tilt) or squashed (a
+/// blink). The chat list's idle faces use it; everything else draws plain.
+struct GlyphLook: Equatable {
+    var left: String?
+    var right: String?
+    var accent: String?
+    var anchor: GlyphAccentAnchor?
+    var hidesAccent = false
+    var eyeShift: CGSize = .zero
+    var eyeSquash: CGFloat = 1
 }
 
 extension MausState {

@@ -51,6 +51,10 @@ struct ChatListView: View {
     @State private var settleTask: Task<Void, Never>?
     @State private var touching = false
     @State private var scrolling = false
+    /// The one loop behind every face in the list (ListFaces.swift).
+    @State private var listFaces = ListFaceDirector()
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
 #if DEBUG
     @MainActor private static var debugRouted = false
@@ -352,6 +356,7 @@ struct ChatListView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if query.isEmpty {
+                        PullRefreshMascot(bot: pullBot, space: "roster")
                         rosterSections
                     } else {
                         if !searchHits.isEmpty {
@@ -391,8 +396,30 @@ struct ChatListView: View {
                     }
                 }
                 .padding(.bottom, Self.barClearance)
+                .background { if pullBot != nil { QuietRefreshSpinner() } }
             }
-            .refreshable { await session.refresh(); await refreshShared() }
+            .coordinateSpace(.named("roster"))
+            .refreshable {
+                listFaces.refreshing = true
+                await session.refresh(); await refreshShared()
+#if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") { try? await Task.sleep(for: .seconds(3)) }
+#endif
+                listFaces.refreshing = false
+                listFaces.refreshSettled += 1
+            }
+            .environment(\.listFaces, listFaces)
+            .onAppear { listFaces.setListVisible(true) }
+            .onDisappear { listFaces.setListVisible(false) }
+            .onChange(of: scenePhase, initial: true) { _, phase in listFaces.setScene(phase) }
+            .onChange(of: reduceMotion, initial: true) { _, reduce in listFaces.reduceMotion = reduce }
+            .onChange(of: rosterFaceOrder, initial: true) { _, ids in listFaces.setOrder(ids) }
+            .onChange(of: workingBotIDs, initial: true) { _, ids in listFaces.setWorkers(ids) }
+            .onChange(of: arrivalStamps) { old, new in
+                // a bot's new message, not the first load: hop + its own tap
+                guard !old.isEmpty else { return }
+                for (id, stamp) in new where stamp > (old[id] ?? 0) { listFaces.arrived(id, botID: id) }
+            }
             .modifier(WatchRosterTouches(touching: $touching, scrolling: $scrolling))
             .onChange(of: orderedConversations.map(\.id), initial: true) { _, ids in settleOrder(ids) }
             .onChange(of: touching || scrolling) { _, busy in
@@ -755,8 +782,9 @@ struct ChatListView: View {
     @ViewBuilder private func pinnedAvatar(_ entry: ConversationEntry) -> some View {
         switch entry {
         case .local(let summary):
-            ChatAvatarView(chat: summary.chat, size: 82,
-                           state: MausState.forChat(summary.chat, in: session.state), animated: pinnedAnimates(entry))
+            LiveChatAvatar(chat: summary.chat, size: 82,
+                           state: MausState.forChat(summary.chat, in: session.state), animated: pinnedAnimates(entry),
+                           at: summary.lastActivity)
         case .contact(let contact): contactAvatar(contact, size: 82)
         case .room(let room): GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 82)
         }
@@ -1035,7 +1063,11 @@ struct ChatListView: View {
         if case let .bot(home) = homeChat(chat),
            let task = session.state.bot(home.id)?.tasks?.first(where: { $0.threadId == home.threadId }) {
             Button("Mark done", systemImage: "checkmark.circle") {
+                // the face waves the thread off before it goes
+                listFaces.farewell(chat.id)
+                Haptics.success()
                 Task {
+                    try? await Task.sleep(for: .milliseconds(650))
                     await session.setTaskArchived(task, for: home, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
                 }
             }
@@ -1243,6 +1275,24 @@ struct ChatListView: View {
 
     // MARK: - Data
 
+    /// Bot rows top to bottom, for idle faces glancing toward a working one.
+    private var rosterFaceOrder: [String] {
+        orderedConversations.compactMap { if case .local(let summary) = $0 { return summary.chat.id } else { return nil } }
+    }
+    private var workingBotIDs: Set<String> {
+        Set(chats.filter { MausState.forChat($0.chat, in: session.state).showsActivity }.map(\.chat.id))
+    }
+    /// Unread, settled bot rows and when they last spoke.
+    private var arrivalStamps: [String: Double] {
+        Dictionary(chats.filter { $0.chat.isBot && $0.chat.unread && !$0.chat.busy }.map { ($0.chat.id, $0.lastActivity) },
+                   uniquingKeysWith: max)
+    }
+    /// The bot that hangs in the gap when the list is pulled down.
+    private var pullBot: Bot? {
+        for summary in chats { if case let .bot(bot) = summary.chat, ListFace.drawsMascot(bot) { return bot } }
+        return nil
+    }
+
     /// The reader's activity level, which the roster preview folds by.
     private var activity: ActivityDetail { .hidden }
 
@@ -1433,7 +1483,7 @@ struct ChatRow: View {
             .padding(.top, 12)
 
             HStack(alignment: .top, spacing: 14) {
-                ChatAvatarView(chat: chat, size: 52, state: state, animated: state.showsActivity)
+                LiveChatAvatar(chat: chat, size: 52, state: state, animated: state.showsActivity, at: at)
                     .padding(.top, 12)
                     .accessibilityHidden(true)
 
