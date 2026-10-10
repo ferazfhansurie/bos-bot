@@ -110,7 +110,7 @@ struct LiveMascot: View {
 
         let diameter = min(bounds.width, bounds.height) * k
         let centre = CGPoint(x: origin.x + bounds.midX * k, y: origin.y + bounds.midY * k)
-        let mass = GlyphMark.massCentre[FlatMascotBodies.body(bodyId).id] ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        let mass = massCentre[FlatMascotBodies.body(bodyId).id] ?? CGPoint(x: bounds.midX, y: bounds.midY)
         // The face slides over the body toward where it looks, and dips with
         // a nod a touch more than the body does, like a chin tucking in.
         let faceCentre = CGPoint(x: origin.x + mass.x * k + pose.gaze.x * 0.07 * diameter,
@@ -189,6 +189,19 @@ struct LiveMascot: View {
             face.fill(mouth, with: .color(ink.opacity(min(1, Double(pose.mouth - 0.03) * 12))))
         }
     }
+
+    /// Area centroid of every body in its 100 box, sampled once; the glyph
+    /// eyes sit on the body's mass, the same way GlyphMark places them.
+    private static let massCentre: [String: CGPoint] = Dictionary(uniqueKeysWithValues: FlatMascotBodies.all.map { body in
+        let outline = FlatMascotBodies.outline(body.id)
+        var sum = CGPoint.zero, count = 0.0
+        for y in stride(from: 1.0, to: 100, by: 2) {
+            for x in stride(from: 1.0, to: 100, by: 2) where outline.contains(CGPoint(x: x, y: y)) {
+                sum.x += x; sum.y += y; count += 1
+            }
+        }
+        return (body.id, count > 0 ? CGPoint(x: sum.x / count, y: sum.y / count) : CGPoint(x: 50, y: 50))
+    })
 
     static func easeOutBack(_ t: Double) -> Double {
         let c = 1.7, u = min(max(t, 0), 1) - 1
