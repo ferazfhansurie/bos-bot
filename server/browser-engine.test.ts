@@ -18,6 +18,7 @@ import {
   ensureChrome,
   installAgentBrowserBinary,
   isMusl,
+  killBrowserDaemon,
   pinnedBinaryPath,
   prepareBrowserSessionState,
   resolveAgentBrowserBinary,
@@ -124,6 +125,22 @@ describe("deleting one browser session's saved logins", () => {
     const { options } = fixture();
     vi.mocked(spawn).mockImplementation((_binary, args) => lifecycleChild(args, { inventory }));
     expect(await closeBrowserSession("fixture-browser", { ...options.env, AGENT_BROWSER_SESSION: "work" })).toBe(false);
+  });
+
+  it.skipIf(!posix)("kills a deadlocked daemon and its browser, only when the pid is the engine binary", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-daemon-")); scratch.push(dir);
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const daemon = spawn(process.execPath, ["-e", "const c=require('child_process').spawn('sleep',['60'],{stdio:'ignore'});console.log(c.pid);setInterval(()=>{},1000)"], { stdio: ["ignore", "pipe", "ignore"], detached: true });
+    const browser = Number(await new Promise<string>((done) => daemon.stdout!.once("data", (chunk) => done(String(chunk).trim()))));
+    writeFileSync(join(dir, "work.pid"), `${daemon.pid}\n`);
+    writeFileSync(join(dir, "work.sock"), "");
+    const env = { AGENT_BROWSER_SESSION: "work", AGENT_BROWSER_SOCKET_DIR: dir };
+    expect(await killBrowserDaemon("/not/the/engine", env)).toBe(false);
+    expect(alive(daemon.pid!)).toBe(true);
+    expect(await killBrowserDaemon(process.execPath, env)).toBe(true);
+    await vi.waitFor(() => expect(alive(browser)).toBe(false));
+    expect(alive(daemon.pid!)).toBe(false);
+    expect(existsSync(join(dir, "work.pid")) || existsSync(join(dir, "work.sock"))).toBe(false);
   });
 
   it("keeps saved state when the daemon remains alive past the close deadline", async () => {

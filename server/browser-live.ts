@@ -15,6 +15,7 @@ const DISCRETE_KEYS = new Set(["Backspace", "Enter", "Tab", "Escape", "Delete", 
 
 export class BrowserLiveError extends Error {
   readonly status: number;
+  timedOut = false;
   constructor(message: string, status = 400) { super(message); this.name = "BrowserLiveError"; this.status = status; }
 }
 
@@ -254,12 +255,12 @@ export class BrowserLive {
     if (viewer.pressedKeys.size || viewer.pressedButtons.size) this.runtime.abandonHumanInput(viewer.session, viewer.id);
   }
 
-  private async command(viewer: Viewer, args: string[]): Promise<ObjectValue> {
+  private async command(viewer: Viewer, args: string[], timeout = 30_000): Promise<ObjectValue> {
     if (!this.current(viewer)) throw new BrowserLiveError("This browser view is no longer available.", 409);
     const env = browserRuntimeEnv({ ...viewer.spec.env, AGENT_BROWSER_SESSION: viewer.session });
     try {
       const { stdout } = await execute(viewer.spec.command, [...args, "--json", "--no-webmcp"], {
-        env, timeout: 30_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, encoding: "utf8", windowsHide: true,
+        env, timeout, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, encoding: "utf8", windowsHide: true,
       });
       if (!this.current(viewer)) throw new Error("stale viewer");
       const result = object(JSON.parse(stdout));
@@ -268,7 +269,29 @@ export class BrowserLive {
       return data;
     } catch (error) {
       console.warn("browser-live:", error);
-      throw new BrowserLiveError("The browser could not complete this action. Check that the browser engine is installed, then reconnect.", 503);
+      const failure = new BrowserLiveError("The browser could not complete this action. Check that the browser engine is installed, then reconnect.", 503);
+      if ((error as { killed?: boolean }).killed) failure.timedOut = true;
+      throw failure;
+    }
+  }
+
+  /** A daemon that times out on `stream status` is deadlocked: every view
+   * would retry into the same hang. Run the person's restart barrier once
+   * (refused while agent or human work holds the browser), then ask again. */
+  private async streamStatus(viewer: Viewer): Promise<ObjectValue> {
+    try { return await this.command(viewer, ["stream", "status"], 15_000); }
+    catch (error) {
+      if (!(error instanceof BrowserLiveError) || !error.timedOut || !this.current(viewer)) throw error;
+      console.warn("browser-live: stream status timed out, restarting the browser session", viewer.session);
+      try {
+        await this.runtime.restart(viewer.session, viewer.id, async () => {
+          if (!await closeAgentBrowser(viewer.session, viewer.spec)) throw new Error("browser close failed");
+        });
+      } catch (cause) {
+        console.warn("browser-live: automatic restart failed:", cause);
+        throw error;
+      }
+      return this.command(viewer, ["stream", "status"]);
     }
   }
 
@@ -327,7 +350,7 @@ export class BrowserLive {
     options.res.once("close", () => this.close(viewer));
     options.res.once("error", () => this.close(viewer));
     try {
-      let status = await this.command(viewer, ["stream", "status"]);
+      let status = await this.streamStatus(viewer);
       if (status.enabled !== true) {
         try { status = await this.command(viewer, ["stream", "enable"]); }
         catch { status = await this.command(viewer, ["stream", "status"]); } // Another view may have enabled the same session.

@@ -9,9 +9,9 @@ import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 //
 // Fail closed, say why: a missing engine reports `unavailable` with a
 // reason a person can act on, never a silently browserless bot.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 
@@ -73,7 +73,7 @@ export async function closeBrowserSession(binaryPath: string, env: NodeJS.Proces
   catch { return false; }
   const closeEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("AGENT_BROWSER_") || ["AGENT_BROWSER_SESSION", "AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_NAMESPACE", "AGENT_BROWSER_ENCRYPTION_KEY", "AGENT_BROWSER_RESTORE", "AGENT_BROWSER_RESTORE_SAVE"].includes(key)));
   closeEnv.AGENT_BROWSER_CONFIG = configPath;
-  const deadline = Date.now() + timeoutMs;
+  let until = Date.now() + timeoutMs;
   const run = (args: string[], capture = false) => new Promise<{ ok: boolean; output: string }>((done) => {
     let settled = false;
     let output = "";
@@ -89,7 +89,7 @@ export async function closeBrowserSession(binaryPath: string, env: NodeJS.Proces
       killTimer = setTimeout(() => { if (!exited) child.kill("SIGKILL"); }, 5_000);
       killTimer.unref?.();
       finish(false);
-    }, Math.max(1, deadline - Date.now()));
+    }, Math.max(1, until - Date.now()));
     timer.unref?.();
     child.stdout?.on("data", (chunk: Buffer) => {
       output += String(chunk);
@@ -99,10 +99,16 @@ export async function closeBrowserSession(binaryPath: string, env: NodeJS.Proces
     // exit can precede the last piped stdout chunk; close follows stdio.
     child.on("close", (code) => { exited = true; clearTimeout(timer); clearTimeout(killTimer); finish(code === 0); });
   });
-  if (!(await run(["close"])).ok) return false;
+  if (!(await run(["close"])).ok) {
+    // A deadlocked daemon accepts the socket but never answers, so close
+    // times out exactly when recovery is needed. Kill that one daemon and
+    // its browser instead of leaving the session wedged until an app restart.
+    if (!await killBrowserDaemon(binaryPath, closeEnv)) return false;
+    until = Date.now() + 5_000;
+  }
   // Native close acknowledges before the daemon exits. Observe its actual
   // removal through the launch-free inventory command before reconnecting.
-  while (Date.now() < deadline) {
+  while (Date.now() < until) {
     const status = await run(["session", "list", "--json"], true);
     if (!status.ok) return false;
     try {
@@ -111,9 +117,54 @@ export async function closeBrowserSession(binaryPath: string, env: NodeJS.Proces
       if (result?.success !== true || !Array.isArray(sessions) || !sessions.every((name) => typeof name === "string")) return false;
       if (!sessions.includes(env.AGENT_BROWSER_SESSION)) return true;
     } catch { return false; }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, until - Date.now()))));
   }
   return false;
+}
+
+function daemonSocketDirectory(env: NodeJS.ProcessEnv): string {
+  if (env.AGENT_BROWSER_SOCKET_DIR) return env.AGENT_BROWSER_SOCKET_DIR;
+  const namespace = env.AGENT_BROWSER_NAMESPACE;
+  if (namespace && !/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(namespace)) throw new Error("Invalid browser namespace.");
+  const home = (process.platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  if (namespace) return join(home, ".agent-browser", "namespaces", namespace, "run");
+  return env.XDG_RUNTIME_DIR ? join(env.XDG_RUNTIME_DIR, "agent-browser") : join(home, ".agent-browser");
+}
+
+function processExecutable(pid: number): string {
+  if (process.platform === "linux") return readlinkSync(`/proc/${pid}/exe`);
+  return execFileSync("ps", ["-o", "comm=", "-p", String(pid)], { encoding: "utf8", timeout: 5_000 }).trim();
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** Last resort for a daemon that will not answer close: SIGKILL the pid in
+ * its own pid file, only when that pid is this exact engine binary, plus
+ * the browser it launched. Saved logins stay on disk from its autosaves. */
+export async function killBrowserDaemon(binaryPath: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  const session = env.AGENT_BROWSER_SESSION;
+  if (process.platform === "win32" || !session || !/^[A-Za-z0-9_.-]{1,96}$/.test(session)) return false;
+  try {
+    const base = join(daemonSocketDirectory(env), session);
+    const pid = Number.parseInt(readFileSync(`${base}.pid`, "utf8").trim(), 10);
+    if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) return false;
+    if (alive(pid)) {
+      if (resolve(processExecutable(pid)) !== resolve(binaryPath)) return false;
+      let children: number[] = [];
+      try { children = execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8", timeout: 5_000 }).split(/\s+/).map(Number).filter((child) => Number.isSafeInteger(child) && child > 1); }
+      catch { /* pgrep exits 1 when the daemon has no browser running. */ }
+      process.kill(pid, "SIGKILL");
+      for (const child of children) { try { process.kill(child, "SIGKILL"); } catch { /* already gone */ } }
+      const deadline = Date.now() + 3_000;
+      while (alive(pid) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 25));
+      if (alive(pid)) return false;
+    }
+    for (const suffix of [".pid", ".sock", ".stream", ".port", ".engine", ".version"]) rmSync(base + suffix, { force: true });
+    return true;
+  } catch { return false; }
 }
 
 /** The browser recovery barrier shared by a person's restart (browser-live)
