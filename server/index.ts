@@ -50,6 +50,7 @@ import { MultiplayerLinks } from "./multiplayer-links.ts";
 import { handleRemoteRoom, withRemoteGroups, type RemoteRoomContext } from "./remote-rooms.ts";
 import { startCloudHostFromEnv } from "./cloud-host-runtime.ts";
 import { RemoteBotBridge, isRemoteBotPath, homeKey } from "./remote-bot-bridge.ts";
+import { HomeLinks } from "./homes.ts";
 import { tailnetOrigin } from "./tailnet-origin.ts";
 /** Self-hosts may advertise a public HTTPS origin; private hosts use Tailscale. */
 async function federationOrigin(peer?: string): Promise<string | null> {
@@ -695,6 +696,12 @@ multiplayerLinks.ownBotAvatar = id => store.bot(id)?.avatarUrl;
 const crossHomeGrants = new Delegations(join(DATA_DIR, "delegations.json"));
 const delegatedJobs = new DelegatedJobs(join(DATA_DIR, "delegated-jobs.json"));
 const delegatedClient = new DelegatedClient(ENVIRONMENT_ID, () => multiplayerLinks.bridgeLinks());
+// Other BOS servers this one holds an admin session on (server/homes.ts).
+// The desktop lists their bots beside its own with full settings.
+const homeLinks = new HomeLinks(DATA_DIR, {
+  environmentId: ENVIRONMENT_ID,
+  label: () => environmentDescriptor({ environmentId: ENVIRONMENT_ID, desktopManaged: DESKTOP_MANAGED }).label,
+});
 // A linked Mac's bots, shown here as ordinary bots (server/remote-bot-bridge.ts).
 // Only the threads this bridge opens on the other Mac are ever relayed.
 const remoteBots = new RemoteBotBridge({
@@ -14795,6 +14802,31 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 500;
           return json(res, status, { error: error instanceof Error ? error.message : String(error) });
         }
+      }
+      return json(res, 404, { error: "Not found" });
+    }
+    // Linked servers (server/homes.ts). Admin-only by request-auth's default
+    // deny; the proxy carries the other server's own admin token.
+    if (path === "/api/homes" || path.startsWith("/api/homes/")) {
+      res.setHeader("cache-control", "no-store");
+      if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+      const proxied = /^\/api\/homes\/([\w-]+)\/proxy(\/.*)$/.exec(path);
+      if (proxied) return homeLinks.proxy(req, res, proxied[1], proxied[2], url.search);
+      if (path === "/api/homes" && method === "GET") return json(res, 200, { homes: homeLinks.list() });
+      if (path === "/api/homes" && method === "POST") {
+        const body = await readBody(req, 4096);
+        try {
+          return json(res, 201, { home: await homeLinks.add(String(body?.address ?? ""), typeof body?.code === "string" ? body.code : undefined) });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : "couldn't link that server" });
+        }
+      }
+      const one = /^\/api\/homes\/([\w-]+)$/.exec(path);
+      if (one && method === "DELETE") return json(res, (await homeLinks.remove(one[1])) ? 200 : 404, { ok: true });
+      if (one && method === "PATCH") {
+        const body = await readBody(req, 4096);
+        const renamed = homeLinks.rename(one[1], String(body?.name ?? ""));
+        return renamed ? json(res, 200, { home: renamed }) : json(res, 400, { error: "name required" });
       }
       return json(res, 404, { error: "Not found" });
     }
