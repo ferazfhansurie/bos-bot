@@ -86,7 +86,7 @@ struct TasksRoutinesView: View {
             }
         }
         .task { await reload() }
-        .refreshable { await reload() }
+        .bosRefreshable { await reload() }
         .sheet(item: $editor) { target in
             RoutineEditorView(routine: target.routine) { await reload() }
         }

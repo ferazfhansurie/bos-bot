@@ -105,7 +105,7 @@ struct ConnectedAppsView: View {
         }
         .overlay { if loading { ProgressView() } }
         .task { await load() }
-        .refreshable { await refreshStatuses() }
+        .bosRefreshable { await refreshStatuses() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await refreshStatuses() } }
         }

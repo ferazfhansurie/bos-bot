@@ -1015,7 +1015,7 @@ struct CloudRoomListView: View {
         .navigationDestination(for: CloudRoomRef.self) { ref in
             CloudRoomChatView(model: model, ref: ref)
         }
-        .refreshable { model.select(model.selected) }
+        .bosRefreshable { model.select(model.selected) }
     }
 }
 

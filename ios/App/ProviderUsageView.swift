@@ -31,7 +31,7 @@ struct ProviderUsageView: View {
             }
         }
         .navigationTitle("Subscription limits")
-        .refreshable { await refresh() }
+        .bosRefreshable { await refresh() }
         .task { await refresh() }
     }
 

@@ -65,7 +65,7 @@ struct JobInboxView: View {
             } message: {
                 Text(openError ?? "")
             }
-            .refreshable { await load() }
+            .bosRefreshable { await load() }
             .task(id: taskSignature) {
                 guard scenePhase == .active else { return }
                 await load()

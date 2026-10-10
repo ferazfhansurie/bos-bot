@@ -42,9 +42,6 @@ import UIKit
 }
 
 @MainActor @Observable final class ListFaceDirector {
-    /// The pull-to-refresh mascot reads these.
-    var refreshing = false
-    var refreshSettled = 0
 
     @ObservationIgnored private var poses: [String: ListFacePose] = [:]
     @ObservationIgnored private var onScreen = Set<String>()
@@ -564,125 +561,6 @@ struct LiveChatAvatar: View {
         } else {
             ChatAvatarView(chat: chat, size: size, state: state, animated: animated)
         }
-    }
-}
-
-// MARK: - Pull to refresh
-
-/// The top bot hangs in the gap a pull opens: it stretches like taffy as
-/// the list comes down, holds on while the refresh runs, and snaps back when
-/// it is done. Sits at the very top of the scroll content with no height of
-/// its own, and owns its geometry so a pull redraws only this view.
-struct PullRefreshMascot: View {
-    let bot: Bot?
-    let space: String
-    @Environment(\.listFaces) private var director
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pull: CGFloat = 0
-    /// Where the top of the list rests, measured on first layout.
-    @State private var rest: CGFloat?
-    @State private var armed = false
-    @State private var happy = false
-
-    private let size: CGFloat = 40
-
-    var body: some View {
-        Color.clear
-            .frame(height: 0)
-            .background(alignment: .top) {
-                GeometryReader { geo in
-                    Color.clear.onChange(of: geo.frame(in: .named(space)).minY, initial: true) { _, y in
-                        if rest == nil { rest = y }
-                        let next = max(0, y - (rest ?? 0))
-                        if abs(next - pull) > 0.5 { pull = next }
-                        let ready = next > 86
-                        if ready != armed {
-                            armed = ready
-                            if ready { Haptics.impact(.soft) }
-                        }
-                    }
-                }
-                .frame(height: 0)
-            }
-            .overlay(alignment: .bottom) { if let bot, pull > 6 { hanging(bot) } }
-            .onChange(of: director?.refreshSettled) { _, _ in
-                happy = true
-                Task { try? await Task.sleep(for: .seconds(0.9)); happy = false }
-            }
-            .accessibilityHidden(true)
-    }
-
-    private func hanging(_ bot: Bot) -> some View {
-        let refreshing = director?.refreshing == true
-        // below the trigger it grows in; past it, the body pulls into taffy
-        let grow = min(1, max(0, (pull - 8) / 50))
-        let taffy = reduceMotion ? 0 : min(0.75, max(0, (pull - 70) / 130))
-        let state: GlyphFaceState = happy ? .happy : refreshing ? .searching : .idle
-        let look = happy || refreshing ? GlyphLook() :
-            armed ? GlyphLook(left: "ring", right: "ring", hidesAccent: true) : GlyphLook(eyeSquash: 0.6 + 0.4 * grow)
-        return Canvas { context, canvas in
-            let slot = CGRect(x: canvas.width / 4, y: canvas.height / 4, width: canvas.width / 2, height: canvas.height / 2)
-            GlyphMark.draw(in: &context, slot: slot, color: bot.color, bodyId: bot.mascotBody, state: state,
-                           scheme: scheme, look: look)
-        }
-        .frame(width: size * 2, height: size * 2)
-        .frame(width: size, height: size)
-        .scaleEffect(x: (0.55 + 0.45 * grow) * (1 - taffy * 0.32), y: (0.55 + 0.45 * grow) * (1 + taffy), anchor: .top)
-        .opacity(Double(grow))
-        .keyframeAnimator(initialValue: CGFloat(1), trigger: director?.refreshSettled ?? 0) { view, s in
-            view.scaleEffect(x: 2 - s, y: s, anchor: .top)
-        } keyframes: { _ in
-            CubicKeyframe(0.78, duration: 0.09)
-            SpringKeyframe(1.12, duration: 0.16, spring: .snappy)
-            SpringKeyframe(1, duration: 0.35, spring: .bouncy)
-        }
-        // hang from the top of the gap, centred
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, max(8, pull - size * (1 + taffy) - 10))
-    }
-}
-
-/// Hides the system spinner of the scroll view this sits in, so the bot in
-/// the gap is the only thing that says "refreshing".
-struct QuietRefreshSpinner: UIViewRepresentable {
-    func makeUIView(context: Context) -> Probe { Probe() }
-    func updateUIView(_ view: Probe, context: Context) { view.quiet() }
-
-    final class Probe: UIView {
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            quiet()
-            DispatchQueue.main.async { [weak self] in self?.quiet() }
-        }
-        func quiet() {
-            var view = superview
-            while let current = view {
-                if let scroll = current as? UIScrollView, let control = scroll.refreshControl {
-                    control.tintColor = .clear
-#if DEBUG
-                    preview(scroll, control)
-#endif
-                    return
-                }
-                view = current.superview
-            }
-        }
-
-#if DEBUG
-        private static var previewed = false
-        /// `-pull-preview`: hold the list pulled down for a screenshot;
-        /// `-pull-refresh-preview` also runs a real refresh from there.
-        private func preview(_ scroll: UIScrollView, _ control: UIRefreshControl) {
-            let args = ProcessInfo.processInfo.arguments
-            guard !Self.previewed, args.contains("-pull-preview") || args.contains("-pull-refresh-preview") else { return }
-            Self.previewed = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top - 120), animated: false)
-                if args.contains("-pull-refresh-preview") { control.sendActions(for: .valueChanged) }
-            }
-        }
-#endif
     }
 }
 

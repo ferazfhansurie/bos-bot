@@ -93,7 +93,7 @@ struct BotOverviewView: View {
             failed = false
             await load()
         }
-        .refreshable { await load() }
+        .bosRefreshable { await load() }
     }
 
     private func load() async {

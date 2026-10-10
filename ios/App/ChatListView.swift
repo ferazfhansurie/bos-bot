@@ -356,7 +356,6 @@ struct ChatListView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if query.isEmpty {
-                        PullRefreshMascot(bot: pullBot, space: "roster")
                         rosterSections
                     } else {
                         if !searchHits.isEmpty {
@@ -396,17 +395,13 @@ struct ChatListView: View {
                     }
                 }
                 .padding(.bottom, Self.barClearance)
-                .background { if pullBot != nil { QuietRefreshSpinner() } }
             }
             .coordinateSpace(.named("roster"))
-            .refreshable {
-                listFaces.refreshing = true
+            .bosRefreshable {
                 await session.refresh(); await refreshShared()
 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") { try? await Task.sleep(for: .seconds(3)) }
 #endif
-                listFaces.refreshing = false
-                listFaces.refreshSettled += 1
             }
             .environment(\.listFaces, listFaces)
             .onAppear { listFaces.setListVisible(true) }
@@ -1291,11 +1286,6 @@ struct ChatListView: View {
     private var arrivalStamps: [String: Double] {
         Dictionary(chats.filter { $0.chat.isBot && $0.chat.unread && !$0.chat.busy }.map { ($0.chat.id, $0.lastActivity) },
                    uniquingKeysWith: max)
-    }
-    /// The bot that hangs in the gap when the list is pulled down.
-    private var pullBot: Bot? {
-        for summary in chats { if case let .bot(bot) = summary.chat, ListFace.drawsMascot(bot) { return bot } }
-        return nil
     }
 
     /// The reader's activity level, which the roster preview folds by.
