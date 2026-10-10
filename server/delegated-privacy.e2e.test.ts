@@ -15,7 +15,7 @@ async function setup(env: Record<string, string> = {}) {
   const pairing = await api('POST', '/api/auth/pairing', { scopes: ['peer'] });
   const paired = (await api('POST', '/api/auth/pair', { code: pairing.body.code })).body;
   token = paired.token;
-  writeFileSync(join(fixture.info.dataDir, 'delegations.json'), JSON.stringify({ version: 1, delegations: [{ granteeHomeId: 'foreign', granteeBotId: 'chief', peerSessionId: paired.session.id, peerTokenHash: createHash('sha256').update(token).digest('hex'), scopes: ['coordinate','bots:create','bots:configure','bots:delete'], section: '', note: 'fixture only' }] }));
+  writeFileSync(join(fixture.info.dataDir, 'cross-home-grants.json'), JSON.stringify({ version: 1, delegations: [{ granteeHomeId: 'foreign', granteeBotId: 'chief', peerSessionId: paired.session.id, peerTokenHash: createHash('sha256').update(token).digest('hex'), scopes: ['coordinate','bots:create','bots:configure','bots:delete'], section: '', note: 'fixture only' }] }));
   const reviewer = (await api('GET', '/api/bots')).body.bots[0];
   const target = (await api('POST', '/api/bots', { name: 'Privacytarget', modelSelection: reviewer.modelSelection })).body.bot;
   return { fixture, api, reviewer, target };

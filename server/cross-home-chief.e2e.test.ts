@@ -20,7 +20,7 @@ test("real peer endpoints deny ungranted authority, recheck revocation at review
     const token = paired.token;
     const grant = { granteeHomeId: "firaz", granteeBotId: "jarvis", peerSessionId: paired.session.id,
       peerTokenHash: createHash("sha256").update(token).digest("hex"), scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", note: "fixture" };
-    const config = (entry: any[] = [grant]) => writeFileSync(join(fixture.info.dataDir, "delegations.json"), JSON.stringify({ version: 1, delegations: entry }));
+    const config = (entry: any[] = [grant]) => writeFileSync(join(fixture.info.dataDir, "cross-home-grants.json"), JSON.stringify({ version: 1, delegations: entry }));
     const bots = (await api("GET", "/api/bots")).bots;
     const recipient = bots[0];
     const selection = recipient.modelSelection;
@@ -37,7 +37,7 @@ test("real peer endpoints deny ungranted authority, recheck revocation at review
     await api("GET", "/api/delegated/roster", undefined, token, 403, "jarvis", "wrong");
     config([{ ...grant, expiresAt: Date.now() - 1 }]);
     await api("GET", "/api/delegated/roster", undefined, token, 403);
-    writeFileSync(join(fixture.info.dataDir, "delegations.json"), "malformed");
+    writeFileSync(join(fixture.info.dataDir, "cross-home-grants.json"), "malformed");
     await api("GET", "/api/delegated/roster", undefined, token, 403);
     config();
     await api("PATCH", `/api/delegated/bots/${recipient.id}`, { reason: "forbidden permission field", fields: { approvalMode: "full" } }, token, 400);
@@ -99,7 +99,7 @@ test("delegated deletion refuses a target with running work", async () => {
     await api("POST", "/api/bots", { name: "Reviewer", title: "Fixture", modelSelection: recipient.modelSelection });
     const pairing = (await api("POST", "/api/auth/pairing", { scopes: ["peer"] })).body;
     const paired = (await api("POST", "/api/auth/pair", { code: pairing.code })).body;
-    writeFileSync(join(fixture.info.dataDir, "delegations.json"), JSON.stringify({ version: 1, delegations: [{ granteeHomeId: "firaz", granteeBotId: "jarvis", peerSessionId: paired.session.id,
+    writeFileSync(join(fixture.info.dataDir, "cross-home-grants.json"), JSON.stringify({ version: 1, delegations: [{ granteeHomeId: "firaz", granteeBotId: "jarvis", peerSessionId: paired.session.id,
       peerTokenHash: createHash("sha256").update(paired.token).digest("hex"), scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", note: "fixture" }] }));
     await runControlOmb(["send", "--bot", recipient.id, "--task", recipient.threadId, "--text", "hold for deletion check", "--url", fixture.info.url]);
     await expect.poll(async () => (await api("GET", "/api/bots")).body.bots.find((bot: any) => bot.id === recipient.id).busy, { timeout: 15000 }).toBe(true);
@@ -108,7 +108,7 @@ test("delegated deletion refuses a target with running work", async () => {
     expect((await api("GET", "/api/bots")).body.bots.some((bot: any) => bot.id === recipient.id)).toBe(true);
     const queued = await api("POST", "/api/delegated/coordinate", { botId: recipient.id, requestKey: "revoked-queued", message: "must not dispatch after revocation" }, paired.token);
     expect(queued.status).toBe(200);
-    writeFileSync(join(fixture.info.dataDir, "delegations.json"), JSON.stringify({ version: 1, delegations: [] }));
+    writeFileSync(join(fixture.info.dataDir, "cross-home-grants.json"), JSON.stringify({ version: 1, delegations: [] }));
     writeFileSync(gate, "finish");
     await expect.poll(() => JSON.parse(readFileSync(join(fixture.info.dataDir, "delegated-jobs.json"), "utf8")).find((job: any) => job.id === queued.body.requestId).status, { timeout: 15000 }).toBe("failed");
     const threads = (await api("GET", "/api/bots")).body.bots.find((bot: any) => bot.id === recipient.id).tasks;
@@ -134,7 +134,7 @@ test("named-section delegation binds peer-only authority and operation-specific 
     const peer = await pair(["peer"]);
     const entry = (session: any, scopes: string[], autoApply = false) => ({ granteeHomeId: "firaz", granteeBotId: "jarvis", peerSessionId: session.session.id,
       peerTokenHash: createHash("sha256").update(session.token).digest("hex"), scopes, section: "work", autoApply, note: "fixture" });
-    const config = (entries: any[]) => writeFileSync(join(fixture.info.dataDir, "delegations.json"), JSON.stringify({ version: 1, delegations: entries }));
+    const config = (entries: any[]) => writeFileSync(join(fixture.info.dataDir, "cross-home-grants.json"), JSON.stringify({ version: 1, delegations: entries }));
     for (const scopes of [["admin"], ["client"]]) {
       const nonPeer = await pair(scopes); config([entry(nonPeer, ["coordinate", "bots:configure"])]);
       expect((await api("GET", "/api/delegated/roster", undefined, nonPeer.token)).status).toBe(403);

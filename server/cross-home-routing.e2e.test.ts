@@ -36,7 +36,7 @@ test("two real isolated homes forward Chief tools and resume once for coordinati
     await api(remote, "POST", "/api/bots", { name: "Surviving receipt owner", title: "Fixture", modelSelection: target.modelSelection }, undefined, 201);
     const grant = { granteeHomeId: localHome, granteeBotId: chief.id, peerSessionId: paired.session.id, peerTokenHash: createHash("sha256").update(paired.token).digest("hex"),
       scopes: ["coordinate", "bots:create", "bots:delete", "bots:configure"], section: "", autoApply: false, note: "two-home fixture" };
-    const grantFile = join(remote.info.dataDir, "delegations.json");
+    const grantFile = join(remote.info.dataDir, "cross-home-grants.json");
     const setGrant = (entries: any[]) => writeFileSync(grantFile, JSON.stringify({ version: 1, delegations: entries }));
     let previousPid = 0;
     const begin = async () => {

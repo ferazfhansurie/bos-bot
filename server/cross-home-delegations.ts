@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { writeFileAtomic } from "./atomic.ts";
 import { z } from "zod";
 
 export const delegationScope = z.enum(["coordinate", "bots:create", "bots:delete", "bots:configure"]);
@@ -12,6 +13,16 @@ const grantSchema = z.object({
 }).strict();
 export type CrossHomeGrant = z.infer<typeof grantSchema>;
 const fileSchema = z.object({ version: z.literal(1), delegations: z.array(grantSchema).max(100) }).strict();
+/** Grants used to share delegations.json with the coordination queue, whose
+ * every save rewrote the file as a queue map and silently revoked them. Move a
+ * grant-shaped legacy file to its own name once, before the queue loads. */
+export function migrateLegacyGrants(legacy: string, file: string): void {
+  if (existsSync(file)) return;
+  try {
+    const parsed = fileSchema.safeParse(JSON.parse(readFileSync(legacy, "utf8")));
+    if (parsed.success) writeFileAtomic(file, JSON.stringify(parsed.data, null, 2), { mode: 0o600 });
+  } catch { /* missing or queue-shaped: nothing to move */ }
+}
 export class DelegationError extends Error { readonly status = 403; }
 
 /** Read afresh at every authority boundary. Missing/malformed/revoked config

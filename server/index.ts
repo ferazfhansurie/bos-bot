@@ -480,7 +480,7 @@ import { screenFrameHash, screenSurfaceForTool, screenTouchingTool, settledFrame
 import { RoutineRequestService } from "./routine-requests.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
 import { ProfileRequestService } from "./profile-requests.ts";
-import { Delegations, type DelegatedIdentity, type DelegationScope } from "./cross-home-delegations.ts";
+import { Delegations, migrateLegacyGrants, type DelegatedIdentity, type DelegationScope } from "./cross-home-delegations.ts";
 import { DelegatedJobs, type DelegatedJob } from "./delegated-jobs.ts";
 import { DelegatedClient } from "./delegated-client.ts";
 import { TeamSetupError, TeamSetupRequestService, type TeamSetupOptions } from "./team-setup-requests.ts";
@@ -693,7 +693,8 @@ const voiceRings = new VoiceRings({
   watching: () => apnsPush.voipSessions(multiplayerActors.ownerId).filter(onScreen),
 });
 multiplayerLinks.ownBotAvatar = id => store.bot(id)?.avatarUrl;
-const crossHomeGrants = new Delegations(join(DATA_DIR, "delegations.json"));
+migrateLegacyGrants(join(DATA_DIR, "delegations.json"), join(DATA_DIR, "cross-home-grants.json"));
+const crossHomeGrants = new Delegations(join(DATA_DIR, "cross-home-grants.json"));
 const delegatedJobs = new DelegatedJobs(join(DATA_DIR, "delegated-jobs.json"));
 const delegatedClient = new DelegatedClient(ENVIRONMENT_ID, () => multiplayerLinks.bridgeLinks());
 // Other BOS servers this one holds an admin session on (server/homes.ts).
