@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# proof for bin/bos-wt in a throwaway repo (real prod untouched): the main
+# checkout refuses commits, two worktrees edit the same line, both land,
+# the second stops on the conflict with its commit intact.  bin/bos-wt-selftest [sha]
+set -u
+SRC=$(cd "$(dirname "$0")/.." && git rev-parse --path-format=absolute --git-common-dir | xargs dirname); SHA=${1:-HEAD}
+SHA=$(git -C "$(dirname "$0")" rev-parse "$SHA")
+T=$(mktemp -d); mkdir -p $T/bin
+git init -q $T/repo
+cd $T/repo && git fetch -q --depth 1 "file://$SRC" "$SHA" || exit 9 && git checkout -q -B prod "$SHA" && git branch -q -f release/bos-1.0 prod
+git config core.hooksPath scripts/git-hooks
+cp ~/.bos-bot/workspaces/59d5f871-db6c-4850-b966-a04ecc033279/bin/bos-promote.sh $T/bin/
+export BOS_REPO=$T/repo BOS_PROMOTE=$T/bin/bos-promote.sh BOS_WT_ROOT=$T/wts
+echo "== 1. commit straight in the main checkout"; echo x >> README.md; git commit -qam direct; echo "exit=$?"; git checkout -q README.md
+echo "== 2. start alpha + beta"
+A=$(bin/bos-wt start alpha | tail -1); B=$(bin/bos-wt start beta | tail -1); echo "$A"; echo "$B"
+sed -i '' '1s/.*/# line one edited by ALPHA/' $A/README.md; git -C $A commit -qam "alpha edits line 1"
+sed -i '' '1s/.*/# line one edited by BETA/' $B/README.md; git -C $B commit -qam "beta edits line 1"
+BSHA=$(git -C $B rev-parse --short HEAD)
+echo "== 3. status"; bin/bos-wt status
+echo "== 4. land alpha"; (cd $A && bin/bos-wt land "test alpha"); echo "exit=$?"
+echo "== 5. land beta"; (cd $B && bin/bos-wt land "test beta"); echo "exit=$?"
+echo "== 6. after"
+echo "prod/release: $(git rev-parse --short prod) $(git rev-parse --short release/bos-1.0)"; git log --oneline -2 prod
+echo "main checkout line 1: $(head -1 README.md)"
+echo "worktrees left: $(ls $T/wts)"
+echo "beta still at $(git -C $B rev-parse --short HEAD) (was $BSHA), line 1: $(head -1 $B/README.md), dirty: $(git -C $B status --porcelain | wc -l | tr -d ' ')"
+cd /; rm -rf "$T"
