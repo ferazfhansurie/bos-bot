@@ -121,14 +121,17 @@ extension ThreadMascotDirector {
             try? await Task.sleep(for: .seconds(seconds))
             beat()
         }
-        await at(4) { sent() }
-        await at(3) { replyLanded() }
-        await at(2) { setMood(.proud) }
-        await at(5) { setMood(.sheepish) }
-        await at(5) { setMood(.curious) }
-        await at(5) { setMood(nil); cardChanged(true) }
-        await at(10) { cardChanged(false); lookingBack = true }
-        await at(5) { lookingBack = false; burstBeat += 1; Haptics.success() }
+        // loops, so a slow screenshot tool still lands on every pose
+        while !Task.isCancelled {
+            await at(4) { sent() }
+            await at(3) { replyLanded() }
+            await at(2) { setMood(.proud) }
+            await at(5) { setMood(.sheepish) }
+            await at(5) { setMood(.curious) }
+            await at(5) { setMood(nil); cardChanged(true) }
+            await at(10) { cardChanged(false); lookingBack = true }
+            await at(5) { lookingBack = false; burstBeat += 1; Haptics.success() }
+        }
     }
 }
 #endif
