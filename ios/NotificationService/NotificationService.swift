@@ -8,11 +8,14 @@ final class NotificationService: UNNotificationServiceExtension {
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         completion = contentHandler
-        let content = Self.withVoiceCategory(request.content)
+        let content = Self.withBotCategory(Self.withVoiceCategory(request.content))
         fallback = content
+        // the sender's face in the mood of what it said, when the app drew it
+        let mood = NotificationMood.glyph(kind: (content.userInfo["type"] as? String) ?? (content.userInfo["kind"] as? String),
+                                          title: content.title, body: content.body)
         guard let senderID = content.userInfo["senderId"] as? String,
               let senderName = content.userInfo["senderName"] as? String,
-              let imageURL = NotificationAvatarCache.url(for: senderID),
+              let imageURL = NotificationAvatarCache.bestURL(for: senderID, mood: mood),
               FileManager.default.fileExists(atPath: imageURL.path) else {
             contentHandler(content)
             return
@@ -49,6 +52,16 @@ final class NotificationService: UNNotificationServiceExtension {
         guard content.categoryIdentifier != category,
               let mutable = content.mutableCopy() as? UNMutableNotificationContent else { return content }
         mutable.categoryIdentifier = category
+        return mutable
+    }
+
+    /// A bot's push without a category of its own gets the one the content
+    /// extension answers to, so a long-press shows the bot's live face.
+    private static func withBotCategory(_ content: UNNotificationContent) -> UNNotificationContent {
+        guard content.categoryIdentifier.isEmpty,
+              content.userInfo["botId"] is String || content.userInfo["senderId"] is String,
+              let mutable = content.mutableCopy() as? UNMutableNotificationContent else { return content }
+        mutable.categoryIdentifier = BotNotificationCategory.bot
         return mutable
     }
 

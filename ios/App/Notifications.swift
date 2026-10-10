@@ -1,6 +1,7 @@
 import Foundation
 import UserNotifications
 import UIKit
+import Intents
 
 extension Notification.Name { static let sharedRoomPushTapped = Notification.Name("bos.sharedRoomPushTapped") }
 import CompanionCore
@@ -51,6 +52,11 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
                 UNNotificationAction(identifier: VoicePush.declineAction, title: "Decline",
                                      options: [.destructive], icon: UNNotificationActionIcon(systemImageName: "phone.down.fill")),
             ], intentIdentifiers: []),
+            // no actions: these exist so the content extension's live face
+            // answers to them (UNNotificationExtensionCategory)
+            UNNotificationCategory(identifier: BotNotificationCategory.update, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: BotNotificationCategory.approval, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(identifier: BotNotificationCategory.bot, actions: [], intentIdentifiers: []),
         ])
     }
 
@@ -91,8 +97,31 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         if notification.isBlocking { content.interruptionLevel = .timeSensitive }
 
         // A replay after a short disconnect must reconcile a missed alert,
-        // but a repeated frame must not draw it twice.
-        center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+        // but a repeated frame must not draw it twice. The banner wears the
+        // bot's face in the mood of what it said, like a push does.
+        let mood = NotificationMood.glyph(kind: notification.kind, title: notification.title, body: notification.body)
+        Self.withSenderFace(content, senderID: "bot:\(notification.botId)", name: notification.title, mood: mood) { [center] final in
+            center.add(UNNotificationRequest(identifier: identifier, content: final, trigger: nil))
+        }
+    }
+
+    /// The communication-style banner: the sender's face instead of the app
+    /// icon. Falls back to the plain content when no face was drawn.
+    private static func withSenderFace(_ content: UNMutableNotificationContent, senderID: String, name: String, mood: String,
+                                       then deliver: @escaping (UNNotificationContent) -> Void) {
+        guard let imageURL = NotificationAvatarCache.bestURL(for: senderID, mood: mood),
+              FileManager.default.fileExists(atPath: imageURL.path) else { deliver(content); return }
+        let sender = INPerson(personHandle: INPersonHandle(value: senderID, type: .unknown),
+                              nameComponents: nil, displayName: name, image: INImage(url: imageURL),
+                              contactIdentifier: nil, customIdentifier: senderID, isMe: false, suggestionType: .none)
+        let intent = INSendMessageIntent(recipients: nil, outgoingMessageType: .outgoingMessageText,
+                                         content: content.body, speakableGroupName: nil,
+                                         conversationIdentifier: content.threadIdentifier,
+                                         serviceName: "BOS", sender: sender, attachments: nil)
+        intent.setImage(INImage(url: imageURL), forParameterNamed: \INSendMessageIntent.sender)
+        let interaction = INInteraction(intent: intent, response: nil)
+        interaction.direction = .incoming
+        interaction.donate { _ in deliver((try? content.updating(from: intent)) ?? content) }
     }
 
     /// A done push for a call that is still live: the call already says it,

@@ -18,6 +18,7 @@ import WidgetKit
 struct BosWidgets: WidgetBundle {
     var body: some Widget {
         BotActivityWidget()
+        BotsWidget()
         if #available(iOS 18.0, *) {
             CallBosControl()
             CallOracleControl()
@@ -112,6 +113,7 @@ private struct CompactTrailing: View {
             Image(systemName: "checkmark")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(context.accent)
+                .transition(.scale(scale: 0.3).combined(with: .opacity))
         } else {
             // the ticking clock is the island's working indicator
             Text(timerInterval: context.elapsed, countsDown: false)
@@ -325,6 +327,10 @@ private struct ActivityBotFace: View {
             at: Date()
         )
         .frame(width: size, height: size)
+        // a new face pops in on a spring each time the bot's state changes
+        .id(context.state.face)
+        .transition(.scale(scale: 0.7).combined(with: .opacity))
+        .animation(.spring(duration: 0.5, bounce: 0.45), value: context.state.face)
         .accessibilityLabel("\(context.attributes.name) avatar")
     }
 }

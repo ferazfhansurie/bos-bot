@@ -43,11 +43,12 @@ targets:
       - target: BosBotWidgets
       - target: BosShareExtension
       - target: BosNotificationService
+      - target: BosNotificationContent
     settings:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios
-        MARKETING_VERSION: "1.9.3"
+        MARKETING_VERSION: "1.9.4"
         CURRENT_PROJECT_VERSION: "78"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -160,6 +161,56 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: BosBot
 
+  # Long-press a bot's notification: the bot itself, in the mood of what it
+  # said, blinking and breathing above the message. Reads the bot's look
+  # from the roster snapshot in the App Group.
+  BosNotificationContent:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: NotificationContent
+      - path: Shared/BotGlance.swift
+      - path: AppShared/NotificationAvatarCache.swift
+      - path: App/GlyphMark.swift
+      - path: App/MausAvatar.swift
+      - path: App/MausFaceData.swift
+    dependencies:
+      - package: CompanionCore
+        product: CompanionCore
+    settings:
+      base:
+        DEVELOPMENT_TEAM: 4W9658Z948
+        PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.notification-content
+        MARKETING_VERSION: "1.9.4"
+        CURRENT_PROJECT_VERSION: "78"
+        SWIFT_VERSION: "5.9"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
+        APPLICATION_EXTENSION_API_ONLY: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: true
+    entitlements:
+      path: NotificationContent/NotificationContent.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.aihlete.aios.shared
+    info:
+      path: NotificationContent/Info.plist
+      properties:
+        CFBundleDisplayName: BOS Faces
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.content-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationViewController
+          NSExtensionAttributes:
+            UNNotificationExtensionCategory:
+              - BOS_BOT
+              - OPENMAUS_UPDATE
+              - OPENMAUS_APPROVAL
+              - VOICE_WORK_DONE
+            UNNotificationExtensionInitialContentSizeRatio: 0.36
+            UNNotificationExtensionUserInteractionEnabled: true
+
   # The system share sheet can send a link, text, image, or document straight
   BosNotificationService:
     type: app-extension
@@ -167,11 +218,12 @@ targets:
     sources:
       - path: NotificationService
       - path: AppShared/NotificationAvatarCache.swift
+      - path: Shared/BotGlance.swift
     settings:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.notification-service
-        MARKETING_VERSION: "1.9.3"
+        MARKETING_VERSION: "1.9.4"
         CURRENT_PROJECT_VERSION: "78"
         SWIFT_VERSION: "5.9"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -208,7 +260,7 @@ targets:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.share
-        MARKETING_VERSION: "1.9.3"
+        MARKETING_VERSION: "1.9.4"
         CURRENT_PROJECT_VERSION: "78"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -270,12 +322,18 @@ targets:
       base:
         DEVELOPMENT_TEAM: 4W9658Z948
         PRODUCT_BUNDLE_IDENTIFIER: com.aihlete.aios.widgets
-        MARKETING_VERSION: "1.9.3"
+        MARKETING_VERSION: "1.9.4"
         CURRENT_PROJECT_VERSION: "78"
         SWIFT_VERSION: "5.9"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
         TARGETED_DEVICE_FAMILY: "1,2"
         SKIP_INSTALL: true
+    # the bots widget reads the roster snapshot the app writes here
+    entitlements:
+      path: Widgets/BosBotWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.aihlete.aios.shared
     info:
       path: Widgets/Info.plist
       properties:

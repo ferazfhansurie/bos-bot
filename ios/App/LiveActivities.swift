@@ -15,6 +15,8 @@
 import ActivityKit
 import Combine
 import Foundation
+import SwiftUI
+import WidgetKit
 import CompanionCore
 
 @MainActor
@@ -25,11 +27,18 @@ final class LiveActivityCoordinator {
     private var since: [String: (kind: String, at: Date)] = [:]
     /// Bots showing their done card, and the task that will end it.
     private var finishing: [String: Task<Void, Never>] = [:]
+    /// The done line each finished bot shows on the widgets, and when.
+    private var finished: [String: (line: String, threadId: String?, title: String?, at: Date)] = [:]
+    /// Each bot's look the notification mood faces were last drawn for.
+    private var moodFacesDrawn: [String: String] = UserDefaults.standard.dictionary(forKey: "glance.moodFaces") as? [String: String] ?? [:]
+    private var lastWidgetReload = Date.distantPast
 
     /// How long the done card stays in the island before it ends, and how
     /// long the ended card then stays on the lock screen.
     private static let doneInIsland: Duration = .seconds(8)
     private static let doneOnLockScreen: TimeInterval = 2 * 60
+    /// The celebrate face's beat at the start of the done card.
+    private static let celebrateInIsland: Duration = .milliseconds(2600)
 
     func attach(to session: Session) {
         // Answer and stop from the island: the intents run in this process.
@@ -42,6 +51,7 @@ final class LiveActivityCoordinator {
         #if DEBUG
         if let demo = UserDefaults.standard.string(forKey: "demoActivity") {
             Task { await Self.demo(demo) }
+            Self.demoGlances(demo)
             return
         }
         #endif
@@ -65,6 +75,8 @@ final class LiveActivityCoordinator {
     }
 
     private func sync(_ state: CompanionState) {
+        publishGlances(state)
+        drawMoodFaces(state.bots)
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         // updates arrive most urgent first: a bot's first one is its headline
@@ -86,8 +98,9 @@ final class LiveActivityCoordinator {
             let needsYou = update.kind == .needsYou
             let kind = needsYou ? "needsYou" : "working"
             if since[bot.id]?.kind != kind { since[bot.id] = (kind, Date()) }
-            let face = MausState.forBot(bot, last: state.visibleTranscript(forThread: bot.threadId).last)
             let step = Self.step(for: update, state: state)
+            let face = needsYou ? MausState.listening
+                : Self.face(forStep: step.symbol, runtime: MausState.forBot(bot, last: state.visibleTranscript(forThread: bot.threadId).last))
             let content = BotActivityAttributes.ContentState(
                 face: face.rawValue,
                 kind: kind,
@@ -144,11 +157,18 @@ final class LiveActivityCoordinator {
                 Task { await activity.end(nil, dismissalPolicy: .immediate) }
                 continue
             }
+            finished[botId] = (done.line, done.threadId, done.threadTitle, Date())
             finishing[botId] = Task { [weak self] in
+                // celebrate in the island first, then settle into a happy face
                 await activity.update(.init(state: done, staleDate: Date().addingTimeInterval(10 * 60)))
-                try? await Task.sleep(for: Self.doneInIsland)
+                try? await Task.sleep(for: Self.celebrateInIsland)
                 guard !Task.isCancelled else { return }
-                await activity.end(.init(state: done, staleDate: nil),
+                var settled = done
+                settled.face = MausState.happy.rawValue
+                await activity.update(.init(state: settled, staleDate: Date().addingTimeInterval(10 * 60)))
+                try? await Task.sleep(for: Self.doneInIsland - Self.celebrateInIsland)
+                guard !Task.isCancelled else { return }
+                await activity.end(.init(state: settled, staleDate: nil),
                                    dismissalPolicy: .after(Date().addingTimeInterval(Self.doneOnLockScreen)))
                 self?.finishing.removeValue(forKey: botId)
             }
@@ -166,7 +186,7 @@ final class LiveActivityCoordinator {
         let line = replyFirstLine(last.text)
         var done = previous
         done.kind = "done"
-        done.face = MausState.happy.rawValue
+        done.face = MausState.celebrate.rawValue
         done.headline = "\(name) is done"
         done.line = line.isEmpty ? "finished" : line
         done.symbol = "checkmark"
@@ -175,6 +195,92 @@ final class LiveActivityCoordinator {
         done.otherThreads = nil
         done.endedAt = Date()
         return done
+    }
+
+    /// The face for what the bot is doing: thinking while it reads and
+    /// reasons, searching while it looks things up, working while it runs
+    /// and edits. A step too vague to say falls back to the runtime's face.
+    private static func face(forStep symbol: String, runtime: MausState) -> MausState {
+        switch symbol {
+        case "ellipsis", "tray.full", "list.bullet": return .thinking
+        case "magnifyingglass", "text.magnifyingglass", "globe", "safari", "doc.text", "envelope", "calendar", "message":
+            return .searching
+        case "bell", "circle.dotted", "puzzlepiece.extension":
+            return runtime.showsActivity ? runtime : .working
+        default: return .working
+        }
+    }
+
+    // MARK: - Widgets and notification faces
+
+    /// Every bot, as the home and lock screen widgets draw it: who is
+    /// working, who needs you, who just finished. Written to the App Group;
+    /// the widgets reload when something they draw changed.
+    private func publishGlances(_ state: CompanionState) {
+        var byBot: [String: ChatUpdate] = [:]
+        for update in state.updates where update.kind != .toReview {
+            guard case let .bot(bot) = update.chat, byBot[bot.id] == nil else { continue }
+            byBot[bot.id] = update
+        }
+        let now = Date()
+        finished = finished.filter { now.timeIntervalSince($0.value.at) < 20 * 60 }
+        let glances: [BotGlance] = state.bots.filter { $0.hidden != true }.map { bot in
+            var glance = BotGlance(id: bot.id, name: bot.name, color: bot.color, body: bot.mascotBody, eyes: bot.mascotEyes,
+                                   status: "idle", face: MausState.idle.rawValue, line: "", threadId: bot.threadId,
+                                   threadTitle: nil, since: nil)
+            if let update = byBot[bot.id] {
+                let needsYou = update.kind == .needsYou
+                let step = Self.step(for: update, state: state)
+                glance.status = needsYou ? "needsYou" : "working"
+                glance.face = (needsYou ? MausState.listening
+                    : Self.face(forStep: step.symbol, runtime: MausState.forBot(bot, last: state.visibleTranscript(forThread: bot.threadId).last))).rawValue
+                glance.line = step.line
+                glance.threadId = update.chat.threadId
+                glance.threadTitle = Self.title(update.chat)
+                glance.since = since[bot.id]?.at ?? now
+                finished.removeValue(forKey: bot.id)
+            } else if let done = finished[bot.id] {
+                glance.status = "done"
+                glance.face = MausState.celebrate.rawValue
+                glance.line = done.line
+                glance.threadId = done.threadId ?? bot.threadId
+                glance.threadTitle = done.title
+                glance.since = done.at
+            }
+            return glance
+        }
+        guard BotRosterStore.save(BotRosterSnapshot(bots: glances, updatedAt: now)) else { return }
+        // the app is in the foreground here, where reloads cost no budget;
+        // a short floor still keeps a streaming turn from hammering it
+        let wait = max(0, 1.5 - now.timeIntervalSince(lastWidgetReload))
+        lastWidgetReload = now.addingTimeInterval(wait)
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+            WidgetCenter.shared.reloadTimelines(ofKind: BotGlanceWidgetKind.bots)
+        }
+    }
+
+    /// The faces a notification can wear, drawn once per look so the
+    /// notification service can pick the one matching the message's mood.
+    /// Only for bots that show their mascot: a photo stays a photo.
+    private func drawMoodFaces(_ bots: [Bot]) {
+        var drew = false
+        for bot in bots where (bot.avatarCrop ?? .mascot) == .mascot && MascotEyeStyle(stored: bot.mascotEyes) == .glyph {
+            let look = [bot.color, bot.mascotBody ?? "", "v1"].joined(separator: "|")
+            guard moodFacesDrawn[bot.id] != look else { continue }
+            for mood in NotificationMood.all {
+                let face = GlyphMark(color: bot.color, bodyId: bot.mascotBody, state: GlyphFaceState(rawValue: mood) ?? .happy, size: 64)
+                    .frame(width: 128, height: 128)
+                    .environment(\.colorScheme, .dark)
+                let renderer = ImageRenderer(content: face)
+                renderer.scale = 2
+                if let png = renderer.uiImage?.pngData() {
+                    NotificationAvatarCache.storeMood(png, for: "bot:\(bot.id)", mood: mood)
+                }
+            }
+            moodFacesDrawn[bot.id] = look
+            drew = true
+        }
+        if drew { UserDefaults.standard.set(moodFacesDrawn, forKey: "glance.moodFaces") }
     }
 
     private static func title(_ chat: Chat) -> String? {
