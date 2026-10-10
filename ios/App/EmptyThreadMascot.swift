@@ -73,6 +73,12 @@ struct EmptyThreadMascot: View {
     /// The person's other bots, one of which may drop by.
     let others: [Bot]
     let dock: MascotDock
+    /// A turn is running: the bot can be pulled down out of the island to
+    /// play with while it works.
+    var running = false
+    /// It is out over the transcript (pulled out during a run), so the
+    /// header can hide its face.
+    var onRecess: (Bool) -> Void = { _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -84,11 +90,19 @@ struct EmptyThreadMascot: View {
     @State private var rate = MascotCreature.Rate.fast
     @State private var clock = MascotClock()
     @State private var game = MascotGameBoard()
+    /// A pull out of the island is under way: its surface stays put until
+    /// the finger lifts, or the touch would be cancelled.
+    @State private var pulling = false
 
     var body: some View {
         GeometryReader { proxy in
-            if let creature, !launchCovered {
-                live(creature, stage: proxy.size)
+            ZStack(alignment: .topLeading) {
+                if let creature, !launchCovered {
+                    live(creature, stage: proxy.size)
+                }
+                if pulling || (creature == nil && running && !isEmpty && !focused && !reduceMotion && !launchCovered) {
+                    pullZone(stage: proxy.size)
+                }
             }
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -97,7 +111,11 @@ struct EmptyThreadMascot: View {
         .onChange(of: isEmpty) { _, empty in
             if empty { arrive() } else { creature?.leave() }
         }
-        .onChange(of: focused) { _, value in creature?.focused = value }
+        .onChange(of: focused) { _, value in
+            creature?.focused = value
+            // typing ends a recess: it goes back up out of the way
+            if value, creature?.recess == true { creature?.leave() }
+        }
         .onChange(of: dictating) { _, value in creature?.dictating = value }
         .onChange(of: unread) { _, value in creature?.unread = value }
         .onReceive(NotificationCenter.default.publisher(for: .bosDeviceShaken)) { _ in creature?.shake() }
@@ -108,7 +126,10 @@ struct EmptyThreadMascot: View {
         .onChange(of: scenePhase) { _, _ in syncClock() }
         .onChange(of: creature == nil) { _, _ in syncClock() }
         .onAppear { syncClock() }
-        .onDisappear { clock.stop() }
+        .onDisappear {
+            clock.stop()
+            onRecess(false)
+        }
     }
 
     private func syncClock() {
@@ -167,12 +188,41 @@ struct EmptyThreadMascot: View {
         .animation(.spring(duration: 0.35, bounce: 0.2), value: game.shown && !focused)
     }
 
-    private func arrive() {
+    /// The top centre, over the island and a little around it: a finger
+    /// that drags down from here pulls the bot out to play.
+    private func pullZone(stage: CGSize) -> some View {
+        let island = MascotCreature.island(origin: origin, width: stage.width).rect
+        let zone = CGRect(x: island.midX - 110, y: min(island.minY, 0), width: 220,
+                          height: max(island.maxY + 6 - min(island.minY, 0), 1))
+        return MascotTouchSurface(origin: origin,
+                                  onTouch: { point, start in pull(to: point, from: start) },
+                                  onRelease: { velocity in
+                                      creature?.release(velocity: velocity)
+                                      pulling = false
+                                  })
+            .frame(width: zone.width, height: zone.height)
+            .position(x: zone.midX, y: zone.midY)
+            .allowsHitTesting(zone.maxY > 0)
+            .accessibilityHidden(true)
+    }
+
+    private func pull(to point: CGPoint, from start: CGPoint) {
+        if !pulling {
+            // a tap up there is not a pull; a drag down is
+            guard creature == nil, point.y - start.y > 8 else { return }
+            pulling = true
+            arrive(pulledAt: point)
+            return
+        }
+        creature?.touch(at: point, from: start)
+    }
+
+    private func arrive(pulledAt: CGPoint? = nil) {
         let pool = others.filter { $0.id != bot.id && $0.hidden != true }
         let seed = EmptyMascotBrain.seed(threadId)
         let fresh = MascotCreature(bot: bot, seed: seed, reduceMotion: reduceMotion,
-                                   cameo: pool.isEmpty ? nil : pool[seed % pool.count],
-                                   draft: draft, dock: dock)
+                                   cameo: pool.isEmpty || pulledAt != nil ? nil : pool[seed % pool.count],
+                                   draft: draft, dock: dock, pulledAt: pulledAt)
         fresh.focused = focused
         fresh.dictating = dictating
         fresh.unread = unread
@@ -182,11 +232,13 @@ struct EmptyThreadMascot: View {
         fresh.onGone = { [weak fresh] in
             guard let fresh, creature === fresh else { return }
             creature = nil
+            if fresh.recess { onRecess(false) }
         }
         line = nil
         rate = .fast
         game.hide()
         creature = fresh
+        onRecess(fresh.recess)
     }
 }
 
@@ -486,6 +538,9 @@ final class MascotCreature {
     let name: String
     let side: CGFloat = 84
     private let seed: Int
+    /// Pulled out of the island while a run is going, to play over the
+    /// transcript: no lines, and when it is left alone it goes back up.
+    let recess: Bool
     private let day: MascotDayMood
     private let reduceMotion: Bool
     private let cameo: Bot?
@@ -631,7 +686,9 @@ final class MascotCreature {
     private var cameoX = Spring(0, stiffness: 120, damping: 17)
     private var cameoLeaving = false
 
-    init(bot: Bot, seed: Int, reduceMotion: Bool, cameo: Bot?, draft: ComposerDraft, dock: MascotDock) {
+    init(bot: Bot, seed: Int, reduceMotion: Bool, cameo: Bot?, draft: ComposerDraft, dock: MascotDock,
+         pulledAt: CGPoint? = nil) {
+        recess = pulledAt != nil
         color = bot.color
         bodyId = bot.mascotBody
         name = bot.name
@@ -642,6 +699,15 @@ final class MascotCreature {
         self.dock = dock
         rng = UInt64(truncatingIfNeeded: seed) &+ 0x9E37_79B9_7F4A_7C15
         mode = reduceMotion ? .home : .birth
+        if let pulledAt {
+            // pulled out of the island during a run: already in the finger
+            mode = .held
+            p = pulledAt
+            finger = pulledAt
+            touchStart = pulledAt
+            touching = true
+            moved = true
+        }
         lastDraft = draft.text
         var day = EmptyMascotBrain.dayMood(at: Date())
 #if DEBUG
@@ -668,35 +734,48 @@ final class MascotCreature {
     /// Where it rests: centred, a little above the middle of the space
     /// between the header and the composer.
     func home(in stage: CGSize, origin: CGPoint) -> CGPoint {
-        let top = max(dock.header.maxY - origin.y, 0)
+        let top = topWall
         let floor = max(stage.height, top + side * 2)
         return CGPoint(x: stage.width / 2, y: top + (floor - top) * 0.42)
     }
 
-    private var topWall: CGFloat { max(dock.header.maxY - origin.y, 0) }
+    /// The bottom of the header as it is seen: the name pill hangs below
+    /// the bar's measured frame (it put the score right on it), so the face
+    /// in it, plus the pill's own padding, counts too.
+    private var topWall: CGFloat {
+        let pill = dock.avatar == .zero ? 0 : dock.avatar.maxY + 8
+        return max(max(dock.header.maxY, pill) - origin.y, 0)
+    }
 
     /// Where the score's top goes, in the stage: under the lower of the
     /// header, the island and the status bar, with a little air.
     var scoreTop: CGFloat {
-        max(topWall, island.maxY, safeTop - origin.y) + 22
+        max(topWall, island.maxY, safeTop - origin.y) + 26
     }
 
     private func local(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x - origin.x, y: point.y - origin.y) }
 
     private func measureIsland() {
+        let measured = Self.island(origin: origin, width: stage.width)
+        safeTop = measured.safeTop
+        hasIsland = measured.hasIsland
+        island = measured.rect
+    }
+
+    /// The island (or the notch), in a stage at `origin`.
+    static func island(origin: CGPoint, width fallback: CGFloat) -> (rect: CGRect, hasIsland: Bool, safeTop: CGFloat) {
         let window = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .first(where: \.isKeyWindow)
-        let width = window?.bounds.width ?? stage.width
+        let width = window?.bounds.width ?? fallback
         let safeTop = window?.safeAreaInsets.top ?? 0
-        self.safeTop = safeTop
         // A dynamic island phone has a top inset of 59 or more; a notch
         // phone has less. Either way it comes out of the top centre.
-        hasIsland = safeTop >= 59
+        let hasIsland = safeTop >= 59
         let size = hasIsland ? CGSize(width: 126, height: 37) : CGSize(width: 110, height: 28)
         let global = CGRect(x: width / 2 - size.width / 2, y: hasIsland ? 11 : 4, width: size.width, height: size.height)
-        island = global.offsetBy(dx: -origin.x, dy: -origin.y)
+        return (global.offsetBy(dx: -origin.x, dy: -origin.y), hasIsland, safeTop)
     }
 
     // MARK: Events
@@ -854,7 +933,7 @@ final class MascotCreature {
             last = now
             stage = newStage
             origin = newOrigin
-            guard settleFrames >= 3 || now.timeIntervalSince(settleSince!) > 0.9 else {
+            guard recess || settleFrames >= 3 || now.timeIntervalSince(settleSince!) > 0.9 else {
                 return Frame(centre: .zero, hit: 1, touchable: false)
             }
             started = true
@@ -894,7 +973,18 @@ final class MascotCreature {
     private func start() {
         measureIsland()
         let home = home(in: stage, origin: origin)
-        if mode == .birth {
+        if recess {
+            // it grows out of the finger and looks up at you
+            released = true
+            snapped = true
+            landedAt = 0
+            scale = Spring(0.35, stiffness: 300, damping: 18)
+            scale.target = 1
+            sy.velocity += 3
+            sx.velocity -= 2
+            moment = (.surprised, nil, t + 0.6)
+            haptic(.medium, 0.9)
+        } else if mode == .birth {
             p = CGPoint(x: island.midX, y: island.midY + 6)
             scale = Spring(0.28, stiffness: 240, damping: 20)
             pill.target = 1
@@ -1475,6 +1565,9 @@ final class MascotCreature {
 
     /// The slow half of a frame: mood, line, idle habits, the visitor.
     private func think() {
+        // A recess ends on its own: left alone at rest for a few seconds, it
+        // goes back up into the header, the end card done first.
+        if recess, mode == .home, !touching, !playing, cheers == 0, t - lastPoke > 3.4 { leave() }
         // The draft, read once per frame. A big cut is suspicious.
         let text = draft.text
         if text != lastDraft {
@@ -1661,6 +1754,8 @@ final class MascotCreature {
     }
 
     private func publishLine(_ line: String?) {
+        // over a transcript a line is clutter
+        let line = recess ? nil : line
         guard line != shownLine else { return }
         shownLine = line
         DispatchQueue.main.async { [weak self] in self?.onLine?(line) }

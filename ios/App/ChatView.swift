@@ -37,6 +37,8 @@ struct ChatView: View {
     @State private var composerDraft = ComposerDraft()
     /// Where the header and its face sit, for the empty thread's mascot.
     @State private var mascotDock = MascotDock()
+    /// The bot was pulled out of the island to play during a run.
+    @State private var mascotOut = false
     private var draft: String {
         get { composerDraft.text }
         nonmutating set { composerDraft.text = newValue }
@@ -419,7 +421,9 @@ struct ChatView: View {
                                           draft: composerDraft, focused: composerFocused,
                                           dictating: dictation.isListening,
                                           unread: onClose == nil ? unreadElsewhere : 0,
-                                          others: session.state.bots, dock: mascotDock)
+                                          others: session.state.bots, dock: mascotDock,
+                                          running: current.busy,
+                                          onRecess: { mascotOut = $0 })
                             .id(threadId)
                     }
                 }
@@ -771,8 +775,9 @@ struct ChatView: View {
                 // While the empty thread's mascot is out it is the bot; a
                 // second face up here is one too many. It comes back as the
                 // mascot is sucked up into it.
-                .opacity(showsEmptyMascot ? 0 : 1)
+                .opacity(showsEmptyMascot || mascotOut ? 0 : 1)
                 .animation(.easeOut(duration: 0.18).delay(showsEmptyMascot ? 0 : 0.4), value: showsEmptyMascot)
+                .animation(.easeOut(duration: 0.14), value: mascotOut)
         }
     }
 
