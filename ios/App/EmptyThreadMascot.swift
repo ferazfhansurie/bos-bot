@@ -455,7 +455,7 @@ final class MascotCreature {
         poke()
         if moved {
             let speed = hypot(velocity.width, velocity.height)
-            let cap: CGFloat = 3600
+            let cap: CGFloat = 5000
             let k = speed > cap ? cap / speed : 1
             v = CGVector(dx: velocity.width * k, dy: velocity.height * k)
             mode = .flung
@@ -670,18 +670,25 @@ final class MascotCreature {
                 p.y += pull.dy * dt * 8
             }
         case .held:
+            // Stuck to the finger, not chasing it: a spring here trailed the
+            // finger by a beat and made dragging feel laggy. The velocity is
+            // the finger's, smoothed, so the stretch and lean still read.
             let target = CGPoint(x: finger.x + grab.dx, y: finger.y + grab.dy)
-            springTo(target, stiffness: 900, damping: 48, dt: dt)
+            let follow = min(dt * 30, 1)
+            v.dx += ((target.x - p.x) / dt - v.dx) * follow
+            v.dy += ((target.y - p.y) / dt - v.dy) * follow
+            p = target
         case .flung:
-            v.dy += 700 * dt
-            let drag = exp(-0.8 * dt)
+            // real-ish weight: falls like a thrown thing, not a balloon
+            v.dy += 1700 * dt
+            let drag = exp(-0.35 * dt)
             v.dx *= drag
             v.dy *= drag
             p.x += v.dx * dt
             p.y += v.dy * dt
             collide(radius: r)
             let speed = hypot(v.dx, v.dy)
-            if (t - flungAt > 1.0 && speed < 260) || t - flungAt > 2.2 { mode = .home }
+            if (t - flungAt > 0.8 && speed < 240) || t - flungAt > 2.0 { mode = .home }
         case .leaving:
             let since = t - (leftAt ?? t)
             let avatar = dock.avatar == .zero
