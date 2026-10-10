@@ -83,6 +83,7 @@ struct EmptyThreadMascot: View {
     @State private var line: String?
     @State private var rate = MascotCreature.Rate.fast
     @State private var clock = MascotClock()
+    @State private var game = MascotGameBoard()
 
     var body: some View {
         GeometryReader { proxy in
@@ -133,8 +134,19 @@ struct EmptyThreadMascot: View {
                     .accessibilityIdentifier("empty-mascot-line")
             }
         }
+        .overlay(alignment: .topLeading) {
+            if game.shown, !focused {
+                MascotScore(board: game, tint: GlyphMark.colors(bot.color, scheme: scheme).body,
+                            reduceMotion: reduceMotion)
+                    .frame(width: stage.width)
+                    .position(x: stage.width / 2, y: creature.ceiling + 64)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+        }
         .animation(.spring(duration: 0.45, bounce: 0.2), value: line)
         .animation(.spring(duration: 0.5, bounce: 0.15), value: home.y)
+        .animation(.spring(duration: 0.35, bounce: 0.2), value: game.shown && !focused)
     }
 
     private func arrive() {
@@ -148,12 +160,14 @@ struct EmptyThreadMascot: View {
         fresh.unread = unread
         fresh.onRate = { rate = $0 }
         fresh.onLine = { line = $0 }
+        fresh.onGame = { game.apply($0) }
         fresh.onGone = { [weak fresh] in
             guard let fresh, creature === fresh else { return }
             creature = nil
         }
         line = nil
         rate = .fast
+        game.hide()
         creature = fresh
     }
 }
@@ -414,6 +428,17 @@ final class MascotCreature {
 
     private enum Mode { case birth, home, held, flung, leaving }
 
+    /// What the keepy-uppy game tells the view: the score lives up top, the
+    /// physics live here.
+    enum GameEvent {
+        case start(best: Int)
+        case scored(score: Int, trick: String?, newBest: Bool)
+        case missed(score: Int)
+        case quit
+    }
+
+    static let bestKey = "bos.mascot.keepyUppy.best"
+
     // Who it is.
     let color: String
     let bodyId: String?
@@ -430,6 +455,7 @@ final class MascotCreature {
     var focused = false {
         didSet {
             guard focused != oldValue else { return }
+            if focused { quitGame() }
             poke()
             keyboardMoved()
         }
@@ -440,6 +466,7 @@ final class MascotCreature {
     var onRate: ((Rate) -> Void)?
     var onLine: ((String?) -> Void)?
     var onGone: (() -> Void)?
+    var onGame: ((GameEvent) -> Void)?
 
     // Stage, in the overlay's own space (its top is the screen's top).
     private var stage: CGSize = .zero
@@ -496,6 +523,19 @@ final class MascotCreature {
     private var flungAt: TimeInterval = 0
     private var lastBump: TimeInterval = -1
     private var tapCount = 0
+
+    // Keepy-uppy: a flick starts a run, every hit while it is up scores, the
+    // floor ends it. A wall bank and a ceiling bonk each score once between
+    // hits, so a good throw is worth more than a tap.
+    private var playing = false
+    private var swatting = false
+    private var score = 0
+    private var best = 0
+    private var bestAtStart = 0
+    private var celebrated = false
+    private var lastHit: TimeInterval = -1
+    private var bankFree = false
+    private var bonkFree = false
 
     // Life.
     private var lastPoke: TimeInterval = 0
@@ -600,11 +640,11 @@ final class MascotCreature {
             touching = true
             moved = false
             grab = CGVector(dx: p.x - start.x, dy: p.y - start.y)
-            if rest == .asleep { wake() }
+            if playing, mode == .flung { swat(at: start) } else if rest == .asleep { wake() }
             poke()
         }
         finger = location
-        if !moved, !reduceMotion, hypot(location.x - start.x, location.y - start.y) > 10 {
+        if !swatting, !moved, !reduceMotion, hypot(location.x - start.x, location.y - start.y) > 10 {
             moved = true
             mode = .held
         }
@@ -614,13 +654,17 @@ final class MascotCreature {
         guard touching else { return }
         touching = false
         poke()
-        if moved {
+        if swatting {
+            swatting = false
+            flick(velocity)
+        } else if moved {
             let speed = hypot(velocity.width, velocity.height)
             let cap: CGFloat = 5000
             let k = speed > cap ? cap / speed : 1
             v = CGVector(dx: velocity.width * k, dy: velocity.height * k)
             mode = .flung
             flungAt = t
+            if speed > 500, !focused { startGame() }
         } else {
             tap()
         }
@@ -656,7 +700,7 @@ final class MascotCreature {
     }
 
     func shake() {
-        guard mode == .home || mode == .flung, landedAt != nil else { return }
+        guard !playing, mode == .home || mode == .flung, landedAt != nil else { return }
         poke()
         if reduceMotion { moment = (.dizzy, .shaken, t + 2); return }
         rattleUntil = t + 0.85
@@ -684,6 +728,7 @@ final class MascotCreature {
             DispatchQueue.main.async { [weak self] in self?.onGone?() }
             return
         }
+        quitGame()
         mode = .leaving
         leftAt = t
         touching = false
@@ -745,7 +790,8 @@ final class MascotCreature {
         }
         think()
         publishRate()
-        let hit = side * 0.92 * scale.value
+        // a moving target gets a forgiving hit area
+        let hit = side * (playing ? 1.4 : 0.92) * scale.value
         return Frame(centre: p, hit: max(hit, 1), touchable: (mode == .home || mode == .held || mode == .flung) && landedAt != nil)
     }
 
@@ -821,8 +867,9 @@ final class MascotCreature {
             v.dy += ((target.y - p.y) / dt - v.dy) * follow
             p = target
         case .flung:
-            // real-ish weight: falls like a thrown thing, not a balloon
-            v.dy += 1700 * dt
+            // real-ish weight: falls like a thrown thing, not a balloon; a
+            // long run gets a little heavier, so it speeds up
+            v.dy += 1700 * gravityScale * dt
             let drag = exp(-0.35 * dt)
             v.dx *= drag
             v.dy *= drag
@@ -830,7 +877,7 @@ final class MascotCreature {
             p.y += v.dy * dt
             collide(radius: r)
             let speed = hypot(v.dx, v.dy)
-            if (t - flungAt > 0.8 && speed < 240) || t - flungAt > 2.0 { mode = .home }
+            if !playing, (t - flungAt > 0.8 && speed < 240) || t - flungAt > 2.0 { mode = .home }
         case .leaving:
             let since = t - (leftAt ?? t)
             let avatar = dock.avatar == .zero
@@ -934,12 +981,13 @@ final class MascotCreature {
     private func collide(radius r: CGFloat) {
         let top = topWall + r
         let bottom = stage.height - r
-        if p.x < r { p.x = r; if v.dx < 0 { bump(-v.dx, horizontal: true); v.dx = -v.dx * 0.62 } }
-        if p.x > stage.width - r { p.x = stage.width - r; if v.dx > 0 { bump(v.dx, horizontal: true); v.dx = -v.dx * 0.62 } }
+        if p.x < r { p.x = r; if v.dx < 0 { bank(-v.dx); bump(-v.dx, horizontal: true); v.dx = -v.dx * 0.62 } }
+        if p.x > stage.width - r { p.x = stage.width - r; if v.dx > 0 { bank(v.dx); bump(v.dx, horizontal: true); v.dx = -v.dx * 0.62 } }
         if p.y < top {
             p.y = top
             if v.dy < 0 {
                 let speed = -v.dy
+                if playing, bonkFree, speed > 450 { bonkFree = false; scored(1, trick: "bonk") }
                 bump(speed, horizontal: false)
                 v.dy = -v.dy * 0.6
                 if speed > 850 {
@@ -950,8 +998,122 @@ final class MascotCreature {
                 }
             }
         }
-        if p.y > bottom { p.y = bottom; if v.dy > 0 { bump(v.dy, horizontal: false); v.dy = -v.dy * 0.55 } }
+        if p.y > bottom {
+            p.y = bottom
+            if v.dy > 0 {
+                let missed = playing
+                // the miss has its own soft thud, not the floor's knock
+                if missed { miss(); lastBump = t }
+                bump(v.dy, horizontal: false)
+                // a miss lands soft: it plops down instead of bouncing away
+                v.dy = -v.dy * (missed ? 0.32 : 0.55)
+                if missed { v.dx *= 0.5 }
+            }
+        }
     }
+
+    // MARK: Keepy-uppy
+
+    private var gravityScale: CGFloat { playing ? 1 + CGFloat(min(score, 40)) * 0.008 : 1 }
+
+    private func startGame() {
+        guard !reduceMotion, !playing else { return }
+        playing = true
+        score = 0
+        best = UserDefaults.standard.integer(forKey: Self.bestKey)
+        bestAtStart = best
+        celebrated = false
+        bankFree = true
+        bonkFree = true
+        lastHit = t
+        publishGame(.start(best: best))
+    }
+
+    /// A finger on it while it is up: it pops up and away from the finger.
+    private func swat(at point: CGPoint) {
+        swatting = true
+        guard t - lastHit > 0.07 else { return }
+        lastHit = t
+        let boost = 1000 * sqrt(gravityScale)
+        v.dy = min(v.dy * 0.15, 0) - boost
+        let off = max(min((p.x - point.x) / (side * 0.5), 1), -1)
+        v.dx = v.dx * 0.55 + off * 280
+        sy.velocity -= 3.4
+        sx.velocity += 2.4
+        rot.velocity -= off * 5
+        blinkAt = t
+        bankFree = true
+        bonkFree = true
+        scored(1, trick: nil)
+    }
+
+    /// The finger kept going through it: the throw aims it and scores again.
+    private func flick(_ velocity: CGSize) {
+        let speed = hypot(velocity.width, velocity.height)
+        guard playing, speed > 900 else { return }
+        v.dx = v.dx * 0.4 + velocity.width * 0.45
+        v.dy = min(v.dy, velocity.height * 0.55)
+        let now = hypot(v.dx, v.dy), cap: CGFloat = 3600
+        if now > cap { v.dx *= cap / now; v.dy *= cap / now }
+        scored(1, trick: "flick")
+    }
+
+    private func bank(_ speed: CGFloat) {
+        guard playing, bankFree, speed > 420 else { return }
+        bankFree = false
+        scored(1, trick: "bank")
+    }
+
+    private func scored(_ points: Int, trick: String?) {
+        score += points
+        var newBest = false
+        if score > best {
+            best = score
+            UserDefaults.standard.set(best, forKey: Self.bestKey)
+            if !celebrated, score > bestAtStart, score >= 3 { celebrated = true; newBest = true }
+        }
+        poke()
+        if newBest {
+            moment = (.excited, nil, t + 1.2)
+            DispatchQueue.main.async { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+        } else {
+            if moment?.mood != .excited { moment = (.nodding, nil, t + 0.45) }
+            // a little firmer as the run goes on
+            let combo = min(Double(score), 25) * 0.02
+            haptic(trick == nil ? .rigid : .light, trick == nil ? 0.5 + combo : 0.7)
+            if trick == "flick" { haptic(.medium, 0.6 + combo) }
+        }
+        publishGame(.scored(score: score, trick: trick, newBest: newBest))
+    }
+
+    private func miss() {
+        playing = false
+        swatting = false
+        flungAt = t
+        moment = (.surprised, nil, t + 0.7)
+        haptic(.soft, 1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [weak self] in self?.haptic(.light, 0.4) }
+        publishGame(.missed(score: score))
+        score = 0
+    }
+
+    /// The composer took focus or a send started: the run ends without a
+    /// miss, and the score gets out of the way.
+    private func quitGame() {
+        guard playing else { return }
+        playing = false
+        swatting = false
+        score = 0
+        flungAt = t - 0.6
+        publishGame(.quit)
+    }
+
+    private func publishGame(_ event: GameEvent) {
+        DispatchQueue.main.async { [weak self] in self?.onGame?(event) }
+    }
+
+    /// The top of the play area, below the header.
+    var ceiling: CGFloat { topWall }
 
     private func bump(_ speed: CGFloat, horizontal: Bool) {
         guard speed > 140 else { return }
@@ -1107,6 +1269,7 @@ final class MascotCreature {
         eyes.aim(EmptyMascotBrain.face(mood), at: t)
 
         guard landedAt != nil, mode != .birth else { return }
+        if playing { line = nil }
         if mode != .leaving {
             let variant = line == .tapped ? seed &+ tapCount : seed
             publishLine(line.map { EmptyMascotBrain.line($0, seed: variant) })
@@ -1487,6 +1650,150 @@ final class MascotCreature {
         DispatchQueue.main.async {
             let generator = UIImpactFeedbackGenerator(style: style)
             generator.impactOccurred(intensity: CGFloat(intensity))
+        }
+    }
+}
+
+// MARK: - Keepy-uppy score
+
+/// The score board's state. The creature sends events; this turns them into
+/// what the number does: pop on a hit, a bigger moment on a new best, and a
+/// quick drain back to nothing on a miss.
+@MainActor @Observable final class MascotGameBoard {
+    private(set) var shown = false
+    private(set) var score = 0
+    private(set) var best = 0
+    private(set) var newBest = false
+    private(set) var pops = 0
+    private(set) var bigPop = false
+    private(set) var draining = false
+    private(set) var trick: (text: String, id: Int)?
+    @ObservationIgnored private var drain: Task<Void, Never>?
+    @ObservationIgnored private var trickClear: Task<Void, Never>?
+
+    func apply(_ event: MascotCreature.GameEvent) {
+        switch event {
+        case .start(let best):
+            drain?.cancel()
+            self.best = best
+            score = 0
+            newBest = false
+            draining = false
+            trick = nil
+            shown = true
+        case let .scored(score, trick, isBest):
+            guard shown, !draining else { return }
+            withAnimation(.snappy(duration: 0.22)) { self.score = score }
+            if score > best { best = score }
+            bigPop = isBest
+            if isBest { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { newBest = true } }
+            pops += 1
+            if let trick { show("+1 \(trick)") }
+        case .missed(let final):
+            guard shown else { return }
+            drain?.cancel()
+            drain = Task { [weak self] in await self?.drainAway(from: final) }
+        case .quit:
+            hide()
+        }
+    }
+
+    func hide() {
+        drain?.cancel()
+        withAnimation(.smooth(duration: 0.25)) { shown = false }
+        draining = false
+        trick = nil
+    }
+
+    private func show(_ text: String) {
+        withAnimation(.spring(duration: 0.3, bounce: 0.25)) { trick = (text, pops) }
+        let id = pops
+        trickClear?.cancel()
+        trickClear = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(750))
+            guard let self, !Task.isCancelled, self.trick?.id == id else { return }
+            withAnimation(.smooth(duration: 0.3)) { self.trick = nil }
+        }
+    }
+
+    /// The number counts back down to zero, quickly, and the board goes.
+    private func drainAway(from final: Int) async {
+        withAnimation(.smooth(duration: 0.3)) { draining = true; trick = nil }
+        if final > 0 {
+            try? await Task.sleep(for: .milliseconds(180))
+            let steps = min(final, 14)
+            for i in 1...steps {
+                try? await Task.sleep(for: .milliseconds(420 / steps))
+                if Task.isCancelled { return }
+                let left = Int((Double(final) * (1 - Double(i) / Double(steps))).rounded())
+                withAnimation(.snappy(duration: 0.12)) { score = left }
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(final > 0 ? 650 : 250))
+        if Task.isCancelled { return }
+        withAnimation(.smooth(duration: 0.35)) { shown = false }
+        draining = false
+    }
+}
+
+/// The score: a big rounded number under the header, the best small and
+/// quiet beneath it, and the trick that scored, briefly, in the bot's colour.
+private struct MascotScore: View {
+    let board: MascotGameBoard
+    let tint: Color
+    let reduceMotion: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            number
+            Group {
+                if board.newBest {
+                    Text("new best")
+                        .foregroundStyle(tint)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                } else if board.best > 0 {
+                    Text("best \(board.best)")
+                        .foregroundStyle(.tertiary)
+                        .contentTransition(.numericText(value: Double(board.best)))
+                }
+            }
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .frame(height: 18)
+            ZStack {
+                if let trick = board.trick {
+                    Text(trick.text)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(tint)
+                        .id(trick.id)
+                        .transition(.asymmetric(insertion: .scale(scale: 0.5).combined(with: .opacity),
+                                                removal: .opacity.combined(with: .offset(y: -8))))
+                }
+            }
+            .frame(height: 22)
+        }
+        .opacity(board.draining ? 0.45 : 1)
+        .offset(y: board.draining ? 6 : 0)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("score \(board.score), best \(board.best)")
+    }
+
+    @ViewBuilder private var number: some View {
+        let text = Text("\(board.score)")
+            .font(.system(size: 72, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
+            .contentTransition(.numericText(value: Double(board.score)))
+        if reduceMotion {
+            text
+        } else {
+            let big = board.bigPop
+            text.keyframeAnimator(initialValue: CGFloat(1), trigger: board.pops) { content, scale in
+                content.scaleEffect(scale)
+            } keyframes: { _ in
+                SpringKeyframe(big ? 1.5 : 1.16, duration: big ? 0.12 : 0.07, spring: .snappy)
+                SpringKeyframe(1, duration: big ? 0.6 : 0.36, spring: .bouncy)
+            }
         }
     }
 }
