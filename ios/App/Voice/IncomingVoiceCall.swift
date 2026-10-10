@@ -307,7 +307,7 @@ struct IncomingVoiceCallView: View {
             Capsule()
                 .fill(Color(hex: "#30d158").opacity(0.22))
                 .frame(width: Self.thumbSize + 12 + thumb, height: Self.trackHeight)
-            ShimmerLabel(text: "slide to answer", dark: dark, still: reduceMotion)
+            SlideShimmerLabel(text: "slide to answer", dark: dark, still: reduceMotion)
                 .frame(width: width - Self.thumbSize - 12)
                 .offset(x: Self.thumbSize + 6)
                 .opacity(1 - min(progress * 2.2, 1))
@@ -371,7 +371,7 @@ struct IncomingVoiceCallView: View {
 }
 
 /// "slide to answer" with the system's light sweeping across it.
-private struct ShimmerLabel: View {
+private struct SlideShimmerLabel: View {
     let text: String
     let dark: Bool
     let still: Bool
