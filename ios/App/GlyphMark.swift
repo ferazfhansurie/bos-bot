@@ -134,7 +134,7 @@ struct GlyphMark: View {
             eye.translateBy(x: (x + look.eyeShift.width) * diameter, y: (layout.eyeY + look.eyeShift.height) * diameter)
             eye.scaleBy(x: eyeScale, y: eyeScale * squash)
             eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
-            eye.stroke(Path(GlyphFaces.path(blinking ? "dash" : glyph)), with: .color(paint.ink),
+            eye.stroke(Path(glyphPath(blinking ? "dash" : glyph)), with: .color(paint.ink),
                        style: StrokeStyle(lineWidth: eyeStroke, lineCap: .round, lineJoin: .round))
         }
 
@@ -150,9 +150,27 @@ struct GlyphMark: View {
         var mark = context
         mark.translateBy(x: centre.x + place.x * diameter - boxSide / 2, y: centre.y + place.y * diameter - boxSide / 2 + float)
         mark.scaleBy(x: boxScale, y: boxScale)
-        mark.stroke(Path(GlyphFaces.path(accent)), with: .color(paint.accent),
+        mark.stroke(Path(glyphPath(accent)), with: .color(paint.accent),
                     style: StrokeStyle(lineWidth: max(place.stroke, layout.minStrokePx / boxScale), lineCap: .round, lineJoin: .round))
     }
+
+    /// A glyph from the shared table, or one of the phone's own mood marks.
+    static func glyphPath(_ id: String) -> CGPath {
+        extraGlyphs[id] ?? GlyphFaces.path(id)
+    }
+
+    /// Marks only the in-thread moods use, in the same 24 box and stroke as
+    /// the table's. `drop` is the sheepish face's sweat bead.
+    private static let extraGlyphs: [String: CGPath] = {
+        let drop = CGMutablePath()
+        drop.move(to: CGPoint(x: 12, y: 4))
+        drop.addCurve(to: CGPoint(x: 6.5, y: 15), control1: CGPoint(x: 12, y: 4), control2: CGPoint(x: 6.5, y: 10.5))
+        drop.addCurve(to: CGPoint(x: 12, y: 20.5), control1: CGPoint(x: 6.5, y: 18), control2: CGPoint(x: 9, y: 20.5))
+        drop.addCurve(to: CGPoint(x: 17.5, y: 15), control1: CGPoint(x: 15, y: 20.5), control2: CGPoint(x: 17.5, y: 18))
+        drop.addCurve(to: CGPoint(x: 12, y: 4), control1: CGPoint(x: 17.5, y: 10.5), control2: CGPoint(x: 12, y: 4))
+        drop.closeSubpath()
+        return ["drop": drop]
+    }()
 
     /// Area centroid of every body in its 100 box, sampled once.
     private static let massCentre: [String: CGPoint] = Dictionary(uniqueKeysWithValues: FlatMascotBodies.all.map { body in

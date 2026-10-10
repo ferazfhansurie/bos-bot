@@ -78,6 +78,8 @@ struct ChatView: View {
     @State private var threadOpenTask: Task<Void, Never>?
     /// Messages that land while the chat is open spring in; history stays still.
     @State private var arrivals = MessageArrivals()
+    /// The header face's beats: reading, nods, moods, the card hop.
+    @State private var mascot = ThreadMascotDirector()
     @FocusState private var composerFocused: Bool
     @StateObject private var dictation = SpeechDictation()
     /// The opening beat: the island grows with the bot's face in it, then
@@ -445,8 +447,18 @@ struct ChatView: View {
                 // And a drag down over the transcript pushes it away, the way
                 // it does in Mail and Messages.
                 .scrollDismissesKeyboard(.interactively)
+                // The header face: a fresh start per thread, the turn's mood
+                // when it settles, and the lean toward an open card.
+                .onChange(of: threadId, initial: true) { _, _ in
+                    mascot.reset(busy: current.busy, cardOpen: cardWaiting)
+                }
+                .onChange(of: current.busy) { _, busy in
+                    mascot.busyChanged(busy, mood: settledMood)
+                }
+                .onChange(of: cardWaiting) { _, open in mascot.cardChanged(open) }
                 .onChange(of: transcript.last?.id) { _, _ in
                     guard !restoringReading, transcript.last != nil else { return }
+                    if let head = transcript.last?.head, head.role == .bot, head.kind == .text { mascot.replyLanded() }
                     if follow.pinned { newestObservedID = transcript.last?.id }
                     // Your own message always brings you down to it; a reply
                     // arriving while you read further up waits behind the
@@ -711,6 +723,7 @@ struct ChatView: View {
         guard !restoringReading else { follow.pinned = false; return }
         if pinned { newestObservedID = messages.last?.id }
         if scrolledAway == pinned { withAnimation(.snappy(duration: 0.2)) { scrolledAway = !pinned } }
+        if mascot.lookingBack == pinned { mascot.lookingBack = !pinned }
         if pinned { unseenBelow = false }
     }
 
@@ -735,8 +748,8 @@ struct ChatView: View {
             // The activity feed's face for this exact thread, so the header
             // moves while the bot works here; without a feed entry, the
             // still idle face it always had.
-            let live = MausState.forThread(current, in: session.state)
-            ChatAvatarView(chat: current, size: 30, state: live ?? .idle, animated: live?.showsActivity == true)
+            ThreadHeaderFace(chat: current, size: 30, live: MausState.forThread(current, in: session.state),
+                             director: mascot, draft: composerDraft, typing: composerFocused)
         }
     }
 
@@ -1048,6 +1061,18 @@ struct ChatView: View {
         messages.contains { $0.card?.isPending == true }
     }
 
+    /// A question, approval or secret card is waiting on you here.
+    private var cardWaiting: Bool {
+        messages.contains { $0.card?.isPending == true || $0.secret?.isPending == true }
+    }
+
+    /// How the turn that just settled went, for the header face.
+    private func settledMood() -> ThreadMood? {
+        var feed: ActivityFeedState?
+        if case let .bot(bot) = current { feed = session.state.activityFeed.entry(bot: bot.id, thread: bot.threadId)?.state }
+        return ThreadMoodRules.mood(after: messages, feed: feed)
+    }
+
     private func beginReadingPosition() {
         restoringReading = true; readingTarget = nil; visibleReadingID = nil
         lastReadingID = nil; newestObservedID = nil; newMessagesBoundary = nil
@@ -1197,6 +1222,7 @@ struct ChatView: View {
             }
             SoundEffects.playSent()
             Haptics.impact(.medium)
+            mascot.sent()
         }
     }
 
@@ -1728,13 +1754,18 @@ private struct ArrivalSpring: ViewModifier {
 
     func body(content: Content) -> some View {
         let resting = !active || reduceMotion || settled
+        // A bot's reply lands with more bounce than your own line: it comes
+        // from further and overshoots, the face in the header nods with it.
+        let bot = !fromTrailing
         content
-            .scaleEffect(resting ? 1 : 0.92, anchor: fromTrailing ? .bottomTrailing : .bottomLeading)
-            .offset(y: resting ? 0 : 6)
+            .scaleEffect(resting ? 1 : (bot ? 0.86 : 0.92), anchor: fromTrailing ? .bottomTrailing : .bottomLeading)
+            .offset(y: resting ? 0 : (bot ? 12 : 6))
             .opacity(resting ? 1 : 0)
             .onAppear {
                 guard active, !reduceMotion else { return }
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { settled = true }
+                withAnimation(bot ? .spring(response: 0.42, dampingFraction: 0.6) : .spring(response: 0.3, dampingFraction: 0.72)) {
+                    settled = true
+                }
             }
     }
 }
@@ -2179,6 +2210,14 @@ struct MessageRow: View {
 
     private static let reactionChoices = ["👍", "❤️", "😂", "🎉", "👀"]
 
+    /// The bot whose face pops beside the menu when this is its own text.
+    private var faceBot: Bot? {
+        guard message.role == .bot, message.kind == .text else { return nil }
+        if let id = message.from?.botId, let bot = session.state.bot(id) { return bot }
+        if case let .bot(bot) = chat { return bot }
+        return nil
+    }
+
     /// Transport tags contain paths on the paired computer. They belong in
     /// attachment cards, never on the clipboard or in the text-selection UI.
     private var attachedContent: AttachedMessageContent {
@@ -2247,7 +2286,7 @@ struct MessageRow: View {
                 .foregroundStyle(Color.secondary)
             }
         }
-        .contextMenu {
+        .botFaceContextMenu(bot: faceBot, text: attachedContent.text) {
             // When it was said: the transcript only marks gaps, so this is
             // where an exact time lives.
             if message.at > 0 {
