@@ -83,10 +83,11 @@ struct RefreshGlyph: View {
     private static let lap = 0.9
 
     var body: some View {
-        let phase = model.phase
+        // read here, not in the canvas, so the pull redraws it
+        let phase = model.phase, progress = model.progress, startedAt = model.startedAt
         TimelineView(.animation(paused: phase != .refreshing)) { timeline in
-            let t = timeline.date.timeIntervalSince(model.startedAt)
-            Canvas { context, canvas in draw(&context, in: canvas, t: t) }
+            let t = timeline.date.timeIntervalSince(startedAt)
+            Canvas { context, canvas in draw(&context, in: canvas, phase: phase, progress: progress, t: t) }
         }
         .frame(width: Self.canvas, height: Self.canvas)
         .scaleEffect(phase == .landing ? 0.4 : 1)
@@ -95,15 +96,15 @@ struct RefreshGlyph: View {
         .accessibilityHidden(true)
     }
 
-    private func draw(_ context: inout GraphicsContext, in canvas: CGSize, t: TimeInterval) {
+    private func draw(_ context: inout GraphicsContext, in canvas: CGSize, phase: RefreshGlyphModel.Phase,
+                      progress p: CGFloat, t: TimeInterval) {
         let ink = scheme == .dark ? Color.white : Color.black
         let centre = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
         let ring = Self.ring(centre: centre, radius: Self.size / 2)
         let stroke = StrokeStyle(lineWidth: Self.line, lineCap: .round)
 
-        switch model.phase {
+        switch phase {
         case .pulling:
-            let p = model.progress
             guard p > 0 else { return }
             // grey while it traces, full ink once it closes
             context.stroke(ring.trimmedPath(from: 0, to: p), with: .color(ink.opacity(0.3 + 0.7 * p)), style: stroke)
@@ -269,29 +270,26 @@ private struct RefreshGlyphInstaller: UIViewRepresentable {
         }
 
         /// The scroll view this modifier sits on: the probe is its background,
-        /// so it is the refreshing scroll view under the probe, found from the
-        /// nearest common ancestor outwards.
+        /// so it is the refreshing scroll view lying under the probe, looked
+        /// for only inside the probe's own screen, never a screen under a sheet.
         private func nearestRefreshingScroll() -> UIScrollView? {
+            var responder: UIResponder? = self
+            while let current = responder, !(current is UIViewController) { responder = current.next }
+            guard let root = (responder as? UIViewController)?.view else { return nil }
             let mine = convert(bounds, to: nil)
-            var ancestor = superview
-            for _ in 0..<8 {
-                guard let current = ancestor else { return nil }
-                var best: (UIScrollView, CGFloat)?
-                var queue: [UIView] = [current]
-                while !queue.isEmpty {
-                    let view = queue.removeFirst()
-                    if let scroll = view as? UIScrollView, scroll.refreshControl != nil {
-                        let overlap = scroll.convert(scroll.bounds, to: nil).intersection(mine)
-                        let area = overlap.isNull ? 0 : overlap.width * overlap.height
-                        if area > (best?.1 ?? 0) { best = (scroll, area) }
-                        continue
-                    }
-                    queue.append(contentsOf: view.subviews)
+            var best: (scroll: UIScrollView, area: CGFloat)?
+            var queue: [UIView] = [root]
+            while !queue.isEmpty {
+                let view = queue.removeFirst()
+                if let scroll = view as? UIScrollView, scroll.refreshControl != nil {
+                    let overlap = scroll.convert(scroll.bounds, to: nil).intersection(mine)
+                    let area = overlap.isNull ? 0 : overlap.width * overlap.height
+                    if area > (best?.area ?? 0) { best = (scroll, area) }
+                    continue
                 }
-                if let best { return best.0 }
-                ancestor = current.superview
+                queue.append(contentsOf: view.subviews)
             }
-            return nil
+            return best?.scroll
         }
 
 #if DEBUG
