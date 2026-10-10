@@ -60,7 +60,7 @@ cmd_start() {
 
 cmd_land() {
   with_land_lock "$@"
-  local keep=0 why="" here head base n conflicts target
+  local keep=0 why="" here head base n conflicts target markers
   for a in "$@"; do
     case $a in --keep) keep=1;; *) why=$a;; esac
   done
@@ -96,6 +96,8 @@ cmd_land() {
       fi
     fi
     target=$(git rev-parse HEAD)
+    markers=$(git diff "$PROD" HEAD | grep -nE '^\+(<<<<<<<|>>>>>>>)( |$)' | head -5)
+    [ -z "$markers" ] || { echo "$markers" >&2; die "leftover conflict markers in your commits; fix them, commit, land again"; }
     [ -n "$why" ] || why="$(basename "$here"): $(git log -1 --format=%s HEAD)"
     BOS_LAND=1 "$PROMOTE" "$target" "$why" || die "promote refused ${target:0:9}; worktree kept at $here"
     echo "landed ${target:0:9} on prod (+$n commit(s))"
