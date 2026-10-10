@@ -46,6 +46,7 @@ with_land_lock() {
 
 cmd_start() {
   local slug=${1:-} path
+  slug=${slug%-wt}
   [ -n "$slug" ] || die "usage: bos-wt start <slug>"
   case $slug in *[!a-z0-9._-]*) die "slug '$slug': use a-z 0-9 . _ - only";; esac
   path="$WT_ROOT/$slug-wt"
