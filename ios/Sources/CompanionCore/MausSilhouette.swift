@@ -19,7 +19,7 @@ import Foundation
 /// library, and what `scripts/gen-mascot-bodies.ts` is required to emit.
 public enum MausSilhouette {
     /// The desktop's face box: the square every body's `fit` is solved into
-    /// and every face coordinate — the eye anchor, the mouth — is expressed
+    /// and every face coordinate — the eye anchor — is expressed
     /// in. Mirrors `MausFaceData.faceBox`, which is the same box seen from
     /// the artwork's side.
     public static let faceBox: CGFloat = 228.541

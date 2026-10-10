@@ -5,7 +5,7 @@ final class EmptyMascotBrainTests: XCTestCase {
     func testEveryMoodDrawsRealGlyphs() {
         for mood in MascotMood.allCases {
             let face = EmptyMascotBrain.face(mood)
-            for id in [face.left, face.right] + [face.accent, face.mouth].compactMap({ $0 }) {
+            for id in [face.left, face.right] + [face.accent].compactMap({ $0 }) {
                 XCTAssertFalse(EmptyMascotBrain.path(id).isEmpty, "\(mood) uses missing glyph \(id)")
                 let box = EmptyMascotBrain.path(id).boundingBoxOfPath
                 XCTAssertTrue(CGRect(x: -0.5, y: -0.5, width: 25, height: 25).contains(box), "\(id) leaves the 24 box")
@@ -85,5 +85,29 @@ final class EmptyMascotBrainTests: XCTestCase {
         XCTAssertEqual(EmptyMascotBrain.line(.unread(3), seed: 9), "3 waiting for you back there")
         XCTAssertEqual(EmptyMascotBrain.seed("thread-a"), EmptyMascotBrain.seed("thread-a"))
         XCTAssertGreaterThanOrEqual(EmptyMascotBrain.seed("thread-a"), 0)
+    }
+
+    func testEyesBlendOnNumbersAndKeepGlyphsTheyCannotMake() {
+        XCTAssertEqual(EmptyMascotBrain.eyeShape("open", inner: 1), MascotEyeShape())
+        XCTAssertGreaterThan(EmptyMascotBrain.eyeShape("wide", inner: 1).size, 1.1)
+        XCTAssertGreaterThan(EmptyMascotBrain.eyeShape("arc", inner: 1).bottom, 0.5)
+        XCTAssertEqual(EmptyMascotBrain.eyeShape("lid", inner: 1).top, 1)
+        // a squint slopes toward the nose on both sides
+        let left = EmptyMascotBrain.eyeShape("squintL", inner: 1), right = EmptyMascotBrain.eyeShape("squintR", inner: -1)
+        XCTAssertEqual(left.slope, -right.slope)
+        XCTAssertGreaterThan(left.slope, 0)
+        for glyph in ["star", "spiral", "caret", "cross"] {
+            let shape = EmptyMascotBrain.eyeShape(glyph, inner: 1)
+            XCTAssertEqual(shape.glyph, glyph)
+            XCTAssertFalse(EmptyMascotBrain.path(glyph).isEmpty, glyph)
+        }
+        // every mood's eyes resolve to something drawable
+        for mood in MascotMood.allCases {
+            let face = EmptyMascotBrain.face(mood)
+            for (glyph, inner) in [(face.left, CGFloat(1)), (face.right, -1)] {
+                let shape = EmptyMascotBrain.eyeShape(glyph, inner: inner)
+                XCTAssertTrue(shape.glyph == nil || !EmptyMascotBrain.path(glyph).isEmpty, "\(mood) \(glyph)")
+            }
+        }
     }
 }

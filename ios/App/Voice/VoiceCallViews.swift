@@ -110,8 +110,8 @@ private struct CallAvatar: View {
         }
     }
 
-    /// Open ring eyes while it talks or listens (the mouth and the nods do
-    /// the rest), the question face between turns.
+    /// Open ring eyes while it talks or listens (their squash with its voice
+    /// and the nods do the rest), the question face between turns.
     private var liveFace: GlyphFaceState {
         guard call.phase == .live else { return .idle }
         return call.activity == .thinking ? .thinking : .waiting

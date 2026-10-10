@@ -15,7 +15,7 @@
  *   expression   pin a single face and stop the cycling
  *   lookAround   how much each expression glances around. 0 = always straight ahead
  *   gaze / turn  aim the eyes, or rotate the head around its implied sphere
- *   showMouth    false for an eyes-only face
+ *   showMouth    off by default: bos mascots are eyes only
  *
  * Made with Blob Studio.
  */
@@ -1190,7 +1190,7 @@ export const CursorAvatar = React.forwardRef<CursorAvatarHandle, CursorAvatarPro
       flip = false,
       spring = 7,
       eyeScale = 1,
-      showMouth = true,
+      showMouth = false,
       mouthStroke = MOUTH_STROKE,
       motion,
       effects = true,

@@ -6,7 +6,7 @@ import kotlin.test.assertTrue
 
 /**
  * Invariants the catalogue has to hold whatever the numbers are: a ring that is a
- * ring, a mouth below the eyes, a state that has somewhere to start. Whether the
+ * ring, a state that has somewhere to start. There is no mouth, ever. Whether the
  * numbers are still the desktop's is a different question, and
  * `MausCatalogueGoldenTest` is where it is asked.
  */
@@ -85,15 +85,6 @@ class MausFaceDataTest {
         return total / (ring.size / 2)
     }
 
-    @Test
-    fun `every expression has a mouth wide enough to see, below the eyes`() {
-        val mouth = FloatArray(MausFaceData.MOUTH_STRIDE)
-        for (expression in 0 until MausFaceData.EXPRESSION_COUNT) {
-            MausFaceData.copyMouth(expression, mouth)
-            assertTrue(mouth[MausFaceData.MOUTH_HALF_WIDTH] > 0f, "no mouth in $expression")
-            assertTrue(mouth[MausFaceData.MOUTH_GAP] > 0f, "mouth on the eyes in $expression")
-        }
-    }
 }
 
 /**
@@ -105,7 +96,6 @@ class MausFaceDataTest {
  */
 class MausFaceEngineTest {
     private val ring = FloatArray(MausFaceData.RING_STRIDE)
-    private val mouth = FloatArray(MausFaceData.MOUTH_STRIDE)
 
     @Test
     fun `a face that is never advanced rests on the desktop's face for its state`() {
@@ -127,9 +117,6 @@ class MausFaceEngineTest {
                 }
             }
 
-            for (index in mouth.indices) {
-                assertEquals(MausGolden.MOUTHS[expression * 4 + index], engine.mouth()[index], 0.001f, state.id)
-            }
             // eyes open, and a body left where it stands
             assertEquals(1f, engine.blinkScale(0L))
             assertEquals(0f, engine.elapsedMillis(0L))

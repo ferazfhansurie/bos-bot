@@ -1,6 +1,6 @@
 // Generated from the Blob Studio export of the mascot (MausMascotios/MausAvatar.tsx;
-// the same tables ship in src/components/CursorAvatar.tsx) — do not hand-edit. 25 expressions × 2 eye rings × 48 points, a mouth per expression,
-// and per-state pools, cadences, blink rhythm and body motion. Same numbers as
+// the same tables ship in src/components/CursorAvatar.tsx) — do not hand-edit. 25 expressions × 2 eye rings × 48 points (eyes only, no mouths),
+// per-state pools, cadences, blink rhythm and body motion. Same numbers as
 // the desktop, which is the whole point.
 import CoreGraphics
 
@@ -71,7 +71,6 @@ struct MausBodyMotion {
 enum MausFaceData {
     static let faceBox: CGFloat = 228.541
     static let faceCentre = CGPoint(x: 120, y: 122.5)
-    static let mouthStroke: CGFloat = 7.5
     static let gazeTravel = CGPoint(x: 13.2, y: 8.4)
     static let expressionCount = 25
     static let pointsPerRing = 48
@@ -384,23 +383,12 @@ enum MausFaceData {
         -49.2559, 20.1061, 17.9684, -13.7621, 4.50385, -15.2402, -27.7374, 14.4381, 19.2877, 42.7034, -29.1651, 8.88542, 3.57635, -27.0711, 19.9578, 18.3411,
         6.10729, 20.5418,
     ]
-    static let mouthsFlat: [CGFloat] = [
-        14, 3, 20, 0, 13, 1, 20, 0, 25, 14, 13, 0, 11, 4, 18, 0,
-        16, -2, 22, 0, 15, -3, 20, 6, 12, 2, 20, 0, 17, -7, 18, 0,
-        15, 5, 20, 0, 12, 3, 20, 0, 14, 1, 20, 0, 23, 12, 13, 0,
-        12, 2, 20, 0, 16, -3, 22, 0, 15, -2, 20, -6, 12, 5, 20, 0,
-        16, -4, 18, 0, 20, 11, 18, 0, 11, 2, 20, 0, 17, 8, 20, 0,
-        15, 5, 10, 0, 12, 4, 18, 0, 16, -3, 22, 0, 15, -5, 20, 7,
-        11, 6, 20, 0,
-    ]
 
     static func ring(_ expression: Int, eye: Int) -> [CGPoint] {
         let base = (expression * 2 + eye) * pointsPerRing * 2
         return (0..<pointsPerRing).map { i in CGPoint(x: expressionsFlat[base + i * 2], y: expressionsFlat[base + i * 2 + 1]) }
     }
     static func gaze(_ expression: Int) -> CGPoint { CGPoint(x: gazeFlat[expression * 2], y: gazeFlat[expression * 2 + 1]) }
-    /// [halfWidth, curve, gap, skew]
-    static func mouth(_ expression: Int) -> [CGFloat] { Array(mouthsFlat[(expression * 4)..<(expression * 4 + 4)]) }
 
     static let pools: [MausState: [Int]] = [
         .sleeping: [22, 13, 4],

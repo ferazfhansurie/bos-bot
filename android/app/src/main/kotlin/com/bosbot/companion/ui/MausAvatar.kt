@@ -21,9 +21,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.boundsInWindow
@@ -35,18 +33,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.PI
 import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlinx.coroutines.flow.collectLatest
 
 /**
  * A bot, at whatever size the row needs — and alive, exactly the way it is on the
  * desktop. The port of `MausAvatar` in `ios/App/MausAvatar.swift`: [MausFaceEngine]
- * picks and morphs the expressions of the [state], this draws them — body, eyes,
- * mouth, and the comet rings the working states wear.
+ * picks and morphs the expressions of the [state], this draws them — body, eyes
+ * (no mouth, ever), and the comet rings the working states wear.
  *
  * The frame clock is read inside the canvas, not in composition, so a tick
  * repaints the mascot without recomposing the row it sits in.
@@ -173,7 +168,6 @@ internal class MausFrameClock {
 /** The scratch one drawn mascot reuses: a list of them redraws on every scroll frame. */
 private class MausFaceGeometry {
     val eyes: Array<Path> = arrayOf(Path(), Path())
-    val mouth: Path = Path()
     val comet: Path = Path()
     val comets: MausCometField = MausCometField()
     val pose: MausBodyPose = MausBodyPose()
@@ -199,9 +193,6 @@ private class MausFaceGeometry {
         }
     }
 }
-
-/** One instance, shared: the mouth is the same 7.5-unit round stroke every frame. */
-private val mouthStroke = Stroke(width = MausFaceData.MOUTH_STROKE, cap = StrokeCap.Round)
 
 private fun DrawScope.drawMaus(
     engine: MausFaceEngine,
@@ -271,7 +262,6 @@ private fun DrawScope.drawBody(
             val blink = engine.blinkScale(nowNanos)
             drawEye(left, geometry.eyes[0], blink)
             drawEye(right, geometry.eyes[1], blink)
-            drawMouth(left, right, engine.mouth(), geometry.mouth)
         }
     }
 }
@@ -288,37 +278,6 @@ private fun DrawScope.drawEye(ring: FloatArray, path: Path, blink: Float) {
     }
     path.close()
     drawPath(path, Color.White)
-}
-
-/**
- * The mouth hangs off the eyes: centred under the pair, tilted with them, pushed
- * clear of whichever eye is tallest.
- */
-private fun DrawScope.drawMouth(left: FloatArray, right: FloatArray, mouth: FloatArray, path: Path) {
-    val leftX = centreX(left)
-    val leftY = centreY(left)
-    val rightX = centreX(right)
-    val rightY = centreY(right)
-    val theta = atan2(rightY - leftY, rightX - leftX)
-    val halfHeight = max(halfHeight(left), halfHeight(right))
-    val drop = halfHeight + mouth[MausFaceData.MOUTH_GAP]
-    val originX = (leftX + rightX) / 2f - sin(theta) * drop
-    val originY = (leftY + rightY) / 2f + cos(theta) * drop
-    val angle = theta + mouth[MausFaceData.MOUTH_SKEW] * DEGREES_TO_RADIANS
-    val cosAngle = cos(angle)
-    val sinAngle = sin(angle)
-    val halfWidth = mouth[MausFaceData.MOUTH_HALF_WIDTH]
-    val curve = mouth[MausFaceData.MOUTH_CURVE]
-
-    path.reset()
-    path.moveTo(originX - halfWidth * cosAngle, originY - halfWidth * sinAngle)
-    path.quadraticTo(
-        originX - curve * sinAngle,
-        originY + curve * cosAngle,
-        originX + halfWidth * cosAngle,
-        originY + halfWidth * sinAngle,
-    )
-    drawPath(path = path, color = Color.White, style = mouthStroke)
 }
 
 /**
@@ -359,16 +318,6 @@ private fun DrawScope.drawComets(geometry: MausFaceGeometry, front: Boolean) {
     }
 }
 
-private fun centreX(ring: FloatArray): Float {
-    var total = 0f
-    var index = 0
-    while (index < ring.size) {
-        total += ring[index]
-        index += 2
-    }
-    return total / (ring.size / 2)
-}
-
 private fun centreY(ring: FloatArray): Float {
     var total = 0f
     var index = 1
@@ -379,19 +328,6 @@ private fun centreY(ring: FloatArray): Float {
     return total / (ring.size / 2)
 }
 
-private fun halfHeight(ring: FloatArray): Float {
-    var low = Float.MAX_VALUE
-    var high = -Float.MAX_VALUE
-    var index = 1
-    while (index < ring.size) {
-        if (ring[index] < low) low = ring[index]
-        if (ring[index] > high) high = ring[index]
-        index += 2
-    }
-    return (high - low) / 2f
-}
-
-private val DEGREES_TO_RADIANS = (PI / 180).toFloat()
 private val DEGREES_PER_RADIAN = (180 / PI).toFloat()
 private const val FRAME_INTERVAL_NANOS = 1_000_000_000L / 30
 private const val NO_ORIGIN = Long.MIN_VALUE

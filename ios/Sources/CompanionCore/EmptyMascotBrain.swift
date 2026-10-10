@@ -18,14 +18,36 @@ public enum MascotMood: String, CaseIterable, Sendable {
     case drowsy, asleep, surprised, dizzy, purr, pose, yawn, excited, late
 }
 
-/// A mood's face: two eyes, an accent beside the body, and an optional mouth
-/// under the eyes. Glyph ids resolve through `EmptyMascotBrain.path`.
+/// A mood's face: two eyes and an accent beside the body. There is no mouth,
+/// ever: the eyes, the lids and the body say all of it. Glyph ids resolve
+/// through `EmptyMascotBrain.path`.
 public struct MascotMoodFace: Equatable, Sendable {
     public let left: String
     public let right: String
     public let accent: String?
     public let anchor: GlyphAccentAnchor?
-    public let mouth: String?
+}
+
+/// One eye as numbers, so a mood change is a blend and never a swap. The
+/// empty thread draws a soft solid eye and shapes it with lids; a glyph the
+/// shape cannot make (a star, a spiral, a caret) is drawn over it as the eye
+/// shrinks away underneath.
+public struct MascotEyeShape: Equatable, Sendable {
+    /// Size against a plain open eye; 1.2 is wide-eyed.
+    public var size: CGFloat
+    /// How far the top lid has come down, 0 open ... 1 shut.
+    public var top: CGFloat
+    /// How far a happy cheek has pushed up from below, 0 ... 1. Past about
+    /// 0.5 the eye reads as a closed smile, ^.
+    public var bottom: CGFloat
+    /// The top lid's slope in radians; positive slopes down toward the nose.
+    public var slope: CGFloat
+    /// A glyph drawn instead of the solid eye, or nil.
+    public var glyph: String?
+
+    public init(size: CGFloat = 1, top: CGFloat = 0, bottom: CGFloat = 0, slope: CGFloat = 0, glyph: String? = nil) {
+        self.size = size; self.top = top; self.bottom = bottom; self.slope = slope; self.glyph = glyph
+    }
 }
 
 /// How the draft being typed reads to the mascot.
@@ -74,10 +96,6 @@ public enum EmptyMascotBrain {
         "zz": "M3 4.5L9 4.5L3 10.5L9 10.5M13 12.5L19 12.5L13 18.5L19 18.5",
         "moon": "M15.5 3.8C11.4 4.6 8.4 8 8.4 12C8.4 16 11.4 19.4 15.5 20.2C10.6 21.6 4.5 18 4.5 12C4.5 6 10.6 2.4 15.5 3.8Z",
         "sweat": "M12 4C12 4 7.5 10 7.5 13.5C7.5 16 9.5 18 12 18C14.5 18 16.5 16 16.5 13.5C16.5 10 12 4 12 4Z",
-        // mouths
-        "yawn": "M12 6C14.5 6 16 8.7 16 12C16 15.3 14.5 18 12 18C9.5 18 8 15.3 8 12C8 8.7 9.5 6 12 6Z",
-        "smile": "M6.5 10C8.5 15 15.5 15 17.5 10",
-        "o": "M12 9C13.66 9 15 10.34 15 12C15 13.66 13.66 15 12 15C10.34 15 9 13.66 9 12C9 10.34 10.34 9 12 9Z",
     ]
 
     private static let parsedExtras: [String: CGPath] = extraPaths.mapValues(GlyphFaces.parsePath)
@@ -89,29 +107,45 @@ public enum EmptyMascotBrain {
 
     public static func face(_ mood: MascotMood) -> MascotMoodFace {
         switch mood {
-        case .idle: MascotMoodFace(left: "open", right: "open", accent: nil, anchor: nil, mouth: nil)
-        case .listening: MascotMoodFace(left: "open", right: "open", accent: nil, anchor: nil, mouth: nil)
+        case .idle: MascotMoodFace(left: "open", right: "open", accent: nil, anchor: nil)
+        case .listening: MascotMoodFace(left: "open", right: "open", accent: nil, anchor: nil)
         case .thinking: shared(.thinking)
-        case .scared: MascotMoodFace(left: "wide", right: "wide", accent: "sweat", anchor: .topRight, mouth: "o")
+        case .scared: MascotMoodFace(left: "wide", right: "wide", accent: "sweat", anchor: .topRight)
         case .alert: shared(.waiting)
-        case .happy: MascotMoodFace(left: "arc", right: "arc", accent: "heart", anchor: .topRight, mouth: "smile")
-        case .nodding: MascotMoodFace(left: "open", right: "open", accent: nil, anchor: nil, mouth: nil)
-        case .suspicious: MascotMoodFace(left: "squintL", right: "squintR", accent: "query", anchor: .left, mouth: nil)
-        case .drowsy: MascotMoodFace(left: "half", right: "half", accent: nil, anchor: nil, mouth: nil)
-        case .asleep: MascotMoodFace(left: "lid", right: "lid", accent: "zz", anchor: .topRight, mouth: nil)
-        case .surprised: MascotMoodFace(left: "wide", right: "wide", accent: "bang", anchor: .left, mouth: "o")
-        case .dizzy: MascotMoodFace(left: "spiral", right: "spiral", accent: "star", anchor: .topRight, mouth: nil)
-        case .purr: MascotMoodFace(left: "arc", right: "arc", accent: "heart", anchor: .topRight, mouth: nil)
-        case .pose: MascotMoodFace(left: "arc", right: "star", accent: "spark", anchor: .split, mouth: "smile")
-        case .yawn: MascotMoodFace(left: "lid", right: "lid", accent: nil, anchor: nil, mouth: "yawn")
-        case .excited: MascotMoodFace(left: "star", right: "star", accent: "spark", anchor: .split, mouth: "smile")
-        case .late: MascotMoodFace(left: "half", right: "half", accent: "moon", anchor: .topRight, mouth: nil)
+        case .happy: MascotMoodFace(left: "arc", right: "arc", accent: "heart", anchor: .topRight)
+        case .nodding: MascotMoodFace(left: "open", right: "open", accent: nil, anchor: nil)
+        case .suspicious: MascotMoodFace(left: "squintL", right: "squintR", accent: "query", anchor: .left)
+        case .drowsy: MascotMoodFace(left: "half", right: "half", accent: nil, anchor: nil)
+        case .asleep: MascotMoodFace(left: "lid", right: "lid", accent: "zz", anchor: .topRight)
+        case .surprised: MascotMoodFace(left: "wide", right: "wide", accent: "bang", anchor: .left)
+        case .dizzy: MascotMoodFace(left: "spiral", right: "spiral", accent: "star", anchor: .topRight)
+        case .purr: MascotMoodFace(left: "arc", right: "arc", accent: "heart", anchor: .topRight)
+        case .pose: MascotMoodFace(left: "arc", right: "star", accent: "spark", anchor: .split)
+        case .yawn: MascotMoodFace(left: "lid", right: "lid", accent: nil, anchor: nil)
+        case .excited: MascotMoodFace(left: "star", right: "star", accent: "spark", anchor: .split)
+        case .late: MascotMoodFace(left: "half", right: "half", accent: "moon", anchor: .topRight)
         }
     }
 
     private static func shared(_ state: GlyphFaceState) -> MascotMoodFace {
         let face = GlyphFaces.face(state)
-        return MascotMoodFace(left: face.left, right: face.right, accent: face.accent, anchor: face.anchor, mouth: nil)
+        return MascotMoodFace(left: face.left, right: face.right, accent: face.accent, anchor: face.anchor)
+    }
+
+    /// The shape a glyph eye asks for. Eyes the solid eye can make become
+    /// lids and sizes; the rest keep their glyph. `inner` is +1 for the left
+    /// eye and -1 for the right, so a slope leans the same way on both sides.
+    public static func eyeShape(_ glyph: String, inner: CGFloat) -> MascotEyeShape {
+        switch glyph {
+        case "open", "ring": MascotEyeShape()
+        case "wide": MascotEyeShape(size: 1.24)
+        case "arc": MascotEyeShape(size: 1.04, bottom: 0.62)
+        case "lid": MascotEyeShape(top: 1)
+        case "dash": MascotEyeShape(top: 0.8)
+        case "half": MascotEyeShape(top: 0.5)
+        case "squintL", "squintR": MascotEyeShape(size: 0.96, top: 0.42, bottom: 0.2, slope: 0.32 * inner)
+        default: MascotEyeShape(size: 0.2, glyph: glyph)
+        }
     }
 
     // MARK: - The draft

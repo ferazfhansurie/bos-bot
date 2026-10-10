@@ -14,25 +14,25 @@ final class LiveMascotMotionTests: XCTestCase {
         }
     }
 
-    func testTheMouthFollowsItsOwnVoiceAndClosesWhenItStops() {
+    func testTheBodyPulsesWithItsOwnVoiceAndSettlesWhenItStops() {
         var motion = CallMascotMotion()
         // syllables: loud for 0.15s, quiet for 0.1s
         let speech: (TimeInterval) -> Float = { t in t.truncatingRemainder(dividingBy: 0.25) < 0.15 ? 0.12 : 0.01 }
         let talking = run(&motion, seconds: 2, mode: .speaking, speaker: speech)
-        let widest = talking.map(\.mouth).max() ?? 0
-        let narrowest = talking.suffix(60).map(\.mouth).min() ?? 1
-        XCTAssertGreaterThan(widest, 0.6, "a loud syllable opens the mouth")
-        XCTAssertLessThan(narrowest, widest * 0.6, "the mouth shapes syllables instead of hanging open")
+        let widest = talking.map(\.voice).max() ?? 0
+        let narrowest = talking.suffix(60).map(\.voice).min() ?? 1
+        XCTAssertGreaterThan(widest, 0.6, "a loud syllable pulses it")
+        XCTAssertLessThan(narrowest, widest * 0.6, "it pulses with syllables instead of hanging swollen")
         XCTAssertGreaterThan(talking.map(\.stretch).max() ?? 0, 0.3, "the body swells with the voice")
 
         let after = run(&motion, from: 2, seconds: 0.6, mode: .idle)
-        XCTAssertLessThan(after.last?.mouth ?? 1, 0.01, "silence closes it")
+        XCTAssertLessThan(after.last?.voice ?? 1, 0.01, "silence settles it")
     }
 
-    func testTheMouthStaysShutWhileTheCallerTalks() {
+    func testItStaysQuietWhileTheCallerTalks() {
         var motion = CallMascotMotion()
         let poses = run(&motion, seconds: 1, mode: .listening, speaker: { _ in 0.2 }, mic: { _ in 0.1 })
-        XCTAssertEqual(poses.map(\.mouth).max(), 0)
+        XCTAssertEqual(poses.map(\.voice).max(), 0)
     }
 
     func testItNodsAlongWhileYouTalkAndNeverWhileItSpeaks() {
@@ -62,7 +62,7 @@ final class LiveMascotMotionTests: XCTestCase {
         XCTAssertLessThan(end.gaze.y, -0.5, "looks up")
         XCTAssertLessThan(end.gaze.x, -0.4, "and off to the side of its question mark")
         XCTAssertLessThan(end.lean, -2)
-        XCTAssertEqual(end.mouth, 0)
+        XCTAssertEqual(end.voice, 0)
     }
 
     func testAStutteringClockNeverBlowsUpTheSprings() {
@@ -99,9 +99,9 @@ final class LiveMascotMotionTests: XCTestCase {
         XCTAssertEqual(poses.last?.stretch, 0)
     }
 
-    func testReduceMotionKeepsTheEyesAndMouthButStillsTheBody() {
-        let pose = LiveMascotPose(gaze: CGPoint(x: 0.5, y: 0), mouth: 0.6, stretch: 0.4, nod: 0.8, lean: 6, lift: 0.1, eyeScale: 1.1)
-        XCTAssertEqual(pose.calmed, LiveMascotPose(gaze: CGPoint(x: 0.5, y: 0), mouth: 0.6, eyeScale: 1.1))
+    func testReduceMotionKeepsTheEyesAndTheirSquashButStillsTheBody() {
+        let pose = LiveMascotPose(gaze: CGPoint(x: 0.5, y: 0), voice: 0.6, stretch: 0.4, nod: 0.8, lean: 6, lift: 0.1, eyeScale: 1.1)
+        XCTAssertEqual(pose.calmed, LiveMascotPose(gaze: CGPoint(x: 0.5, y: 0), voice: 0.6, eyeScale: 1.1))
     }
 
     func testColourBlendsThroughTheMiddle() {

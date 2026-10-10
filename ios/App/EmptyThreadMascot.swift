@@ -988,23 +988,12 @@ final class MascotCreature {
         var eyes = c
         eyes.translateBy(x: faceCentre.x, y: faceCentre.y)
         eyes.rotate(by: .degrees(GlyphFaces.tiltDegrees))
-        let lift: CGFloat = face.mouth == nil ? 0 : -0.06
         for (glyph, x) in [(face.left, -layout.eyeX), (face.right, layout.eyeX)] {
             var eye = eyes
-            eye.translateBy(x: x * diameter, y: (layout.eyeY + lift) * diameter)
+            eye.translateBy(x: x * diameter, y: layout.eyeY * diameter)
             eye.scaleBy(x: eyeScale, y: eyeScale * squash * open)
             eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
             eye.stroke(Path(EmptyMascotBrain.path(glyph)), with: .color(paint.ink), style: style)
-        }
-        if let mouth = face.mouth {
-            let box = (mouth == "yawn" ? 0.3 : 0.24) * diameter
-            let scale = box / GlyphFaces.viewBox
-            var m = eyes
-            m.translateBy(x: 0, y: 0.27 * diameter)
-            m.scaleBy(x: scale, y: scale * squash)
-            m.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
-            m.stroke(Path(EmptyMascotBrain.path(mouth)), with: .color(paint.ink),
-                     style: StrokeStyle(lineWidth: max(GlyphFaces.stroke, layout.minStrokePx / scale), lineCap: .round, lineJoin: .round))
         }
 
         guard let accent = face.accent, let anchor = face.anchor, let place = GlyphFaces.placement(anchor) else { return }

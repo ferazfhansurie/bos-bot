@@ -4,7 +4,7 @@ package com.openmausbot.companion.ui
  * The mascot's face, as data — the port of `ios/App/MausFaceData.swift`, which is
  * itself the Blob Studio export the desktop draws from (`MausMascotios/MausAvatar.tsx`;
  * the same tables ship in `src/components/CursorAvatar.tsx`). 25 expressions × 2 eye
- * rings × 48 points, a mouth per expression, and per-state pools, cadences, blink
+ * rings × 48 points (eyes only, no mouths), and per-state pools, cadences, blink
  * rhythm and body motion.
  *
  * Same numbers as the desktop and the phone's other port, which is the whole point:
@@ -87,18 +87,10 @@ internal object MausFaceData {
     const val FACE_BOX: Float = 228.541f
     const val FACE_CENTRE_X: Float = 120f
     const val FACE_CENTRE_Y: Float = 122.5f
-    const val MOUTH_STROKE: Float = 7.5f
     const val EXPRESSION_COUNT: Int = 25
     const val POINTS_PER_RING: Int = 48
     /** Interleaved x, y — so a ring is [POINTS_PER_RING] * 2 floats. */
     const val RING_STRIDE: Int = POINTS_PER_RING * 2
-
-    /** A mouth is four numbers: half-width, curve, gap below the eyes, skew. */
-    const val MOUTH_STRIDE: Int = 4
-    const val MOUTH_HALF_WIDTH: Int = 0
-    const val MOUTH_CURVE: Int = 1
-    const val MOUTH_GAP: Int = 2
-    const val MOUTH_SKEW: Int = 3
 
     /** expression → eye → point → (x, y), flattened; see [copyRing]. */
     private val expressionsFlat: FloatArray = floatArrayOf(
@@ -714,17 +706,6 @@ internal object MausFaceData {
         6.10729f, 20.5418f,
     )
 
-    /** Per expression: half-width, curve, gap, skew. */
-    private val mouthsFlat: FloatArray = floatArrayOf(
-        14f, 3f, 20f, 0f, 13f, 1f, 20f, 0f, 25f, 14f, 13f, 0f, 11f, 4f, 18f, 0f,
-        16f, -2f, 22f, 0f, 15f, -3f, 20f, 6f, 12f, 2f, 20f, 0f, 17f, -7f, 18f, 0f,
-        15f, 5f, 20f, 0f, 12f, 3f, 20f, 0f, 14f, 1f, 20f, 0f, 23f, 12f, 13f, 0f,
-        12f, 2f, 20f, 0f, 16f, -3f, 22f, 0f, 15f, -2f, 20f, -6f, 12f, 5f, 20f, 0f,
-        16f, -4f, 18f, 0f, 20f, 11f, 18f, 0f, 11f, 2f, 20f, 0f, 17f, 8f, 20f, 0f,
-        15f, 5f, 10f, 0f, 12f, 4f, 18f, 0f, 16f, -3f, 22f, 0f, 15f, -5f, 20f, 7f,
-        11f, 6f, 20f, 0f,
-    )
-
     /** One eye ring of [RING_STRIDE] floats, into a caller-owned buffer. */
     fun copyRing(expression: Int, eye: Int, into: FloatArray) {
         val base = (expression * 2 + eye) * RING_STRIDE
@@ -735,12 +716,6 @@ internal object MausFaceData {
     fun gazeX(expression: Int): Float = gazeFlat[expression * 2]
 
     fun gazeY(expression: Int): Float = gazeFlat[expression * 2 + 1]
-
-    /** One mouth of [MOUTH_STRIDE] floats, into a caller-owned buffer. */
-    fun copyMouth(expression: Int, into: FloatArray) {
-        val base = expression * MOUTH_STRIDE
-        mouthsFlat.copyInto(into, 0, base, base + MOUTH_STRIDE)
-    }
 
     /** The expressions a state drifts through. The first is its resting face. */
     val pools: Map<MausState, List<Int>> = mapOf(

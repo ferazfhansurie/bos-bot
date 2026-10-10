@@ -9,7 +9,7 @@ import kotlin.random.Random
  * The face, frame by frame — the port of `MausFaceEngine` in
  * `ios/App/MausAvatar.swift`, which is itself the desktop's frame loop: a state
  * picks a pool of expressions and drifts through them on its cadence, a spring
- * morphs the eyes and mouth between them, it blinks on its own rhythm, and the
+ * morphs the eyes between them, it blinks on its own rhythm, and the
  * body bobs, sways, breathes or jitters per state.
  *
  * One per drawn mascot, and no Compose in it: a roster is a list of these being
@@ -30,9 +30,6 @@ internal class MausFaceEngine(private val random: Random = Random.Default) {
     private val currentRings = Array(EYES) { FloatArray(MausFaceData.RING_STRIDE) }
     private val targetRings = Array(EYES) { FloatArray(MausFaceData.RING_STRIDE) }
     private val displayedRings = Array(EYES) { FloatArray(MausFaceData.RING_STRIDE) }
-    private val currentMouth = FloatArray(MausFaceData.MOUTH_STRIDE)
-    private val targetMouth = FloatArray(MausFaceData.MOUTH_STRIDE)
-    private val displayedMouth = FloatArray(MausFaceData.MOUTH_STRIDE)
     private var currentGazeX = MausFaceData.gazeX(0)
     private var currentGazeY = MausFaceData.gazeY(0)
     private var targetGazeX = currentGazeX
@@ -52,8 +49,6 @@ internal class MausFaceEngine(private val random: Random = Random.Default) {
             MausFaceData.copyRing(0, eye, currentRings[eye])
             MausFaceData.copyRing(0, eye, targetRings[eye])
         }
-        MausFaceData.copyMouth(0, currentMouth)
-        MausFaceData.copyMouth(0, targetMouth)
     }
 
     fun setState(next: MausState, nowNanos: Long) {
@@ -127,15 +122,6 @@ internal class MausFaceEngine(private val random: Random = Random.Default) {
         return out
     }
 
-    /** The mouth this frame; the engine's own buffer, as with [ring]. */
-    fun mouth(): FloatArray {
-        val m = morph.coerceIn(0f, 1f)
-        for (i in displayedMouth.indices) {
-            displayedMouth[i] = currentMouth[i] + (targetMouth[i] - currentMouth[i]) * m
-        }
-        return displayedMouth
-    }
-
     /** How much of its own height an eye has left: 1 open, 0.04 shut. */
     fun blinkScale(nowNanos: Long): Float {
         if (blinkStartNanos == UNSET) return 1f
@@ -172,8 +158,6 @@ internal class MausFaceEngine(private val random: Random = Random.Default) {
             for (i in current.indices) current[i] += (target[i] - current[i]) * m
             MausFaceData.copyRing(next, eye, target)
         }
-        for (i in currentMouth.indices) currentMouth[i] += (targetMouth[i] - currentMouth[i]) * m
-        MausFaceData.copyMouth(next, targetMouth)
         currentGazeX = gazeX()
         currentGazeY = gazeY()
         targetGazeX = MausFaceData.gazeX(next)

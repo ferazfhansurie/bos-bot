@@ -221,16 +221,6 @@ internal object MausGolden {
         6.10729f, 20.5418f,
     )
 
-    /** `MausFaceData.swift:379-387`: half-width, curve, gap, skew, per expression. */
-    val MOUTHS: FloatArray = floatArrayOf(
-        14.0f, 3.0f, 20.0f, 0.0f, 13.0f, 1.0f, 20.0f, 0.0f, 25.0f, 14.0f, 13.0f, 0.0f, 11.0f, 4.0f, 18.0f, 0.0f,
-        16.0f, -2.0f, 22.0f, 0.0f, 15.0f, -3.0f, 20.0f, 6.0f, 12.0f, 2.0f, 20.0f, 0.0f, 17.0f, -7.0f, 18.0f, 0.0f,
-        15.0f, 5.0f, 20.0f, 0.0f, 12.0f, 3.0f, 20.0f, 0.0f, 14.0f, 1.0f, 20.0f, 0.0f, 23.0f, 12.0f, 13.0f, 0.0f,
-        12.0f, 2.0f, 20.0f, 0.0f, 16.0f, -3.0f, 22.0f, 0.0f, 15.0f, -2.0f, 20.0f, -6.0f, 12.0f, 5.0f, 20.0f, 0.0f,
-        16.0f, -4.0f, 18.0f, 0.0f, 20.0f, 11.0f, 18.0f, 0.0f, 11.0f, 2.0f, 20.0f, 0.0f, 17.0f, 8.0f, 20.0f, 0.0f,
-        15.0f, 5.0f, 10.0f, 0.0f, 12.0f, 4.0f, 18.0f, 0.0f, 16.0f, -3.0f, 22.0f, 0.0f, 15.0f, -5.0f, 20.0f, 7.0f,
-        11.0f, 6.0f, 20.0f, 0.0f,
-    )
 
     /**
      * The 4,800 numbers of `MausFaceData.swift:71-372`, as one number: `h = 0` then
@@ -282,16 +272,6 @@ class MausCatalogueGoldenTest {
         }
     }
 
-    @Test
-    fun `the mouth table is still the desktop's`() {
-        val mouth = FloatArray(4)
-        for (expression in 0 until 25) {
-            MausFaceData.copyMouth(expression, mouth)
-            for (part in 0 until 4) {
-                assertEquals(MausGolden.MOUTHS[expression * 4 + part], mouth[part], "mouth $expression part $part")
-            }
-        }
-    }
 
     @Test
     fun `the states are still the desktop's forty, in order`() {
@@ -363,12 +343,11 @@ class MausCatalogueGoldenTest {
     }
 
     @Test
-    fun `the face box, its anchor and its mouth stroke are still the desktop's`() {
+    fun `the face box and its anchor are still the desktop's`() {
         // MausFaceData.swift:63-69
         assertEquals(228.541f, MausFaceData.FACE_BOX)
         assertEquals(120f, MausFaceData.FACE_CENTRE_X)
         assertEquals(122.5f, MausFaceData.FACE_CENTRE_Y)
-        assertEquals(7.5f, MausFaceData.MOUTH_STROKE)
         assertEquals(25, MausFaceData.EXPRESSION_COUNT)
         assertEquals(48, MausFaceData.POINTS_PER_RING)
         // MausAvatar.swift:122 — the viewBox's margin around that box
@@ -397,8 +376,8 @@ class MausCatalogueGoldenTest {
 
     @Test
     fun `the morph still springs at the desktop's stiffness`() {
-        // Idle rests on expression 6 and laughing on 2, whose mouths are 12 and 25
-        // wide — so the mouth reads the morph directly. The desktop's stiffness of
+        // Idle rests on expression 6 and laughing on 2; the eye ring moves linearly
+        // with the morph, so its point that travels furthest reads it directly. The desktop's stiffness of
         // 7, stepped at 30fps, is 87% of the way there after half a second and 99%
         // after one. A softer 5 would be 73%, a stiffer 9 would be 93%.
         val engine = MausFaceEngine()
@@ -433,8 +412,26 @@ class MausCatalogueGoldenTest {
         assertTrue(progress(jumped) < 0.6f, "the jump was not clamped")
     }
 
-    /** How far the mouth has travelled from idle's expression 6 to laughing's 2. */
-    private fun progress(engine: MausFaceEngine): Float = (engine.mouth()[0] - 12f) / (25f - 12f)
+    /** How far the left eye has travelled from idle's expression 6 to laughing's 2. */
+    private fun progress(engine: MausFaceEngine): Float {
+        val from = worn(6)
+        val to = worn(2)
+        var far = 0
+        for (index in from.indices) {
+            if (kotlin.math.abs(to[index] - from[index]) > kotlin.math.abs(to[far] - from[far])) far = index
+        }
+        return (engine.ring(0)[far] - from[far]) / (to[far] - from[far])
+    }
+
+    /** Expression [expression]'s left eye with its own gaze, as the engine wears it at rest. */
+    private fun worn(expression: Int): FloatArray {
+        val ring = FloatArray(MausFaceData.RING_STRIDE)
+        MausFaceData.copyRing(expression, 0, ring)
+        for (index in ring.indices) {
+            ring[index] += MausGolden.GAZE[expression * 2 + index % 2] * MausFaceEngine.LOOK_AROUND
+        }
+        return ring
+    }
 
     private fun millis(value: Float): Long = (value * 1_000_000f).toLong()
 

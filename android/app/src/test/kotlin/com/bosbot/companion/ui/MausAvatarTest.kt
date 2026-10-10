@@ -62,7 +62,7 @@ class MausAvatarTest {
 
     @Test
     fun `the shipped cursor body keeps the fixed tight artwork bounds in the face box`() {
-        // Which is what puts the eyes and the mouth on the body rather than beside
+        // Which is what puts the eyes on the body rather than beside
         // it: every face coordinate is expressed in this box. The numbers are the
         // ones this file carried by hand before the catalog was generated.
         val bounds = MausSilhouette.faceBoxBounds("cursor")

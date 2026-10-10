@@ -49,7 +49,7 @@ extension MausSilhouette {
 /// A bot, at whatever size the row needs — and alive, exactly the way it is
 /// on the desktop. `MausFaceEngine` is a port of the frame loop in
 /// `MausMascotios/MausAvatar.tsx`: a state picks a pool of expressions and
-/// drifts through them on its cadence, a spring morphs the eyes and mouth
+/// drifts through them on its cadence, a spring morphs the eyes
 /// between them, it blinks on its own rhythm, and the body bobs, sways,
 /// breathes or jitters per state. Same data, same numbers, same face.
 struct MausAvatar: View {
@@ -131,8 +131,6 @@ final class MausFaceEngine {
     private var expression = 0
     private var currentRings: [[CGPoint]] = [MausFaceData.ring(0, eye: 0), MausFaceData.ring(0, eye: 1)]
     private var targetRings: [[CGPoint]] = [MausFaceData.ring(0, eye: 0), MausFaceData.ring(0, eye: 1)]
-    private var currentMouth = MausFaceData.mouth(0)
-    private var targetMouth = MausFaceData.mouth(0)
     private var currentGaze = MausFaceData.gaze(0)
     private var targetGaze = MausFaceData.gaze(0)
     private var morph: CGFloat = 1
@@ -171,10 +169,8 @@ final class MausFaceEngine {
         let i = ((index % MausFaceData.expressionCount) + MausFaceData.expressionCount) % MausFaceData.expressionCount
         if i == expression && morph >= 1 { return }
         currentRings = displayedRings()
-        currentMouth = displayedMouth()
         currentGaze = displayedGaze()
         targetRings = [MausFaceData.ring(i, eye: 0), MausFaceData.ring(i, eye: 1)]
-        targetMouth = MausFaceData.mouth(i)
         targetGaze = MausFaceData.gaze(i)
         expression = i
         morph = 0
@@ -419,13 +415,6 @@ final class MausFaceEngine {
             context.fill(path, with: .color(.white))
         }
 
-        let spec = displayedMouth()
-        let frame = Self.mouthFrame(rings, spec)
-        context.stroke(
-            Self.mouthPath(frame, spec),
-            with: .color(.white),
-            style: StrokeStyle(lineWidth: MausFaceData.mouthStroke, lineCap: .round)
-        )
     }
 
     /// The desktop's `bodyTransform`, in face-box units, elapsed in ms.
@@ -502,10 +491,6 @@ final class MausFaceEngine {
             }
         }
     }
-    private func displayedMouth() -> [CGFloat] {
-        let m = min(max(morph, 0), 1)
-        return currentMouth.enumerated().map { i, v in v + (targetMouth[i] - v) * m }
-    }
     private func displayedGaze() -> CGPoint {
         let m = min(max(morph, 0), 1)
         return CGPoint(x: currentGaze.x + (targetGaze.x - currentGaze.x) * m, y: currentGaze.y + (targetGaze.y - currentGaze.y) * m)
@@ -515,36 +500,6 @@ final class MausFaceEngine {
         var x: CGFloat = 0, y: CGFloat = 0
         for p in ring { x += p.x; y += p.y }
         return CGPoint(x: x / CGFloat(ring.count), y: y / CGFloat(ring.count))
-    }
-
-    /// The mouth hangs off the eyes: centred under the pair, tilted with
-    /// them, pushed clear of whichever eye is tallest.
-    private static func mouthFrame(_ rings: [[CGPoint]], _ spec: [CGFloat]) -> (x: CGFloat, y: CGFloat, angle: CGFloat) {
-        let c0 = centre(rings[0]), c1 = centre(rings[1])
-        let theta = atan2(c1.y - c0.y, c1.x - c0.x)
-        var halfHeight: CGFloat = 0
-        for ring in rings {
-            var lo = CGFloat.infinity, hi = -CGFloat.infinity
-            for p in ring { lo = min(lo, p.y); hi = max(hi, p.y) }
-            halfHeight = max(halfHeight, (hi - lo) / 2)
-        }
-        let drop = halfHeight + spec[2]
-        return (
-            x: (c0.x + c1.x) / 2 - sin(theta) * drop,
-            y: (c0.y + c1.y) / 2 + cos(theta) * drop,
-            angle: theta + spec[3] * .pi / 180
-        )
-    }
-
-    private static func mouthPath(_ frame: (x: CGFloat, y: CGFloat, angle: CGFloat), _ spec: [CGFloat]) -> Path {
-        let ca = cos(frame.angle), sa = sin(frame.angle)
-        func at(_ lx: CGFloat, _ ly: CGFloat) -> CGPoint {
-            CGPoint(x: frame.x + lx * ca - ly * sa, y: frame.y + lx * sa + ly * ca)
-        }
-        var path = Path()
-        path.move(to: at(-spec[0], 0))
-        path.addQuadCurve(to: at(spec[0], 0), control: at(0, spec[1]))
-        return path
     }
 
     private static func easeOutBack(_ t: CGFloat) -> CGFloat {

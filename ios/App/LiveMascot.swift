@@ -4,7 +4,7 @@
 // smoothly when its colour, body or eyes change underneath it.
 //
 // Calm when left alone, wild when touched. Every bot keeps its own body and
-// colour. Reduce Motion keeps the eyes, the mouth and the blink, stills the
+// colour. Reduce Motion keeps the eyes, their squash and the blink, stills the
 // body, and turns a body change into a crossfade.
 import CompanionCore
 import SwiftUI
@@ -16,7 +16,7 @@ struct LiveMascot: View {
     var eyeStyle: MascotEyeStyle = .glyph
     var face: GlyphFaceState = .idle
     /// The state's accent glyph (the thinking `?`); off while it talks or
-    /// listens, where the mouth and the nods say it instead.
+    /// listens, where the eyes and the nods say it instead.
     var accent = true
     var size: CGFloat
     /// The pose for a frame. Called once per frame on the main actor.
@@ -126,21 +126,11 @@ struct LiveMascot: View {
         for (glyph, x) in [(face.left, -layout.eyeX), (face.right, layout.eyeX)] {
             var eye = eyes
             eye.translateBy(x: x * diameter, y: layout.eyeY * diameter)
-            eye.scaleBy(x: eyeScale, y: eyeScale * squash)
+            // its own voice squashes the eyes: no mouth, the face talks with them
+            eye.scaleBy(x: eyeScale * (1 + 0.08 * pose.voice), y: eyeScale * squash * (1 - 0.32 * pose.voice))
             eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
             eye.stroke(Path(GlyphFaces.path(blinking ? "dash" : glyph)), with: .color(paint.ink),
                        style: StrokeStyle(lineWidth: eyeStroke, lineCap: .round, lineJoin: .round))
-        }
-
-        // The mouth only exists while it talks: a soft ink oval that opens
-        // with its own voice.
-        if pose.mouth > 0.03 {
-            let w = diameter * (0.10 + 0.06 * pose.mouth)
-            let h = diameter * (0.025 + 0.12 * pose.mouth)
-            let y = layout.eyeY * diameter + 0.25 * diameter
-            let mouth = Path(roundedRect: CGRect(x: -w / 2, y: y - h / 2, width: w, height: h),
-                             cornerRadius: min(w, h) / 2, style: .continuous)
-            eyes.fill(mouth, with: .color(paint.ink.opacity(min(1, Double(pose.mouth - 0.03) * 12))))
         }
 
         guard showAccent, side >= layout.accentMinSize, let accent = face.accent, let anchor = face.anchor,
@@ -177,16 +167,10 @@ struct LiveMascot: View {
         let eyeCentre = CGPoint(x: 53.25, y: 45)
         var eyes = face
         eyes.translateBy(x: eyeCentre.x, y: eyeCentre.y)
-        eyes.scaleBy(x: pose.eyeScale, y: pose.eyeScale)
+        eyes.scaleBy(x: pose.eyeScale * (1 + 0.08 * pose.voice), y: pose.eyeScale * (1 - 0.32 * pose.voice))
         eyes.translateBy(x: -eyeCentre.x, y: -eyeCentre.y)
         for path in style.paths(openness: blinking ? 0.14 : 1) {
             eyes.fill(Path(path), with: .color(ink))
-        }
-        if pose.mouth > 0.03 {
-            let w = 6 + 4 * pose.mouth, h = 1.6 + 8 * pose.mouth
-            let mouth = Path(roundedRect: CGRect(x: eyeCentre.x - w / 2, y: 59 - h / 2, width: w, height: h),
-                             cornerRadius: min(w, h) / 2, style: .continuous)
-            face.fill(mouth, with: .color(ink.opacity(min(1, Double(pose.mouth - 0.03) * 12))))
         }
     }
 

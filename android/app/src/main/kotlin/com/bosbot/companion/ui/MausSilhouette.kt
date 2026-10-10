@@ -28,7 +28,7 @@ internal object MausSilhouette {
 
     /**
      * The desktop's face box: the square every body's fit is solved into and every
-     * face coordinate — the eye anchor, the mouth — is expressed in. Mirrors
+     * face coordinate — the eye anchor — is expressed in. Mirrors
      * [MausFaceData.FACE_BOX], which is the same box seen from the artwork's side.
      */
     const val FACE_BOX: Float = MausFaceData.FACE_BOX

@@ -9,8 +9,9 @@ import Foundation
 /// axis (x right, y down), lift is in body heights (up), lean in degrees.
 public struct LiveMascotPose: Equatable, Sendable {
     public var gaze: CGPoint = .zero
-    /// 0 closed (no mouth drawn) ... 1 wide open.
-    public var mouth: CGFloat = 0
+    /// Its own voice right now, 0 silent ... 1 loud. There is no mouth: the
+    /// body pulses and the eyes squash with it.
+    public var voice: CGFloat = 0
     /// +1 tall and thin ... -1 short and wide.
     public var stretch: CGFloat = 0
     /// Forward dip of a nod; 0 is upright, 1 the bottom of the nod.
@@ -20,17 +21,17 @@ public struct LiveMascotPose: Equatable, Sendable {
     /// Eye size; above 1 is wide-eyed attention.
     public var eyeScale: CGFloat = 1
 
-    public init(gaze: CGPoint = .zero, mouth: CGFloat = 0, stretch: CGFloat = 0, nod: CGFloat = 0,
+    public init(gaze: CGPoint = .zero, voice: CGFloat = 0, stretch: CGFloat = 0, nod: CGFloat = 0,
                 lean: CGFloat = 0, lift: CGFloat = 0, eyeScale: CGFloat = 1) {
-        self.gaze = gaze; self.mouth = mouth; self.stretch = stretch; self.nod = nod
+        self.gaze = gaze; self.voice = voice; self.stretch = stretch; self.nod = nod
         self.lean = lean; self.lift = lift; self.eyeScale = eyeScale
     }
 
     public static let rest = LiveMascotPose()
 
-    /// Reduce Motion: the body holds still. The eyes and the mouth still say
-    /// where it is looking and that it is the one talking.
-    public var calmed: LiveMascotPose { LiveMascotPose(gaze: gaze, mouth: mouth, eyeScale: eyeScale) }
+    /// Reduce Motion: the body holds still. The eyes still say where it is
+    /// looking, and their squash that it is the one talking.
+    public var calmed: LiveMascotPose { LiveMascotPose(gaze: gaze, voice: voice, eyeScale: eyeScale) }
 }
 
 enum LiveMotion {
@@ -61,13 +62,13 @@ enum LiveMotion {
     }
 }
 
-/// The mascot on a voice call. Its mouth and body follow its own voice (the
+/// The mascot on a voice call. Its body and eyes follow its own voice (the
 /// tts playback level), it looks at you and nods along while the mic hears
 /// you, and it drifts off into thought between turns.
 public struct CallMascotMotion: Sendable {
     public enum Mode: Sendable { case idle, listening, thinking, speaking }
 
-    private var mouth: CGFloat = 0
+    private var voice: CGFloat = 0
     private var mic: CGFloat = 0
     private var nod: CGFloat = 0
     private var nodVelocity: CGFloat = 0
@@ -97,10 +98,10 @@ public struct CallMascotMotion: Sendable {
         let dt = CGFloat(min(max(t - (last ?? t), 0), 0.1))
         last = t
 
-        // The mouth opens on the attack and closes a little slower, so it
-        // shapes words rather than buzzing with every buffer.
-        let open = mode == .speaking ? min(1, CGFloat(speaker) * Self.gain) : 0
-        mouth = LiveMotion.approach(mouth, open, rate: open > mouth ? 32 : 14, dt: dt)
+        // The voice rises on the attack and falls a little slower, so the
+        // body pulses with words rather than buzzing with every buffer.
+        let loud = mode == .speaking ? min(1, CGFloat(speaker) * Self.gain) : 0
+        voice = LiveMotion.approach(voice, loud, rate: loud > voice ? 32 : 14, dt: dt)
 
         // Nods: on a syllable onset while you talk, or on a slow beat.
         let heard = mode == .listening ? min(1, CGFloat(micLevel) * Self.gain) : 0
@@ -119,7 +120,7 @@ public struct CallMascotMotion: Sendable {
             // eyes on you, a little wider: it is paying attention
             target = (CGPoint(x: 0, y: 0.2), 0, 1.12)
         case .speaking:
-            target = (CGPoint(x: 0.15 * CGFloat(sin(t * 0.9)), y: 0.05), 2 * CGFloat(sin(t * 1.3)) * mouth, 1)
+            target = (CGPoint(x: 0.15 * CGFloat(sin(t * 0.9)), y: 0.05), 2 * CGFloat(sin(t * 1.3)) * voice, 1)
         case .thinking:
             // up and away, toward the question mark, swaying slowly
             target = (CGPoint(x: -0.7 + 0.15 * CGFloat(sin(t * 0.8)), y: -0.75), -5 + 2 * CGFloat(sin(t * 1.1)), 0.95)
@@ -132,8 +133,8 @@ public struct CallMascotMotion: Sendable {
         eyes = LiveMotion.approach(eyes, target.eyes, rate: 8, dt: dt)
 
         let breath = mode == .speaking ? 0 : 0.012 * CGFloat(sin(t * 2 * .pi / 3.4))
-        return LiveMascotPose(gaze: gaze, mouth: mouth, stretch: mouth * 0.7, nod: nod,
-                              lean: lean, lift: breath + mouth * 0.03, eyeScale: eyes)
+        return LiveMascotPose(gaze: gaze, voice: voice, stretch: voice * 0.7, nod: nod,
+                              lean: lean, lift: breath + voice * 0.03, eyeScale: eyes)
     }
 }
 
