@@ -412,30 +412,6 @@ final class MascotCreature {
         var touchable: Bool
     }
 
-    /// Something floating in the scene during a run: knock the mascot
-    /// through it to collect it. Drawn as a flat glyph in the bot's accent.
-    private struct Pickup {
-        enum Kind {
-            case star, spark, heart
-            var glyph: String {
-                switch self {
-                case .star: "star"
-                case .spark: "spark"
-                case .heart: "heart"
-                }
-            }
-        }
-        let id: Int
-        let kind: Kind
-        let born: TimeInterval
-        let life: TimeInterval
-        var p: CGPoint
-        var v: CGVector
-        let phase: Double
-        var size = Spring(0, stiffness: 300, damping: 14)
-        var taken: TimeInterval?
-    }
-
     /// A damped spring, stepped by hand. Every motion here is one of these.
     struct Spring {
         var value: CGFloat
@@ -499,7 +475,6 @@ final class MascotCreature {
         case start(best: Int)
         case scored(score: Int, points: Int, trick: String?, newBest: Bool, milestone: Bool)
         case missed(score: Int, newBest: Bool)
-        case note(String)
         case quit
     }
 
@@ -607,12 +582,6 @@ final class MascotCreature {
     /// A new best just ended a run: hops left in its little celebration.
     private var cheers = 0
     private var cheerAt: TimeInterval = 0
-    /// Things floating in the scene to knock it through during a run.
-    private var pickups: [Pickup] = []
-    private var pickupCount = 0
-    private var nextPickup: TimeInterval = 0
-    /// Hearts caught: each one saves a miss.
-    private var saves = 0
     private var lastHit: TimeInterval = -1
     private var bankFree = false
     private var bonkFree = false
@@ -839,7 +808,6 @@ final class MascotCreature {
 
     func leave() {
         guard mode != .leaving else { return }
-        dropPickups()
         // a first message before it was ever born: nothing to send up
         if !started {
             mode = .leaving
@@ -898,7 +866,6 @@ final class MascotCreature {
         last = now
         stage = newStage
         origin = newOrigin
-        let dt0 = min(max(elapsed, 0), 1.0 / 30)
         // A late frame advances at most two frames' worth: a hitch slows the
         // motion for a beat instead of teleporting it.
         let dt = min(max(elapsed, 0), 1.0 / 30)
@@ -912,7 +879,6 @@ final class MascotCreature {
         publishRate()
         trail.append((t, p))
         trail.removeAll { t - $0.t > Self.trailLength }
-        if !pickups.isEmpty || playing { stepPickups(CGFloat(dt0)) }
         var hit = side * 0.92 * scale.value
         if playing {
             // the surface only has to catch the finger; `hits` decides
@@ -1186,15 +1152,7 @@ final class MascotCreature {
         }
         if p.y > bottom {
             p.y = bottom
-            if v.dy > 0, playing, saves > 0 {
-                // a heart saves it: back up, harder than a pop
-                saves -= 1
-                bump(v.dy, horizontal: false)
-                v.dy = -popSpeed * 1.08
-                moment = (.surprised, nil, t + 0.5)
-                haptic(.heavy, 1)
-                publishGame(.note("saved"))
-            } else if v.dy > 0 {
+            if v.dy > 0 {
                 let missed = playing
                 // the miss has its own soft thud, not the floor's knock
                 if missed { miss(); lastBump = t }
@@ -1212,8 +1170,7 @@ final class MascotCreature {
     // hit, never jumps, and a new run starts easy again. Build 95's climb was
     // too gentle to notice (firaz: "it doesnt get harder at all"): now it is
     // twice as heavy by 50, pops lower and quicker, the target shrinks to
-    // near the body, a wind blows from 8, and the pickups move and fade
-    // faster.
+    // near the body, and a wind blows from 8.
     private static let trailLength: TimeInterval = 0.07
     private var level: CGFloat { playing ? CGFloat(min(score, 50)) : 0 }
     /// Floaty enough at the start for anyone to keep it up; 2% heavier per
@@ -1253,105 +1210,6 @@ final class MascotCreature {
         reach(point, from: trail.first?.p ?? p, to: p) <= hitRadius
     }
 
-    // MARK: Pickups
-
-    /// How many float at once, by score: one from 3, two from 15, three
-    /// from 35.
-    private var pickupRoom: Int { score >= 35 ? 3 : score >= 15 ? 2 : score >= 3 ? 1 : 0 }
-
-    /// Spawns, moves, collects and clears the pickups, once a frame.
-    private func stepPickups(_ dt: CGFloat) {
-        let r = side * 0.46 * scale.value
-        let from = trail.count > 1 ? trail[trail.count - 2].p : p
-        for i in pickups.indices {
-            var k = pickups[i]
-            k.size.step(dt)
-            guard k.taken == nil else { pickups[i] = k; continue }
-            // later in a run they wander, and a spark always does
-            k.p.x += k.v.dx * dt
-            k.p.y += k.v.dy * dt
-            let pad: CGFloat = 26
-            if k.p.x < pad || k.p.x > stage.width - pad { k.v.dx = -k.v.dx; k.p.x = min(max(k.p.x, pad), stage.width - pad) }
-            if k.p.y < topWall + pad || k.p.y > stage.height - r * 2.2 {
-                k.v.dy = -k.v.dy
-                k.p.y = min(max(k.p.y, topWall + pad), stage.height - r * 2.2)
-            }
-            if playing, mode == .flung, reach(k.p, from: from, to: p) < r + 16 * k.size.value {
-                k.taken = t
-                k.size.target = 1.7
-                k.size.stiffness = 500
-                pickups[i] = k
-                collect(k.kind)
-                continue
-            }
-            if t - k.born > k.life || !playing { k.size.target = 0 }
-            pickups[i] = k
-        }
-        pickups.removeAll { k in
-            if let taken = k.taken { return t - taken > 0.3 }
-            return k.size.target == 0 && k.size.value < 0.04
-        }
-        guard playing, t >= nextPickup, pickups.filter({ $0.taken == nil && $0.size.target > 0 }).count < pickupRoom else { return }
-        spawnPickup()
-    }
-
-    private func spawnPickup() {
-        let rollKind = roll()
-        let kind: Pickup.Kind = score >= 20 && saves == 0 && rollKind < 0.14 ? .heart
-            : score >= 8 && rollKind < 0.32 ? .spark
-            : .star
-        // somewhere it can reach: between the top of a pop and a little
-        // above where it is usually hit
-        let lift = popSpeed * popSpeed / (2 * gameGravity)
-        let low = stage.height * 0.7
-        let high = max(topWall + 60, stage.height * 0.8 - lift)
-        var spot = CGPoint.zero
-        for _ in 0..<6 {
-            spot = CGPoint(x: 40 + CGFloat(roll()) * max(stage.width - 80, 1),
-                           y: high + CGFloat(roll()) * max(low - high, 1))
-            // not on top of it, and not on top of another
-            let clear = hypot(spot.x - p.x, spot.y - p.y) > side * 1.1
-                && pickups.allSatisfy { hypot($0.p.x - spot.x, $0.p.y - spot.y) > 70 }
-            if clear { break }
-        }
-        let wander = min(max(CGFloat(score) - 25, 0) / 25, 1) * 70 + (kind == .spark ? 60 : 0)
-        let angle = roll() * 2 * .pi
-        pickupCount += 1
-        var pickup = Pickup(id: pickupCount, kind: kind, born: t,
-                            life: kind == .spark ? 3.5 : kind == .heart ? 5 : max(6 - Double(score) * 0.05, 3.5),
-                            p: spot, v: CGVector(dx: CGFloat(cos(angle)) * wander, dy: CGFloat(sin(angle)) * wander * 0.6),
-                            phase: roll() * 2 * .pi)
-        pickup.size.target = 1
-        pickups.append(pickup)
-        nextPickup = t + 1.1 + roll() * 0.8
-    }
-
-    /// Knocked through one: a star is +2, a spark +5, a heart saves the
-    /// next miss.
-    private func collect(_ kind: Pickup.Kind) {
-        nextPickup = max(nextPickup, t + 0.8)
-        blinkAt = t
-        sy.velocity -= 2.5
-        sx.velocity += 2
-        switch kind {
-        case .star:
-            scored(2, trick: "star")
-        case .spark:
-            haptic(.medium, 0.9)
-            scored(5, trick: "spark")
-        case .heart:
-            saves = 1
-            moment = (.happy, nil, t + 0.8)
-            haptic(.medium, 0.8)
-            publishGame(.note("+1 save"))
-        }
-    }
-
-    /// The run ended: what is still floating shrinks away.
-    private func dropPickups() {
-        for i in pickups.indices where pickups[i].taken == nil { pickups[i].size.target = 0 }
-    }
-
     private func startGame() {
         guard !reduceMotion, !playing else { return }
         playing = true
@@ -1360,9 +1218,6 @@ final class MascotCreature {
         bestAtStart = best
         celebrated = false
         cheers = 0
-        pickups.removeAll()
-        saves = 0
-        nextPickup = t + 1.2
         if cameoStart != nil { cameoLeaving = true }
         bankFree = true
         bonkFree = true
@@ -1447,7 +1302,6 @@ final class MascotCreature {
     private func miss() {
         guard playing else { return }
         playing = false
-        dropPickups()
         swatting = false
         whiffed = false
         flungAt = t
@@ -1516,7 +1370,6 @@ final class MascotCreature {
     private func quitGame() {
         guard playing else { return }
         playing = false
-        dropPickups()
         swatting = false
         whiffed = false
         score = 0
@@ -1862,8 +1715,6 @@ final class MascotCreature {
                      gaze: CGPoint(x: -cameoSide, y: 0.2), lead: .zero, changedAt: -10, scheme: scheme)
         }
 
-        for k in pickups { drawPickup(k, in: &context, paint: paint) }
-
         // The taffy neck back up to the island while it is being born.
         if neck.value > 0.02, released {
             let top = CGPoint(x: island.midX, y: island.maxY + pill.value * 8 - 6)
@@ -1893,11 +1744,6 @@ final class MascotCreature {
                  left: eyes.left, right: eyes.right, open: min(eyeOpenness, eyeSquash),
                  gaze: CGPoint(x: gazeX.value, y: gazeY.value),
                  lead: CGPoint(x: leadX.value, y: leadY.value), changedAt: moodChangedAt, scheme: scheme)
-        // a caught heart rides along until it saves a miss
-        if saves > 0, playing {
-            drawGlyph("heart", at: CGPoint(x: p.x + side * 0.46, y: p.y - side * 0.5), box: 22,
-                      rotation: sin(t * 2 * .pi / 1.4) * 0.15, opacity: 1, in: &context, paint: paint)
-        }
 
         // The island swells to let it out, then closes behind it.
         if pill.value > 0.01, mode == .birth || mode == .home {
@@ -1909,36 +1755,6 @@ final class MascotCreature {
             pillContext.fill(Path(roundedRect: rect, cornerRadius: h / 2, style: .continuous), with: .color(.black))
             if mode == .birth { peekEyes(in: &pillContext, pill: rect, paint: paint) }
         }
-    }
-
-    private func drawPickup(_ k: Pickup, in context: inout GraphicsContext, paint: Paint) {
-        let bob = CGFloat(sin((t - k.born) * 2 * .pi / 1.6 + k.phase)) * 4
-        let spin: Double = switch k.kind {
-        case .star: (t - k.born) * 0.9
-        case .spark: (t - k.born) * 3
-        case .heart: sin((t - k.born) * 2 * .pi / 1.2) * 0.12
-        }
-        let fade = k.taken.map { max(0, 1 - (t - $0) / 0.3) } ?? 1
-        // the last second of its life it blinks, so a miss is fair
-        let left = k.life - (t - k.born)
-        let blink = k.taken == nil && left < 1 && left > 0 && Int(left * 8) % 2 == 0 ? 0.35 : 1
-        drawGlyph(k.kind.glyph, at: CGPoint(x: k.p.x, y: k.p.y + bob), box: (k.kind == .spark ? 30 : 34) * k.size.value,
-                  rotation: spin, opacity: fade * blink, in: &context, paint: paint)
-    }
-
-    /// One flat glyph in the accent colour, the way the face accents are drawn.
-    private func drawGlyph(_ glyph: String, at centre: CGPoint, box: CGFloat, rotation: Double, opacity: Double,
-                           in context: inout GraphicsContext, paint: Paint) {
-        let scale = box / GlyphFaces.viewBox
-        guard scale > 0.01, opacity > 0.01 else { return }
-        var c = context
-        c.opacity *= opacity
-        c.translateBy(x: centre.x, y: centre.y)
-        c.rotate(by: .radians(rotation))
-        c.translateBy(x: -box / 2, y: -box / 2)
-        c.scaleBy(x: scale, y: scale)
-        c.stroke(Path(EmptyMascotBrain.path(glyph)), with: .color(paint.accent),
-                 style: StrokeStyle(lineWidth: max(GlyphFaces.stroke, 2.6 / scale), lineCap: .round, lineJoin: .round))
     }
 
     /// How long the eyes look around in the island before the body drops.
@@ -2175,9 +1991,6 @@ final class MascotCreature {
             pops += 1
             if milestone { mark() }
             if let trick { show("+\(points) \(trick)") }
-        case .note(let text):
-            guard shown else { return }
-            show(text)
         case let .missed(final, record):
             guard shown else { return }
             hold?.cancel()
