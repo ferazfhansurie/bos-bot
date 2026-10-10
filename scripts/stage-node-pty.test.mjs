@@ -73,6 +73,14 @@ it("retains a compatible local release build when no prebuild exists", () => {
   expect(stageNodePty(source, destination, { platform: "linux", arch: "x64" })).toBe("build/Release");
 });
 
+it("stages a linux source build that has no spawn-helper", () => {
+  const { source, destination } = fixture();
+  runtime(source, "build/Release", "linux-x64");
+  rmSync(join(source, "build/Release", "spawn-helper"));
+  expect(stageNodePty(source, destination, { platform: "linux", arch: "x64" })).toBe("build/Release");
+  expect(existsSync(join(destination, "build/Release", "pty.node"))).toBe(true);
+});
+
 it.each(["wrong helper", "missing helper", "corrupt addon"])("skips a release build with %s", (failure) => {
   const { source, destination } = fixture();
   runtime(source, "build/Release", "darwin-arm64");

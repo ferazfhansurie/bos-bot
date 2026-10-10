@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { executableTarget } from "./prepare-cloudflared.mjs";
 
@@ -18,7 +18,8 @@ function nativeFiles(directory, prefix = "") {
 export function stageNodePty(source, destination, { platform = process.platform, arch = process.arch } = {}) {
   const target = `${platform}-${arch}`;
   rmSync(destination, { recursive: true, force: true });
-  const required = platform === "win32" ? ["conpty.node", "conpty_console_list.node"] : ["pty.node", "spawn-helper"];
+  // node-pty only builds spawn-helper on macOS; linux forks with pty.node alone.
+  const required = platform === "win32" ? ["conpty.node", "conpty_console_list.node"] : platform === "darwin" ? ["pty.node", "spawn-helper"] : ["pty.node"];
   const failures = [];
   let nativeRelative;
   for (const relative of ["build/Release", `prebuilds/${target}`]) {
@@ -49,6 +50,7 @@ export function stageNodePty(source, destination, { platform = process.platform,
     filter: (path) => path === nativeSource || path === join(nativeSource, "conpty") || runtimeFile(path),
   });
   // npm prebuild helpers can be 0644 when install scripts are disabled.
-  if (platform !== "win32") chmodSync(join(destination, nativeRelative, "spawn-helper"), 0o755);
+  const helper = join(destination, nativeRelative, "spawn-helper");
+  if (platform !== "win32" && existsSync(helper)) chmodSync(helper, 0o755);
   return nativeRelative;
 }
