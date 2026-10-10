@@ -288,8 +288,8 @@ final class MascotCreature {
     private var mode: Mode
     private var p = CGPoint.zero
     private var v = CGVector.zero
-    private var sx = Spring(1, stiffness: 300, damping: 10)
-    private var sy = Spring(1, stiffness: 300, damping: 10)
+    private var sx = Spring(1, stiffness: 300, damping: 15)
+    private var sy = Spring(1, stiffness: 300, damping: 15)
     private var rot = Spring(0, stiffness: 150, damping: 11)
     private var scale = Spring(1, stiffness: 240, damping: 22)
     // Eyes jump (a saccade is stiff and quick); the body turns after them.
@@ -297,7 +297,7 @@ final class MascotCreature {
     private var gazeY = Spring(0, stiffness: 900, damping: 52)
     private var turn = Spring(0, stiffness: 38, damping: 8.5)
     // The top of the body lags every move and wobbles back.
-    private var shear = Spring(0, stiffness: 95, damping: 4.5)
+    private var shear = Spring(0, stiffness: 95, damping: 9)
     // The face leads: it slides toward where the body is going.
     private var leadX = Spring(0, stiffness: 420, damping: 28)
     private var leadY = Spring(0, stiffness: 420, damping: 28)
@@ -592,25 +592,26 @@ final class MascotCreature {
 
         switch mode {
         case .birth:
-            if !released, t > 0.45 {
+            if !released, t > 0.22 {
                 released = true
                 scale.target = 1
-                v = CGVector(dx: 0, dy: 300)
+                v = CGVector(dx: 0, dy: 520)
                 neck.target = 1
             }
             if released {
-                springTo(home, stiffness: 70, damping: 7.5, dt: dt)
+                // a system spring: quick, one soft overshoot, no yo-yo
+                springTo(home, stiffness: 150, damping: 19, dt: dt)
                 let below = p.y - island.maxY
-                if !snapped, below > side * 1.2 || t > 0.97 {
+                if !snapped, below > side * 0.9 || t > 0.7 {
                     snapped = true
                     neck.target = 0
                     pill.target = 0
                     // snap back into shape
-                    sx.velocity += 5
-                    sy.velocity -= 4
+                    sx.velocity += 3
+                    sy.velocity -= 2.5
                     haptic(.light, 0.6)
                 }
-                if snapped, landedAt == nil, v.dy < 0, p.y > home.y - 4 {
+                if snapped, landedAt == nil, (v.dy < 0 && p.y > home.y - 4) || t > 1.3 {
                     land()
                 }
             } else {
@@ -663,7 +664,7 @@ final class MascotCreature {
         let speedX = abs(v.dx), speedY = abs(v.dy)
         var stretchY = 1 + min(speedY / 1700, 0.55) - min(speedX / 3600, 0.18)
         var stretchX = 1 + min(speedX / 1700, 0.55) - min(speedY / 3600, 0.18)
-        if mode == .birth, !snapped { stretchY += neck.value * 0.3; stretchX -= neck.value * 0.12 }
+        if mode == .birth, !snapped { stretchY += neck.value * 0.18; stretchX -= neck.value * 0.08 }
         if mode == .home, !reduceMotion {
             let r = rest
             let period: Double = r == .asleep ? 5.2 : r == .drowsy ? 4.4 : 3.4
@@ -713,8 +714,8 @@ final class MascotCreature {
     private func land() {
         landedAt = t
         mode = .home
-        sy.velocity -= 4.5
-        sx.velocity += 3.5
+        sy.velocity -= 3
+        sx.velocity += 2.4
         blinkAt = t + 0.2
         nextBlink = t + 3
         haptic(.soft, 0.9)

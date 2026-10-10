@@ -86,6 +86,8 @@ struct CompanionApp: App {
                 // resolve once; the appearance screen commits a new one on
                 // the way out, and re-identifying here repaints everything.
                 .environment(\.launchCovered, showingLaunchSplash)
+                // the app settles up from just behind the splash as it lifts
+                .scaleEffect(showingLaunchSplash && !UIAccessibility.isReduceMotionEnabled ? 0.94 : 1)
                 .id("\(language)|\(themeApplied)")
                 // A voice call outlives the screen it started on: the
                 // full-screen call and its pill float above the whole app,
@@ -100,14 +102,10 @@ struct CompanionApp: App {
                 }
                 .overlay {
                     if showingLaunchSplash {
-                        LaunchSplashView { showingLaunchSplash = false }
-                            .background(Color(red: 13/255, green: 13/255, blue: 13/255))
-                            .ignoresSafeArea()
-                            .task {
-                                try? await Task.sleep(for: .seconds(6))
-                                guard !Task.isCancelled else { return }
-                                showingLaunchSplash = false
-                            }
+                        LaunchSplashView(bots: session.state.bots) {
+                            withAnimation(.launchReveal) { showingLaunchSplash = false }
+                        }
+                        .transition(.splashLift)
                     }
                 }
                 .onAppear {
