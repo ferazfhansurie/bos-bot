@@ -15340,7 +15340,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (path === "/api/multiplayer/links") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
-        if (method === "GET") return json(res, 200, { contacts: multiplayerLinks.contacts() });
+        if (method === "GET") return json(res, 200, { contacts: multiplayerLinks.contacts(), removedBots: remoteBots.removedBots() });
         if (method === "POST") {
           const body = await readBody(req, 4096);
           if (typeof body?.pairingUrl !== "string") return json(res, 400, { error: "pairingUrl required" });
@@ -15351,6 +15351,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           }
           catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : "could not link workspace" }); }
         }
+      }
+      // Put a bot removed from this home's list back (remote-bot-bridge.ts).
+      m = path.match(/^\/api\/multiplayer\/links\/([\w-]+)\/bots\/([\w-]+)\/add-back$/);
+      if (m && method === "POST") {
+        if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+        const added = await remoteBots.addBack(m[1], m[2]);
+        return json(res, added ? 200 : 404, added ? { ok: true } : { error: "that bot is not removed" });
       }
       m = path.match(/^\/api\/multiplayer\/links\/([\w-]+)$/);
       if (m && method === "DELETE") {
@@ -18082,6 +18089,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     // applied the same client/admin gate as for a local bot. Routes the other
     // Mac cannot serve for this home answer 403.
     if (isRemoteBotPath(path)) {
+      // Deleting a linked bot removes it from this home's list only; it stays
+      // on the other Mac. The link itself stays even with every bot removed:
+      // it also carries shared rooms with that home.
+      const removing = method === "DELETE" ? path.match(/^\/api\/bots\/(rb-[\w-]+)$/) : null;
+      if (removing) {
+        if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
+        const removed = remoteBots.removeFromList(removing[1]!);
+        return json(res, removed ? 200 : 404, removed ? { ok: true } : { error: "no such bot" });
+      }
       const answer = await remoteBots.route(method, path, url.searchParams, () => readBody(req));
       if ("bytes" in answer) {
         res.writeHead(answer.status, answer.headers);

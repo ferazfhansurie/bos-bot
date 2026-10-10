@@ -112,8 +112,16 @@ interface HomeState {
   selected: Record<string, string>;
   pinned: Record<string, true>;
   bots: Record<string, SafeBot>;
+  /** Bots the owner removed from this home's list. They stay on B; the
+   * bridge skips them (roster, rooms, relayed frames) until added back. */
+  removed: Record<string, RemovedBot>;
   attachments: string[];
 }
+
+interface RemovedBot { name: string; removedAt: number }
+
+/** A bot removed from this home's list, for the "add back" control. */
+export interface RemovedRemoteBot { homeId: string; homeName: string; remoteBotId: string; name: string; removedAt: number }
 
 interface Snapshot {
   version: 1;
@@ -248,7 +256,7 @@ function safeTask(raw: Record<string, any>): WireTask {
 }
 
 function emptyState(): HomeState {
-  return { threads: {}, selected: {}, pinned: {}, bots: {}, attachments: [] };
+  return { threads: {}, selected: {}, pinned: {}, bots: {}, removed: {}, attachments: [] };
 }
 
 function cleanState(value: unknown): HomeState {
@@ -273,8 +281,14 @@ function cleanState(value: unknown): HomeState {
     }
   }
   if (isObject(value.pinned)) for (const botId of Object.keys(value.pinned)) if (ID.test(botId)) state.pinned[botId] = true;
+  if (isObject(value.removed)) {
+    for (const [botId, entry] of Object.entries(value.removed)) {
+      if (!ID.test(botId) || !isObject(entry)) continue;
+      state.removed[botId] = { name: typeof entry.name === "string" ? entry.name.slice(0, 200) : "Bot", removedAt: typeof entry.removedAt === "number" ? entry.removedAt : 0 };
+    }
+  }
   if (isObject(value.bots)) {
-    for (const [botId, bot] of Object.entries(value.bots)) if (ID.test(botId) && isObject(bot)) state.bots[botId] = safeBot(bot);
+    for (const [botId, bot] of Object.entries(value.bots)) if (ID.test(botId) && isObject(bot) && !state.removed[botId]) state.bots[botId] = safeBot(bot);
   }
   if (Array.isArray(value.attachments)) {
     state.attachments = value.attachments.filter((name): name is string => typeof name === "string" && ATTACHMENT_NAME.test(name)).slice(-MAX_ATTACHMENT_NAMES);
@@ -349,6 +363,12 @@ export class RemoteBotBridge {
       home.wake?.();
       this.homes.delete(homeId);
       for (const botId of Object.keys(home.state.bots)) this.options.broadcast({ kind: "bot.deleted", botId: this.botId(home, botId) });
+      // An unlinked home forgets which bots were removed: linking it again
+      // is asking to see its bots.
+      if (Object.keys(home.state.removed).length) {
+        home.state.removed = {};
+        this.persist();
+      }
     }
     for (const link of links) {
       let home = this.homes.get(link.homeId);
@@ -392,8 +412,9 @@ export class RemoteBotBridge {
 
   /** Virtual thread id for a B thread, only when the bridge created it. */
   private mapped(home: Home, remoteThreadId: unknown): string | null {
-    return typeof remoteThreadId === "string" && home.state.threads[remoteThreadId] && !this.isRoomThread(home.state.threads[remoteThreadId]!)
-      ? this.threadId(home, remoteThreadId) : null;
+    const entry = typeof remoteThreadId === "string" ? home.state.threads[remoteThreadId] : undefined;
+    return entry && !this.isRoomThread(entry) && !home.state.removed[entry.botId]
+      ? this.threadId(home, remoteThreadId as string) : null;
   }
 
   private sharedBot(home: Home, remoteBotId: unknown): string | null {
@@ -483,6 +504,52 @@ export class RemoteBotBridge {
       if (typeof status === "number" && status >= 400 && status < 500) return failure(status, error instanceof Error ? error.message : "bad request");
       return failure(502, "the other Mac did not answer");
     }
+  }
+
+  // ── removing a bot from this home's list ──────────────────────────────
+
+  /** Take a linked bot off this home's list. Nothing changes on B. Its
+   * bridge threads stay mapped (hidden) so adding it back keeps the chat. */
+  removeFromList(virtualBotId: string): { homeId: string } | null {
+    const target = this.parse(virtualBotId, "rb");
+    if (!target || !target.home.state.bots[target.remoteId]) return null;
+    const { home, remoteId: botId } = target;
+    home.state.removed[botId] = { name: home.state.bots[botId]!.name, removedAt: Date.now() };
+    delete home.state.bots[botId];
+    let queuesChanged = false;
+    for (const threadId of Object.keys(home.state.threads)) {
+      if (home.state.threads[threadId]!.botId !== botId) continue;
+      home.cache.delete(threadId);
+      const virtual = this.threadId(home, threadId);
+      if (home.queues[virtual]) { delete home.queues[virtual]; queuesChanged = true; }
+    }
+    if (queuesChanged) this.options.queuesChanged?.();
+    this.persist();
+    this.options.broadcast({ kind: "bot.deleted", botId: virtualBotId });
+    return { homeId: home.link.homeId };
+  }
+
+  /** Bots removed from this home's list, per linked home. */
+  removedBots(): RemovedRemoteBot[] {
+    const out: RemovedRemoteBot[] = [];
+    for (const home of this.homes.values()) {
+      for (const [remoteBotId, entry] of Object.entries(home.state.removed)) {
+        out.push({ homeId: home.link.homeId, homeName: home.link.ownerName?.trim() || home.link.name, remoteBotId, ...entry });
+      }
+    }
+    return out.sort((a, b) => b.removedAt - a.removedAt);
+  }
+
+  /** Put a removed bot back on this home's list; it shows again once B lists it. */
+  async addBack(homeId: string, remoteBotId: string): Promise<boolean> {
+    const home = this.homes.get(homeId);
+    if (!home || !home.state.removed[remoteBotId]) return false;
+    delete home.state.removed[remoteBotId];
+    this.persist();
+    try { await this.refreshSnapshot(home); }
+    catch { home.wake?.(); }
+    if (home.state.bots[remoteBotId]) this.options.broadcast({ kind: "bot", bot: this.virtualBot(home, remoteBotId) });
+    return true;
   }
 
   private async botRoute(method: string, virtualBotId: string, rest: string, search: URLSearchParams, readBody: () => Promise<any>): Promise<BridgeResponse> {
@@ -1130,6 +1197,10 @@ export class RemoteBotBridge {
   private absorbBot(home: Home, raw: Record<string, any>): boolean {
     const botId = raw.id as string;
     if (relayed(raw)) return false;
+    if (home.state.removed[botId]) {
+      if (typeof raw.name === "string" && raw.name) home.state.removed[botId]!.name = raw.name.slice(0, 200);
+      return false;
+    }
     if (raw.hidden === true || raw.visibility === "private") {
       if (home.state.bots[botId]) this.removeBot(home, botId);
       return false;
@@ -1450,7 +1521,7 @@ export class RemoteBotBridge {
           if (this.stopped || !home.running) break;
           const selected = new Set(Object.keys(home.state.bots).map(botId => this.selectedThread(home, botId)));
           await Promise.all(Object.keys(home.state.threads)
-            .filter(threadId => !this.isRoomThread(home.state.threads[threadId]!) &&
+            .filter(threadId => !this.isRoomThread(home.state.threads[threadId]!) && !home.state.removed[home.state.threads[threadId]!.botId] &&
               (home.cache.get(threadId)?.hydrated || selected.has(threadId)))
             .map(threadId => this.hydrate(home, threadId, true)));
           if (this.stopped || !home.running) break;

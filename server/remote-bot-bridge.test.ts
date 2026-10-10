@@ -650,6 +650,61 @@ describe("RemoteBotBridge", () => {
     expect(bridge.homeForTest(HOME)?.running).toBe(false);
   });
 
+  it("removes a bot from this home's list only, keeps it gone across restarts and B's frames, and adds it back with its chat", async () => {
+    bridge.start();
+    await until(() => fake.streams.length === 1);
+    fake.push({ kind: "hello", cursor: "S:1", resumed: false });
+    await until(() => frames.some((frame) => frame.kind === "bot"));
+    await firstSend();
+    frames = [];
+    expect(bridge.removeFromList(botId)).toEqual({ homeId: HOME });
+    expect(frames).toEqual([{ kind: "bot.deleted", botId }]);
+    // nothing was deleted on B
+    expect(fake.calls.some((call) => call.method === "DELETE")).toBe(false);
+    expect(await bridge.listBots(0)).toEqual([]);
+    expect(bridge.roomBot(HOME, "pixie")).toBeNull();
+    expect(bridge.roomMember(botId)).toBeNull();
+    expect((await route("POST", `/api/bots/${botId}/messages`, { text: "hi", threadId: `rt-${KEY}-bridge-1` })).status).toBe(404);
+    expect(bridge.removedBots()).toEqual([{ homeId: HOME, homeName: "Putri", remoteBotId: "pixie", name: "Pixie", removedAt: expect.any(Number) }]);
+    // B keeps sharing it and its thread keeps talking: none of it comes through
+    frames = [];
+    fake.push({ kind: "bot", bot: fake.bot() }, "S:2");
+    fake.push({ kind: "message", threadId: "bridge-1", message: { id: "b9", role: "bot", kind: "text", text: "still here", at: 3 } }, "S:3");
+    fake.push({ kind: "runtime", event: { type: "content.delta", threadId: "bridge-1", payload: { delta: "x" } } }, "S:4");
+    fake.push({ kind: "notify", notification: { kind: "reply", botId: "pixie", botName: "Pixie", threadId: "bridge-1", title: "Pixie", body: "x" } }, "S:5");
+    fake.push({ kind: "hello", cursor: "S:6", resumed: true }, "S:6");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(frames).toEqual([]);
+    expect(notices).toEqual([]);
+    // a restart does not bring it back
+    bridge.stop();
+    bridge = make();
+    expect(await bridge.listBots(0)).toEqual([]);
+    expect(bridge.removedBots().map((bot) => bot.remoteBotId)).toEqual(["pixie"]);
+    // add back: listed again, with the same linked chat
+    expect(await bridge.addBack(HOME, "pixie")).toBe(true);
+    expect(await bridge.addBack(HOME, "pixie")).toBe(false);
+    expect(frames.some((frame) => frame.kind === "bot" && frame.bot.id === botId)).toBe(true);
+    const [bot] = await bridge.listBots(0);
+    expect(bot!.id).toBe(botId);
+    expect(bot!.threadId).toBe(`rt-${KEY}-bridge-1`);
+    expect(bridge.removedBots()).toEqual([]);
+    expect(fake.created).toBe(1);
+  });
+
+  it("forgets removed bots when the home is unlinked, so a relink lists them again", async () => {
+    let links = [link];
+    bridge.stop();
+    bridge = make({ links: () => links });
+    await bridge.listBots(0);
+    bridge.removeFromList(botId);
+    links = [];
+    bridge.sync();
+    links = [link];
+    const [bot] = await bridge.listBots(0);
+    expect(bot!.id).toBe(botId);
+  });
+
   it("relays only frames for bridge threads, rewritten to virtual ids", async () => {
     bridge.start();
     await until(() => fake.streams.length === 1);
