@@ -10901,14 +10901,21 @@ async function executeGroupMemberTurn(
   assertWithinBudget(cfg, DATA_DIR);
   assertModelVariantSupported(preparedSelection, instance.adapter.capabilities);
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
-  const skillAuthoring =
+  // skills_list/skill_manage ride every room turn that mounts agent tools, so
+  // a teammate reached by a handoff or a chained @mention can manage its own
+  // skills when asked (skill_manage still writes only the calling bot's skills
+  // and follows the normal review). The /learn steering below stays with the
+  // first responder: one room message authors at most one skill.
+  const skillTools =
     skillAuthoringEnabled(cfg) &&
+    instance.adapter.capabilities.agentsMcp === true;
+  const skillAuthoring =
+    skillTools &&
     hop === 0 &&
     !skillAuthoringClaim.claimed &&
-    !cardContinuation &&
-    instance.adapter.capabilities.agentsMcp === true;
+    !cardContinuation;
   if ((hop < MAX_COMMS_DEPTH || orchestration?.roomHandoffId) && instance.adapter.capabilities.agentsMcp === true) {
-    integrations.agents = agentsIntegration(bot.id, threadId, hop, skillAuthoring, internalGeneration, orchestration?.roomHandoffId, !orchestration || Boolean(orchestration.roomHandoffId));
+    integrations.agents = agentsIntegration(bot.id, threadId, hop, skillTools, internalGeneration, orchestration?.roomHandoffId, !orchestration || Boolean(orchestration.roomHandoffId));
   }
   if (instance.adapter.capabilities.hooks === true && hooksEnabled()) {
     integrations.hooks = hooksIntegration(bot.id, threadId, internalGeneration);

@@ -73,6 +73,14 @@ it("runs room-destined work in the room's own conversation, opening no thread on
   expect(JSON.stringify(f.provider().find((turn: any) => turn.botId === f.target.id).prompt).match(/Please build CSV/g)).toHaveLength(1);
 }), 45_000);
 
+it("gives a room handoff's recipient its own skill tools, not only the first responder", () => withRooms(async f => {
+  await f.start(); expect((await f.wait()).status).toBe("settled");
+  const toolsOf = (botId: string) => f.provider().find((turn: any) => turn.botId === botId)
+    .evidence[0].result.tools.map((tool: any) => tool.name);
+  expect(toolsOf(f.sender.id)).toEqual(expect.arrayContaining(["skills_list", "skill_manage"]));
+  expect(toolsOf(f.target.id)).toEqual(expect.arrayContaining(["skills_list", "skill_manage"]));
+}), 45_000);
+
 it("lets an explicitly authorized Chief coordinate another team, which can consult its own specialist", () => withRooms(async f => {
   await f.api(`/api/bots/${f.target.id}`, { section: "Engineering" }, "PATCH");
   await f.api(`/api/bots/${f.sender.id}`, { chiefOfStaff: true, managedSections: ["Engineering"], acknowledgePeerScope: true }, "PATCH");
