@@ -248,8 +248,8 @@ struct ThreadHeaderFace: View {
     /// turn; otherwise a mood, the card face, or open attentive eyes while
     /// you type, read back or the bot reads your message.
     private var look: GlyphLook? {
-        if sweep != nil { return GlyphLook(left: "ring", right: "ring") }
-        if director.cardOpen { return GlyphLook(GlyphFaces.face(.waiting)) }
+        if sweep != nil { return .eyes("ring") }
+        if director.cardOpen { return .face(GlyphFaces.face(.waiting)) }
         if busy { return nil }
         switch director.mood {
         case .proud: return GlyphLook(left: "caret", right: "caret", accent: "star", anchor: .topRight)
@@ -257,7 +257,7 @@ struct ThreadHeaderFace: View {
         case .curious: return GlyphLook(left: "ring", right: "ring", accent: "query", anchor: .topRight)
         case nil: break
         }
-        if typing || director.lookingBack { return GlyphLook(left: "ring", right: "ring") }
+        if typing || director.lookingBack { return .eyes("ring") }
         return nil
     }
 
@@ -369,6 +369,19 @@ private struct MoodPose: ViewModifier {
     }
 }
 
+extension GlyphLook {
+    /// Both eyes one glyph, no accent.
+    static func eyes(_ glyph: String) -> GlyphLook {
+        GlyphLook(left: glyph, right: glyph, hidesAccent: true)
+    }
+
+    /// A whole table face, worn whatever the live state is.
+    static func face(_ face: GlyphFace) -> GlyphLook {
+        GlyphLook(left: face.left, right: face.right, accent: face.accent, anchor: face.anchor,
+                  hidesAccent: face.accent == nil)
+    }
+}
+
 /// `GlyphMark.draw` with gaze and blink as animatable properties, so a
 /// spring moves the eyes between frames without a running timeline.
 struct GlyphPoseFace: View, Animatable {
@@ -389,13 +402,22 @@ struct GlyphPoseFace: View, Animatable {
         set { gazeX = newValue.first.first; gazeY = newValue.first.second; openness = newValue.second }
     }
 
+    /// The look with the springs' gaze and blink on it.
+    private var posed: GlyphLook {
+        var pose = look ?? GlyphLook()
+        pose.eyeShift = CGSize(width: gazeX, height: gazeY)
+        // a blink sprung from outside, between timeline frames
+        pose.eyeSquash = max(0.12, min(1.2, openness))
+        return pose
+    }
+
     var body: some View {
-        let pose = GlyphPose(gazeX: gazeX, gazeY: gazeY, openness: openness, look: look)
+        let pose = posed
         let color = color, bodyId = bodyId, state = state, scheme = scheme, now = now, changedAt = changedAt
         Canvas { context, canvas in
             let slot = CGRect(x: canvas.width / 4, y: canvas.height / 4, width: canvas.width / 2, height: canvas.height / 2)
             GlyphMark.draw(in: &context, slot: slot, color: color, bodyId: bodyId, state: state,
-                           scheme: scheme, now: now, changedAt: changedAt, pose: pose)
+                           scheme: scheme, now: now, changedAt: changedAt, look: pose)
         }
         // the accent floats outside the body, as in GlyphMark
         .frame(width: size * 2, height: size * 2)
