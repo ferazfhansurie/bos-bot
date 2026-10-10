@@ -134,14 +134,18 @@ struct EmptyThreadMascot: View {
                     .accessibilityIdentifier("empty-mascot-line")
             }
         }
-        .overlay(alignment: .topLeading) {
+        // The score is part of the scene: behind the mascot, top-anchored
+        // under whichever is lower, the island or the header, so it never
+        // sits on either on any phone.
+        .background(alignment: .top) {
             if game.shown, !focused {
                 MascotScore(board: game, tint: GlyphMark.colors(bot.color, scheme: scheme).body,
                             reduceMotion: reduceMotion)
                     .frame(width: stage.width)
-                    .position(x: stage.width / 2, y: creature.ceiling + 64)
+                    .padding(.top, creature.scoreTop)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .allowsHitTesting(false)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
             }
         }
         .animation(.spring(duration: 0.45, bounce: 0.2), value: line)
@@ -193,7 +197,8 @@ private struct MascotFrame: View {
                 .allowsHitTesting(false)
             MascotTouchSurface(origin: origin,
                                onTouch: { creature.touch(at: $0, from: $1) },
-                               onRelease: { creature.release(velocity: $0) })
+                               onRelease: { creature.release(velocity: $0) },
+                               onExtraTouch: { creature.extraTouch(at: $0) })
                 .frame(width: frame.hit, height: frame.hit)
                 .position(frame.centre)
                 .allowsHitTesting(frame.touchable)
@@ -217,14 +222,21 @@ private struct MascotFrame: View {
 
     func run(_ rate: MascotCreature.Rate) {
         if link == nil {
-            let tick = Tick { [weak self] in self?.now = Date() }
-            let link = CADisplayLink(target: tick, selector: #selector(Tick.fire))
+            // the time this frame will be on screen, not when the callback
+            // happened to run: callback jitter was stepping the motion
+            // unevenly, which reads as stutter on a fast fall
+            let tick = Tick { [weak self] link in
+                self?.now = Date(timeIntervalSinceNow: link.targetTimestamp - CACurrentMediaTime())
+            }
+            let link = CADisplayLink(target: tick, selector: #selector(Tick.fire(_:)))
             link.add(to: .main, forMode: .common)
             self.link = link
             target = tick
         }
+        // awake asks for the full 120 and won't accept being halved: a game
+        // at 60 is visibly choppier on a promotion screen
         let fps = Float((1 / rate.interval).rounded())
-        link?.preferredFrameRateRange = CAFrameRateRange(minimum: fps / 2, maximum: fps, preferred: fps)
+        link?.preferredFrameRateRange = CAFrameRateRange(minimum: rate == .fast ? 80 : fps / 2, maximum: fps, preferred: fps)
         link?.isPaused = false
     }
 
@@ -237,9 +249,9 @@ private struct MascotFrame: View {
     }
 
     private final class Tick: NSObject {
-        let action: () -> Void
-        init(_ action: @escaping () -> Void) { self.action = action }
-        @objc func fire() { action() }
+        let action: (CADisplayLink) -> Void
+        init(_ action: @escaping (CADisplayLink) -> Void) { self.action = action }
+        @objc func fire(_ link: CADisplayLink) { action(link) }
     }
 }
 
@@ -253,14 +265,20 @@ struct MascotTouchSurface: UIViewRepresentable {
     var origin: CGPoint
     var onTouch: (CGPoint, CGPoint) -> Void
     var onRelease: (CGSize) -> Void
+    /// Another finger landed while the first is still down: juggling with
+    /// two thumbs, the second tap must count too.
+    var onExtraTouch: (CGPoint) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .clear
+        // or a second finger never reaches the recognizer
+        view.isMultipleTouchEnabled = true
         let grab = GrabRecognizer(target: context.coordinator, action: #selector(Coordinator.grabbed(_:)))
         grab.delegate = context.coordinator
+        grab.onExtra = { [weak coordinator = context.coordinator] window in coordinator?.extra(window) }
         view.addGestureRecognizer(grab)
         return view
     }
@@ -272,6 +290,10 @@ struct MascotTouchSurface: UIViewRepresentable {
         private var start: CGPoint = .zero
 
         init(_ surface: MascotTouchSurface) { self.surface = surface }
+
+        func extra(_ window: CGPoint) {
+            surface.onExtraTouch(CGPoint(x: window.x - surface.origin.x, y: window.y - surface.origin.y))
+        }
 
         @objc func grabbed(_ grab: GrabRecognizer) {
             let window = grab.location(in: nil)
@@ -298,6 +320,8 @@ struct MascotTouchSurface: UIViewRepresentable {
 final class GrabRecognizer: UIGestureRecognizer {
     private var finger: UITouch?
     private var samples: [(time: TimeInterval, point: CGPoint)] = []
+    /// A later finger's touch-down, in window points.
+    var onExtra: ((CGPoint) -> Void)?
 
     /// Points per second over the last few hundredths of a second. A finger
     /// that stopped before it lifted throws nothing.
@@ -320,7 +344,10 @@ final class GrabRecognizer: UIGestureRecognizer {
             record(touch)
             state = .began
         }
-        for touch in touches where touch !== finger { ignore(touch, for: event) }
+        for touch in touches where touch !== finger {
+            if state == .changed || state == .began { onExtra?(touch.location(in: nil)) }
+            ignore(touch, for: event)
+        }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -432,8 +459,8 @@ final class MascotCreature {
     /// physics live here.
     enum GameEvent {
         case start(best: Int)
-        case scored(score: Int, trick: String?, newBest: Bool)
-        case missed(score: Int)
+        case scored(score: Int, trick: String?, newBest: Bool, milestone: Bool)
+        case missed(score: Int, newBest: Bool)
         case quit
     }
 
@@ -473,6 +500,7 @@ final class MascotCreature {
     private var origin: CGPoint = .zero
     private var island: CGRect = .zero
     private var hasIsland = false
+    private var safeTop: CGFloat = 0
 
     // Time, in seconds since it arrived. Paused frames do not count.
     private var t: TimeInterval = 0
@@ -536,6 +564,20 @@ final class MascotCreature {
     private var lastHit: TimeInterval = -1
     private var bankFree = false
     private var bonkFree = false
+    /// A touch that landed during a run but not on it: it does nothing,
+    /// no grab, no throw, no tap.
+    private var whiffed = false
+    private var touchStart = CGPoint.zero
+    /// Where it has just been, one point a frame: a finger aims at what the
+    /// screen showed a frame or two ago, so a hit counts anywhere along it.
+    private var trail: [(t: TimeInterval, p: CGPoint)] = []
+    /// The sideways drift that creeps in late in a run: two slow waves.
+    private var drift: (a: Double, b: Double, fa: Double, fb: Double) = (0, 0, 0.5, 0.8)
+#if DEBUG
+    /// `-mascot-autoplay`: it juggles itself, for measuring and screenshots.
+    private let autoplay = ProcessInfo.processInfo.arguments.contains("-mascot-autoplay")
+    private var autoplayStop = 28
+#endif
 
     // Life.
     private var lastPoke: TimeInterval = 0
@@ -612,6 +654,12 @@ final class MascotCreature {
 
     private var topWall: CGFloat { max(dock.header.maxY - origin.y, 0) }
 
+    /// Where the score's top goes, in the stage: under the lower of the
+    /// header, the island and the status bar, with a little air.
+    var scoreTop: CGFloat {
+        max(topWall, island.maxY, safeTop - origin.y) + 22
+    }
+
     private func local(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x - origin.x, y: point.y - origin.y) }
 
     private func measureIsland() {
@@ -621,6 +669,7 @@ final class MascotCreature {
             .first(where: \.isKeyWindow)
         let width = window?.bounds.width ?? stage.width
         let safeTop = window?.safeAreaInsets.top ?? 0
+        self.safeTop = safeTop
         // A dynamic island phone has a top inset of 59 or more; a notch
         // phone has less. Either way it comes out of the top centre.
         hasIsland = safeTop >= 59
@@ -640,11 +689,16 @@ final class MascotCreature {
             touching = true
             moved = false
             grab = CGVector(dx: p.x - start.x, dy: p.y - start.y)
-            if playing, mode == .flung { swat(at: start) } else if rest == .asleep { wake() }
+            finger = start
+            touchStart = start
+            if playing, mode == .flung {
+                // a hit counts on touch-down; a near miss does nothing at all
+                if hits(start) { swat(at: start) } else { whiffed = true }
+            } else if rest == .asleep { wake() }
             poke()
         }
         finger = location
-        if !swatting, !moved, !reduceMotion, hypot(location.x - start.x, location.y - start.y) > 10 {
+        if !swatting, !whiffed, !moved, !reduceMotion, hypot(location.x - start.x, location.y - start.y) > 10 {
             moved = true
             mode = .held
         }
@@ -654,7 +708,9 @@ final class MascotCreature {
         guard touching else { return }
         touching = false
         poke()
-        if swatting {
+        if whiffed {
+            whiffed = false
+        } else if swatting {
             swatting = false
             flick(velocity)
         } else if moved {
@@ -668,6 +724,14 @@ final class MascotCreature {
         } else {
             tap()
         }
+    }
+
+    /// A second finger came down while the first is still on the glass.
+    func extraTouch(at point: CGPoint) {
+        guard playing, mode == .flung, hits(point) else { return }
+        let was = swatting
+        swat(at: point)
+        swatting = was
     }
 
     func tap() {
@@ -790,8 +854,17 @@ final class MascotCreature {
         }
         think()
         publishRate()
-        // a moving target gets a forgiving hit area
-        let hit = side * (playing ? 1.4 : 0.92) * scale.value
+        trail.append((t, p))
+        trail.removeAll { t - $0.t > Self.trailLength }
+        var hit = side * 0.92 * scale.value
+        if playing {
+            // the surface only has to catch the finger; `hits` decides
+            let back = trail.first.map { hypot($0.p.x - p.x, $0.p.y - p.y) } ?? 0
+            hit = 2 * (hitRadius + back + 12)
+        }
+#if DEBUG
+        if autoplay { autoplayStep() }
+#endif
         return Frame(centre: p, hit: max(hit, 1), touchable: (mode == .home || mode == .held || mode == .flung) && landedAt != nil)
     }
 
@@ -867,12 +940,20 @@ final class MascotCreature {
             v.dy += ((target.y - p.y) / dt - v.dy) * follow
             p = target
         case .flung:
-            // real-ish weight: falls like a thrown thing, not a balloon; a
-            // long run gets a little heavier, so it speeds up
-            v.dy += 1700 * gravityScale * dt
-            let drag = exp(-0.35 * dt)
-            v.dx *= drag
-            v.dy *= drag
+            if playing {
+                // in a run: no vertical drag, so every pop rises the same
+                // height and falls the same way; a run gets heavier and,
+                // later, drifts a little sideways
+                v.dy += gameGravity * dt
+                v.dx += driftPush * dt
+                v.dx *= exp(-0.5 * dt)
+            } else {
+                // real-ish weight: falls like a thrown thing, not a balloon
+                v.dy += 1700 * dt
+                let drag = exp(-0.35 * dt)
+                v.dx *= drag
+                v.dy *= drag
+            }
             p.x += v.dx * dt
             p.y += v.dy * dt
             collide(radius: r)
@@ -981,8 +1062,10 @@ final class MascotCreature {
     private func collide(radius r: CGFloat) {
         let top = topWall + r
         let bottom = stage.height - r
-        if p.x < r { p.x = r; if v.dx < 0 { bank(-v.dx); bump(-v.dx, horizontal: true); v.dx = -v.dx * 0.62 } }
-        if p.x > stage.width - r { p.x = stage.width - r; if v.dx > 0 { bank(v.dx); bump(v.dx, horizontal: true); v.dx = -v.dx * 0.62 } }
+        // positions are clamped every 240hz substep, so nothing tunnels
+        let wall: CGFloat = playing ? 0.7 : 0.62
+        if p.x < r { p.x = r; if v.dx < 0 { bank(-v.dx); bump(-v.dx, horizontal: true); v.dx = -v.dx * wall } }
+        if p.x > stage.width - r { p.x = stage.width - r; if v.dx > 0 { bank(v.dx); bump(v.dx, horizontal: true); v.dx = -v.dx * wall } }
         if p.y < top {
             p.y = top
             if v.dy < 0 {
@@ -1014,7 +1097,41 @@ final class MascotCreature {
 
     // MARK: Keepy-uppy
 
-    private var gravityScale: CGFloat { playing ? 1 + CGFloat(min(score, 40)) * 0.008 : 1 }
+    // Difficulty is a function of the score alone, so it climbs a hair per
+    // hit, never jumps, and a new run starts easy again.
+    private static let trailLength: TimeInterval = 0.07
+    private var level: CGFloat { playing ? CGFloat(min(score, 60)) : 0 }
+    /// Floaty enough at the start for anyone to keep it up; 1.2% heavier
+    /// per hit, 1.7x by 60.
+    private var gameGravity: CGFloat { 1250 * (1 + level * 0.012) }
+    /// Every pop rises the same height, whatever it was doing when hit.
+    private var popSpeed: CGFloat {
+        let room = max(stage.height - topWall, 400)
+        let height = min(max(room * 0.42, 230), 330) * (1 - level * 0.0015)
+        return sqrt(2 * gameGravity * height)
+    }
+    /// A generous circle round the body (it is 0.46 of the side), shrinking
+    /// a little to 50.
+    private var hitRadius: CGFloat { side * (0.95 - CGFloat(min(score, 50)) * 0.0035) * scale.value }
+    /// From 15 a slow sideways wind, up to full strength at 50.
+    private var driftPush: CGFloat {
+        let k = min(max(CGFloat(score) - 15, 0) / 35, 1)
+        guard k > 0 else { return 0 }
+        let wave = 0.6 * sin(t * drift.fa * 2 * .pi + drift.a) + 0.4 * sin(t * drift.fb * 2 * .pi + drift.b)
+        return 300 * k * CGFloat(wave)
+    }
+
+    /// A finger at `point` is on it: within the radius of anywhere it has
+    /// been over the last few frames.
+    private func hits(_ point: CGPoint) -> Bool {
+        let a = trail.first?.p ?? p
+        let b = p
+        let ab = CGVector(dx: b.x - a.x, dy: b.y - a.y)
+        let len = ab.dx * ab.dx + ab.dy * ab.dy
+        let u = len > 0 ? max(0, min(1, ((point.x - a.x) * ab.dx + (point.y - a.y) * ab.dy) / len)) : 0
+        let near = CGPoint(x: a.x + ab.dx * u, y: a.y + ab.dy * u)
+        return hypot(point.x - near.x, point.y - near.y) <= hitRadius
+    }
 
     private func startGame() {
         guard !reduceMotion, !playing else { return }
@@ -1025,35 +1142,43 @@ final class MascotCreature {
         celebrated = false
         bankFree = true
         bonkFree = true
+        whiffed = false
         lastHit = t
+        drift = (roll() * 2 * .pi, roll() * 2 * .pi, 0.35 + roll() * 0.25, 0.7 + roll() * 0.3)
+        // a wild opening throw is still a throw, just not a rocket
+        let speed = hypot(v.dx, v.dy), cap: CGFloat = 2600
+        if speed > cap { v.dx *= cap / speed; v.dy *= cap / speed }
+        Self.prepareHaptics()
         publishGame(.start(best: best))
     }
 
-    /// A finger on it while it is up: it pops up and away from the finger.
+    /// A finger on it while it is up: the same pop every time, straight up
+    /// with a small push away from where it was hit.
     private func swat(at point: CGPoint) {
         swatting = true
-        guard t - lastHit > 0.07 else { return }
+        guard t - lastHit > 0.1 else { return }
         lastHit = t
-        let boost = 1000 * sqrt(gravityScale)
-        v.dy = min(v.dy * 0.15, 0) - boost
-        let off = max(min((p.x - point.x) / (side * 0.5), 1), -1)
-        v.dx = v.dx * 0.55 + off * 280
+        bankFree = true
+        bonkFree = true
+        let off = max(min((p.x - point.x) / hitRadius, 1), -1)
+        scored(1, trick: nil)
+        v.dy = -popSpeed
+        v.dx = v.dx * 0.3 + off * 240
         sy.velocity -= 3.4
         sx.velocity += 2.4
         rot.velocity -= off * 5
         blinkAt = t
-        bankFree = true
-        bonkFree = true
-        scored(1, trick: nil)
     }
 
     /// The finger kept going through it: the throw aims it and scores again.
     private func flick(_ velocity: CGSize) {
         let speed = hypot(velocity.width, velocity.height)
-        guard playing, speed > 900 else { return }
+        // a quick tap has a fast but tiny wobble; a flick goes somewhere
+        let travel = hypot(finger.x - touchStart.x, finger.y - touchStart.y)
+        guard playing, speed > 900, travel > 24 else { return }
         v.dx = v.dx * 0.4 + velocity.width * 0.45
         v.dy = min(v.dy, velocity.height * 0.55)
-        let now = hypot(v.dx, v.dy), cap: CGFloat = 3600
+        let now = hypot(v.dx, v.dy), cap: CGFloat = 3200
         if now > cap { v.dx *= cap / now; v.dy *= cap / now }
         scored(1, trick: "flick")
     }
@@ -1064,7 +1189,10 @@ final class MascotCreature {
         scored(1, trick: "bank")
     }
 
+    private static let milestones: Set<Int> = [10, 25, 50]
+
     private func scored(_ points: Int, trick: String?) {
+        let before = score
         score += points
         var newBest = false
         if score > best {
@@ -1072,8 +1200,14 @@ final class MascotCreature {
             UserDefaults.standard.set(best, forKey: Self.bestKey)
             if !celebrated, score > bestAtStart, score >= 3 { celebrated = true; newBest = true }
         }
+        // 10, 25, 50, then every 50: it is getting harder, and it says so
+        let milestone = (before + 1...score).contains { Self.milestones.contains($0) || ($0 > 50 && $0 % 50 == 0) }
         poke()
-        if newBest {
+        if milestone {
+            moment = (.excited, nil, t + 1.0)
+            haptic(.heavy, 1)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.11) { [weak self] in self?.haptic(.rigid, 0.8) }
+        } else if newBest {
             moment = (.excited, nil, t + 1.2)
             DispatchQueue.main.async { UINotificationFeedbackGenerator().notificationOccurred(.success) }
         } else {
@@ -1083,19 +1217,47 @@ final class MascotCreature {
             haptic(trick == nil ? .rigid : .light, trick == nil ? 0.5 + combo : 0.7)
             if trick == "flick" { haptic(.medium, 0.6 + combo) }
         }
-        publishGame(.scored(score: score, trick: trick, newBest: newBest))
+        publishGame(.scored(score: score, trick: trick, newBest: newBest, milestone: milestone))
     }
 
     private func miss() {
         playing = false
         swatting = false
+        whiffed = false
         flungAt = t
-        moment = (.surprised, nil, t + 0.7)
+        let record = score > bestAtStart && score >= 3
+        moment = record ? (.excited, nil, t + 1.4) : (.surprised, nil, t + 0.7)
         haptic(.soft, 1)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [weak self] in self?.haptic(.light, 0.4) }
-        publishGame(.missed(score: score))
+        if record {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
+        }
+        publishGame(.missed(score: score, newBest: record))
         score = 0
     }
+
+#if DEBUG
+    /// Juggles itself: starts a run once it has landed, then hits it on the
+    /// way down near the bottom third, off-centre by a varying amount.
+    private func autoplayStep() {
+        guard landedAt != nil, mode != .leaving, !focused else { return }
+        if !playing {
+            guard mode == .home, t - flungAt > 1.5 else { return }
+            v = CGVector(dx: 300, dy: -1400)
+            mode = .flung
+            flungAt = t
+            autoplayStop = 12 + Int(roll() * 30)
+            startGame()
+            return
+        }
+        guard score < autoplayStop, v.dy > 0, p.y > stage.height * 0.62 else { return }
+        let off = CGFloat(roll() - 0.5) * hitRadius * 0.9
+        swat(at: CGPoint(x: p.x - off, y: p.y + 10))
+        swatting = false
+    }
+#endif
 
     /// The composer took focus or a send started: the run ends without a
     /// miss, and the score gets out of the way.
@@ -1103,6 +1265,7 @@ final class MascotCreature {
         guard playing else { return }
         playing = false
         swatting = false
+        whiffed = false
         score = 0
         flungAt = t - 0.6
         publishGame(.quit)
@@ -1111,9 +1274,6 @@ final class MascotCreature {
     private func publishGame(_ event: GameEvent) {
         DispatchQueue.main.async { [weak self] in self?.onGame?(event) }
     }
-
-    /// The top of the play area, below the header.
-    var ceiling: CGFloat { topWall }
 
     private func bump(_ speed: CGFloat, horizontal: Bool) {
         guard speed > 140 else { return }
@@ -1648,8 +1808,28 @@ final class MascotCreature {
 
     private func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle, _ intensity: Double) {
         DispatchQueue.main.async {
-            let generator = UIImpactFeedbackGenerator(style: style)
+            let generator = Self.impact(style)
             generator.impactOccurred(intensity: CGFloat(intensity))
+            // a fresh generator spins up the engine on the hit itself; a
+            // prepared one fires on the frame
+            generator.prepare()
+        }
+    }
+
+    @MainActor private static var impacts: [UIImpactFeedbackGenerator.FeedbackStyle: UIImpactFeedbackGenerator] = [:]
+
+    @MainActor private static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle) -> UIImpactFeedbackGenerator {
+        if let generator = impacts[style] { return generator }
+        let generator = UIImpactFeedbackGenerator(style: style)
+        impacts[style] = generator
+        return generator
+    }
+
+    private static func prepareHaptics() {
+        DispatchQueue.main.async {
+            for style in [UIImpactFeedbackGenerator.FeedbackStyle.rigid, .light, .medium, .heavy, .soft] {
+                impact(style).prepare()
+            }
         }
     }
 }
@@ -1657,8 +1837,8 @@ final class MascotCreature {
 // MARK: - Keepy-uppy score
 
 /// The score board's state. The creature sends events; this turns them into
-/// what the number does: pop on a hit, a bigger moment on a new best, and a
-/// quick drain back to nothing on a miss.
+/// what the number does: pop on a hit, a ring at a milestone, and at the end
+/// of a run the final number stays a moment with the best under it, then goes.
 @MainActor @Observable final class MascotGameBoard {
     private(set) var shown = false
     private(set) var score = 0
@@ -1666,43 +1846,77 @@ final class MascotCreature {
     private(set) var newBest = false
     private(set) var pops = 0
     private(set) var bigPop = false
-    private(set) var draining = false
+    private(set) var ended = false
+    private(set) var endPulse = 0
+    private(set) var milestones = 0
+    private(set) var flash = false
     private(set) var trick: (text: String, id: Int)?
-    @ObservationIgnored private var drain: Task<Void, Never>?
+    @ObservationIgnored private var hold: Task<Void, Never>?
     @ObservationIgnored private var trickClear: Task<Void, Never>?
+    @ObservationIgnored private var flashClear: Task<Void, Never>?
 
     func apply(_ event: MascotCreature.GameEvent) {
         switch event {
         case .start(let best):
-            drain?.cancel()
+            hold?.cancel()
             self.best = best
             score = 0
             newBest = false
-            draining = false
+            ended = false
+            flash = false
             trick = nil
             shown = true
-        case let .scored(score, trick, isBest):
-            guard shown, !draining else { return }
+        case let .scored(score, trick, isBest, milestone):
+            guard shown, !ended else { return }
             withAnimation(.snappy(duration: 0.22)) { self.score = score }
             if score > best { best = score }
-            bigPop = isBest
+            bigPop = isBest || milestone
             if isBest { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { newBest = true } }
             pops += 1
+            if milestone { mark() }
             if let trick { show("+1 \(trick)") }
-        case .missed(let final):
+        case let .missed(final, record):
             guard shown else { return }
-            drain?.cancel()
-            drain = Task { [weak self] in await self?.drainAway(from: final) }
+            hold?.cancel()
+            withAnimation(.spring(duration: 0.35, bounce: 0.25)) {
+                ended = true
+                score = final
+                trick = nil
+                if record { newBest = true }
+            }
+            endPulse += 1
+            hold = Task { [weak self] in
+                // long enough to read it, short enough not to be in the way
+                try? await Task.sleep(for: .milliseconds(final > 0 ? 2200 : 900))
+                guard let self, !Task.isCancelled else { return }
+                withAnimation(.smooth(duration: 0.45)) { self.shown = false }
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                self.ended = false
+            }
         case .quit:
             hide()
         }
     }
 
     func hide() {
-        drain?.cancel()
+        hold?.cancel()
         withAnimation(.smooth(duration: 0.25)) { shown = false }
-        draining = false
+        ended = false
         trick = nil
+    }
+
+    /// A milestone: the number takes the bot's colour for a beat and a ring
+    /// leaves it.
+    private func mark() {
+        milestones += 1
+        withAnimation(.easeOut(duration: 0.12)) { flash = true }
+        flashClear?.cancel()
+        flashClear = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard let self, !Task.isCancelled else { return }
+            withAnimation(.smooth(duration: 0.5)) { self.flash = false }
+        }
     }
 
     private func show(_ text: String) {
@@ -1715,29 +1929,11 @@ final class MascotCreature {
             withAnimation(.smooth(duration: 0.3)) { self.trick = nil }
         }
     }
-
-    /// The number counts back down to zero, quickly, and the board goes.
-    private func drainAway(from final: Int) async {
-        withAnimation(.smooth(duration: 0.3)) { draining = true; trick = nil }
-        if final > 0 {
-            try? await Task.sleep(for: .milliseconds(180))
-            let steps = min(final, 14)
-            for i in 1...steps {
-                try? await Task.sleep(for: .milliseconds(420 / steps))
-                if Task.isCancelled { return }
-                let left = Int((Double(final) * (1 - Double(i) / Double(steps))).rounded())
-                withAnimation(.snappy(duration: 0.12)) { score = left }
-            }
-        }
-        try? await Task.sleep(for: .milliseconds(final > 0 ? 650 : 250))
-        if Task.isCancelled { return }
-        withAnimation(.smooth(duration: 0.35)) { shown = false }
-        draining = false
-    }
 }
 
-/// The score: a big rounded number under the header, the best small and
-/// quiet beneath it, and the trick that scored, briefly, in the bot's colour.
+/// The score: a big rounded number in the scene under the header, the best
+/// small and quiet beneath it, and the trick that scored, briefly, in the
+/// bot's colour. Drawn behind the mascot, so it flies over it.
 private struct MascotScore: View {
     let board: MascotGameBoard
     let tint: Color
@@ -1757,9 +1953,9 @@ private struct MascotScore: View {
                         .contentTransition(.numericText(value: Double(board.best)))
                 }
             }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .font(.system(size: board.ended ? 15 : 13, weight: .semibold, design: .rounded))
             .monospacedDigit()
-            .frame(height: 18)
+            .frame(height: 20)
             ZStack {
                 if let trick = board.trick {
                     Text(trick.text)
@@ -1772,28 +1968,49 @@ private struct MascotScore: View {
             }
             .frame(height: 22)
         }
-        .opacity(board.draining ? 0.45 : 1)
-        .offset(y: board.draining ? 6 : 0)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("score \(board.score), best \(board.best)")
+        .accessibilityLabel(board.ended ? "final score \(board.score), best \(board.best)" : "score \(board.score), best \(board.best)")
     }
 
     @ViewBuilder private var number: some View {
         let text = Text("\(board.score)")
-            .font(.system(size: 72, weight: .bold, design: .rounded))
+            .font(.system(size: 64, weight: .bold, design: .rounded))
             .monospacedDigit()
-            .foregroundStyle(.primary)
+            .foregroundStyle(board.flash || (board.ended && board.newBest) ? AnyShapeStyle(tint) : AnyShapeStyle(.primary))
             .contentTransition(.numericText(value: Double(board.score)))
         if reduceMotion {
             text
         } else {
             let big = board.bigPop
-            text.keyframeAnimator(initialValue: CGFloat(1), trigger: board.pops) { content, scale in
-                content.scaleEffect(scale)
-            } keyframes: { _ in
-                SpringKeyframe(big ? 1.5 : 1.16, duration: big ? 0.12 : 0.07, spring: .snappy)
-                SpringKeyframe(1, duration: big ? 0.6 : 0.36, spring: .bouncy)
-            }
+            text
+                .background { ring }
+                .keyframeAnimator(initialValue: CGFloat(1), trigger: board.pops) { content, scale in
+                    content.scaleEffect(scale)
+                } keyframes: { _ in
+                    SpringKeyframe(big ? 1.4 : 1.14, duration: big ? 0.12 : 0.07, spring: .snappy)
+                    SpringKeyframe(1, duration: big ? 0.6 : 0.36, spring: .bouncy)
+                }
+                // the run is over: the number lands with a thump and stays
+                .keyframeAnimator(initialValue: CGFloat(1), trigger: board.endPulse) { content, scale in
+                    content.scaleEffect(scale)
+                } keyframes: { _ in
+                    SpringKeyframe(1.22, duration: 0.14, spring: .snappy)
+                    SpringKeyframe(1, duration: 0.7, spring: .bouncy)
+                }
         }
+    }
+
+    /// The milestone ring: leaves the number and fades.
+    private var ring: some View {
+        Circle()
+            .stroke(tint, lineWidth: 3)
+            .frame(width: 70, height: 70)
+            // at rest k is 1: fully out and invisible
+            .keyframeAnimator(initialValue: CGFloat(1), trigger: board.milestones) { content, k in
+                content.scaleEffect(0.7 + k * 1.3).opacity(Double(1 - k) * 0.7)
+            } keyframes: { _ in
+                MoveKeyframe(0)
+                LinearKeyframe(1, duration: 0.7, timingCurve: .easeOut)
+            }
     }
 }
