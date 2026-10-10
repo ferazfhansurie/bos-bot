@@ -248,7 +248,9 @@ struct RootView: View {
 
     private var route: CompanionOnboardingRoute {
         let pairingState: CompanionPairingState
-        if session.status == .unauthorized {
+        // A main computer that unpaired this phone must not take the other
+        // homes' chats away with it; its banner says what happened.
+        if session.status == .unauthorized, session.satellites.isEmpty {
             pairingState = .revoked
         } else if session.connection != nil {
             pairingState = .paired

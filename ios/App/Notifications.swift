@@ -19,7 +19,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     var sharedRoomHandler: ((String, String?) -> Void)?
     var foregroundPresentation: (@MainActor (NotificationTarget) -> NotificationPresentation)?
     var foregroundSharedPresentation: (@MainActor (String, String?) -> NotificationPresentation)?
-    var foregroundVoicePresentation: (@MainActor (VoicePush) -> NotificationPresentation)?
+    var foregroundVoicePresentation: (@MainActor (VoicePush, String?) -> NotificationPresentation)?
     /// BOS 2.0 cloud rooms. A tap that launches the app arrives before any
     /// view sets the handler; it waits in `pendingCloudHint` until one does.
     var cloudHintHandler: (@MainActor (CloudPushHint) -> Void)? {
@@ -178,7 +178,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
             if payload[Self.localRingKey] == "1" {
                 presentation = .alert
             } else if let push = VoicePush(payload: payload) {
-                presentation = foregroundVoicePresentation?(push) ?? .alert
+                presentation = foregroundVoicePresentation?(push, payload["connectionId"]) ?? .alert
             } else if let hint = CloudPushHint(userInfo: notification.request.content.userInfo) {
                 presentation = foregroundCloudPresentation?(hint) ?? .quiet
             } else if let roomID = payload["roomId"] {

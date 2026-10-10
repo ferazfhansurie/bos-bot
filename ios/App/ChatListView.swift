@@ -341,7 +341,7 @@ struct ChatListView: View {
         VStack(spacing: 0) {
             header
             LegacyArchivedBanner()
-            StatusBanner()
+            StatusBanner(quietWhenAnotherHomeIsLive: true)
             InterruptedTurnsBanner()
             if searchOpen {
                 HStack(spacing: 12) {
@@ -582,8 +582,10 @@ struct ChatListView: View {
 
     private var headerSubtitle: String {
         let name = session.connection?.name ?? "Not paired"
+        let others = session.satellites.filter { $0.status == .live }.map(\.homeLabel)
         switch session.status {
         case .live: return "\(name) · connected"
+        case .connecting where !others.isEmpty, .offline where !others.isEmpty: return "\(others.joined(separator: ", ")) · connected · \(name) asleep"
         case .connecting: return "\(name) · connecting…"
         case .offline: return "\(name) · offline"
         case .unauthorized: return "\(name) · unpaired"
@@ -812,7 +814,7 @@ struct ChatListView: View {
         switch entry {
         case .local(let summary):
             LiveChatAvatar(chat: summary.chat, size: 82,
-                           state: MausState.forChat(summary.chat, in: session.state), animated: pinnedAnimates(entry),
+                           state: Self.face(summary.chat, in: session), animated: pinnedAnimates(entry),
                            at: summary.lastActivity)
         case .home(let summary, let home, _):
             LiveChatAvatar(chat: summary.chat, size: 82,
@@ -1373,7 +1375,7 @@ struct ChatListView: View {
         orderedConversations.compactMap { if case .local(let summary) = $0 { return summary.chat.id } else { return nil } }
     }
     private var workingBotIDs: Set<String> {
-        Set(chats.filter { MausState.forChat($0.chat, in: session.state).showsActivity }.map(\.chat.id))
+        Set(chats.filter { Self.face($0.chat, in: session).showsActivity }.map(\.chat.id))
     }
     /// Unread, settled bot rows and when they last spoke.
     private var arrivalStamps: [String: Double] {
@@ -1761,11 +1763,17 @@ struct MascotStack: View {
 /// Connection state, shown only when it is not "fine".
 struct StatusBanner: View {
     @EnvironmentObject private var session: Session
+    var quietWhenAnotherHomeIsLive = false
 
     var body: some View {
         Group {
             switch session.status {
             case .live, .unpaired:
+                EmptyView()
+            case .connecting where quietWhenAnotherHomeIsLive && session.anotherHomeIsLive,
+                 .offline where quietWhenAnotherHomeIsLive && session.anotherHomeIsLive:
+                // The list with another computer up: this one's bots sleep
+                // and the header says so. Retries carry on in the background.
                 EmptyView()
             case .connecting:
                 banner("Connecting…", systemImage: "arrow.triangle.2.circlepath", tint: .secondary)

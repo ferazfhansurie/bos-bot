@@ -349,6 +349,10 @@ final class Session: ObservableObject {
     /// The session holding this connection: this one or another home.
     func home(for connectionId: String?) -> Session {
         guard !isSatellite, let connectionId, connectionId != connection?.id else { return self }
+        if let home = satellites.first(where: { $0.connection?.id == connectionId }) { return home }
+        // A push can cold-launch the app while the keychain was still locked
+        // for that home; try once more now before falling back to this one.
+        syncSatellites()
         return satellites.first { $0.connection?.id == connectionId } ?? self
     }
 
@@ -366,6 +370,10 @@ final class Session: ObservableObject {
         let name = connection?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? "other computer" : name
     }
+
+    /// Another paired computer is connected right now, so this one being
+    /// down is a sleeping-bots fact, not a reason to shout.
+    var anotherHomeIsLive: Bool { satellites.contains { $0.status == .live } }
 
     /// App coming to the front or going away: every home follows.
     func connectHomes() {
@@ -411,8 +419,8 @@ final class Session: ObservableObject {
         NotificationCoordinator.shared.responseHandler = { [weak self] target in
             Task { @MainActor in await self?.openNotification(target) }
         }
-        NotificationCoordinator.shared.foregroundVoicePresentation = { [weak self] push in
-            self?.voicePresentation(for: push) ?? .alert
+        NotificationCoordinator.shared.foregroundVoicePresentation = { [weak self] push, connectionId in
+            self?.home(for: connectionId).voicePresentation(for: push) ?? .alert
         }
         NotificationCoordinator.shared.voiceHandler = { [weak self] action in
             Task { @MainActor in await self?.handleVoice(action) }
@@ -1491,7 +1499,10 @@ final class Session: ObservableObject {
     private func run() async {
         while !Task.isCancelled {
             guard let client else { return }
-            status = .connecting
+            // Retrying a home that is down stays quiet: its bots already
+            // sleep, and flipping offline → connecting every backoff would
+            // pulse the banner and every face for nothing.
+            if case .offline = status {} else { status = .connecting }
             // A server connection first checks it is still the same server.
             // The descriptor is public, so this spends no credential; a
             // changed environment id (the address now belongs to another
@@ -1537,6 +1548,9 @@ final class Session: ObservableObject {
                             state.resetCursor(cursor)
                         }
                         status = .live
+                        // The next cold launch draws this roster at once,
+                        // even if this computer is down by then.
+                        if !resumed { saveRosterCache() }
                         failedDialsSinceLive = 0
                         // A push may have moved the badge while the stream
                         // was down; set it once from the live count.
@@ -3305,7 +3319,7 @@ final class Session: ObservableObject {
 
     /// A done push for a live call is the call's to say; a ring while the app
     /// is open becomes the incoming call screen instead of a banner.
-    private func voicePresentation(for push: VoicePush) -> NotificationPresentation {
+    fileprivate func voicePresentation(for push: VoicePush) -> NotificationPresentation {
         switch push {
         case let .workDone(_, threadId, callId, _):
             if let callId, callId == VoiceCallCenter.shared.liveCallId { return .quiet }
@@ -3380,6 +3394,11 @@ final class Session: ObservableObject {
         var bot: Bot?
         for _ in 0..<40 {
             if client != nil, let found = shortcutBot(botId: botId, name: name) { bot = found; break }
+            // The bot may live on another home; a dead main computer must
+            // not hold the call for 20 s.
+            if !isSatellite, let home = satellites.first(where: { $0.client != nil && $0.shortcutBot(botId: botId, name: name) != nil }) {
+                return await home.callFromShortcut(botId: botId, name: name)
+            }
             if client == nil, !restorePending { break }
             try? await Task.sleep(for: .milliseconds(500))
         }
