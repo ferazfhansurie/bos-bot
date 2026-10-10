@@ -30,6 +30,12 @@ final class MascotDock {
     var header: CGRect = .zero
 }
 
+extension EnvironmentValues {
+    /// The launch splash is still over the app. The mascot waits it out, or
+    /// it would be born where nobody can see it.
+    @Entry var launchCovered = false
+}
+
 extension Notification.Name {
     static let bosDeviceShaken = Notification.Name("bos.deviceShaken")
 }
@@ -59,6 +65,7 @@ struct EmptyThreadMascot: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.launchCovered) private var launchCovered
     @State private var creature: MascotCreature?
     @State private var origin: CGPoint = .zero
     @State private var line: String?
@@ -66,7 +73,7 @@ struct EmptyThreadMascot: View {
 
     var body: some View {
         GeometryReader { proxy in
-            if let creature {
+            if let creature, !launchCovered {
                 live(creature, stage: proxy.size)
             }
         }
@@ -511,7 +518,7 @@ final class MascotCreature {
 
         switch mode {
         case .birth:
-            if !released, t > 0.2 {
+            if !released, t > 0.45 {
                 released = true
                 scale.target = 1
                 v = CGVector(dx: 0, dy: 300)
@@ -520,7 +527,7 @@ final class MascotCreature {
             if released {
                 springTo(home, stiffness: 70, damping: 7.5, dt: dt)
                 let below = p.y - island.maxY
-                if !snapped, below > side * 1.2 || t > 0.72 {
+                if !snapped, below > side * 1.2 || t > 0.97 {
                     snapped = true
                     neck.target = 0
                     pill.target = 0

@@ -85,6 +85,7 @@ struct CompanionApp: App {
                 // A theme lives in UIKit's background colours, which views
                 // resolve once; the appearance screen commits a new one on
                 // the way out, and re-identifying here repaints everything.
+                .environment(\.launchCovered, showingLaunchSplash)
                 .id("\(language)|\(themeApplied)")
                 // A voice call outlives the screen it started on: the
                 // full-screen call and its pill float above the whole app,
