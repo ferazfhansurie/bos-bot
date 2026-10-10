@@ -269,26 +269,30 @@ final class LiveActivityCoordinator {
     private func drawMoodFaces(_ bots: [Bot]) {
         var drew = false
         for bot in bots where (bot.avatarCrop ?? .mascot) == .mascot && MascotEyeStyle(stored: bot.mascotEyes) == .glyph {
-            let look = [bot.color, bot.mascotBody ?? "", "v1"].joined(separator: "|")
-            guard moodFacesDrawn[bot.id] != look else { continue }
-            Self.drawMoodFaces(id: bot.id, color: bot.color, body: bot.mascotBody)
+            // v2: v1 marked faces drawn even when the render came out blank
+            let look = [bot.color, bot.mascotBody ?? "", "v2"].joined(separator: "|")
+            guard moodFacesDrawn[bot.id] != look,
+                  Self.drawMoodFaces(id: bot.id, color: bot.color, body: bot.mascotBody) else { continue }
             moodFacesDrawn[bot.id] = look
             drew = true
         }
         if drew { UserDefaults.standard.set(moodFacesDrawn, forKey: "glance.moodFaces") }
     }
 
-    private static func drawMoodFaces(id: String, color: String, body: String?) {
+    /// True only when every mood came out with a visible face.
+    @discardableResult
+    private static func drawMoodFaces(id: String, color: String, body: String?) -> Bool {
+        var all = true
         for mood in NotificationMood.all {
             let face = GlyphMark(color: color, bodyId: body, state: GlyphFaceState(rawValue: mood) ?? .happy, size: 64)
                 .frame(width: 128, height: 128)
                 .environment(\.colorScheme, .dark)
             let renderer = ImageRenderer(content: face)
             renderer.scale = 2
-            if let png = renderer.uiImage?.pngData() {
-                NotificationAvatarCache.storeMood(png, for: "bot:\(id)", mood: mood)
-            }
+            guard let png = renderer.uiImage?.pngData(),
+                  NotificationAvatarCache.storeMood(png, for: "bot:\(id)", mood: mood) else { all = false; continue }
         }
+        return all
     }
 
     private static func title(_ chat: Chat) -> String? {

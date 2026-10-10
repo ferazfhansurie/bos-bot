@@ -1,5 +1,7 @@
 import Foundation
 import CryptoKit
+import CoreGraphics
+import ImageIO
 
 enum NotificationAvatarCache {
     private static let group = "group.com.aihlete.aios.shared"
@@ -13,8 +15,35 @@ enum NotificationAvatarCache {
 
     static func store(_ data: Data, for senderID: String) {
         guard let url = url(for: senderID) else { return }
+        write(data, to: url)
+    }
+
+    /// ImageRenderer hands back a fully transparent picture when the app
+    /// draws from the background (a stream update while the phone is locked),
+    /// and that blank used to replace a good face: banners showed an empty
+    /// circle (2026-10-11). A blank is never kept; the last good face stays.
+    @discardableResult
+    static func write(_ data: Data, to url: URL) -> Bool {
+        guard hasInk(data) else { return false }
+        if (try? Data(contentsOf: url)) == data { return true }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        return (try? data.write(to: url, options: .atomic)) != nil
+    }
+
+    /// Whether a PNG has any visible pixel, checked on a 16×16 thumbnail.
+    static func hasInk(_ data: Data) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return false }
+        let side = 16
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drew = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8,
+                                          bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        return drew && stride(from: 3, to: pixels.count, by: 4).contains { pixels[$0] > 8 }
     }
 }
 
@@ -27,10 +56,10 @@ extension NotificationAvatarCache {
         return base.deletingLastPathComponent().appendingPathComponent("\(stem)-\(mood).png")
     }
 
-    static func storeMood(_ data: Data, for senderID: String, mood: String) {
-        guard let url = moodURL(for: senderID, mood: mood) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+    @discardableResult
+    static func storeMood(_ data: Data, for senderID: String, mood: String) -> Bool {
+        guard let url = moodURL(for: senderID, mood: mood) else { return false }
+        return write(data, to: url)
     }
 
     /// The mood face when there is one, else the plain avatar.
@@ -44,7 +73,8 @@ extension NotificationAvatarCache {
     /// left a blank circle with only the app badge showing (2026-10-11).
     static func faceData(for senderID: String, mood: String) -> Data? {
         for url in [moodURL(for: senderID, mood: mood), url(for: senderID)] {
-            if let url, let data = try? Data(contentsOf: url), !data.isEmpty { return data }
+            // a blank drawn before blanks were refused is skipped, not shown
+            if let url, let data = try? Data(contentsOf: url), hasInk(data) { return data }
         }
         return nil
     }
