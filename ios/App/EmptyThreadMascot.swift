@@ -73,9 +73,6 @@ struct EmptyThreadMascot: View {
     /// The person's other bots, one of which may drop by.
     let others: [Bot]
     let dock: MascotDock
-    /// A turn is running: the bot can be pulled down out of the island to
-    /// play with while it works.
-    var running = false
     /// It is out over the transcript (pulled out during a run), so the
     /// header can hide its face.
     var onRecess: (Bool) -> Void = { _ in }
@@ -90,19 +87,13 @@ struct EmptyThreadMascot: View {
     @State private var rate = MascotCreature.Rate.fast
     @State private var clock = MascotClock()
     @State private var game = MascotGameBoard()
-    /// A pull out of the island is under way: its surface stays put until
-    /// the finger lifts, or the touch would be cancelled.
-    @State private var pulling = false
+    /// Watches the whole window for a drag down off the header's face.
+    @State private var puller = MascotPuller()
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack(alignment: .topLeading) {
-                if let creature, !launchCovered {
-                    live(creature, stage: proxy.size)
-                }
-                if pulling || (creature == nil && running && !isEmpty && !focused && !reduceMotion && !launchCovered) {
-                    pullZone(stage: proxy.size)
-                }
+            if let creature, !launchCovered {
+                live(creature, stage: proxy.size)
             }
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -128,8 +119,24 @@ struct EmptyThreadMascot: View {
         .onAppear { syncClock() }
         .onDisappear {
             clock.stop()
+            puller.uninstall()
             onRecess(false)
         }
+        // Once there are messages the bot lives in the header: a drag down
+        // off its face (or the island) pulls it out to play over the thread,
+        // a run going or not.
+        .onAppear {
+            puller.zone = { [dock] in
+                let island = MascotCreature.island(origin: .zero, width: 0).rect
+                guard dock.avatar != .zero else { return island.insetBy(dx: -40, dy: -10) }
+                return dock.avatar.insetBy(dx: -56, dy: -14).union(island.insetBy(dx: -40, dy: -10))
+            }
+            puller.onBegin = { pull(began: $0) }
+            puller.onMove = { pull(moved: $0) }
+            puller.onEnd = { velocity in creature?.release(velocity: velocity) }
+            puller.install()
+        }
+        .onChange(of: canPull, initial: true) { _, value in puller.open = value }
     }
 
     private func syncClock() {
@@ -188,33 +195,18 @@ struct EmptyThreadMascot: View {
         .animation(.spring(duration: 0.35, bounce: 0.2), value: game.shown && !focused)
     }
 
-    /// The top centre, over the island and a little around it: a finger
-    /// that drags down from here pulls the bot out to play.
-    private func pullZone(stage: CGSize) -> some View {
-        let island = MascotCreature.island(origin: origin, width: stage.width).rect
-        let zone = CGRect(x: island.midX - 110, y: min(island.minY, 0), width: 220,
-                          height: max(island.maxY + 6 - min(island.minY, 0), 1))
-        return MascotTouchSurface(origin: origin,
-                                  onTouch: { point, start in pull(to: point, from: start) },
-                                  onRelease: { velocity in
-                                      creature?.release(velocity: velocity)
-                                      pulling = false
-                                  })
-            .frame(width: zone.width, height: zone.height)
-            .position(x: zone.midX, y: zone.midY)
-            .allowsHitTesting(zone.maxY > 0)
-            .accessibilityHidden(true)
+    private var canPull: Bool { creature == nil && !isEmpty && !focused && !reduceMotion && !launchCovered }
+
+    @State private var pullStart = CGPoint.zero
+
+    private func pull(began window: CGPoint) {
+        let point = CGPoint(x: window.x - origin.x, y: window.y - origin.y)
+        pullStart = point
+        arrive(pulledAt: point)
     }
 
-    private func pull(to point: CGPoint, from start: CGPoint) {
-        if !pulling {
-            // a tap up there is not a pull; a drag down is
-            guard creature == nil, point.y - start.y > 8 else { return }
-            pulling = true
-            arrive(pulledAt: point)
-            return
-        }
-        creature?.touch(at: point, from: start)
+    private func pull(moved window: CGPoint) {
+        creature?.touch(at: CGPoint(x: window.x - origin.x, y: window.y - origin.y), from: pullStart)
     }
 
     private func arrive(pulledAt: CGPoint? = nil) {
@@ -379,6 +371,119 @@ struct MascotTouchSurface: UIViewRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+/// The pull out of the header. Its recognizer sits on the window, so it
+/// sees a touch on the name pill even though the pill (a menu) is what the
+/// touch hit: a plain overlay there would have swallowed the menu's taps,
+/// and the menu alone only stretched its glass on a drag (build 98).
+@MainActor final class MascotPuller {
+    var open = false
+    var zone: () -> CGRect? = { nil }
+    var onBegin: (CGPoint) -> Void = { _ in }
+    var onMove: (CGPoint) -> Void = { _ in }
+    var onEnd: (CGSize) -> Void = { _ in }
+    private var recognizer: PullRecognizer?
+
+    func install() {
+        guard recognizer == nil, let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).flatMap(\.windows).first(where: \.isKeyWindow) else { return }
+        let pull = PullRecognizer(target: nil, action: nil)
+        pull.puller = self
+        window.addGestureRecognizer(pull)
+        recognizer = pull
+    }
+
+    func uninstall() {
+        recognizer?.view?.removeGestureRecognizer(recognizer!)
+        recognizer = nil
+    }
+}
+
+/// Fails at once for a touch outside the zone. Inside it, it waits: a tap
+/// stays the menu's, and a drag down of 14 points takes the touch, cancels
+/// whatever else had it and hands it to the mascot until the finger lifts.
+final class PullRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    weak var puller: MascotPuller?
+    private var finger: UITouch?
+    private var start = CGPoint.zero
+    private var samples: [(time: TimeInterval, point: CGPoint)] = []
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        delegate = self
+        cancelsTouchesInView = true
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard finger == nil, let touch = touches.first, touches.count == 1,
+              let puller, puller.open, let zone = puller.zone(), zone.contains(touch.location(in: nil)) else {
+            if finger == nil { state = .failed }
+            return
+        }
+        finger = touch
+        start = touch.location(in: nil)
+        record(touch)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let finger, touches.contains(finger) else { return }
+        record(finger)
+        let point = finger.location(in: nil)
+        if state == .possible {
+            let dy = point.y - start.y
+            if abs(point.x - start.x) > 24 && abs(point.x - start.x) > dy { state = .failed; return }
+            guard dy > 14 else { return }
+            state = .began
+            // the menu's press and anything else on this touch let go of it
+            for other in finger.gestureRecognizers ?? [] where other !== self && other.isEnabled {
+                other.isEnabled = false
+                other.isEnabled = true
+            }
+            puller?.onBegin(point)
+        } else {
+            state = .changed
+            puller?.onMove(point)
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let finger, touches.contains(finger) else { return }
+        record(finger)
+        if state == .possible { state = .failed; return }
+        puller?.onEnd(velocity)
+        state = .ended
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard let finger, touches.contains(finger) else { return }
+        if state != .possible { puller?.onEnd(.zero) }
+        state = .cancelled
+    }
+
+    override func reset() {
+        super.reset()
+        finger = nil
+        samples = []
+    }
+
+    private var velocity: CGSize {
+        guard let last = samples.last,
+              let first = samples.first(where: { last.time - $0.time <= 0.08 }),
+              last.time - first.time > 0.004
+        else { return .zero }
+        let dt = last.time - first.time
+        return CGSize(width: (last.point.x - first.point.x) / dt, height: (last.point.y - first.point.y) / dt)
+    }
+
+    private func record(_ touch: UITouch) {
+        samples.append((touch.timestamp, touch.location(in: nil)))
+        if let last = samples.last { samples.removeAll { last.time - $0.time > 0.2 } }
     }
 }
 

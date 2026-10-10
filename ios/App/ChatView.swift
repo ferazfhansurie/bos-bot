@@ -422,7 +422,6 @@ struct ChatView: View {
                                           dictating: dictation.isListening,
                                           unread: onClose == nil ? unreadElsewhere : 0,
                                           others: session.state.bots, dock: mascotDock,
-                                          running: current.busy,
                                           onRecess: { mascotOut = $0 })
                             .id(threadId)
                     }
