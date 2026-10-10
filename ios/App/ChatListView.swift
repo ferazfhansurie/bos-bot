@@ -50,6 +50,9 @@ struct ChatListView: View {
     /// the computer that holds the bot.
     @AppStorage("bos.hiddenChats") private var hiddenChatsRaw = ""
     @State private var showHidden = false
+    /// The people list under the bots; folded until he opens it, then stays
+    /// however he left it.
+    @AppStorage("bos.peopleExpanded") private var peopleExpanded = false
     /// Bots removed from the main computer's list; their copies from a
     /// directly paired server stay off this list too.
     @State private var removedOnMain: Set<String> = []
@@ -732,31 +735,88 @@ struct ChatListView: View {
 
         sectionLabel(Text("Chats")).padding(.top, 18).padding(.bottom, 4)
         let unpinned = shownConversations.filter { !pinnedChats.ids.contains($0.id) }
-        let lastID = unpinned.last?.id
+        let chatRows = unpinned.filter { !Self.isPerson($0) }
+        let people = unpinned.filter(Self.isPerson)
+        let lastID = chatRows.last?.id
         let waiting = waitingChats
-        ForEach(unpinned) { entry in
-            switch entry {
-            case .local(let summary): botRow(summary, waiting: waiting.contains(summary.chat.id), last: entry.id == lastID)
-            case .home(let summary, let home, _): botRow(summary, in: home, waiting: false, last: entry.id == lastID)
-            case .contact(let contact): contactRow(contact, last: entry.id == lastID)
-            case .room(let room):
-                Button { open(room) } label: {
-                    sharedConversationRow(name: room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? ""), subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0, last: entry.id == lastID) {
-                        GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 52)
-                    }
+        ForEach(chatRows) { entry in
+            conversationRow(entry, waiting: waiting, last: entry.id == lastID)
+        }
+        if !people.isEmpty { peopleSection(people) }
+        hiddenFooter
+    }
+
+    /// People (direct chats with humans) sit in their own list under the
+    /// bots, folded to one row until opened. A shared contact is a person by
+    /// its `kind`; `orderedConversations` only lets `kind == "person"` in.
+    private static func isPerson(_ entry: ConversationEntry) -> Bool {
+        if case .contact = entry { return true }
+        return false
+    }
+
+    @ViewBuilder private func peopleSection(_ people: [ConversationEntry]) -> some View {
+        // a status filter is a search; folding its matches away would hide them
+        let open = peopleExpanded || conversationFilter != "all"
+        let unread = people.filter(conversationUnread).count
+        Button {
+            Haptics.selection()
+            withAnimation(.smooth(duration: 0.3)) { peopleExpanded.toggle() }
+        } label: {
+            HStack(spacing: 8) {
+                Text("People · \(people.count)")
+                    .textCase(.uppercase)
+                    .font(.footnote.weight(.semibold))
+                    .tracking(0.4)
+                    .foregroundStyle(Color.secondary)
+                if unread > 0 && !open {
+                    Text(unread > 99 ? "99+" : String(unread))
+                        .font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
                 }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    pinButton(.room(room))
-                    if room.isGroup {
-                        Button("Delete group", systemImage: "trash", role: .destructive) {
-                            groupPendingDeletion = room
-                        }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(Color.secondary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+            }
+            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 14)
+        .accessibilityLabel("People, \(people.count)\(unread > 0 ? ", \(unread) unread" : "")")
+        .accessibilityValue(open ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier("people-section-toggle")
+        if open {
+            let lastID = people.last?.id
+            ForEach(people) { entry in
+                conversationRow(entry, waiting: [], last: entry.id == lastID)
+            }
+        }
+    }
+
+    @ViewBuilder private func conversationRow(_ entry: ConversationEntry, waiting: Set<String>, last: Bool) -> some View {
+        switch entry {
+        case .local(let summary): botRow(summary, waiting: waiting.contains(summary.chat.id), last: last)
+        case .home(let summary, let home, _): botRow(summary, in: home, waiting: false, last: last)
+        case .contact(let contact): contactRow(contact, last: last)
+        case .room(let room):
+            Button { open(room) } label: {
+                sharedConversationRow(name: room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? ""), subtitle: nil, preview: room.preview ?? "", at: room.lastActivity ?? 0, unreadCount: room.unreadCount ?? 0, last: last) {
+                    GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 52)
+                }
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                pinButton(.room(room))
+                if room.isGroup {
+                    Button("Delete group", systemImage: "trash", role: .destructive) {
+                        groupPendingDeletion = room
                     }
                 }
             }
         }
-        hiddenFooter
     }
 
     private var hiddenChats: Set<String> {
