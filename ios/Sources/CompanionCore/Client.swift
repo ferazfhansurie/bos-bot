@@ -758,6 +758,12 @@ public struct CompanionClient: Sendable {
         try await send(makeRequest("POST", "/api/multiplayer/rooms/\(id)/leave", body: ["revision": revision]))
     }
 
+    /// Takes a bot from a linked Mac off this home's list. It stays on its owner's Mac.
+    public func removeRemoteBot(id: String) async throws {
+        let bot = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        try await send(makeRequest("DELETE", "/api/bots/\(bot)"))
+    }
+
     public func deleteSharedRoom(id: String, revision: Int) async throws {
         let room = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         try await send(makeRequest("DELETE", "/api/multiplayer/rooms/\(room)", body: ["revision": revision]))

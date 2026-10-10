@@ -45,6 +45,8 @@ struct ChatListView: View {
     @State private var sharedRooms: [SharedRoomSummary] = []
     @State private var groupPendingDeletion: SharedRoomSummary?
     @State private var groupDeleteError: String?
+    @State private var botPendingRemoval: Chat?
+    @State private var botRemoveError: String?
     @FocusState private var searchFocused: Bool
     /// The chat rows' order on screen, held while a finger is on the list.
     @State private var rowOrder = StableOrder()
@@ -202,6 +204,29 @@ struct ChatListView: View {
                 Button("OK", role: .cancel) { groupDeleteError = nil }
             } message: {
                 Text(groupDeleteError ?? "")
+            }
+            .confirmationDialog(botPendingRemoval.map { "Remove \($0.name) from your list?" } ?? "", isPresented: Binding(
+                get: { botPendingRemoval != nil },
+                set: { if !$0 { botPendingRemoval = nil } }
+            ), titleVisibility: .visible) {
+                Button("Remove", role: .destructive) {
+                    guard let chat = botPendingRemoval else { return }
+                    botPendingRemoval = nil
+                    Task {
+                        do { try await session.removeRemoteBot(chat.id) }
+                        catch { botRemoveError = error.localizedDescription }
+                    }
+                }
+            } message: {
+                Text("It stays on \(remoteOwner(botPendingRemoval))'s Mac. You can add it back from Settings on your Mac.")
+            }
+            .alert("Could not remove bot", isPresented: Binding(
+                get: { botRemoveError != nil },
+                set: { if !$0 { botRemoveError = nil } }
+            )) {
+                Button("OK", role: .cancel) { botRemoveError = nil }
+            } message: {
+                Text(botRemoveError ?? "")
             }
             .sheet(isPresented: $showingJobs) {
                 JobInboxView { chat in
@@ -1023,6 +1048,12 @@ struct ChatListView: View {
         }
     }
 
+    private func remoteOwner(_ chat: Chat?) -> String {
+        guard case let .bot(bot) = chat, let remote = bot.remote else { return "its owner" }
+        let owner = remote.ownerName?.trimmingCharacters(in: .whitespaces) ?? ""
+        return owner.isEmpty ? remote.homeName : owner
+    }
+
     private func homeChat(_ chat: Chat) -> Chat {
         if case let .bot(bot) = chat { return .bot((session.state.bot(bot.id) ?? bot).homeThread) }
         return chat
@@ -1052,6 +1083,11 @@ struct ChatListView: View {
             pinButton(.local(summary))
             OpenBesideButton(chat: homeChat(summary.chat))
             markDoneButton(summary.chat)
+            if summary.chat.isRemoteBot {
+                Button("Remove from list", systemImage: "minus.circle", role: .destructive) {
+                    botPendingRemoval = summary.chat
+                }
+            }
         }
     }
 

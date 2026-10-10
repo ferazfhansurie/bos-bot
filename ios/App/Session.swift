@@ -894,6 +894,13 @@ final class Session: ObservableObject {
         try await client.leaveSharedRoom(id: id, revision: revision)
     }
 
+    /// Removes a linked Mac's bot from this list only; the server never deletes it on the other Mac.
+    func removeRemoteBot(_ botId: String) async throws {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        try await client.removeRemoteBot(id: botId)
+        state.apply(.botDeleted(botId: botId))
+    }
+
     func deleteSharedRoom(_ room: SharedRoomSummary) async throws {
         guard let client else { throw APIError.transport("Computer is offline") }
         guard let revision = room.revision else {
