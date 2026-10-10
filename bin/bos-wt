@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# One worktree per thread, one way back onto prod. Many bos threads build in
+# this repo at once, often in the same files; this makes it impossible for
+# them to overwrite or lose each other's work without anyone remembering a rule.
+#
+#   bin/bos-wt start <slug>        detached worktree off the latest prod; prints its path
+#   bin/bos-wt land ["<why>"]      from inside a worktree: lock, rebase onto latest prod,
+#                                  promote (prod + release move together), remove the worktree.
+#                                  --keep leaves the worktree in place.
+#   bin/bos-wt status              open worktrees, the files each touches, and overlaps
+#
+# land never resolves a conflict for you: on a conflict it aborts the rebase,
+# names the files, and leaves the worktree exactly as it was (commits intact).
+# The main checkout refuses `git commit` unless BOS_LAND=1
+# (scripts/git-hooks/pre-commit), so work can only reach prod through land.
+set -uo pipefail
+
+WT_ROOT=${BOS_WT_ROOT:-$HOME/.bos-bot/task-workspaces}
+PROMOTE=${BOS_PROMOTE:-$HOME/.bos-bot/workspaces/59d5f871-db6c-4850-b966-a04ecc033279/bin/bos-promote.sh}
+LOCK_WAIT=${BOS_WT_LOCK_WAIT:-900}
+PROD=refs/heads/prod
+
+die() { echo "bos-wt: $*" >&2; exit 1; }
+
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || die "not inside the bos-bot repo"
+REPO=$(dirname "$common")
+LOCK="$common/bos-land.lock"
+
+in_worktree() {
+  local gd
+  gd=$(git rev-parse --path-format=absolute --git-dir) || return 1
+  [ "$gd" != "$common" ]
+}
+
+# Landing is serialized with a kernel file lock (lockf on macOS, flock on
+# linux): land re-runs itself under the lock, and the lock dies with the
+# process, so a killed turn can never leave a stale lock behind.
+with_land_lock() {
+  [ -n "${BOS_WT_LOCKED:-}" ] && return 0
+  echo "bos-wt: taking the land lock (waits if another thread is landing)"
+  if command -v flock >/dev/null; then
+    exec flock -w "$LOCK_WAIT" "$LOCK" env BOS_WT_LOCKED=1 "$0" land "$@"
+  fi
+  exec lockf -k -t "$LOCK_WAIT" "$LOCK" env BOS_WT_LOCKED=1 "$0" land "$@"
+}
+
+cmd_start() {
+  local slug=${1:-} path
+  [ -n "$slug" ] || die "usage: bos-wt start <slug>"
+  case $slug in *[!a-z0-9._-]*) die "slug '$slug': use a-z 0-9 . _ - only";; esac
+  path="$WT_ROOT/$slug-wt"
+  [ -e "$path" ] && die "$path already exists; pick another slug, or land/remove that one first"
+  mkdir -p "$WT_ROOT"
+  # a remote prod, if one is ever added, is the source of truth
+  git remote | grep -qx origin && git fetch -q origin prod:prod 2>/dev/null
+  git -C "$REPO" worktree add -q --detach "$path" "$PROD" || die "could not create $path"
+  echo "worktree off prod $(git rev-parse --short "$PROD"): work and commit there, then run bin/bos-wt land from inside it"
+  echo "$path"
+}
+
+cmd_land() {
+  with_land_lock "$@"
+  local keep=0 why="" here head base n conflicts target
+  for a in "$@"; do
+    case $a in --keep) keep=1;; *) why=$a;; esac
+  done
+  in_worktree || die "run land from inside a worktree (bos-wt start <slug>), not the main checkout"
+  here=$(git rev-parse --show-toplevel)
+  [ -z "$(git status --porcelain)" ] || { git status --short >&2; die "uncommitted changes in $here; commit them (or delete them) first"; }
+  git rev-parse --verify -q HEAD >/dev/null || die "no commits here"
+  [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ] &&
+    die "a rebase is in progress here; finish it (git rebase --continue) or abort it first"
+
+  git remote | grep -qx origin && { git fetch -q origin prod:prod 2>/dev/null || die "fetch of origin prod failed"; }
+  base=$(git rev-parse "$PROD")
+  head=$(git rev-parse HEAD)
+  n=$(git rev-list --count "$PROD..HEAD")
+  if [ "$n" -eq 0 ]; then
+    echo "nothing to land: every commit here is already on prod ${base:0:9}"
+  else
+    if ! git merge-base --is-ancestor "$PROD" HEAD; then
+      echo "rebasing $n commit(s) onto prod ${base:0:9}"
+      if ! git rebase -q "$PROD" >/dev/null 2>&1; then
+        conflicts=$(git diff --name-only --diff-filter=U)
+        git rebase --abort
+        [ "$(git rev-parse HEAD)" = "$head" ] || die "rebase abort did not restore ${head:0:9}; inspect $here before doing anything"
+        {
+          echo "bos-wt: CONFLICT. another thread landed changes to the same lines. nothing landed, nothing lost:"
+          echo "  your commits are untouched at ${head:0:9} in $here"
+          echo "  prod is ${base:0:9}; conflicting files:"
+          printf '%s\n' "$conflicts" | sed 's/^/    /'
+          echo "  fix: cd $here && git rebase prod, resolve by hand keeping both sides' intent,"
+          echo "       git rebase --continue, rerun your checks, then bin/bos-wt land again"
+        } >&2
+        exit 3
+      fi
+    fi
+    target=$(git rev-parse HEAD)
+    [ -n "$why" ] || why="$(basename "$here"): $(git log -1 --format=%s HEAD)"
+    BOS_LAND=1 "$PROMOTE" "$target" "$why" || die "promote refused ${target:0:9}; worktree kept at $here"
+    echo "landed ${target:0:9} on prod (+$n commit(s))"
+  fi
+  if [ "$keep" -eq 1 ]; then echo "kept $here"; return 0; fi
+  cd "$REPO" || exit 1
+  git worktree remove "$here" || die "landed, but could not remove $here"
+  echo "removed $here (cd out of it)"
+}
+
+cmd_status() {
+  local tmp p head rest ahead behind files
+  tmp=$(mktemp)
+  echo "prod $(git rev-parse --short "$PROD")"
+  git -C "$REPO" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' | while read -r p; do
+    [ "$p" = "$REPO" ] && continue
+    if [ ! -d "$p" ]; then echo; echo "$p  (missing: git worktree prune)"; continue; fi
+    head=$(git -C "$p" rev-parse --short HEAD)
+    ahead=$(git -C "$p" rev-list --count "$PROD..HEAD")
+    behind=$(git -C "$p" rev-list --count "HEAD..$PROD")
+    files=$( { git -C "$p" diff --name-only "$PROD...HEAD"; git -C "$p" status --porcelain | cut -c4- | sed 's/.* -> //'; } | sort -u)
+    rest="$ahead ahead, $behind behind prod"
+    [ -n "$(git -C "$p" status --porcelain)" ] && rest="$rest, uncommitted edits"
+    echo; echo "$(basename "$p")  $head  ($rest)"
+    if [ -z "$files" ]; then echo "  (no changes)"; else
+      printf '%s\n' "$files" | sed 's/^/  /'
+      printf '%s\n' "$files" | sed "s|^|$(basename "$p")	|" >> "$tmp"
+    fi
+  done
+  echo
+  overlaps=$(cut -f2 "$tmp" | sort | uniq -d)
+  if [ -z "$overlaps" ]; then echo "no overlaps"; else
+    echo "OVERLAPS (same file in more than one worktree; whoever lands second rebases onto the first):"
+    printf '%s\n' "$overlaps" | while read -r f; do
+      echo "  $f: $(awk -F'\t' -v f="$f" '$2==f{print $1}' "$tmp" | paste -sd, - | sed 's/,/, /g')"
+    done
+  fi
+  rm -f "$tmp"
+}
+
+case ${1:-} in
+  start) shift; cmd_start "$@";;
+  land) shift; cmd_land "$@";;
+  status) shift; cmd_status "$@";;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+esac

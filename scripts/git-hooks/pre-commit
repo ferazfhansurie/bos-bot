@@ -1,0 +1,18 @@
+#!/bin/sh
+# The main checkout is prod. Commits never happen there directly: every thread
+# builds in its own worktree (bin/bos-wt start <slug>) and reaches prod only
+# through bin/bos-wt land, which rebases, refuses on conflict, and fast-forwards.
+# A commit straight onto the main checkout is how parallel threads overwrite
+# each other, so it is refused here. BOS_LAND=1 is the deliberate override.
+# Worktrees are unaffected.
+[ -n "$BOS_LAND" ] && exit 0
+git_dir=$(git rev-parse --path-format=absolute --git-dir) || exit 0
+common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 0
+[ "$git_dir" != "$common" ] && exit 0
+cat >&2 <<'MSG'
+pre-commit: refused. this is the main checkout (prod); don't commit here.
+  bin/bos-wt start <slug>   make your own worktree off prod, commit there
+  bin/bos-wt land           from inside it, puts your commits on prod safely
+  (BOS_LAND=1 git commit ... overrides, on purpose only)
+MSG
+exit 1
