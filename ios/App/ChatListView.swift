@@ -905,6 +905,9 @@ struct ChatListView: View {
         // twice: once through this computer's link to it, once from that home
         // itself. The home's own copy, with its label, is the one kept.
         let direct = Set(session.satellites.flatMap { $0.state.chatSummaries(activity: activity).map(\.chat.id) })
+        let homes = [session] + session.satellites
+        let shownHomes = Set(homes.compactMap(\.roomHomeId))
+        let shownBotIDs = Set(homes.flatMap { $0.state.bots.filter { $0.remote == nil }.map(\.id) })
         let entries: [(ConversationEntry, Double)] =
             session.state.chatSummaries(activity: activity)
                 .filter { summary in
@@ -915,7 +918,14 @@ struct ChatListView: View {
                 }
                 .map { (.local($0), $0.lastActivity) }
             + session.satellites.flatMap { home in
-                home.state.chatSummaries(activity: activity).map { (ConversationEntry.home($0, home, connectionID: home.connection?.id ?? ""), $0.lastActivity) }
+                home.state.chatSummaries(activity: activity)
+                    .filter { summary in
+                        // Another home's copy of a bot that lives on a home
+                        // already in this list (partner's "bos" is this mac's bos).
+                        guard case let .bot(bot) = summary.chat, let remote = bot.remote else { return true }
+                        return !shownHomes.contains(remote.homeId) && !shownBotIDs.contains { bot.id.hasSuffix("-" + $0) }
+                    }
+                    .map { (ConversationEntry.home($0, home, connectionID: home.connection?.id ?? ""), $0.lastActivity) }
             }
             + remoteContacts.map { contact in
                 (.contact(contact), directRooms.first(where: { $0.memberIds.contains(contact.id) })?.lastActivity ?? 0)
