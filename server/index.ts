@@ -620,6 +620,16 @@ const ENVIRONMENT_ID = loadEnvironmentId(DATA_DIR);
 const multiplayerActors = new MultiplayerActors(join(DATA_DIR, "multiplayer-actors.json"), ENVIRONMENT_ID);
 /** Device pairing already grants access to this home. Account sign-ins and
  * peer links require explicit actor binding and never inherit its owner. */
+// A headless server (`bosbot serve`, no desktop parent) has no packaged app to
+// run the trusted Full/Custom transition, so without this its owner could never
+// grant Full access at all. There the owner's own paired admin session stands in
+// for the desktop dialog. Loopback never qualifies: any bot with a shell on the
+// box reaches loopback, and that is the caller these transitions exist to stop.
+function headlessOwnerMayElevate(auth: RequestAuth): boolean {
+  return !DESKTOP_MANAGED && auth.kind === "session" && auth.scopes.includes("admin") &&
+    !auth.scopes.includes("peer") && sessions.isLive(auth.session.id) &&
+    workspaceActor(auth) === multiplayerActors.ownerId;
+}
 function workspaceActor(auth: RequestAuth): string | null {
   if (auth.kind === "loopback") return multiplayerActors.ownerId;
   const bound = multiplayerActors.actorFor(auth.session.id);
@@ -19855,7 +19865,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ((requestedApprovalMode === "full" || requestedApprovalMode === "custom") &&
           currentApprovalMode !== requestedApprovalMode) ||
         (currentApprovalMode === "custom" && requestedApprovalMode !== "custom");
-      if (requiresPrivateApprovalTransition) {
+      if (requiresPrivateApprovalTransition && !headlessOwnerMayElevate(auth)) {
         return json(res, 403, {
           error: "This approval-level change can only be made from the packaged desktop app",
         });
@@ -21246,8 +21256,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const mode = body.approvalMode ?? (body.autoApprove ? "auto" : "ask");
         // Elevated modes still require the trusted desktop transition. A
         // thread settings PATCH cannot manufacture that grant.
-        if (mode !== "ask" && mode !== "auto" && mode !== "edits") return json(res, 403, { error: "Full and Custom access require trusted desktop confirmation" });
-        if (approvalModeFor(current) === "custom") return json(res, 403, { error: "Leaving Custom approval requires confirmation in the packaged desktop app" });
+        if (mode !== "ask" && mode !== "auto" && mode !== "edits" && !(mode === "full" && headlessOwnerMayElevate(auth))) return json(res, 403, { error: "Full and Custom access require trusted desktop confirmation" });
+        if (approvalModeFor(current) === "custom" && !headlessOwnerMayElevate(auth)) return json(res, 403, { error: "Leaving Custom approval requires confirmation in the packaged desktop app" });
         if (!supportsApprovalMode(registry.cliTarget((patch.modelSelection ?? current.modelSelection).instanceId)?.driverKind, mode)) {
           return json(res, 400, { error: "This provider does not support the selected approval level" });
         }
