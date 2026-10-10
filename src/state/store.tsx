@@ -1347,7 +1347,8 @@ export function reducer(state: AppState, action: Action): AppState {
         });
       const selectedId = bots.some((bot) => bot.id === state.selectedId) || state.groups.some((group) => group.id === state.selectedId)
         ? state.selectedId : (bots[0]?.id ?? "");
-      return { ...state, homes: action.homes, bots, selectedId };
+      const homes = action.homes.map((home) => ({ ...home, online: state.homes?.find((entry) => entry.id === home.id)?.online }));
+      return { ...state, homes, bots, selectedId };
     }
     case "homeHydrate": {
       const link: HomeLink = { id: action.home.id, name: action.home.name, online: true };
@@ -1369,6 +1370,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case "homeOnline":
       return {
         ...state,
+        homes: state.homes?.map((home) => home.id === action.homeId ? { ...home, online: action.online } : home),
         bots: state.bots.map((bot) =>
           bot.homeLink?.id === action.homeId && bot.homeLink.online !== action.online
             ? { ...bot, homeLink: { ...bot.homeLink, online: action.online } }

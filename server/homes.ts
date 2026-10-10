@@ -54,11 +54,12 @@ type FetchLike = typeof fetch;
 export class HomeLinks {
   private homes: HomeRecord[] = [];
   private readonly file: string;
-  constructor(
-    dataDir: string,
-    private readonly self: { environmentId: string; label: () => string },
-    private readonly fetcher: FetchLike = fetch,
-  ) {
+  private readonly self: { environmentId: string; label: () => string };
+  private readonly fetcher: FetchLike;
+  // No parameter properties: the server runs under node's strip-only types.
+  constructor(dataDir: string, self: { environmentId: string; label: () => string }, fetcher: FetchLike = fetch) {
+    this.self = self;
+    this.fetcher = fetcher;
     this.file = join(dataDir, "homes.json");
     try {
       const parsed = JSON.parse(readFileSync(this.file, "utf8"));
@@ -186,14 +187,21 @@ export class HomeLinks {
         const decoder = new TextDecoder();
         let carry = "";
         const reader = upstream.body.getReader();
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          carry += decoder.decode(value, { stream: true });
-          const cut = carry.lastIndexOf("\n");
-          if (cut < 0) continue;
-          res.write(rewriteHomeUrls(carry.slice(0, cut + 1), home.id));
-          carry = carry.slice(cut + 1);
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            carry += decoder.decode(value, { stream: true });
+            const cut = carry.lastIndexOf("\n");
+            if (cut < 0) continue;
+            res.write(rewriteHomeUrls(carry.slice(0, cut + 1), home.id));
+            carry = carry.slice(cut + 1);
+          }
+        } catch {
+          // The home went away mid-stream. End cleanly, never destroy: a
+          // proxy in between (vite, a tunnel) can hold a destroyed socket
+          // open, and the client must see the close to mark its bots asleep.
+          carry = "";
         }
         if (carry) res.write(rewriteHomeUrls(carry, home.id));
         res.end();

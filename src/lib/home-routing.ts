@@ -14,6 +14,8 @@ export interface LinkedHome {
   id: string;
   name: string;
   origin: string;
+  /** Unknown until its first snapshot or stream answers. */
+  online?: boolean;
 }
 
 interface RoutableBot {

@@ -16,6 +16,7 @@ import { useUpdaterState } from "@/lib/updater";
 import { EnginesSettings } from "./EnginesSettings";
 import { LocalComputerSection } from "./LocalComputerSection";
 import { CompanionSection } from "./CompanionSection";
+import { LinkedServersCard } from "./LinkedServersCard";
 import { ServerPairingCard } from "./ServerPairingCard";
 import { PeopleSection } from "./PeopleSection";
 import { RemovedRemoteBots } from "./RemovedRemoteBots";
@@ -732,6 +733,7 @@ export function SettingsModal() {
                     Settings there is the only place that server's phones can be paired from (MOCA-84).
                     The server decides who may act — an owner or an admin session — not this gate. */}
                 <ServerPairingCard />
+                {!remoteActive && <LinkedServersCard />}
                 {!remoteActive && <CompanionSection profileEmail={state.config?.profile?.email} />}
               </>
             )}
