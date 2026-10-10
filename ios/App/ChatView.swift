@@ -768,6 +768,11 @@ struct ChatView: View {
             ThreadHeaderFace(chat: current, size: 30, live: MausState.forThread(current, in: session.state),
                              director: mascot, draft: composerDraft, typing: composerFocused)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mascotDock.avatar = $0 }
+                // While the empty thread's mascot is out it is the bot; a
+                // second face up here is one too many. It comes back as the
+                // mascot is sucked up into it.
+                .opacity(showsEmptyMascot ? 0 : 1)
+                .animation(.easeOut(duration: 0.18).delay(showsEmptyMascot ? 0 : 0.4), value: showsEmptyMascot)
         }
     }
 

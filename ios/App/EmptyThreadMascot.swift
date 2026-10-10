@@ -9,11 +9,16 @@
 // and gets sucked up into the header's face, where the turn's own animation
 // takes over.
 //
+// It looks exactly like the bot everywhere else: its flat body in its own
+// colour and the same bold glyph eyes as the header's face, never a second
+// drawing of it. While it is out, the header's face steps aside, so there is
+// only ever one of it on screen.
+//
 // It is never fully still. A few slow waves with random frequencies sway it,
-// it breathes, its eyes jump from spot to spot the way real eyes do and the
-// body turns after them, the top of the body lags behind every move and
-// wobbles back, and a mood change blends the eyes' lids and size instead of
-// swapping a drawing. Nothing repeats on a visible loop.
+// it breathes, and its face slides across the round body from spot to spot,
+// clipped at the rim as if the body turned to look. The body turns after the
+// eyes and its top lags behind every move. A new mood squashes the old glyph
+// eyes shut and opens the new ones. Nothing repeats on a visible loop.
 //
 // Everything that moves is a spring stepped once per frame on a plain
 // object — no SwiftUI state per frame, so the transcript never re-renders for
@@ -208,36 +213,34 @@ final class MascotCreature {
     }
 
     /// One eye's shape, each number on its own spring, so moods blend.
-    struct Eye {
-        var size = Spring(1, stiffness: 260, damping: 19)
-        var top = Spring(0, stiffness: 300, damping: 24)
-        var bottom = Spring(0, stiffness: 260, damping: 21)
-        var slope = Spring(0, stiffness: 220, damping: 20)
-        /// 0 the solid eye ... 1 the glyph.
-        var mix = Spring(0, stiffness: 240, damping: 20)
-        var glyph: String?
+    /// The header's own glyph eyes. A new face squashes the old glyphs shut
+    /// and opens the new ones, the way every glyph face changes.
+    struct GlyphEyes {
+        var left: String
+        var right: String
+        private var next: (left: String, right: String)?
+        private var swapAt: TimeInterval?
 
-        mutating func aim(_ shape: MascotEyeShape) {
-            size.target = shape.size
-            top.target = shape.top
-            bottom.target = shape.bottom
-            slope.target = shape.slope
-            mix.target = shape.glyph == nil ? 0 : 1
-            if let next = shape.glyph { glyph = next }
-        }
+        init(_ face: MascotMoodFace) { left = face.left; right = face.right }
 
-        mutating func step(_ dt: CGFloat) {
-            size.step(dt); top.step(dt); bottom.step(dt); slope.step(dt); mix.step(dt)
-            if mix.target == 0, mix.value < 0.01 { glyph = nil }
-        }
-
-        static func fixed(_ shape: MascotEyeShape) -> Eye {
-            var eye = Eye()
-            eye.aim(shape)
-            for spring in [\Eye.size, \.top, \.bottom, \.slope, \.mix] {
-                eye[keyPath: spring].value = eye[keyPath: spring].target
+        mutating func aim(_ face: MascotMoodFace, at t: TimeInterval) {
+            if let next {
+                guard next.left != face.left || next.right != face.right else { return }
+            } else if face.left == left, face.right == right {
+                return
             }
-            return eye
+            next = (face.left, face.right)
+            if swapAt == nil { swapAt = t }
+        }
+
+        /// How open the eyes are this frame: 1 ... 0.1 squashed shut at the
+        /// middle of a change, when the glyphs swap.
+        mutating func squash(at t: TimeInterval) -> CGFloat {
+            guard let start = swapAt else { return 1 }
+            let k = (t - start) / 0.14
+            if k >= 0.5, let next { left = next.left; right = next.right; self.next = nil }
+            if k >= 1 { swapAt = next == nil ? nil : t; return 1 }
+            return max(0.1, CGFloat(abs(1 - 2 * k)))
         }
     }
 
@@ -247,7 +250,7 @@ final class MascotCreature {
     let color: String
     let bodyId: String?
     let name: String
-    let side: CGFloat = 124
+    let side: CGFloat = 84
     private let seed: Int
     private let day: MascotDayMood
     private let reduceMotion: Bool
@@ -298,7 +301,8 @@ final class MascotCreature {
     // The face leads: it slides toward where the body is going.
     private var leadX = Spring(0, stiffness: 420, damping: 28)
     private var leadY = Spring(0, stiffness: 420, damping: 28)
-    private var eyes = [Eye(), Eye()]
+    private var eyes = GlyphEyes(EmptyMascotBrain.face(.idle))
+    private var eyeSquash: CGFloat = 1
     private var opacity = Spring(1, stiffness: 140, damping: 24)
     private var voice = Spring(0, stiffness: 600, damping: 45)
 
@@ -378,9 +382,6 @@ final class MascotCreature {
         // Six slow waves at unrelated speeds: their sum never visibly repeats.
         for _ in 0..<6 { waves.append((0.33 + roll() * 0.9, roll() * 2 * .pi)) }
         nextFidget = 5 + roll() * 4
-        let face = EmptyMascotBrain.face(.idle)
-        eyes = [Eye.fixed(EmptyMascotBrain.eyeShape(face.left, inner: 1)),
-                Eye.fixed(EmptyMascotBrain.eyeShape(face.right, inner: -1))]
         // Rarely: about one empty thread in three gets a visitor, once.
         if cameo != nil, seed % 3 == 0 { cameoAt = 14 + Double(seed % 11) }
 #if DEBUG
@@ -697,7 +698,7 @@ final class MascotCreature {
         sx.step(dt); sy.step(dt); rot.step(dt); scale.step(dt)
         gazeX.step(dt); gazeY.step(dt); opacity.step(dt); voice.step(dt)
         turn.step(dt); shear.step(dt); leadX.step(dt); leadY.step(dt)
-        eyes[0].step(dt); eyes[1].step(dt)
+        eyeSquash = eyes.squash(at: t)
         neck.step(dt); pill.step(dt)
         if cameoStart != nil { cameoX.step(dt) }
     }
@@ -918,9 +919,7 @@ final class MascotCreature {
             mood = next
             moodChangedAt = t
         }
-        let face = EmptyMascotBrain.face(mood)
-        eyes[0].aim(EmptyMascotBrain.eyeShape(face.left, inner: 1))
-        eyes[1].aim(EmptyMascotBrain.eyeShape(face.right, inner: -1))
+        eyes.aim(EmptyMascotBrain.face(mood), at: t)
 
         guard landedAt != nil, mode != .birth else { return }
         if mode != .leaving {
@@ -1067,9 +1066,6 @@ final class MascotCreature {
         var body: Color
         var ink: Color
         var accent: Color
-        /// The eye's catchlight: white in a dark eye, the body's colour in a
-        /// light one.
-        var shine: Color
         var lowContrast: Bool
     }
 
@@ -1081,22 +1077,11 @@ final class MascotCreature {
         if let known = paints[color] { return known }
         let colors = GlyphMark.colors(color, scheme: scheme)
         let hex = GlyphFaces.resolveColor(color)
-        let darkEye = GlyphFaces.ink(hex).uppercased() != "#FFFFFF"
         let made = Paint(body: colors.body, ink: colors.ink, accent: colors.accent,
-                         shine: darkEye ? .white : Color(hex: hex),
                          lowContrast: GlyphFaces.contrast(hex, scheme == .dark ? "#111111" : "#FFFFFF") < 1.25)
         paints[color] = made
         return made
     }
-
-    /// Light from above: a lit top, a shaded base.
-    private static let shade = Gradient(stops: [
-        .init(color: .white.opacity(0.22), location: 0),
-        .init(color: .white.opacity(0), location: 0.45),
-        .init(color: .black.opacity(0.2), location: 1),
-    ])
-    private static let shine = Gradient(colors: [.white.opacity(0.55), .white.opacity(0)])
-    private static let floorShadow = Gradient(colors: [.black.opacity(1), .black.opacity(0)])
 
     func draw(in context: inout GraphicsContext, scheme: ColorScheme) {
         guard stage.width > 0 else { return }
@@ -1104,41 +1089,15 @@ final class MascotCreature {
         context.opacity = Double(max(min(opacity.value, 1), 0))
         let home = home(in: stage, origin: origin)
 
-        // A soft glow of its own colour behind it, so it sits in the dark
-        // instead of on it.
-        if scheme == .dark, !(mode == .birth && !snapped) {
-            let r = side * 1.05 * scale.value
-            var glow = context
-            glow.opacity *= 0.22
-            glow.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)),
-                      with: .radialGradient(Gradient(colors: [paint.body, paint.body.opacity(0)]), center: p, startRadius: 0, endRadius: r))
-        }
-
-        // Its shadow on the floor: tight and dark on the ground, wide and
-        // faint as it rises.
-        if mode != .birth || snapped {
-            let floor = home.y + side * 0.5
-            let feet = p.y + side * 0.42 * sy.value * scale.value
-            let height = max(floor - feet, 0)
-            let near = max(0, 1 - height / (side * 1.6))
-            if near > 0.01 {
-                let w = side * (0.62 + 0.25 * (1 - near)) * scale.value * sx.value
-                let h = side * 0.1
-                var shadow = context
-                shadow.opacity *= Double(near) * (scheme == .dark ? 0.55 : 0.2)
-                shadow.fill(Path(ellipseIn: CGRect(x: p.x - w / 2, y: floor - h / 2, width: w, height: h)),
-                            with: .radialGradient(Self.floorShadow, center: CGPoint(x: p.x, y: floor), startRadius: 0, endRadius: w / 2))
-            }
-        }
-
         // The visitor peeks in behind.
         if let cameo, let cameoStart {
             let size = side * 0.62
             let since = t - cameoStart
-            let blink = since > 1.7 && since < 1.84 ? 0.1 : 1.0
+            let blink: CGFloat = since > 1.7 && since < 1.84 ? 0.1 : 1
+            let idle = EmptyMascotBrain.face(.idle)
             drawBody(in: &context, centre: CGPoint(x: cameoX.value, y: home.y + side * 0.42), side: size,
                      sx: 1, sy: 1, rotation: -cameoSide * 0.24, shear: 0, color: cameo.color, bodyId: cameo.mascotBody,
-                     face: EmptyMascotBrain.face(.idle), eyes: Self.restingEyes, open: blink,
+                     face: idle, left: idle.left, right: idle.right, open: blink,
                      gaze: CGPoint(x: -cameoSide, y: 0.2), lead: .zero, changedAt: -10, scheme: scheme)
         }
 
@@ -1167,8 +1126,9 @@ final class MascotCreature {
                        face: old.face, grow: CGFloat(1 - (t - old.at) / 0.2), color: color, scheme: scheme)
         }
         drawBody(in: &context, centre: p, side: side * scale.value, sx: sx.value, sy: sy.value, rotation: rot.value,
-                 shear: shear.value, color: color, bodyId: bodyId, face: EmptyMascotBrain.face(mood), eyes: eyes,
-                 open: eyeOpenness, gaze: CGPoint(x: gazeX.value, y: gazeY.value),
+                 shear: shear.value, color: color, bodyId: bodyId, face: EmptyMascotBrain.face(mood),
+                 left: eyes.left, right: eyes.right, open: min(eyeOpenness, eyeSquash),
+                 gaze: CGPoint(x: gazeX.value, y: gazeY.value),
                  lead: CGPoint(x: leadX.value, y: leadY.value), changedAt: moodChangedAt, scheme: scheme)
 
         // The island swells to let it out, then closes behind it.
@@ -1182,32 +1142,28 @@ final class MascotCreature {
         }
     }
 
-    private static let restingEyes: [Eye] = {
-        let face = EmptyMascotBrain.face(.idle)
-        return [Eye.fixed(EmptyMascotBrain.eyeShape(face.left, inner: 1)),
-                Eye.fixed(EmptyMascotBrain.eyeShape(face.right, inner: -1))]
-    }()
-
-    /// 1 open ... 0.04 shut: a fast close and a slower open, 0.17s in all.
+    /// 1 open ... 0.1 shut: a fast squash and a slower open, 0.15s in all.
     private var eyeOpenness: CGFloat {
         guard blinkAt >= 0 else { return 1 }
-        let phase = (t - blinkAt) / 0.17
+        let phase = (t - blinkAt) / 0.15
         guard phase >= 0, phase < 1 else { return 1 }
-        let open = phase < 0.38 ? 1 - phase / 0.38 : (phase - 0.38) / 0.62
-        return max(0.04, CGFloat(open))
+        let open = phase < 0.4 ? 1 - phase / 0.4 : (phase - 0.4) / 0.6
+        return max(0.1, CGFloat(open))
     }
 
+    /// The body flat in its colour, the header's glyph eyes on it. The face
+    /// slides across the body to look, and the rim clips it, so a look to
+    /// the side reads as the whole round body turning.
     private func drawBody(in context: inout GraphicsContext, centre: CGPoint, side: CGFloat, sx: CGFloat, sy: CGFloat,
                           rotation: CGFloat, shear: CGFloat, color: String, bodyId: String?, face: MascotMoodFace,
-                          eyes: [Eye], open: CGFloat, gaze: CGPoint, lead: CGPoint, changedAt: TimeInterval,
-                          scheme: ColorScheme) {
+                          left: String, right: String, open: CGFloat, gaze: CGPoint, lead: CGPoint,
+                          changedAt: TimeInterval, scheme: ColorScheme) {
         guard side > 1 else { return }
         let paint = palette(color, scheme)
         let layout = GlyphFaces.layout
         let outline = FlatMascotBodies.outline(bodyId)
         let bounds = outline.boundingBoxOfPath
         let k = side / 100
-        let shape = Path(outline)
 
         var c = context
         c.translateBy(x: centre.x, y: centre.y)
@@ -1221,115 +1177,39 @@ final class MascotCreature {
             c.translateBy(x: 0, y: -base)
         }
 
-        var body = c
-        body.scaleBy(x: k, y: k)
-        body.translateBy(x: -bounds.midX, y: -bounds.midY)
-        body.fill(shape, with: .color(paint.body))
-        var lit = body
-        lit.clip(to: shape)
-        lit.fill(shape, with: .linearGradient(Self.shade, startPoint: CGPoint(x: bounds.midX, y: bounds.minY),
-                                              endPoint: CGPoint(x: bounds.midX, y: bounds.maxY)))
-        let spot = CGPoint(x: bounds.minX + bounds.width * 0.33, y: bounds.minY + bounds.height * 0.2)
-        lit.fill(Path(ellipseIn: CGRect(x: spot.x - bounds.width * 0.28, y: spot.y - bounds.height * 0.17,
-                                        width: bounds.width * 0.56, height: bounds.height * 0.34)),
-                 with: .radialGradient(Self.shine, center: spot, startRadius: 0, endRadius: bounds.width * 0.27))
+        let shape = Path(outline).applying(CGAffineTransform(translationX: -bounds.midX, y: -bounds.midY)
+            .concatenating(CGAffineTransform(scaleX: k, y: k)))
+        c.fill(shape, with: .color(paint.body))
         if paint.lowContrast {
-            body.stroke(shape, with: .color(paint.ink.opacity(0.22)), lineWidth: max(1, side / 52) / k)
+            c.stroke(shape, with: .color(paint.ink.opacity(0.22)), lineWidth: max(1, side / 52))
         }
 
         let diameter = min(bounds.width, bounds.height) * k
         let mass = GlyphMark.massCentre[FlatMascotBodies.body(bodyId).id] ?? CGPoint(x: bounds.midX, y: bounds.midY)
-        // The eyes lead: gaze and the direction of travel both pull the face.
-        let look = CGPoint(x: (gaze.x * 0.085 + lead.x * 0.05) * diameter, y: (gaze.y * 0.07 + lead.y * 0.05) * diameter)
-        var faceContext = c
-        faceContext.translateBy(x: (mass.x - bounds.midX) * k + look.x, y: (mass.y - bounds.midY) * k + look.y)
-
-        for (index, sideSign) in [CGFloat(-1), 1].enumerated() {
-            let eye = eyes[index]
-            // Looking aside, the far eye shrinks a touch and the pair closes
-            // up: a head turning on a round body.
-            let far = max(0, sideSign * -gaze.x)
-            let x = sideSign * layout.eyeX * diameter * (1 - 0.06 * abs(gaze.x))
-            let point = CGPoint(x: x, y: layout.eyeY * diameter)
-            drawEye(faceContext, at: point, eye: eye, diameter: diameter, scale: 1 - 0.09 * far, open: open, gaze: gaze, paint: paint)
-            if let glyph = eye.glyph, eye.mix.value > 0.02 {
-                let pop = min(max(eye.mix.value, 0), 1.3)
-                let eyeSide = layout.eyeBox * diameter
-                let eyeScale = eyeSide / GlyphFaces.viewBox * pop
-                guard eyeScale > 0.01 else { continue }
-                var mark = faceContext
-                mark.rotate(by: .degrees(GlyphFaces.tiltDegrees))
-                mark.translateBy(x: sideSign * layout.eyeX * diameter, y: layout.eyeY * diameter)
-                mark.scaleBy(x: eyeScale, y: eyeScale * max(open, 0.15))
-                mark.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
-                let stroke = max(GlyphFaces.stroke, layout.minStrokePx / eyeScale)
-                mark.stroke(Path(EmptyMascotBrain.path(glyph)), with: .color(paint.ink),
-                            style: StrokeStyle(lineWidth: stroke, lineCap: .round, lineJoin: .round))
-            }
+        // The eyes lead: gaze and the direction of travel both carry the face.
+        let look = CGPoint(x: (gaze.x * 0.2 + lead.x * 0.06) * diameter, y: (gaze.y * 0.15 + lead.y * 0.06) * diameter)
+        var eyes = c
+        eyes.clip(to: shape)
+        eyes.translateBy(x: (mass.x - bounds.midX) * k + look.x, y: (mass.y - bounds.midY) * k + look.y)
+        eyes.rotate(by: .degrees(GlyphFaces.tiltDegrees))
+        let eyeSide = layout.eyeBox * diameter
+        let eyeScale = eyeSide / GlyphFaces.viewBox
+        guard eyeScale > 0.01 else { return }
+        let eyeStroke = max(GlyphFaces.stroke, layout.minStrokePx / eyeScale)
+        // Turned aside, the pair closes up a little on the round body.
+        let spread = 1 - 0.12 * min(abs(gaze.x), 1)
+        for (glyph, x) in [(left, -layout.eyeX), (right, layout.eyeX)] {
+            var eye = eyes
+            eye.translateBy(x: x * spread * diameter, y: layout.eyeY * diameter)
+            eye.scaleBy(x: eyeScale, y: eyeScale * max(open, 0.1))
+            eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
+            eye.stroke(Path(EmptyMascotBrain.path(glyph)), with: .color(paint.ink),
+                       style: StrokeStyle(lineWidth: eyeStroke, lineCap: .round, lineJoin: .round))
         }
 
         let sinceChange = t - changedAt
         let grow = sinceChange < 0.26 ? CGFloat(Self.easeOutBack(sinceChange / 0.26)) : 1
         drawAccent(in: &c, face: face, grow: grow, diameter: diameter, paint: paint)
-    }
-
-    /// A solid eye shaped by its lids, with a catchlight. Fully shut, it is a
-    /// curved line: a smile's ^ when the cheek closed it, a sleeper's u when
-    /// the lid did.
-    private func drawEye(_ context: GraphicsContext, at point: CGPoint, eye: Eye, diameter: CGFloat, scale: CGFloat,
-                         open: CGFloat, gaze: CGPoint, paint: Paint) {
-        let solid = min(max(1 - eye.mix.value, 0), 1)
-        let w = 0.16 * diameter * max(eye.size.value, 0) * scale * (0.2 + 0.8 * solid)
-        guard w > 0.5, solid > 0.01 else { return }
-        let h = w * 1.3
-        let top = min(max(eye.top.value, 0), 1)
-        let closed = min(1, top + (1 - top) * (1 - open))
-        let bottom = min(max(eye.bottom.value, 0), 1)
-        let lidY = -h / 2 + closed * h
-        let cheekTop = h / 2 - bottom * h * 1.1
-        let opening = max(0, cheekTop - lidY) / h
-
-        var e = context
-        e.translateBy(x: point.x, y: point.y)
-        e.opacity *= Double(solid)
-
-        // the line a shut eye leaves
-        let lineAlpha = max(0, 1 - opening / 0.16)
-        if lineAlpha > 0.01 {
-            let y = min(max((lidY + cheekTop) / 2, -h * 0.3), h * 0.3)
-            let smile = bottom > top * 0.6
-            var line = Path()
-            line.move(to: CGPoint(x: -w * 0.55, y: y + (smile ? h * 0.08 : -h * 0.06)))
-            line.addQuadCurve(to: CGPoint(x: w * 0.55, y: y + (smile ? h * 0.08 : -h * 0.06)),
-                              control: CGPoint(x: 0, y: y + (smile ? -h * 0.32 : h * 0.26)))
-            var ink = e
-            ink.opacity *= Double(lineAlpha)
-            ink.stroke(line, with: .color(paint.ink), style: StrokeStyle(lineWidth: max(w * 0.24, 1.5), lineCap: .round))
-        }
-        guard opening > 0.005 else { return }
-
-        var lids = e
-        lids.opacity *= Double(min(1, opening / 0.16))
-        if closed > 0.001 {
-            let slope = eye.slope.value
-            let lid = Path(CGRect(x: -w * 3, y: lidY - h * 4, width: w * 6, height: h * 4))
-                .applying(CGAffineTransform(translationX: 0, y: -lidY).concatenating(CGAffineTransform(rotationAngle: slope))
-                    .concatenating(CGAffineTransform(translationX: 0, y: lidY)))
-            lids.clip(to: lid, options: .inverse)
-        }
-        if bottom > 0.001 {
-            let r = w * 1.1
-            lids.clip(to: Path(ellipseIn: CGRect(x: -r, y: cheekTop, width: r * 2, height: r * 2)), options: .inverse)
-        }
-        lids.fill(Path(ellipseIn: CGRect(x: -w / 2, y: -h / 2, width: w, height: h)), with: .color(paint.ink))
-        // catchlights, sliding a little against the gaze so the eye reads round
-        let r1 = w * 0.2
-        let c1 = CGPoint(x: w * 0.16 - gaze.x * w * 0.06, y: -h * 0.19 - gaze.y * h * 0.05)
-        lids.fill(Path(ellipseIn: CGRect(x: c1.x - r1, y: c1.y - r1, width: r1 * 2, height: r1 * 2)), with: .color(paint.shine))
-        let r2 = w * 0.085
-        let c2 = CGPoint(x: -w * 0.16 - gaze.x * w * 0.04, y: h * 0.17)
-        lids.fill(Path(ellipseIn: CGRect(x: c2.x - r2, y: c2.y - r2, width: r2 * 2, height: r2 * 2)),
-                  with: .color(paint.shine.opacity(0.5)))
     }
 
     /// The old accent shrinking away while the new one pops in.
