@@ -38,4 +38,14 @@ extension NotificationAvatarCache {
         if let mood = moodURL(for: senderID, mood: mood), FileManager.default.fileExists(atPath: mood.path) { return mood }
         return url(for: senderID)
     }
+
+    /// The face as bytes for an `INImage(imageData:)`, never a file URL: the
+    /// process that draws the banner can't read the app group, so a URL image
+    /// left a blank circle with only the app badge showing (2026-10-11).
+    static func faceData(for senderID: String, mood: String) -> Data? {
+        for url in [moodURL(for: senderID, mood: mood), url(for: senderID)] {
+            if let url, let data = try? Data(contentsOf: url), !data.isEmpty { return data }
+        }
+        return nil
+    }
 }

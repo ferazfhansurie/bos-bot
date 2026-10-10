@@ -109,16 +109,16 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     /// icon. Falls back to the plain content when no face was drawn.
     static func withSenderFace(_ content: UNMutableNotificationContent, senderID: String, name: String, mood: String,
                                        then deliver: @escaping (UNNotificationContent) -> Void) {
-        guard let imageURL = NotificationAvatarCache.bestURL(for: senderID, mood: mood),
-              FileManager.default.fileExists(atPath: imageURL.path) else { deliver(content); return }
+        guard let data = NotificationAvatarCache.faceData(for: senderID, mood: mood) else { deliver(content); return }
+        let image = INImage(imageData: data)
         let sender = INPerson(personHandle: INPersonHandle(value: senderID, type: .unknown),
-                              nameComponents: nil, displayName: name, image: INImage(url: imageURL),
+                              nameComponents: nil, displayName: name, image: image,
                               contactIdentifier: nil, customIdentifier: senderID, isMe: false, suggestionType: .none)
         let intent = INSendMessageIntent(recipients: nil, outgoingMessageType: .outgoingMessageText,
                                          content: content.body, speakableGroupName: nil,
                                          conversationIdentifier: content.threadIdentifier,
                                          serviceName: "BOS", sender: sender, attachments: nil)
-        intent.setImage(INImage(url: imageURL), forParameterNamed: \INSendMessageIntent.sender)
+        intent.setImage(image, forParameterNamed: \INSendMessageIntent.sender)
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
         interaction.donate { _ in deliver((try? content.updating(from: intent)) ?? content) }

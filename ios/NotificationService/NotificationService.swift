@@ -15,20 +15,20 @@ final class NotificationService: UNNotificationServiceExtension {
                                           title: content.title, body: content.body)
         guard let senderID = content.userInfo["senderId"] as? String,
               let senderName = content.userInfo["senderName"] as? String,
-              let imageURL = NotificationAvatarCache.bestURL(for: senderID, mood: mood),
-              FileManager.default.fileExists(atPath: imageURL.path) else {
+              let data = NotificationAvatarCache.faceData(for: senderID, mood: mood) else {
             contentHandler(content)
             return
         }
+        let image = INImage(imageData: data)
         let sender = INPerson(personHandle: INPersonHandle(value: senderID, type: .unknown),
                               nameComponents: nil, displayName: senderName,
-                              image: INImage(url: imageURL), contactIdentifier: nil,
+                              image: image, contactIdentifier: nil,
                               customIdentifier: senderID, isMe: false, suggestionType: .none)
         let intent = INSendMessageIntent(recipients: nil, outgoingMessageType: .outgoingMessageText,
                                          content: content.body, speakableGroupName: nil,
                                          conversationIdentifier: content.threadIdentifier,
                                          serviceName: "BOS", sender: sender, attachments: nil)
-        intent.setImage(INImage(url: imageURL), forParameterNamed: \INSendMessageIntent.sender)
+        intent.setImage(image, forParameterNamed: \INSendMessageIntent.sender)
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
         interaction.donate { [weak self] _ in
