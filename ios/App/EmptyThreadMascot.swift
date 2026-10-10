@@ -282,6 +282,11 @@ final class MascotCreature {
     // Time, in seconds since it arrived. Paused frames do not count.
     private var t: TimeInterval = 0
     private var last: Date?
+    // The birth waits for a quiet screen: the thread slides in and lays out
+    // on its first frames, and a drop that starts then stutters (build 86).
+    private var started = false
+    private var settleFrames = 0
+    private var settleSince: Date?
     private var rng: UInt64
 
     // Body.
@@ -520,6 +525,13 @@ final class MascotCreature {
 
     func leave() {
         guard mode != .leaving else { return }
+        // a first message before it was ever born: nothing to send up
+        if !started {
+            mode = .leaving
+            gone = true
+            DispatchQueue.main.async { [weak self] in self?.onGone?() }
+            return
+        }
         mode = .leaving
         leftAt = t
         touching = false
@@ -552,13 +564,31 @@ final class MascotCreature {
     }
 
     func step(to now: Date, stage newStage: CGSize, origin newOrigin: CGPoint) -> Frame {
-        let firstFrame = last == nil
+        if !started {
+            // Three on-time frames in a row with the page standing still (a
+            // push slides it), or 0.9s at most, then the clock starts.
+            let elapsed = last.map { now.timeIntervalSince($0) } ?? 1
+            let still = newOrigin == origin && newStage == stage && newStage.width > 0
+            settleFrames = still && elapsed < 1.0 / 45 ? settleFrames + 1 : 0
+            settleSince = settleSince ?? now
+            last = now
+            stage = newStage
+            origin = newOrigin
+            guard settleFrames >= 3 || now.timeIntervalSince(settleSince!) > 0.9 else {
+                return Frame(centre: .zero, hit: 1, touchable: false)
+            }
+            started = true
+            start()
+            publishRate()
+            return Frame(centre: p, hit: 1, touchable: false)
+        }
         let elapsed = last.map { now.timeIntervalSince($0) } ?? 0
         last = now
         stage = newStage
         origin = newOrigin
-        if firstFrame { start() }
-        let dt = min(max(elapsed, 0), 1.0 / 15)
+        // A late frame advances at most two frames' worth: a hitch slows the
+        // motion for a beat instead of teleporting it.
+        let dt = min(max(elapsed, 0), 1.0 / 30)
         if dt > 0 {
             let steps = max(1, Int((dt * 240).rounded(.up)))
             let h = dt / Double(steps)
@@ -592,27 +622,37 @@ final class MascotCreature {
 
         switch mode {
         case .birth:
-            if !released, t > 0.22 {
+            // The island wakes first: its eyes open in the pill, look around
+            // and find you (`peekEyes`). Then the body drips out on a taffy
+            // neck, lets go, falls and lands with a squash and a small hop.
+            if !released, t > Self.peekLength {
                 released = true
                 scale.target = 1
-                v = CGVector(dx: 0, dy: 520)
+                v = CGVector(dx: 0, dy: 240)
                 neck.target = 1
             }
             if released {
-                // a system spring: quick, one soft overshoot, no yo-yo
-                springTo(home, stiffness: 150, damping: 19, dt: dt)
-                let below = p.y - island.maxY
-                if !snapped, below > side * 0.9 || t > 0.7 {
-                    snapped = true
-                    neck.target = 0
-                    pill.target = 0
-                    // snap back into shape
-                    sx.velocity += 3
-                    sy.velocity -= 2.5
-                    haptic(.light, 0.6)
-                }
-                if snapped, landedAt == nil, (v.dy < 0 && p.y > home.y - 4) || t > 1.3 {
-                    land()
+                p.x += (home.x - p.x) * min(dt * 10, 1)
+                if !snapped {
+                    // the taffy holds it back while it stretches
+                    v.dy = min(v.dy + 900 * dt, 420)
+                    p.y += v.dy * dt
+                    if p.y - island.maxY > side * 0.85 || t > Self.peekLength + 0.5 {
+                        snapped = true
+                        neck.target = 0
+                        pill.target = 0
+                        sx.velocity += 3
+                        sy.velocity -= 2.5
+                        haptic(.light, 0.5)
+                    }
+                } else {
+                    v.dy += 2200 * dt
+                    p.y += v.dy * dt
+                    if landedAt == nil, p.y >= home.y || t > Self.peekLength + 1.6 {
+                        let impact = v.dy
+                        p.y = min(p.y, home.y)
+                        land(impact: impact)
+                    }
                 }
             } else {
                 p = CGPoint(x: island.midX, y: island.midY + 6 + pill.value * 10)
@@ -662,7 +702,8 @@ final class MascotCreature {
 
         // Squash and stretch: volume kept, the long side along the motion.
         let speedX = abs(v.dx), speedY = abs(v.dy)
-        var stretchY = 1 + min(speedY / 1700, 0.55) - min(speedX / 3600, 0.18)
+        let stretchCap: CGFloat = mode == .birth ? 0.3 : 0.55
+        var stretchY = 1 + min(speedY / 1700, stretchCap) - min(speedX / 3600, 0.18)
         var stretchX = 1 + min(speedX / 1700, 0.55) - min(speedY / 3600, 0.18)
         if mode == .birth, !snapped { stretchY += neck.value * 0.18; stretchX -= neck.value * 0.08 }
         if mode == .home, !reduceMotion {
@@ -711,11 +752,18 @@ final class MascotCreature {
         p.y += v.dy * dt
     }
 
-    private func land() {
+    private func land(impact: CGFloat = 0) {
         landedAt = t
         mode = .home
-        sy.velocity -= 3
-        sx.velocity += 2.4
+        if impact > 0 {
+            // squash by how hard it came down, then a small hop off the floor
+            sy.velocity -= min(impact / 180, 8)
+            sx.velocity += min(impact / 240, 6)
+            v = CGVector(dx: 0, dy: -min(impact * 0.22, 300))
+        } else {
+            sy.velocity -= 3
+            sx.velocity += 2.4
+        }
         blinkAt = t + 0.2
         nextBlink = t + 3
         haptic(.soft, 0.9)
@@ -1085,7 +1133,7 @@ final class MascotCreature {
     }
 
     func draw(in context: inout GraphicsContext, scheme: ColorScheme) {
-        guard stage.width > 0 else { return }
+        guard started, stage.width > 0 else { return }
         let paint = palette(color, scheme)
         context.opacity = Double(max(min(opacity.value, 1), 0))
         let home = home(in: stage, origin: origin)
@@ -1140,7 +1188,42 @@ final class MascotCreature {
             var pillContext = context
             if !hasIsland { pillContext.opacity *= Double(min(pill.value * 3, 1)) }
             pillContext.fill(Path(roundedRect: rect, cornerRadius: h / 2, style: .continuous), with: .color(.black))
+            if mode == .birth { peekEyes(in: &pillContext, pill: rect, paint: paint) }
         }
+    }
+
+    /// How long the eyes look around in the island before the body drops.
+    static let peekLength: TimeInterval = 0.7
+
+    /// The bot's eyes, awake in the island: they open, glance left, right,
+    /// blink, then look down at you, and close up as the body lets go.
+    private func peekEyes(in context: inout GraphicsContext, pill: CGRect, paint: Paint) {
+        let appear = smooth((t - 0.08) / 0.12)
+        let vanish = smooth((t - Self.peekLength) / 0.08)
+        let alpha = appear * (1 - vanish)
+        guard alpha > 0.01 else { return }
+        // where they look: left, right, then down at you
+        let lookX = CGFloat(-smooth((t - 0.18) / 0.1) + 2 * smooth((t - 0.32) / 0.12) - smooth((t - 0.5) / 0.1))
+        let lookY = CGFloat(smooth((t - 0.5) / 0.1))
+        let blink: CGFloat = t > 0.44 && t < 0.52 ? 0.12 : 1
+        let eyeSide = pill.height * 0.5
+        let scale = eyeSide / GlyphFaces.viewBox
+        let ink = GlyphFaces.contrast(GlyphFaces.resolveColor(color), "#000000") >= 2 ? paint.body : Color.white
+        for (glyph, x) in [(eyes.left, -pill.height * 0.42), (eyes.right, pill.height * 0.42)] {
+            var eye = context
+            eye.opacity *= alpha
+            eye.translateBy(x: pill.midX + x + lookX * pill.width * 0.1, y: pill.midY + lookY * pill.height * 0.12)
+            eye.rotate(by: .degrees(GlyphFaces.tiltDegrees))
+            eye.scaleBy(x: scale, y: scale * blink * (0.6 + 0.4 * CGFloat(appear)))
+            eye.translateBy(x: -GlyphFaces.viewBox / 2, y: -GlyphFaces.viewBox / 2)
+            eye.stroke(Path(EmptyMascotBrain.path(glyph)), with: .color(ink),
+                       style: StrokeStyle(lineWidth: max(GlyphFaces.stroke, 1.4 / scale), lineCap: .round, lineJoin: .round))
+        }
+    }
+
+    private func smooth(_ x: Double) -> Double {
+        let k = min(max(x, 0), 1)
+        return k * k * (3 - 2 * k)
     }
 
     /// 1 open ... 0.1 shut: a fast squash and a slower open, 0.15s in all.
