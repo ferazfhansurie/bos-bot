@@ -943,8 +943,8 @@ final class MascotCreature {
                 bump(speed, horizontal: false)
                 v.dy = -v.dy * 0.6
                 if speed > 850 {
-                    // a hard bonk on the ceiling
-                    moment = (.dizzy, .dizzy, t + 2.6)
+                    // a hard bonk on the ceiling: a blink, no dizzy spirals (firaz hates them on a throw)
+                    blinkAt = t
                     rot.velocity += (v.dx >= 0 ? 1 : -1) * 6
                     haptic(.heavy, 1)
                 }
