@@ -290,13 +290,116 @@ final class Session: ObservableObject {
     }
 
     private var registry = CompanionConnectionRegistry()
+
+    // MARK: - Other homes
+
+    /// True for a session holding one more paired computer beside the
+    /// selected one, so its bots sit in the same chat list. It owns no
+    /// app-wide handler (notifications, CallKit, badge, network path); the
+    /// primary session routes those to it by connection id.
+    private(set) var isSatellite = false
+    private weak var primary: Session?
+    /// Every other paired computer, connected at the same time as this one.
+    @Published private(set) var satellites: [Session] = []
+    private var satelliteChanges: [AnyCancellable] = []
+    private var satellitePushRegistered = false
+
+    private init(satelliteOf saved: Connection, token: String, primary: Session) {
+        isSatellite = true
+        self.primary = primary
+        onLocalNetwork = primary.onLocalNetwork
+        registry = BosSharedConnectionStore.loadRegistry()
+        connections = registry.connections
+        configureActiveConnection(saved, token: token)
+    }
+
+    /// Keep one satellite per paired computer other than the selected one.
+    /// Runs whenever the registry or the selection changes.
+    private func syncSatellites() {
+        guard !isSatellite else { return }
+        let activeID = connection?.id
+        var kept: [Session] = []
+        for saved in registry.connections where saved.id != activeID {
+            if let existing = satellites.first(where: { $0.connection?.id == saved.id }) {
+                kept.append(existing)
+                continue
+            }
+            // A locked keychain or a lost token leaves that home out until
+            // the next sync; it is never removed from here.
+            guard let stored = (try? Keychain.token(for: saved.id)) ?? nil else { continue }
+            kept.append(Session(satelliteOf: saved, token: stored, primary: self))
+        }
+        for gone in satellites where !kept.contains(where: { $0 === gone }) { gone.retire() }
+        satelliteChanges = kept.map { home in
+            home.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        }
+        satellites = kept
+        if UIApplication.shared.applicationState != .background {
+            for home in kept { home.connect() }
+        }
+        refreshBadge()
+    }
+
+    private func retire() {
+        stopActiveRuntime()
+        connection = nil
+        status = .unpaired
+    }
+
+    /// The session holding this connection: this one or another home.
+    func home(for connectionId: String?) -> Session {
+        guard !isSatellite, let connectionId, connectionId != connection?.id else { return self }
+        return satellites.first { $0.connection?.id == connectionId } ?? self
+    }
+
+    /// The session whose computer this chat's bot or room lives on.
+    func owner(of chat: Chat) -> Session {
+        func holds(_ session: Session) -> Bool {
+            session.state.bot(chat.id) != nil || session.state.rooms.contains { $0.id == chat.id }
+        }
+        if isSatellite || holds(self) { return self }
+        return satellites.first(where: holds) ?? self
+    }
+
+    /// The short name a chat row shows for a bot on another home.
+    var homeLabel: String {
+        let name = connection?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "other computer" : name
+    }
+
+    /// App coming to the front or going away: every home follows.
+    func connectHomes() {
+        connect()
+        if !isSatellite { syncSatellites() }
+    }
+
+    func lingerHomes() {
+        linger()
+        for home in satellites { home.linger() }
+    }
+
+    private func refreshBadge() {
+        guard !isSatellite else { primary?.refreshBadge(); return }
+        applyBadge(state.unreadCount)
+    }
+
+    /// A satellite never navigates the app itself: the chat list watches
+    /// the primary's `notificationChat`.
+    private func present(_ chat: Chat) {
+        if isSatellite, let primary {
+            primary.notificationChat = chat
+        } else {
+            notificationChat = chat
+        }
+    }
+
     // MARK: - Pairing
 
     init() {
         Self.removeStaleFilePreviews()
         _ = NotificationCoordinator.shared
         NotificationCoordinator.shared.foregroundPresentation = { [weak self] target in
-            self?.notificationPresentation(for: target) ?? .quiet
+            self?.home(for: target.connectionId).notificationPresentation(for: target) ?? .quiet
         }
         NotificationCoordinator.shared.foregroundSharedPresentation = { [weak self] roomID, connectionID in
             guard let self, let connectionID, connectionID == self.client?.connection.id else { return .quiet }
@@ -447,6 +550,7 @@ final class Session: ObservableObject {
             _ = try? Keychain.token(for: saved.id)
         }
         restoreSelectedConnection()
+        syncSatellites()
     }
 
     /// Find the first selected pairing whose Keychain token still exists.
@@ -563,7 +667,22 @@ final class Session: ObservableObject {
         try Keychain.save(token, for: stored.id)
         let firstPairing = registry.connections.isEmpty
         var updatedRegistry = registry
-        updatedRegistry.upsert(stored)
+        // Pairing one more computer adds a home beside the selected one; the
+        // selected computer stays the main one. A re-pair of the selected
+        // computer, or a first pairing, still makes it active.
+        let addsHome = !isSatellite && client != nil && connection.map { $0.id != stored.id } == true
+        updatedRegistry.upsert(stored, makeActive: !addsHome)
+        if addsHome {
+            BosSharedConnectionStore.saveRegistry(updatedRegistry)
+            pairingInvite = CompanionPairingInvitePolicy.nextInvite(current: pairingInvite, after: .pairingSucceeded)
+            pairingRequested = false
+            registry = updatedRegistry
+            connections = registry.connections
+            satellites.first { $0.connection?.id == stored.id }?.retire()
+            satellites.removeAll { $0.connection == nil }
+            syncSatellites()
+            return
+        }
         // Write the first-pair education marker before making the connection
         // restorable. If the process stops between these writes, an orphan
         // marker is harmless while unpaired; the reverse order could restore
@@ -604,6 +723,7 @@ final class Session: ObservableObject {
         // keychain — the token is in hand, so there is nothing left to retry.
         restorePending = false
         connect()
+        syncSatellites()
     }
 
     /// `GET /.well-known/openmausbot/environment` on a server about to be
@@ -677,6 +797,7 @@ final class Session: ObservableObject {
         connections = registry.connections
         configureActiveConnection(saved, token: stored)
         connect()
+        syncSatellites()
     }
 
     func forgetConnection(id: String) {
@@ -696,7 +817,7 @@ final class Session: ObservableObject {
         registry.remove(id: id)
         persistRegistry()
         connections = registry.connections
-        guard wasActive else { return }
+        guard wasActive else { syncSatellites(); return }
 
         connection = nil
         client = nil
@@ -707,6 +828,7 @@ final class Session: ObservableObject {
         applyBadge(0)
         restoreSelectedConnection()
         if connection != nil { connect() }
+        syncSatellites()
         if connections.isEmpty {
             UserDefaults.standard.removeObject(
                 forKey: CompanionOnboardingPreferences.pendingNotificationOnboardingKey
@@ -796,6 +918,9 @@ final class Session: ObservableObject {
     }
 
     private func persistActiveConnection(_ updated: Connection) {
+        // A satellite's copy of the registry is stale the moment the primary
+        // saves; start from the stored one so its write changes one record.
+        if isSatellite { registry = BosSharedConnectionStore.loadRegistry() }
         registry.upsert(updated, makeActive: false)
         connection = updated
         connections = registry.connections
@@ -1356,6 +1481,8 @@ final class Session: ObservableObject {
     }
 
     private func applyBadge(_ count: Int) {
+        if isSatellite { primary?.refreshBadge(); return }
+        let count = count + satellites.reduce(0) { $0 + $1.state.unreadCount }
         guard appliedBadge != count else { return }
         appliedBadge = count
         NotificationCoordinator.shared.setBadge(count)
@@ -1424,6 +1551,11 @@ final class Session: ObservableObject {
                         // not be replayable, so a gap is closed by a snapshot.
                         refreshActivityFeed(using: client)
                         reconcileRemoteStreams(using: client)
+                        if isSatellite, !satellitePushRegistered,
+                           let token = UserDefaults.standard.string(forKey: "bos.apnsToken") {
+                            satellitePushRegistered = true
+                            await registerPushToken(token)
+                        }
                         continue
                     }
                     enqueue(frame)
@@ -1755,6 +1887,9 @@ final class Session: ObservableObject {
     /// report is not a change, except that a launch off the local network
     /// must not sit on a cleartext route that cannot answer.
     private func networkPathChanged(satisfied: Bool, onLocalNetwork local: Bool, signature: String) {
+        for home in satellites {
+            home.networkPathChanged(satisfied: satisfied, onLocalNetwork: local, signature: signature)
+        }
         let previous = pathSignature
         pathSignature = signature
         onLocalNetwork = local
@@ -3097,7 +3232,10 @@ final class Session: ObservableObject {
     }
 
     func openNotification(_ target: NotificationTarget) async {
-        guard target.belongs(to: client?.connection.id ?? registry.activeConnectionID) else {
+        let home = home(for: target.connectionId)
+        if home !== self { return await home.openNotification(target) }
+        let ownID = isSatellite ? connection?.id : client?.connection.id ?? registry.activeConnectionID
+        guard target.belongs(to: ownID) else {
             actionError = "This notification belongs to another or an older connection. Select its computer and open the conversation there."
             return
         }
@@ -3140,7 +3278,7 @@ final class Session: ObservableObject {
                     state.apply(.room(room))
                 }
                 focusedMessageId = target.messageId
-                notificationChat = .room(room)
+                present(.room(room))
                 return
             }
             guard var selected = state.bot(target.botId) else {
@@ -3152,7 +3290,7 @@ final class Session: ObservableObject {
                 state.apply(.bot(selected))
             }
             focusedMessageId = target.messageId
-            notificationChat = .bot(selected)
+            present(.bot(selected))
         } catch is CancellationError {
             // A previous connection's response cannot navigate the new account.
         } catch {
@@ -3206,6 +3344,12 @@ final class Session: ObservableObject {
     }
 
     func handleVoice(_ action: VoiceNotificationAction) async {
+        let connectionId: String? = switch action {
+        case let .open(target), let .callBack(target, _): target.connectionId
+        case let .accept(_, id): id
+        }
+        let home = home(for: connectionId)
+        if home !== self { return await home.handleVoice(action) }
         switch action {
         case let .open(target):
             await openNotification(target)
@@ -3399,10 +3543,14 @@ final class Session: ObservableObject {
     }
 
     private func registerPushToken(_ token: String) async {
+        for home in satellites { await home.registerPushToken(token) }
         guard let client else { return }
+        // Live Activities follow the main computer only; another home
+        // pushing into the same island would fight it.
         let live = LiveActivityTokens.shared
         try? await client.registerPushToken(token, environment: Self.apnsEnvironment, voipToken: CallKitRinger.shared.voipToken,
-                                            liveStartToken: live.startToken, liveActivities: live.activities)
+                                            liveStartToken: isSatellite ? nil : live.startToken,
+                                            liveActivities: isSatellite ? nil : live.activities)
     }
 
     func enableNotifications() async {

@@ -113,7 +113,7 @@ struct CompanionApp: App {
                 }
                 .onAppear {
                     BosSharedInbox.removeDirectories(olderThan: 60 * 60)
-                    session.connect()
+                    session.connectHomes()
                     liveActivities.attach(to: session)
                     CallIntentRouter.shared.attach(session)
                 }
@@ -126,9 +126,9 @@ struct CompanionApp: App {
                     switch phase {
                     case .active:
                         BosSharedInbox.removeDirectories(olderThan: 60 * 60)
-                        session.connect()
+                        session.connectHomes()
                         Task { await session.refreshNotificationAuthorization() }
-                    case .background: session.linger()
+                    case .background: session.lingerHomes()
                     case .inactive: break
                     @unknown default: break
                     }

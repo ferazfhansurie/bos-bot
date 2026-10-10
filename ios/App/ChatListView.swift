@@ -287,7 +287,7 @@ struct ChatListView: View {
             } side: {
                 if let sideChat {
                     NavigationStack {
-                        chatDestinations(ChatView(chat: sideChat) { self.sideChat = nil })
+                        chatDestinations(ChatView(chat: sideChat) { self.sideChat = nil }.session(session.owner(of: sideChat)))
                     }
                     // a different chat is a fresh pane: its own draft, scroll
                     // and selected thread
@@ -305,7 +305,7 @@ struct ChatListView: View {
         root
             .toolbar(.hidden, for: .navigationBar)
             .interactiveBackSwipe()
-            .navigationDestination(for: Chat.self) { ChatView(chat: $0) }
+            .navigationDestination(for: Chat.self) { ChatView(chat: $0).session(session.owner(of: $0)) }
             .navigationDestination(for: SharedRoomSummary.self) { room in
                 SharedChatView(room: room, selfID: sharedMe?.actorId ?? "", contacts: sharedContacts)
             }
@@ -727,6 +727,7 @@ struct ChatListView: View {
         ForEach(unpinned) { entry in
             switch entry {
             case .local(let summary): botRow(summary, waiting: waiting.contains(summary.chat.id), last: entry.id == lastID)
+            case .home(let summary, let home, _): botRow(summary, in: home, waiting: false, last: entry.id == lastID)
             case .contact(let contact): contactRow(contact, last: entry.id == lastID)
             case .room(let room):
                 Button { open(room) } label: {
@@ -793,7 +794,7 @@ struct ChatListView: View {
                 .accessibilityLabel("\(conversationName(entry)), pinned chat\(conversationBusy(entry) ? ", working" : conversationUnread(entry) ? ", unread" : "")")
                 .contextMenu {
                     pinButton(entry)
-                    if case .local(let summary) = entry { OpenBesideButton(chat: homeChat(summary.chat)) }
+                    if let (summary, _) = botEntry(entry) { OpenBesideButton(chat: homeChat(summary.chat)) }
                     if pinnedChats.ids.first != entry.id {
                         Button("Move to front", systemImage: "arrow.up.to.line") {
                             pinnedChats.moveToFront(entry.id)
@@ -813,6 +814,11 @@ struct ChatListView: View {
             LiveChatAvatar(chat: summary.chat, size: 82,
                            state: MausState.forChat(summary.chat, in: session.state), animated: pinnedAnimates(entry),
                            at: summary.lastActivity)
+        case .home(let summary, let home, _):
+            LiveChatAvatar(chat: summary.chat, size: 82,
+                           state: Self.face(summary.chat, in: home), animated: pinnedAnimates(entry),
+                           at: summary.lastActivity)
+                .session(home)
         case .contact(let contact): contactAvatar(contact, size: 82)
         case .room(let room): GroupMarkView(members: GroupMarkView.faces(room, contacts: sharedContacts, selfID: sharedMe?.actorId), size: 82)
         }
@@ -820,32 +826,31 @@ struct ChatListView: View {
 
     /// A pinned bot's own face moves while it works, like its row below.
     private func pinnedAnimates(_ entry: ConversationEntry) -> Bool {
-        guard case .local(let summary) = entry, case .bot = summary.chat else { return false }
-        return MausState.forChat(summary.chat, in: session.state).showsActivity
+        guard let (summary, home) = botEntry(entry), case .bot = summary.chat else { return false }
+        return Self.face(summary.chat, in: home).showsActivity
     }
     /// The busiest member working in a pinned room, with its live face.
     private func pinnedWorker(_ entry: ConversationEntry) -> (bot: Bot, face: MausState)? {
-        guard case .local(let summary) = entry, case let .room(room) = summary.chat,
-              let live = session.state.activityFeed.busiest(room: room.id, thread: room.threadId),
-              let bot = session.state.bot(live.botId) else { return nil }
+        guard let (summary, home) = botEntry(entry), case let .room(room) = summary.chat,
+              let live = home.state.activityFeed.busiest(room: room.id, thread: room.threadId),
+              let bot = home.state.bot(live.botId) else { return nil }
         let face = MausState.forFeed(live)
         return face.showsActivity ? (bot, face) : nil
     }
 
     private func conversationName(_ entry: ConversationEntry) -> String {
         switch entry {
-        case .local(let summary): return summary.chat.name
+        case .local(let summary), .home(let summary, _, _): return summary.chat.name
         case .contact(let contact): return contact.name
         case .room(let room): return room.displayName(contacts: sharedContacts, selfID: sharedMe?.actorId ?? "")
         }
     }
     private func conversationBusy(_ entry: ConversationEntry) -> Bool {
-        if case .local(let summary) = entry { return summary.chat.busy }
-        return false
+        botEntry(entry)?.summary.chat.busy ?? false
     }
     private func conversationUnread(_ entry: ConversationEntry) -> Bool {
         switch entry {
-        case .local(let summary): return summary.chat.unread
+        case .local(let summary), .home(let summary, _, _): return summary.chat.unread
         case .room(let room): return (room.unreadCount ?? 0) > 0
         case .contact(let contact):
             return sharedRooms.contains { !$0.isGroup && $0.memberIds.count == 2 && $0.memberIds.contains(contact.id) && $0.memberIds.contains(sharedMe?.actorId ?? "") && ($0.unreadCount ?? 0) > 0 }
@@ -853,7 +858,7 @@ struct ChatListView: View {
     }
     private func openConversation(_ entry: ConversationEntry) {
         switch entry {
-        case .local(let summary): open(homeChat(summary.chat))
+        case .local(let summary), .home(let summary, _, _): open(homeChat(summary.chat))
         case .room(let room): open(room)
         case .contact(let contact): openContact(contact)
         }
@@ -872,9 +877,13 @@ struct ChatListView: View {
 
     private enum ConversationEntry: Identifiable {
         case local(ChatSummary), contact(SharedContact), room(SharedRoomSummary)
+        /// A bot or room on another paired computer, with the session that
+        /// holds it.
+        case home(ChatSummary, Session, connectionID: String)
         var id: String {
             switch self {
             case .local(let summary): return "local:\(summary.id)"
+            case .home(let summary, _, let connectionID): return "home:\(connectionID):\(summary.id)"
             case .contact(let contact): return "contact:\(contact.id)"
             case .room(let room): return "room:\(room.id)"
             }
@@ -893,6 +902,9 @@ struct ChatListView: View {
         let entries: [(ConversationEntry, Double)] =
             session.state.chatSummaries(activity: activity)
                 .map { (.local($0), $0.lastActivity) }
+            + session.satellites.flatMap { home in
+                home.state.chatSummaries(activity: activity).map { (ConversationEntry.home($0, home, connectionID: home.connection?.id ?? ""), $0.lastActivity) }
+            }
             + remoteContacts.map { contact in
                 (.contact(contact), directRooms.first(where: { $0.memberIds.contains(contact.id) })?.lastActivity ?? 0)
             }
@@ -920,7 +932,7 @@ struct ChatListView: View {
         switch conversationFilter {
         case "unread": return conversationUnread(entry)
         case "running":
-            if case .local(let summary) = entry {
+            if let (summary, _) = botEntry(entry) {
                 if case .bot(let bot) = summary.chat, let tasks = bot.tasks {
                     return tasks.contains { $0.activity == "working" || $0.activity == "running" }
                 }
@@ -1059,8 +1071,27 @@ struct ChatListView: View {
     }
 
     private func homeChat(_ chat: Chat) -> Chat {
-        if case let .bot(bot) = chat { return .bot((session.state.bot(bot.id) ?? bot).homeThread) }
+        if case let .bot(bot) = chat { return .bot((session.owner(of: chat).state.bot(bot.id) ?? bot).homeThread) }
         return chat
+    }
+
+    /// A bot or room row, here or on another home, with the session it
+    /// belongs to.
+    private func botEntry(_ entry: ConversationEntry) -> (summary: ChatSummary, home: Session)? {
+        switch entry {
+        case .local(let summary): return (summary, session)
+        case .home(let summary, let home, _): return (summary, home)
+        default: return nil
+        }
+    }
+
+    /// A home that is not connected right now shows its bots asleep.
+    private static func face(_ chat: Chat, in home: Session) -> MausState {
+        home.status == .live ? MausState.forChat(chat, in: home.state) : .sleeping
+    }
+
+    private static func homeLabel(_ home: Session) -> String {
+        home.status == .live ? home.homeLabel : home.homeLabel + " · asleep"
     }
 
     @ViewBuilder
@@ -1071,23 +1102,26 @@ struct ChatListView: View {
         }
     }
 
-    private func botRow(_ summary: ChatSummary, waiting: Bool, last: Bool) -> some View {
-        Button { open(homeChat(summary.chat)) } label: {
+    private func botRow(_ summary: ChatSummary, in home: Session? = nil, waiting: Bool, last: Bool) -> some View {
+        let owner = home ?? session
+        return Button { open(homeChat(summary.chat)) } label: {
             ChatRow(
                 chat: summary.chat,
                 preview: summary.chat.busy ? String(localized: "Working…") : summary.preview,
                 at: summary.lastActivity,
-                state: MausState.forChat(summary.chat, in: session.state),
+                state: Self.face(summary.chat, in: owner),
                 waiting: waiting,
-                last: last
+                last: last,
+                home: home.map(Self.homeLabel)
             )
+            .session(owner)
         }
         .buttonStyle(.plain)
         .doneSwipe(color: MausPalette.color(summary.chat.color), enabled: doneTask(summary.chat)?.task.canMarkDone == true) {
             markDone(summary.chat, after: 0)
         }
         .contextMenu {
-            pinButton(.local(summary))
+            pinButton(home.map { .home(summary, $0, connectionID: $0.connection?.id ?? "") } ?? .local(summary))
             OpenBesideButton(chat: homeChat(summary.chat))
             markDoneButton(summary.chat)
             if summary.chat.isRemoteBot {
@@ -1101,7 +1135,7 @@ struct ChatListView: View {
     /// The thread a bot's row opens, which is the one marking it done closes.
     private func doneTask(_ chat: Chat) -> (task: BotTask, home: Bot)? {
         guard case let .bot(home) = homeChat(chat),
-              let task = session.state.bot(home.id)?.tasks?.first(where: { $0.threadId == home.threadId })
+              let task = session.owner(of: chat).state.bot(home.id)?.tasks?.first(where: { $0.threadId == home.threadId })
         else { return nil }
         return (task, home)
     }
@@ -1111,7 +1145,7 @@ struct ChatListView: View {
     private func markDone(_ chat: Chat, after delay: Double) {
         guard let (task, home) = doneTask(chat), task.canMarkDone else { return }
         DoneMoments.shared.done(chat.id, after: delay)
-        let session = session
+        let session = session.owner(of: chat)
         Task {
             try? await Task.sleep(for: .seconds(delay + DoneMoments.holds))
             guard await session.setTaskArchived(task, for: home, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded(),
@@ -1521,6 +1555,9 @@ struct ChatRow: View {
     var state: MausState = .idle
     var waiting = false
     var last = false
+    /// The computer a bot on another home lives on, shown small beside its
+    /// name; nil for this computer's own bots.
+    var home: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -1556,6 +1593,13 @@ struct ChatRow: View {
                             .foregroundStyle(Color.primary)
                             .lineLimit(1)
                             .layoutPriority(1)
+
+                        if let home {
+                            Text(home)
+                                .font(.caption)
+                                .foregroundStyle(Color.secondary.opacity(0.7))
+                                .lineLimit(1)
+                        }
 
                         Spacer(minLength: 4)
 
