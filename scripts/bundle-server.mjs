@@ -143,20 +143,6 @@ await build({
   logLevel: "info",
 });
 
-// Partner's one-time offline history import must be runnable from a server-only
-// installation without TypeScript source, pnpm, or node_modules.
-await build({
-  entryPoints: [join(root, "scripts", "import-partner-discord-history.ts")],
-  bundle: true,
-  platform: "node",
-  target: "node24",
-  format: "esm",
-  outfile: join(root, "dist-server", "import-partner-discord-history.js"),
-  allowOverwrite: true,
-  logLevel: "info",
-  plugins: [yamlEsmPlugin],
-});
-
 // `bosbot serve --tunnel` (server/tunnel.ts) spawns the connector guardian
 // as its own process, so it has to exist as a file beside the server, not only
 // as code inlined into the bundle that imports its neighbours. Bundled under
