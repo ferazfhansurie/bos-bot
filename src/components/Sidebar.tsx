@@ -1260,13 +1260,13 @@ export function BotListItem({
     <>
       {/* flex, not inline: an inline wrapper adds a baseline gap under the
           avatar and makes the row taller than before the presence dot */}
-      <span className={cn("relative flex shrink-0", bot.homeLink?.online === false && "opacity-50 grayscale")}>
+      <span className="relative flex shrink-0">
         <SidebarActivityAvatar bot={bot} gesture={live.gesture} size={avatarSize}>
         <span className={cn("flex", working && "bot-morph")}>
         <BotAvatar
           bot={bot}
           state={stateForBot({ ...bot, messages: visible })}
-          face={failed ? "failed" : glyphFaceForBot({ ...bot, messages: visible })}
+          face={bot.homeLink?.online === false ? "asleep" : failed ? "failed" : glyphFaceForBot({ ...bot, messages: visible })}
           size={avatarSize}
           motion={mascotMotion?.kind ?? "none"}
           motionKey={mascotMotion?.nonce ?? 0}

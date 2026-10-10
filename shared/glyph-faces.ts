@@ -58,8 +58,8 @@ export const MAUS_COLORS = {
 
 export type GlyphId =
   | "dash" | "caret" | "ring" | "plus" | "gt" | "lt" | "star" | "cross"
-  | "bang" | "query" | "dots" | "code" | "heart" | "spark";
-export type GlyphFaceState = "idle" | "thinking" | "searching" | "working" | "waiting" | "finished" | "happy" | "failed";
+  | "bang" | "query" | "dots" | "code" | "heart" | "spark" | "lid" | "zz";
+export type GlyphFaceState = "idle" | "thinking" | "searching" | "working" | "waiting" | "finished" | "happy" | "failed" | "asleep";
 export type AccentAnchor = "left" | "top-right" | "split";
 export interface GlyphFace { left: GlyphId; right: GlyphId; accent: GlyphId | null; anchor: AccentAnchor | null }
 
@@ -68,11 +68,11 @@ export const GLYPH_TILT_DEG = -12;
 
 export const GLYPH_IDS = [
   "dash", "caret", "ring", "plus", "gt", "lt", "star", "cross",
-  "bang", "query", "dots", "code", "heart", "spark",
+  "bang", "query", "dots", "code", "heart", "spark", "lid", "zz",
 ] as const satisfies readonly GlyphId[];
 
 export const GLYPH_FACE_STATES = [
-  "idle", "thinking", "searching", "working", "waiting", "finished", "happy", "failed",
+  "idle", "thinking", "searching", "working", "waiting", "finished", "happy", "failed", "asleep",
 ] as const satisfies readonly GlyphFaceState[];
 
 export const GLYPH_PATHS: Record<GlyphId, string> = {
@@ -106,6 +106,10 @@ export const GLYPH_PATHS: Record<GlyphId, string> = {
   // box is centred on the body and larger than it, so one tick floats off
   // the top-left of the body and the other off the bottom-right
   spark: "M2.9 9.4C2.1 9 2 7.9 2.8 7.3M16.6 20.4C17.4 20.8 17.5 21.9 16.7 22.5",
+  // u  a closed, sleeping eye
+  lid: "M5 10C7.2 16.5 16.8 16.5 19 10",
+  // zz  a small z and a lower, later one
+  zz: "M3 4.5L9 4.5L3 10.5L9 10.5M13 12.5L19 12.5L13 18.5L19 18.5",
 };
 
 export const GLYPH_FACES: Record<GlyphFaceState, GlyphFace> = {
@@ -117,6 +121,8 @@ export const GLYPH_FACES: Record<GlyphFaceState, GlyphFace> = {
   finished: { left: "gt", right: "lt", accent: "spark", anchor: "split" },
   happy: { left: "star", right: "star", accent: "heart", anchor: "top-right" },
   failed: { left: "cross", right: "cross", accent: null, anchor: null },
+  // a bot whose computer can't be reached right now
+  asleep: { left: "lid", right: "lid", accent: "zz", anchor: "top-right" },
 };
 
 /** Suggested placement, as fractions of the body diameter D, measured from
@@ -153,7 +159,7 @@ const EXPRESSION_STATES: Record<string, GlyphFaceState> = {
   idle: "idle", thinking: "thinking", searching: "searching", working: "working",
   waiting: "waiting", finished: "finished", happy: "happy", failed: "failed",
   // CursorAvatar lifecycle
-  sleeping: "idle", waking: "idle", listening: "searching",
+  sleeping: "asleep", waking: "idle", listening: "searching",
   // CursorAvatar reactions
   excited: "happy", surprised: "waiting", suspicious: "thinking", angry: "waiting",
   drowsy: "idle", curious: "thinking", confused: "thinking", bored: "idle",

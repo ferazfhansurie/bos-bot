@@ -243,7 +243,7 @@
   {
    "expression": "sleeping",
    "activity": null,
-   "state": "idle"
+   "state": "asleep"
   },
   {
    "expression": "sleeping",
@@ -258,12 +258,12 @@
   {
    "expression": "sleeping",
    "activity": "idle",
-   "state": "idle"
+   "state": "asleep"
   },
   {
    "expression": "sleeping",
    "activity": "no-signal",
-   "state": "idle"
+   "state": "asleep"
   },
   {
    "expression": "sleeping",

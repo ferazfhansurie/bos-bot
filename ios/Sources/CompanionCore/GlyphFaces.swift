@@ -11,7 +11,7 @@ import CoreGraphics
 import Foundation
 
 public enum GlyphFaceState: String, CaseIterable, Codable, Sendable {
-    case idle, thinking, searching, working, waiting, finished, happy, failed
+    case idle, thinking, searching, working, waiting, finished, happy, failed, asleep
 }
 
 public enum GlyphAccentAnchor: String, Codable, Sendable {
@@ -163,7 +163,7 @@ public enum GlyphFaces {
     static let expressionStates: [String: GlyphFaceState] = [
         "idle": .idle, "thinking": .thinking, "searching": .searching, "working": .working,
         "waiting": .waiting, "finished": .finished, "happy": .happy, "failed": .failed,
-        "sleeping": .idle, "waking": .idle, "listening": .searching,
+        "sleeping": .asleep, "waking": .idle, "listening": .searching,
         "excited": .happy, "surprised": .waiting, "suspicious": .thinking, "angry": .waiting,
         "drowsy": .idle, "curious": .thinking, "confused": .thinking, "bored": .idle,
         "proud": .finished, "shy": .happy, "sad": .idle, "laughing": .finished,

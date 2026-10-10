@@ -71,6 +71,7 @@ describe("glyph face table", () => {
       finished: { left: "gt", right: "lt", accent: "spark", anchor: "split" },
       happy: { left: "star", right: "star", accent: "heart", anchor: "top-right" },
       failed: { left: "cross", right: "cross", accent: null, anchor: null },
+      asleep: { left: "lid", right: "lid", accent: "zz", anchor: "top-right" },
     });
     expect(Object.keys(GLYPH_FACES).sort()).toEqual([...GLYPH_FACE_STATES].sort());
   });
