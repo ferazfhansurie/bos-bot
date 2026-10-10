@@ -39,6 +39,9 @@ final class ThreadMascotDirector {
     @ObservationIgnored private var moodTask: Task<Void, Never>?
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var cardKnown = false
+#if DEBUG
+    @ObservationIgnored private var scripted = false
+#endif
 
     func sent() { readBeat += 1 }
 
@@ -86,6 +89,12 @@ final class ThreadMascotDirector {
         cardOpen = open
         cardKnown = true
         lookingBack = false
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-mascot-script"), !scripted {
+            scripted = true
+            Task { await playScript() }
+        }
+#endif
     }
 
     private func setMood(_ next: ThreadMood?) {
@@ -102,6 +111,27 @@ final class ThreadMascotDirector {
         }
     }
 }
+
+#if DEBUG
+extension ThreadMascotDirector {
+    /// `-mascot-script`: every beat on a clock, so a simulator can be
+    /// screenshotted in each pose without a live turn.
+    fileprivate func playScript() async {
+        func at(_ seconds: Double, _ beat: () -> Void) async {
+            try? await Task.sleep(for: .seconds(seconds))
+            beat()
+        }
+        await at(4) { sent() }
+        await at(3) { replyLanded() }
+        await at(2) { setMood(.proud) }
+        await at(5) { setMood(.sheepish) }
+        await at(5) { setMood(.curious) }
+        await at(5) { setMood(nil); cardChanged(true) }
+        await at(10) { cardChanged(false); lookingBack = true }
+        await at(5) { lookingBack = false; burstBeat += 1; Haptics.success() }
+    }
+}
+#endif
 
 // MARK: - Header face
 
