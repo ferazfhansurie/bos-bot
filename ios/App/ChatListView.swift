@@ -415,6 +415,10 @@ struct ChatListView: View {
             .onChange(of: reduceMotion, initial: true) { _, reduce in listFaces.reduceMotion = reduce }
             .onChange(of: rosterFaceOrder, initial: true) { _, ids in listFaces.setOrder(ids) }
             .onChange(of: workingBotIDs, initial: true) { _, ids in listFaces.setWorkers(ids) }
+            .onChange(of: DoneMoments.shared.showing) { old, new in
+                // a thread marked done, here or from inside it: happy eyes and a wave
+                for id in new.subtracting(old) { listFaces.farewell(id) }
+            }
             .onChange(of: arrivalStamps) { old, new in
                 // a bot's new message, not the first load: hop + its own tap
                 guard !old.isEmpty else { return }
@@ -1063,11 +1067,12 @@ struct ChatListView: View {
         if case let .bot(home) = homeChat(chat),
            let task = session.state.bot(home.id)?.tasks?.first(where: { $0.threadId == home.threadId }) {
             Button("Mark done", systemImage: "checkmark.circle") {
-                // the face waves the thread off before it goes
-                listFaces.farewell(chat.id)
+                // the row checks off and the face waves the thread away once
+                // the menu has closed, then the thread goes
                 Haptics.success()
+                DoneMoments.shared.celebrate(chat.id, after: 0.25)
                 Task {
-                    try? await Task.sleep(for: .milliseconds(650))
+                    try? await Task.sleep(for: .milliseconds(750))
                     await session.setTaskArchived(task, for: home, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
                 }
             }
@@ -1484,6 +1489,14 @@ struct ChatRow: View {
 
             HStack(alignment: .top, spacing: 14) {
                 LiveChatAvatar(chat: chat, size: 52, state: state, animated: state.showsActivity, at: at)
+                    .overlay(alignment: .bottomTrailing) {
+                        if DoneMoments.shared.showing.contains(chat.id) {
+                            DoneCheck(color: MausPalette.color(chat.color), size: 22)
+                                .background(Circle().fill(Color(uiColor: .systemBackground)).padding(-2.5))
+                                .offset(x: 4, y: 4)
+                                .transition(.opacity)
+                        }
+                    }
                     .padding(.top, 12)
                     .accessibilityHidden(true)
 

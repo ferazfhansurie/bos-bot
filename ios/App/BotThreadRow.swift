@@ -14,6 +14,9 @@ struct BotThreadRow: View {
     /// keeps the task record's own answer. Scoped to this thread, so a bot
     /// busy elsewhere never marks this row.
     var live: ActivityFeedState? = nil
+    /// Just marked done: the bot's colour, for the check that draws itself
+    /// before the row folds away.
+    var done: Color? = nil
 
     private var working: Bool { live?.isBusy ?? task.isWorking }
 
@@ -85,8 +88,12 @@ struct BotThreadRow: View {
                 .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(done != nil ? 0.5 : 1)
 
-            if selected {
+            if let done {
+                DoneCheck(color: done, size: 24)
+                    .transition(.opacity)
+            } else if selected {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(Color.accentColor)
                     .accessibilityHidden(true)

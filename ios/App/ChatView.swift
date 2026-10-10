@@ -829,6 +829,9 @@ struct ChatView: View {
             setArchived(task, in: bot, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
             // Back to the list right away: the optimistic update has already
             // taken the thread out of it, and a failed write restores it.
+            // The bot's row checks off there once the pop has landed.
+            Haptics.success()
+            DoneMoments.shared.celebrate(bot.id, after: 0.4)
             leave()
         }
     }

@@ -18,6 +18,9 @@ struct TaskManagerView: View {
     @State private var isMutating = false
     @State private var showingArchived = false
     @State private var errorMessage: String?
+    /// Threads playing their done check before they fold into Archived.
+    @State private var finishing = Set<String>()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var renameFocused: Bool
 
     private var current: Chat {
@@ -29,6 +32,8 @@ struct TaskManagerView: View {
             return session.state.rooms.first(where: { $0.id == room.id }).map(Chat.room) ?? chat
         }
     }
+
+    private var doneColor: Color { MausPalette.color(current.color) }
 
     private var tasks: [BotTask] {
         switch current {
@@ -321,7 +326,8 @@ struct TaskManagerView: View {
                     task: task,
                     selected: task.threadId == current.threadId,
                     queued: session.state.pendingQueued[task.threadId]?.isEmpty == false,
-                    live: liveState(task)
+                    live: liveState(task),
+                    done: finishing.contains(task.threadId) ? doneColor : nil
                 )
             }
             .disabled(isMutating || (!current.isBot && current.busy && task.threadId != current.threadId))
@@ -393,7 +399,23 @@ struct TaskManagerView: View {
     private func toggleArchive(_ task: BotTask) {
         // The desktop sends Date.now(); the server takes any epoch number.
         let stamp = task.isArchived ? nil : (Date().timeIntervalSince1970 * 1000).rounded()
-        perform { await setArchived(task, archivedAt: stamp) }
+        guard stamp != nil else {
+            perform { await setArchived(task, archivedAt: nil) }
+            return
+        }
+        // Done: one tap, the row checks off once the swipe or menu has
+        // closed, then folds away into Archived.
+        guard !isMutating else { return }
+        Haptics.success()
+        perform {
+            try? await Task.sleep(for: .milliseconds(200))
+            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.3, dampingFraction: 0.7)) {
+                _ = finishing.insert(task.threadId)
+            }
+            try? await Task.sleep(for: .milliseconds(reduceMotion ? 250 : 420))
+            await setArchived(task, archivedAt: stamp)
+            finishing.remove(task.threadId)
+        }
     }
 
     private func setArchived(_ task: BotTask, archivedAt: Double?) async {
@@ -403,7 +425,8 @@ struct TaskManagerView: View {
             showError("This thread can't be marked done while it's working.")
             return
         }
-        guard await session.setTaskArchived(liveTask, for: bot, archivedAt: archivedAt) else {
+        let fold: Animation = reduceMotion ? .easeOut(duration: 0.2) : .snappy(duration: 0.32)
+        guard await session.setTaskArchived(liveTask, for: bot, archivedAt: archivedAt, animation: fold) else {
             showError("Couldn't update the thread. Try again.")
             return
         }
