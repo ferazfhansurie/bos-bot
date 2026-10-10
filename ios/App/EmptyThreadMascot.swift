@@ -101,7 +101,6 @@ struct EmptyThreadMascot: View {
     @State private var line: String?
     @State private var rate = MascotCreature.Rate.fast
     @State private var clock = MascotClock()
-    @State private var game = MascotGameBoard()
     /// Watches the whole window for a drag down off the header's face.
     @State private var puller = MascotPuller()
 
@@ -186,37 +185,8 @@ struct EmptyThreadMascot: View {
                     .accessibilityIdentifier("empty-mascot-line")
             }
         }
-        // The score is part of the scene: behind the mascot, top-anchored
-        // under whichever is lower, the island or the header, so it never
-        // sits on either on any phone.
-        .background(alignment: .top) {
-            if game.shown, !focused {
-                MascotScore(board: game, tint: GlyphMark.colors(bot.color, scheme: scheme).body,
-                            reduceMotion: reduceMotion)
-                    .frame(width: stage.width)
-                    .padding(.top, creature.scoreTop)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .allowsHitTesting(false)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
-            }
-        }
-        // The end of a run: centred between the score's spot and the mascot,
-        // behind it, and a tap anywhere on it skips it.
-        .background(alignment: .topLeading) {
-            if let ending = game.ending, !focused {
-                MascotEndCard(ending: ending, tint: GlyphMark.colors(bot.color, scheme: scheme).body,
-                              reduceMotion: reduceMotion, skip: { game.skip() })
-                    .id(ending.id)
-                    .frame(width: stage.width, height: 190)
-                    .position(x: stage.width / 2,
-                              y: max((creature.scoreTop + home.y - creature.side * 0.6) / 2, creature.scoreTop + 95))
-                    .transition(.asymmetric(insertion: .identity,
-                                            removal: .opacity.combined(with: .scale(scale: 0.85))))
-            }
-        }
         .animation(.spring(duration: 0.45, bounce: 0.2), value: line)
         .animation(.spring(duration: 0.5, bounce: 0.15), value: home.y)
-        .animation(.spring(duration: 0.35, bounce: 0.2), value: game.shown && !focused)
     }
 
     private var canPull: Bool { creature == nil && !isEmpty && !focused && !reduceMotion && !launchCovered }
@@ -245,7 +215,6 @@ struct EmptyThreadMascot: View {
         fresh.working = working
         fresh.onRate = { rate = $0 }
         fresh.onLine = { line = $0 }
-        fresh.onGame = { game.apply($0) }
         fresh.onGone = { [weak fresh] in
             guard let fresh, creature === fresh else { return }
             creature = nil
@@ -253,7 +222,6 @@ struct EmptyThreadMascot: View {
         }
         line = nil
         rate = .fast
-        game.hide()
         creature = fresh
         onRecess(fresh.recess)
     }
@@ -682,16 +650,7 @@ final class MascotCreature {
         }
     }
 
-    private enum Mode { case birth, home, held, flung, leaving }
-
-    /// What the keepy-uppy game tells the view: the score lives up top, the
-    /// physics live here.
-    enum GameEvent {
-        case start(best: Int)
-        case scored(score: Int, points: Int, trick: String?, newBest: Bool, milestone: Bool)
-        case missed(score: Int, newBest: Bool)
-        case quit
-    }
+    private enum Mode { case birth, home, held, flung, leaving, goal }
 
     static let bestKey = "bos.mascot.keepyUppy.best"
 
@@ -733,7 +692,6 @@ final class MascotCreature {
     var onRate: ((Rate) -> Void)?
     var onLine: ((String?) -> Void)?
     var onGone: (() -> Void)?
-    var onGame: ((GameEvent) -> Void)?
 
     // Stage, in the overlay's own space (its top is the screen's top).
     private var stage: CGSize = .zero
@@ -807,12 +765,29 @@ final class MascotCreature {
     private var lastClick: TimeInterval = -1
     /// Seconds spent spinning hard in place: long enough and it reels.
     private var fastSpin: TimeInterval = 0
-    /// Held and swung round in circles: which way the finger is heading,
-    /// and how fast that heading turns. The ball spins up with it.
-    private var heading: CGFloat?
-    private var headingFrom = CGPoint.zero
-    private var headingAt: TimeInterval = 0
-    private var swirl: CGFloat = 0
+    /// Held, it hangs off the finger by the spot it was grabbed: a
+    /// pendulum at `holdPhi` round the finger, `holdArm` out, turning at
+    /// `holdOmega`. The hand's speed and acceleration, smoothed, swing it.
+    private var holdPhi: CGFloat = .pi / 2
+    private var holdArm: CGFloat = 0
+    private var holdArmTarget: CGFloat = 16
+    private var holdOmega: CGFloat = 0
+    private var lastFinger: CGPoint?
+    private var fingerVel = CGVector.zero
+    private var fingerAcc = CGVector.zero
+    /// A touch that came down when it could not be taken: ignored to the end.
+    private var ignoring = false
+    /// Thrown up into the island (or the header's face on a recess).
+    private var goalAt: TimeInterval = 0
+    private var ejected = false
+    // The combo, fighting-game style: a count by the ball that punches on
+    // every hit and drops away when the run ends. No score, no board.
+    private var comboShown = 0
+    private var comboHitAt: TimeInterval = -10
+    private var comboEndAt: TimeInterval?
+    private var comboTrick: (word: String, at: TimeInterval)?
+    private var comboAt = CGPoint.zero
+    private var comboSide: CGFloat = 1
     private var frameDt: CGFloat = 0
 
     // Fidgets.
@@ -963,12 +938,6 @@ final class MascotCreature {
         return max(max(dock.header.maxY, pill) - origin.y, 0)
     }
 
-    /// Where the score's top goes, in the stage: under the lower of the
-    /// header, the island and the status bar, with a little air.
-    var scoreTop: CGFloat {
-        max(topWall, island.maxY, safeTop - origin.y) + 26
-    }
-
     private func local(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x - origin.x, y: point.y - origin.y) }
 
     private func measureIsland() {
@@ -1000,24 +969,26 @@ final class MascotCreature {
     private func poke() { lastPoke = t }
 
     func touch(at location: CGPoint, from start: CGPoint) {
-        guard mode != .leaving, mode != .birth else { return }
+        if ignoring { return }
         if !touching {
+            guard catchable else { ignoring = true; return }
             touching = true
             moved = false
             grab = CGVector(dx: p.x - start.x, dy: p.y - start.y)
             finger = start
+            lastFinger = nil
+            fingerVel = .zero
+            fingerAcc = .zero
             touchStart = start
             touchDownAt = t
-            heading = nil
-            headingFrom = start
-            headingAt = t
-            swirl = 0
             homeHopAt = nil
             hopping = false
             tiltRolling = false
             if playing, mode == .flung {
                 // a hit counts on touch-down; a near miss does nothing at all
                 if hits(start) { swat(at: start) } else { whiffed = true }
+            } else if mode == .flung || mode == .birth || mode == .leaving {
+                snatch()
             } else if rest == .asleep { wake() }
             poke()
         }
@@ -1050,12 +1021,13 @@ final class MascotCreature {
                 dialFollowed = 0
             } else {
                 squeezing = false
-                mode = .held
+                beginHold()
             }
         }
     }
 
     func release(velocity: CGSize) {
+        if ignoring { ignoring = false; return }
         guard touching else { return }
         touching = false
         poke()
@@ -1077,11 +1049,13 @@ final class MascotCreature {
             let speed = hypot(velocity.width, velocity.height)
             let cap: CGFloat = 5000
             let k = speed > cap ? cap / speed : 1
-            v = CGVector(dx: velocity.width * k, dy: velocity.height * k)
-            // a throw rolls off the fingertips with a little spin, on top of
-            // whatever spin a swing round gave it
-            spin += v.dx * 0.003
-            spin = max(min(spin, 60), -60)
+            // the hand's throw plus the swing it was hanging in: let go on
+            // the upswing and it slings
+            let swing = holdArm * holdOmega
+            v = CGVector(dx: velocity.width * k - sin(holdPhi) * swing, dy: velocity.height * k + cos(holdPhi) * swing)
+            // it leaves turning at the swing's rate, with a little roll off
+            // the fingertips
+            spin = max(min(holdOmega + v.dx * 0.0015, 60), -60)
             mode = .flung
             flungAt = t
             if speed > 500, !focused { startGame() }
@@ -1096,6 +1070,104 @@ final class MascotCreature {
         let was = swatting
         swat(at: point)
         swatting = was
+    }
+
+    /// Whether a finger coming down now can take it: any time it is out,
+    /// flying, dropping out of the island, or on its way back up.
+    private var catchable: Bool {
+        switch mode {
+        case .home, .held, .flung: return landedAt != nil
+        case .birth: return released && !reduceMotion
+        case .leaving: return recess && !focused && !gone && leftAt != nil && opacity.value > 0.3
+        case .goal: return false
+        }
+    }
+
+    /// Caught out of the air: it takes the hit in a squash, and whatever
+    /// it was doing carries into the swing off the finger.
+    private func snatch() {
+        if mode == .birth {
+            released = true
+            snapped = true
+            neck.target = 0
+            pill.target = 0
+        }
+        if mode == .leaving {
+            // grabbed on its way back up: it stays out
+            leftAt = nil
+            opacity.target = 1
+            runDoneAt = nil
+            cameoLeaving = true
+        }
+        if landedAt == nil {
+            landedAt = t
+            publishLine(EmptyMascotBrain.line(.arrive(day), seed: seed))
+        }
+        let speed = hypot(v.dx, v.dy)
+        moved = true
+        beginHold()
+        sy.velocity -= min(speed / 400, 5)
+        sx.velocity += min(speed / 550, 3.6)
+        blinkAt = t
+        moment = (.surprised, nil, t + 0.5)
+        haptic(.medium, min(0.45 + Double(speed) / 3000, 1))
+    }
+
+    /// Picked up: it hangs off the finger by the spot it was grabbed. Its
+    /// motion about that spot becomes the swing, the way a caught ball's
+    /// momentum does.
+    private func beginHold() {
+        let r = side * 0.46 * scale.value
+        let d = hypot(grab.dx, grab.dy)
+        holdPhi = d > 1 ? atan2(grab.dy, grab.dx) : .pi / 2
+        holdArm = min(d, r * 0.95)
+        // grabbed dead centre it still hangs a little: the finger has its skin
+        holdArmTarget = min(max(d, r * 0.4), r * 0.95)
+        let along = -sin(holdPhi) * v.dx + cos(holdPhi) * v.dy
+        let inertia = 0.5 * r * r + holdArm * holdArm
+        holdOmega = reduceMotion ? 0 : max(min((holdArm * along + 0.5 * r * r * spin) / max(inertia, 1), 40), -40)
+        mode = .held
+    }
+
+    /// Where a goal goes in: the island in an empty thread; on a recess,
+    /// the face in the header, where it lives then.
+    private var goalMouth: (at: CGPoint, half: CGFloat) {
+        if recess {
+            let at = dock.avatar == .zero
+                ? CGPoint(x: stage.width / 2, y: topWall - 30)
+                : local(CGPoint(x: dock.avatar.midX, y: dock.avatar.midY))
+            return (at, max(dock.avatar.width / 2, 40))
+        }
+        return (CGPoint(x: island.midX, y: island.midY), island.width / 2)
+    }
+
+    /// Thrown up into it: sucked in with a gulp and a cheer. In an empty
+    /// thread it drops straight back out to go again; on a recess it is
+    /// put away.
+    private func scoreGoal() {
+        mode = .goal
+        goalAt = t
+        ejected = false
+        swatting = false
+        if playing {
+            lastHit = t
+            bankFree = true
+            bonkFree = true
+            scored(1, trick: "goal")
+        }
+        pings.append((t, true))
+        pings.append((t + 0.1, true))
+        blinkAt = t
+        moment = (.excited, nil, t + 1.8)
+        if !recess {
+            pill.target = 1
+            pill.velocity += 5
+        }
+        haptic(.heavy, 1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+        poke()
     }
 
     func tap() {
@@ -1263,6 +1335,7 @@ final class MascotCreature {
             t += dt
         }
         think()
+        stepCombo(CGFloat(dt))
         publishRate()
         trail.append((t, p))
         trail.removeAll { t - $0.t > Self.trailLength }
@@ -1271,11 +1344,15 @@ final class MascotCreature {
             // the surface only has to catch the finger; `hits` decides
             let back = trail.first.map { hypot($0.p.x - p.x, $0.p.y - p.y) } ?? 0
             hit = 2 * (hitRadius + back + 12)
+        } else if mode == .flung || mode == .birth || mode == .leaving {
+            // a catch only has to come down near it: it is moving
+            let back = trail.first.map { hypot($0.p.x - p.x, $0.p.y - p.y) } ?? 0
+            hit = 2 * (side * 0.62 * max(scale.value, 0.6) + back + 10)
         }
 #if DEBUG
         if autoplay { autoplayStep() }
 #endif
-        return Frame(centre: p, hit: max(hit, 1), touchable: (mode == .home || mode == .held || mode == .flung) && landedAt != nil)
+        return Frame(centre: p, hit: max(hit, 1), touchable: catchable)
     }
 
     private func start() {
@@ -1355,14 +1432,63 @@ final class MascotCreature {
             if reduceMotion { p = home; v = .zero } else { springTo(target, stiffness: 120, damping: 12.5, dt: dt) }
             if cheers > 0, t >= cheerAt { cheer() }
         case .held:
-            // Stuck to the finger, not chasing it: a spring here trailed the
-            // finger by a beat and made dragging feel laggy. The velocity is
-            // the finger's, smoothed, so the stretch and lean still read.
-            let target = CGPoint(x: finger.x + grab.dx, y: finger.y + grab.dy)
-            let follow = min(dt * 30, 1)
-            v.dx += ((target.x - p.x) / dt - v.dx) * follow
-            v.dy += ((target.y - p.y) / dt - v.dy) * follow
-            p = target
+            // Hung off the finger by the spot it was grabbed, no lag: a
+            // pendulum. Gravity, the phone's tip and the hand's own
+            // acceleration swing it; swing the hand round and it goes over
+            // the top, round and round.
+            holdArm += (holdArmTarget - holdArm) * min(dt * 10, 1)
+            if !reduceMotion {
+                let ux = cos(holdPhi), uy = sin(holdPhi)
+                let gx = tilt * 2200 - fingerAcc.dx
+                let gy = 1700 - fingerAcc.dy
+                let inertia = 0.5 * r * r + holdArm * holdArm
+                let push = holdArm * (ux * gy - uy * gx) / max(inertia, 1)
+                holdOmega += (push - 1.1 * holdOmega) * dt
+                holdOmega = max(min(holdOmega, 60), -60)
+                holdPhi += holdOmega * dt
+                if abs(holdPhi) > 4 * .pi { holdPhi = remainder(holdPhi, 2 * .pi) }
+            }
+            p = CGPoint(x: finger.x + holdArm * cos(holdPhi), y: finger.y + holdArm * sin(holdPhi))
+            v = CGVector(dx: fingerVel.dx - sin(holdPhi) * holdArm * holdOmega,
+                         dy: fingerVel.dy + cos(holdPhi) * holdArm * holdOmega)
+        case .goal:
+            let since = t - goalAt
+            let mouth = goalMouth.at
+            if recess || since < 0.55 {
+                // in: pulled up into the mouth, shrinking as it goes
+                springTo(mouth, stiffness: 520, damping: 34, dt: dt)
+                scale.target = recess ? (dock.avatar == .zero ? 0.25 : dock.avatar.width / side) : 0.3
+                if recess {
+                    if hypot(p.x - mouth.x, p.y - mouth.y) < 16 || since > 0.45 { opacity.target = 0 }
+                    if !gone, opacity.value < 0.03 || since > 1.2 {
+                        gone = true
+                        quitGame()
+                        DispatchQueue.main.async { [weak self] in self?.onGone?() }
+                    }
+                }
+            } else {
+                // out: it drops back out of the bottom of the island, the
+                // game still on if there was one
+                if !ejected {
+                    ejected = true
+                    p = CGPoint(x: island.midX, y: island.maxY - r * 0.3)
+                    v = CGVector(dx: CGFloat(roll() - 0.5) * 300, dy: 420)
+                    spin = CGFloat(roll() - 0.5) * 16
+                    scale.target = 1
+                    sy.velocity += 4
+                    sx.velocity -= 3
+                    haptic(.light, 0.6)
+                }
+                v.dy += (playing ? gameGravity : 1700) * dt
+                p.x += v.dx * dt
+                p.y += v.dy * dt
+                if p.y - r > island.maxY - 6 { pill.target = 0 }
+                if p.y >= topWall + r {
+                    pill.target = 0
+                    mode = .flung
+                    flungAt = t
+                }
+            }
         case .flung:
             if playing {
                 // in a run: no vertical drag, so every pop rises the same
@@ -1390,6 +1516,8 @@ final class MascotCreature {
             p.x += v.dx * dt
             p.y += v.dy * dt
             collide(radius: r)
+            // it went in the goal: the goal owns it from here
+            guard mode == .flung else { break }
             let speed = hypot(v.dx, v.dy)
             if !playing, !tiltRolling { headHome(home, radius: r, speed: speed) }
         case .leaving:
@@ -1554,6 +1682,12 @@ final class MascotCreature {
             p.y = top
             if v.dy < 0 {
                 let speed = -v.dy
+                // hard up under the island (or the face, on a recess): in it goes
+                let mouth = goalMouth
+                if !reduceMotion, speed > 650, abs(p.x - mouth.at.x) < mouth.half + r * 0.3 {
+                    scoreGoal()
+                    return
+                }
                 if playing, bonkFree, speed > 450 { bonkFree = false; scored(1, trick: "bonk") }
                 bump(speed, horizontal: false)
                 v.dy = -v.dy * 0.6
@@ -1610,15 +1744,20 @@ final class MascotCreature {
         }
         switch mode {
         case .home:
+            // A spun ball coasts: a steady rolling friction plus a little
+            // air, so it winds down evenly instead of braking at a speed.
+            // Its weighted bottom pulls the whole time, so as it slows each
+            // turn lurches more until it can't get over the top, then it
+            // rocks itself upright.
             let target = (p.x - home.x) / max(r, 1)
-            let damping: CGFloat = abs(spin) > 6 ? 0.45 : 2.4
-            spin += (-45 * sin(angle - target) - damping * spin) * dt
+            let fast = abs(spin)
+            let slow = max(1 - fast / 5, 0)
+            let drag = 0.25 + 2.1 * slow * slow
+            let friction = 1.5 * min(fast / 0.5, 1) * (spin > 0 ? 1 : -1)
+            spin += (-45 * sin(angle - target) - drag * spin - friction) * dt
         case .held:
-            // swung round in circles it spins up with the swing; held
-            // still it settles back upright in the hand
-            let want = max(min(swirl, 40), -40)
-            spin += (want - spin) * min(dt * (abs(want) > 1 ? 5 : 3), 1)
-            if abs(want) < 1 { spin -= 18 * sin(angle) * dt }
+            // it turns with the swing about the finger
+            spin = holdOmega
         case .flung:
             let floor = stage.height - r
             if p.y >= floor - 0.5, abs(v.dy) < 80 {
@@ -1677,22 +1816,24 @@ final class MascotCreature {
             squeezing = true
             nextSqueezeTick = t
         }
-        if mode == .held {
-            let dx = finger.x - headingFrom.x, dy = finger.y - headingFrom.y
-            if hypot(dx, dy) > 3 {
-                let h = atan2(dy, dx)
-                let turned = heading.map { remainder(h - $0, 2 * .pi) } ?? 0
-                // a sharp reversal is a shake, not a circle
-                let rate = abs(turned) < 1.2 ? turned / max(CGFloat(t - headingAt), dt) : 0
-                swirl += (rate - swirl) * min(dt * 9, 1)
-                heading = h
-                headingFrom = finger
-                headingAt = t
-            } else {
-                swirl *= exp(-5 * dt)
-            }
+        // the hand's speed and acceleration, smoothed: the held pendulum
+        // swings off them
+        if touching {
+            let prev = lastFinger ?? finger
+            lastFinger = finger
+            let k = min(dt / 0.035, 1)
+            let next = CGVector(dx: fingerVel.dx + ((finger.x - prev.x) / dt - fingerVel.dx) * k,
+                                dy: fingerVel.dy + ((finger.y - prev.y) / dt - fingerVel.dy) * k)
+            var ax = (next.dx - fingerVel.dx) / dt, ay = (next.dy - fingerVel.dy) / dt
+            let a = hypot(ax, ay), cap: CGFloat = 14000
+            if a > cap { ax *= cap / a; ay *= cap / a }
+            let j = min(dt / 0.05, 1)
+            fingerAcc = CGVector(dx: fingerAcc.dx + (ax - fingerAcc.dx) * j, dy: fingerAcc.dy + (ay - fingerAcc.dy) * j)
+            fingerVel = next
         } else {
-            swirl = 0
+            lastFinger = nil
+            fingerVel = .zero
+            fingerAcc = .zero
         }
     }
 
@@ -1760,7 +1901,6 @@ final class MascotCreature {
         let speed = hypot(v.dx, v.dy), cap: CGFloat = 2600
         if speed > cap { v.dx *= cap / speed; v.dy *= cap / speed }
         Self.prepareHaptics()
-        publishGame(.start(best: best))
     }
 
     /// A finger on it while it is up: the same pop every time, straight up
@@ -1828,7 +1968,11 @@ final class MascotCreature {
             haptic(trick == nil ? .rigid : .light, trick == nil ? 0.5 + combo : 0.7)
             if trick == "flick" { haptic(.medium, 0.6 + combo) }
         }
-        publishGame(.scored(score: score, points: points, trick: trick, newBest: newBest, milestone: milestone))
+        if before == 0 { comboAt = .zero }
+        comboShown = score
+        comboHitAt = t
+        comboEndAt = nil
+        if let trick { comboTrick = (trick, t) }
     }
 
     private func miss() {
@@ -1856,7 +2000,7 @@ final class MascotCreature {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.haptic(.soft, 0.45) }
             }
         }
-        publishGame(.missed(score: score, newBest: record))
+        comboEndAt = t
         score = 0
     }
 
@@ -1906,11 +2050,7 @@ final class MascotCreature {
         whiffed = false
         score = 0
         flungAt = t - 0.6
-        publishGame(.quit)
-    }
-
-    private func publishGame(_ event: GameEvent) {
-        DispatchQueue.main.async { [weak self] in self?.onGame?(event) }
+        comboEndAt = t
     }
 
     private func bump(_ speed: CGFloat, horizontal: Bool) {
@@ -2215,7 +2355,7 @@ final class MascotCreature {
         let quarter = Int(floor(angle / (.pi / 2))) & 3
         if quarter != lastQuarter {
             lastQuarter = quarter
-            if !playing, mode == .home || mode == .held, abs(spin) > 1.5, t - lastClick > 0.035 {
+            if !playing, (mode == .home && abs(spin) > 1.5) || (mode == .held && abs(spin) > 7), t - lastClick > 0.035 {
                 lastClick = t
                 haptic(.rigid, min(0.3 + Double(abs(spin)) / 40, 0.9))
             }
@@ -2359,8 +2499,10 @@ final class MascotCreature {
                  gaze: CGPoint(x: gazeX.value * still, y: gazeY.value * still),
                  lead: CGPoint(x: leadX.value, y: leadY.value), changedAt: moodChangedAt, scheme: scheme)
 
-        // The island swells to let it out, then closes behind it.
-        if pill.value > 0.01, mode == .birth || mode == .home {
+        drawCombo(in: &context, paint: paint, scheme: scheme)
+
+        // The island swells to let it out (or take a goal), then closes.
+        if pill.value > 0.01, mode != .leaving {
             let w = island.width + 34 * pill.value
             let h = island.height + 18 * pill.value
             let rect = CGRect(x: island.midX - w / 2, y: island.minY, width: w, height: h)
@@ -2368,6 +2510,65 @@ final class MascotCreature {
             if !hasIsland { pillContext.opacity *= Double(min(pill.value * 3, 1)) }
             pillContext.fill(Path(roundedRect: rect, cornerRadius: h / 2, style: .continuous), with: .color(.black))
             if mode == .birth { peekEyes(in: &pillContext, pill: rect, paint: paint) }
+        }
+    }
+
+    /// The combo by the ball, the way a fighting game counts hits: it stays
+    /// off the side with more room, follows the ball, punches up on every
+    /// hit with a flash, shakes once the run is long, and when the run ends
+    /// it holds a beat and drops away.
+    private func stepCombo(_ dt: CGFloat) {
+        guard comboShown > 1, comboEndAt == nil else { return }
+        let r = side * 0.46 * scale.value
+        if p.x > stage.width * 0.62 { comboSide = -1 } else if p.x < stage.width * 0.38 { comboSide = 1 }
+        let want = CGPoint(x: min(max(p.x + comboSide * (r + 48), 56), stage.width - 56),
+                           y: max(p.y - r * 0.6, topWall + 30))
+        let k = comboAt == .zero ? 1 : min(dt * 14, 1)
+        comboAt.x += (want.x - comboAt.x) * k
+        comboAt.y += (want.y - comboAt.y) * k
+    }
+
+    private func drawCombo(in context: inout GraphicsContext, paint: Paint, scheme: ColorScheme) {
+        guard comboShown > 1, comboAt != .zero else { return }
+        var fade = 1.0
+        var drop: CGFloat = 0
+        if let end = comboEndAt {
+            let k = (t - end - 0.7) / 0.35
+            if k >= 1 { return }
+            if k > 0 { fade = 1 - k; drop = CGFloat(k * k) * 26 }
+        }
+        let since = t - comboHitAt
+        let punch = CGFloat(max(1 - since / 0.18, 0))
+        let size = 1 + 0.5 * punch * punch
+        let jolt = comboShown >= 10 ? punch * 3 : 0
+        var c = context
+        c.opacity *= fade
+        c.translateBy(x: comboAt.x + jolt * CGFloat(sin(t * 97)), y: comboAt.y + drop + jolt * CGFloat(cos(t * 83)))
+        c.rotate(by: .degrees(-8))
+        c.scaleBy(x: size, y: size)
+        c.addFilter(.shadow(color: .black.opacity(scheme == .dark ? 0.55 : 0.22), radius: 3, y: 1.5))
+        let numberFont = Font.system(size: 40, weight: .black, design: .rounded).italic()
+        let number = c.resolve(Text("\(comboShown)").font(numberFont).foregroundColor(paint.body))
+        let hits = c.resolve(Text("HITS").font(.system(size: 13, weight: .heavy, design: .rounded).italic())
+            .foregroundColor(paint.body))
+        let n = number.measure(in: CGSize(width: 300, height: 100))
+        let h = hits.measure(in: CGSize(width: 300, height: 100))
+        let left = -(n.width + 3 + h.width) / 2
+        c.draw(number, at: CGPoint(x: left, y: 0), anchor: .leading)
+        c.draw(hits, at: CGPoint(x: left + n.width + 3, y: n.height * 0.2), anchor: .leading)
+        if punch > 0.02 {
+            var flash = c
+            flash.opacity *= Double(punch)
+            flash.draw(c.resolve(Text("\(comboShown)").font(numberFont).foregroundColor(.white)),
+                       at: CGPoint(x: left, y: 0), anchor: .leading)
+        }
+        if let trick = comboTrick, t - trick.at < 0.8 {
+            let k = (t - trick.at) / 0.8
+            var w = c
+            w.opacity *= 1 - k * k
+            w.draw(c.resolve(Text(trick.word.uppercased() + "!").font(.system(size: 13, weight: .heavy, design: .rounded).italic())
+                    .foregroundColor(scheme == .dark ? .white : .black)),
+                   at: CGPoint(x: 0, y: n.height * 0.6 + CGFloat(k) * 4), anchor: .center)
         }
     }
 
@@ -2554,291 +2755,5 @@ final class MascotCreature {
                 impact(style).prepare()
             }
         }
-    }
-}
-
-// MARK: - Keepy-uppy score
-
-/// The score board's state. The creature sends events; this turns them into
-/// what the number does: pop on a hit, a ring at a milestone, and at the end
-/// of a run a score moment in the middle of the scene: the final number lands
-/// big with the best under it, or a burst for a new best, then goes.
-@MainActor @Observable final class MascotGameBoard {
-    /// A finished run, on screen until it times out or is tapped away.
-    struct Ending: Equatable {
-        let id: Int
-        let score: Int
-        let best: Int
-        let newBest: Bool
-    }
-
-    private(set) var shown = false
-    private(set) var score = 0
-    private(set) var best = 0
-    private(set) var newBest = false
-    private(set) var pops = 0
-    private(set) var bigPop = false
-    private(set) var milestones = 0
-    private(set) var flash = false
-    private(set) var trick: (text: String, id: Int)?
-    private(set) var ending: Ending?
-    @ObservationIgnored private var endings = 0
-    @ObservationIgnored private var hold: Task<Void, Never>?
-    @ObservationIgnored private var trickClear: Task<Void, Never>?
-    @ObservationIgnored private var flashClear: Task<Void, Never>?
-
-    func apply(_ event: MascotCreature.GameEvent) {
-        switch event {
-        case .start(let best):
-            // a new throw clears the last run's moment straight away
-            hold?.cancel()
-            if ending != nil { withAnimation(.smooth(duration: 0.2)) { ending = nil } }
-            self.best = best
-            score = 0
-            newBest = false
-            flash = false
-            trick = nil
-            shown = true
-        case let .scored(score, points, trick, isBest, milestone):
-            guard shown else { return }
-            withAnimation(.snappy(duration: 0.22)) { self.score = score }
-            if score > best { best = score }
-            bigPop = isBest || milestone
-            if isBest { withAnimation(.spring(duration: 0.4, bounce: 0.3)) { newBest = true } }
-            pops += 1
-            if milestone { mark() }
-            if let trick { show("+\(points) \(trick)") }
-        case let .missed(final, record):
-            guard shown else { return }
-            hold?.cancel()
-            let best = max(best, final)
-            withAnimation(.smooth(duration: 0.2)) {
-                shown = false
-                trick = nil
-            }
-            // a toss that never got a hit is not a run: no moment for it
-            guard final > 0 else { return }
-            endings += 1
-            ending = Ending(id: endings, score: final, best: best, newBest: record)
-            let id = endings
-            hold = Task { [weak self] in
-                // long enough to enjoy it, short enough not to be in the way
-                try? await Task.sleep(for: .milliseconds(record ? 2500 : 2000))
-                guard let self, !Task.isCancelled, self.ending?.id == id else { return }
-                withAnimation(.smooth(duration: 0.45)) { self.ending = nil }
-            }
-        case .quit:
-            hide()
-        }
-    }
-
-    /// A tap on the moment: it goes now.
-    func skip() {
-        hold?.cancel()
-        withAnimation(.smooth(duration: 0.3)) { ending = nil }
-    }
-
-    func hide() {
-        hold?.cancel()
-        withAnimation(.smooth(duration: 0.25)) {
-            shown = false
-            ending = nil
-        }
-        trick = nil
-    }
-
-    /// A milestone: the number takes the bot's colour for a beat and a ring
-    /// leaves it.
-    private func mark() {
-        milestones += 1
-        withAnimation(.easeOut(duration: 0.12)) { flash = true }
-        flashClear?.cancel()
-        flashClear = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(650))
-            guard let self, !Task.isCancelled else { return }
-            withAnimation(.smooth(duration: 0.5)) { self.flash = false }
-        }
-    }
-
-    private func show(_ text: String) {
-        withAnimation(.spring(duration: 0.3, bounce: 0.25)) { trick = (text, pops) }
-        let id = pops
-        trickClear?.cancel()
-        trickClear = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(900))
-            guard let self, !Task.isCancelled, self.trick?.id == id else { return }
-            withAnimation(.smooth(duration: 0.3)) { self.trick = nil }
-        }
-    }
-}
-
-/// The score during a run: a big rounded number in the scene under the
-/// header, the best small and quiet beneath it, and the trick that scored,
-/// briefly, in the bot's colour. Drawn behind the mascot, so it flies over it.
-private struct MascotScore: View {
-    let board: MascotGameBoard
-    let tint: Color
-    let reduceMotion: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            number
-            Group {
-                if board.newBest {
-                    Text("new best")
-                        .foregroundStyle(tint)
-                        .transition(.scale(scale: 0.6).combined(with: .opacity))
-                } else if board.best > 0 {
-                    Text("best \(board.best)")
-                        .foregroundStyle(.tertiary)
-                        .contentTransition(.numericText(value: Double(board.best)))
-                }
-            }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-            .frame(height: 20)
-            ZStack {
-                if let trick = board.trick {
-                    Text(trick.text)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(tint)
-                        .id(trick.id)
-                        .transition(.asymmetric(insertion: .scale(scale: 0.5).combined(with: .opacity),
-                                                removal: .opacity.combined(with: .offset(y: -8))))
-                }
-            }
-            .frame(height: 22)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("score \(board.score), best \(board.best)")
-    }
-
-    @ViewBuilder private var number: some View {
-        let text = Text("\(board.score)")
-            .font(.system(size: 64, weight: .bold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(board.flash ? AnyShapeStyle(tint) : AnyShapeStyle(.primary))
-            .contentTransition(.numericText(value: Double(board.score)))
-        if reduceMotion {
-            text
-        } else {
-            let big = board.bigPop
-            text
-                .background { ring }
-                .keyframeAnimator(initialValue: CGFloat(1), trigger: board.pops) { content, scale in
-                    content.scaleEffect(scale)
-                } keyframes: { _ in
-                    SpringKeyframe(big ? 1.4 : 1.14, duration: big ? 0.12 : 0.07, spring: .snappy)
-                    SpringKeyframe(1, duration: big ? 0.6 : 0.36, spring: .bouncy)
-                }
-        }
-    }
-
-    /// The milestone ring: leaves the number and fades.
-    private var ring: some View {
-        Circle()
-            .stroke(tint, lineWidth: 3)
-            .frame(width: 70, height: 70)
-            // at rest k is 1: fully out and invisible
-            .keyframeAnimator(initialValue: CGFloat(1), trigger: board.milestones) { content, k in
-                content.scaleEffect(0.7 + k * 1.3).opacity(Double(1 - k) * 0.7)
-            } keyframes: { _ in
-                MoveKeyframe(0)
-                LinearKeyframe(1, duration: 0.7, timingCurve: .easeOut)
-            }
-    }
-}
-
-/// The end of a run, in the middle of the scene. A plain miss: the number
-/// drops in and lands with a thud, the best quiet under it. A new best: the
-/// number springs up from nothing in the bot's colour, a burst of flat dots
-/// and two rings leave it, and "new best" pops in under it. Tap to skip.
-private struct MascotEndCard: View {
-    let ending: MascotGameBoard.Ending
-    let tint: Color
-    let reduceMotion: Bool
-    let skip: () -> Void
-    @State private var landed = false
-    @State private var label = false
-    @State private var burst = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                if ending.newBest, !reduceMotion { MascotBurst(tint: tint, out: burst) }
-                Text("\(ending.score)")
-                    .font(.system(size: ending.newBest ? 116 : 100, weight: .heavy, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(ending.newBest ? AnyShapeStyle(tint) : AnyShapeStyle(.primary))
-                    .scaleEffect(landed ? 1 : ending.newBest ? 0.2 : 1.3)
-                    .offset(y: landed || ending.newBest ? 0 : -36)
-                    .opacity(landed ? 1 : 0)
-            }
-            Group {
-                if ending.newBest {
-                    Text("new best")
-                        .font(.system(size: 26, weight: .heavy, design: .rounded))
-                        .foregroundStyle(tint)
-                } else {
-                    Text("best \(ending.best)")
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .monospacedDigit()
-            .scaleEffect(label ? 1 : 0.5)
-            .opacity(label ? 1 : 0)
-        }
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: skip)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(ending.newBest ? "new best, \(ending.score)" : "final score \(ending.score), best \(ending.best)")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Tap to dismiss")
-        .onAppear {
-            guard !reduceMotion else { landed = true; label = true; return }
-            if ending.newBest {
-                withAnimation(.spring(duration: 0.6, bounce: 0.55)) { landed = true }
-                withAnimation(.easeOut(duration: 0.95).delay(0.06)) { burst = true }
-                withAnimation(.spring(duration: 0.5, bounce: 0.5).delay(0.22)) { label = true }
-            } else {
-                // a thud: falls a little, lands, barely bounces
-                withAnimation(.spring(duration: 0.38, bounce: 0.28)) { landed = true }
-                withAnimation(.smooth(duration: 0.35).delay(0.2)) { label = true }
-            }
-        }
-    }
-}
-
-/// The new-best burst: flat dots and dashes thrown out in a ring, and two
-/// rings expanding, all in the bot's colour, gone in under a second.
-private struct MascotBurst: View {
-    let tint: Color
-    let out: Bool
-    private static let count = 14
-
-    var body: some View {
-        ZStack {
-            ForEach(0..<2, id: \.self) { i in
-                Circle()
-                    .stroke(tint, lineWidth: i == 0 ? 4 : 2.5)
-                    .frame(width: 96, height: 96)
-                    .scaleEffect(out ? (i == 0 ? 2.6 : 3.4) : 0.5)
-                    .opacity(out ? 0 : 0.8)
-            }
-            ForEach(0..<Self.count, id: \.self) { i in
-                let angle = Double(i) / Double(Self.count) * 2 * .pi + (i.isMultiple(of: 2) ? 0 : 0.18)
-                let far: CGFloat = i.isMultiple(of: 2) ? 150 : 115
-                Capsule()
-                    .fill(tint.opacity(i.isMultiple(of: 3) ? 0.55 : 1))
-                    .frame(width: i.isMultiple(of: 2) ? 16 : 10, height: i.isMultiple(of: 2) ? 7 : 10)
-                    .rotationEffect(.radians(angle))
-                    .offset(x: CGFloat(cos(angle)) * (out ? far : 40), y: CGFloat(sin(angle)) * (out ? far : 40))
-                    .scaleEffect(out ? 0.5 : 1)
-                    .opacity(out ? 0 : 1)
-            }
-        }
-        .allowsHitTesting(false)
     }
 }
