@@ -696,7 +696,7 @@ struct ChatView: View {
             isPresented: $showingPhotoPicker,
             selection: $selectedPhotos,
             maxSelectionCount: max(1, AttachmentPolicy.maximumItems - attachments.count),
-            matching: .images,
+            matching: .any(of: [.images, .videos]),
             preferredItemEncoding: .current
         )
         .onChange(of: selectedPhotos) { _, items in
@@ -922,7 +922,7 @@ struct ChatView: View {
         var out: [PlusAction] = [
             PlusAction(
                 id: "photos", systemImage: "photo.on.rectangle", title: "Photo Library",
-                subtitle: "Add a photo to this message", disabled: !canAddAttachment
+                subtitle: "Add a photo or video to this message", disabled: !canAddAttachment
             ) { showingPhotoPicker = true },
             PlusAction(
                 id: "files", systemImage: "paperclip", title: "Choose File",
@@ -1280,6 +1280,17 @@ struct ChatView: View {
         do {
             var imported: [PendingMessageAttachment] = []
             for (index, item) in items.enumerated() {
+                if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                    guard let movie = try await item.loadTransferable(type: PickedMovie.self) else {
+                        throw AttachmentImportError.unreadable("that video")
+                    }
+                    defer { try? FileManager.default.removeItem(at: movie.url) }
+                    let name = items.count == 1 ? "Video" : "Video \(index + 1)"
+                    let candidate = try await VideoAttachment.make(from: movie.url, name: name)
+                    try AttachmentPolicy.validate(existingAttachments + imported + [candidate])
+                    imported.append(candidate)
+                    continue
+                }
                 guard let raw = try await item.loadTransferable(type: Data.self) else {
                     throw AttachmentImportError.unreadable("that photo")
                 }
@@ -1352,6 +1363,14 @@ struct ChatView: View {
         do {
             var imported: [PendingMessageAttachment] = []
             for url in urls {
+                if (UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie)) == true {
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                    let candidate = try await VideoAttachment.make(from: url, name: url.lastPathComponent)
+                    try AttachmentPolicy.validate(existingAttachments + imported + [candidate])
+                    imported.append(candidate)
+                    continue
+                }
                 let usedBytes = (existingAttachments + imported).reduce(0) { $0 + $1.data.count }
                 let remainingBytes = max(0, AttachmentPolicy.maximumTotalBytes - usedBytes)
                 let candidate = try await Task.detached(priority: .userInitiated) {

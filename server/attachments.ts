@@ -77,7 +77,7 @@ const IMAGE_MIMES: Record<string, string> = {
   "image/webp": ".webp",
 };
 
-/** Useful document and audio formats accepted by the upload endpoint.
+/** Useful document, audio and video formats accepted by the upload endpoint.
  * Generic archives, binaries, HTML, SVG, and executable/script mimes stay
  * out. Office/OpenDocument packages are allowed because they are documents,
  * despite using ZIP internally. The claimed mime determines the extension;
@@ -95,6 +95,11 @@ const FILE_MIMES: Readonly<Record<string, string>> = {
   "audio/flac": ".flac",
   "audio/x-flac": ".flac",
   "audio/webm": ".webm",
+  // Phone videos. The iOS app re-encodes them to fit FILE_MAX_BYTES.
+  "video/mp4": ".mp4",
+  "video/quicktime": ".mov",
+  "video/x-m4v": ".m4v",
+  "video/webm": ".webm",
   "text/plain": ".txt",
   "text/markdown": ".md",
   "text/csv": ".csv",
@@ -464,7 +469,7 @@ export function extensionForFileMime(mime: string | undefined): string | null {
  * remain visible as bad requests. */
 export function sanitizeSharedFileName(name: string, mime: string): string {
   const extension = extensionForFileMime(mime);
-  if (!extension) throw statusError(400, "content-type must be a supported document or audio type");
+  if (!extension) throw statusError(400, "content-type must be a supported document, audio or video type");
 
   const normalized = name.normalize("NFKC").trim();
   if (!normalized) throw statusError(400, "name is required");
@@ -500,7 +505,7 @@ export async function saveFile(
 ): Promise<SavedFile> {
   const normalized = normalizedMime(mime);
   if (!normalized || !extensionForFileMime(normalized)) {
-    throw statusError(400, "content-type must be a supported document or audio type");
+    throw statusError(400, "content-type must be a supported document, audio or video type");
   }
   const name = sanitizeSharedFileName(originalName, normalized);
   const extension = extensionForFileMime(normalized)!;

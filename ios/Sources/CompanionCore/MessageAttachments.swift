@@ -48,7 +48,7 @@ public enum AttachmentPolicyError: Error, LocalizedError, Equatable, Sendable {
         case .invalidName:
             return "That file doesn't have a valid filename."
         case let .unsupportedType(name):
-            return "\(name) isn't a supported file. Try PDF, text, Word, Excel, or PowerPoint."
+            return "\(name) isn't a supported file. Try a video, PDF, text, Word, Excel, or PowerPoint."
         case let .itemTooLarge(name, limitMB):
             return "\(name) is larger than \(limitMB) MB."
         }
@@ -66,6 +66,11 @@ public enum AttachmentPolicy {
 
     public static let imageMIMETypes: Set<String> = [
         "image/png", "image/jpeg", "image/gif", "image/webp",
+    ]
+
+    /// Videos go up as files; the app re-encodes them to fit maximumFileBytes.
+    public static let videoMIMETypes: Set<String> = [
+        "video/mp4", "video/quicktime", "video/x-m4v",
     ]
 
     public static let documentMIMETypes: Set<String> = [
@@ -92,7 +97,7 @@ public enum AttachmentPolicy {
     public static func kind(forMIME value: String) -> PendingMessageAttachment.Kind? {
         let mime = normalizedMIME(value)
         if imageMIMETypes.contains(mime) { return .image }
-        if documentMIMETypes.contains(mime) { return .file }
+        if documentMIMETypes.contains(mime) || videoMIMETypes.contains(mime) { return .file }
         return nil
     }
 
@@ -115,7 +120,7 @@ public enum AttachmentPolicy {
                     throw AttachmentPolicyError.itemTooLarge(name: name, limitMB: 10)
                 }
             case .file:
-                guard documentMIMETypes.contains(mime) else {
+                guard documentMIMETypes.contains(mime) || videoMIMETypes.contains(mime) else {
                     throw AttachmentPolicyError.unsupportedType(name)
                 }
                 guard attachment.data.count <= maximumFileBytes else {

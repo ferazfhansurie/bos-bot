@@ -403,6 +403,8 @@ describe("shared files", () => {
   it("sanitizes the display name and derives its extension from the mime", () => {
     expect(sanitizeSharedFileName("  Quarterly: report.exe  ", "application/pdf")).toBe("Quarterly_ report.pdf");
     expect(sanitizeSharedFileName("notes", "text/markdown")).toBe("notes.md");
+    expect(sanitizeSharedFileName("Video.MOV", "video/quicktime")).toBe("Video.mov");
+    expect(sanitizeSharedFileName("Video", "video/mp4")).toBe("Video.mp4");
     expect(() => sanitizeSharedFileName("../../secret.txt", "text/plain")).toThrow(/filename, not a path/);
     expect(() => sanitizeSharedFileName("..\\..\\secret.txt", "text/plain")).toThrow(/filename, not a path/);
     expect(() => sanitizeSharedFileName("..%2F..%2Fsecret.txt", "text/plain")).toThrow(/filename, not a path/);
