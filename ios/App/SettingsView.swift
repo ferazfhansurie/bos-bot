@@ -552,6 +552,17 @@ struct ConnectedComputersView: View {
         session.connections.filter { $0.id != session.connection?.id }
     }
 
+    /// Other computers stay connected; say whether this one is right now.
+    private func homeStatus(_ computer: Connection) -> String {
+        guard let home = session.satellites.first(where: { $0.connection?.id == computer.id }) else {
+            return String(localized: "Not connected")
+        }
+        let bots = home.state.bots.filter { $0.hidden != true }.count
+        return home.status == .live
+            ? String(localized: "Connected · \(bots) bots in your list")
+            : String(localized: "Asleep · bots show as asleep until it's back")
+    }
+
     var body: some View {
         List {
             if let active = session.connection {
@@ -581,12 +592,12 @@ struct ConnectedComputersView: View {
                                     Text(computer.name)
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
-                                    Text("Tap to switch")
+                                    Text(homeStatus(computer))
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Text("Use")
+                                Text("Make main")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(MausPalette.color("blue"))
                             }
@@ -604,7 +615,7 @@ struct ConnectedComputersView: View {
                                 pendingRemoval = computer
                             }
                         }
-                        .accessibilityHint("Switches BOS to this computer")
+                        .accessibilityHint("Makes this the main computer")
                     }
                 }
             }
@@ -617,7 +628,7 @@ struct ConnectedComputersView: View {
                     Label("Connect another computer", systemImage: "plus.circle.fill")
                 }
             } footer: {
-                Text("Each computer is paired separately. Only the selected computer is active at a time.")
+                Text("Bots on every paired computer show in your chat list. The main computer is the one widgets and Live Activities follow.")
             }
         }
         .navigationTitle("Computers")
