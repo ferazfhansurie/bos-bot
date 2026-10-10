@@ -125,7 +125,10 @@ export class ApnsPush {
     if (removed.length) this.persist();
   }
 
-  async send(actorId: string, title: string, body: string, target: PushTarget, id: string = randomUUID()): Promise<void> {
+  /** `skipVoip`: a session with the app on screen rings in-app from the
+   * stream, so its ring skips CallKit (iOS would ring it there instead). */
+  async send(actorId: string, title: string, body: string, target: PushTarget, id: string = randomUUID(),
+    skipVoip: (sessionId: string) => boolean = () => false): Promise<void> {
     this.pruneRevoked();
     const credential = this.credential();
     if (!credential) return;
@@ -135,7 +138,7 @@ export class ApnsPush {
       // A connection can fail before Apple sees the push (2026-10-10: a ring
       // died on "pending stream has been canceled"), so a fresh session retries.
       for (let attempt = 1; ; attempt++) {
-        try { return await this.deliver(device, credential, title, body, target, id); }
+        try { return await this.deliver(device, credential, title, body, target, id, skipVoip); }
         catch (error) {
           if (attempt >= 3) throw error;
           console.warn(`APNs attempt ${attempt} failed (${describe(error)}); retrying`);
@@ -145,7 +148,8 @@ export class ApnsPush {
     }));
   }
 
-  private async deliver(device: Device, credential: Credential, title: string, body: string, target: PushTarget, id: string): Promise<void> {
+  private async deliver(device: Device, credential: Credential, title: string, body: string, target: PushTarget, id: string,
+    skipVoip: (sessionId: string) => boolean = () => false): Promise<void> {
     const host = device.environment === "development" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
     const client = connect(host, CONNECT_OPTIONS);
     client.on("error", error => console.warn(`APNs connection failed: ${describe(error)}`));
@@ -153,7 +157,9 @@ export class ApnsPush {
       const payload = JSON.stringify(buildApnsPayload(title, body, target, device.connectionId));
       // A ring rings through CallKit when the phone has a PushKit token;
       // without one, or if Apple refuses it, the alert push still goes.
-      if (target.type === "voice_ring" && device.voipToken) {
+      // On screen, the app rings itself; the alert still goes in case it
+      // has just left the screen (the app keeps a foreground one quiet).
+      if (target.type === "voice_ring" && device.voipToken && !(device.sessionId && skipVoip(device.sessionId))) {
         const voip = await this.post(client, credential, device.voipToken, `${APNS_TOPIC}.voip`, "voip", payload, id,
           { "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 30) });
         if (voip.status === 200) { console.info("APNs accepted a VoIP ring"); return; }

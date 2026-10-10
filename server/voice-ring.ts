@@ -63,7 +63,9 @@ export class VoiceRings {
     this.lastRing.clear();
     for (const [botId, value] of next) this.lastRing.set(botId, value);
     const ring: VoiceRingData = { type: "voice_ring", ringId: randomUUID(), ...input };
-    this.options.emit({ kind: "voice_ring", ...ring });
+    // Whoever gets this frame has the app open, so it got no VoIP ring
+    // (index.ts skips on-screen sessions): it rings in-app straight away.
+    this.options.emit({ kind: "voice_ring", ...ring, inApp: true });
     void this.options.push(this.options.ownerId, `${botName} is calling`, ring.reason, { ...ring, botName }, ring.ringId)
       .catch(error => console.warn(`voice ring push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
     return ring;

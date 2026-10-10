@@ -11,6 +11,7 @@ import AVFoundation
 import CallKit
 import CompanionCore
 import PushKit
+import SwiftUI
 
 @MainActor
 final class CallKitRinger: NSObject {
@@ -42,9 +43,28 @@ final class CallKitRinger: NSObject {
         configuration.maximumCallsPerCallGroup = 1
         configuration.supportedHandleTypes = [.generic]
         configuration.includesCallsInRecents = false
+        // The label above the caller is the app's display name ("BOS Bot
+        // Audio"); iOS ignores localizedName since 14. What is ours: the
+        // bos chime and the glyph on the answer screen's app button.
+        configuration.ringtoneSound = "bos-ring.caf"
+        configuration.iconTemplateImageData = Self.glyphTemplate()
         provider = CXProvider(configuration: configuration)
         super.init()
         provider.setDelegate(self, queue: .main)
+    }
+
+    /// The bos mascot as a 40 pt template: its body opaque, its eyes cut out,
+    /// so iOS can tint it like any other call app's mark.
+    private static func glyphTemplate() -> Data? {
+        let mark = Canvas { context, canvas in
+            GlyphMark.draw(in: &context, slot: CGRect(origin: .zero, size: canvas).insetBy(dx: 2, dy: 2),
+                           color: "#FFFFFF", bodyId: nil, state: .idle, scheme: .dark)
+        }
+        .frame(width: 40, height: 40)
+        .luminanceToAlpha()
+        let renderer = ImageRenderer(content: mark)
+        renderer.scale = 3
+        return renderer.uiImage?.pngData()
     }
 
     /// At launch, before it ends: a VoIP push that launched the app is

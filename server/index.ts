@@ -686,7 +686,7 @@ const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.
 const voiceRings = new VoiceRings({
   file: join(DATA_DIR, "voice-rings.json"), ownerId: multiplayerActors.ownerId,
   emit: frame => broadcast(frame),
-  push: (...args) => apnsPush.send(...args),
+  push: (actorId, title, body, target, ringId) => apnsPush.send(actorId, title, body, target, ringId, onScreen),
 });
 multiplayerLinks.ownBotAvatar = id => store.bot(id)?.avatarUrl;
 const crossHomeGrants = new Delegations(join(DATA_DIR, "delegations.json"));

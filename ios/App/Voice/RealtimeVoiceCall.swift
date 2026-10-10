@@ -802,6 +802,10 @@ final class VoiceCallCenter: ObservableObject {
     @Published private(set) var records: [VoiceCallRecord]
     /// A bot ringing, shown full screen above the app until answered.
     @Published private(set) var incoming: IncomingVoiceRing?
+    /// The call was answered from the in-app ring: its mascot has already
+    /// glided into the header, so the call screen takes over without a
+    /// transition of its own (one mascot on screen, never two).
+    @Published private(set) var arrivedFromRing = false
 
     private static let recordsKey = "voiceCall.records"
     private var seenRings = Set<String>()
@@ -816,7 +820,7 @@ final class VoiceCallCenter: ObservableObject {
         }
     }
 
-    func start(bot: Bot, threadId: String, session: Session, opener: String? = nil) {
+    func start(bot: Bot, threadId: String, session: Session, opener: String? = nil, fromRing: Bool = false) {
         if let call, !call.isOver {
             if call.bot.id == bot.id, opener == nil {
                 withAnimation(.spring(duration: 0.4)) { presentation = .full }
@@ -828,6 +832,19 @@ final class VoiceCallCenter: ObservableObject {
         let call = RealtimeVoiceCall(bot: bot, threadId: threadId, session: session, opener: opener)
         call.onEnded = { [weak self] ended in self?.ended(ended) }
         showingSettings = false
+        if fromRing {
+            // straight to the hero screen, swapped in under the ring's mascot
+            var swap = Transaction()
+            swap.disablesAnimations = true
+            withTransaction(swap) {
+                arrivedFromRing = true
+                presentation = .full
+                self.call = call
+            }
+            call.start()
+            return
+        }
+        arrivedFromRing = false
         presentation = .splash
         withAnimation(.easeOut(duration: 0.2)) { self.call = call }
         call.start()
@@ -839,6 +856,7 @@ final class VoiceCallCenter: ObservableObject {
     }
 
     func minimize() {
+        arrivedFromRing = false
         withAnimation(.spring(duration: 0.4)) {
             showingSettings = false
             presentation = .pill
@@ -885,7 +903,9 @@ final class VoiceCallCenter: ObservableObject {
         guard !CallKitRinger.shared.reported(ring.ringId) else { return }
         // This phone gets a VoIP push for the ring: CallKit rings it. Only if
         // that push never lands does the in-app ring take over.
-        if viaCallKitWait, CallKitRinger.shared.ringsThroughCallKit {
+        // A ring flagged in-app never had a VoIP push (the app was on screen):
+        // ours rings now.
+        if viaCallKitWait, !ring.inApp, CallKitRinger.shared.ringsThroughCallKit {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(3))
                 self?.ring(ring, bot: bot, session: session, viaCallKitWait: false)
@@ -906,17 +926,40 @@ final class VoiceCallCenter: ObservableObject {
         }
     }
 
-    func accept() {
+    /// Answer. `handoff`: the ring screen has already moved its mascot into
+    /// the call header, so both screens swap in one frame.
+    func accept(handoff: Bool = false) {
         guard let incoming else { return }
+        let opener = RealtimeVoice.ringOpener(reason: incoming.ring.reason)
+        let threadId = incoming.ring.threadId ?? incoming.bot.threadId
+        if handoff {
+            silenceRing()
+            var swap = Transaction()
+            swap.disablesAnimations = true
+            withTransaction(swap) { self.incoming = nil }
+            start(bot: incoming.bot, threadId: threadId, session: incoming.session, opener: opener, fromRing: true)
+            return
+        }
         stopRinging()
-        start(bot: incoming.bot, threadId: incoming.ring.threadId ?? incoming.bot.threadId, session: incoming.session,
-              opener: RealtimeVoice.ringOpener(reason: incoming.ring.reason))
+        start(bot: incoming.bot, threadId: threadId, session: incoming.session, opener: opener)
     }
 
-    func decline() {
+    func decline(animated: Bool = false) {
         guard incoming != nil else { return }
+        if animated {
+            // the ring screen already flung its mascot away; just let it go
+            silenceRing()
+            withAnimation(.easeOut(duration: 0.25)) { incoming = nil }
+            return
+        }
         stopRinging()
         Haptics.impact(.light)
+    }
+
+    /// Stop the chime and buzz now, while the ring screen finishes its exit.
+    func silenceRing() {
+        ringer?.stop()
+        ringer = nil
     }
 
     /// A ring already answered from its notification.

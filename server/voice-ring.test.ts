@@ -15,7 +15,7 @@ describe("owner voice rings", () => {
       const ring = rings.ring(input, "Builder");
       expect(ring).toMatchObject({ type: "voice_ring", ...input });
       expect(ring.ringId).toMatch(/^[a-f0-9-]{36}$/);
-      expect(emit).toHaveBeenCalledExactlyOnceWith({ kind: "voice_ring", ...ring });
+      expect(emit).toHaveBeenCalledExactlyOnceWith({ kind: "voice_ring", ...ring, inApp: true });
       expect(push).toHaveBeenCalledExactlyOnceWith("home:person:owner", "Builder is calling", input.reason, { ...ring, botName: "Builder" }, ring.ringId);
       const payload = buildApnsPayload("Builder is calling", input.reason, ring, "device-a");
       expect(payload).toMatchObject({ ...ring, connectionId: "device-a", aps: { category: "VOICE_RING", "interruption-level": "time-sensitive", sound: "default" } });

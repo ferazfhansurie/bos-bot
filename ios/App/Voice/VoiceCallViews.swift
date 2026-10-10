@@ -22,7 +22,10 @@ struct VoiceCallOverlay: View {
         ZStack(alignment: .top) {
             if let call = center.call {
                 VoiceCallStage(call: call, center: center, space: space)
-                    .transition(.scale(scale: 0.1, anchor: .bottomTrailing).combined(with: .opacity))
+                    // answered from the ring: it is already in place under the ring's mascot
+                    .transition(center.arrivedFromRing
+                        ? .asymmetric(insertion: .identity, removal: .opacity)
+                        : .scale(scale: 0.1, anchor: .bottomTrailing).combined(with: .opacity))
             }
             if let incoming = center.incoming {
                 IncomingVoiceCallView(incoming: incoming, center: center)
@@ -83,7 +86,7 @@ private struct CallAvatar: View {
             if wearsMascot {
                 LiveMascot(color: call.bot.color, bodyId: call.bot.mascotBody,
                            eyeStyle: MascotEyeStyle(stored: call.bot.mascotEyes),
-                           face: liveFace, accent: call.activity == .thinking, size: size) { date in
+                           face: liveFace, accent: call.activity == .thinking, size: size, fps: 120) { date in
                     let levels = call.levels
                     // the playback tap knows it is talking a beat before the turn says so
                     let mode = call.phase == .live && levels.assistantSpeaking ? .speaking : liveMode
@@ -141,15 +144,20 @@ private struct VoiceCallFullScreen: View {
     @ObservedObject var center: VoiceCallCenter
     let space: Namespace.ID
     @Environment(\.colorScheme) private var scheme
+    /// Answered from the ring: the mascot and name are already here, the rest
+    /// fades in around them.
+    @State private var settledIn = false
 
     private var dark: Bool { scheme == .dark }
     private var foreground: Color { dark ? .white : .black }
+    private var arriving: Double { center.arrivedFromRing && !settledIn ? 0 : 1 }
 
     var body: some View {
         ZStack {
             (dark ? Color.black : Color.white).ignoresSafeArea()
             VStack(spacing: 0) {
                 header
+                Group {
                 if case let .failed(message) = call.phase {
                     failure(message)
                 } else if center.showingSettings {
@@ -161,8 +169,16 @@ private struct VoiceCallFullScreen: View {
                 } else {
                     VoiceCallTranscript(call: call)
                 }
+                }
+                .opacity(arriving)
                 controls
+                    .opacity(arriving)
+                    .offset(y: arriving == 0 ? 24 : 0)
             }
+        }
+        .onAppear {
+            guard center.arrivedFromRing, !settledIn else { return }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.9).delay(0.05)) { settledIn = true }
         }
         .gesture(DragGesture(minimumDistance: 30).onEnded { value in
             if value.translation.height < -80 { center.minimize() }
@@ -173,6 +189,7 @@ private struct VoiceCallFullScreen: View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 6) {
                 CallAvatar(call: call, size: 96, space: space)
+                    .background { CallAura(call: call, size: 96) }
                     .padding(.vertical, 6)
                 Text(call.bot.name)
                     .font(.system(size: 17, weight: .semibold))
@@ -182,6 +199,7 @@ private struct VoiceCallFullScreen: View {
                     .font(.system(size: 13).monospacedDigit())
                     .foregroundStyle(CallColors.secondary)
                     .contentTransition(.numericText())
+                    .opacity(arriving)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 8)
@@ -197,7 +215,7 @@ private struct VoiceCallFullScreen: View {
             .padding(.leading, 8)
             .accessibilityLabel("Minimize call")
             .disabled(call.isOver)
-            .opacity(call.isOver ? 0 : 1)
+            .opacity(call.isOver ? 0 : arriving)
         }
     }
 
@@ -273,6 +291,78 @@ private struct VoiceCallFullScreen: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
         .padding(.top, 8)
+    }
+}
+
+/// The bot's colour around its mascot, breathing with the call: a faint
+/// halo at rest that blooms and throws rings while it talks, and answers
+/// your voice with a softer swell. Still under Reduce Motion.
+private struct CallAura: View {
+    @ObservedObject var call: RealtimeVoiceCall
+    let size: CGFloat
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var model = AuraModel()
+
+    final class AuraModel {
+        var own: CGFloat = 0
+        var yours: CGFloat = 0
+        var last: TimeInterval?
+        /// When each thrown ring left, newest last.
+        var rings: [TimeInterval] = []
+        var lastRing: TimeInterval = 0
+    }
+
+    var body: some View {
+        let accent = GlyphMark.colors(call.bot.color, scheme: scheme).accent
+        let dark = scheme == .dark
+        TimelineView(.animation(minimumInterval: 1.0 / 120, paused: reduceMotion)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            let (own, yours, rings) = step(at: t)
+            Canvas { context, canvas in
+                let centre = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
+                let base = size * 0.62
+                let halo = base * (1.45 + 0.55 * own + 0.25 * yours)
+                let strength = (dark ? 0.2 : 0.13) + 0.3 * own + 0.12 * yours
+                context.fill(Path(ellipseIn: CGRect(x: centre.x - halo, y: centre.y - halo, width: halo * 2, height: halo * 2)),
+                             with: .radialGradient(Gradient(colors: [accent.opacity(strength), accent.opacity(0)]),
+                                                   center: centre, startRadius: 0, endRadius: halo))
+                for left in rings {
+                    let k = (t - left) / 1.2
+                    guard k >= 0, k < 1 else { continue }
+                    let r = base * (0.95 + 1.1 * (1 - pow(1 - k, 3)))
+                    context.stroke(Path(ellipseIn: CGRect(x: centre.x - r, y: centre.y - r, width: r * 2, height: r * 2)),
+                                   with: .color(accent.opacity(0.4 * (1 - k))), lineWidth: 2 * (1 - k) + 0.5)
+                }
+            }
+        }
+        .frame(width: size * 3.2, height: size * 3.2)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func step(at t: TimeInterval) -> (CGFloat, CGFloat, [TimeInterval]) {
+        let levels = call.levels
+        let live = call.phase == .live
+        let dt = min(max(t - (model.last ?? t), 0), 0.1)
+        model.last = t
+        let ownTarget = live && levels.assistantSpeaking ? min(1, CGFloat(levels.speaker) * 7) : 0
+        let yoursTarget = live && !levels.assistantSpeaking ? min(1, CGFloat(levels.mic) * 7) : 0
+        // quick to rise, slow to fall, like a meter
+        func ease(_ value: CGFloat, _ target: CGFloat) -> CGFloat {
+            let rate: Double = target > value ? 22 : 5
+            return value + (target - value) * CGFloat(1 - exp(-rate * dt))
+        }
+        let rising = ownTarget - model.own
+        model.own = ease(model.own, ownTarget)
+        model.yours = ease(model.yours, yoursTarget)
+        // a syllable landing throws a ring, at most every 0.28 s
+        if rising > 0.25, model.own > 0.35, t - model.lastRing > 0.28 {
+            model.rings.append(t)
+            model.lastRing = t
+        }
+        model.rings.removeAll { t - $0 > 1.2 }
+        return (model.own, model.yours, model.rings)
     }
 }
 

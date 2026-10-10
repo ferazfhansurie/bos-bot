@@ -19,6 +19,8 @@ struct LiveMascot: View {
     /// listens, where the eyes and the nods say it instead.
     var accent = true
     var size: CGFloat
+    /// Frames a second; the ring and the call run at the display's 120.
+    var fps: Double = 60
     /// The pose for a frame. Called once per frame on the main actor.
     let pose: (Date) -> LiveMascotPose
 
@@ -29,7 +31,7 @@ struct LiveMascot: View {
     @State private var onScreen = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: scenePhase != .active || !onScreen)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / fps, paused: scenePhase != .active || !onScreen)) { timeline in
             let now = timeline.date
             let raw = pose(now)
             let frame = memory.frame(at: now, color: color, bodyId: bodyId, eyes: eyeStyle, face: face,

@@ -88,14 +88,18 @@ public struct VoiceRing: Codable, Hashable, Identifiable, Sendable {
     public var botId: String
     public var threadId: String?
     public var reason: String
+    /// The computer rang a phone that had the app on screen in-app only, with
+    /// no VoIP push: ring here now instead of waiting for CallKit.
+    public var inApp: Bool
 
     public var id: String { ringId }
 
-    public init(ringId: String, botId: String, threadId: String?, reason: String) {
+    public init(ringId: String, botId: String, threadId: String?, reason: String, inApp: Bool = false) {
         self.ringId = ringId
         self.botId = botId
         self.threadId = threadId
         self.reason = reason
+        self.inApp = inApp
     }
 
     public init(from decoder: any Decoder) throws {
@@ -104,6 +108,7 @@ public struct VoiceRing: Codable, Hashable, Identifiable, Sendable {
         botId = try c.decode(String.self, forKey: .botId)
         threadId = try c.decodeIfPresent(String.self, forKey: .threadId).flatMap { $0.isEmpty ? nil : $0 }
         reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        inApp = try c.decodeIfPresent(Bool.self, forKey: .inApp) ?? false
         guard !ringId.isEmpty, !botId.isEmpty else {
             throw DecodingError.dataCorruptedError(forKey: .ringId, in: c, debugDescription: "empty ring")
         }

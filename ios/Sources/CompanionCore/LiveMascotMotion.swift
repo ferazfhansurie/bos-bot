@@ -192,3 +192,106 @@ public enum LiveMascotColor {
         return ((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF)
     }
 }
+
+/// The mascot ringing its owner. It hops on every ring (crouch, jump, land
+/// with a jelly squash), watches the answer thumb as it slides and gets more
+/// excited the closer it gets, and settles flat and calm the moment the call
+/// is answered so it can glide into the call screen as the same pose.
+public struct RingMascotMotion: Sendable {
+    /// One ring every this many seconds, matching the chime.
+    public static let period: TimeInterval = 2.6
+    /// Where the answer thumb is, 0 at rest ... 1 answered. Its eyes follow it.
+    public var pull: CGFloat = 0
+    /// The answer thumb's position relative to the mascot, in mascot widths.
+    public var thumb: CGPoint?
+    /// The mascot itself held and dragged: its lean and stretch follow the finger.
+    public var drag: CGSize = .zero
+    /// Answered: no more hops, eyes front, ready to become the call avatar.
+    public var settled = false
+    /// When the ring began on the caller's clock, so the hops land on the
+    /// chime; the first frame if nobody says.
+    public var start: TimeInterval?
+
+    private var gaze: CGPoint = .zero
+    private var lean: CGFloat = 0
+    private var eyes: CGFloat = 1
+    private var stretch: CGFloat = 0
+    private var lift: CGFloat = 0
+    private var pokedAt: TimeInterval?
+    private var last: TimeInterval?
+
+    public init() {}
+
+    public mutating func poke(at t: TimeInterval) { pokedAt = t }
+
+    /// Where in its hop the mascot is, given seconds since the ring began.
+    /// Returns (lift in body heights, stretch). The hop lands on the chime's
+    /// first note, so it reads as the mascot ringing, not bouncing to music.
+    static func hop(_ phase: TimeInterval) -> (lift: CGFloat, stretch: CGFloat) {
+        let p = phase.truncatingRemainder(dividingBy: period)
+        switch p {
+        case ..<0.12:
+            // crouch
+            let k = CGFloat(p / 0.12)
+            return (0, -0.55 * sin(k * .pi / 2))
+        case ..<0.44:
+            // up and down, a parabola, stretched tall on the way up
+            let k = CGFloat((p - 0.12) / 0.32)
+            return (0.22 * 4 * k * (1 - k), 0.55 * (1 - 2 * k))
+        case ..<1.3:
+            // land: a squash that rings out
+            let s = p - 0.44
+            return (0, -0.7 * CGFloat(cos(s * 24) * exp(-s * 7)))
+        default:
+            return (0, 0)
+        }
+    }
+
+    public mutating func step(at t: TimeInterval) -> LiveMascotPose {
+        let dt = CGFloat(min(max(t - (last ?? t), 0), 0.1))
+        last = t
+        if start == nil { start = t }
+        let since = max(0, t - (start ?? t))
+
+        var target = (gaze: LiveMotion.idleGlance(at: t, every: 2.1), lean: CGFloat(0), eyes: CGFloat(1.06),
+                      stretch: CGFloat(0), lift: CGFloat(0))
+        if !settled {
+            let hop = Self.hop(since)
+            // the further the thumb, the smaller the hop: it is watching now
+            let calm = 1 - min(pull * 1.6, 1)
+            target.lift = hop.lift * calm
+            target.stretch = hop.stretch * calm
+        }
+        if let thumb, !settled {
+            let length = max(hypot(thumb.x, thumb.y), 0.0001)
+            target.gaze = CGPoint(x: thumb.x / length, y: thumb.y / length)
+            target.lean = max(-10, min(10, thumb.x * 6))
+            // wide-eyed and up on its toes as you pull it in
+            target.eyes = 1.06 + 0.24 * pull
+            target.lift += 0.05 * pull
+            target.stretch += 0.25 * pull
+        }
+        if drag != .zero {
+            target.gaze = CGPoint(x: max(-1, min(1, -drag.width / 120)), y: max(-1, min(1, -drag.height / 120)))
+            target.lean = max(-18, min(18, drag.width / 6))
+            target.stretch = max(-0.8, min(0.8, -hypot(drag.width, drag.height) / 260))
+            target.eyes = 1.2
+        }
+        if settled {
+            target = (.zero, 0, 1, 0, 0)
+        }
+        // Hops are pre-shaped, so they pass straight through; everything
+        // else eases, fast enough to feel attached to the finger.
+        let follow: CGFloat = drag != .zero || thumb != nil ? 20 : 8
+        gaze.x = LiveMotion.approach(gaze.x, target.gaze.x, rate: follow, dt: dt)
+        gaze.y = LiveMotion.approach(gaze.y, target.gaze.y, rate: follow, dt: dt)
+        lean = LiveMotion.approach(lean, target.lean, rate: 12, dt: dt)
+        eyes = LiveMotion.approach(eyes, target.eyes, rate: 12, dt: dt)
+        stretch = LiveMotion.approach(stretch, target.stretch, rate: settled ? 10 : 40, dt: dt)
+        lift = LiveMotion.approach(lift, target.lift, rate: settled ? 10 : 40, dt: dt)
+        let wobble = pokedAt.map { LiveMotion.jelly(since: t - $0) } ?? 0
+        let breath = settled ? 0 : 0.01 * CGFloat(sin(t * 2 * .pi / 1.7))
+        return LiveMascotPose(gaze: gaze, stretch: stretch + wobble * 0.9, lean: lean,
+                              lift: lift + breath, eyeScale: eyes)
+    }
+}
