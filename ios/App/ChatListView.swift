@@ -901,8 +901,18 @@ struct ChatListView: View {
         }
         let contactIDs = Set(remoteContacts.map(\.id))
         let directRooms = sharedRooms.filter { $0.memberIds.count == 2 && !$0.isGroup && $0.memberIds.contains(selfID) }
+        // A room or bot on another home this phone is also paired with comes
+        // twice: once through this computer's link to it, once from that home
+        // itself. The home's own copy, with its label, is the one kept.
+        let direct = Set(session.satellites.flatMap { $0.state.chatSummaries(activity: activity).map(\.chat.id) })
         let entries: [(ConversationEntry, Double)] =
             session.state.chatSummaries(activity: activity)
+                .filter { summary in
+                    switch summary.chat {
+                    case let .room(room): return room.home == nil || !direct.contains(room.id)
+                    case let .bot(bot): return bot.remote == nil || !direct.contains(bot.id)
+                    }
+                }
                 .map { (.local($0), $0.lastActivity) }
             + session.satellites.flatMap { home in
                 home.state.chatSummaries(activity: activity).map { (ConversationEntry.home($0, home, connectionID: home.connection?.id ?? ""), $0.lastActivity) }
