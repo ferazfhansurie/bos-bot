@@ -72,10 +72,49 @@ private struct CallAvatar: View {
     @ObservedObject var call: RealtimeVoiceCall
     let size: CGFloat
     let space: Namespace.ID
+    @State private var motion = CallMotionBox()
+
+    /// A bot that wears its mascot comes alive on the call; a photo stays a
+    /// photo.
+    private var wearsMascot: Bool { (call.bot.avatarCrop ?? .mascot) == .mascot || call.bot.avatarUrl == nil }
 
     var body: some View {
-        BotAvatarView(bot: call.bot, size: size, state: call.activity.face, animated: true)
-            .matchedGeometryEffect(id: "voice-avatar", in: space)
+        Group {
+            if wearsMascot {
+                LiveMascot(color: call.bot.color, bodyId: call.bot.mascotBody,
+                           eyeStyle: MascotEyeStyle(stored: call.bot.mascotEyes),
+                           face: liveFace, accent: call.activity == .thinking, size: size) { date in
+                    let levels = call.levels
+                    // the playback tap knows it is talking a beat before the turn says so
+                    let mode = call.phase == .live && levels.assistantSpeaking ? .speaking : liveMode
+                    return motion.motion.step(at: date.timeIntervalSinceReferenceDate, mode: mode,
+                                              speaker: levels.speaker, mic: levels.mic)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(call.bot.name) avatar")
+            } else {
+                BotAvatarView(bot: call.bot, size: size, state: call.activity.face, animated: true)
+            }
+        }
+        .matchedGeometryEffect(id: "voice-avatar", in: space)
+    }
+
+    /// Before the line is live it just waits; once live it follows the turn.
+    private var liveMode: CallMascotMotion.Mode {
+        guard call.phase == .live else { return .idle }
+        switch call.activity {
+        case .idle: return .idle
+        case .listening: return .listening
+        case .thinking: return .thinking
+        case .speaking: return .speaking
+        }
+    }
+
+    /// Open ring eyes while it talks or listens (the mouth and the nods do
+    /// the rest), the question face between turns.
+    private var liveFace: GlyphFaceState {
+        guard call.phase == .live else { return .idle }
+        return call.activity == .thinking ? .thinking : .waiting
     }
 }
 
@@ -133,7 +172,8 @@ private struct VoiceCallFullScreen: View {
     private var header: some View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 6) {
-                CallAvatar(call: call, size: 52, space: space)
+                CallAvatar(call: call, size: 96, space: space)
+                    .padding(.vertical, 6)
                 Text(call.bot.name)
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(foreground)

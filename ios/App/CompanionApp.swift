@@ -95,6 +95,9 @@ struct CompanionApp: App {
                         .environment(\.locale, AppLanguage.resolved(language).locale ?? .autoupdatingCurrent)
                 }
                 .overlay {
+                    if ProcessInfo.processInfo.arguments.contains("-call-mascot-preview") { LiveMascotCallPreview() }
+                }
+                .overlay {
                     if showingLaunchSplash {
                         LaunchSplashView { showingLaunchSplash = false }
                             .background(Color(red: 13/255, green: 13/255, blue: 13/255))

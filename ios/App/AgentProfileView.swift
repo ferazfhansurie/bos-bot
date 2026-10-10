@@ -41,6 +41,11 @@ struct AgentProfileView: View {
     @State private var player: AVAudioPlayer?
     @State private var baseline: ProfileFormSnapshot
     @State private var confirmingDiscard = false
+    /// What the hero mascot wears while a pick is still saving, so it morphs
+    /// the moment you choose instead of after the round trip.
+    @State private var previewColor: String?
+    @State private var previewBody: String?
+    @State private var previewEyes: MascotEyeStyle?
 
     init(bot: Bot) {
         self.bot = bot
@@ -192,12 +197,22 @@ struct AgentProfileView: View {
                 }
 
                 Section {
-                    HStack {
-                        Spacer()
-                        BotAvatarView(bot: current, size: 112, state: .happy, animated: true)
-                        Spacer()
+                    if crop == .mascot || current.avatarUrl == nil {
+                        // the mascot itself: follows your finger, a tap cycles its
+                        // mood, and it morphs live while you pick below
+                        ProfileLiveMascot(color: previewColor ?? current.color,
+                                          bodyId: previewBody ?? current.mascotBody,
+                                          eyeStyle: previewEyes ?? MascotEyeStyle(stored: current.mascotEyes),
+                                          size: 112, name: current.name)
+                            .listRowBackground(Color.clear)
+                    } else {
+                        HStack {
+                            Spacer()
+                            BotAvatarView(bot: current, size: 112, state: .happy, animated: true)
+                            Spacer()
+                        }
+                        .listRowBackground(Color.clear)
                     }
-                    .listRowBackground(Color.clear)
 
                     Picker("Shape", selection: $crop) {
                         ForEach(AvatarCrop.allCases, id: \.self) { shape in
@@ -213,7 +228,9 @@ struct AgentProfileView: View {
                         )) {
                             ForEach(MascotEyeStyle.allCases, id: \.self) { Text($0.label).tag($0) }
                         }.pickerStyle(.segmented).disabled(busy)
-                        MascotColorPicker(current: current.color, disabled: busy) { color in await selectColor(color) }
+                        MascotColorPicker(current: current.color, disabled: busy) { color in
+                            await selectColor(color)
+                        } preview: { color in previewColor = color }
                         ForEach(FlatMascotBodies.groups, id: \.self) { group in
                             VStack(alignment: .leading, spacing: 12) {
                                 Text(group).font(.subheadline).foregroundStyle(.secondary)
@@ -613,12 +630,14 @@ struct AgentProfileView: View {
     }
 
     private func selectEyes(_ eyes: MascotEyeStyle) async {
+        previewEyes = eyes
         busy = true
-        defer { busy = false }
+        defer { busy = false; previewEyes = nil }
         _ = await session.updateProfile(BotProfilePatch(mascotEyes: eyes.rawValue), for: current)
     }
 
     private func selectColor(_ color: String) async {
+        defer { previewColor = nil }
         guard color != current.color else { return }
         busy = true
         defer { busy = false }
@@ -626,8 +645,9 @@ struct AgentProfileView: View {
     }
 
     private func selectBody(_ body: String) async {
+        previewBody = body
         busy = true
-        defer { busy = false }
+        defer { busy = false; previewBody = nil }
         if let updated = await session.updateProfile(BotProfilePatch(avatarCrop: .mascot, mascotBody: body), for: current) {
             crop = updated.avatarCrop ?? .mascot
             baseline.crop = crop

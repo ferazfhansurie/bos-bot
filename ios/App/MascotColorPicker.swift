@@ -11,6 +11,9 @@ struct MascotColorPicker: View {
     let current: String
     var disabled = false
     let pick: (String) async -> Void
+    /// Every colour as it is being chosen, before it saves: a swatch tap and
+    /// each step of the wheel, so the mascot above can morph live.
+    var preview: (String) -> Void = { _ in }
 
     @State private var custom: Color = .green
     @State private var save: Task<Void, Never>?
@@ -25,6 +28,7 @@ struct MascotColorPicker: View {
                 ForEach(GlyphFaces.paletteNames, id: \.self) { name in
                     Button {
                         save?.cancel()
+                        preview(name)
                         Task { await pick(name) }
                     } label: {
                         swatch(MausPalette.color(name), selected: current == name)
@@ -40,6 +44,7 @@ struct MascotColorPicker: View {
                         // the wheel reports every drag step; save where it settles
                         save?.cancel()
                         guard let hex = Self.hex(next), hex != currentHex else { return }
+                        preview(hex)
                         save = Task {
                             try? await Task.sleep(for: .milliseconds(450))
                             guard !Task.isCancelled else { return }
