@@ -950,7 +950,8 @@ struct ChatListView: View {
                 .filter { summary in
                     switch summary.chat {
                     case let .room(room): return room.home == nil || !direct.contains(room.id)
-                    case let .bot(bot): return bot.remote == nil || !direct.contains(bot.id)
+                    // This computer's copy is "rb-<link>-<id>"; the home's own copy is "<id>".
+                    case let .bot(bot): return bot.remote == nil || !direct.contains { bot.id == $0 || bot.id.hasSuffix("-" + $0) }
                     }
                 }
                 .map { (.local($0), $0.lastActivity) }
