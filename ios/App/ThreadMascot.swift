@@ -206,10 +206,10 @@ struct ThreadHeaderFace: View {
                 SpringKeyframe(1.16, duration: 0.14, spring: .snappy)
                 SpringKeyframe(1, duration: 0.5, spring: .bouncy)
             }
+            // always mounted while motion is on, so the first beat is a
+            // change it can see; at rest it draws nothing
             .overlay {
-                if moving, director.burstBeat > 0 {
-                    CometBurst(beat: director.burstBeat, color: chat.color, size: size)
-                }
+                if moving { CometBurst(beat: director.burstBeat, color: chat.color, size: size) }
             }
             .animation(reduceMotion ? .easeInOut(duration: 0.2) : nil, value: look)
             .onChange(of: director.readBeat) { _, _ in read() }
