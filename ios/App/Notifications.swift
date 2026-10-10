@@ -134,6 +134,24 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         }
     }
 
+    private static let localRingKey = "bosLocalRing"
+
+    /// A ring that lands mid-call: the ring push's banner, with Accept.
+    func deliverRing(_ ring: VoiceRing, botName: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "\(botName) is calling"
+        content.body = ring.reason
+        content.sound = .default
+        content.categoryIdentifier = VoicePush.ringCategory
+        content.interruptionLevel = .timeSensitive
+        content.threadIdentifier = ring.threadId ?? "bos"
+        var info: [String: String] = ["type": "voice_ring", "ringId": ring.ringId, "botId": ring.botId, "reason": ring.reason,
+                                      Self.localRingKey: "1"]
+        if let threadId = ring.threadId { info["threadId"] = threadId }
+        content.userInfo = info
+        center.add(UNNotificationRequest(identifier: "voice-ring.\(ring.ringId)", content: content, trigger: nil))
+    }
+
     /// Accept on a CallKit ring: the same path as Accept on the ring push.
     @MainActor func acceptRing(_ ring: VoiceRing, connectionId: String?) {
         let action = VoiceNotificationAction.accept(ring, connectionId: connectionId)
@@ -157,7 +175,9 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         let payload = Self.strings(notification.request.content.userInfo)
         Task { @MainActor in
             let presentation: NotificationPresentation
-            if let push = VoicePush(payload: payload) {
+            if payload[Self.localRingKey] == "1" {
+                presentation = .alert
+            } else if let push = VoicePush(payload: payload) {
                 presentation = foregroundVoicePresentation?(push) ?? .alert
             } else if let hint = CloudPushHint(userInfo: notification.request.content.userInfo) {
                 presentation = foregroundCloudPresentation?(hint) ?? .quiet

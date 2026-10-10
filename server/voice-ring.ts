@@ -34,14 +34,27 @@ interface VoiceRingOptions {
   file: string;
   ownerId: string;
   emit(frame: Record<string, unknown>): void;
-  push(actorId: string, title: string, body: string, target: PushTarget, ringId: string): Promise<void>;
+  /** `skipVoip`: true for a push session whose app showed the ring itself. */
+  push(actorId: string, title: string, body: string, target: PushTarget, ringId: string,
+    skipVoip: (sessionId: string) => boolean): Promise<void>;
+  /** The owner's push sessions that have a live event stream right now. */
+  watching?: () => Iterable<string>;
+  ackWindowMs?: number;
   now?: () => number;
 }
+
+/** How long a phone with a live stream gets to say it showed the ring before
+ * CallKit rings it anyway. A stream is not proof the app is on screen: it
+ * lingers after backgrounding, a dead cellular socket stays listed until a
+ * write fails, and a live call keeps it up (2026-10-10: two rings reached
+ * nothing because of it). */
+const ACK_WINDOW_MS = 2_000;
 
 /** One synchronous reservation precedes both transports. Persist it before
  * publishing so a restart or an overlapping request cannot ring twice. */
 export class VoiceRings {
   private readonly lastRing = new Map<string, number>();
+  private readonly pending = new Map<string, { waiting: Set<string>; acked: Set<string>; fire(): void }>();
   private readonly options: VoiceRingOptions;
   constructor(options: VoiceRingOptions) {
     this.options = options;
@@ -63,11 +76,33 @@ export class VoiceRings {
     this.lastRing.clear();
     for (const [botId, value] of next) this.lastRing.set(botId, value);
     const ring: VoiceRingData = { type: "voice_ring", ringId: randomUUID(), ...input };
-    // Whoever gets this frame has the app open, so it got no VoIP ring
-    // (index.ts skips on-screen sessions): it rings in-app straight away.
-    this.options.emit({ kind: "voice_ring", ...ring, inApp: true });
-    void this.options.push(this.options.ownerId, `${botName} is calling`, ring.reason, { ...ring, botName }, ring.ringId)
+    // The stream goes first: an app that shows its ring screen acks it, and
+    // only that session skips CallKit. Every other device, and any that stays
+    // silent past the window, gets the VoIP push as before.
+    const waiting = new Set(this.options.watching?.() ?? []);
+    const acked = new Set<string>();
+    const send = () => void this.options.push(this.options.ownerId, `${botName} is calling`, ring.reason, { ...ring, botName }, ring.ringId,
+      session => acked.has(session))
       .catch(error => console.warn(`voice ring push failed: ${error instanceof Error ? error.message : "unknown failure"}`));
+    this.options.emit({ kind: "voice_ring", ...ring, inApp: true });
+    if (!waiting.size) { send(); return ring; }
+    const fire = () => {
+      if (!this.pending.delete(ring.ringId)) return;
+      clearTimeout(timer);
+      send();
+    };
+    const timer = setTimeout(fire, this.options.ackWindowMs ?? ACK_WINDOW_MS);
+    timer.unref?.();
+    this.pending.set(ring.ringId, { waiting, acked, fire });
     return ring;
+  }
+
+  /** A phone showed this ring on screen. False once the push has gone. */
+  ack(ringId: string, sessionId: string): boolean {
+    const entry = this.pending.get(ringId);
+    if (!entry) return false;
+    entry.acked.add(sessionId);
+    if ([...entry.waiting].every(session => entry.acked.has(session))) entry.fire();
+    return true;
   }
 }

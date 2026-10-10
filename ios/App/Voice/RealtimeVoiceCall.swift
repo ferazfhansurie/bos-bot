@@ -809,6 +809,7 @@ final class VoiceCallCenter: ObservableObject {
 
     private static let recordsKey = "voiceCall.records"
     private var seenRings = Set<String>()
+    private var banneredRings = Set<String>()
     private var ringer: VoiceRinger?
 
     private init() {
@@ -898,13 +899,13 @@ final class VoiceCallCenter: ObservableObject {
     // MARK: Rings
 
     /// Show a ring full screen. Each ring once; a ring during a live call
-    /// stays a notification, never a second call over the first.
+    /// becomes a banner, never a second call over the first. A ring shown
+    /// here is acked, so the computer holds back CallKit for it.
     func ring(_ ring: VoiceRing, bot: Bot, session: Session, viaCallKitWait: Bool = true) {
         guard !CallKitRinger.shared.reported(ring.ringId) else { return }
-        // This phone gets a VoIP push for the ring: CallKit rings it. Only if
-        // that push never lands does the in-app ring take over.
-        // A ring flagged in-app never had a VoIP push (the app was on screen):
-        // ours rings now.
+        // A push-borne ring: this phone also gets a VoIP push, so CallKit
+        // rings it. Only if that push never lands does the in-app ring take
+        // over. A stream ring (inApp) comes first: ours rings now and acks.
         if viaCallKitWait, !ring.inApp, CallKitRinger.shared.ringsThroughCallKit {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(3))
@@ -912,8 +913,16 @@ final class VoiceCallCenter: ObservableObject {
             }
             return
         }
-        guard seenRings.insert(ring.ringId).inserted, incoming == nil, liveCallId == nil else { return }
+        guard seenRings.insert(ring.ringId).inserted else { return }
+        if liveCallId != nil || incoming != nil {
+            // Already on a call or ringing: say it as a banner instead of
+            // dropping it (CallKit would only log it as missed).
+            if claimRingBanner(ring.ringId) { NotificationCoordinator.shared.deliverRing(ring, botName: bot.name) }
+            session.ackRing(ring.ringId)
+            return
+        }
         incoming = IncomingVoiceRing(ring: ring, bot: bot, session: session)
+        session.ackRing(ring.ringId)
         let ringer = VoiceRinger()
         self.ringer = ringer
         ringer.start()
@@ -960,6 +969,15 @@ final class VoiceCallCenter: ObservableObject {
     func silenceRing() {
         ringer?.stop()
         ringer = nil
+    }
+
+    /// A ring that cannot ring here (live call, another ring up) is shown
+    /// as one banner: ours or the push's, whichever comes first.
+    func claimRingBanner(_ ringId: String) -> Bool { banneredRings.insert(ringId).inserted }
+
+    /// The ring has nowhere to ring on this screen right now.
+    func ringIsBusy(_ ringId: String) -> Bool {
+        liveCallId != nil || (incoming != nil && incoming?.ring.ringId != ringId)
     }
 
     /// A ring already answered from its notification.

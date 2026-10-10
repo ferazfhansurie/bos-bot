@@ -686,7 +686,9 @@ const multiplayerLinks = new MultiplayerLinks(join(DATA_DIR, "multiplayer-links.
 const voiceRings = new VoiceRings({
   file: join(DATA_DIR, "voice-rings.json"), ownerId: multiplayerActors.ownerId,
   emit: frame => broadcast(frame),
-  push: (actorId, title, body, target, ringId) => apnsPush.send(actorId, title, body, target, ringId, onScreen),
+  push: (actorId, title, body, target, ringId, skipVoip) => apnsPush.send(actorId, title, body, target, ringId, skipVoip),
+  // only these can ack in time; anything else gets CallKit straight away
+  watching: () => apnsPush.voipSessions(multiplayerActors.ownerId).filter(onScreen),
 });
 multiplayerLinks.ownBotAvatar = id => store.bot(id)?.avatarUrl;
 const crossHomeGrants = new Delegations(join(DATA_DIR, "delegations.json"));
@@ -14559,6 +14561,15 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         res.setHeader("retry-after", String(error.retryAfter));
         return json(res, 429, { error: error.message, retryAfter: error.retryAfter });
       }
+    }
+
+    // The phone showed this ring on its own screen: CallKit can stay out of it.
+    const ringAck = method === "POST" ? /^\/api\/voice\/ring\/([\w-]{1,128})\/ack$/.exec(path) : null;
+    if (ringAck) {
+      req.resume();
+      const pushSession = pushSessionFor(auth);
+      if (!pushSession || workspaceActor(auth) !== multiplayerActors.ownerId) return json(res, 403, { error: "ring ack requires the owner's paired device" });
+      return json(res, 200, { acked: voiceRings.ack(ringAck[1]!, pushSession) });
     }
 
     if (peerSessionId && requestActor === multiplayerActors.ownerId && (channelIngress || joinedChannelFile || path === "/api/events" || channelManagerIngress)) return json(res, 403, { error: "a peer session cannot inherit owner room access" });

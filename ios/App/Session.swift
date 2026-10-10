@@ -3169,8 +3169,16 @@ final class Session: ObservableObject {
             return visible ? .quiet : .alert
         case let .ring(ring):
             receivedRing(ring, connectionId: client?.connection.id)
-            return VoiceCallCenter.shared.liveCallId == nil ? .quiet : .alert
+            let center = VoiceCallCenter.shared
+            return center.ringIsBusy(ring.ringId) && center.claimRingBanner(ring.ringId) ? .alert : .quiet
         }
+    }
+
+    /// Tell the computer this ring is on screen here; without it, CallKit
+    /// rings the phone ~2 s later.
+    func ackRing(_ ringId: String) {
+        guard let client else { return }
+        Task { try? await client.ackRing(ringId) }
     }
 
     private func receivedRing(_ ring: VoiceRing, connectionId: String?) {

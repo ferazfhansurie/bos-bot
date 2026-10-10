@@ -16,7 +16,7 @@ describe("owner voice rings", () => {
       expect(ring).toMatchObject({ type: "voice_ring", ...input });
       expect(ring.ringId).toMatch(/^[a-f0-9-]{36}$/);
       expect(emit).toHaveBeenCalledExactlyOnceWith({ kind: "voice_ring", ...ring, inApp: true });
-      expect(push).toHaveBeenCalledExactlyOnceWith("home:person:owner", "Builder is calling", input.reason, { ...ring, botName: "Builder" }, ring.ringId);
+      expect(push).toHaveBeenCalledExactlyOnceWith("home:person:owner", "Builder is calling", input.reason, { ...ring, botName: "Builder" }, ring.ringId, expect.any(Function));
       const payload = buildApnsPayload("Builder is calling", input.reason, ring, "device-a");
       expect(payload).toMatchObject({ ...ring, connectionId: "device-a", aps: { category: "VOICE_RING", "interruption-level": "time-sensitive", sound: "default" } });
       expect(buildApnsPayload("Normal", "hello", { botId: "bot-a" }).aps).not.toHaveProperty("category");
@@ -44,6 +44,57 @@ describe("owner voice rings", () => {
       expect(emit).toHaveBeenCalledTimes(3);
       expect(push).toHaveBeenCalledTimes(3);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("holds the VoIP ring for a streaming phone until it acks, and rings CallKit when it never does", async () => {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(join(tmpdir(), "bos-ring-ack-"));
+    try {
+      const emit = vi.fn();
+      const skips: Array<(session: string) => boolean> = [];
+      const push = vi.fn(async (..._args: unknown[]) => { skips.push(_args[5] as (session: string) => boolean); });
+      let watching = ["phone", "ipad"];
+      const rings = new VoiceRings({ file: join(dir, "rings.json"), ownerId: "home:person:owner", emit, push, watching: () => watching });
+
+      // the phone shows its ring screen, the ipad's stream is stale: the
+      // push waits for the window, then skips CallKit for the phone only
+      const a = rings.ring({ botId: "bot-a", threadId: "t", reason: "Call" }, "A");
+      expect(emit).toHaveBeenCalledOnce();
+      expect(push).not.toHaveBeenCalled();
+      expect(rings.ack(a.ringId, "phone")).toBe(true);
+      expect(push).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(push).toHaveBeenCalledOnce();
+      expect(skips[0]!("phone")).toBe(true);
+      expect(skips[0]!("ipad")).toBe(false);
+      expect(rings.ack(a.ringId, "ipad")).toBe(false);
+
+      // every streaming session acked: no need to wait out the window
+      watching = ["phone"];
+      const b = rings.ring({ botId: "bot-b", threadId: "t", reason: "Call" }, "B");
+      rings.ack(b.ringId, "phone");
+      expect(push).toHaveBeenCalledTimes(2);
+      expect(skips[1]!("phone")).toBe(true);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(push).toHaveBeenCalledTimes(2);
+
+      // a lingering stream that never acks (backgrounded, dead cellular
+      // socket, live call) still gets CallKit after the window
+      const c = rings.ring({ botId: "bot-c", threadId: "t", reason: "Call" }, "C");
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(push).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(push).toHaveBeenCalledTimes(3);
+      expect(skips[2]!("phone")).toBe(false);
+      expect(rings.ack(c.ringId, "phone")).toBe(false);
+      expect(rings.ack("no-such-ring", "phone")).toBe(false);
+
+      // nobody streaming: CallKit straight away
+      watching = [];
+      rings.ring({ botId: "bot-d", threadId: "t", reason: "Call" }, "D");
+      expect(push).toHaveBeenCalledTimes(4);
+      expect(skips[3]!("phone")).toBe(false);
+    } finally { vi.useRealTimers(); rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("bounds payloads and rejects missing reasons, invalid ids and arbitrary push recipients", () => {

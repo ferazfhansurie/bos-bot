@@ -29,6 +29,9 @@ describe("account scoped push routing", () => {
       push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a", "C".repeat(64));
       push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a");
       expect(JSON.parse(readFileSync(file, "utf8")).devices[0].voipToken).toBe("c".repeat(64));
+      push.register("home:person:owner", "b".repeat(64), "development", "device-home-2", "session-b");
+      expect(push.voipSessions("home:person:owner")).toEqual(["session-a"]);
+      expect(push.voipSessions("home:person:other")).toEqual([]);
       expect(() => push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a", "nope")).toThrow("invalid VoIP token");
       expect(() => new ApnsPush(file, () => true)).not.toThrow();
     } finally { rmSync(dir, { recursive: true, force: true }); }

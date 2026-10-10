@@ -1703,6 +1703,12 @@ public struct CompanionClient: Sendable {
         return try await send(try makeRequest("POST", "/api/voice/call", body: body), as: VoiceCallStart.self)
     }
 
+    /// This phone is showing the ring on its own screen, so the computer
+    /// leaves CallKit out of it. Unacked rings get a VoIP push after ~2 s.
+    public func ackRing(_ ringId: String) async throws {
+        try await send(makeRequest("POST", "/api/voice/ring/\(ringId)/ack", body: [:]))
+    }
+
     /// The call hung up after `seconds` connected (Settings → Usage, xAI voice).
     public func reportVoiceCallUsage(callId: String, seconds: Int) async throws {
         _ = try await send(

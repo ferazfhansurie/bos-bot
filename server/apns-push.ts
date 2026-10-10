@@ -125,8 +125,8 @@ export class ApnsPush {
     if (removed.length) this.persist();
   }
 
-  /** `skipVoip`: a session with the app on screen rings in-app from the
-   * stream, so its ring skips CallKit (iOS would ring it there instead). */
+  /** `skipVoip`: a session whose app acked the ring is ringing in-app from
+   * the stream, so its ring skips CallKit (server/voice-ring.ts). */
   async send(actorId: string, title: string, body: string, target: PushTarget, id: string = randomUUID(),
     skipVoip: (sessionId: string) => boolean = () => false): Promise<void> {
     this.pruneRevoked();
@@ -157,8 +157,8 @@ export class ApnsPush {
       const payload = JSON.stringify(buildApnsPayload(title, body, target, device.connectionId));
       // A ring rings through CallKit when the phone has a PushKit token;
       // without one, or if Apple refuses it, the alert push still goes.
-      // On screen, the app rings itself; the alert still goes in case it
-      // has just left the screen (the app keeps a foreground one quiet).
+      // An app that acked the ring rings itself; the alert still goes in
+      // case it has just left the screen (the app keeps a foreground one quiet).
       if (target.type === "voice_ring" && device.voipToken && !(device.sessionId && skipVoip(device.sessionId))) {
         const voip = await this.post(client, credential, device.voipToken, `${APNS_TOPIC}.voip`, "voip", payload, id,
           { "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 30) });
@@ -179,6 +179,12 @@ export class ApnsPush {
         console.warn(`APNs rejected a notification (${result.status}, ${result.reason || "unknown"})`);
       }
     } finally { client.close(); }
+  }
+
+  /** Push sessions of this actor's devices that a VoIP ring would reach. */
+  voipSessions(actorId: string): string[] {
+    return [...this.devices.values()].filter(device => device.actorId === actorId && device.voipToken && this.active(device))
+      .map(device => device.sessionId!);
   }
 
   /** Whether any of this actor's devices can show a bot's island from here:
