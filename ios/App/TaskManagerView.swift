@@ -18,8 +18,9 @@ struct TaskManagerView: View {
     @State private var isMutating = false
     @State private var showingArchived = false
     @State private var errorMessage: String?
-    /// Threads playing their done check before they fold into Archived.
-    @State private var finishing = Set<String>()
+    /// Threads playing their done check before they fold into Archived,
+    /// with the streak level each plays at.
+    @State private var finishing: [String: Int] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var renameFocused: Bool
 
@@ -137,6 +138,8 @@ struct TaskManagerView: View {
                         .padding(12)
                         .background(.regularMaterial, in: Capsule())
                         .padding()
+                } else {
+                    DoneUndoPill().padding(.bottom, 8)
                 }
             }
         }
@@ -327,8 +330,11 @@ struct TaskManagerView: View {
                     selected: task.threadId == current.threadId,
                     queued: session.state.pendingQueued[task.threadId]?.isEmpty == false,
                     live: liveState(task),
-                    done: finishing.contains(task.threadId) ? doneColor : nil
+                    done: finishing[task.threadId].map { (doneColor, $0) }
                 )
+            }
+            .doneSwipe(color: doneColor, enabled: current.isBot && !task.isArchived && !task.isWorking && !isMutating) {
+                markDone(task, after: 0)
             }
             .disabled(isMutating || (!current.isBot && current.busy && task.threadId != current.threadId))
             .accessibilityIdentifier("thread-\(task.threadId)")
@@ -403,33 +409,52 @@ struct TaskManagerView: View {
             perform { await setArchived(task, archivedAt: nil) }
             return
         }
-        // Done: one tap, the row checks off once the swipe or menu has
-        // closed, then folds away into Archived.
-        guard !isMutating else { return }
-        Haptics.success()
-        perform {
-            try? await Task.sleep(for: .milliseconds(200))
-            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.3, dampingFraction: 0.7)) {
-                _ = finishing.insert(task.threadId)
+        // once the swipe actions or the menu have closed
+        markDone(task, after: 0.22)
+    }
+
+    /// Done: the row checks off and bursts, holds a beat, then folds away
+    /// into Archived while the list closes up. Undo brings it back.
+    private func markDone(_ task: BotTask, after delay: Double) {
+        // its own task, not `perform`: several can be checked off in a row
+        // without waiting on each other or a progress pill
+        guard !isMutating, finishing[task.threadId] == nil else { return }
+        let moments = DoneMoments.shared
+        let level = moments.nextLevel()
+        moments.tap(level: level, after: delay)
+        errorMessage = nil
+        Task { @MainActor in
+            if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
+            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.28, dampingFraction: 0.7)) {
+                finishing[task.threadId] = level
             }
-            try? await Task.sleep(for: .milliseconds(reduceMotion ? 250 : 420))
-            await setArchived(task, archivedAt: stamp)
-            finishing.remove(task.threadId)
+            try? await Task.sleep(for: .seconds(reduceMotion ? 0.3 : DoneMoments.holds - 0.25))
+            let stamp = (Date().timeIntervalSince1970 * 1000).rounded()
+            let saved = await setArchived(task, archivedAt: stamp)
+            finishing.removeValue(forKey: task.threadId)
+            guard saved, case let .bot(bot) = current else { return }
+            let session = session
+            moments.offerUndo(title: task.displayTitle, color: doneColor) {
+                guard let live = session.state.bot(bot.id) else { return }
+                await session.setTaskArchived(task, for: live, archivedAt: nil, animation: .smooth(duration: 0.35))
+            }
         }
     }
 
-    private func setArchived(_ task: BotTask, archivedAt: Double?) async {
-        guard case let .bot(bot) = current else { return }
+    @discardableResult
+    private func setArchived(_ task: BotTask, archivedAt: Double?) async -> Bool {
+        guard case let .bot(bot) = current else { return false }
         // Recheck after the menu; an SSE update may have started work there.
         guard let liveTask = tasks.first(where: { $0.threadId == task.threadId }), !liveTask.isWorking else {
             showError("This thread can't be marked done while it's working.")
-            return
+            return false
         }
-        let fold: Animation = reduceMotion ? .easeOut(duration: 0.2) : .snappy(duration: 0.32)
+        let fold: Animation = reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.38, dampingFraction: 0.86)
         guard await session.setTaskArchived(liveTask, for: bot, archivedAt: archivedAt, animation: fold) else {
             showError("Couldn't update the thread. Try again.")
-            return
+            return false
         }
+        return true
     }
 
     /// Lock before creating the Task so two rapid taps cannot send two writes.

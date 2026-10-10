@@ -436,8 +436,8 @@ struct ChatListView: View {
             .onChange(of: rosterFaceOrder, initial: true) { _, ids in listFaces.setOrder(ids) }
             .onChange(of: workingBotIDs, initial: true) { _, ids in listFaces.setWorkers(ids) }
             .onChange(of: DoneMoments.shared.showing) { old, new in
-                // a thread marked done, here or from inside it: happy eyes and a wave
-                for id in new.subtracting(old) { listFaces.farewell(id) }
+                // a thread marked done, here or from inside it: happy eyes and a hop
+                for (id, level) in new where old[id] == nil { listFaces.cheer(id, level: level) }
             }
             .onChange(of: arrivalStamps) { old, new in
                 // a bot's new message, not the first load: hop + its own tap
@@ -493,6 +493,10 @@ struct ChatListView: View {
                     hasIsland: IslandGeometry.hasIsland(topInset: geo.safeAreaInsets.top)
                 ) { chat in open(chat) }
             }
+        }
+        // the last thread marked done, for a few seconds
+        .overlay(alignment: .bottom) {
+            DoneUndoPill().padding(.bottom, 8)
         }
         }
     }
@@ -1079,6 +1083,9 @@ struct ChatListView: View {
             )
         }
         .buttonStyle(.plain)
+        .doneSwipe(color: MausPalette.color(summary.chat.color), enabled: doneTask(summary.chat)?.task.canMarkDone == true) {
+            markDone(summary.chat, after: 0)
+        }
         .contextMenu {
             pinButton(.local(summary))
             OpenBesideButton(chat: homeChat(summary.chat))
@@ -1091,23 +1098,39 @@ struct ChatListView: View {
         }
     }
 
+    /// The thread a bot's row opens, which is the one marking it done closes.
+    private func doneTask(_ chat: Chat) -> (task: BotTask, home: Bot)? {
+        guard case let .bot(home) = homeChat(chat),
+              let task = session.state.bot(home.id)?.tasks?.first(where: { $0.threadId == home.threadId })
+        else { return nil }
+        return (task, home)
+    }
+
+    /// The row checks off, the face cheers, and once the check has landed
+    /// the thread goes and the row opens the bot's next one. Undo puts it back.
+    private func markDone(_ chat: Chat, after delay: Double) {
+        guard let (task, home) = doneTask(chat), task.canMarkDone else { return }
+        DoneMoments.shared.done(chat.id, after: delay)
+        let session = session
+        Task {
+            try? await Task.sleep(for: .seconds(delay + DoneMoments.holds))
+            guard await session.setTaskArchived(task, for: home, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded(),
+                                                animation: .smooth(duration: 0.35)) else { return }
+            DoneMoments.shared.offerUndo(title: task.displayTitle, color: MausPalette.color(chat.color)) {
+                guard let live = session.state.bot(home.id) else { return }
+                await session.setTaskArchived(task, for: live, archivedAt: nil, animation: .smooth(duration: 0.35))
+            }
+        }
+    }
+
     /// Done for the thread this row opens: the server archives and closes it,
     /// and the row then opens the bot's next thread. Not offered while that
     /// thread is working.
     @ViewBuilder private func markDoneButton(_ chat: Chat) -> some View {
-        if case let .bot(home) = homeChat(chat),
-           let task = session.state.bot(home.id)?.tasks?.first(where: { $0.threadId == home.threadId }) {
-            Button("Mark done", systemImage: "checkmark.circle") {
-                // the row checks off and the face waves the thread away once
-                // the menu has closed, then the thread goes
-                Haptics.success()
-                DoneMoments.shared.celebrate(chat.id, after: 0.25)
-                Task {
-                    try? await Task.sleep(for: .milliseconds(750))
-                    await session.setTaskArchived(task, for: home, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
-                }
-            }
-            .disabled(!task.canMarkDone)
+        if let (task, _) = doneTask(chat) {
+            // the moment plays once the menu has closed
+            Button("Mark done", systemImage: "checkmark.circle") { markDone(chat, after: 0.3) }
+                .disabled(!task.canMarkDone)
         }
     }
 
@@ -1516,10 +1539,10 @@ struct ChatRow: View {
             HStack(alignment: .top, spacing: 14) {
                 LiveChatAvatar(chat: chat, size: 52, state: state, animated: state.showsActivity, at: at)
                     .overlay(alignment: .bottomTrailing) {
-                        if DoneMoments.shared.showing.contains(chat.id) {
-                            DoneCheck(color: MausPalette.color(chat.color), size: 22)
+                        if let level = DoneMoments.shared.showing[chat.id] {
+                            DoneCheck(color: MausPalette.color(chat.color), size: 24, level: level)
                                 .background(Circle().fill(Color(uiColor: .systemBackground)).padding(-2.5))
-                                .offset(x: 4, y: 4)
+                                .offset(x: 5, y: 5)
                                 .transition(.opacity)
                         }
                     }

@@ -240,15 +240,19 @@ import UIKit
         BotHaptics.shared.play(botID: botID)
     }
 
-    /// The row is about to fold away as done: happy shut eyes and a wave.
-    func farewell(_ id: String) {
+    /// A thread just marked done: the face squints happily as the check
+    /// pops on, hops as it lands, and bounces higher on a streak.
+    func cheer(_ id: String, level: Int) {
         let pose = pose(id)
         lastEvent[id] = Date().addingTimeInterval(5)
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-            pose.left = "caret"; pose.right = "caret"; pose.gaze = .zero
+        withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
+            pose.left = "caret"; pose.right = "caret"; pose.gaze = .zero; pose.squash = 1
         }
-        if !reduceMotion { pose.wave += 1 }
-        after(1.3) {
+        if !reduceMotion {
+            after(DoneMoments.landsAt - 0.08) { self.hop(pose, height: 1.25 + 0.3 * CGFloat(level)) }
+            if level >= 2 { after(DoneMoments.landsAt + 0.62) { self.hop(pose, height: 0.5) } }
+        }
+        after(1.45) {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { pose.left = nil; pose.right = nil }
         }
     }

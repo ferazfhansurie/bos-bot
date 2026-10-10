@@ -825,13 +825,22 @@ struct ChatView: View {
             }
         }
         return ThreadDoneAction(title: "Mark done", systemImage: "checkmark.circle", disabled: !task.canMarkDone) {
-            // The desktop sends Date.now(); the server takes any epoch number.
-            setArchived(task, in: bot, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
             // Back to the list right away: the optimistic update has already
             // taken the thread out of it, and a failed write restores it.
-            // The bot's row checks off there once the pop has landed.
-            Haptics.success()
-            DoneMoments.shared.celebrate(bot.id, after: 0.4)
+            // The bot's row checks off there once the pop has landed, and
+            // the pill offers it back once the write has.
+            DoneMoments.shared.done(bot.id, after: 0.4)
+            let session = session
+            Task { @MainActor in
+                guard let live = session.state.bot(bot.id),
+                      // The desktop sends Date.now(); the server takes any epoch number.
+                      await session.setTaskArchived(task, for: live, archivedAt: (Date().timeIntervalSince1970 * 1000).rounded())
+                else { return }
+                DoneMoments.shared.offerUndo(title: task.displayTitle, color: MausPalette.color(bot.color)) {
+                    guard let live = session.state.bot(bot.id) else { return }
+                    await session.setTaskArchived(task, for: live, archivedAt: nil, animation: .smooth(duration: 0.35))
+                }
+            }
             leave()
         }
     }
