@@ -35,6 +35,31 @@ describe("account scoped push routing", () => {
   });
 });
 
+describe("live activity tokens", () => {
+  it("keeps live tokens across plain registrations and reports what each device can take", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bos-apns-live-"));
+    try {
+      const file = join(dir, "devices.json");
+      const push = new ApnsPush(file, () => true);
+      push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a", undefined,
+        { startToken: "D".repeat(160), activities: { "bot-1": "e".repeat(160), "bad id": "f".repeat(160), "bot-2": "nope" } });
+      push.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a");
+      const saved = JSON.parse(readFileSync(file, "utf8")).devices[0];
+      expect(saved.liveStartToken).toBe("d".repeat(160));
+      expect(saved.liveTokens).toEqual({ "bot-1": "e".repeat(160) });
+      const again = new ApnsPush(file, () => true);
+      expect(again.liveReach("home:person:owner", "bot-1")).toEqual({ activity: true, start: true });
+      expect(again.liveReach("home:person:owner", "bot-2")).toEqual({ activity: false, start: true });
+      // the app on screen runs its own island: the server stays out
+      expect(again.liveReach("home:person:owner", "bot-1", session => session === "session-a")).toEqual({ activity: false, start: false });
+      again.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a", undefined, { activities: {} });
+      expect(again.liveReach("home:person:owner", "bot-1")).toEqual({ activity: false, start: true });
+      expect(() => again.register("home:person:owner", "a".repeat(64), "development", "device-home-1", "session-a", undefined, { startToken: "zz" }))
+        .toThrow();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
 describe("push session authority", () => {
   it("drops revoked sessions before sending and fails closed for legacy rows", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bos-apns-revoke-"));

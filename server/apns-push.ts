@@ -1,5 +1,5 @@
 import { createPrivateKey, sign, randomUUID } from "node:crypto";
-import { connect, type ClientHttp2Session } from "node:http2";
+import { connect, type ClientHttp2Session, type SecureClientSessionOptions } from "node:http2";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
@@ -7,11 +7,35 @@ import { DATA_DIR } from "./config.ts";
 
 interface Device { actorId: string; token: string; environment: "development" | "production"; updatedAt: number; connectionId?: string; sessionId?: string;
   /** PushKit token: a ring goes here as a VoIP push so CallKit shows a real incoming call. */
-  voipToken?: string }
+  voipToken?: string;
+  /** ActivityKit push-to-start token: the server starts a bot's Live Activity with it. */
+  liveStartToken?: string;
+  /** Each running bot activity's own push token, by bot id: updates and ends go here. */
+  liveTokens?: Record<string, string> }
+/** What the phone reports about its Live Activities on each registration. */
+export interface LiveRegistration { startToken?: string; activities?: Record<string, string> }
+/** One bot's island, exactly as BotActivityAttributes / BotActivityContent decode it. */
+export interface LiveActivityPush {
+  event: "start" | "update" | "end";
+  attributes: { botId: string; threadId: string; name: string; color: string; mascotBody?: string; mascotEyes?: string };
+  content: Record<string, unknown>;
+  alert?: { title: string; body: string };
+  staleDate?: number; dismissalDate?: number;
+  /** 10 interrupts (start, needs you, end); 5 is a quiet progress update. */
+  priority?: 5 | 10;
+}
 interface Credential { teamId: string; keyId: string; privateKey: string }
 const TOKEN = /^[a-f0-9]{64}$/i;
 const APNS_TOPIC = "com.aihlete.aios";
 const CONNECTION = /^[A-Za-z0-9_-]{1,128}$/;
+/** ActivityKit tokens are longer than alert tokens and not fixed-size. */
+const LIVE_TOKEN = /^[a-f0-9]{64,400}$/i;
+const BOT_ID = /^[A-Za-z0-9_-]{1,128}$/;
+/** Node's happy-eyeballs gives each address 250 ms. The sandbox APNs host is
+ * ~270 ms from Malaysia and IPv6 is unreachable on most home links, so every
+ * attempt timed out and no push left this Mac (2026-10-10). */
+// passed through to net.connect; the http2 typings leave it out
+const CONNECT_OPTIONS = { autoSelectFamilyAttemptTimeout: 2_000 } as SecureClientSessionOptions;
 export interface PushTarget {
   roomId?: string; botId?: string; threadId?: string; senderId?: string;
   senderName?: string; kind?: string; requestId?: string; messageId?: string;
@@ -60,13 +84,15 @@ export class ApnsPush {
       if (device.connectionId !== undefined && !CONNECTION.test(device.connectionId)) throw new Error("invalid push connection");
       if (device.sessionId !== undefined && !CONNECTION.test(device.sessionId)) throw new Error("invalid push session");
       if (device.voipToken !== undefined && !TOKEN.test(device.voipToken)) throw new Error("invalid VoIP token");
+      if (device.liveStartToken !== undefined && !LIVE_TOKEN.test(device.liveStartToken)) delete device.liveStartToken;
+      if (device.liveTokens) device.liveTokens = cleanLiveTokens(device.liveTokens);
       this.devices.set(device.token.toLowerCase(), device);
     }
   }
 
   /** `voipToken` undefined keeps the one already registered: the alert token
    * and the PushKit token arrive separately and either may register first. */
-  register(actorId: string, token: string, environment: "development" | "production", connectionId?: string, sessionId?: string, voipToken?: string): void {
+  register(actorId: string, token: string, environment: "development" | "production", connectionId?: string, sessionId?: string, voipToken?: string, live?: LiveRegistration): void {
     if (!/^[A-Za-z0-9_-]+:person:[A-Za-z0-9_-]+$/.test(actorId) || !TOKEN.test(token)) throw new Error("invalid push registration");
     if (voipToken !== undefined && !TOKEN.test(voipToken)) throw new Error("invalid VoIP token");
     if (environment !== "development" && environment !== "production") throw new Error("invalid push environment");
@@ -74,8 +100,14 @@ export class ApnsPush {
     if (!connectionId || !sessionId || !CONNECTION.test(sessionId) || !this.authorized(sessionId, actorId)) throw new Error("push registration requires a live owned session and connection");
     const existing = this.devices.get(token.toLowerCase());
     if (existing && existing.actorId !== actorId && existing.sessionId && this.authorized(existing.sessionId, existing.actorId)) throw new Error("push token is already owned by another actor");
+    if (live?.startToken !== undefined && !LIVE_TOKEN.test(live.startToken)) throw new Error("invalid Live Activity token");
     const voip = voipToken?.toLowerCase() ?? (existing?.actorId === actorId ? existing.voipToken : undefined);
-    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now(), connectionId, sessionId, ...(voip ? { voipToken: voip } : {}) });
+    const mine = existing?.actorId === actorId ? existing : undefined;
+    // like the VoIP token, an absent field keeps what is registered
+    const liveStart = live?.startToken?.toLowerCase() ?? mine?.liveStartToken;
+    const liveTokens = live?.activities !== undefined ? cleanLiveTokens(live.activities) : mine?.liveTokens;
+    this.devices.set(token.toLowerCase(), { actorId, token: token.toLowerCase(), environment, updatedAt: Date.now(), connectionId, sessionId, ...(voip ? { voipToken: voip } : {}),
+      ...(liveStart ? { liveStartToken: liveStart } : {}), ...(liveTokens && Object.keys(liveTokens).length ? { liveTokens } : {}) });
     this.persist();
   }
 
@@ -115,7 +147,7 @@ export class ApnsPush {
 
   private async deliver(device: Device, credential: Credential, title: string, body: string, target: PushTarget, id: string): Promise<void> {
     const host = device.environment === "development" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
-    const client = connect(host);
+    const client = connect(host, CONNECT_OPTIONS);
     client.on("error", error => console.warn(`APNs connection failed: ${describe(error)}`));
     try {
       const payload = JSON.stringify(buildApnsPayload(title, body, target, device.connectionId));
@@ -135,13 +167,71 @@ export class ApnsPush {
       if (result.status === 410 || result.reason === "Unregistered" || result.reason === "BadDeviceToken") {
         this.devices.delete(device.token);
         this.persist();
-      } else if (result.status !== 200) {
+      } else if (result.status === 200) {
+        console.info(`APNs accepted a notification (${target.kind ?? target.type ?? "message"})`);
+      } else {
         console.warn(`APNs rejected a notification (${result.status}, ${result.reason || "unknown"})`);
       }
     } finally { client.close(); }
   }
 
-  private post(client: ClientHttp2Session, credential: Credential, token: string, topic: string, type: "alert" | "voip",
+  /** Whether any of this actor's devices can show a bot's island from here:
+   * a running activity's token, or a push-to-start token for a new one. */
+  liveReach(actorId: string, botId: string, skip: (sessionId: string) => boolean = () => false): { activity: boolean; start: boolean } {
+    const devices = [...this.devices.values()].filter(device => device.actorId === actorId && this.active(device) && !skip(device.sessionId!));
+    return { activity: devices.some(device => device.liveTokens?.[botId]), start: devices.some(device => device.liveStartToken) };
+  }
+
+  /** Start, update or end one bot's Live Activity on every device of the
+   * actor. A device already running that bot's activity gets an update in
+   * place of a second start; a device without one is started only on start. */
+  async sendLive(actorId: string, push: LiveActivityPush, skip: (sessionId: string) => boolean = () => false): Promise<void> {
+    this.pruneRevoked();
+    const credential = this.credential();
+    if (!credential) return;
+    const botId = push.attributes.botId;
+    const devices = [...this.devices.values()].filter(device => device.actorId === actorId && this.active(device));
+    await Promise.all(devices.map(async device => {
+      const activityToken = device.liveTokens?.[botId];
+      const event = push.event === "start" && activityToken ? "update" : push.event;
+      const token = event === "start" ? device.liveStartToken : activityToken;
+      // an app on screen runs its own islands, with the richer step lines
+      if (!token || skip(device.sessionId!)) return;
+      const now = Math.floor(Date.now() / 1000);
+      const payload = JSON.stringify({ aps: {
+        timestamp: now, event, "content-state": push.content,
+        ...(event === "start" ? { "attributes-type": "BotActivityAttributes", attributes: push.attributes } : {}),
+        ...(push.alert ? { alert: { title: push.alert.title, body: push.alert.body, sound: "default" } } : {}),
+        ...(push.staleDate ? { "stale-date": push.staleDate } : {}),
+        ...(event === "end" ? { "dismissal-date": push.dismissalDate ?? now } : {}),
+      } });
+      const host = device.environment === "development" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
+      for (let attempt = 1; ; attempt++) {
+        const client = connect(host, CONNECT_OPTIONS);
+        client.on("error", error => console.warn(`APNs connection failed: ${describe(error)}`));
+        try {
+          const result = await this.post(client, credential, token, `${APNS_TOPIC}.push-type.liveactivity`, "liveactivity", payload, randomUUID(),
+            { "apns-priority": String(push.priority ?? 10) });
+          if (result.status === 200) {
+            console.info(`APNs accepted a live activity ${event} (${botId.slice(0, 8)})`);
+            if (event === "end" && device.liveTokens?.[botId]) { delete device.liveTokens[botId]; this.persist(); }
+          } else {
+            console.warn(`APNs rejected a live activity ${event} (${result.status}, ${result.reason || "unknown"})`);
+            if (result.status === 410 || result.reason === "Unregistered" || result.reason === "BadDeviceToken") {
+              if (event === "start") delete device.liveStartToken; else if (device.liveTokens) delete device.liveTokens[botId];
+              this.persist();
+            }
+          }
+          return;
+        } catch (error) {
+          if (attempt >= 3) { console.warn(`live activity push failed: ${describe(error)}`); return; }
+          await new Promise(resolve => setTimeout(resolve, attempt * 750));
+        } finally { client.close(); }
+      }
+    }));
+  }
+
+  private post(client: ClientHttp2Session, credential: Credential, token: string, topic: string, type: "alert" | "voip" | "liveactivity",
                payload: string, id: string, extra: Record<string, string> = {}): Promise<{ status: number; reason: string }> {
     return new Promise((resolve, reject) => {
       const request = client.request({ ":method": "POST", ":path": `/3/device/${token}`, authorization: `bearer ${this.jwt(credential)}`, "apns-topic": topic, "apns-push-type": type, "apns-id": id, "content-type": "application/json", ...extra });
@@ -177,4 +267,12 @@ export class ApnsPush {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
     writeFileAtomic(this.file, JSON.stringify({ version: 1, devices: [...this.devices.values()] }), { mode: 0o600 });
   }
+}
+
+function cleanLiveTokens(tokens: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [botId, token] of Object.entries(tokens).slice(0, 32)) {
+    if (BOT_ID.test(botId) && typeof token === "string" && LIVE_TOKEN.test(token)) out[botId] = token.toLowerCase();
+  }
+  return out;
 }

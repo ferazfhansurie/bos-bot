@@ -73,7 +73,8 @@ import type { SharedSearchKind } from "../shared/shared-search.ts";
 import { SharedRoomTrust, isSharedRoomTrustLevel, sharedRoomTargets, sharedMentionText, sharedRoomBotCandidates, type SharedRoomTrustLevel } from "./shared-room-trust.ts";
 import { collectSharedBotReply, type SharedBotReply } from "./shared-bot-reply.ts";
 import { SharedAttachmentStore } from "./shared-attachment-store.ts";
-import { ApnsPush } from "./apns-push.ts";
+import { ApnsPush, type LiveRegistration } from "./apns-push.ts";
+import { LiveActivityDriver } from "./live-activity-driver.ts";
 import { VoiceRings, VoiceRingRateLimit, voiceRingInput } from "./voice-ring.ts";
 import { contactId, parseContactId, SHARED_ROOM_MAX_HOPS, type SharedRoom, type SharedTextMessage, type SharedAttachment } from "../shared/multiplayer.ts";
 import { SharedComputerControl } from "./shared-computer-control.ts";
@@ -655,6 +656,17 @@ function companionDevicePaired(deviceId: string): boolean {
     const devices = Array.isArray(parsed) ? parsed : parsed.devices;
     return Array.isArray(devices) && devices.some(device => device?.id === deviceId);
   } catch { return false; }
+}
+/** `liveStartToken` and `liveActivities` (bot id → activity token) from a
+ * push registration; undefined when the phone sent neither, null when they
+ * are malformed. */
+function liveRegistration(body: Record<string, unknown>): LiveRegistration | undefined | null {
+  const start = body.liveStartToken, activities = body.liveActivities;
+  if (start === undefined && activities === undefined) return undefined;
+  if (start !== undefined && typeof start !== "string") return null;
+  if (activities !== undefined && (typeof activities !== "object" || activities === null || Array.isArray(activities)
+      || Object.values(activities).some(value => typeof value !== "string"))) return null;
+  return { ...(start !== undefined ? { startToken: start } : {}), ...(activities !== undefined ? { activities: activities as Record<string, string> } : {}) };
 }
 function pushSessionFor(auth: RequestAuth): string | null {
   if (auth.kind === "session") return sessions.isLive(auth.session.id) ? auth.session.id : null;
@@ -3896,6 +3908,9 @@ interface SseClient {
   /** The paired session behind this stream, when there is one: revoking or
    * expiring it must end the stream, not just future requests. */
   sessionId?: string;
+  /** The push registration this stream's device sends under: while it is
+   * connected the app is on screen and runs its own Live Activities. */
+  pushSession?: string;
   /** Set once this client's socket has signalled it can't keep up (write()
    * returned false); cleared implicitly once it's disconnected. See
    * ./sse-fanout.ts for what this does to fan-out. */
@@ -3980,6 +3995,21 @@ function cursorSeq(raw: string | string[] | undefined): number | null {
 const activityFeed = new ActivityFeed();
 let activityPushScheduled = false;
 let lastActivitySnapshot = "";
+/** The phone's lock-screen island while the app is not on screen
+ * (server/live-activity-driver.ts). A device with a live event stream has
+ * the app open, and the app drives its own island then. */
+const onScreen = (pushSession: string) => [...sseClients].some(client => client.pushSession === pushSession);
+const liveActivities = new LiveActivityDriver({
+  bot: id => {
+    const bot = store.bot(id);
+    return bot ? { id: bot.id, name: bot.name, color: bot.color,
+      ...(bot.mascotBody ? { mascotBody: bot.mascotBody } : {}), ...(bot.mascotEyes ? { mascotEyes: bot.mascotEyes } : {}) } : undefined;
+  },
+  title: (botId, threadId) => { try { return store.taskByThread(botId, threadId)?.title || undefined; } catch { return undefined; } },
+  reach: botId => apnsPush.liveReach(multiplayerActors.ownerId, botId, onScreen),
+  send: push => apnsPush.sendLive(multiplayerActors.ownerId, push, onScreen).catch(error =>
+    console.warn(`live activity push failed: ${error instanceof Error ? error.message : String(error)}`)),
+});
 function scheduleActivityPush() {
   if (activityPushScheduled) return;
   activityPushScheduled = true;
@@ -3989,6 +4019,7 @@ function scheduleActivityPush() {
       const snapshot = activitySnapshot({ includeGroups: true, bots: store.bots });
       const encoded = JSON.stringify(snapshot);
       if (encoded !== lastActivitySnapshot) { lastActivitySnapshot = encoded; broadcast({ kind: "activity", ...snapshot }); }
+      liveActivities.observe(snapshot.items);
     } catch { /* unavailable storage never publishes a partial list */ }
   });
 }
@@ -15200,7 +15231,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (!pushSession) return json(res, 403, { error: "Push registration requires this device's live paired session" });
           if (typeof body?.token !== "string" || !["development", "production"].includes(body.environment) || typeof body.connectionId !== "string" || body.connectionId.length > 128) return json(res, 400, { error: "APNs token, environment and connection id required" });
           if (body.voipToken !== undefined && typeof body.voipToken !== "string") return json(res, 400, { error: "voipToken must be a string" });
-          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId, pushSession, body.voipToken); }
+          const live = liveRegistration(body);
+          if (live === null) return json(res, 400, { error: "invalid live activity tokens" });
+          try { apnsPush.register(multiplayerActors.ownerId, body.token, body.environment, body.connectionId, pushSession, body.voipToken, live); }
           catch { return json(res, 400, { error: "invalid or unowned APNs registration" }); }
           // The shared home's bridge session outlives this device's session.
           // Forwarding would keep delivering after device revocation here.
@@ -15309,14 +15342,16 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (!actorId) return json(res, 403, { error: "this device has not been assigned to a person" });
       if (method === "POST" && path === "/api/multiplayer/push-token") {
-        const body = await readBody(req, 1024);
+        const body = await readBody(req, 16_000);
         const pushSession = pushSessionFor(auth);
         if (!pushSession) return json(res, 403, { error: "Push registration requires this device's live paired session" });
         if (typeof body?.token !== "string" || (body.environment !== "development" && body.environment !== "production") || typeof body.connectionId !== "string" || body.connectionId.length > 128) {
           return json(res, 400, { error: "APNs token, environment and connection id required" });
         }
         if (body.voipToken !== undefined && typeof body.voipToken !== "string") return json(res, 400, { error: "voipToken must be a string" });
-        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId, pushSession, body.voipToken); }
+        const live = liveRegistration(body);
+        if (live === null) return json(res, 400, { error: "invalid live activity tokens" });
+        try { apnsPush.register(actorId, body.token, body.environment, body.connectionId, pushSession, body.voipToken, live); }
         catch { return json(res, 400, { error: "invalid APNs token" }); }
         return json(res, 200, { registered: true, deliveryConfigured: apnsPush.configured() });
       }
@@ -17928,6 +17963,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         backpressured: false,
       };
       if (auth.kind === "session") client.sessionId = auth.session.id;
+      client.pushSession = pushSessionFor(auth) ?? undefined;
       res.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
