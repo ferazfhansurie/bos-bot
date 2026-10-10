@@ -50,6 +50,9 @@ struct ChatListView: View {
     /// the computer that holds the bot.
     @AppStorage("bos.hiddenChats") private var hiddenChatsRaw = ""
     @State private var showHidden = false
+    /// Bots removed from the main computer's list; their copies from a
+    /// directly paired server stay off this list too.
+    @State private var removedOnMain: Set<String> = []
     @State private var botRemoveError: String?
     @FocusState private var searchFocused: Bool
     /// The chat rows' order on screen, held while a finger is on the list.
@@ -618,6 +621,7 @@ struct ChatListView: View {
             sharedMe = me
             sharedContacts = contacts
             sharedRooms = rooms
+            if let removed = try? await session.removedRemoteBotIDs(), session.connection?.id == connectionID { removedOnMain = removed }
             await cacheNotificationAvatars(contacts)
             if let roomID = UserDefaults.standard.string(forKey: "bos.pendingSharedRoomPush"),
                let room = rooms.first(where: { $0.id == roomID }) {
@@ -955,7 +959,9 @@ struct ChatListView: View {
                     .filter { summary in
                         // Another home's copy of a bot that lives on a home
                         // already in this list (partner's "bos" is this mac's bos).
-                        guard case let .bot(bot) = summary.chat, let remote = bot.remote else { return true }
+                        guard case let .bot(bot) = summary.chat else { return true }
+                        if removedOnMain.contains(bot.id) { return false }
+                        guard let remote = bot.remote else { return true }
                         return !shownHomes.contains(remote.homeId) && !shownBotIDs.contains { bot.id.hasSuffix("-" + $0) }
                     }
                     .map { (ConversationEntry.home($0, home, connectionID: home.connection?.id ?? ""), $0.lastActivity) }

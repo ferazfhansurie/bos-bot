@@ -720,6 +720,12 @@ public struct CompanionClient: Sendable {
         try await send(makeRequest("POST", "/api/multiplayer/push-token", body: body))
     }
 
+    /// Bot ids (on their own server) the owner took off this home's list.
+    public func removedRemoteBotIDs() async throws -> Set<String> {
+        struct Links: Decodable { struct Removed: Decodable { let remoteBotId: String }; let removedBots: [Removed]? }
+        return Set(try await send(makeRequest("GET", "/api/multiplayer/links"), as: Links.self).removedBots?.map(\.remoteBotId) ?? [])
+    }
+
     public func sharedContacts() async throws -> [SharedContact] {
         try await send(makeRequest("GET", "/api/multiplayer/contacts"), as: SharedContactsResponse.self).contacts
     }

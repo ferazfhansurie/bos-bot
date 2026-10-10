@@ -988,6 +988,11 @@ final class Session: ObservableObject {
         }
     }
 
+    func removedRemoteBotIDs() async throws -> Set<String> {
+        guard let client else { throw APIError.transport("Computer is offline") }
+        return try await client.removedRemoteBotIDs()
+    }
+
     func sharedRoster() async throws -> (SharedMe, [SharedContact], [SharedRoomSummary]) {
         guard let client else { throw APIError.transport("Computer is offline") }
         let me = try await client.sharedMe()
