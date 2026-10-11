@@ -97,3 +97,10 @@ Strict lint also fails on an unchanged control-character regex in
 `server/index.ts`; the same warning was reproduced from `121d0e994`.
 The modified steering regression test lints cleanly. These baseline issues
 remain visible for the production owner rather than being counted as passes.
+
+After porting this change onto public `main` (`538d2c36c`), the isolated
+steering/stop checks again passed (19 passed, 3 skipped) and typecheck passed.
+The strict repository lint run reports 41 warnings on both unchanged public
+`main` and this PR branch, with identical file/rule/message sets and no new
+warnings. Consequently the local pre-push lint hook fails on the baseline too;
+publishing this review branch does not assert that the full lint gate passes.
