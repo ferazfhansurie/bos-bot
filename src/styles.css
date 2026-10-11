@@ -1670,3 +1670,8 @@ button:disabled.bg-danger {
   .ui-setup-link { display: flex; min-width: 0; align-items: center; gap: 12px; border-radius: 12px; background: var(--color-card); padding: 12px; text-align: start; }
   .ui-setup-link:hover { background: var(--color-raised-hover); }
 }
+
+/* Nested pickers align to the tools panel, not a small icon midway across it. */
+.conversation-tools [role="group"] div:has(> [role="dialog"]),
+.conversation-tools [role="group"] div:has(> [role="menu"]) { position: static; }
+.conversation-tools [role="dialog"] { max-height: min(480px, calc(100dvh - 240px)); }
