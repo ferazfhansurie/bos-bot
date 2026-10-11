@@ -23,6 +23,8 @@ public struct CompanionState: Sendable {
     /// An empty snapshot is different from a roster we have not received yet.
     public private(set) var rosterLoaded = false
     public var bots: [Bot] = []
+    // Transport baselines cannot be overwritten by late HTTP snapshots or UI rollback.
+    private var streamTasks: [String: [BotTask]] = [:]
     public var rooms: [Room] = []
     /// Transcripts by thread, which is the key both bots and rooms share.
     public var messages: [String: [Message]] = [:]
@@ -303,6 +305,27 @@ public struct CompanionState: Sendable {
     // MARK: - Folding
 
     public mutating func apply(_ streamFrame: StreamFrame) {
+        switch streamFrame.frame {
+        case .hello:
+            streamTasks.removeAll()
+        case let .bot(incoming):
+            var bot = incoming
+            if let order = incoming.taskOrder {
+                guard let baseline = streamTasks[bot.id] else { return }
+                var tasks = Dictionary(baseline.map { ($0.threadId, $0) }, uniquingKeysWith: { _, newest in newest })
+                for task in incoming.tasks ?? [] { tasks[task.threadId] = task }
+                guard order.allSatisfy({ tasks[$0] != nil }) else { return }
+                bot.tasks = order.compactMap { tasks[$0] }
+                bot.taskOrder = nil
+            }
+            if let tasks = bot.tasks { streamTasks[bot.id] = tasks }
+            else { streamTasks.removeValue(forKey: bot.id) }
+            apply(.bot(bot))
+            return
+        case let .botDeleted(id):
+            streamTasks.removeValue(forKey: id)
+        default: break
+        }
         apply(streamFrame.frame)
     }
 
@@ -377,7 +400,7 @@ public struct CompanionState: Sendable {
                     messages[bot.threadId] = replacement
                     hasMore[bot.threadId] = bot.hasMore ?? false
                     merged.messages = replacement
-                    if bot.currentTaskBusy != true { clearStream(bot.threadId) }
+                    if merged.currentTaskBusy != true { clearStream(bot.threadId) }
                     reconcileQueued(threadId: bot.threadId)
                 } else {
                     merged.messages = messages[bot.threadId]

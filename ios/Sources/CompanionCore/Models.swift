@@ -540,6 +540,8 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     /// older harness included) means the shipped `cursor` silhouette.
     public var mascotEyes: String? = nil
     public var mascotBody: String?
+    /// Present only on negotiated stream deltas; lists the complete task order.
+    public var taskOrder: [String]? = nil
     public var tasks: [BotTask]?
     public var projects: [BotProject]?
     public var messages: [Message]?

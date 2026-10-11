@@ -1,3 +1,4 @@
+import { createTaskDeltas } from "./task-deltas.ts";
 // What the harness says, minus what a device has no business holding.
 //
 // `resumeCursors` is the harness's own bookkeeping: the native session id to
@@ -85,7 +86,8 @@ export const MAX_SSE_EVENT_BYTES = 36 * 1024 * 1024;
  * unterminated corrupts the stream, emitting it unscrubbed defeats the point
  * of this file. The caller drops the connection instead.
  */
-export function createSseScrubber(): (chunk: string) => string {
+export function createSseScrubber(taskDeltas = false): (chunk: string) => string {
+  const project = taskDeltas ? createTaskDeltas() : (value: unknown) => value;
   let pending = "";
   return (chunk: string): string => {
     pending += chunk;
@@ -98,7 +100,7 @@ export function createSseScrubber(): (chunk: string) => string {
         throw new Error(`SSE event exceeded ${MAX_SSE_EVENT_BYTES} bytes`);
       }
       pending = pending.slice(boundary.index + boundary.terminator.length);
-      out += scrubEvent(event) + boundary.terminator;
+      out += scrubEvent(event, project) + boundary.terminator;
     }
     if (Buffer.byteLength(pending, "utf8") > MAX_SSE_EVENT_BYTES) {
       throw new Error(`SSE event exceeded ${MAX_SSE_EVENT_BYTES} bytes without a terminator`);
@@ -127,7 +129,7 @@ function nextBoundary(text: string): { index: number; terminator: string } | nul
 }
 
 /** One complete SSE event, `data:` payload scrubbed, everything else kept. */
-function scrubEvent(event: string): string {
+function scrubEvent(event: string, project: (value: unknown) => unknown): string {
   // The ending this event arrived with is the one it leaves with.
   const eol = event.includes("\r\n") ? "\r\n" : event.includes("\r") ? "\r" : "\n";
   return event
@@ -138,7 +140,7 @@ function scrubEvent(event: string): string {
       const raw = line.slice(5).trimStart();
       if (!raw) return line;
       try {
-        return `data: ${JSON.stringify(scrub(JSON.parse(raw)))}`;
+        return `data: ${JSON.stringify(project(scrub(JSON.parse(raw))))}`;
       } catch {
         // not JSON: pass it through rather than dropping it. A frame this
         // code does not understand is still the harness's to send.

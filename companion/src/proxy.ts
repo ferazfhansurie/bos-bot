@@ -465,7 +465,7 @@ export function createProxyHandler(options: ProxyOptions) {
           // connection.
           res.socket?.setKeepAlive(true, 30_000);
 
-          const scrubStream = createSseScrubber();
+          const scrubStream = createSseScrubber(new URL(req.url ?? "/", "http://localhost").searchParams.get("taskDeltas") === "1");
           harness.setEncoding("utf8");
           harness.on("data", (chunk: string) => {
             let rewritten: string;

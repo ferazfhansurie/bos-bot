@@ -1677,6 +1677,9 @@ final class Session: ObservableObject {
                     }
 
                     if case let .hello(cursor, resumed) = frame.frame {
+                        // Finish the old connection before resetting transport baselines.
+                        flushFrames()
+                        state.apply(frame)
                         // Hello names the current head: replayed events cannot celebrate.
                         mascotLedgers.removeAll()
                         mascotCompletionIDs.removeAll()

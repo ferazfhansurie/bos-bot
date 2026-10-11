@@ -37,6 +37,31 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(state.rooms.first?.home?.id, "partner")
     }
 
+    func testTaskDeltaPreservesUnchangedTasksAppliesOrderAndRemovals() throws {
+        var state = try hydrated()
+        var bot = state.bots[0]
+        bot.tasks = [BotTask(threadId: "a", title: "A", createdAt: 1), BotTask(threadId: "b", title: "B", createdAt: 2)]
+        state.apply(StreamFrame(frame: .bot(bot), seq: 1))
+        bot.tasks = [BotTask(threadId: "a", title: "Changed", createdAt: 1)]
+        bot.taskOrder = ["b", "a"]
+        state.apply(StreamFrame(frame: .bot(bot), seq: 1))
+        XCTAssertEqual(state.bots[0].tasks?.map(\.title), ["B", "Changed"])
+        XCTAssertNil(state.bots[0].taskOrder)
+        // A delayed HTTP response must not become the next delta's baseline.
+        var stale = bot
+        stale.taskOrder = nil
+        stale.tasks = [BotTask(threadId: "b", title: "Stale", createdAt: 2)]
+        state.apply(.bot(stale))
+        bot.tasks = []
+        bot.taskOrder = ["b"]
+        state.apply(StreamFrame(frame: .bot(bot), seq: 1))
+        XCTAssertEqual(state.bots[0].tasks?.map(\.threadId), ["b"])
+        XCTAssertEqual(state.bots[0].tasks?.first?.title, "B")
+        bot.taskOrder = nil
+        state.apply(StreamFrame(frame: .bot(bot), seq: 1))
+        XCTAssertEqual(state.bots[0].tasks?.count, 0)
+    }
+
     // MARK: - Hydration
 
     func testOnlyRuntimeEventsCountAsLiveTextOnly() {

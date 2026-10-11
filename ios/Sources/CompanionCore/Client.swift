@@ -2280,7 +2280,7 @@ public struct CompanionClient: Sendable {
         screens: Bool = false,
         streamingSession: URLSession? = nil
     ) throws -> AsyncThrowingStream<StreamFrame, Error> {
-        var query = [URLQueryItem(name: "screens", value: screens ? "on" : "off")]
+        var query = [URLQueryItem(name: "screens", value: screens ? "on" : "off"), URLQueryItem(name: "taskDeltas", value: "1")]
         if let cursor { query.append(URLQueryItem(name: "since", value: cursor)) }
         var streamRequest = try makeRequest("GET", "/api/events", query: query)
         streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
