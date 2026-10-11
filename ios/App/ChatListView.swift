@@ -39,7 +39,6 @@ struct ChatListView: View {
     @State private var collapsedFolders = Set<String>()
     @State private var creatingThreads = Set<String>()
     @State private var managingThreads: Chat?
-    @State private var showingJobs = false
     @State private var sharedMe: SharedMe?
     @State private var sharedContacts: [SharedContact] = []
     @State private var sharedRooms: [SharedRoomSummary] = []
@@ -237,12 +236,6 @@ struct ChatListView: View {
                 Button("OK", role: .cancel) { botRemoveError = nil }
             } message: {
                 Text(botRemoveError ?? "")
-            }
-            .sheet(isPresented: $showingJobs) {
-                JobInboxView { chat in
-                    showingJobs = false
-                    open(chat)
-                }
             }
             .sheet(item: $managingThreads) { chat in
                 TaskManagerView(chat: chat) { threadId in
@@ -702,20 +695,6 @@ struct ChatListView: View {
         if conversationFilter != "all" && shownConversations.isEmpty {
             Text("No conversations match this filter.")
                 .foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 12)
-        }
-        if conversationFilter == "all" {
-            Button {
-                Haptics.selection()
-                showingJobs = true
-            } label: {
-                Label("Jobs", systemImage: "checklist")
-                    .font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 20)
-            .accessibilityIdentifier("job-inbox-entry")
         }
         if conversationFilter == "all" && !attention.isEmpty {
             sectionLabel(Text("Needs attention"))

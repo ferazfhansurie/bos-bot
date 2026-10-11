@@ -2,7 +2,7 @@ import { RemoteFullAccess } from "./RemoteFullAccess";
 import { useSharedDelivery } from "@/lib/shared-delivery";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
-import { ArrowUp, BookOpen, Clock, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
+import { ArrowUp, BookOpen, Clock, Loader2, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
 import { useStore, visibleMessages, currentTaskBot, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
@@ -377,9 +377,27 @@ export function Composer({
     Boolean(approval),
   );
   const [steering, setSteering] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const stopPending = useRef(false);
+  useEffect(() => {
+    stopPending.current = false;
+    setStopping(false);
+  }, [threadId, busy]);
+  useEffect(() => {
+    if (!stopping) return;
+    const timeout = window.setTimeout(() => {
+      stopPending.current = false;
+      setStopping(false);
+    }, 15000);
+    return () => window.clearTimeout(timeout);
+  }, [stopping]);
   const interruptTurn = () => {
-    if (group) dispatch({ type: "interruptGroup", groupId: group.id, threadId });
-    else if (bot) dispatch({ type: "interrupt", botId: bot.id, threadId });
+    if (stopPending.current || (!group && !bot)) return;
+    stopPending.current = true;
+    setStopping(true);
+    const onError = () => { stopPending.current = false; setStopping(false); };
+    if (group) dispatch({ type: "interruptGroup", groupId: group.id, threadId, onError });
+    else if (bot) dispatch({ type: "interrupt", botId: bot.id, threadId, onError });
   };
   const queueHeadId = queuedMessages[0]?.queueId;
   // Rooms run several members at once: the head steers into the member the
@@ -1257,11 +1275,13 @@ export function Composer({
           {busy && !locked && (
           <button
             onClick={interruptTurn}
-            aria-label={t("chat.stopTurn")}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+            disabled={stopping}
+            aria-busy={stopping}
+            aria-label={stopping ? "Stopping…" : t("chat.stopTurn")}
+            className="flex h-8 shrink-0 items-center justify-center gap-2 rounded-full bg-ink px-2.5 text-card transition-transform active:scale-90 disabled:cursor-wait"
             title={t("chat.stop")}
           >
-            <Square size={14} className="fill-current" />
+            {stopping ? <><Loader2 size={14} className="animate-spin" /><span role="status" className="text-xs">Stopping…</span></> : <Square size={14} className="fill-current" />}
           </button>
         )}
         {!locked && !busy && !hasContent && capabilities.dictation.available && (

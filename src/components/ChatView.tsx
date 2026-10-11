@@ -15,7 +15,6 @@ import {
   PinOff,
   RefreshCw,
   Search,
-  Square,
   Trash2,
   Webhook,
   X,
@@ -128,7 +127,6 @@ import { BotCallButton, BotCallOverlay } from "./voice-call/BotCall";
 import { effectivePlace, toolPlace, type EffectivePlace } from "@/lib/place";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
-import { COMPACT_BUBBLE } from "@/lib/compact-chip";
 import { useFocusMessage } from "@/lib/focus-message";
 import { groupTranscript } from "@/lib/activity-runs";
 import { ActivityRun } from "./ActivityRun";
@@ -404,7 +402,7 @@ function Bubble({
   };
 
   return (
-    <div className={cn("group flex w-full flex-col", user ? "animate-msg-in items-end" : "items-start")}>
+    <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
       {message.leadAction && <div role="status" className="mb-1 rounded-lg border border-line bg-card px-3 py-2 text-xs text-ink-secondary">
         <span className="font-medium">{message.leadAction.status} · {state.bots.find(b => b.id === message.leadAction?.leadBotId)?.name ?? "Lead"}</span>
         <div>{message.leadAction.requiredAction}</div>
@@ -1412,6 +1410,8 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           style={controlsShiftStyle}
         >
           {shared?.actions}
+          {!shared && <BotCallButton bot={bot} />}
+          <ConversationTools key={bot.threadId}>
           {<button
             onClick={() => shared ? shared.onOpenSearch?.() : setFindOpen((open) => !open)}
             aria-label={t("chat.find")}
@@ -1424,22 +1424,8 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           >
             <Search size={18} />
           </button>}
-          {!shared && bot.busy && (
-            <button
-              onClick={() => dispatch({ type: "interrupt", botId: bot.id, threadId: bot.threadId })}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
-                COMPACT_BUBBLE,
-              )}
-              title={t("chat.stopTurn")}
-            >
-              <Square size={12} className="fill-current" />
-              <span className="@max-4xl/chathead:hidden">{t("chat.stop")}</span>
-            </button>
-          )}
           {!shared && <TaskPicker bot={bot} />}
-          {!shared && <BotCallButton bot={bot} />}
-          <ConversationTools key={bot.threadId}>
+
           {local && !remoteClient && !bot.busy && (() => {
             // "Done" closes and archives this thread in one go; an archived
             // thread offers unarchive instead, which also reopens it.

@@ -69,7 +69,7 @@ const BODY_DIAMETER = 80;
 
 function MausAvatarComponent(
   { size = 44, label, color, bodyId = "circle", state, face, eyes: eyeStyle,
-    animated = true, trackPointer = true, gaze, turn = 0 }: MausAvatarProps,
+    animated = true, trackPointer = true, gaze, turn = 0, motion = "none", motionKey = 0 }: MausAvatarProps,
   ref: React.Ref<MausAvatarHandle>,
 ) {
 
@@ -102,6 +102,8 @@ function MausAvatarComponent(
         setPointer({ x: ((event.clientX-r.left)/r.width-.5)*5, y: ((event.clientY-r.top)/r.height-.5)*5 });
       } : undefined}
       onPointerLeave={() => setPointer({ x: 0, y: 0 })}>
+      <g key={`${motion}-${motionKey}`} className={animated ? "bos-mascot-motion" : undefined} data-motion={animated ? motion : undefined}>
+      <g className={animated && (state === "working" || state === "thinking") ? "bos-mascot-working" : undefined}>
       <g key={spinKey} className={animated && spinKey ? "bos-avatar-spin" : undefined} style={{ transformOrigin: "50px 50px" }}>
         <path d={body.path} fill={fill} />
         {glyph ? (
@@ -119,6 +121,8 @@ function MausAvatarComponent(
         )}
       </g>
       {glyph && <GlyphAccent parts={glyph} animated={animated} />}
+      </g>
+      </g>
     </svg>
   );
 }

@@ -1675,3 +1675,42 @@ button:disabled.bg-danger {
 .conversation-tools [role="group"] div:has(> [role="dialog"]),
 .conversation-tools [role="group"] div:has(> [role="menu"]) { position: static; }
 .conversation-tools [role="dialog"] { max-height: min(480px, calc(100dvh - 240px)); }
+
+/* Desktop motion stays small and leaves transcript geometry unchanged. */
+@keyframes bos-menu-reveal {
+  from { opacity: 0; transform: translateY(-5px) scale(.97); }
+  to { opacity: 1; transform: none; }
+}
+.conversation-tools[open] > [role="group"] {
+  transform-origin: top right;
+  animation: bos-menu-reveal 180ms var(--room-ease-out) both;
+}
+.conversation-header button, .conversation-header summary,
+.conversation-composer button {
+  transition: transform 150ms var(--room-ease-pop), background-color 150ms ease, color 150ms ease;
+}
+.conversation-header button:active:not(:disabled),
+.conversation-header summary:active,
+.conversation-composer button:active:not(:disabled) { transform: scale(.94); }
+.conversation-composer { transition: box-shadow 180ms ease; }
+.conversation-composer:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent); }
+@keyframes bos-mascot-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-1.5px) scale(1.025, .975); }
+}
+@keyframes bos-mascot-react {
+  0% { transform: scale(1); }
+  35% { transform: translateY(-3px) scale(.96, 1.04); }
+  65% { transform: scale(1.035, .965); }
+  100% { transform: none; }
+}
+.bos-mascot-working, .bos-mascot-motion { transform-origin: 50px 75px; }
+.bos-mascot-working { animation: bos-mascot-breathe 1900ms ease-in-out infinite; }
+.bos-mascot-motion:not([data-motion="none"]) { animation: bos-mascot-react 480ms var(--room-ease-out); }
+@media (prefers-reduced-motion: reduce) {
+  .conversation-tools[open] > [role="group"], .bos-mascot-working, .bos-mascot-motion { animation: none; }
+  .conversation-header button, .conversation-header summary, .conversation-composer,
+  .conversation-composer button { transition: none; }
+  .conversation-header button:active, .conversation-header summary:active,
+  .conversation-composer button:active { transform: none; }
+}

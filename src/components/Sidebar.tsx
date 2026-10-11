@@ -50,7 +50,6 @@ import { WorkingDots } from "./WorkingIndicator";
 import { nextRename } from "@/lib/rename";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { SharedContactsSidebar } from "./SharedContactsSidebar";
-import { JobInboxNavRow } from "./JobInbox";
 import { remoteBotHint, remoteBotRemoveCopy } from "@/lib/remote-bot";
 import { homeLinkHint } from "@/lib/home-routing";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
@@ -2387,7 +2386,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           ))}
         </div>
       )}
-      <JobInboxNavRow density={density} />
 
       {attentionPinned && density !== "icons" && (
         <SidebarAttentionPanel

@@ -25,6 +25,7 @@ struct ChatView: View {
     /// Set when this chat is the side pane of a wide window: there is no
     /// stack to pop, so leaving closes the pane instead.
     var onClose: (() -> Void)?
+    @State private var stoppingThreadId: String?
     @State private var selectedThreadId: String
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
@@ -501,6 +502,7 @@ struct ChatView: View {
                     mascot.reset(busy: current.busy, cardOpen: cardWaiting)
                 }
                 .onChange(of: current.busy) { _, busy in
+                    if !busy { stoppingThreadId = nil }
                     mascot.busyChanged(busy, mood: settledMood)
                 }
                 .onChange(of: cardWaiting) { _, open in mascot.cardChanged(open) }
@@ -622,6 +624,7 @@ struct ChatView: View {
             if unread { Task { await session.markRead(readChat) } }
         }
         .onChange(of: threadId) { previous, next in
+            stoppingThreadId = nil
             session.setNotificationVisible(threadId: previous, visible: false)
             session.setNotificationVisible(threadId: next, visible: true)
             saveReadingPosition()
@@ -1586,8 +1589,17 @@ struct ChatView: View {
     private var stopAction: (() -> Void)? {
         guard current.busy, case let .bot(bot) = current else { return nil }
         return {
-            Haptics.impact(.light)
-            Task { await session.interrupt(bot: bot) }
+            guard stoppingThreadId != bot.threadId else { return }
+            let target = bot.threadId
+            stoppingThreadId = target
+            Haptics.impact(.medium)
+            Task {
+                await session.interrupt(bot: bot)
+                if session.actionError == nil {
+                    try? await Task.sleep(for: .seconds(15))
+                }
+                if stoppingThreadId == target { stoppingThreadId = nil }
+            }
         }
     }
 
@@ -1801,6 +1813,7 @@ struct ChatView: View {
                     onSend: { submit() },
                     onVoice: { startVoice() },
                     onStop: stopAction,
+                    stopping: stoppingThreadId == threadId,
                     onLongVoice: { openWalkie() }
                 )
             }
@@ -2190,6 +2203,7 @@ struct ChatComposerBar: View {
     let onVoice: () -> Void
     /// The stop square left of the voice button, while the bot is working.
     var onStop: (() -> Void)? = nil
+    var stopping = false
     /// Long-pressing the voice button: the walkie-talkie.
     var onLongVoice: (() -> Void)? = nil
 
@@ -2244,15 +2258,23 @@ struct ChatComposerBar: View {
                     .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
                     if !canSend, let onStop {
                         Button(action: onStop) {
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 12, weight: .bold))
+                            HStack(spacing: 6) {
+                                if stopping {
+                                    ProgressView().tint(.white)
+                                    Text("Stopping…").font(.caption.weight(.medium))
+                                } else {
+                                    Image(systemName: "stop.fill").font(.system(size: 12, weight: .bold))
+                                }
+                            }
                                 .foregroundStyle(Color.white)
-                                .frame(width: 36, height: 36)
+                                .padding(.horizontal, stopping ? 10 : 0)
+                                .frame(minWidth: 36, minHeight: 36)
                                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .fill(Color(hex: "#2c2c2e")))
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Stop")
+                        .disabled(stopping)
+                        .accessibilityLabel(stopping ? "Stopping" : "Stop")
                         .padding(.bottom, 4)
                         .transition(.scale.combined(with: .opacity))
                     }
