@@ -68,6 +68,19 @@ verifies no alert appeared, and checks the correction and Steer control remain. 
 Debug-only, synthetic and unpaired. Retain the screenshots and `.xcresult`;
 shut down/delete only the simulator created for this run.
 
+### captured native evidence
+
+These screenshots were captured from the two passing simulator tests on
+2026-10-11 using synthetic, unpaired preview content:
+
+![Distinct steering delivery states](evidence/steering-delivery/statuses.png)
+
+![A refused steer keeps its correction queued and shows inline feedback](evidence/steering-delivery/refusal.png)
+
+The preview also shows an old synthetic thinking timestamp and a
+draft-restoration warning. The tests verify the steering states and refusal
+behavior; these captures do not establish acceptance of the entire screen.
+
 ## limits and baseline findings
 
 These checks do not prove a paid model acted on a correction, physical-phone
