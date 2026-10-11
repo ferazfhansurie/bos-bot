@@ -2290,6 +2290,14 @@ struct MessageRow: View {
         AttachedMessageContent.parse(message.text ?? "")
     }
 
+    private func steeringLabel(_ status: SteeringStatus) -> String {
+        switch status {
+        case .sentDuringReply: return String(localized: "Sent during reply")
+        case .acceptedDuringReply: return String(localized: "Accepted during reply")
+        case .uncertain: return String(localized: "Delivery uncertain · check before resending")
+        }
+    }
+
     var body: some View {
         VStack(alignment: message.role == .user && !message.isFromAnotherPerson(selfID: selfID) ? .trailing : .leading, spacing: 6) {
             if let reference = message.replyToId {
@@ -2305,6 +2313,12 @@ struct MessageRow: View {
                     .accessibilityIdentifier("reply-quote-" + reference)
             }
             content
+            if let steeringStatus = message.steeringStatus {
+                Text(steeringLabel(steeringStatus))
+                    .font(.caption)
+                    .foregroundStyle(steeringStatus == .uncertain ? Color.orange : Color.secondary)
+                    .accessibilityIdentifier("steer-delivery-" + message.id)
+            }
             if let action = message.leadAction {
                 Label(action.status.capitalized, systemImage: action.status == "resolved" ? "checkmark.circle" : "exclamationmark.circle")
                     .font(.caption.weight(.medium))
@@ -3673,8 +3687,10 @@ private struct QueuedSendList: View {
     /// Room steer the server would refuse or hold: shown in place of the
     /// button so nobody taps a Steer that lands nowhere.
     var steerUnavailable: String? = nil
-    let steer: (QueuedSend) async -> Void
+    let steer: (QueuedSend) async -> String?
     @State private var steering = false
+    @State private var steeringFeedback: String?
+    @State private var steeringRequest = UUID()
     /// Opens the text editor for one entry; nil hides the button.
     var edit: ((QueuedSend) -> Void)? = nil
     let cancel: (QueuedSend) -> Void
@@ -3707,11 +3723,23 @@ private struct QueuedSendList: View {
                         Button(steerTargetName.map { String(localized: "Steer \($0)") } ?? String(localized: "Steer")) {
                             guard !steering else { return }
                             steering = true
-                            Task { await steer(send); steering = false }
+                            steeringFeedback = nil
+                            let request = UUID()
+                            steeringRequest = request
+                            Task {
+                                let feedback = await steer(send)
+                                guard steeringRequest == request else { return }
+                                steeringFeedback = feedback
+                                steering = false
+                            }
                         }
                         .lineLimit(1)
                         .disabled(steering)
-                        .onChange(of: sends) { _, _ in steering = false }
+                        .onChange(of: sends) { _, _ in
+                            steering = false
+                            steeringFeedback = nil
+                            steeringRequest = UUID()
+                        }
                         .accessibilityLabel(steerTargetName.map { String(localized: "Send this into \($0)'s running turn now") } ?? String(localized: "Steer queued message now"))
                     }
                     if let edit {
@@ -3742,6 +3770,12 @@ private struct QueuedSendList: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+            }
+            if let steeringFeedback {
+                Text(steeringFeedback)
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+                    .accessibilityIdentifier("queued-steer-feedback")
             }
         }
         .padding(.horizontal, 4)

@@ -6891,6 +6891,7 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
       queueId: item.messageId,
       peerAsk: item.peerAsk,
       steered: steered === "steered",
+      steerDelivery: steered === "indeterminate" ? "outcome_unknown" : instance?.adapter.provider === "claudeAgent" ? "transport_written" : "provider_accepted",
       ...(item.origin ? { origin: item.origin } : {}),
     }));
     // Words from a call folded into the running turn: that turn's settle is
@@ -6912,7 +6913,8 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
     else for (const message of messages) handoffs.uncertain(bot.threadId, steerTarget, instance?.instanceId, message.id);
     const queueIds = held.items.map((item) => item.messageId);
     settleHeldSteeredQueue(held);
-    return ({ ok: true, steered: steered === "steered", outcomeUnknown: steered === "indeterminate", threadId: bot.threadId, messages, queueIds });
+    return ({ ok: true, steered: steered === "steered", outcomeUnknown: steered === "indeterminate",
+      delivery: messages[0]?.steerDelivery, consumption: "unconfirmed", threadId: bot.threadId, messages, queueIds });
   }
   if (steered === "indeterminate") {
     // No destination is left: settle so a restart cannot replay words a

@@ -159,6 +159,32 @@ final class QueuedSendClientTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/api/bots/bot-1/messages")
     }
 
+    func testSteerReturnsRefusalInsteadOfTreatingHTTP200AsDelivery() async throws {
+        QueuedCancelStub.responseBody = Data(#"{"ok":true,"queued":true,"threadId":"thread-9","reason":"wait for the next reply"}"#.utf8)
+        let receipt = try await client.steerQueued(queueId: "q1", to: .bot(id: "bot-1", threadId: "thread-9"))
+        XCTAssertEqual(receipt.queued, true)
+        XCTAssertEqual(receipt.reason, "wait for the next reply")
+        XCTAssertNil(receipt.steered)
+        let request = try XCTUnwrap(QueuedCancelStub.capturedRequest)
+        XCTAssertEqual(request.url?.path, "/api/bots/bot-1/queue/q1/steer")
+        let body = try XCTUnwrap(QueuedCancelStub.capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json["threadId"], "thread-9")
+    }
+
+    func testRoomSteerKeepsMemberAndThreadPinnedAndReturnsUncertainReceipt() async throws {
+        QueuedCancelStub.responseBody = Data(#"{"steered":false,"outcomeUnknown":true,"threadId":"thread-9"}"#.utf8)
+        let receipt = try await client.steerQueued(queueId: "q1", to: .room(id: "room-1", threadId: "thread-9"), botId: "bot-1")
+        XCTAssertEqual(receipt.outcomeUnknown, true)
+        XCTAssertEqual(receipt.steered, false)
+        let request = try XCTUnwrap(QueuedCancelStub.capturedRequest)
+        XCTAssertEqual(request.url?.path, "/api/groups/room-1/queue/q1/steer")
+        let body = try XCTUnwrap(QueuedCancelStub.capturedBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json["threadId"], "thread-9")
+        XCTAssertEqual(json["botId"], "bot-1")
+    }
+
     func testDeleteSharedGroupSendsRevisionToScopedRoomRoute() async throws {
         try await client.deleteSharedRoom(id: "room-1", revision: 3)
         let request = try XCTUnwrap(QueuedCancelStub.capturedRequest)

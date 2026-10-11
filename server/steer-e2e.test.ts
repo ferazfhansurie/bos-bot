@@ -162,6 +162,7 @@ posixOnly("mid-turn steering e2e", () => {
       }
       expect(second.status).toBe(200);
       expect(second.body).toMatchObject({ ok: true, steered: true });
+      expect(second.body.message.steerDelivery).toBe("transport_written");
       expect(second.body.queued).toBeUndefined();
       expect((await getBot(created.id)).messages.filter((m: any) => m.text === "and also this" && m.steered)).toHaveLength(1);
       // no chip left behind: the queue id is already settled
@@ -460,8 +461,10 @@ posixOnly("mid-turn steering e2e", () => {
     const second = await enqueueThenSteer(`/api/bots/${created.id}/messages`, { text: "and also this" });
     expect(second.status).toBe(200);
     expect(second.body.steered).toBe(true);
+    expect(second.body).toMatchObject({ delivery: "provider_accepted", consumption: "unconfirmed" });
     const steered = (await getBot(created.id)).messages.find((m: any) => m.text === "and also this");
     expect(steered.steered).toBe(true);
+    expect(steered.steerDelivery).toBe("provider_accepted");
 
     // the fold reached the app-server as mid-turn input for the SAME turn
     const nativeRows = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8")
@@ -504,9 +507,11 @@ posixOnly("mid-turn steering e2e", () => {
     await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.card), "held unknown-delivery turn");
     const outcome = await enqueueThenSteer(`/api/bots/${created.id}/messages`, { text: "uncertain input", threadId: created.threadId });
     expect(outcome.body).toMatchObject({ outcomeUnknown: true, steered: false });
+    expect(outcome.body.message.steerDelivery).toBe("outcome_unknown");
     const route = `/api/bots/${created.id}/queue/${outcome.body.message.queueId}/steer`;
     const bot = await getBot(created.id);
     expect(bot.messages.filter((m: any) => m.text === "uncertain input")).toHaveLength(1);
+    expect(bot.messages.find((m: any) => m.text === "uncertain input").steerDelivery).toBe("outcome_unknown");
     expect(bot.messages.some((m: any) => m.tool?.name.includes("delivery outcome unknown"))).toBe(true);
     expect((await api("POST", route, { threadId: created.threadId })).body).not.toMatchObject({ steered: true });
     const native = readFileSync(join(home, ".openmausbot", "native", `${created.threadId}.ndjson`), "utf8").trim().split("\n").map(line => JSON.parse(line));

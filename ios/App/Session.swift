@@ -507,12 +507,36 @@ final class Session: ObservableObject {
                 config.protocolClasses = [ImagePreviewProtocol.self]
                 client = CompanionClient(connection: preview, token: "image-fixture-token", session: URLSession(configuration: config))
             }
+            if arguments.contains("-steering-preview-refusal") {
+                let config = URLSessionConfiguration.ephemeral
+                config.protocolClasses = [SteeringPreviewProtocol.self]
+                client = CompanionClient(connection: preview, token: "steering-fixture-token", session: URLSession(configuration: config))
+            }
             state.hydrate(fleet)
             if arguments.contains("-threads-preview"),
                let pagesURL = Bundle.main.url(forResource: "ThreadPreviewPages", withExtension: "json"),
                let pagesData = try? Data(contentsOf: pagesURL),
                let pages = try? JSONDecoder().decode([String: ThreadPage].self, from: pagesData) {
                 for (threadID, page) in pages { state.merge(page, intoThread: threadID) }
+            }
+            if arguments.contains("-steering-preview") {
+                var parent = state.visibleTranscript(forThread: "preview-gmail").last?.id
+                for (index, delivery) in ["transport_written", "provider_accepted", "outcome_unknown"].enumerated() {
+                    let id = "preview-steer-\(index)"
+                    var message: [String: Any] = ["id": id, "role": "user", "kind": "text",
+                        "at": 1789088500000 + Double(index),
+                        "text": ["Keep the original scope", "Use the revised scope", "Check this correction before sending again"][index],
+                        "steered": delivery != "outcome_unknown", "steerDelivery": delivery]
+                    if let parent { message["parentId"] = parent }
+                    if let data = try? JSONSerialization.data(withJSONObject: message),
+                       let decoded = try? JSONDecoder().decode(Message.self, from: data) {
+                        state.apply(.message(threadId: "preview-gmail", message: decoded))
+                    }
+                    parent = id
+                }
+            }
+            if arguments.contains("-steering-preview-refusal") {
+                state.rememberQueued(QueuedSend(queueId: "preview-steer-refusal", text: "Keep this queued correction"), threadId: "preview-gmail")
             }
             status = .live
             if let i = arguments.firstIndex(of: "-empty-thread-send-after"), i + 1 < arguments.count,
@@ -2163,13 +2187,23 @@ final class Session: ObservableObject {
         await perform { _ = try await $0.setThreadSettlement(days: days) }
     }
 
-    func steerQueued(_ send: QueuedSend, threadId: String, in chat: Chat, botId: String? = nil) async {
+    func steerQueued(_ send: QueuedSend, threadId: String, in chat: Chat, botId: String? = nil) async -> String? {
+        let connectionID = client?.connection.id
+        var feedback: String?
         let destination: MessageDestination
         switch chat {
         case let .bot(bot): destination = .bot(id: bot.id, threadId: threadId)
         case let .room(room): destination = .room(id: room.id, threadId: threadId)
         }
-        await perform { try await $0.steerQueued(queueId: send.queueId, to: destination, botId: botId) }
+        await perform { client in
+            let receipt = try await client.steerQueued(queueId: send.queueId, to: destination, botId: botId)
+            guard self.client?.connection.id == connectionID else { return }
+            receipt.apply(to: &state, expectedThreadId: threadId)
+            if receipt.queued == true {
+                feedback = receipt.reason ?? String(localized: "This message is queued for the next reply; the running turn did not accept it.")
+            }
+        }
+        return feedback
     }
 
     func cancelQueued(_ send: QueuedSend, threadId: String, in chat: Chat) async {
