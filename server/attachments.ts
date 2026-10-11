@@ -26,7 +26,7 @@ export const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 /** Shared documents are deliberately smaller than Cloudflare's transport
  * ceiling. This is a local inbox, not unbounded remote storage. */
-export const FILE_MAX_BYTES = 25 * 1024 * 1024;
+export const FILE_MAX_BYTES = 90 * 1024 * 1024;
 
 /** Quota pressure may reclaim old orphan uploads, never retained references. */
 export const ATTACHMENTS_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -95,7 +95,7 @@ const FILE_MIMES: Readonly<Record<string, string>> = {
   "audio/flac": ".flac",
   "audio/x-flac": ".flac",
   "audio/webm": ".webm",
-  // Phone videos. The iOS app re-encodes them to fit FILE_MAX_BYTES.
+  // Phone videos stream from app-owned files; oversized exports fit this ceiling.
   "video/mp4": ".mp4",
   "video/quicktime": ".mov",
   "video/x-m4v": ".m4v",

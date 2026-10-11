@@ -188,6 +188,53 @@ final class ShareClientTests: XCTestCase {
         XCTAssertEqual(ShareRequestStub.capturedBody, bytes)
     }
 
+    func testDownloadToDiskRejectsOversizedLengthAndKeepsAuthorizationErrors() async throws {
+        ShareRequestStub.responseHeaders = ["Content-Type": "video/mp4", "Content-Length": String(AttachmentPolicy.maximumFileBytes + 1)]
+        ShareRequestStub.responseBody = Data([1, 2, 3])
+        do {
+            _ = try await client.downloadFileToDisk(threadId: "thread-1", messageId: "message-1", path: "/tmp/video.mp4")
+            XCTFail("expected bounded download rejection")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("90 MB")) }
+        ShareRequestStub.statusCode = 401
+        ShareRequestStub.responseHeaders = ["Content-Type": "application/json"]
+        ShareRequestStub.responseBody = Data(#"{"error":"device revoked"}"#.utf8)
+        do {
+            _ = try await client.downloadFileToDisk(threadId: "thread-1", messageId: "message-1", path: "/tmp/video.mp4")
+            XCTFail("expected authorization rejection")
+        } catch let error as APIError { XCTAssertTrue(error.isUnauthorized) }
+        catch { XCTFail("unexpected error: \(error)") }
+    }
+
+    func testDownloadToDiskPreservesCanonicalNameAndDoesNotLoadVideoData() async throws {
+        ShareRequestStub.responseHeaders = ["Content-Type": "video/mp4", "Content-Disposition": "attachment; filename=Video.mp4"]
+        ShareRequestStub.responseBody = Data([1, 2, 3])
+        let result = try await client.downloadFileToDisk(threadId: "thread-1", messageId: "message-1", path: "/tmp/video.mp4")
+        let url = try XCTUnwrap(result.localURL)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertEqual(result.filename, "Video.mp4")
+        XCTAssertTrue(result.data.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: url), Data([1, 2, 3]))
+    }
+
+    func testFileBackedUploadRetriesWithTheSameIDAndDoesNotUseHTTPBodyData() async throws {
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: source) }
+        try Data([1, 2, 3]).write(to: source)
+        ShareRequestStub.transientFailures = 1
+        ShareRequestStub.statusCode = 201
+        ShareRequestStub.responseBody = Data(#"{"path":"/tmp/attachments/video.mp4","name":"Video.mp4","mime":"video/mp4","bytes":3}"#.utf8)
+        let id = UUID().uuidString
+        let result = try await client.uploadFile(fileURL: source, name: "Video.mp4", mime: "video/mp4", uploadId: id)
+        XCTAssertEqual(result.name, "Video.mp4")
+        XCTAssertEqual(ShareRequestStub.requests.count, 2)
+        for request in ShareRequestStub.requests {
+            XCTAssertNil(request.httpBody)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Length"), "3")
+            XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "uploadId" })?.value, id)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
     func testRawFileUploadEncodesDisplayNameAndReturnsMacPath() async throws {
         ShareRequestStub.statusCode = 201
         ShareRequestStub.responseBody = Data(#"{"path":"/Users/test/.openmausbot/files/id.pdf","name":"Q3 plan.pdf","mime":"application/pdf","bytes":3}"#.utf8)
@@ -237,7 +284,7 @@ final class ShareClientTests: XCTestCase {
     }
 
     func testOversizedFileIsRejectedBeforeNetworking() async {
-        let bytes = Data(repeating: 0, count: CompanionClient.maximumFileUploadBytes + 1)
+        let bytes = Data(repeating: 0, count: AttachmentPolicy.maximumBufferedFileBytes + 1)
 
         do {
             _ = try await client.uploadFile(data: bytes, name: "large.zip", mime: "application/zip")

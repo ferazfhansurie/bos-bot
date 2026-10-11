@@ -2076,12 +2076,12 @@ final class Session: ObservableObject {
                         displayName: attachment.name
                     ))
                 case .file:
-                    let file = try await client.uploadFile(
-                        data: attachment.data,
-                        name: attachment.name,
-                        mime: mime,
-                        uploadId: attachment.id.uuidString
-                    )
+                    let file: UploadedFile
+                    if let fileURL = attachment.fileURL {
+                        file = try await client.uploadFile(fileURL: fileURL, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString)
+                    } else {
+                        file = try await client.uploadFile(data: attachment.data, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString)
+                    }
                     uploaded.append(SharedAttachmentReference(
                         path: file.path,
                         kind: .file,
@@ -2338,12 +2338,16 @@ final class Session: ObservableObject {
         path: String,
         cacheResult: Bool = false
     ) async throws -> DownloadedFile {
-        let download = try await fetchAttachment(
-            threadId: threadId,
-            messageId: messageId,
-            path: path,
-            cacheResult: cacheResult
-        )
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        let generation = attachmentCacheGeneration
+        let download: DownloadedFile
+        do { download = try await client.downloadFileToDisk(threadId: threadId, messageId: messageId, path: path) }
+        catch let error as APIError where error.isUnauthorized {
+            if generation == attachmentCacheGeneration, !Task.isCancelled { status = .unauthorized }
+            throw error
+        }
+        defer { Self.removePreview(at: download.localURL) }
+        guard generation == attachmentCacheGeneration else { throw CancellationError() }
         try Task.checkCancellation()
         let preparation = Task.detached(priority: .userInitiated) {
             // Content-Disposition is the server's canonical, sanitised name.
@@ -2358,6 +2362,7 @@ final class Session: ObservableObject {
         }
         do {
             try Task.checkCancellation()
+            guard generation == attachmentCacheGeneration else { throw CancellationError() }
             return prepared
         } catch {
             Self.removePreview(at: prepared.localURL)
@@ -2410,10 +2415,11 @@ final class Session: ObservableObject {
         )
         let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
         do {
-            try download.data.write(
-                to: fileURL,
-                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
-            )
+            if let source = download.localURL {
+                try manager.copyItem(at: source, to: fileURL)
+            } else {
+                try download.data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            }
             try Task.checkCancellation()
             return DownloadedFile(
                 data: download.data,
@@ -2436,6 +2442,9 @@ final class Session: ObservableObject {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("BOSFilePreviews", isDirectory: true)
         try? FileManager.default.removeItem(at: root)
+        for name in ["BOSFileDownloads", "BOSPendingAttachments"] {
+            try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent(name))
+        }
     }
 
     func answer(chat: Chat, card: OptionCard, choice: String, rememberingPermission: Bool = true) async {

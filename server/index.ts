@@ -14902,7 +14902,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const expectedBytes = rawLength === undefined ? undefined : Number(rawLength);
       if (expectedBytes !== undefined && (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0 || expectedBytes > FILE_MAX_BYTES)) {
         req.resume();
-        return json(res, 413, { error: "attachment exceeds 25 MB" });
+        return json(res, 413, { error: `attachment exceeds ${Math.floor(FILE_MAX_BYTES / 1024 / 1024)} MB` });
       }
       let saved: { path: string };
       if (extensionForMime(mime)) {

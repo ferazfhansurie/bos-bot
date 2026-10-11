@@ -2,6 +2,43 @@ import XCTest
 @testable import CompanionCore
 
 final class BotDraftTests: XCTestCase {
+    func testFileBackedVideoSurvivesPickerDeletionAndRestartWithoutLoadingBytes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("picker.mp4")
+        let bytes = Data(repeating: 17, count: 30 * 1_024 * 1_024)
+        try bytes.write(to: source)
+        let file = try PendingMessageAttachment(copying: source, name: "Video.mp4", mime: "video/mp4")
+        try FileManager.default.removeItem(at: source)
+        XCTAssertTrue(file.data.isEmpty)
+        XCTAssertEqual(file.bytes, bytes.count)
+        let first = BotDraft(directory: root.appendingPathComponent("draft"))
+        first.files = [file]
+        let sendID = try first.prepareSend(text: "review", priority: .queue)
+        let restored = BotDraft(directory: root.appendingPathComponent("draft"))
+        XCTAssertNotNil(restored.error) // Interrupted sends keep their retry identity.
+        XCTAssertEqual(restored.files.first?.id, file.id)
+        XCTAssertEqual(restored.files.first?.bytes, bytes.count)
+        XCTAssertTrue(try XCTUnwrap(restored.files.first).data.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(restored.files.first?.fileURL)), bytes)
+        XCTAssertEqual(try restored.prepareSend(text: "review", priority: .queue), sendID)
+        restored.complete(sendID: sendID)
+        XCTAssertTrue(restored.files.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("draft").appendingPathComponent(file.id.uuidString).path))
+    }
+
+    func testFileBackedImportRejectsOversizeAndRemovesTemporaryCopy() throws {
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: source) }
+        XCTAssertTrue(FileManager.default.createFile(atPath: source.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: source)
+        try handle.truncate(atOffset: UInt64(AttachmentPolicy.maximumFileBytes + 1)); try handle.close()
+        let target = source.appendingPathExtension("copy")
+        XCTAssertThrowsError(try copyAttachmentFile(source, to: target, limit: AttachmentPolicy.maximumFileBytes))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+    }
+
     func testRestartKeepsFilesReplyAndRetryIdentityButEditChangesIdentity() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -43,7 +80,7 @@ final class BotDraftTests: XCTestCase {
             let url = directory.appendingPathComponent(id.uuidString)
             XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: nil))
             let file = try FileHandle(forWritingTo: url)
-            try file.truncate(atOffset: UInt64(AttachmentPolicy.maximumFileBytes))
+            try file.truncate(atOffset: UInt64(AttachmentPolicy.maximumBufferedFileBytes))
             try file.close()
         }
         XCTAssertThrowsError(try SharedDraftDisk(directory: directory).load())

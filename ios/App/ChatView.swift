@@ -1385,7 +1385,7 @@ struct ChatView: View {
                     imported.append(candidate)
                     continue
                 }
-                let usedBytes = (existingAttachments + imported).reduce(0) { $0 + $1.data.count }
+                let usedBytes = (existingAttachments + imported).reduce(0) { $0 + $1.bytes }
                 let remainingBytes = max(0, AttachmentPolicy.maximumTotalBytes - usedBytes)
                 let candidate = try await Task.detached(priority: .userInitiated) {
                     try Self.readImportedFile(url, remainingBytes: remainingBytes)
@@ -1432,6 +1432,11 @@ struct ChatView: View {
         let readLimit = min(itemLimit, remainingBytes)
         if let fileSize = values.fileSize, fileSize > readLimit {
             throw AttachmentImportError.tooLarge(name, readLimit)
+        }
+        if kind == .file {
+            let pending = try PendingMessageAttachment(copying: url, name: name, mime: mime)
+            guard pending.bytes <= readLimit else { throw AttachmentImportError.tooLarge(name, readLimit) }
+            return pending
         }
         // Some document providers do not report a size. Never let that turn
         // into an unbounded read of a provider-controlled file: read one byte
