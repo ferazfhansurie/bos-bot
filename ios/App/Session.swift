@@ -113,7 +113,23 @@ final class Session: ObservableObject {
     /// `Connection.canAdminister`. Views hide owner-only controls when this
     /// is false rather than offer buttons the server would answer 403 to.
     var canAdminister: Bool { connection?.canAdminister ?? false }
-    @Published private(set) var status: Status = .unpaired
+    @Published private(set) var status: Status = .unpaired {
+        didSet {
+            let label: String
+            switch status {
+            case .unpaired: label = "unpaired"
+            case .connecting: label = "connecting"
+            case .live: label = "live"
+            case .unauthorized: label = "unauthorized"
+            case .offline: label = "offline"
+            }
+            traceConnection("status \(label)")
+        }
+    }
+    private var lastFrameTrace = Date.distantPast
+    private func traceConnection(_ event: String) {
+        ConnectionTrace.record("satellite=\(isSatellite) generation=\(streamGeneration) \(event)")
+    }
     @Published private(set) var isRefreshing = false
     /// Transient, user-facing failures from an action they just took.
     @Published var actionError: String?
@@ -196,6 +212,7 @@ final class Session: ObservableObject {
             guard !Task.isCancelled, let self, self.streamGeneration == generation,
                   !self.streamedMessageIDs.contains(message.id) else { return }
             self.sendStreamCheck = nil
+            self.traceConnection("send echo missing; reconnect")
             // Resume the cursor; never resend the accepted message.
             self.stopStream()
             self.connect()
@@ -1012,6 +1029,7 @@ final class Session: ObservableObject {
 
     /// Called when the app comes to the front, and once at launch.
     func connect() {
+        traceConnection("connect task=\(streamTask != nil)")
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-shared-chat-preview")
             || ProcessInfo.processInfo.arguments.contains("-notification-tap-preview") { status = .live; return }
@@ -1235,6 +1253,7 @@ final class Session: ObservableObject {
     /// anyway; dropping it deliberately means the cursor is written down at
     /// a known point instead of wherever the socket happened to die.
     func disconnect() {
+        traceConnection("disconnect appState=\(UIApplication.shared.applicationState.rawValue)")
         resetCredentialEntry()
         stopStream()
         saveRosterCache()
@@ -1264,6 +1283,7 @@ final class Session: ObservableObject {
     /// the island. After that, iOS suspends us anyway; disconnect cleanly so
     /// the cursor is written down at a known point.
     func linger() {
+        traceConnection("linger appState=\(UIApplication.shared.applicationState.rawValue)")
         guard streamTask != nil, lingerTask == .invalid else { disconnect(); return }
         // A previous request can leave a sleeper behind when iOS refuses the
         // background assertion. Never let it outlive the assertion it belongs
@@ -1295,6 +1315,7 @@ final class Session: ObservableObject {
     /// keeps the cursor and the state in step: every frame that arrived is
     /// either folded with its seq, or was never received.
     private func stopStream() {
+        traceConnection("stopStream")
         sendStreamCheck?.cancel()
         sendStreamCheck = nil
         flushFrames()
@@ -1639,6 +1660,10 @@ final class Session: ObservableObject {
                 for try await frame in events {
                     if Task.isCancelled { return }
                     reconnectDelay = 0
+                    if Date().timeIntervalSince(lastFrameTrace) > 5 {
+                        lastFrameTrace = Date()
+                        traceConnection("frame received")
+                    }
                     if case let .message(_, message) = frame.frame {
                         if streamedMessageIDs.count >= 500 { streamedMessageIDs.removeAll(keepingCapacity: true) }
                         streamedMessageIDs.insert(message.id)
@@ -1649,6 +1674,7 @@ final class Session: ObservableObject {
                         mascotLedgers.removeAll()
                         mascotCompletionIDs.removeAll()
                         mascotReplayCutoff = cursor.split(separator: ":").last.flatMap { Int($0) }
+                        traceConnection("hello resumed=\(resumed)")
                         log.info("stream live, resumed=\(resumed, privacy: .public)")
                         // false means the server could not replay the gap —
                         // the one case that costs a full hydrate. Commit the
@@ -1707,6 +1733,7 @@ final class Session: ObservableObject {
                     return
                 }
                 flushFrames()
+                traceConnection("stream error domain=\((error as NSError).domain) code=\((error as NSError).code)")
                 log.error("stream failed: \(error.localizedDescription, privacy: .public)")
                 status = .offline(failureMessage(for: error))
             }
@@ -2186,7 +2213,9 @@ final class Session: ObservableObject {
                 urls: [],
                 attachments: uploaded
             )
+            traceConnection("send begins busy=\(chat.busy)")
             let receipt = try await client.send(text: message, to: destination, sendId: sendID, replyToId: replyToId, priority: priority)
+            traceConnection("send accepted queued=\(receipt.queued == true)")
             // The send succeeded on the computer it was addressed to, so the
             // draft clears either way. Its queue row belongs to that computer,
             // and must not be drawn on one selected mid-upload.

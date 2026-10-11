@@ -47,10 +47,11 @@ export const isJson = (contentType: string | undefined): boolean => {
   return media === "application/json" || media.endsWith("+json");
 };
 
-/** How much of a single SSE event the scrubber will hold while waiting for
- * its terminator. Generous — the largest real frame is a bot payload, orders
- * of magnitude under this — because the number only exists to be a ceiling. */
-export const MAX_SSE_EVENT_BYTES = 1024 * 1024;
+/** Match the proxy's JSON response ceiling: bot snapshots can include several
+ * megabytes of retained conversation. A smaller SSE-only limit disconnects
+ * live clients and traps resumed streams on the same legitimate snapshot.
+ * Enforce this in UTF-8 bytes for complete and fragmented events alike. */
+export const MAX_SSE_EVENT_BYTES = 36 * 1024 * 1024;
 
 /**
  * Rewrites an SSE byte stream, scrubbing each event's `data:` payload while
@@ -93,10 +94,13 @@ export function createSseScrubber(): (chunk: string) => string {
       const boundary = nextBoundary(pending);
       if (!boundary) break;
       const event = pending.slice(0, boundary.index);
+      if (Buffer.byteLength(event, "utf8") > MAX_SSE_EVENT_BYTES) {
+        throw new Error(`SSE event exceeded ${MAX_SSE_EVENT_BYTES} bytes`);
+      }
       pending = pending.slice(boundary.index + boundary.terminator.length);
       out += scrubEvent(event) + boundary.terminator;
     }
-    if (pending.length > MAX_SSE_EVENT_BYTES) {
+    if (Buffer.byteLength(pending, "utf8") > MAX_SSE_EVENT_BYTES) {
       throw new Error(`SSE event exceeded ${MAX_SSE_EVENT_BYTES} bytes without a terminator`);
     }
     return out;
