@@ -62,7 +62,7 @@ import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Composer } from "./Composer";
-import { ConversationHeader } from "./ConversationChrome";
+import { ConversationHeader, ConversationTools } from "./ConversationChrome";
 import { SharedAttachmentTile } from "./SharedAttachmentTile";
 import type { SharedComposer } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -250,7 +250,7 @@ class MessageBoundary extends Component<{ children: ReactNode; fallbackText: str
   render() {
     if (this.state.failed) {
       return (
-        <div className="chat-text w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
+        <div className="chat-text conversation-bubble w-fit max-w-[min(42rem,78%)] bg-card px-4 py-2.5 whitespace-pre-wrap text-ink">
           {this.props.fallbackText}
         </div>
       );
@@ -461,7 +461,7 @@ function Bubble({
         )}
         <div
           className={cn(
-            "w-fit max-w-[min(42rem,78%)] rounded-2xl text-[15px] leading-relaxed",
+            "conversation-bubble w-fit max-w-[min(42rem,78%)]",
             emerging && "turn-answer",
             arriving && !emerging && (user ? "msg-spring origin-right" : "msg-spring origin-left"),
             user && webhookView
@@ -1355,6 +1355,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       {/* Header */}
       <ConversationHeader style={headerDragStyle}>
         <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1" style={headerNoDragStyle}>
+          {(messages.length > 0 || bot.busy || shared) && (
           <button
             onClick={() => { if (shared) shared.onOpenDetails?.(); else if (local) dispatch({ type: "toggleSettings", open: true }); }}
             className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
@@ -1378,6 +1379,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               />
             )}
           </button>
+          )}
           {shared ? <button type="button" onClick={shared.onOpenDetails} className="truncate text-[15px] font-semibold text-ink hover:underline">{bot.name}</button> : !local ? <span className="truncate text-[15px] font-semibold text-ink">{bot.name}</span> : <RenameTitle
             value={bot.name}
             onCommit={(name) => {
@@ -1422,11 +1424,6 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           >
             <Search size={18} />
           </button>}
-          {!remoteHint && <ExportTranscriptMenu
-            title={bot.name}
-            messages={messages}
-            botName={bot.name}
-          />}
           {!shared && bot.busy && (
             <button
               onClick={() => dispatch({ type: "interrupt", botId: bot.id, threadId: bot.threadId })}
@@ -1440,6 +1437,9 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               <span className="@max-4xl/chathead:hidden">{t("chat.stop")}</span>
             </button>
           )}
+          {!shared && <TaskPicker bot={bot} />}
+          {!shared && <BotCallButton bot={bot} />}
+          <ConversationTools key={bot.threadId}>
           {local && !remoteClient && !bot.busy && (() => {
             // "Done" closes and archives this thread in one go; an archived
             // thread offers unarchive instead, which also reopens it.
@@ -1454,10 +1454,13 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               {archived ? <ArchiveRestore size={18} /> : <CircleCheck size={18} />}
             </button>;
           })()}
-          {!shared && <TaskPicker bot={bot} />}
-          {local && <div className="@max-3xl/chathead:hidden"><UsageChip bot={bot} /></div>}
-          {local && !remoteClient && <div className="@max-3xl/chathead:hidden"><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}
-          {!shared && <BotCallButton bot={bot} />}
+          {!remoteHint && <ExportTranscriptMenu
+            title={bot.name}
+            messages={messages}
+            botName={bot.name}
+          />}
+          {local && <div className=""><UsageChip bot={bot} /></div>}
+          {local && !remoteClient && <div className=""><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}
           {local && <button
             data-tour="computer"
             onClick={() => dispatch({ type: "toggleComputer" })}
@@ -1475,13 +1478,14 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             aria-label={t("chat.inspector")}
             aria-pressed={state.inspectorOpen}
             className={cn(
-              "rounded-md p-1.5 hover:bg-raised @max-3xl/chathead:hidden",
+              "rounded-md p-1.5 hover:bg-raised ",
               state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title={t("chat.inspectorHint")}
           >
             <Bug size={18} />
           </button>}
+          </ConversationTools>
         </div>
       </ConversationHeader>
 

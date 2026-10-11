@@ -4374,6 +4374,15 @@ describe("harness HTTP API", () => {
     expect(markdownExport.body.markdown).toContain("## Activation");
     expect(markdownExport.body.markdown).toContain("Give this file to your Chief of Staff");
     expect(markdownExport.body.markdown).not.toMatch(/Archived|autoApprove|alwaysAllow|modelSelection|threadId/);
+    const single = await api("POST", "/api/teams/export", { name: "Mira", format: "package", botIds: [first.id] });
+    expect(single.status).toBe(200);
+    expect(single.body.members).toBe(1);
+    expect(single.body.markdown).toContain("Mira");
+    expect(single.body.markdown).not.toContain("Scout");
+    expect(single.body.markdown).not.toMatch(/Archived|autoApprove|alwaysAllow|modelSelection|threadId/);
+    for (const botIds of [[], [hidden.id], ["missing"], [first.id, first.id], [123]]) {
+      expect((await api("POST", "/api/teams/export", { format: "package", botIds })).status).toBe(400);
+    }
     expect((await api("GET", "/api/bots")).body.groups).toHaveLength(roomsBefore);
     expect((await api("POST", "/api/teams/export", {})).body.team.name).toBe("My Bos Team");
 
@@ -4632,6 +4641,16 @@ describe("harness HTTP API", () => {
     });
     expect(exportedWithSkill.status).toBe(200);
     expect(exportedWithSkill.body.markdown).toContain("name: source-check");
+    const selected = await api("POST", "/api/teams/export", {
+      format: "package", botIds: [scout.id], skillIds: ["source-check"],
+    });
+    expect(selected.status).toBe(200);
+    expect(selected.body.members).toBe(1);
+    expect(selected.body.markdown).toContain("name: source-check");
+    expect(selected.body.markdown).not.toMatch(/Signal Room|Morning signals|Prepare the approved morning|Package Editor/);
+    expect((await api("POST", "/api/teams/export", {
+      format: "package", botIds: [editor.id], skillIds: ["source-check"],
+    })).status).toBe(400);
     const exportedWithoutSkills = await api("POST", "/api/teams/export", { format: "package" });
     expect(exportedWithoutSkills.status).toBe(200);
     expect(exportedWithoutSkills.body.markdown).not.toContain("name: source-check");

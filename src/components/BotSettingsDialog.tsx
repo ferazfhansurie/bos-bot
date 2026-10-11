@@ -352,7 +352,7 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           {visibleSections.length === 0 && (
-            <div className="px-4 py-4 text-[12.5px] leading-relaxed text-ink-secondary">
+            <div className="px-4 py-4 text-[13px] leading-relaxed text-ink-secondary">
               Nothing matches “{query.trim()}”
             </div>
           )}

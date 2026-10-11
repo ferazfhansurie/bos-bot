@@ -534,7 +534,7 @@ export function PluginsPanel() {
       >
         <header className="flex items-start justify-between gap-4 px-6 pb-3 pt-6 sm:px-8 sm:pt-7">
           <div>
-            <h2 id="plugins-title" className="text-[22px] font-semibold tracking-[-0.01em] text-ink">{t("connectors.title")}</h2>
+            <h2 id="plugins-title" className="ui-page-title">{t("connectors.title")}</h2>
             <p className="mt-1 text-[13px] text-ink-secondary">{t("connectors.subtitle")}</p>
           </div>
           <div className="flex items-center gap-1">
@@ -568,7 +568,7 @@ export function PluginsPanel() {
                 aria-selected={surface === item}
                 onClick={() => dispatch({ type: "togglePlugins", open: true, surface: item })}
                 className={cn(
-                  "border-b-2 px-0.5 pb-3 pt-1 text-[13.5px] font-medium transition-colors",
+                  "border-b-2 px-0.5 pb-3 pt-1 text-[14px] font-medium transition-colors",
                   surface === item ? "border-accent text-ink" : "border-transparent text-ink-secondary hover:text-ink",
                 )}
               >
@@ -583,7 +583,7 @@ export function PluginsPanel() {
         {stale && (
           // Say which of the two things is true. Silence here is what makes a
           // remembered list indistinguishable from a confirmed one.
-          <div className="mx-6 mb-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12.5px] text-warning sm:mx-8">
+          <div className="mx-6 mb-1 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning sm:mx-8">
             <TriangleAlert size={14} className="mt-px shrink-0" />
             <span>
               {t("connectors.stale")}
@@ -598,7 +598,7 @@ export function PluginsPanel() {
               aria-selected={tab === "marketplace"}
               onClick={() => setTab("marketplace")}
               className={cn(
-                "rounded-lg px-4 py-2 text-[13.5px] transition-colors",
+                "rounded-lg px-4 py-2 text-[14px] transition-colors",
                 tab === "marketplace" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
               )}
             >
@@ -609,7 +609,7 @@ export function PluginsPanel() {
               aria-selected={tab === "connected"}
               onClick={() => setTab("connected")}
               className={cn(
-                "rounded-lg px-4 py-2 text-[13.5px] transition-colors",
+                "rounded-lg px-4 py-2 text-[14px] transition-colors",
                 tab === "connected" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
               )}
             >
@@ -646,7 +646,7 @@ export function PluginsPanel() {
           </div>
         )}
         {botsWithoutApps.length > 0 && (
-          <div className="mx-6 mb-1 rounded-xl bg-inset px-4 py-3 text-[12.5px] leading-relaxed text-ink-secondary sm:mx-8">
+          <div className="mx-6 mb-1 rounded-xl bg-inset px-4 py-3 text-[13px] leading-relaxed text-ink-secondary sm:mx-8">
             <span className="font-medium text-ink">{t("connectors.perBot.title")}</span>{" "}
             {t("connectors.perBot.body")}
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -655,7 +655,7 @@ export function PluginsPanel() {
                   key={candidate.id}
                   type="button"
                   onClick={() => dispatch({ type: "updateBot", botId: candidate.id, patch: { composio: true } })}
-                  className="rounded-full bg-control px-2.5 py-1 text-[11.5px] font-medium text-ink hover:bg-raised-hover"
+                  className="rounded-full bg-control px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-raised-hover"
                 >
                   {t("connectors.perBot.allow", { name: candidate.name })}
                 </button>
@@ -721,7 +721,7 @@ export function PluginsPanel() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14px] font-medium text-ink">{card.label}</div>
                       <div
-                        className="mt-0.5 truncate text-[12.5px] text-ink-secondary"
+                        className="mt-0.5 truncate text-[13px] text-ink-secondary"
                         title={unavailableReason ?? undefined}
                       >
                         {unavailableReason ?? (
@@ -755,7 +755,7 @@ export function PluginsPanel() {
                           setAliasDraft("");
                         }
                       }}
-                      className="flex min-w-[88px] items-center justify-center gap-1.5 rounded-full bg-raised px-3 py-2 text-[12.5px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-40"
+                      className="flex min-w-[88px] items-center justify-center gap-1.5 rounded-full bg-raised px-3 py-2 text-[13px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-40"
                     >
                       {unavailableReason ? (
                         t("connectors.selfHostOnly")
@@ -780,7 +780,7 @@ export function PluginsPanel() {
                         return (
                           <div key={account.id} className="flex items-center gap-2 rounded-lg bg-raised/45 px-3 py-2">
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5 text-[12.5px] font-medium text-ink">
+                              <div className="flex items-center gap-1.5 text-[13px] font-medium text-ink">
                                 {active && <Check size={13} className="shrink-0 text-success" />}
                                 <span className="truncate">{account.alias || account.id}</span>
                               </div>
@@ -852,7 +852,7 @@ export function PluginsPanel() {
               <div className="text-[14px] font-medium text-ink">
                 {tab === "connected" ? connectedEmptyCopy.title : t("connectors.noAppsFound")}
               </div>
-              <div className="mt-1 text-[12.5px] text-ink-secondary">
+              <div className="mt-1 text-[13px] text-ink-secondary">
                 {tab === "connected" ? connectedEmptyCopy.description : t("connectors.tryDifferentSearch")}
               </div>
               {tab === "connected" && inventoryPhase === "error" && (
@@ -860,7 +860,7 @@ export function PluginsPanel() {
                   type="button"
                   disabled={refreshing}
                   onClick={() => void loadConnectionInventory(true)}
-                  className="mt-4 flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[12.5px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-50"
+                  className="mt-4 flex items-center gap-1.5 rounded-lg bg-raised px-3 py-2 text-[13px] text-ink transition-colors hover:bg-raised-hover disabled:opacity-50"
                 >
                   <RefreshCw size={13} className={cn(refreshing && "animate-spin")} />
                   {t("connectors.action.retry")}

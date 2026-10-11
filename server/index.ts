@@ -18757,15 +18757,22 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 200, createTeamBackup(store, routines!.listRoutines(), name));
         }
         if (body.format === "package") {
-          const selectedBots = store.bots.filter((bot) => !bot.hidden);
+          const availableBots = store.bots.filter((bot) => !bot.hidden && !bot.remote);
+          const ids = body.botIds;
+          if (ids !== undefined && (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== "string") || new Set(ids).size !== ids.length || ids.some((id) => !availableBots.some((bot) => bot.id === id)))) {
+            return json(res, 400, { error: "Choose one or more local bots to share" });
+          }
+          const selectedBots = ids === undefined ? store.bots.filter((bot) => !bot.hidden) : availableBots.filter((bot) => ids.includes(bot.id));
           const skillNames = checkedExportSkillNames(body.skillIds, selectedBots);
           if (!skillNames.ok) return json(res, 400, { error: skillNames.error });
           const document = createBotPackageExport({
             name,
             authorName: profileName,
             bots: selectedBots,
-            groups: store.groups,
-            routines: routines!.listRoutines(),
+            // A selected-bot share contains only its explicit definition.
+            // Workspace rooms and scheduled prompts require the full export flow.
+            groups: ids === undefined ? store.groups : [],
+            routines: ids === undefined ? routines!.listRoutines() : [],
             skillsByBot: collectExportSkills(selectedBots, skillNames.names),
           });
           return json(res, 200, {

@@ -259,7 +259,7 @@ export function GroupListItem({
         onMenu({ groupId: group.id, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
       }}
       className={cn(
-        "relative flex w-full items-center rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
+        "relative flex w-full items-center rounded-[10px] text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
         density === "icons" ? "justify-center px-1 py-1.5" : density === "compact" ? "gap-1.5 py-1 pl-6 pr-2" : "gap-2 py-1.5 pl-6 pr-2",
         selected && !expanded ? "bg-raised/70" : "hover:bg-raised/40",
       )}
@@ -1239,7 +1239,7 @@ export function BotListItem({
   // line above the name lets both truncate independently instead.
   const title = bot.title.trim();
   const rowClass = cn(
-    "flex w-full items-center rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
+    "flex w-full items-center rounded-[10px] text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60",
     iconOnly
       ? "justify-center px-1 py-1.5"
       : density === "compact"
@@ -2613,6 +2613,10 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             ]}
           />
         )}
+        {!remoteClient && <button type="button" onClick={() => setTeamLibraryOpen(true)} aria-label="Bot marketplace" title={density === "icons" ? "Bot marketplace" : undefined}
+          className={cn("flex min-h-10 w-full items-center rounded-xl py-2 text-left text-ink-secondary hover:bg-raised/50 hover:text-ink", density === "icons" ? "justify-center" : "gap-3 px-3")}>
+          <Library size={18} />{density !== "icons" && <span className="text-[14px]">Bot marketplace</span>}
+        </button>}
         {density !== "icons" && (
           <button
             type="button"

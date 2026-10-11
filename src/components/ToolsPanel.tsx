@@ -95,7 +95,7 @@ export function ToolsPanel({ target, onClose }: { target: TerminalTarget; onClos
       <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">{opened.map(kind => <button key={kind} className={cn("shrink-0 rounded-md px-2 py-1.5 text-xs", active === kind ? "bg-raised text-ink" : "text-ink-secondary hover:bg-raised")} aria-pressed={active === kind} onClick={() => setActive(kind)}>{tools.find(t => t.kind === kind)?.name}</button>)}</div>
       <button className={button} aria-label="Close tools" onClick={onClose}><X size={16}/></button>
     </header>
-    {active === "home" && <div className="p-5"><h2 className="mb-4 text-lg font-semibold">Tools</h2><div className="grid grid-cols-2 gap-2">{tools.map(tool => <button key={tool.kind} data-tool={tool.kind} className="flex min-h-14 items-center gap-3 rounded-xl bg-raised px-3 py-3 text-left text-sm hover:bg-raised/70" onClick={() => open(tool.kind)}><tool.icon size={18} className="shrink-0 text-ink-secondary"/>{tool.name}</button>)}</div></div>}
+    {active === "home" && <div className="p-5"><h2 className="ui-panel-title mb-4">Tools</h2><div className="grid grid-cols-2 gap-2">{tools.map(tool => <button key={tool.kind} data-tool={tool.kind} className="flex min-h-14 items-center gap-3 rounded-xl bg-raised px-3 py-3 text-left text-sm hover:bg-raised/70" onClick={() => open(tool.kind)}><tool.icon size={18} className="shrink-0 text-ink-secondary"/>{tool.name}</button>)}</div></div>}
     {opened.map(kind => <div key={kind} className={cn("min-h-0 flex-1", active === kind ? "flex flex-col" : "hidden")}>
       {kind === "terminal" && <TerminalPanel target={target} onClose={onClose}/>}
       {kind === "browser" && <BrowserTool visible={active === kind}/>}

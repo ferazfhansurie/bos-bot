@@ -1647,3 +1647,26 @@ button:disabled.bg-danger {
 @media (prefers-reduced-motion: reduce) {
   .voice-call-indeterminate { animation: none; transform: translateX(97%); }
 }
+
+/* Conversation geometry is shared by local and linked-home chat. Palette
+   remains owned by the selected skin; these roles only govern visual rhythm. */
+.conversation-bubble {
+  border-radius: 18px;
+  font-size: 15px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.conversation-header { min-height: 64px; gap: 12px; }
+.conversation-composer { border-radius: 26px; }
+.conversation-tools > summary::-webkit-details-marker { display: none; }
+.conversation-tools[open] > summary { background: var(--color-raised); color: var(--color-ink); }
+
+/* App-wide hierarchy: skins own color; these roles own rhythm. */
+@layer components {
+  .ui-page-title { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-ink); }
+  .ui-panel-title { font-size: 17px; line-height: 24px; font-weight: 600; color: var(--color-ink); }
+  .ui-section-title { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--color-ink); }
+  .ui-surface { border-radius: 12px; background: var(--color-card); padding: 16px; }
+  .ui-setup-link { display: flex; min-width: 0; align-items: center; gap: 12px; border-radius: 12px; background: var(--color-card); padding: 12px; text-align: start; }
+  .ui-setup-link:hover { background: var(--color-raised-hover); }
+}
