@@ -1,61 +1,46 @@
-> ⚠️ **No affiliation with any cryptocurrency.** BOS Bot has no token. Any coin using the BOS Bot, Maus, or SupaMaus name is not created, endorsed, or affiliated with this project or its maintainer. I have received no tokens, payment, or allocation from anyone, and I will not be endorsing any token.
-
 <div align="center">
 
 # BOS Bot
 
-BOS Bot is a fork of OpenMausBot. Upstream attribution is preserved in NOTICE and LICENSING.md.
-
-**Your own team of AI bots, in a chat app.**
-
-<sub>An independent, open-source project inspired by **Grok Bot** — bring-your-own-agent, local-first, on the models you already have. Not affiliated with xAI.</sub>
-
-Every bot in the sidebar is a real agent — Claude or Codex running locally under the hood — with its own
-personality, its own model, its own cloud computer, and its own connected apps.
-Talk to them like contacts. Watch them work. Approve what matters.
+**Your own AI team in a group chat. Open source, any model, runs on your own computer.**
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
-![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Electron](https://img.shields.io/badge/Electron-macOS%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-2B2E3A?logo=electron&logoColor=9FEAF9)
-![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex-d97757)
-![PRs](https://img.shields.io/badge/PRs-welcome-38d591)
+![Agents](https://img.shields.io/badge/agents-Claude%20·%20Codex%20·%20Grok-d97757)
+![License](https://img.shields.io/badge/license-Apache%202.0-38d591)
 
-<br>
-
-<!-- BOS download page. TODO(dev): confirm https://bos.aihlete.com/download is the real BOS download URL. -->
 <a href="https://bos.aihlete.com/download">
-  <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F%20%20Download%20BOS-Mac%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-1084fe?style=for-the-badge&labelColor=070707" alt="Download BOS for Mac, Windows or Ubuntu" height="40">
+  <img src="https://img.shields.io/badge/Download%20BOS-Mac%20%C2%B7%20Windows%20%C2%B7%20Ubuntu-1084fe?style=for-the-badge&labelColor=070707" alt="Download BOS for Mac, Windows or Ubuntu" height="40">
 </a>
 
-<sub>[download BOS](https://bos.aihlete.com/download) &nbsp;·&nbsp; macOS: Apple silicon & Intel .dmg &nbsp;·&nbsp; Windows: x64 installer &nbsp;·&nbsp; Ubuntu 24.04 x64: .deb or AppImage beta</sub>
+<br><br>
 
-<br>
-
-<br>
-<br>
-
-<img src="docs/screenshots/hero.png" alt="BOS Bot — a Telegram-style chat app where every chat is a real AI agent" width="900">
+<img src="docs/screenshots/hero.png" alt="BOS Bot: a chat app where every contact is a real AI agent" width="900">
 
 </div>
 
 ---
 
-## Why
+## The honest version
 
-One assistant in one box is the wrong shape for agents. BOS Bot is an independent, open-source project inspired by **Grok Bot** —
-it keeps the idea (AI as a *messaging app*: a roster of bots you chat with, each with its own personality,
-memory of its thread, model, computer, and apps) and rebuilds it open, local-first, and on the agents you
-already have:
+BOS Bot is a fork of [OpenMausBot](https://github.com/milind-soni/OpenMausBot) by Milind Soni, an open-source
+take on Grok Bot. I forked it on 2026-09-20 and have put about 650 commits into it since, because it now runs
+my whole agency: a team of bots I talk to from my phone and my Mac, plus my teammates and clients in the
+same chats. Upstream attribution is kept in [NOTICE](NOTICE) and [LICENSING.md](LICENSING.md).
 
-- **Bring your own agents.** Bots run on the `claude`, `codex`, and `grok` CLIs installed on your own machine
-  — your existing logins and subscriptions, no new accounts, no proxy in the middle. Point any engine at a
-  custom CLI binary (a versioned build or wrapper) in **Settings → Engines**.
-- **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys, and
-  events live in `~/.openmausbot`, not a cloud.
-- **Agents with hands.** Each bot can use a cloud Linux desktop, an isolated Local VM, or—where the platform
-  safety boundary is currently certified—your own computer, plus 500+ apps through Composio. Host control is
-  available on macOS and Ubuntu Xorg after explicit opt-in. Ubuntu Wayland host control remains disabled while
-  issue #345 is resolved.
+## How it's different from Grok Bot
+
+1. **Multiplayer that doesn't burn your quota.** Put your team, your clients and your bots in one room. Only
+   the bot you @tag wakes up. In Grok Bot every bot in a group reads every message, so a busy group eats your
+   weekly limit fast.
+2. **Open source and model agnostic.** Claude, Codex (GPT), Grok, or any ACP CLI or OpenAI-compatible
+   endpoint. Pick a model per bot, switch mid-conversation, and change the code however you like.
+3. **Free.** No extra subscription. Bots run on the `claude`, `codex` or `grok` CLI already logged in on your
+   machine, so you only pay your AI provider, and the Claude or ChatGPT plan you already have works.
+4. **Hands on your computer.** Bots can drive your own Mac (opt-in, with approval cards), an isolated local
+   VM, or a cloud Linux desktop, and use 500+ apps through Composio.
+5. **Local first.** One small harness server on `127.0.0.1` owns every agent process. Transcripts, keys and
+   events stay on your machine.
 
 ## Features
 
@@ -63,7 +48,7 @@ already have:
 <tr>
 <td width="50%" valign="top">
 
-### 🧠 Pick a brain per bot
+### Pick a brain per bot
 
 A model picker with a provider rail — Claude and Codex models side by side, defaults marked, unavailable
 providers dimmed with the reason. Switch a bot's model mid-conversation.
@@ -73,7 +58,7 @@ providers dimmed with the reason. Switch a bot's model mid-conversation.
 </td>
 <td width="50%" valign="top">
 
-### 🖥️ Every bot gets a computer
+### Every bot gets a computer
 
 Open the Computer panel and the bot's cloud desktop spins up on its own — live screen preview while it
 works, "Open desktop" to take over in your browser, or point the bot at *this Mac* instead.
@@ -85,7 +70,7 @@ works, "Open desktop" to take over in your browser, or point the bot at *this Ma
 <tr>
 <td width="50%" valign="top">
 
-### 🙋 Bots ask before they act
+### Bots ask before they act
 
 Shell commands, file edits, and questions surface as inline cards — Allow / Deny / answer in chat. A
 permission broker turns every risky action into a decision you make, for cloud and local computers alike.
@@ -95,7 +80,7 @@ permission broker turns every risky action into a decision you make, for cloud a
 </td>
 <td width="50%" valign="top">
 
-### 🔌 Connected apps
+### Connected apps
 
 A one-click marketplace over Composio Sessions: Gmail, Slack, GitHub, Notion, Linear and hundreds more.
 OAuth once, and every bot can use them as tools.
@@ -107,7 +92,7 @@ OAuth once, and every bot can use them as tools.
 <tr>
 <td width="50%" valign="top">
 
-### 🗂 Manage bots like chats
+### Manage bots like chats
 
 Right-click any bot: pin, mark unread, edit profile, duplicate, copy conversation ID, hide, delete. It's a
 messaging app — your agents behave like contacts.
@@ -117,7 +102,7 @@ messaging app — your agents behave like contacts.
 </td>
 <td width="50%" valign="top">
 
-### 🔑 Keys once, everything lights up
+### Keys once, everything lights up
 
 Paste credentials in App Settings — they persist locally and the provider fleet hot-reloads instantly.
 Secrets are write-only: the UI only ever sees "configured" flags.
@@ -128,13 +113,13 @@ Secrets are write-only: the UI only ever sees "configured" flags.
 </tr>
 </table>
 
-### #️⃣ Channels for every context
+### Channels for every context
 
 Keep Work, Personal, and each project in separate channels without cloning your bots. Every channel has
 its own transcript, shared instructions, working folder, responder rules, and editable bot roster. File a
 channel and its bots under a named context, then rename it or change its members whenever the team changes.
 
-### 📦 Install a complete team from one Markdown file
+### Install a complete team from one Markdown file
 
 Browse outcome-driven teams on [BotMRR](https://botmrr.io), then choose **Add to BOS Bot**. The app
 opens a review screen before creating the bots, Chief of Staff, channels, playbooks, connector checklist,
@@ -147,7 +132,7 @@ remain off until you approve them, routines arrive paused, and packages never ca
 conversations, permissions, memory, or computer access. The portable format comes from the upstream BOS Bot
 [playbook repository](https://github.com/milind-soni/openmausbot-teams) ([format](https://github.com/milind-soni/openmausbot-teams/blob/main/FORMAT.md)); a BOS team library is not published yet.
 
-### 🎧 Bots that talk back
+### Bots that talk back
 
 Press the speaker on any reply, or switch a bot to read its answers out as they land — so you can listen
 to what ran overnight while you make breakfast. Hit **call** and it's a conversation: it hears you, tells
@@ -255,7 +240,7 @@ Any desktop build can also pair as a client to another Windows, macOS, or Ubuntu
 **From source:**
 
 ```sh
-git clone https://github.com/firazfhansurie/bos-bot && cd bos-bot
+git clone https://github.com/ferazfhansurie/bos-bot && cd bos-bot
 pnpm install
 
 pnpm dev:server    # harness server → 127.0.0.1:8799
@@ -289,9 +274,9 @@ The Linux preview is user-initiated and never enables local bot control or Auto 
 Driver 0.19.3 runtime starts only after explicit opt-in and without its full-screen cursor overlay. On Wayland the
 app never starts it and clears legacy opt-ins while that real-seat safety gate remains unresolved. Chat, preview,
 Cloud, and Local VM remain available on both sessions. See the [Ubuntu Desktop guide](docs/linux-desktop.md) and upstream BOS Bot
-tracking issues [#29](https://github.com/firazfhansurie/bos-bot/issues/29),
-[#345](https://github.com/firazfhansurie/bos-bot/issues/345), and
-[#113](https://github.com/firazfhansurie/bos-bot/issues/113).
+tracking issues [#29](https://github.com/milind-soni/OpenMausBot/issues/29),
+[#345](https://github.com/milind-soni/OpenMausBot/issues/345), and
+[#113](https://github.com/milind-soni/OpenMausBot/issues/113).
 
 The Linux packager downloads only the tag-pinned upstream archive during the build, verifies its size, SHA-256,
 complete member allowlist, and inner executable hashes, then packages only the CLI and cursor-theme sidecar. The
@@ -361,9 +346,8 @@ Questions, bugs and feedback: <https://bos.aihlete.com/support>.
 ## Run from a terminal or on a server
 
 > **Not published for BOS yet.** The `bosbot` package on npm is the upstream
-> project, not BOS — don't install it for BOS. Until a BOS terminal package ships
-> (TODO(dev): package name), run BOS from source (see Quick start). The commands
-> below describe the upstream CLI flow this will follow.
+> project, not BOS. Until a BOS terminal package ships, run BOS from source (see
+> Quick start). The commands below describe the upstream CLI flow this will follow.
 
 The terminal flow: First launch guides you with
 arrow-key choices: choose AI access, sign in or paste a hidden API key, choose
