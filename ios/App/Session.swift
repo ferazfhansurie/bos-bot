@@ -1612,6 +1612,7 @@ final class Session: ObservableObject {
                         // reconnecting must still ask for the missing gap.
                         if !resumed {
                             try await hydrate(using: client)
+                            try Task.checkCancellation()
                             state.resetCursor(cursor)
                         }
                         status = .live
@@ -1641,11 +1642,15 @@ final class Session: ObservableObject {
                     }
                     enqueue(frame)
                 }
+                // Cancellation may end AsyncThrowingStream normally. The old
+                // stream must never mark its replacement offline during refresh.
+                if Task.isCancelled { return }
                 flushFrames()
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
                 status = .offline(failureMessage(for: URLError(.networkConnectionLost)))
             } catch let error as APIError where error.isUnauthorized {
+                if Task.isCancelled { return }
                 log.error("stream refused: unauthorized")
                 status = .unauthorized
                 return
@@ -2206,9 +2211,13 @@ final class Session: ObservableObject {
     /// delivering it. This is wire state, not optimism: the row exists
     /// because the computer said it does, identified by its queueId.
     private func rememberQueuedSend(from receipt: SendReceipt?, text: String) {
-        guard let receipt, receipt.queued == true,
-              let queueId = receipt.queueId, let threadId = receipt.threadId
-        else { return }
+        guard let receipt, let threadId = receipt.threadId else { return }
+        // The HTTP receipt is authoritative too. Reconcile the local preview
+        // now, even if its matching event-stream frame arrives later.
+        if let message = receipt.message {
+            state.apply(.message(threadId: threadId, message: message))
+        }
+        guard receipt.queued == true, let queueId = receipt.queueId else { return }
         state.rememberQueued(
             QueuedSend(
                 queueId: queueId,

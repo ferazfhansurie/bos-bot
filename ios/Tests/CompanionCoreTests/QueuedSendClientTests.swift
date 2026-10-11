@@ -168,8 +168,9 @@ final class QueuedSendClientTests: XCTestCase {
         let request = try XCTUnwrap(QueuedCancelStub.capturedRequest)
         XCTAssertEqual(request.url?.path, "/api/bots/bot-1/queue/q1/steer")
         let body = try XCTUnwrap(QueuedCancelStub.capturedBody)
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
-        XCTAssertEqual(json["threadId"], "thread-9")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["threadId"] as? String, "thread-9")
+        XCTAssertEqual(json["interrupt"] as? Bool, true)
     }
 
     func testRoomSteerKeepsMemberAndThreadPinnedAndReturnsUncertainReceipt() async throws {

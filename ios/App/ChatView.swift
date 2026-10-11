@@ -68,8 +68,15 @@ struct ChatView: View {
     @State private var uploadStatus: String?
     @State private var preparingAttachments = false
     @State private var sendingMessage = false
-    /// Queue or block for the next send while a turn runs. Every send puts
-    /// it back to queue, so block is never sticky.
+    private struct PendingSendPreview {
+        let threadId: String
+        let id: String
+        let text: String
+        let steering: Bool
+    }
+    @State private var pendingSendPreview: PendingSendPreview?
+    /// Direct chats default to immediate steer. An explicit Queue choice
+    /// remains selected so the next send respects the person's choice.
     @State private var sendPriority: MessagePriority = .queue
     /// The held send open in the queued-message editor.
     @State private var editingQueued: QueuedSend?
@@ -132,6 +139,7 @@ struct ChatView: View {
         self.chat = chat
         self.onClose = onClose
         _selectedThreadId = State(initialValue: chat.threadId)
+        if case .bot = chat { _sendPriority = State(initialValue: .block) }
     }
 
     /// The live bubble's scroll target. A constant because there is at most
@@ -385,6 +393,19 @@ struct ChatView: View {
                                     avatar: AnyView(ChatAvatarView(chat: current, size: 22, state: face, animated: true))
                                 )
                             }
+                        }
+                        if let pending = pendingSendPreview, pending.threadId == threadId,
+                           !messages.contains(where: { $0.sendId == pending.id || $0.queueId == pending.id }) {
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(pending.text).textSelection(.enabled)
+                                    .padding(12)
+                                    .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 18))
+                                Text(pending.steering ? "Interrupting…" : "Sending…")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .id("pending-send-" + pending.id)
+                            .onAppear { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
                         }
                         Color.clear.frame(height: 1).id(Self.bottomId)
                             .modifier(ReportsVisible { visible in
@@ -1221,14 +1242,14 @@ struct ChatView: View {
               !preparingAttachments,
               !sendingMessage
         else { return }
-        let priorityAtSend: MessagePriority = chatAtSend.busy ? sendPriority : .queue
+        let priorityAtSend = sendPriority
         checkpointDraft()
         guard let archive = activeArchive else { return }
         let durableID: String
         do { durableID = try archive.prepareSend(text: text, priority: priorityAtSend) }
         catch { attachmentError = archive.error; return }
-        sendPriority = .queue
         sendingMessage = true
+        pendingSendPreview = PendingSendPreview(threadId: chatAtSend.threadId, id: durableID, text: text.isEmpty ? outgoingAttachments.map(\.name).joined(separator: "\n") : text, steering: priorityAtSend == .block && chatAtSend.busy)
         attachmentError = nil
         showCommandHUD = false
         showingPlus = false
@@ -1245,6 +1266,7 @@ struct ChatView: View {
                 }
             )
             sendingMessage = false
+            if pendingSendPreview?.id == durableID { pendingSendPreview = nil }
             uploadStatus = nil
             guard sent else {
                 let failure = session.actionError ?? "Couldn't send this message. Try again."
@@ -1558,7 +1580,10 @@ struct ChatView: View {
                 let roomSteer = roomSteerTarget
                 QueuedSendList(sends: heldSends, steerTargetName: roomSteer?.target?.name,
                                steerUnavailable: roomSteer?.unavailable, steer: { send in
-                    await session.steerQueued(send, threadId: threadId, in: current, botId: roomSteer?.target?.id)
+                    let targetThread = threadId
+                    pendingSendPreview = PendingSendPreview(threadId: targetThread, id: send.queueId, text: send.text, steering: roomSteer == nil)
+                    defer { if pendingSendPreview?.id == send.queueId { pendingSendPreview = nil } }
+                    return await session.steerQueued(send, threadId: targetThread, in: current, botId: roomSteer?.target?.id)
                 }, edit: { editingQueued = $0 }) { send in
                     Task { await session.cancelQueued(send, threadId: threadId, in: current) }
                 }
@@ -2102,7 +2127,7 @@ struct SendPriorityToggle: View {
     var body: some View {
         HStack(spacing: 2) {
             option(.queue, "Queue", "tray.and.arrow.down")
-            option(.block, "Block", "hand.raised")
+            option(.block, "Steer", "arrow.turn.up.right")
         }
         .padding(3)
         .glassCapsule()

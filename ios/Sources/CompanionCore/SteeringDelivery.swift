@@ -20,6 +20,7 @@ extension Message {
 /// Neither a pipe write nor a provider acknowledgement proves model consumption.
 public struct SteerReceipt: Decodable, Sendable {
     public var steered: Bool?
+    public var interrupted: Bool?
     public var outcomeUnknown: Bool?
     public var queued: Bool?
     public var reason: String?
@@ -32,7 +33,7 @@ public struct SteerReceipt: Decodable, Sendable {
     /// Refused or unscoped receipts leave the queue alone for SSE to reconcile.
     @discardableResult
     public func apply(to state: inout CompanionState, expectedThreadId: String) -> Bool {
-        guard threadId == expectedThreadId, steered == true || outcomeUnknown == true else { return false }
+        guard threadId == expectedThreadId, steered == true || outcomeUnknown == true || (interrupted == true && queued != true) else { return false }
         for var message in messages ?? [] {
             if message.steerDelivery == nil {
                 message.steerDelivery = outcomeUnknown == true ? "outcome_unknown" : delivery

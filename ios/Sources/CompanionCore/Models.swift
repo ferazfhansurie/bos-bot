@@ -308,6 +308,8 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     /// when it held the message, echoed back on the line that finally landed.
     /// Clients match it against their held-send rows to retire them.
     public var queueId: String?
+    /// Stable client identity for reconciling an optimistic send.
+    public var sendId: String?
     /// Mid-turn delivery evidence, preserved through transcript and cache reads.
     public var steered: Bool?
     /// Kept as a string so a newer server cannot break an older phone's decoder.

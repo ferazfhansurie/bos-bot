@@ -484,13 +484,15 @@ public enum WriteAuthority: Sendable {
 /// identify the held line. Every field is optional because the two shapes
 /// are disjoint and the client reads only the half it got.
 public struct SendReceipt: Decodable, Sendable {
+    public var message: Message?
     public var queued: Bool?
     public var queueId: String?
     public var threadId: String?
     /// "capacity" is the known value; anything else still parses.
     public var reason: String?
 
-    public init(queued: Bool? = nil, queueId: String? = nil, threadId: String? = nil, reason: String? = nil) {
+    public init(queued: Bool? = nil, queueId: String? = nil, threadId: String? = nil, reason: String? = nil, message: Message? = nil) {
+        self.message = message
         self.queued = queued
         self.queueId = queueId
         self.threadId = threadId
@@ -1305,6 +1307,7 @@ public struct CompanionClient: Sendable {
         }
         guard Self.validRouteID(queueId), Self.validRouteID(threadId) else { throw APIError.badURL }
         var body: [String: Any] = ["threadId": threadId]
+        if case .bot = destination { body["interrupt"] = true }
         if case .room = destination, let botId {
             guard Self.validRouteID(botId) else { throw APIError.badURL }
             body["botId"] = botId

@@ -72,6 +72,36 @@ final class SteeringDeliveryTests: XCTestCase {
         XCTAssertEqual(state.transcript(forThread: "t1").first?.steeringStatus, .acceptedDuringReply)
     }
 
+    func testInterruptedReceiptReconcilesExactlyOnceWithoutClaimingModelConsumption() throws {
+        let receipt = try decode(#"{"interrupted":true,"queued":false,"threadId":"t1","queueIds":["q1"],"messages":[{"id":"m1","role":"user","kind":"text","at":1,"text":"correction","queueId":"q1","sendId":"s1"}]}"#)
+        var state = CompanionState()
+        state.rememberQueued(QueuedSend(queueId: "q1", text: "correction"), threadId: "t1")
+        XCTAssertTrue(receipt.apply(to: &state, expectedThreadId: "t1"))
+        let message = try XCTUnwrap(state.transcript(forThread: "t1").first)
+        XCTAssertEqual(message.sendId, "s1")
+        XCTAssertNil(message.steeringStatus)
+        state.apply(.message(threadId: "t1", message: message))
+        XCTAssertEqual(state.transcript(forThread: "t1").count, 1)
+        XCTAssertNil(state.pendingQueued["t1"])
+        let cached = try JSONDecoder().decode(Message.self, from: JSONEncoder().encode(message))
+        XCTAssertEqual(cached.sendId, "s1")
+    }
+
+    func testInterruptedButStillQueuedReceiptDoesNotHideCorrection() throws {
+        let receipt = try decode(#"{"interrupted":true,"queued":true,"threadId":"t1","queueIds":["q1"]}"#)
+        var state = CompanionState()
+        state.rememberQueued(QueuedSend(queueId: "q1", text: "correction"), threadId: "t1")
+        XCTAssertFalse(receipt.apply(to: &state, expectedThreadId: "t1"))
+        XCTAssertEqual(state.pendingQueued["t1"]?.count, 1)
+    }
+
+    func testSendReceiptKeepsCanonicalMessageForImmediateLocalReconciliation() throws {
+        let source = #"{"threadId":"t1","message":{"id":"m1","role":"user","kind":"text","at":1,"text":"now","sendId":"s1"}}"#
+        let receipt = try JSONDecoder().decode(SendReceipt.self, from: Data(source.utf8))
+        XCTAssertEqual(receipt.message?.sendId, "s1")
+        XCTAssertEqual(receipt.threadId, "t1")
+    }
+
     private func decode(_ source: String) throws -> SteerReceipt {
         try JSONDecoder().decode(SteerReceipt.self, from: Data(source.utf8))
     }

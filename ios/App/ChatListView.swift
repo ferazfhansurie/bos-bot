@@ -437,7 +437,7 @@ struct ChatListView: View {
                 await session.refreshHomes()
                 await shared
 #if DEBUG
-                if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") { try? await Task.sleep(for: .seconds(3)) }
+                if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") || ProcessInfo.processInfo.arguments.contains("-refresh-ui-test") { try? await Task.sleep(for: .seconds(5)) }
 #endif
             }
             .environment(\.listFaces, listFaces)
@@ -1902,6 +1902,10 @@ struct StatusBanner: View {
     var body: some View {
         Group {
             switch session.status {
+            case _ where session.isRefreshing:
+                // The refresh control already owns this feedback. Inserting a
+                // banner here changes the scroll inset under the user's finger.
+                EmptyView()
             case .live, .unpaired:
                 EmptyView()
             case .connecting where quietWhenAnotherHomeIsLive && session.anotherHomeIsLive,

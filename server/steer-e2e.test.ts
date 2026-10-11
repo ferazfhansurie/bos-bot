@@ -140,6 +140,33 @@ posixOnly("mid-turn steering e2e", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it("interrupts an explicitly steered phone correction before the held tool returns", async () => {
+    writeFileSync(toolResultGate, "hold result");
+    rmSync(steerFinishGate, { force: true });
+    const created = (await api("POST", "/api/bots")).body.bot;
+    try {
+      await api("PATCH", `/api/bots/${created.id}`, { modelSelection: { instanceId: "claudeSteer", model: "claude-fake" } });
+      await api("POST", `/api/bots/${created.id}/messages`, { text: "original work" });
+      await waitFor(async () => (await getBot(created.id)).messages.some((m: any) => m.kind === "activity"), "held tool");
+      const queued = await api("POST", `/api/bots/${created.id}/messages`, { text: "correct course now", sendId: "immediate-steer-once" });
+      expect(queued.body.queued).toBe(true);
+      const receipt = await api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, { threadId: created.threadId, interrupt: true });
+      expect(receipt.status).toBe(200);
+      expect(receipt.body).toMatchObject({ interrupted: true, queued: false, threadId: created.threadId });
+      expect(receipt.body.messages).toHaveLength(1);
+      expect(receipt.body.messages[0]).toMatchObject({ text: "correct course now", sendId: "immediate-steer-once" });
+      expect(readFileSync(toolResultGate, "utf8")).toBe("hold result");
+      const repeated = await api("POST", `/api/bots/${created.id}/queue/${queued.body.queueId}/steer`, { threadId: created.threadId, interrupt: true });
+      expect(repeated.body.interrupted).not.toBe(true);
+      const snapshot = await getBot(created.id);
+      expect(snapshot.messages.filter((m: any) => m.sendId === "immediate-steer-once")).toHaveLength(1);
+    } finally {
+      await api("POST", `/api/bots/${created.id}/stop`, { threadId: created.threadId });
+      rmSync(toolResultGate, { force: true });
+      writeFileSync(steerFinishGate, "finish");
+    }
+  }, 30_000);
+
   it(
     "explicitly steers a queued send into the same Claude turn with no remaining queued chip",
     async () => {

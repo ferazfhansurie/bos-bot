@@ -6822,11 +6822,37 @@ function noteSteerImagesAsFiles(threadId: string, from?: { botId: string; name: 
   });
 }
 
-async function steerInboxQueue(botId: string, threadId: string, queueId: string, attended = false) {
+async function steerInboxQueue(botId: string, threadId: string, queueId: string, attended = false, immediate = false) {
   const bot = store.projectBotForTask(botId, threadId);
   if (!bot) return { ok: false, queued: false, threadId };
   const held = holdSteeredQueue(bot.id, bot.threadId, queueId);
   if (!held) return { ok: false, queued: false, threadId: bot.threadId };
+  if (immediate) {
+    // Explicit human steering interrupts the wait before dispatching these
+    // still-undelivered words. Hold the exact queue throughout cancellation:
+    // turn.completed and a concurrent send must not dispatch it twice.
+    priorityDirectPreemptions.add(threadId);
+    try {
+      const current = store.projectBotForTask(botId, threadId);
+      const priorAdapter = current ? runningTurnInstance(current, threadId)?.adapter : undefined;
+      if (current?.busy || threadBusy(botId, threadId)) {
+        await interruptDirectThread(botId, threadId);
+        const deadline = Date.now() + 10_000;
+        while (threadBusy(botId, threadId) || priorAdapter?.hasSession(threadId)) {
+          if (Date.now() >= deadline) throw Object.assign(new Error("the current turn is still stopping; your correction remains queued"), { status: 409 });
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      }
+    } finally {
+      restoreHeldSteeredQueue(held);
+      priorityDirectPreemptions.delete(threadId);
+      drainQueuedSends();
+    }
+    const queueIds = held.items.map(item => item.messageId);
+    const messages = store.messagesFor(threadId).filter(message => message.queueId && queueIds.includes(message.queueId));
+    return { ok: true, interrupted: true, threadId, messages,
+      queueIds: messages.map(message => message.queueId!), queued: messages.length !== held.items.length };
+  }
   const currentAtStart = store.projectBotForTask(bot.id, bot.threadId);
   const instance = currentAtStart?.busy ? runningTurnInstance(currentAtStart, bot.threadId) : undefined;
   // Words spoken on a call and folded into a running turn carry the same
@@ -20919,8 +20945,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { ok: true });
     }
 
-    // Steer a queued message into the RUNNING turn (no interrupt). Engines
-    // without a live steer keep the queue; this never ends the current turn.
+    // Explicit steering interrupts the current wait, then resumes this thread
+    // with the held correction. Automatic delivery still uses native steering.
     m = path.match(/^\/api\/bots\/([\w-]+)\/queue\/([\w-]+)\/steer$/);
     if (m && method === "POST") {
       const body = await readBody(req);
@@ -20930,7 +20956,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // Lift the whole queue atomically: a settle racing this request can
       // drain it as a follow-up, or this request can steer it into the live
       // turn — never both for the same words.
-      return json(res, 200, await steerInboxQueue(bot.id, bot.threadId, m[2], auth.kind === "session" || DESKTOP_MANAGED));
+      const queueId = m[2];
+      return json(res, 200, await withMessagePostLock(`bot:${bot.id}:${bot.threadId}`, () =>
+        steerInboxQueue(bot.id, bot.threadId, queueId, auth.kind === "session" || DESKTOP_MANAGED, body?.interrupt === true)));
     }
 
     // Compaction shares normal turn admission and Stop, but never executes
