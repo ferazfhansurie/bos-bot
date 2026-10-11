@@ -114,6 +114,7 @@ final class Session: ObservableObject {
     /// is false rather than offer buttons the server would answer 403 to.
     var canAdminister: Bool { connection?.canAdminister ?? false }
     @Published private(set) var status: Status = .unpaired
+    @Published private(set) var isRefreshing = false
     /// Transient, user-facing failures from an action they just took.
     @Published var actionError: String?
     /// One exact message the next opened chat should reveal.
@@ -1019,11 +1020,33 @@ final class Session: ObservableObject {
     /// makes the spinner mean what it appears to mean; the deadline is there
     /// so a network that never answers still gives the control back.
     func refresh() async {
-        restartStream()
+        if isRefreshing {
+            while isRefreshing, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+            return
+        }
+        guard client != nil || restorePending else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        // Publish before spawning run(): otherwise a previously live home
+        // can make the refresh return before its new handshake even starts.
+        stopStream()
+        status = .connecting
         connect()
         let deadline = Date().addingTimeInterval(10)
         while status == .connecting, !Task.isCancelled, Date() < deadline {
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+    }
+
+    /// The roster contains every paired home. Check them concurrently so a
+    /// sleeping secondary computer cannot leave stale faces after a pull.
+    func refreshHomes() async {
+        if !isSatellite { syncSatellites() }
+        let homes = [self] + satellites
+        await withTaskGroup(of: Void.self) { group in
+            for home in homes { group.addTask { await home.refresh() } }
         }
     }
 

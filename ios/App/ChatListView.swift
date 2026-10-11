@@ -433,7 +433,9 @@ struct ChatListView: View {
             }
             .coordinateSpace(.named("roster"))
             .bosRefreshable {
-                await session.refresh(); await refreshShared()
+                async let shared: Void = refreshShared()
+                await session.refreshHomes()
+                await shared
 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") { try? await Task.sleep(for: .seconds(3)) }
 #endif
@@ -475,7 +477,7 @@ struct ChatListView: View {
                         } description: {
                             Text("Keep BOS open on your Mac. Your chats will appear when the connection is ready.")
                         } actions: {
-                            Button("Try again") { Task { await session.refresh(); await refreshShared() } }
+                            Button("Try again") { Task { await session.refreshHomes(); await refreshShared() } }
                                 .buttonStyle(.bordered)
                         }
                     } else {
@@ -1210,11 +1212,17 @@ struct ChatListView: View {
 
     /// A home that is not connected right now shows its bots asleep.
     private static func face(_ chat: Chat, in home: Session) -> MausState {
-        home.status == .live ? MausState.forChat(chat, in: home.state) : .sleeping
+        switch BotConnectionPhase.resolve(refreshing: home.isRefreshing, connecting: home.status == .connecting,
+                                          live: home.status == .live) {
+        case .checking: return .loading
+        case .awake: return MausState.forChat(chat, in: home.state)
+        case .asleep: return .sleeping
+        }
     }
 
     private static func homeLabel(_ home: Session) -> String {
-        home.status == .live ? home.homeLabel : home.homeLabel + " · asleep"
+        if home.isRefreshing || home.status == .connecting { return home.homeLabel + " · checking" }
+        return home.status == .live ? home.homeLabel : home.homeLabel + " · asleep"
     }
 
     @ViewBuilder

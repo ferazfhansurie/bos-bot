@@ -10,6 +10,17 @@ import CompanionCore
 import SwiftUI
 import UIKit
 
+private struct BotRefreshCheckingKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var botRefreshChecking: Bool {
+        get { self[BotRefreshCheckingKey.self] }
+        set { self[BotRefreshCheckingKey.self] = newValue }
+    }
+}
+
 extension View {
     /// `.refreshable`, drawn with the bos mark instead of the stock spinner.
     func bosRefreshable(_ action: @escaping @Sendable () async -> Void) -> some View {
@@ -23,6 +34,9 @@ private struct BosRefreshModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .environment(\.botRefreshChecking, model.phase == .refreshing)
+            .accessibilityIdentifier("bos-refresh-surface")
+            .accessibilityValue(model.phase == .refreshing ? "Checking bots" : "Ready")
             .background(RefreshGlyphInstaller(model: model))
             .refreshable { await model.run(action) }
     }
