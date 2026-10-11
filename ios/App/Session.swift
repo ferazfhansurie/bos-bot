@@ -275,6 +275,7 @@ final class Session: ObservableObject {
     /// is available. Retain the last explicitly tapped destination until the
     /// paired client can be rebuilt after unlock.
     private var pendingNotification: NotificationTarget?
+    private var notificationOpenID = UUID()
     private var notificationVisibleThreads = Set<String>()
 
     /// The exact route the current client will use for a credential write.
@@ -406,6 +407,14 @@ final class Session: ObservableObject {
     init() {
         Self.removeStaleFilePreviews()
         _ = NotificationCoordinator.shared
+#if DEBUG
+        // Exercise a launch tap before the navigation handler is installed.
+        if ProcessInfo.processInfo.arguments.contains("-notification-tap-preview"),
+           let target = NotificationTarget(botId: "preview-pepper", threadId: "preview-icloud",
+                                           connectionId: "preview-current", kind: "done") {
+            NotificationCoordinator.shared.openThread(target)
+        }
+#endif
         NotificationCoordinator.shared.foregroundPresentation = { [weak self] target in
             self?.home(for: target.connectionId).notificationPresentation(for: target) ?? .quiet
         }
@@ -501,6 +510,11 @@ final class Session: ObservableObject {
                 connections = registry.connections
             } else {
                 connections = [preview]
+            }
+            if arguments.contains("-notification-tap-preview") {
+                let config = URLSessionConfiguration.ephemeral
+                config.protocolClasses = [NotificationPreviewProtocol.self]
+                client = CompanionClient(connection: preview, token: "notification-fixture-token", session: URLSession(configuration: config))
             }
             if arguments.contains("-images-preview") {
                 let config = URLSessionConfiguration.ephemeral
@@ -964,7 +978,8 @@ final class Session: ObservableObject {
     /// Called when the app comes to the front, and once at launch.
     func connect() {
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-shared-chat-preview") { status = .live; return }
+        if ProcessInfo.processInfo.arguments.contains("-shared-chat-preview")
+            || ProcessInfo.processInfo.arguments.contains("-notification-tap-preview") { status = .live; return }
 #endif
         // A restore that found the keychain locked left `client` nil on
         // purpose. Coming to the front is the moment worth retrying on: the
@@ -3312,7 +3327,12 @@ final class Session: ObservableObject {
         }
         pendingNotification = nil
         notificationChat = nil
+        // A tap also resumes the app. Start reconnect before capturing its
+        // generation so the foreground callback cannot cancel this navigation.
+        connect()
         let generation = streamGeneration
+        let openID = UUID()
+        notificationOpenID = openID
         do {
             try await hydrate(using: client)
             let page: ThreadPage
@@ -3322,41 +3342,34 @@ final class Session: ObservableObject {
                 page = try await client.messages(threadId: target.threadId)
             }
             try Task.checkCancellation()
-            guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
-            switch target.requestState(in: page.messages) {
-            case .unavailable:
-                throw APIError.status(code: 404, message: "That exact request is no longer available. Open the conversation to review its history.")
-            case .settled:
-                throw APIError.status(code: 409, message: "That request has already been answered or dismissed.")
-            case .pending, .notRequired: break
-            }
+            guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
+            // A tap opens history, it does not answer a request. Settled
+            // approval notifications still lead to their original thread.
+            let focus = target.requestState(in: page.messages) == .unavailable ? nil : target.messageId
             state.merge(page, intoThread: target.threadId)
             if var room = state.rooms.first(where: {
                 $0.threadId == target.threadId || ($0.tasks ?? []).contains(where: { $0.threadId == target.threadId })
             }) {
                 if room.threadId != target.threadId {
                     room = try await client.switchTask(groupId: room.id, threadId: target.threadId)
-                    guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
+                    guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
                     state.apply(.room(room))
                 }
-                focusedMessageId = target.messageId
+                focusedMessageId = focus
                 present(.room(room))
                 return
             }
-            guard var selected = state.bot(target.botId) else {
-                throw APIError.status(code: 404, message: "That agent no longer exists.")
+            guard let selected = state.bot(target.botId)?.projected(forThread: target.threadId) else {
+                throw APIError.status(code: 404, message: "That conversation no longer exists.")
             }
-            if target.requiresTaskSwitch(activeThreadId: selected.threadId) {
-                selected = try await client.switchTask(botId: selected.id, threadId: target.threadId)
-                guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
-                state.apply(.bot(selected))
-            }
-            focusedMessageId = target.messageId
+            // Selection belongs to this screen, like the thread picker. A
+            // running sibling must not prevent reading the notified thread.
+            focusedMessageId = focus
             present(.bot(selected))
         } catch is CancellationError {
             // A previous connection's response cannot navigate the new account.
         } catch {
-            guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { return }
+            guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { return }
             actionError = "Couldn't open this notification's exact task. " + error.localizedDescription
         }
     }
