@@ -58,7 +58,15 @@ public final class BotDraft {
     /// cache is claimed: stable attachment UUIDs request server deduplication.
     public func prepareSend(text: String, priority: MessagePriority) throws -> String {
         let snapshot = Snapshot(text: text, fileIDs: files.map(\.id), replyID: reply?.id, priority: priority.rawValue)
-        if previous != snapshot || composerText != self.text { sendID = UUID().uuidString }
+        // Scheduling preference can change after a lost response (the bot
+        // became idle or the composer reset). It is not a new message.
+        // Keep the saved priority field for archive compatibility, but match
+        // retry identity only on content and the visible composer text.
+        if sendID == nil || previous?.text != snapshot.text
+            || previous?.fileIDs != snapshot.fileIDs || previous?.replyID != snapshot.replyID
+            || composerText != self.text {
+            sendID = UUID().uuidString
+        }
         previous = snapshot; composerText = self.text
         try checkpoint()
         return sendID!

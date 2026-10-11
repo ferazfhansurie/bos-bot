@@ -57,6 +57,20 @@ final class BotDraftTests: XCTestCase {
         restored.complete(sendID: id)
         XCTAssertEqual(restored.text, "edited")
     }
+    func testLostResponseRetryKeepsIdentityWhenBotBecomesIdle() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let draft = BotDraft(directory: directory)
+        draft.text = "one message"
+        let first = try draft.prepareSend(text: draft.text, priority: .block)
+        // The UI resets priority after sending; on reconnect the bot may
+        // also have finished its turn. Neither proves the message was lost.
+        let restored = BotDraft(directory: directory)
+        XCTAssertEqual(try restored.prepareSend(text: restored.text, priority: .queue), first)
+        restored.text = "a changed message"
+        XCTAssertNotEqual(try restored.prepareSend(text: restored.text, priority: .queue), first)
+    }
+
     func testThirtyTwoAttachmentsSurviveRestartAndKeepRetryIdentity() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
