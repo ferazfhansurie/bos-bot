@@ -216,6 +216,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
 
     private func dial(reconnect: Bool) async {
         guard let session, !isOver else { return }
+        guard session.connection?.id == connectionID else { return finish(failure: "The call’s computer changed. Call again from the current chat.") }
         dialToken &+= 1
         let token = dialToken
         do {
@@ -569,7 +570,11 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         case .sendTask:
             sendTask(callId: callId, arguments: arguments)
         case .recallTextMessages:
-            let messages = session?.state.visibleTranscript(forThread: threadId) ?? []
+            guard let session, session.connection?.id == connectionID else {
+                output(callId, ["error": "The original chat is no longer connected."])
+                return
+            }
+            let messages = session.state.visibleTranscript(forThread: threadId)
             output(callId, RealtimeVoice.recallOutput(messages))
             requestResponse(nil)
         case .staySilent:
@@ -654,7 +659,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     /// From the first send_task on, every settled bot text line that lands
     /// in the thread is fed into the call, batched so a burst is one update.
     private func watchForReplies() {
-        guard watchSince == nil, let session else { return }
+        guard watchSince == nil, let session, session.connection?.id == connectionID else { return }
         watchSince = Date().timeIntervalSince1970 * 1000 - 1000
         deliveredIds = Set(session.state.transcript(forThread: threadId).map(\.id))
         stateSink = session.stateChanges.sink { [weak self] _ in
@@ -676,7 +681,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     /// chatter stay unspoken; the turn's last line, or everything once the
     /// bot is idle, goes in.
     private func deliverLanded() {
-        guard let session, let since = watchSince, !isOver else { return }
+        guard let session, let since = watchSince, !isOver, session.connection?.id == connectionID else { return }
         let current = session.state.bot(bot.id)
         let busy = current?.projected(forThread: threadId)?.busy ?? current?.busy ?? false
         let fresh = RealtimeVoice.landedReplies(session.state.transcript(forThread: threadId),

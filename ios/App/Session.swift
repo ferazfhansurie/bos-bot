@@ -890,6 +890,9 @@ final class Session: ObservableObject {
             return
         }
 
+        if VoiceCallCenter.shared.call?.connectionID == connection?.id {
+            VoiceCallCenter.shared.call?.hangUp()
+        }
         stopActiveRuntime()
         registry.select(id: id)
         persistRegistry()
