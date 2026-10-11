@@ -656,6 +656,7 @@ struct VoiceWorkingRow: View {
 /// transcript is deliberately not dumped into the chat.
 struct VoiceCallEndedRow: View {
     let record: VoiceCallRecord
+    @State private var showingTranscript = false
 
     var body: some View {
         VStack(spacing: 4) {
@@ -669,9 +670,31 @@ struct VoiceCallEndedRow: View {
                     .font(.system(size: 13))
             }
             .foregroundStyle(.secondary)
+            if let transcript = record.transcript, !transcript.isEmpty {
+                Button("View transcript") { showingTranscript = true }
+                    .font(.caption)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .accessibilityElement(children: .combine)
+        .sheet(isPresented: $showingTranscript) {
+            NavigationStack {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 20) {
+                        ForEach(record.transcript ?? []) { line in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(line.speaker == .user ? "You" : "Assistant")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                Text(line.text).textSelection(.enabled)
+                                if line.interrupted { Text("Interrupted").font(.caption).foregroundStyle(.secondary) }
+                            }
+                        }
+                    }.padding()
+                }
+                .navigationTitle("Call transcript")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingTranscript = false } } }
+            }
+        }
     }
 }

@@ -32,7 +32,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
 
     enum Activity: Equatable { case idle, listening, thinking, speaking }
 
-    struct Line: Identifiable, Equatable {
+    struct Line: Identifiable, Equatable, Codable, Hashable {
         let id: String
         let speaker: RealtimeVoice.Speaker
         var text: String
@@ -46,6 +46,9 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     let bot: Bot
     let threadId: String
     let levels = VoiceCallLevels()
+    private let chatContext: String
+    private var archivedLines: [Line] = []
+    var savedTranscript: [Line] { archivedLines + lines.filter { !$0.text.isEmpty } }
     /// What the call opens with instead of the plan's greeting: a call back
     /// about finished work, or a picked-up ring.
     let opener: String?
@@ -131,6 +134,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         self.threadId = threadId
         self.session = session
         self.opener = opener
+        self.chatContext = RealtimeVoice.chatContext(session.state.visibleTranscript(forThread: threadId))
         self.settings = Self.savedSettings(botId: bot.id)
     }
 
@@ -162,7 +166,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         Self.save(next, botId: bot.id)
         // Same instructions, new voice/speed/language, mid-call.
         if invited, socketOpen, let plan {
-            send(RealtimeVoice.sessionUpdate(plan: plan, settings: next, reconnect: isReconnect))
+            send(RealtimeVoice.sessionUpdate(plan: plan, settings: next, reconnect: isReconnect, chatContext: chatContext))
         }
     }
 
@@ -341,7 +345,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     private func maybeInvite() {
         guard socketOpen, micReady, !invited, let plan else { return }
         invited = true
-        send(RealtimeVoice.sessionUpdate(plan: plan, settings: settings, reconnect: isReconnect))
+        send(RealtimeVoice.sessionUpdate(plan: plan, settings: settings, reconnect: isReconnect, chatContext: chatContext))
         if isReconnect {
             for line in lines where line.final && !line.text.isEmpty {
                 send(RealtimeVoice.replay(role: line.speaker, text: line.text))
@@ -523,7 +527,11 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         } else {
             lines.append(Line(id: itemId, speaker: .assistant, text: delta, final: false))
         }
-        if lines.count > 200 { lines.removeFirst(lines.count - 200) }
+        if lines.count > 200 {
+            let count = lines.count - 200
+            archivedLines.append(contentsOf: lines.prefix(count))
+            lines.removeFirst(count)
+        }
     }
 
     // MARK: - Turn gate
@@ -583,24 +591,37 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
             output(callId, ["error": .string(rejection.message)])
             requestResponse(nil)
         case let .success(request):
+            guard let session else {
+                output(callId, ["error": "The computer is offline. The job was not sent."])
+                requestResponse(nil)
+                return
+            }
             watchForReplies()
             lastTaskCallId = callId
-            handedWork = true
-            // A receipt, at once: the call never waits on the work.
-            output(callId, ["status": "sent"])
-            if !spokeThisResponse, let plan { requestResponse(plan.receiptTurn) }
-            let botId = bot.id, threadId = threadId, name = bot.name, origin = self.callId
-            Task { [weak self] in
-                // The caller's last words may still be transcribing.
-                await self?.waitForCallerTranscript()
-                guard let self, let session = self.session, !self.isOver else { return }
-                let ask = VoiceCallAsk.make(spoken: self.takeCallerWords(), request: request)
-                // The model asking twice for one thing is one message.
-                guard !ask.repeats(self.lastAsk, now: Date()) else { return }
-                self.lastAsk = (ask.text, Date())
-                if let failure = await session.sendFromVoiceCall(ask.text, job: ask.job, callId: origin,
-                                                                 botId: botId, threadId: threadId) {
-                    self.landed(eventId: "\(callId).failed", text: "That job never reached \(name): \(failure) Tell them it did not go through.", at: Date())
+            // Own this handoff through hang-up: ending audio must not drop an accepted ask.
+            Task { [self, session] in
+                await waitForCallerTranscript()
+                let ask = VoiceCallAsk.make(spoken: takeCallerWords(), request: request)
+                guard !ask.repeats(lastAsk, now: Date()) else {
+                    if !isOver { output(callId, ["status": "already_submitted"]) }
+                    return
+                }
+                lastAsk = (ask.text, Date())
+                let failure = await session.sendFromVoiceCall(ask.text, job: ask.job, callId: self.callId,
+                                                             botId: bot.id, threadId: threadId)
+                if let failure {
+                    lastAsk = nil
+                    if isOver { session.actionError = "Voice task was not sent: \(failure)" }
+                    else {
+                        output(callId, ["error": .string("The job was not sent: \(failure)")])
+                        requestResponse("The job did not reach the computer. Tell the caller briefly; do not claim it is running.")
+                    }
+                } else {
+                    handedWork = true
+                    if !isOver {
+                        output(callId, ["status": "accepted"])
+                        if !spokeThisResponse, let plan { requestResponse(plan.receiptTurn) }
+                    }
                 }
             }
         }
@@ -788,6 +809,7 @@ struct VoiceCallRecord: Codable, Identifiable, Hashable {
     var threadId: String
     var endedAt: Double
     var seconds: Int
+    var transcript: [RealtimeVoiceCall.Line]? = nil
 }
 
 @MainActor
@@ -823,7 +845,7 @@ final class VoiceCallCenter: ObservableObject {
 
     func start(bot: Bot, threadId: String, session: Session, opener: String? = nil, fromRing: Bool = false) {
         if let call, !call.isOver {
-            if call.bot.id == bot.id, opener == nil {
+            if call.bot.id == bot.id, call.threadId == threadId, opener == nil {
                 withAnimation(.spring(duration: 0.4)) { presentation = .full }
                 return
             }
@@ -878,7 +900,7 @@ final class VoiceCallCenter: ObservableObject {
     private func ended(_ ended: RealtimeVoiceCall) {
         if ended.hasBeenLive {
             records.append(VoiceCallRecord(id: ended.id.uuidString, botId: ended.bot.id, threadId: ended.threadId,
-                                           endedAt: Date().timeIntervalSince1970 * 1000, seconds: ended.elapsed))
+                                           endedAt: Date().timeIntervalSince1970 * 1000, seconds: ended.elapsed, transcript: ended.savedTranscript))
             if records.count > 200 { records.removeFirst(records.count - 200) }
             if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: Self.recordsKey) }
         }

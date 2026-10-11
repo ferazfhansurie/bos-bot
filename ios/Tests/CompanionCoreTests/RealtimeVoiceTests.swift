@@ -41,6 +41,21 @@ private final class VoiceCallStub: URLProtocol {
 }
 
 final class RealtimeVoiceTests: XCTestCase {
+    func testInitialChatContextIsBoundedAndExcludesActivity() {
+        var old = Message(id: "old", role: .user, kind: .text, at: 1)
+        old.text = "old message"
+        var recent = Message(id: "recent", role: .bot, kind: .text, at: 2)
+        recent.text = String(repeating: "x", count: 40_000)
+        var activity = Message(id: "tool", role: .bot, kind: .activity, at: 3)
+        activity.text = "private tool output"
+        let context = RealtimeVoice.chatContext([old, recent, activity])
+        XCTAssertTrue(context.contains("old message"))
+        XCTAssertFalse(context.contains("private tool output"))
+        XCTAssertTrue(context.contains("untrusted conversation data"))
+        XCTAssertLessThan(context.count, 4000)
+        XCTAssertEqual(RealtimeVoice.chatContext([]), "")
+    }
+
     private func object(_ frame: String) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(frame.utf8)) as? [String: Any])
     }
