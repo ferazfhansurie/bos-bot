@@ -1160,13 +1160,40 @@ public struct CompanionClient: Sendable {
     ) {
         try Task.checkCancellation()
         let fleet = try await fleet(messages: limit)
-        var waitingThreads: [String: ThreadPage] = [:]
-        for bot in fleet.bots {
-            for task in bot.tasks ?? [] where task.activity == "waiting-on-you"
-                && task.threadId != bot.threadId && waitingThreads[task.threadId] == nil {
-                try Task.checkCancellation()
-                waitingThreads[task.threadId] = try await messages(threadId: task.threadId, limit: limit)
+        var seen = Set<String>()
+        let waitingIDs = fleet.bots.flatMap { bot in
+            (bot.tasks ?? []).compactMap { task -> String? in
+                guard task.activity == "waiting-on-you", task.threadId != bot.threadId,
+                      seen.insert(task.threadId).inserted else { return nil }
+                return task.threadId
             }
+        }
+        // Slow remote pages may overlap, but never fan out without a bound.
+        // The task group still fails the entire snapshot on any missing page;
+        // callers retain their cursor and generation checks before committing.
+        let waitingThreads = try await withThrowingTaskGroup(
+            of: (String, ThreadPage).self, returning: [String: ThreadPage].self
+        ) { group in
+            var next = waitingIDs.makeIterator()
+            for _ in 0..<4 {
+                guard let id = next.next() else { break }
+                group.addTask {
+                    try Task.checkCancellation()
+                    return (id, try await self.messages(threadId: id, limit: limit))
+                }
+            }
+            var pages: [String: ThreadPage] = [:]
+            while let (id, page) = try await group.next() {
+                try Task.checkCancellation()
+                pages[id] = page
+                if let id = next.next() {
+                    group.addTask {
+                        try Task.checkCancellation()
+                        return (id, try await self.messages(threadId: id, limit: limit))
+                    }
+                }
+            }
+            return pages
         }
         try Task.checkCancellation()
         return (fleet, waitingThreads)
