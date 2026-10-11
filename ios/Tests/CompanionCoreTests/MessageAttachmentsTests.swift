@@ -89,7 +89,8 @@ final class MessageAttachmentsTests: XCTestCase {
         let valid = PendingMessageAttachment(
             data: Data([1]), name: "notes.txt", mime: "text/plain", kind: .file
         )
-        XCTAssertThrowsError(try AttachmentPolicy.validate(Array(repeating: valid, count: 5))) {
+        XCTAssertNoThrow(try AttachmentPolicy.validate(Array(repeating: valid, count: 32)))
+        XCTAssertThrowsError(try AttachmentPolicy.validate(Array(repeating: valid, count: AttachmentPolicy.maximumItems + 1))) {
             XCTAssertEqual($0 as? AttachmentPolicyError, .tooManyItems)
         }
         XCTAssertThrowsError(try AttachmentPolicy.validate([

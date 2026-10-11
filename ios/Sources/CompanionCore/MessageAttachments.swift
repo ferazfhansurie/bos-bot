@@ -42,7 +42,7 @@ public enum AttachmentPolicyError: Error, LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .tooManyItems:
-            return "Attach up to 4 items at a time."
+            return "Attach up to \(AttachmentPolicy.maximumItems) items at a time."
         case .totalTooLarge:
             return "Those attachments are larger than 50 MB together."
         case .invalidName:
@@ -59,7 +59,7 @@ public enum AttachmentPolicyError: Error, LocalizedError, Equatable, Sendable {
 /// Keeping the policy in CompanionCore prevents either entry point from
 /// accepting an attachment that the authenticated upload route will reject.
 public enum AttachmentPolicy {
-    public static let maximumItems = 4
+    public static let maximumItems = 32
     public static let maximumTotalBytes = 50 * 1_024 * 1_024
     public static let maximumImageBytes = 10 * 1_024 * 1_024
     public static let maximumFileBytes = 25 * 1_024 * 1_024
