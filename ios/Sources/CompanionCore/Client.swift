@@ -1221,7 +1221,8 @@ public struct CompanionClient: Sendable {
 
     /// `botId` names the room member the steer must reach; the server then
     /// refuses rather than deliver it to a different running member.
-    public func steerQueued(queueId: String, to destination: MessageDestination, botId: String? = nil) async throws {
+    @discardableResult
+    public func steerQueued(queueId: String, to destination: MessageDestination, botId: String? = nil) async throws -> SteerReceipt {
         let route: String
         let threadId: String
         switch destination {
@@ -1240,8 +1241,7 @@ public struct CompanionClient: Sendable {
             guard Self.validRouteID(botId) else { throw APIError.badURL }
             body["botId"] = botId
         }
-        try await send(try makeRequest("POST", route, body: body))
-        // SSE owns removal: a refused steer can return 200 and retain the queue.
+        return try await send(try makeRequest("POST", route, body: body), as: SteerReceipt.self)
     }
 
     public func config() async throws -> ConfigStatus {
