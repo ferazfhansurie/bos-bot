@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createProxyHandler } from "../src/proxy.ts";
+import { MAX_SSE_EVENT_BYTES } from "../src/wire.ts";
 import { createConnectedDeviceTracker } from "../src/connected-devices.ts";
 import type { CompanionEndpoint } from "../src/endpoints.ts";
 
@@ -591,7 +592,7 @@ describe("the sidecar in front of an unmodified harness", () => {
   // correct and bounded by nothing. An upstream that opens a `data:` line and
   // never closes it would otherwise be a memory leak with a straight face.
   it("ends a stream whose event never terminates, rather than buffering it", async () => {
-    const TWO_MIB = 2 * 1024 * 1024;
+    const overflowBytes = MAX_SSE_EVENT_BYTES + 64 * 1024;
     const flood = createServer((_req, res) => {
       res.on("error", () => {
         /* the sidecar hangs up on us — that is the pass condition */
@@ -601,7 +602,7 @@ describe("the sidecar in front of an unmodified harness", () => {
       const blob = "x".repeat(64 * 1024);
       let sent = 0;
       const pump = () => {
-        while (sent < TWO_MIB) {
+        while (sent < overflowBytes) {
           sent += blob.length;
           if (!res.write(blob)) return void res.once("drain", pump);
         }
