@@ -1781,7 +1781,7 @@ struct ChatView: View {
                     draft: draft, showingPlus: $showingPlus, dictation: dictation,
                     focus: $composerFocused, name: current.name,
                     busy: preparingAttachments || sendingMessage,
-                    hasAttachments: !attachments.isEmpty || !mentionPicks.isEmpty, supportsVoiceChat: true,
+                    hasAttachments: !attachments.isEmpty || !mentionPicks.isEmpty, supportsVoiceChat: false,
                     onDraftChange: { value in
 #if DEBUG
                         MainThreadProbe.shared.typing(!value.isEmpty)
