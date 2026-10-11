@@ -32,6 +32,7 @@ import XCTest
 final class StreamingStub: URLProtocol {
     /// Chunks to deliver, in order, with a small gap between them.
     static var chunks: [String] = []
+    static var staysOpen = false
     static var status = 200
     /// How many requests have been torn down — the cancellation assertion,
     /// counted rather than flagged so it cannot be reset by a straggler.
@@ -79,7 +80,7 @@ final class StreamingStub: URLProtocol {
                 self.client?.urlProtocol(self, didLoad: Data(chunk.utf8))
                 Thread.sleep(forTimeInterval: 0.03)
             }
-            if !stopped.isSet { self.client?.urlProtocolDidFinishLoading(self) }
+            if !stopped.isSet && !Self.staysOpen { self.client?.urlProtocolDidFinishLoading(self) }
         }
     }
 
@@ -96,6 +97,7 @@ final class EventStreamTests: XCTestCase {
         super.setUp()
         StreamingStub.chunks = []
         StreamingStub.status = 200
+        StreamingStub.staysOpen = false
         StreamingStub.stopCount = 0
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StreamingStub.self]
@@ -121,6 +123,23 @@ final class EventStreamTests: XCTestCase {
             if frames.count >= limit { break }
         }
         return frames
+    }
+
+    func testSilentOpenSocketFailsInsteadOfLeavingChatFrozen() async throws {
+        StreamingStub.staysOpen = true
+        StreamingStub.chunks = ["data: {\"kind\":\"hello\",\"cursor\":\"abc12345:0\",\"resumed\":true}\n\n"]
+        var received = 0
+        let started = ContinuousClock.now
+        do {
+            for try await _ in eventStream(request: request, session: session, idleTimeout: .milliseconds(150)) {
+                received += 1
+            }
+            XCTFail("a silent open connection must trigger recovery")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .timedOut)
+        }
+        XCTAssertEqual(received, 1)
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(2))
     }
 
     func testDeliversEveryFrameAsItArrives() async throws {

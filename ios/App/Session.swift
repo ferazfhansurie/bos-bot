@@ -179,6 +179,28 @@ final class Session: ObservableObject {
     /// and persisted — when a stream goes live.
     private var rotation = CandidateRotation(hosts: [])
     private var streamTask: Task<Void, Never>?
+#if DEBUG
+    private var recoveryPreviewSession: URLSession?
+#endif
+    private var streamedMessageIDs = Set<String>()
+    private var sendStreamCheck: Task<Void, Never>?
+
+    /// HTTP acceptance must not conceal a stalled event connection.
+    private func verifySendStream(_ receipt: SendReceipt?) {
+        guard let receipt, receipt.queued != true, let message = receipt.message else { return }
+        guard !streamedMessageIDs.contains(message.id) else { return }
+        sendStreamCheck?.cancel()
+        let generation = streamGeneration
+        sendStreamCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self, self.streamGeneration == generation,
+                  !self.streamedMessageIDs.contains(message.id) else { return }
+            self.sendStreamCheck = nil
+            // Resume the cursor; never resend the accepted message.
+            self.stopStream()
+            self.connect()
+        }
+    }
     /// Rooms joined on another home stream from that home through
     /// `/api/groups/:id/events`, one stream per home, beside the main one.
     private var remoteStreams: [String: (groupId: String, task: Task<Void, Never>)] = [:]
@@ -526,6 +548,18 @@ final class Session: ObservableObject {
                 let config = URLSessionConfiguration.ephemeral
                 config.protocolClasses = [SteeringPreviewProtocol.self]
                 client = CompanionClient(connection: preview, token: "steering-fixture-token", session: URLSession(configuration: config))
+            }
+            if arguments.contains("-stream-recovery-preview") {
+                let config = URLSessionConfiguration.ephemeral
+                config.protocolClasses = [StreamRecoveryPreviewProtocol.self]
+                let network = URLSession(configuration: config)
+                recoveryPreviewSession = network
+                client = CompanionClient(connection: preview, token: "isolated-fixture", session: network)
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1))
+                    guard let self, let bot = self.state.bots.first else { return }
+                    _ = await self.send(text: "recover this live stream", attachments: [], to: .bot(bot), durableSendID: "recovery-send-0001")
+                }
             }
             state.hydrate(fleet)
             if arguments.contains("-threads-preview"),
@@ -1261,6 +1295,8 @@ final class Session: ObservableObject {
     /// keeps the cursor and the state in step: every frame that arrived is
     /// either folded with its seq, or was never received.
     private func stopStream() {
+        sendStreamCheck?.cancel()
+        sendStreamCheck = nil
         flushFrames()
         activityFeedTask?.cancel()
         activityFeedTask = nil
@@ -1595,9 +1631,18 @@ final class Session: ObservableObject {
                 // breaking out here instead would fall through to the "the
                 // harness went away" path and flash a lost-connection banner
                 // on what is actually a deliberate reconnect.
-                for try await frame in try client.events(since: state.cursor, screens: screenWatchers > 0) {
+#if DEBUG
+                let events = try client.events(since: state.cursor, screens: screenWatchers > 0, streamingSession: recoveryPreviewSession)
+#else
+                let events = try client.events(since: state.cursor, screens: screenWatchers > 0)
+#endif
+                for try await frame in events {
                     if Task.isCancelled { return }
                     reconnectDelay = 0
+                    if case let .message(_, message) = frame.frame {
+                        if streamedMessageIDs.count >= 500 { streamedMessageIDs.removeAll(keepingCapacity: true) }
+                        streamedMessageIDs.insert(message.id)
+                    }
 
                     if case let .hello(cursor, resumed) = frame.frame {
                         // Hello names the current head: replayed events cannot celebrate.
@@ -1657,7 +1702,7 @@ final class Session: ObservableObject {
             } catch {
                 // backgrounding cancels the stream on purpose; that is not a
                 // failure to report, and it must not be retried
-                if Task.isCancelled || error is CancellationError {
+                if Task.isCancelled {
                     log.info("stream closed by us")
                     return
                 }
@@ -2063,6 +2108,7 @@ final class Session: ObservableObject {
             actionError = "This computer is offline."
             return false
         }
+        connect()
         let connectionID = client.connection.id
         actionError = nil
         do {
@@ -2212,6 +2258,7 @@ final class Session: ObservableObject {
     /// because the computer said it does, identified by its queueId.
     private func rememberQueuedSend(from receipt: SendReceipt?, text: String) {
         guard let receipt, let threadId = receipt.threadId else { return }
+        verifySendStream(receipt)
         // The HTTP receipt is authoritative too. Reconcile the local preview
         // now, even if its matching event-stream frame arrives later.
         if let message = receipt.message {
