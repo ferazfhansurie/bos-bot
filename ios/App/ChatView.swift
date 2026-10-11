@@ -317,6 +317,12 @@ struct ChatView: View {
                             .padding(.vertical, 8)
                         }
 
+                        if transcript.isEmpty, case let .bot(bot) = current {
+                            ForEach(voiceCalls.records(botId: bot.id, threadId: threadId, connectionID: session.connection?.id)) { record in
+                                VoiceCallEndedRow(record: record)
+                            }
+                        }
+
                         ForEach(Array(transcript.enumerated()), id: \.element.id) { index, row in
                             VStack(alignment: .leading, spacing: 6) {
                                 if row.id == newMessagesBoundary {
@@ -1044,7 +1050,7 @@ struct ChatView: View {
     /// the first row rather than vanishing.
     private func voiceRecords(after index: Int, in rows: [TranscriptRow]) -> [VoiceCallRecord] {
         guard case let .bot(bot) = current else { return [] }
-        let records = voiceCalls.records(botId: bot.id, threadId: threadId)
+        let records = voiceCalls.records(botId: bot.id, threadId: threadId, connectionID: session.connection?.id)
         guard !records.isEmpty else { return [] }
         let from = index == 0 ? -Double.infinity : rows[index].at
         let until = index + 1 < rows.count ? rows[index + 1].at : Double.infinity

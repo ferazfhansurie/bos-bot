@@ -901,6 +901,7 @@ final class Session: ObservableObject {
 
     func forgetConnection(id: String) {
         guard let forgotten = registry.connection(id: id) else { return }
+        VoiceCallCenter.shared.forget(connectionID: id)
         setLegacyArchived(false, connectionID: id)
         let wasActive = registry.activeConnectionID == id
         // A server session is ended on the server too, best effort: the
@@ -2279,12 +2280,12 @@ final class Session: ObservableObject {
     /// caller's words with the call's origin, the model's restatement as
     /// `job`. Returns nil on success or the failure text; it never touches
     /// `actionError`, because the call reports failures out loud.
-    func sendFromVoiceCall(_ text: String, job: String, callId: String, botId: String, threadId: String) async -> String? {
-        guard let client else { return "This computer is offline." }
+    func sendFromVoiceCall(_ text: String, job: String, callId: String, botId: String, threadId: String, sendId: String, expectedConnectionID: String?) async -> String? {
+        guard let client, client.connection.id == expectedConnectionID else { return "The call’s computer is no longer connected." }
         let connectionID = client.connection.id
         do {
             let receipt = try await client.send(text: text, toBot: botId, threadId: threadId,
-                                                origin: .voiceCall(callId: callId, job: job))
+                                                origin: .voiceCall(callId: callId, job: job), sendId: sendId)
             if self.client?.connection.id == connectionID { rememberQueuedSend(from: receipt, text: text) }
             return nil
         } catch {

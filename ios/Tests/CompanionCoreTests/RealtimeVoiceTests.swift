@@ -320,6 +320,30 @@ final class RealtimeVoiceTests: XCTestCase {
 
     // MARK: Start round trip
 
+    func testVoiceHandoffRetainsIdentityAndOriginAcrossRetry() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [VoiceCallStub.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = CompanionClient(connection: Connection(name: "Test", host: "127.0.0.1", port: 8810), token: "t", session: session)
+        VoiceCallStub.statusCode = 200
+        VoiceCallStub.responseBody = Data("{}".utf8)
+        let sendId = UUID().uuidString.lowercased()
+        var bodies: [Data] = []
+        for _ in 0..<2 {
+            _ = try await client.send(text: "my exact spoken words", toBot: "bot-1", threadId: "thread-1",
+                                      origin: .voiceCall(callId: "call-1", job: "the request"), sendId: sendId)
+            bodies.append(try XCTUnwrap(VoiceCallStub.capturedBody))
+        }
+        for data in bodies {
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(body["sendId"] as? String, sendId)
+            XCTAssertEqual(body["text"] as? String, "my exact spoken words")
+            XCTAssertEqual(body["threadId"] as? String, "thread-1")
+            XCTAssertEqual((body["origin"] as? [String: String])?["callId"], "call-1")
+        }
+    }
+
     func testVoiceCallPostsBotAndDecodesThePlan() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [VoiceCallStub.self]

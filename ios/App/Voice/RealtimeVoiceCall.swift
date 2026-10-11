@@ -45,6 +45,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     let id = UUID()
     let bot: Bot
     let threadId: String
+    let connectionID: String?
     let levels = VoiceCallLevels()
     private let chatContext: String
     private var archivedLines: [Line] = []
@@ -122,6 +123,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     /// Caller lines already posted as part of an ask.
     private var askedLineIds = Set<String>()
     private var lastAsk: (text: String, at: Date)?
+    private var submittedJobs = Set<String>()
     private var landedCount = 0
     private var stateSink: AnyCancellable?
     private var deliverTask: Task<Void, Never>?
@@ -132,6 +134,7 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
     init(bot: Bot, threadId: String, session: Session, opener: String? = nil) {
         self.bot = bot
         self.threadId = threadId
+        self.connectionID = session.connection?.id
         self.session = session
         self.opener = opener
         self.chatContext = RealtimeVoice.chatContext(session.state.visibleTranscript(forThread: threadId))
@@ -596,6 +599,12 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
                 requestResponse(nil)
                 return
             }
+            let jobKey = request.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard submittedJobs.insert(jobKey).inserted else {
+                output(callId, ["status": "already_submitted", "instruction": "Do not resubmit. The original handoff may still be processing."])
+                return
+            }
+            let sendId = UUID().uuidString.lowercased()
             watchForReplies()
             lastTaskCallId = callId
             // Own this handoff through hang-up: ending audio must not drop an accepted ask.
@@ -608,13 +617,12 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
                 }
                 lastAsk = (ask.text, Date())
                 let failure = await session.sendFromVoiceCall(ask.text, job: ask.job, callId: self.callId,
-                                                             botId: bot.id, threadId: threadId)
+                                                             botId: bot.id, threadId: threadId, sendId: sendId, expectedConnectionID: connectionID)
                 if let failure {
-                    lastAsk = nil
-                    if isOver { session.actionError = "Voice task was not sent: \(failure)" }
+                    if isOver { session.actionError = "Voice task delivery could not be confirmed: \(failure)" }
                     else {
-                        output(callId, ["error": .string("The job was not sent: \(failure)")])
-                        requestResponse("The job did not reach the computer. Tell the caller briefly; do not claim it is running.")
+                        output(callId, ["error": .string("Job delivery could not be confirmed: \(failure)")])
+                        requestResponse("We could not confirm delivery. Tell the caller to check this thread before trying again; do not claim the job is running or failed.")
                     }
                 } else {
                     handedWork = true
@@ -810,6 +818,7 @@ struct VoiceCallRecord: Codable, Identifiable, Hashable {
     var endedAt: Double
     var seconds: Int
     var transcript: [RealtimeVoiceCall.Line]? = nil
+    var connectionID: String? = nil
 }
 
 @MainActor
@@ -845,7 +854,7 @@ final class VoiceCallCenter: ObservableObject {
 
     func start(bot: Bot, threadId: String, session: Session, opener: String? = nil, fromRing: Bool = false) {
         if let call, !call.isOver {
-            if call.bot.id == bot.id, call.threadId == threadId, opener == nil {
+            if call.bot.id == bot.id, call.threadId == threadId, call.connectionID == session.connection?.id, opener == nil {
                 withAnimation(.spring(duration: 0.4)) { presentation = .full }
                 return
             }
@@ -900,7 +909,7 @@ final class VoiceCallCenter: ObservableObject {
     private func ended(_ ended: RealtimeVoiceCall) {
         if ended.hasBeenLive {
             records.append(VoiceCallRecord(id: ended.id.uuidString, botId: ended.bot.id, threadId: ended.threadId,
-                                           endedAt: Date().timeIntervalSince1970 * 1000, seconds: ended.elapsed, transcript: ended.savedTranscript))
+                                           endedAt: Date().timeIntervalSince1970 * 1000, seconds: ended.elapsed, transcript: ended.savedTranscript, connectionID: ended.connectionID))
             if records.count > 200 { records.removeFirst(records.count - 200) }
             if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: Self.recordsKey) }
         }
@@ -914,8 +923,15 @@ final class VoiceCallCenter: ObservableObject {
         withAnimation(.easeIn(duration: 0.25)) { call = nil }
     }
 
-    func records(botId: String, threadId: String) -> [VoiceCallRecord] {
-        records.filter { $0.botId == botId && $0.threadId == threadId }
+    func records(botId: String, threadId: String, connectionID: String?) -> [VoiceCallRecord] {
+        guard let connectionID else { return [] }
+        return records.filter { $0.botId == botId && $0.threadId == threadId && ($0.connectionID == connectionID || ($0.connectionID == nil && $0.transcript == nil)) }
+    }
+
+    func forget(connectionID: String) {
+        if call?.connectionID == connectionID { call?.hangUp(); call = nil }
+        records.removeAll { $0.connectionID == connectionID || $0.connectionID == nil }
+        if let data = try? JSONEncoder().encode(records) { UserDefaults.standard.set(data, forKey: Self.recordsKey) }
     }
 
     // MARK: Rings

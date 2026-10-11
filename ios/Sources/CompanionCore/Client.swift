@@ -1877,15 +1877,19 @@ public struct CompanionClient: Sendable {
 
     @discardableResult
     public func send(text: String, toBot botId: String, threadId: String? = nil,
-                     origin: MessageOrigin? = nil) async throws -> SendReceipt {
+                     origin: MessageOrigin? = nil, sendId: String? = nil) async throws -> SendReceipt {
         var body: [String: Any] = ["text": text]
+        if let sendId {
+            guard Self.validSendID(sendId) else { throw APIError.badURL }
+            body["sendId"] = sendId
+        }
         if let threadId { body["threadId"] = threadId }
         if let origin {
             var wire: [String: Any] = ["kind": origin.kind, "callId": origin.callId]
             if let job = origin.job { wire["job"] = job }
             body["origin"] = wire
         }
-        return try await sendForReceipt(try makeRequest("POST", "/api/bots/\(botId)/messages", body: body))
+        return try await sendForReceipt(try makeRequest("POST", "/api/bots/\(botId)/messages", body: body), retrySafe: sendId != nil)
     }
 
     @discardableResult
