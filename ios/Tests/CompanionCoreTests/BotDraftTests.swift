@@ -20,6 +20,36 @@ final class BotDraftTests: XCTestCase {
         restored.complete(sendID: id)
         XCTAssertEqual(restored.text, "edited")
     }
+    func testThirtyTwoAttachmentsSurviveRestartAndKeepRetryIdentity() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = BotDraft(directory: directory)
+        first.files = (0..<32).map { PendingMessageAttachment(data: Data([UInt8($0)]), name: "file-\($0).txt", mime: "text/plain", kind: .file) }
+        try AttachmentPolicy.validate(first.files)
+        let id = try first.prepareSend(text: "batch", priority: .queue)
+        let restored = BotDraft(directory: directory)
+        XCTAssertEqual(restored.files, first.files)
+        XCTAssertEqual(try restored.prepareSend(text: "batch", priority: .queue), id)
+    }
+
+    func testOversizedSavedBatchIsRejectedBeforeLoadingPayloads() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let ids = (0..<5).map { _ in UUID() }
+        let archive = SharedDraftArchive(text: "", files: ids.map { .init(id: $0, name: "file.txt", mime: "text/plain") }, reply: nil, previous: nil, previousID: nil, uploads: [:])
+        try JSONEncoder().encode(archive).write(to: directory.appendingPathComponent("draft.json"))
+        for id in ids {
+            let url = directory.appendingPathComponent(id.uuidString)
+            XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: nil))
+            let file = try FileHandle(forWritingTo: url)
+            try file.truncate(atOffset: UInt64(AttachmentPolicy.maximumFileBytes))
+            try file.close()
+        }
+        XCTAssertThrowsError(try SharedDraftDisk(directory: directory).load())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(ids[0].uuidString).path))
+    }
+
     func testCorruptManifestIsPreservedAndBlocksNetworkCheckpoint() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

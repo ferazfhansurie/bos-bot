@@ -22,15 +22,25 @@ struct SharedDraftDisk {
     func load() throws -> (SharedDraftArchive, [PendingSharedFile])? {
         guard FileManager.default.fileExists(atPath: manifest.path) else { return nil }
         let archive = try JSONDecoder().decode(SharedDraftArchive.self, from: Data(contentsOf: manifest))
-        guard archive.files.count <= 4 else { throw CocoaError(.fileReadCorruptFile) }
+        guard archive.files.count <= AttachmentPolicy.maximumItems else { throw CocoaError(.fileReadCorruptFile) }
+        var total = 0
+        for file in archive.files {
+            let size = try payload(file.id).resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size > 0, size <= AttachmentPolicy.maximumFileBytes,
+                  size <= SharedDeliveryDraft.maximumTotalBytes - total else { throw CocoaError(.fileReadCorruptFile) }
+            total += size
+        }
         let files = try archive.files.map { file in
             let data = try Data(contentsOf: payload(file.id))
-            guard !data.isEmpty, data.count <= 25 * 1024 * 1024 else { throw CocoaError(.fileReadCorruptFile) }
+            guard !data.isEmpty, data.count <= AttachmentPolicy.maximumFileBytes else { throw CocoaError(.fileReadCorruptFile) }
             return PendingSharedFile(id: file.id, name: file.name, mime: file.mime, data: data)
         }
         return (archive, files)
     }
     func save(_ archive: SharedDraftArchive, files: [PendingSharedFile]) throws {
+        guard files.count <= AttachmentPolicy.maximumItems,
+              files.allSatisfy({ !$0.data.isEmpty && $0.data.count <= AttachmentPolicy.maximumFileBytes }),
+              files.reduce(0, { $0 + $1.data.count }) <= SharedDeliveryDraft.maximumTotalBytes else { throw CocoaError(.fileWriteOutOfSpace) }
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         for file in files where !manager.fileExists(atPath: payload(file.id).path) {
