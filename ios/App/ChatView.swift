@@ -405,7 +405,7 @@ struct ChatView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .trailing)
                             .id("pending-send-" + pending.id)
-                            .onAppear { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
+                            .onAppear { jumpToLatest(proxy, lastRow: "pending-send-" + pending.id) }
                         }
                         Color.clear.frame(height: 1).id(Self.bottomId)
                             .modifier(ReportsVisible { visible in
@@ -507,7 +507,11 @@ struct ChatView: View {
                     // jump button instead of yanking the page.
                     let mine = transcript.last?.head.role == .user
                     guard mine || follow.pinned else { unseenBelow = true; return }
-                    withAnimation { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
+                    // The end marker in a lazy transcript has an estimated
+                    // offset. Sending while the composer shrinks can scroll
+                    // beyond the real rows into blank space. Use the same
+                    // edge-based landing as the explicit latest button.
+                    jumpToLatest(proxy, lastRow: transcript.last?.id)
                 }
                 // Follow the text as it arrives. Keyed on length rather than
                 // the string so this fires once per delta batch, and without
@@ -1147,7 +1151,7 @@ struct ChatView: View {
         readingStore = nil; savedReading = nil; readingError = nil
         do {
             guard let connection = session.connection,
-                  let token = try BosSharedKeychain.token(for: connection.id) else { return }
+                  let token = try archiveToken(for: connection) else { return }
             let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let store = ReadingPositionStore(root: root.appendingPathComponent("ReadingPositions"), connectionID: connection.id,
                 accountIdentity: token, conversationID: current.id, threadID: threadId)
@@ -1200,10 +1204,20 @@ struct ChatView: View {
         do { try archive.checkpoint() } catch { attachmentError = archive.error }
     }
 
+    private func archiveToken(for connection: Connection) throws -> String? {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-store-preview"),
+           ProcessInfo.processInfo.arguments.contains("-send-scroll-preview"), connection.id == "preview-current" {
+            return "isolated-scroll-fixture-token"
+        }
+#endif
+        return try BosSharedKeychain.token(for: connection.id)
+    }
+
     private func restoreDraft() {
         do {
             guard let connection = session.connection,
-                  let token = try BosSharedKeychain.token(for: connection.id) else {
+                  let token = try archiveToken(for: connection) else {
                 composerDraft.pendingCheckpoint?.cancel(); composerDraft.onEdit = nil
                 activeArchive = nil; activeScope = nil
                 draft = ""; attachments = []; replyTarget = nil

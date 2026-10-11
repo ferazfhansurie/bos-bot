@@ -566,13 +566,14 @@ final class Session: ObservableObject {
                 config.protocolClasses = [SteeringPreviewProtocol.self]
                 client = CompanionClient(connection: preview, token: "steering-fixture-token", session: URLSession(configuration: config))
             }
-            if arguments.contains("-stream-recovery-preview") {
+            if arguments.contains("-stream-recovery-preview") || arguments.contains("-send-scroll-preview") {
                 let config = URLSessionConfiguration.ephemeral
                 config.protocolClasses = [StreamRecoveryPreviewProtocol.self]
                 let network = URLSession(configuration: config)
                 recoveryPreviewSession = network
                 client = CompanionClient(connection: preview, token: "isolated-fixture", session: network)
                 Task { [weak self] in
+                    guard !arguments.contains("-send-scroll-preview") else { return }
                     try? await Task.sleep(for: .seconds(1))
                     guard let self, let bot = self.state.bots.first else { return }
                     _ = await self.send(text: "recover this live stream", attachments: [], to: .bot(bot), durableSendID: "recovery-send-0001")
@@ -1388,6 +1389,12 @@ final class Session: ObservableObject {
             if let seeded = frame(["kind": "message", "threadId": threadId, "message": message]) { state.apply(seeded.frame) }
         }
         if branched { state.activeLeafIds[threadId] = parent }
+        if args.contains("-send-scroll-preview") {
+            if var bot = state.bot("preview-pepper") {
+                bot.busy = false; bot.messages = nil; state.apply(.bot(bot))
+            }
+            return
+        }
         Task { @MainActor [weak self] in
             // Start on the first keystroke so the test can reach the
             // composer while the app is still idle.

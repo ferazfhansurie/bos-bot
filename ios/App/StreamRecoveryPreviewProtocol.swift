@@ -14,11 +14,20 @@ final class StreamRecoveryPreviewProtocol: URLProtocol {
             Self.lock.lock(); Self.streams += 1; let count = Self.streams; Self.lock.unlock()
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "text/event-stream"])!, cacheStoragePolicy: .notAllowed)
             emit(["kind": "hello", "cursor": "fixture:0", "resumed": true])
-            if count > 1 {
+            if count > 1 && !ProcessInfo.processInfo.arguments.contains("-send-scroll-preview") {
                 emit(["kind": "message", "seq": 1, "threadId": "preview-gmail", "message": Self.message])
                 emit(["kind": "thread", "seq": 2, "threadId": "preview-gmail", "activeLeafId": "recovery-user"])
                 emit(["kind": "message", "seq": 3, "threadId": "preview-gmail", "message": ["id": "recovery-reply", "parentId": "recovery-user", "role": "bot", "kind": "text", "at": 1890000000100, "text": "Live reply recovered without reopening"]])
             }
+            return
+        }
+        if ProcessInfo.processInfo.arguments.contains("-send-scroll-preview"), request.httpMethod == "POST" {
+            let message: [String: Any] = ["id": "scroll-user", "parentId": "stream-history-299",
+                "role": "user", "kind": "text", "at": 1890000000000, "text": "keep this message visible"]
+            let body: [String: Any] = ["ok": true, "threadId": "preview-gmail", "message": message]
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: body))
+            client?.urlProtocolDidFinishLoading(self)
             return
         }
         let body: [String: Any] = request.httpMethod == "POST" && path.hasSuffix("/messages")
