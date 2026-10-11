@@ -765,7 +765,9 @@ final class RealtimeVoiceCall: ObservableObject, Identifiable {
         }
         if let startedAt {
             elapsed = Int(Date().timeIntervalSince(startedAt))
-            session?.reportVoiceCallUsage(callId: callId, seconds: elapsed)
+            if session?.connection?.id == connectionID {
+                session?.reportVoiceCallUsage(callId: callId, seconds: elapsed)
+            }
         }
         activity = .idle
         levels.mic = 0

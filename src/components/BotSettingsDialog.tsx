@@ -9,7 +9,7 @@ import { api, useStore, type Bot } from "@/state/store";
 import type { BotOverview } from "@/lib/bot-overview-types";
 import { cn } from "@/lib/cn";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BOT_SECTIONS } from "./bot-settings/sections";
+import { BOT_SECTIONS, BOT_SECTION_GROUPS } from "./bot-settings/sections";
 import { useBotSettingsDerived } from "./bot-settings/useBotSettingsDerived";
 import { OverviewSection } from "./bot-settings/OverviewSection";
 import { IdentitySection } from "./bot-settings/IdentitySection";
@@ -40,7 +40,9 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
   // this panel is already mounted, including after collapsing the same row.
   const collapsed = !state.botSettingsExpandAccordion;
   const q = query.trim().toLowerCase();
-  const visibleSections = BOT_SECTIONS.filter((entry) => sectionMatches(entry, q));
+  const activeGroup = BOT_SECTION_GROUPS.find(group => (group.sections as readonly string[]).includes(section)) ?? BOT_SECTION_GROUPS[0];
+  const inGroup = (id: string) => Boolean(q) || (activeGroup.sections as readonly string[]).includes(id);
+  const visibleSections = BOT_SECTIONS.filter((entry) => inGroup(entry.id) && sectionMatches(entry, q));
 
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [overviewError, setOverviewError] = useState(false);
@@ -318,6 +320,16 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
           </button>
         </div>
 
+        <div role="group" aria-label="Settings categories" className="mx-4 mb-3 flex shrink-0 gap-1 rounded-full bg-control/50 p-1">
+          {BOT_SECTION_GROUPS.map(group => (
+            <button key={group.label} type="button" aria-pressed={activeGroup === group && !q}
+              onClick={() => { setQuery(""); dispatch({ type: "toggleSettings", open: true, section: group.sections[0] }); }}
+              className={cn("min-w-0 flex-1 rounded-full px-3 py-2 text-[13px] transition-colors", activeGroup === group && !q ? "bg-raised text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}>
+              {group.label}
+            </button>
+          ))}
+        </div>
+
         <div className="mx-4 mb-2 flex shrink-0 items-center gap-2 rounded-lg bg-control/70 px-2.5 py-2">
           <Search size={14} className="shrink-0 text-ink-secondary" />
           <input
@@ -349,7 +361,7 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
               rows are omitted entirely. */}
           {BOT_SECTIONS.map((entry) => {
             const { id, label, icon: Icon } = entry;
-            const matched = sectionMatches(entry, q);
+            const matched = inGroup(id) && sectionMatches(entry, q);
             if (!matched && id !== "memory") return null;
             const open = !collapsed && section === id;
             return (
