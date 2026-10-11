@@ -11,6 +11,8 @@ public struct PendingMessageAttachment: Identifiable, Hashable, Sendable {
 
     public let id: UUID
     public let data: Data
+    private let file: OwnedAttachmentFile?
+    public var fileURL: URL? { file?.url }
     public let name: String
     public let mime: String
     public let kind: Kind
@@ -24,17 +26,73 @@ public struct PendingMessageAttachment: Identifiable, Hashable, Sendable {
     ) {
         self.id = id
         self.data = data
+        self.file = nil
         self.name = name
         self.mime = mime
         self.kind = kind
     }
 
-    public var bytes: Int { data.count }
+    /// A picker/provider file is copied in bounded chunks before its scope ends.
+    /// Its owner removes the temporary copy after the final draft/send reference dies.
+    public init(id: UUID = UUID(), copying url: URL, name: String, mime: String) throws {
+        let owned = try OwnedAttachmentFile(copying: url, limit: AttachmentPolicy.maximumFileBytes)
+        self.id = id; self.data = Data(); self.file = owned
+        self.name = name; self.mime = mime; self.kind = .file
+    }
+
+    public var bytes: Int { file?.bytes ?? data.count }
+}
+
+private final class OwnedAttachmentFile: @unchecked Sendable, Hashable {
+    let url: URL
+    let bytes: Int
+    let temporary: Bool
+    init(url: URL, bytes: Int, temporary: Bool) {
+        self.url = url; self.bytes = bytes; self.temporary = temporary
+    }
+    convenience init(copying source: URL, limit: Int) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BOSPendingAttachments")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let target = directory.appendingPathComponent(UUID().uuidString)
+        let count = try copyAttachmentFile(source, to: target, limit: limit)
+        self.init(url: target, bytes: count, temporary: true)
+    }
+    deinit { if temporary { try? FileManager.default.removeItem(at: url) } }
+    static func == (lhs: OwnedAttachmentFile, rhs: OwnedAttachmentFile) -> Bool { lhs.url == rhs.url }
+    func hash(into hasher: inout Hasher) { hasher.combine(url) }
+}
+
+/// Never read a provider-controlled video into one Data allocation, even if
+/// its reported size is absent or inaccurate. Partial copies are removed.
+@discardableResult func copyAttachmentFile(_ source: URL, to target: URL, limit: Int) throws -> Int {
+    let input = try FileHandle(forReadingFrom: source)
+    defer { try? input.close() }
+    guard FileManager.default.createFile(atPath: target.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    var completed = false
+    defer { if !completed { try? FileManager.default.removeItem(at: target) } }
+    let output = try FileHandle(forWritingTo: target)
+    defer { try? output.close() }
+    var total = 0
+    while let chunk = try input.read(upToCount: 1_024 * 1_024), !chunk.isEmpty {
+        guard chunk.count <= limit - total else { throw AttachmentPolicyError.itemTooLarge(name: source.lastPathComponent, limitMB: limit / 1_024 / 1_024) }
+        try output.write(contentsOf: chunk)
+        total += chunk.count
+    }
+    guard total > 0 else { throw CocoaError(.fileReadCorruptFile) }
+    try output.synchronize()
+    #if os(iOS)
+    try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: target.path)
+    #endif
+    completed = true
+    return total
 }
 
 public enum AttachmentPolicyError: Error, LocalizedError, Equatable, Sendable {
     case tooManyItems
     case totalTooLarge
+    case memoryTooLarge
     case invalidName
     case unsupportedType(String)
     case itemTooLarge(name: String, limitMB: Int)
@@ -42,9 +100,11 @@ public enum AttachmentPolicyError: Error, LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .tooManyItems:
-            return "Attach up to 4 items at a time."
+            return "Attach up to \(AttachmentPolicy.maximumItems) items at a time."
         case .totalTooLarge:
-            return "Those attachments are larger than 50 MB together."
+            return "Those attachments are larger than 200 MB together."
+        case .memoryTooLarge:
+            return "Choose fewer large images or documents at a time."
         case .invalidName:
             return "That file doesn't have a valid filename."
         case let .unsupportedType(name):
@@ -55,14 +115,16 @@ public enum AttachmentPolicyError: Error, LocalizedError, Equatable, Sendable {
     }
 }
 
-/// The same limits apply to the in-app composer and the Share extension.
+/// File-backed bot attachments can be larger than buffered shared-room files.
 /// Keeping the policy in CompanionCore prevents either entry point from
 /// accepting an attachment that the authenticated upload route will reject.
 public enum AttachmentPolicy {
-    public static let maximumItems = 4
-    public static let maximumTotalBytes = 50 * 1_024 * 1_024
+    public static let maximumItems = 32
+    public static let maximumTotalBytes = 200 * 1_024 * 1_024
+    public static let maximumInMemoryBytes = 50 * 1_024 * 1_024
+    public static let maximumBufferedFileBytes = 25 * 1_024 * 1_024
     public static let maximumImageBytes = 10 * 1_024 * 1_024
-    public static let maximumFileBytes = 25 * 1_024 * 1_024
+    public static let maximumFileBytes = 90 * 1_024 * 1_024
 
     public static let imageMIMETypes: Set<String> = [
         "image/png", "image/jpeg", "image/gif", "image/webp",
@@ -103,10 +165,13 @@ public enum AttachmentPolicy {
 
     public static func validate(_ attachments: [PendingMessageAttachment]) throws {
         guard attachments.count <= maximumItems else { throw AttachmentPolicyError.tooManyItems }
-        guard attachments.reduce(0, { $0 + $1.data.count }) <= maximumTotalBytes else {
+        guard attachments.reduce(0, { $0 + $1.bytes }) <= maximumTotalBytes else {
             throw AttachmentPolicyError.totalTooLarge
         }
 
+        guard attachments.reduce(0, { $0 + $1.data.count }) <= maximumInMemoryBytes else {
+            throw AttachmentPolicyError.memoryTooLarge
+        }
         for attachment in attachments {
             let name = attachment.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard validDisplayName(name) else { throw AttachmentPolicyError.invalidName }
@@ -116,15 +181,16 @@ public enum AttachmentPolicy {
                 guard imageMIMETypes.contains(mime) else {
                     throw AttachmentPolicyError.unsupportedType(name)
                 }
-                guard attachment.data.count <= maximumImageBytes else {
+                guard attachment.bytes <= maximumImageBytes else {
                     throw AttachmentPolicyError.itemTooLarge(name: name, limitMB: 10)
                 }
             case .file:
                 guard documentMIMETypes.contains(mime) || videoMIMETypes.contains(mime) else {
                     throw AttachmentPolicyError.unsupportedType(name)
                 }
-                guard attachment.data.count <= maximumFileBytes else {
-                    throw AttachmentPolicyError.itemTooLarge(name: name, limitMB: 25)
+                let limit = attachment.fileURL == nil ? maximumBufferedFileBytes : maximumFileBytes
+                guard attachment.bytes <= limit else {
+                    throw AttachmentPolicyError.itemTooLarge(name: name, limitMB: limit / 1_024 / 1_024)
                 }
             }
         }

@@ -264,7 +264,7 @@ enum ShareItemLoader {
             provider,
             type: type,
             into: inbox,
-            maximumBytes: AttachmentPolicy.maximumFileBytes
+            maximumBytes: AttachmentPolicy.maximumBufferedFileBytes
         )
         let claimedMime = UTType(type)?.preferredMIMEType?.lowercased() ?? "application/octet-stream"
         if AttachmentPolicy.imageMIMETypes.contains(claimedMime),
@@ -302,7 +302,7 @@ enum ShareItemLoader {
             type: representation.identifier,
             suggestedType: representation.type,
             into: inbox,
-            maximumBytes: AttachmentPolicy.maximumFileBytes
+            maximumBytes: AttachmentPolicy.maximumBufferedFileBytes
         )
         return LocalShareAttachment(
             id: UUID(), url: copied.url, name: copied.name,
@@ -337,7 +337,7 @@ enum ShareItemLoader {
                         source,
                         name: name,
                         into: inbox,
-                        maximumBytes: AttachmentPolicy.maximumFileBytes
+                        maximumBytes: AttachmentPolicy.maximumBufferedFileBytes
                     )
                     continuation.resume(returning: LocalShareAttachment(
                         id: UUID(), url: copied.url, name: name,

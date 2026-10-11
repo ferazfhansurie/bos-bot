@@ -1,0 +1,5 @@
+# Mobile attachment batches
+
+The private bot composer, share extension and shared-room composer now accept up to 32 selected items. Picker capacity, persisted draft loading and composer buttons use the same item policy. Uploads remain sequential. Private bot drafts retain the 50 MiB aggregate policy; shared drafts retain their former worst-case 100 MiB ceiling (four 25 MiB files). Saved payload sizes are checked before loading the batch into memory. Individual upload limits are unchanged; larger videos are a separate slice.
+
+Validation: 17 focused attachment, draft and shared-delivery tests pass. A 32-file draft survives a new instance with the same retry identity. Oversized saved payloads are rejected before loading their bytes, and remain on disk for recovery. In an isolated fake-engine server, 32 distinct synthetic files uploaded successfully with exact bytes, one message was accepted, and an independent message read returned all 32 attachment tags. The fixture was stopped afterward. Physical phone build 112 acceptance is tracked separately from these checks.
