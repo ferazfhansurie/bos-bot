@@ -18263,13 +18263,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       // tasks stays explicit, because that is the one field publicBot() adds
       // that messagePage() does not: wireBot() omits the key entirely for a
       // bot record carrying no tasks, where publicBot() always sent [].
-      const remoteListed = await remoteBots.listBots(limit);
+      const remoteListed = await remoteBots.listBots(limit, 100);
       const viewerActor = auth.kind === "session" ? multiplayerActors.actorFor(auth.session.id) : null;
       const foreignNow = auth.kind === "session" && viewerActor != null && viewerActor !== multiplayerActors.ownerId;
       const visibleBots = foreignNow ? store.bots.filter(bot => bot.visibility !== "private") : store.bots;
       const visibleBotIds = new Set(visibleBots.map(bot => bot.id));
       const withJoinedRooms = <T extends { groups: Array<{ id: string }> }>(body: T): Promise<T> | T =>
-        remoteRoomOwner && !foreignNow ? withRemoteGroups(body.groups, remoteRooms).then(groups => ({ ...body, groups })) : body;
+        remoteRoomOwner && !foreignNow ? withRemoteGroups(body.groups, { ...remoteRooms, waitMs: 100 }).then(groups => ({ ...body, groups })) : body;
       return json(res, 200, await withJoinedRooms({
         bots: [...visibleBots.map(visibleThreadBot).map((bot) => ({
           ...wireBot(bot),

@@ -93,6 +93,7 @@ export class MultiplayerLinks {
   private primary: PrimaryRoomHome | null = null;
   /** Last full room views per home, from the canonical home. Memory only. */
   private readonly groupViews = new Map<string, Array<Record<string, unknown>>>();
+  private readonly groupRefreshes = new Map<RemoteLink, Promise<boolean>>();
   /** Set by the server so relayed rooms keep our own shared bots' photos. */
   ownBotAvatar: OwnBotAvatar = () => null;
 
@@ -224,6 +225,16 @@ export class MultiplayerLinks {
   async refreshJoinedGroups(homeId: string): Promise<boolean> {
     const link = this.links.get(homeId);
     if (!link) return false;
+    const existing = this.groupRefreshes.get(link);
+    if (existing) return existing;
+    const pending = this.loadJoinedGroups(homeId, link).finally(() => {
+      if (this.groupRefreshes.get(link) === pending) this.groupRefreshes.delete(link);
+    });
+    this.groupRefreshes.set(link, pending);
+    return pending;
+  }
+
+  private async loadJoinedGroups(homeId: string, link: RemoteLink): Promise<boolean> {
     const answer = await this.forwardTo(link, "/api/groups", "GET", undefined, GROUP_ROUTES);
     const groups = (answer.body as { groups?: unknown } | null)?.groups;
     if (answer.status !== 200 || !Array.isArray(groups)) return false;

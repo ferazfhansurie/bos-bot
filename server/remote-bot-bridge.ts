@@ -442,8 +442,30 @@ export class RemoteBotBridge {
   // ── public reads ──────────────────────────────────────────────────────
 
   /** Virtual bots for GET /api/bots, shaped like wireBot + tasks + messagePage. */
-  async listBots(limit: number | undefined): Promise<Array<WireBot & { tasks: WireTask[]; messages: WireMessage[]; hasMore: boolean; activeLeafId: string | null }>> {
+  async listBots(limit: number | undefined, budgetMs?: number): Promise<Array<WireBot & { tasks: WireTask[]; messages: WireMessage[]; hasMore: boolean; activeLeafId: string | null }>> {
     this.sync();
+    if (budgetMs !== undefined) {
+      // Local hydration must not wait for every linked home. The relay keeps
+      // refreshing after this shared deadline; late transcript changes are
+      // broadcast, rather than silently populating a cache after the response.
+      const refresh = Promise.all([...this.homes.values()].map(async home => {
+        if (!home.snapshotAt) await this.refreshSnapshot(home);
+        await Promise.all(Object.keys(home.state.bots).map(async botId => {
+          const selected = this.selectedThread(home, botId);
+          if ((limit ?? PAGE_MAX) > 0 && selected && !home.cache.get(selected)?.hydrated) {
+            await this.hydrate(home, selected, true);
+          }
+        }));
+      }));
+      await withTimeout(refresh, budgetMs).catch(() => {});
+      this.sync();
+      return [...this.homes.values()].flatMap(home => Object.keys(home.state.bots).map(botId => {
+        const selected = this.selectedThread(home, botId);
+        const page = selected ? this.cachedPage(home, selected, limit ?? PAGE_MAX)
+          : { messages: [], hasMore: false, activeLeafId: null };
+        return { ...this.virtualBot(home, botId), ...page };
+      }));
+    }
     const bound = this.options.listTimeoutMs ?? 4000;
     await Promise.all([...this.homes.values()].map((home) => withTimeout((async () => {
       if (!home.snapshotAt) await this.refreshSnapshot(home);

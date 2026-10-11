@@ -211,6 +211,43 @@ describe("RemoteBotBridge", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("bounds cold remote discovery without pretending the remote home is connected", async () => {
+    bridge.stop();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    bridge = make({ fetcher: (async (input, init) => {
+      if (new URL(String(input)).pathname === "/api/bots") await held;
+      return fake.fetcher(input, init);
+    }) as typeof fetch });
+    const started = Date.now();
+    const listed = await bridge.listBots(50, 20);
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(listed).toEqual([]);
+    expect(bridge.homeForTest(HOME)?.connected).toBe(false);
+    release();
+    await until(() => !!bridge.homeForTest(HOME)?.snapshotAt);
+    expect((await bridge.listBots(50, 20)).map(bot => bot.id)).toContain(botId);
+  });
+
+  it("broadcasts a late transcript after a bounded fleet response", async () => {
+    await bridge.listBots(0);
+    await firstSend();
+    bridge.stop();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    bridge = make({ fetcher: (async (input, init) => {
+      if (new URL(String(input)).pathname === "/api/threads/bridge-1/messages") await held;
+      return fake.fetcher(input, init);
+    }) as typeof fetch });
+    fake.threads.set("bridge-1", [{ id: "late-message", role: "user", kind: "text", text: "late reply", at: 3 }]);
+    frames.length = 0;
+    const listed = await bridge.listBots(50, 20);
+    expect(listed.find(bot => bot.id === botId)?.messages).toEqual([]);
+    release();
+    await until(() => frames.some(frame => frame.kind === "message" && frame.message.id === "late-message"));
+    expect((await bridge.listBots(50, 20)).find(bot => bot.id === botId)?.messages.map(message => message.id)).toContain("late-message");
+  });
+
   it("recognises only virtual ids as bridge paths", () => {
     expect(isRemoteBotPath(`/api/bots/${botId}/messages`)).toBe(true);
     expect(isRemoteBotPath(`/api/threads/rt-${KEY}-bridge-1/messages`)).toBe(true);
