@@ -2610,15 +2610,19 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                 ),
                 onSelect: () => dispatch({ type: "showRoutines" }),
               },
-              {
-                key: "plugins",
-                tourId: "nav-apps",
-                label: t("sidebar.nav.connectedApps"),
-                icon: <Puzzle size={18} />,
-                onSelect: () => dispatch({ type: "togglePlugins", open: true }),
-              },
             ]}
           />
+        )}
+        {density !== "icons" && (
+          <button
+            type="button"
+            data-tour="nav-apps"
+            onClick={() => dispatch({ type: "togglePlugins", open: true })}
+            className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-full border border-hairline bg-raised/60 px-4 py-2.5 text-[14px] font-medium text-ink transition-colors hover:bg-raised focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            <Puzzle size={18} className="shrink-0 text-ink-secondary" />
+            {t("sidebar.nav.connectedApps")}
+          </button>
         )}
         {density !== "icons" && <SidebarUsageRow />}
         {density === "icons" ? (
