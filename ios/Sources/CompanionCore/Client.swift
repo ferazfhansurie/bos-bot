@@ -678,8 +678,8 @@ public struct CompanionClient: Sendable {
     }
 
     @discardableResult
-    private func send<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
-        let (data, response) = try await perform(request)
+    private func send<T: Decodable>(_ request: URLRequest, as type: T.Type, retrySafe: Bool = false) async throws -> T {
+        let (data, response) = try await (retrySafe ? performIdempotent(request) : perform(request))
         try verify(response, data)
         do {
             return try JSONDecoder().decode(T.self, from: data)
@@ -697,8 +697,8 @@ public struct CompanionClient: Sendable {
     /// message for it arrives on the event stream, so the receipt here is
     /// best-effort state. A body this build cannot read means "not queued"
     /// rather than a failed send.
-    private func sendForReceipt(_ request: URLRequest) async throws -> SendReceipt {
-        let (data, response) = try await perform(request)
+    private func sendForReceipt(_ request: URLRequest, retrySafe: Bool = false) async throws -> SendReceipt {
+        let (data, response) = try await (retrySafe ? performIdempotent(request) : perform(request))
         try verify(response, data)
         authorityObserver?(.accepted)
         return (try? JSONDecoder().decode(SendReceipt.self, from: data)) ?? SendReceipt()
@@ -870,6 +870,31 @@ public struct CompanionClient: Sendable {
             authorityObserver?(.moved)
             throw error
         }
+    }
+
+    /// Only sends/uploads with a stable identity can be replayed after a lost
+    /// response. Other mutations must retain their single-attempt behavior.
+    private func performIdempotent(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        for attempt in 0..<3 {
+            try Task.checkCancellation()
+            do {
+                let result = try await session.data(for: request)
+                if let http = result.1 as? HTTPURLResponse,
+                   [408, 502, 503, 504].contains(http.statusCode), attempt < 2 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 500_000_000)
+                    continue
+                }
+                return result
+            } catch let error as URLError {
+                if [.timedOut, .networkConnectionLost, .cannotConnectToHost, .notConnectedToInternet].contains(error.code), attempt < 2 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 500_000_000)
+                    continue
+                }
+                if error.code == .cancelled { throw CancellationError() }
+                throw APIError.transport(error.localizedDescription)
+            }
+        }
+        throw APIError.transport("Couldn't reach this computer. Your message is still here.")
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
@@ -1531,7 +1556,8 @@ public struct CompanionClient: Sendable {
         )
         request.setValue(normalizedMime, forHTTPHeaderField: "Content-Type")
         request.httpBody = data
-        let saved = try await send(request, as: AttachmentResponse.self)
+        request.timeoutInterval = 300
+        let saved = try await send(request, as: AttachmentResponse.self, retrySafe: uploadId != nil)
         guard Self.validUploadedPath(saved.path) else {
             throw APIError.transport("The uploaded image could not be used.")
         }
@@ -1572,7 +1598,8 @@ public struct CompanionClient: Sendable {
         )
         request.setValue(normalizedMime, forHTTPHeaderField: "Content-Type")
         request.httpBody = data
-        let saved = try await send(request, as: FileUploadResponse.self)
+        request.timeoutInterval = 300
+        let saved = try await send(request, as: FileUploadResponse.self, retrySafe: uploadId != nil)
         let returnedName = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.validUploadedPath(saved.path), Self.validUploadedName(returnedName) else {
             throw APIError.transport("The uploaded file could not be used.")
@@ -1777,7 +1804,7 @@ public struct CompanionClient: Sendable {
         // Queue is the server's default, so a queued send stays byte-for-byte
         // what older computers already accept.
         if priority == .block { body["priority"] = MessagePriority.block.rawValue }
-        return try await sendForReceipt(try makeRequest("POST", route, body: body))
+        return try await sendForReceipt(try makeRequest("POST", route, body: body), retrySafe: true)
     }
 
     /// Saves only an existing pending item. Errors never fall back to a new send.

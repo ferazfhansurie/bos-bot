@@ -353,6 +353,7 @@ export function createProxyHandler(options: ProxyOptions) {
     if (device && options.mutationToken && !mutationToken) {
       return sendJson(res, 503, { error: "The desktop connection is starting. Please try again shortly." });
     }
+    let responseStarted = false;
     const upstream = httpRequest(
       {
         hostname: "127.0.0.1",
@@ -362,6 +363,7 @@ export function createProxyHandler(options: ProxyOptions) {
         headers: forwardHeaders(req, device?.id, mutationToken ?? undefined),
       },
       (harness) => {
+        responseStarted = true;
         clearTimeout(headersDeadline);
         // Keep liveness tied to the actual harness. Answering from the
         // sidecar alone made a dead bot server look healthy and caused the
@@ -615,11 +617,27 @@ export function createProxyHandler(options: ProxyOptions) {
     // device's request open until one side gives up, which neither does.
     let timedOut = false;
     const headersTimeoutMs = proxyHeadersTimeoutMs(req.url ?? "", options.headersTimeoutMs);
-    const headersDeadline = setTimeout(() => {
+    // Raw uploads cannot receive a successful response before their body
+    // reaches the harness. Counting transfer time as response latency made
+    // a healthy slow phone upload fail with 504 after thirty seconds.
+    const rawUpload = method === "POST" && (
+      path === "/api/files" || path === "/api/attachments"
+      || /^\/api\/groups\/[\w-]+\/attachments$/.test(path)
+    );
+    const expire = () => {
       timedOut = true;
       upstream.destroy(new Error("the harness sent no response headers"));
-    }, headersTimeoutMs);
+    };
+    // Keep a finite transfer budget as well; a stalled request must not
+    // hold a companion socket forever. The server still bounds byte count.
+    let headersDeadline = setTimeout(expire, rawUpload ? 300_000 : headersTimeoutMs);
     headersDeadline.unref?.();
+    upstream.once("finish", () => {
+      if (!rawUpload || responseStarted || upstream.destroyed) return;
+      clearTimeout(headersDeadline);
+      headersDeadline = setTimeout(expire, headersTimeoutMs);
+      headersDeadline.unref?.();
+    });
 
     upstream.on("error", () => {
       clearTimeout(headersDeadline);

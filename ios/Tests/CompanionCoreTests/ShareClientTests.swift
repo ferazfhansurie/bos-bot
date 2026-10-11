@@ -6,6 +6,10 @@ private final class ShareRequestStub: URLProtocol {
     static var responseBody = Data()
     static var statusCode = 200
     static var responseHeaders = ["Content-Type": "application/json"]
+    static var requests: [URLRequest] = []
+    static var bodies: [Data?] = []
+    static var networkFailures = 0
+    static var transientFailures = 0
     static var capturedRequest: URLRequest?
     static var capturedBody: Data?
 
@@ -15,9 +19,17 @@ private final class ShareRequestStub: URLProtocol {
     override func startLoading() {
         Self.capturedRequest = request
         Self.capturedBody = Self.readBody(from: request)
+        Self.requests.append(request); Self.bodies.append(Self.capturedBody)
+        if Self.networkFailures > 0 {
+            Self.networkFailures -= 1
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
+        }
+        let code = Self.transientFailures > 0 ? 504 : Self.statusCode
+        Self.transientFailures = max(0, Self.transientFailures - 1)
         let response = HTTPURLResponse(
             url: request.url!,
-            statusCode: Self.statusCode,
+            statusCode: code,
             httpVersion: "HTTP/1.1",
             headerFields: Self.responseHeaders
         )!
@@ -52,6 +64,8 @@ final class ShareClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         ShareRequestStub.responseBody = Data()
+        ShareRequestStub.requests = []; ShareRequestStub.bodies = []
+        ShareRequestStub.networkFailures = 0; ShareRequestStub.transientFailures = 0
         ShareRequestStub.statusCode = 200
         ShareRequestStub.responseHeaders = ["Content-Type": "application/json"]
         ShareRequestStub.capturedRequest = nil
@@ -429,3 +443,42 @@ final class ShareClientTests: XCTestCase {
     }
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+extension ShareClientTests {
+    func testLostMessageResponseRetriesExactPinnedSend() async throws {
+        ShareRequestStub.networkFailures = 1
+        ShareRequestStub.responseBody = Data("{\"ok\":true}".utf8)
+        _ = try await client.send(text: "fixture", to: .bot(id: "bot-1", threadId: "thread-1"), sendId: "11111111-1111-4111-8111-111111111111")
+        XCTAssertEqual(ShareRequestStub.requests.count, 2)
+        XCTAssertEqual(ShareRequestStub.bodies[0], ShareRequestStub.bodies[1])
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(ShareRequestStub.bodies[1])) as? [String: String])
+        XCTAssertEqual(json["sendId"], "11111111-1111-4111-8111-111111111111")
+        XCTAssertEqual(json["threadId"], "thread-1")
+    }
+    func testVideoUploadRetriesGatewayFailureWithoutChangingBytesOrID() async throws {
+        ShareRequestStub.transientFailures = 1
+        ShareRequestStub.responseBody = Data("{\"path\":\"/tmp/fixture.mp4\",\"name\":\"Video.mp4\",\"mime\":\"video/mp4\",\"bytes\":4}".utf8)
+        let bytes = Data([1,2,3,4])
+        _ = try await client.uploadFile(data: bytes, name: "Video.mp4", mime: "video/mp4", uploadId: "22222222-2222-4222-8222-222222222222")
+        XCTAssertEqual(ShareRequestStub.requests.count, 2)
+        XCTAssertEqual(ShareRequestStub.bodies[0], bytes)
+        XCTAssertEqual(ShareRequestStub.bodies[0], ShareRequestStub.bodies[1])
+        XCTAssertEqual(ShareRequestStub.requests[0].url, ShareRequestStub.requests[1].url)
+        XCTAssertEqual(ShareRequestStub.requests[0].timeoutInterval, 300)
+    }
+    func testUploadWithoutIdentityDoesNotRetry() async throws {
+        ShareRequestStub.networkFailures = 1
+        do { _ = try await client.uploadFile(data: Data([1]), name: "Video.mp4", mime: "video/mp4"); XCTFail("expected failure") }
+        catch { XCTAssertEqual(ShareRequestStub.requests.count, 1) }
+    }
+    func testMessageAuthorizationFailureDoesNotRetry() async throws {
+        ShareRequestStub.statusCode = 401
+        do { _ = try await client.send(text: "fixture", to: .room(id: "room-1", threadId: "thread-1"), sendId: "11111111-1111-4111-8111-111111111111"); XCTFail("expected failure") }
+        catch { XCTAssertEqual(ShareRequestStub.requests.count, 1) }
+    }
+    func testMessageRetryIsBounded() async throws {
+        ShareRequestStub.networkFailures = 5
+        do { _ = try await client.send(text: "fixture", to: .room(id: "room-1", threadId: "thread-1"), sendId: "11111111-1111-4111-8111-111111111111"); XCTFail("expected failure") }
+        catch { XCTAssertEqual(ShareRequestStub.requests.count, 3) }
+    }
+}
