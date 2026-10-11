@@ -15,7 +15,7 @@
 
 <br><br>
 
-<img src="docs/screenshots/hero.png" alt="BOS Bot: a chat app where every contact is a real AI agent" width="900">
+<img src="docs/screenshots/hero.png" alt="A BOS room: tag @ink or @pixel and only that bot wakes up and answers" width="900">
 
 </div>
 
@@ -50,8 +50,8 @@ same chats. Upstream attribution is kept in [NOTICE](NOTICE) and [LICENSING.md](
 
 ### Pick a brain per bot
 
-A model picker with a provider rail — Claude and Codex models side by side, defaults marked, unavailable
-providers dimmed with the reason. Switch a bot's model mid-conversation.
+Claude, Codex or a local model, per bot or per thread, with an effort dial. In the room above, ink runs
+on Claude and pixel on GPT, side by side.
 
 <img src="docs/screenshots/model-picker.png" alt="Model picker with provider rail" width="100%">
 
@@ -60,10 +60,10 @@ providers dimmed with the reason. Switch a bot's model mid-conversation.
 
 ### Every bot gets a computer
 
-Open the Computer panel and the bot's cloud desktop spins up on its own — live screen preview while it
-works, "Open desktop" to take over in your browser, or point the bot at *this Mac* instead.
+Pick where each bot works: an isolated local VM, a cloud box, a browser, your own Mac, or nothing at all.
+You watch its screen live while it works.
 
-<img src="docs/screenshots/computer-panel.png" alt="Computer panel with live screen preview" width="100%">
+<img src="docs/screenshots/computer-panel.png" alt="Computer panel: choose where a bot works" width="100%">
 
 </td>
 </tr>
@@ -72,10 +72,10 @@ works, "Open desktop" to take over in your browser, or point the bot at *this Ma
 
 ### Bots ask before they act
 
-Shell commands, file edits, and questions surface as inline cards — Allow / Deny / answer in chat. A
-permission broker turns every risky action into a decision you make, for cloud and local computers alike.
+Questions, shell commands and file edits show up as cards in the chat. You pick an answer or hit
+Allow / Deny, and the bot carries on.
 
-<img src="docs/screenshots/approval-card.png" alt="Approval and question cards in chat" width="100%">
+<img src="docs/screenshots/approval-card.png" alt="A bot asking a question card in chat" width="100%">
 
 </td>
 <td width="50%" valign="top">
@@ -94,8 +94,8 @@ OAuth once, and every bot can use them as tools.
 
 ### Manage bots like chats
 
-Right-click any bot: pin, mark unread, edit profile, duplicate, copy conversation ID, hide, delete. It's a
-messaging app — your agents behave like contacts.
+Right-click any bot: new thread, split view, pin, make it Chief of Staff, move it to a team, duplicate,
+archive. It's a messaging app, and your bots behave like contacts.
 
 <img src="docs/screenshots/context-menu.png" alt="Bot context menu" width="100%">
 
@@ -104,8 +104,8 @@ messaging app — your agents behave like contacts.
 
 ### Keys once, everything lights up
 
-Paste credentials in App Settings — they persist locally and the provider fleet hot-reloads instantly.
-Secrets are write-only: the UI only ever sees "configured" flags.
+Paste an Anthropic, OpenRouter or xAI key once in Settings and every bot can use it. Keys stay on your
+computer, and the UI only ever sees a "configured" flag.
 
 <img src="docs/screenshots/app-settings.png" alt="App-level settings with API keys" width="100%">
 
