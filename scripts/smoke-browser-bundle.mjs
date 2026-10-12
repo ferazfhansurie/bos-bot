@@ -111,7 +111,8 @@ for (const directory of new Set([fixtureHome, env.APPDATA, env.LOCALAPPDATA, env
 }
 // Isolate even source-module initialization. No inherited account credentials,
 // agent-browser config, external CDP connection, profile, proxy, or launch flags.
-compatEnv = env;
+for (const key of Object.keys(process.env)) delete process.env[key];
+Object.assign(process.env, env);
 const children = new Set();
 const clients = [];
 let server;
