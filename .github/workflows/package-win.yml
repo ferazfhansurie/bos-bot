@@ -48,7 +48,13 @@ jobs:
         shell: bash
         run: git clean -fdX -- dist dist-server release "$OUT"
       - run: node scripts/release-contract.mjs check live win
-      - run: pnpm package:win:live
+      - run: pnpm package:prepare
+      - run: pnpm build:cua:win
+      # Ship the reviewed, portable updater bundles from the source commit.
+      # esbuild regenerates host-dependent labels on Windows; keep the clean
+      # source gate without replacing those committed modules with local output.
+      - run: git restore electron/vendor/electron-updater.cjs electron/vendor/update-yaml.cjs
+      - run: node scripts/release-contract.mjs package live win
       - run: node scripts/release-contract.mjs packaged live win "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
       - name: Verify the bundled browser with an empty home
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
