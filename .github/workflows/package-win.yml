@@ -20,11 +20,11 @@ on:
         required: false
         type: string
 
-# pnpm package:win builds the staging app (electron-builder.staging.yml):
-# "BOS Staging", output in release-staging/, auto-update off (publish: null),
-# matching the mac staging build.
+# live installer for bos.aihlete.com; unsigned windows preview.
 env:
-  OUT: release-staging
+  OUT: release
+  BOS_WINDOWS_SIGNING: unsigned
+  BOS_UPDATE_FEED_URL: https://bos.aihlete.com/updates
 
 jobs:
   package:
@@ -46,10 +46,10 @@ jobs:
       # incident) — a fresh checkout is clean, but be explicit
       - name: clean build outputs
         shell: bash
-        run: rm -rf dist dist-server release "$OUT"
-      - run: node scripts/release-contract.mjs check staging win
-      - run: pnpm package:win
-      - run: node scripts/release-contract.mjs packaged staging win "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
+        run: git clean -fdX -- dist dist-server release "$OUT"
+      - run: node scripts/release-contract.mjs check live win
+      - run: pnpm package:win:live
+      - run: node scripts/release-contract.mjs packaged live win "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
       - name: Verify the bundled browser with an empty home
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/${{ env.OUT }}/win-unpacked/resources"
       - name: Verify the packaged server discovers its browser
@@ -91,11 +91,7 @@ jobs:
             "$res/cloudflared/cloudflared.exe" version | grep -Fq "cloudflared version 2026.8.2 " || {
               echo "::error::packaged cloudflared has the wrong version"; fail=1; }
           fi
-          # staging ships with auto-update off (publish: null). an update file
-          # here would mean the build points at a feed it shouldn't use.
-          if [ -f "$res/app-update.yml" ]; then
-            echo "::error::staging build carries app-update.yml"; cat "$res/app-update.yml"; fail=1
-          fi
+          [ -f "$res/app-update.yml" ] || { echo "::error::live build lacks update feed"; fail=1; }
           exit $fail
 
       # index.js EXISTING is not the same as index.js RUNNING. 0.1.24 shipped a
@@ -126,9 +122,10 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-installer
+          name: windows-live-installer
           path: |
             ${{ env.OUT }}/*.exe
+            ${{ env.OUT }}/release-contract-win.json
           if-no-files-found: error
           retention-days: 14
 # branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
