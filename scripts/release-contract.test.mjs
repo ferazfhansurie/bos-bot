@@ -14,7 +14,7 @@ test('staging has no update feed', () => { const s = parse(readFileSync('electro
 test('production signing fails closed without secrets', () => { assert.throws(() => signingPrerequisites('win',{})); assert.throws(() => signingPrerequisites('mac',{})); signingPrerequisites('win',{WIN_CSC_LINK:'supplied',WIN_CSC_KEY_PASSWORD:'supplied',BOS_WINDOWS_PUBLISHER:'stable subject'}); });
 test('packaged channel, commit and feed parity', () => {
  const p={name:'bos-bot',bosChannel:'live',bosSourceCommit:'a'.repeat(40)};
- const feed={provider:'github',owner:'firazfhansurie',repo:'bos-bot'};
+ const feed={provider:'github',owner:'ferazfhansurie',repo:'bos-bot'};
  validatePackaged(p,feed,'live','a'.repeat(40));
  assert.throws(()=>validatePackaged({...p,bosSourceCommit:'b'.repeat(40)},feed,'live','a'.repeat(40)));
  assert.throws(()=>validatePackaged(p,{...feed,repo:'BOS Bot'},'live','a'.repeat(40)));
@@ -40,7 +40,7 @@ test('1.0 is a stable live version', () => {
 test('update feed defaults to the BOS repo and is configurable', () => {
  assert.deepEqual(releaseFeed({}),DEFAULT_FEED);
  assert.deepEqual(releaseFeed({BOS_UPDATE_FEED_URL:'',BOS_UPDATE_GITHUB_OWNER:' '}),DEFAULT_FEED);
- assert.deepEqual(releaseFeed({BOS_UPDATE_GITHUB_REPO:'bos-releases'}),{provider:'github',owner:'firazfhansurie',repo:'bos-releases'});
+ assert.deepEqual(releaseFeed({BOS_UPDATE_GITHUB_REPO:'bos-releases'}),{provider:'github',owner:'ferazfhansurie',repo:'bos-releases'});
  assert.deepEqual(releaseFeed({BOS_UPDATE_FEED_URL:'https://dl.example.com/bos/'}),{provider:'generic',url:'https://dl.example.com/bos'});
  for(const env of [{BOS_UPDATE_FEED_URL:'http://dl.example.com'},{BOS_UPDATE_FEED_URL:'https://u:p@dl.example.com'},{BOS_UPDATE_FEED_URL:'https://dl.example.com/?x=1'},{BOS_UPDATE_FEED_URL:'nope'},
   {BOS_UPDATE_FEED_URL:'https://dl.example.com',BOS_UPDATE_GITHUB_REPO:'r'},{BOS_UPDATE_GITHUB_OWNER:'a/b'}]) assert.throws(()=>releaseFeed(env));
@@ -84,7 +84,7 @@ test('live builder config: one feed, signed by default, unsigned windows skips u
  assert.equal(signed.forceCodeSigning,true);
  assert.equal(signed.win.verifyUpdateCodeSignature,true);
  assert.deepEqual(signed.win.target,base.win.target);
- assert.deepEqual(signed.extraMetadata,{bosChannel:'live',name:'bos-bot',bosUpdatePolicy:{mode:'native',feed:{provider:'github',owner:'firazfhansurie',repo:'bos-bot'}}});
+ assert.deepEqual(signed.extraMetadata,{bosChannel:'live',name:'bos-bot',bosUpdatePolicy:{mode:'native',feed:{provider:'github',owner:'ferazfhansurie',repo:'bos-bot'}}});
  const unsigned=liveConfig({BOS_WINDOWS_SIGNING:'unsigned'});
  validateConfig(unsigned,'live');
  assert.equal(unsigned.forceCodeSigning,false);
@@ -92,7 +92,7 @@ test('live builder config: one feed, signed by default, unsigned windows skips u
  assert.equal(unsigned.win.signtoolOptions,undefined);
  assert.deepEqual(unsigned.win.extraResources,base.win.extraResources);
  assert.deepEqual(liveConfig({BOS_UPDATE_FEED_URL:'https://dl.example.com/bos'}).publish,[{provider:'generic',url:'https://dl.example.com/bos'}]);
- assert.deepEqual(liveConfig({BOS_UPDATE_GITHUB_REPO:'bos-releases'}).publish,[{provider:'github',owner:'firazfhansurie',repo:'bos-releases'}]);
+ assert.deepEqual(liveConfig({BOS_UPDATE_GITHUB_REPO:'bos-releases'}).publish,[{provider:'github',owner:'ferazfhansurie',repo:'bos-releases'}]);
 });
 test('release workflow builds the 1.0 windows installer unsigned unless configured', () => {
  const workflow=parse(readFileSync('.github/workflows/release.yml','utf8'));

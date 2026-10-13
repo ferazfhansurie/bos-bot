@@ -5,8 +5,8 @@ on:
   # with the workflow token never fires push events on its own.
   workflow_dispatch:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches: [ main ]
+    tags: [ "v*" ]
     paths:
       - Dockerfile
       - .dockerignore
@@ -123,13 +123,16 @@ jobs:
           grep -q '"baseUrl":"https://localhost"' <<<"$(body -b "$jar" $H/api/webhooks)"   # OMB_WEBHOOK_PUBLIC_URL is advertised
           test "$(code $H/api/bots)" = 403                                        # and without the cookie it is still closed
           docker compose -f deploy/docker-compose.yml down -v
+    if: github.repository == 'milind-soni/OpenMausBot'
 
   publish:
     name: publish to GHCR
     needs: build-and-smoke
     # Release dispatches on its published tag because GITHUB_TOKEN-created
     # tags do not start another workflow. A manual branch run is smoke-only.
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v'))
+    if: github.repository == 'milind-soni/OpenMausBot' && (github.event_name ==
+      'push' || (github.event_name == 'workflow_dispatch' &&
+      startsWith(github.ref, 'refs/tags/v')))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -158,4 +161,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
 # branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling; container-health-check: container probes must check the frozen health identity returned by old and new servers

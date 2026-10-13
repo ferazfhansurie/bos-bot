@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ferazfhansurie/bos-bot/security
+    about: Follow SECURITY.md; do not post vulnerabilities in public issues.
+  - name: Development and setup guide
+    url: https://github.com/ferazfhansurie/bos-bot/blob/main/CONTRIBUTING.md
+    about: Requirements, local setup, tests, and contribution guidelines.

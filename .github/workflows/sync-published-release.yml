@@ -2,7 +2,7 @@ name: Sync published release
 
 on:
   release:
-    types: [published]
+    types: [ published ]
   workflow_dispatch:
     inputs:
       tag:
@@ -25,7 +25,9 @@ jobs:
     name: Preserve legacy updater compatibility
     # Dependency prereleases are not desktop updates. Manual recovery still
     # reaches the strict stable-tag and artifact checks below.
-    if: github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v'))
+    if: github.repository == 'milind-soni/OpenMausBot' && (github.event_name ==
+      'workflow_dispatch' || (!github.event.release.prerelease &&
+      startsWith(github.event.release.tag_name, 'v')))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -200,4 +202,5 @@ jobs:
           fi
           curl --fail-with-body --silent --show-error --request POST "$DOCS_DEPLOY_HOOK_URL" > /dev/null
           echo "requested a docs rebuild"
+
 # branding compatibility (electron/branding-compat.json): upstream-artifacts: pinned third-party binaries and historical upstream provenance cannot be redirected by a product rename

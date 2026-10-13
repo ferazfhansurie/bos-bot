@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please **do not open a public issue** for security problems. Email **soni.mil2001@gmail.com** with
+Please **do not open a public issue** for security problems. Email **ferazfhansurie@gmail.com** with
 the details (or use GitHub's private vulnerability reporting on this repo if enabled). You'll get a
 response as soon as possible, normally within a few days.
 

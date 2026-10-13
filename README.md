@@ -21,6 +21,8 @@
 
 ---
 
+[Get started](#quick-start) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
+
 ## The honest version
 
 BOS Bot is a fork of [OpenMausBot](https://github.com/milind-soni/OpenMausBot) by Milind Soni, an open-source

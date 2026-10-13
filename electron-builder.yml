@@ -18,7 +18,7 @@ protocols:
 # stranded on its installed version.
 publish:
   - provider: github
-    owner: firazfhansurie
+    owner: ferazfhansurie
     repo: bos-bot
 
 directories:

@@ -5,11 +5,11 @@
     "mode": "offline"
   },
   "version": "1.9.8",
-  "description": "A private, local-first multi-model AI desktop for Claude and Codex.",
-  "homepage": "https://github.com/firazfhansurie/bos-bot",
+  "description": "Open-source, local-first AI workspace for people and bots, with desktop and mobile clients.",
+  "homepage": "https://github.com/ferazfhansurie/bos-bot",
   "repository": {
     "type": "git",
-    "url": "https://github.com/firazfhansurie/bos-bot.git"
+    "url": "https://github.com/ferazfhansurie/bos-bot.git"
   },
   "author": {
     "name": "Milind Soni",
@@ -139,5 +139,16 @@
     "vite": "^7.1.0",
     "vitest": "^4.1.10",
     "wrangler": "4.123.0"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/ferazfhansurie/bos-bot/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "electron",
+    "local-first",
+    "claude",
+    "codex"
+  ]
 }

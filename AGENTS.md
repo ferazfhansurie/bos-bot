@@ -1,20 +1,13 @@
-# BOS Bot agent notes
+# BOS Bot contributor notes
 
-Before claiming a server or conversation change works, follow
-[`docs/verification/README.md`](docs/verification/README.md). Always launch an
-isolated fixture; never verify mutations against the user's live app or data.
+This is the public BOS Bot fork. Start with [CONTRIBUTING.md](CONTRIBUTING.md),
+[the architecture](docs/architecture.md), and [the documentation index](docs/README.md).
 
-More specific `AGENTS.md` files override this note within their directories.
-
-## Parallel threads (bos-bot fork)
-
-Many threads build in this repo at once. Never edit or commit in the main
-checkout; its pre-commit hook refuses (`BOS_LAND=1` overrides, on purpose only).
-
-1. `bin/bos-wt start <slug>`: your own worktree off the latest prod; it prints
-   the path. Do all edits, builds and commits there.
-2. `bin/bos-wt status`: open worktrees, the files each touches, overlaps.
-3. `bin/bos-wt land "<why>"` from inside the worktree: rebases onto the latest
-   prod under a lock, moves prod and release/bos-1.0 together, removes the
-   worktree. On a conflict it stops, names the files and keeps your commits;
-   resolve with `git rebase prod`, keep both sides' intent, rerun checks, land again.
+- Base focused changes on `main`; submit a pull request against `main`.
+- Use a separate branch or worktree for each task. Do not edit another contributor's work.
+- Verify server and conversation changes in disposable fixtures, never a live user's home.
+  See [verification](docs/verification/README.md).
+- Keep credentials, transcripts, customer information and private deployment notes out of commits.
+- Preserve upstream and bundled third-party license notices.
+- Run checks relevant to the change; report commands and limitations in the pull request.
+- This public clone does not use the maintainer's private `prod` / `bos-wt land` workflow.

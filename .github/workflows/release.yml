@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 # Update feed baked into every live app-update.yml (scripts/release-feed.cjs).
-# Unset = github firazfhansurie/bos-bot, which must be PUBLIC. This workflow
+# Unset = github ferazfhansurie/bos-bot, which must be PUBLIC. This workflow
 # only uploads to its own repository's release, so point the feed elsewhere
 # only if you publish the assets there yourself.
 env:
@@ -41,7 +41,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - name: Enforce BOS release destination
-        run: test "$GITHUB_REPOSITORY" = firazfhansurie/bos-bot
+        run: test "$GITHUB_REPOSITORY" = ferazfhansurie/bos-bot
       - id: pin
         env:
           BEFORE: ${{ github.event.before }}
@@ -125,7 +125,7 @@ jobs:
           for app in "release/mac-arm64/BOS Bot.app" "release/mac/BOS Bot.app"; do
             update="$app/Contents/Resources/app-update.yml"
             test -f "$update" || { echo "::error::missing $update"; exit 1; }
-            grep -Eq '^owner: firazfhansurie$' "$update" || { echo "::error::wrong update owner in $update"; exit 1; }
+            grep -Eq '^owner: ferazfhansurie$' "$update" || { echo "::error::wrong update owner in $update"; exit 1; }
             grep -Eq '^repo: bos-bot$' "$update" || { echo "::error::wrong update repo in $update"; exit 1; }
           done
 

@@ -4,7 +4,7 @@ const { compatEnv, compatEnvironment } = require("../electron/branding-env.cjs")
 // contract that verifies it can never disagree.
 //
 // Update feed (baked into app-update.yml at build time, never read at runtime):
-//   default                         github firazfhansurie/bos-bot (must be PUBLIC:
+//   default                         github ferazfhansurie/bos-bot (must be PUBLIC:
 //                                   installed apps fetch it with no token)
 //   BOS_UPDATE_GITHUB_OWNER/_REPO   another public github releases repo
 //   BOS_UPDATE_FEED_URL             https base URL of a generic static feed
@@ -18,7 +18,7 @@ const { compatEnv, compatEnvironment } = require("../electron/branding-env.cjs")
 //   unset     signed (fail closed). The release workflow sets it explicitly.
 'use strict';
 
-const DEFAULT_FEED = Object.freeze({ provider: 'github', owner: 'firazfhansurie', repo: 'bos-bot' });
+const DEFAULT_FEED = Object.freeze({ provider: 'github', owner: 'ferazfhansurie', repo: 'bos-bot' });
 const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/;
 
 function value(env, key) {

@@ -4,6 +4,13 @@ Thanks for wanting to help — community PRs have already shipped in this repo, 
 This file tells you how to get a working dev setup, what the codebase expects from a change, and what
 makes a PR easy to merge. Read it once before opening anything; it's short on purpose.
 
+## Branches and pull requests
+
+`main` is the public integration branch. Fork it and use `feat/<name>`, `fix/<name>`, or
+`docs/<name>` for one change. Open a pull request against `main`; do not use private `prod`
+or installer-pointer branches. Merged branches are deleted automatically. Published
+versions use immutable `vX.Y.Z` tags. See [project maintenance](docs/project-maintenance.md).
+
 ## Ground rules
 
 - **Small, focused PRs.** One concern per PR. A PR that ports a platform *and* adds a feature *and*
@@ -23,7 +30,7 @@ and logged in. macOS is the primary release platform and Ubuntu 24.04 x64 is the
 the harness server itself is portable Node and the test suite runs on macOS, Linux, and Windows.
 
 ```sh
-git clone https://github.com/firazfhansurie/bos-bot && cd bos-bot
+git clone https://github.com/ferazfhansurie/bos-bot && cd bos-bot
 pnpm install
 
 pnpm dev:server    # harness server → 127.0.0.1:8799
@@ -62,7 +69,7 @@ and produces one release artifact containing:
 
 Before publishing, confirm that `package.json` has the release version and dispatch the workflow against the same
 commit used for the other platforms. Attach all five Ubuntu files to the matching release in the separate
-[BOS Bot releases](https://github.com/firazfhansurie/bos-bot/releases). Then verify the checksum
+[BOS Bot releases](https://github.com/ferazfhansurie/bos-bot/releases). Then verify the checksum
 file and install the `.deb` plus launch the AppImage in a clean Ubuntu 24.04 x86_64 GNOME environment. Never combine
 packages built from different commits under one version.
 
