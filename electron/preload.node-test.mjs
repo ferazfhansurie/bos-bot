@@ -73,3 +73,28 @@ test("onOpenAppSettings subscribes to the exact app:open-settings channel, forwa
   emit("app:open-settings");
   assert.equal(cbCalls.length, 2);
 });
+
+test("tools browser popup bridge preserves guest identity and unsubscribes", () => {
+  const received = [];
+  const stop = exposed.api.onToolsBrowserPopup((url, source) => received.push({ url, source }));
+  const source = { guestId: 12, partition: "persist:workspace-test" };
+  emit("tools-browser:popup", "https://example.com", source);
+  emit("tools-browser:popup", null, source);
+  assert.deepEqual(received, [{ url: "https://example.com", source }]);
+  stop();
+  assert.equal(subscriberCount("tools-browser:popup"), 0);
+});
+
+test("tools browser download bridge rejects malformed event and unsubscribes", () => {
+  const received = [];
+  const stop = exposed.api.onToolsBrowserDownload((row) => received.push(row));
+  emit("tools-browser:download", null);
+  emit("tools-browser:download", { state: "completed" });
+  const row = { partition: "persist:test", state: "completed" };
+  emit("tools-browser:download", row);
+  assert.deepEqual(received, [row]);
+  stop();
+  assert.equal(subscriberCount("tools-browser:download"), 0);
+  assert.equal(typeof exposed.api.toolsBrowserPartitionFor, "function");
+  assert.equal(typeof exposed.api.toolsBrowserDownloads, "function");
+});

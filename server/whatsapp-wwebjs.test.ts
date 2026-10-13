@@ -18,6 +18,11 @@ interface FakePage {
 const instances: FakeClient[] = [];
 
 class FakeClient extends EventEmitter {
+  info = { wid: { _serialized: "60111111111@c.us" } };
+  getNumberId = vi.fn(async (number: string) => ({ _serialized: `${number}@c.us` }));
+  sendMessage = vi.fn(async () => ({ id: { _serialized: "submitted-message" } }));
+  historyChat = { id: { _serialized: "60222222222@c.us" }, syncHistory: vi.fn(async () => true), fetchMessages: vi.fn(async () => [] as unknown[]) };
+  getChatById = vi.fn(async () => this.historyChat);
   /** "resumed-synced": the page synced before the listener existed (the hang);
    * "resumed": the listener catches the sync during initialize();
    * "qr": no saved session */
@@ -69,7 +74,15 @@ class FakeClient extends EventEmitter {
 }
 
 vi.mock("whatsapp-web.js", () => ({
-  default: { Client: FakeClient, LocalAuth: class {} },
+  default: { Client: FakeClient, LocalAuth: class {}, Chat: class {
+    id: { _serialized: string }; name: string | null;
+    syncHistory: () => Promise<boolean>; fetchMessages: (options: unknown) => Promise<unknown[]>;
+    constructor(client: FakeClient, data: { id: { _serialized: string }; formattedTitle: string | null }) {
+      this.id = data.id; this.name = data.formattedTitle;
+      this.syncHistory = client.historyChat.syncHistory;
+      this.fetchMessages = client.historyChat.fetchMessages;
+    }
+  } },
 }));
 
 const { createReadOnlyClient, SYNCED_RESUME_CHECK_MS } = await import("./whatsapp-wwebjs.ts");
@@ -88,6 +101,59 @@ function handlers() {
 }
 
 const options = { authDir: "/tmp/never-used", clientId: "bos", executablePath: "/fake/chrome", qrMaxRetries: 5, deviceName: "BOS Bot" };
+
+it("reply transport rechecks live authorization after recipient lookups and sends no seen receipt", async () => {
+  const wrapped = createReadOnlyClient(options, handlers());
+  const raw = instances.at(-1)!;
+  const input = { account_id: "60111111111@c.us", chat_id: "60222222222@c.us", message_id: "inbound", text: "hello" };
+  await expect(wrapped.replies!.reply(input, () => false)).rejects.toThrow("revoked");
+  expect(raw.sendMessage).not.toHaveBeenCalled();
+  await expect(wrapped.replies!.reply(input, () => true)).resolves.toBe("submitted-message");
+  expect(raw.sendMessage).toHaveBeenCalledWith(input.chat_id, input.text, { sendSeen: false, quotedMessageId: "inbound" });
+  raw.info.wid._serialized = "60333333333@c.us";
+  await expect(wrapped.replies!.reply(input, () => true)).rejects.toThrow("account changed");
+  expect(raw.sendMessage).toHaveBeenCalledTimes(1);
+});
+
+it("history uses the documented sync/fetch path, verifies the account and never sends", async () => {
+  const wrapped = createReadOnlyClient(options, handlers());
+  const raw = instances.at(-1)!;
+  expect(await wrapped.history!.sync("60222222222@c.us", "60111111111@c.us", () => true)).toEqual({ requested: true, messages: [] });
+  expect(raw.historyChat.syncHistory).toHaveBeenCalledTimes(1);
+  expect(raw.historyChat.fetchMessages).toHaveBeenCalledWith({ limit: 200 });
+  expect(raw.sendMessage).not.toHaveBeenCalled();
+  await expect(wrapped.history!.sync("60222222222@c.us", "60111111111@c.us", () => false)).rejects.toMatchObject({ status: 403, stage: "account_or_scope_changed" });
+  expect(raw.historyChat.syncHistory).toHaveBeenCalledTimes(1);
+});
+
+it("history fetch still works when peer sync fails, and lookup failures are not permission errors", async () => {
+  const wrapped = createReadOnlyClient(options, handlers());
+  const raw = instances.at(-1)!;
+  raw.historyChat.syncHistory.mockRejectedValueOnce(new Error("provider implementation unavailable"));
+  expect(await wrapped.history!.sync("60222222222@c.us", "60111111111@c.us", () => true)).toEqual({ requested: false, messages: [], warning: "peer_history_request_failed" });
+  expect(raw.historyChat.fetchMessages).toHaveBeenCalledWith({ limit: 200 });
+  raw.getChatById.mockRejectedValueOnce(new Error("provider lookup failed"));
+  raw.pupPage.evaluate.mockRejectedValueOnce(new Error("raw lookup also unavailable"));
+  await expect(wrapped.history!.sync("60222222222@c.us", "60111111111@c.us", () => true)).rejects.toMatchObject({ status: 502, stage: "history_chat_lookup" });
+  expect(raw.sendMessage).not.toHaveBeenCalled();
+});
+
+it("recovers only the exact group's messages when last-message metadata lookup breaks", async () => {
+  const wrapped = createReadOnlyClient(options, handlers());
+  const raw = instances.at(-1)!;
+  const group = "120363431027070091@g.us";
+  raw.getChatById.mockRejectedValueOnce(new Error("IndexedDB get(undefined)"));
+  raw.pupPage.evaluate.mockResolvedValueOnce({ id: { _serialized: group }, formattedTitle: "fixture client group" });
+  const getChat = vi.fn(async () => { throw new Error("metadata lookup must not run again"); });
+  raw.historyChat.fetchMessages.mockResolvedValueOnce([{ id: { id: "ABC", fromMe: false, remote: { _serialized: group }, $1: `false_${group}_ABC` }, from: group, fromMe: false, timestamp: Date.now() / 1000, type: "chat", body: "fixture history", hasMedia: false, getChat }]);
+  const result = await wrapped.history!.sync(group, "60111111111@c.us", () => true);
+  expect(result.messages).toHaveLength(1);
+  expect(result.messages[0]).toMatchObject({ chatId: group, chatName: "fixture client group", accountId: "60111111111@c.us", id: `false_${group}_ABC` });
+  expect(getChat).not.toHaveBeenCalled();
+  expect(raw.sendMessage).not.toHaveBeenCalled();
+  expect(raw.pupPage.evaluate.mock.calls[0][0]).toContain(JSON.stringify(group));
+  expect(raw.pupPage.evaluate.mock.calls[0][0]).toContain("getAsModel: false");
+});
 
 describe("createReadOnlyClient resume", () => {
   beforeEach(() => {

@@ -2,6 +2,13 @@ import XCTest
 @testable import CompanionCore
 
 final class ProviderUsageTests: XCTestCase {
+    func testNamedAccountsKeepDistinctIdentityWithTheSameLabel() throws {
+        let accounts = try decode(#"{"accounts":[{"provider":"claude","instanceId":"personal","account":"claude","sevenDay":{"usedPercent":24,"resetsAt":null},"status":"available"},{"provider":"claude","instanceId":"work","account":"claude","sevenDay":{"usedPercent":74,"resetsAt":null},"status":"available"}]}"#)
+        XCTAssertNotEqual(accounts[0].id, accounts[1].id)
+        XCTAssertEqual(accounts[0].peakPercent, 24)
+        XCTAssertEqual(accounts[1].peakPercent, 74)
+    }
+
     private func decode(_ json: String) throws -> [ProviderUsageAccount] {
         try JSONDecoder().decode(ProviderUsageResponse.self, from: Data(json.utf8)).accounts
     }

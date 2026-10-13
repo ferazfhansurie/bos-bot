@@ -21,6 +21,8 @@ struct ComputerView: View {
     let bot: Bot
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    @State private var showingBrowser = false
+    @State private var previewWaitExpired = false
     @State private var confirmingDesktop = false
     @State private var openingDesktop = false
     @State private var desktopURL: URL?
@@ -28,8 +30,7 @@ struct ComputerView: View {
 
     private var frame: ScreenFrame? { session.state.screens[bot.id] }
 
-    /// The bot as the stream last described it — `busy` is what tells us
-    /// whether more frames are coming or this is the last one.
+    /// The latest bot state. Busy alone does not guarantee a screen frame.
     private var current: Bot { session.state.bot(bot.id) ?? bot }
 
     var body: some View {
@@ -51,13 +52,16 @@ struct ComputerView: View {
         .navigationTitle(current.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if bot.remote == nil { Button { showingBrowser = true } label: { Image(systemName: "globe") }.accessibilityLabel("Open live browser") }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 // Busy is the difference between "the picture is a moment old"
                 // and "the picture is however it was left" — worth saying,
                 // because a still frame looks identical either way.
-                Text(current.busy == true ? "Preview" : "Idle")
+                Text(frame == nil ? "No screen" : current.busy == true ? "Preview" : "Idle")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(current.busy == true ? Color.green : Color.secondary)
+                    .foregroundStyle(frame != nil && current.busy == true ? Color.green : Color.secondary)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -114,6 +118,14 @@ struct ComputerView: View {
                     .ignoresSafeArea()
             }
         }
+        .navigationDestination(isPresented: $showingBrowser) { BrowserLiveView(bot: bot) }
+        .task(id: "\(current.id):\(current.busy == true):\(frame != nil)") {
+            previewWaitExpired = false
+            guard frame == nil, current.busy == true else { return }
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            guard frame == nil else { return }
+            previewWaitExpired = true
+        }
         .onAppear {
             session.watchScreen(of: bot.id)
         }
@@ -123,21 +135,24 @@ struct ComputerView: View {
     }
 
     private var waiting: some View {
-        VStack(spacing: 12) {
-            ProgressView().tint(.white)
-            Text(current.busy == true ? "Waiting for a frame…" : "Nothing to show yet")
-                .font(.system(size: 15))
-                .foregroundStyle(Color.white.opacity(0.7))
-            // An idle bot is not being screenshotted at all, so this would
-            // otherwise be an indefinite spinner with no explanation.
-            if current.busy != true {
-                Text("This bot's computer is only captured while it is working.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.white.opacity(0.45))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+        VStack(spacing: 14) {
+            if current.busy == true && !previewWaitExpired {
+                ProgressView().tint(.white)
+                Text("Waiting for screen activity…").foregroundStyle(.white.opacity(0.7))
+            } else {
+                Image(systemName: "display").font(.system(size: 30)).foregroundStyle(.white.opacity(0.4))
+                Text("No screen activity yet").foregroundStyle(.white.opacity(0.7))
+            }
+            Text("Computer previews appear when \(current.name) uses a screen. Open the browser to see web pages.")
+                .font(.footnote).foregroundStyle(.white.opacity(0.5))
+                .multilineTextAlignment(.center).padding(.horizontal, 32)
+            if current.remote == nil {
+                Button("Open browser") { showingBrowser = true }
+                    .buttonStyle(.bordered).tint(.white)
+                    .accessibilityIdentifier("preview-open-browser")
             }
         }
+        .font(.subheadline)
     }
 
     @MainActor

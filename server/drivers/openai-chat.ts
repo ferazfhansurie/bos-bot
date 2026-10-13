@@ -360,7 +360,10 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
       let ok = false;
       let stopReason: string | null = null;
       let failure: string | undefined;
-      let toolFailed = false;
+      // tools whose latest call failed; a later success of the same tool (the
+      // model fixing its arguments and retrying) clears it, so a recovered
+      // turn does not end as an error
+      const failedTools = new Set<string>();
       const denials: string[] = [];
       const seenCalls = new Set<string>();
       try {
@@ -426,7 +429,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
             if (completion.finishReason && completion.finishReason !== "stop") {
               throw new ChatProtocolError(`provider did not finish the response (${completion.finishReason})`);
             }
-            if (toolFailed) {
+            if (failedTools.size) {
               stopReason = "tool_error";
               throw new ChatProtocolError("One or more tool operations failed or were denied. See the tool results; the final response is not an execution receipt.");
             }
@@ -461,7 +464,9 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
               // so it is honoured here: without it every single tool call on
               // an OpenAI-compatible engine stops for a card, and a Chief's
               // delegated Full access cannot help either.
-              const allowed = turn.approvalMode === "full"
+              // Reviewed read-only BOS lookups (list bots, team setup...) run
+              // without a card, as they do on Codex via their MCP annotations.
+              const allowed = turn.approvalMode === "full" || tools.readOnly(call.function.name)
                 || await approval.ask(call.function.name, inputPreview ?? "This tool has no arguments.");
               abort.signal.throwIfAborted();
               emit({ ...base(turn.threadId, turnId), type: "item.started", itemType: "tool", itemId: call.id,
@@ -484,7 +489,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
             const text = safeText(result.text);
             const output = preview({ ok: result.ok, result: text });
             emit({ ...base(turn.threadId, turnId), type: "item.completed", itemType: "tool", itemId: call.id, ok: result.ok, output });
-            if (!result.ok) toolFailed = true;
+            if (result.ok) failedTools.delete(call.function.name); else failedTools.add(call.function.name);
             messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ ok: result.ok, result: text }) });
             abort.signal.throwIfAborted();
             if (fatal) throw fatal;

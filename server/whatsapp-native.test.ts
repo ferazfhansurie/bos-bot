@@ -624,7 +624,7 @@ describe("WhatsApp is read-only", () => {
     void latest;
   });
 
-  it("no WhatsApp source calls a send, reply, seen, presence or mutation API", () => {
+  it("capture calls no mutation API; the wrapper has one scoped reply transport", () => {
     const sources = [
       "whatsapp-wwebjs.ts",
       "whatsapp-capture.ts",
@@ -639,14 +639,19 @@ describe("WhatsApp is read-only", () => {
     for (const [name, text] of sources) {
       // comments may name the methods to say they are never called
       const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-      expect(code, name).not.toMatch(forbidden);
+      expect(name === "whatsapp-wwebjs.ts" ? code.replace(/client\.sendMessage\(/g, "scopedReply(") : code, name).not.toMatch(forbidden);
+      if (name === "whatsapp-wwebjs.ts") {
+        expect(code.match(/client\.sendMessage\(/g)).toHaveLength(1);
+        expect(code).toMatch(/sendSeen: false, quotedMessageId: input.message_id/);
+        expect(code).toMatch(/serializedWid\(client.info\?\.wid\) !== input.account_id/);
+      }
       // the single allowed presence call lives in the wrapper, exactly once
       const presence = code.match(/\.sendPresenceUnavailable\s*\(/g) ?? [];
       expect(presence.length, name).toBe(name === "whatsapp-wwebjs.ts" ? 1 : 0);
     }
     // the bridge reaches native WhatsApp only through GET read routes
     expect(proxy).toMatch(/BOS_WHATSAPP_LIST_CHATS/);
-    expect(proxy).not.toMatch(/BOS_WHATSAPP_(SEND|REPLY|MARK)/);
+    expect(proxy).not.toMatch(/BOS_WHATSAPP_(SEND|MARK)/);
     const routes = proxy.slice(proxy.indexOf("const WHATSAPP_ROUTES"), proxy.indexOf("async function whatsappRead"));
     expect([...routes.matchAll(/path: "([a-z]+)"/g)].map((match) => match[1])).toEqual(["chats", "messages"]);
     const read = proxy.slice(proxy.indexOf("async function whatsappRead"), proxy.indexOf("interface ConnectorRequest"));
@@ -656,8 +661,8 @@ describe("WhatsApp is read-only", () => {
 
   it("the wrapper returns only the three read-only methods from whatsapp-web.js", () => {
     const text = readFileSync(join(import.meta.dirname, "whatsapp-wwebjs.ts"), "utf8");
-    const returned = text.slice(text.lastIndexOf("return {"));
-    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["initialize", "getState", "destroy", "goInvisible", "browserPid"]);
+    const returned = text.slice(text.indexOf("\n  return {\n    history:"));
+    expect(returned.match(/^\s{4}(\w+):/gm)?.map((key) => key.trim().slice(0, -1))).toEqual(["history", "replies", "initialize", "getState", "destroy", "goInvisible", "browserPid"]);
     const invisible = returned.slice(returned.indexOf("goInvisible:"));
     expect(invisible.slice(0, invisible.indexOf("},") + 2)).toMatch(/^goInvisible: async \(\) => \{\s*await client\.sendPresenceUnavailable\(\);\s*\},$/);
   });

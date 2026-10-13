@@ -34,17 +34,25 @@ public struct AttachedMessageContent: Hashable, Sendable {
 
     /// Splits only the exact, standalone tags BOS Bot writes. An inline
     /// example in somebody's prose stays prose instead of disappearing.
-    public static func parse(_ source: String) -> AttachedMessageContent {
-        let scanned = scan(source)
+    ///
+    /// `markdownImages` is for bot replies: a line holding nothing but
+    /// Markdown images of local files (`![x](/abs/cover.png)`) becomes image
+    /// attachments too, fetched through the same message-scoped file route
+    /// the server already opens for files a bot reply links. Web images stay
+    /// prose, as on the desktop, which never loads them unasked.
+    public static func parse(_ source: String, markdownImages: Bool = false) -> AttachedMessageContent {
+        let scanned = scan(source, markdownImages: markdownImages)
         return AttachedMessageContent(text: scanned.visible, attachments: scanned.attachments)
     }
 
     /// The same split as `parse`, plus where each consumed transport tag line
     /// sits in `source`, so an editor can keep those lines byte for byte.
-    static func scan(_ source: String) -> (
+    static func scan(_ source: String, markdownImages: Bool = false) -> (
         visible: String, attachments: [DisplayedMessageAttachment], tagLines: [Range<String.Index>]
     ) {
         var attachments: [DisplayedMessageAttachment] = []
+        // A reply that both tags and embeds the same file shows it once.
+        var seenImagePaths = Set<String>()
         var tagLines: [Range<String.Index>] = []
         var visible = ""
         var fence: Fence?
@@ -76,8 +84,16 @@ public struct AttachedMessageContent: Hashable, Sendable {
             } else if let marker = fenceMarker(in: line) {
                 fence = Fence(character: marker.character, length: marker.length)
             } else if let attachment = attachmentTag(in: line) {
-                attachments.append(attachment)
+                if !markdownImages || attachment.kind != .image
+                    || seenImagePaths.insert(imageIdentity(attachment.path)).inserted {
+                    attachments.append(attachment)
+                }
                 tagLines.append(cursor..<lineEnd)
+                consumedTransportTag = true
+            } else if markdownImages, let images = localMarkdownImages(in: line) {
+                for image in images where seenImagePaths.insert(imageIdentity(image.path)).inserted {
+                    attachments.append(image)
+                }
                 consumedTransportTag = true
             } else if let openingHTMLBlock = htmlBlockStarting(in: line) {
                 htmlBlock = openingHTMLBlock
@@ -233,6 +249,59 @@ public struct AttachedMessageContent: Hashable, Sendable {
         )
     }
 
+    /// Every image on a line made only of Markdown images (optionally one
+    /// list item, optionally each wrapped in a link), or nil if anything else
+    /// is on the line or any image is not a local file.
+    private static func localMarkdownImages(in line: String) -> [DisplayedMessageAttachment]? {
+        let full = NSRange(line.startIndex..<line.endIndex, in: line)
+        guard markdownImageLineExpression.firstMatch(in: line, range: full) != nil else { return nil }
+        var images: [DisplayedMessageAttachment] = []
+        for match in markdownImageExpression.matches(in: line, range: full) {
+            let destination = [1, 2].lazy.compactMap { group -> String? in
+                guard match.range(at: group).location != NSNotFound,
+                      let range = Range(match.range(at: group), in: line) else { return nil }
+                return String(line[range])
+            }.first
+            guard let destination, let localPath = localImagePath(destination) else { return nil }
+            images.append(DisplayedMessageAttachment(
+                kind: .image,
+                // The authored destination, unchanged: the server matches it
+                // against the reply's own Markdown before opening anything.
+                path: destination,
+                name: displayName(providedName: nil, path: localPath, kind: .image)
+            ))
+        }
+        return images.isEmpty ? nil : images
+    }
+
+    /// The decoded local path of a Markdown destination, or nil for a web
+    /// (or any non-file) source.
+    private static func localImagePath(_ destination: String) -> String? {
+        if destination.lowercased().hasPrefix("file:") {
+            guard let url = URL(string: destination), url.isFileURL, !url.path.isEmpty else { return nil }
+            return url.path
+        }
+        let isPosix = destination.hasPrefix("/") && !destination.hasPrefix("//")
+        let isWindowsDrive = destination.range(of: #"^[A-Za-z]:[\\/]"#, options: .regularExpression) != nil
+        guard isPosix || isWindowsDrive else { return nil }
+        return destination.removingPercentEncoding ?? destination
+    }
+
+    private static func imageIdentity(_ path: String) -> String {
+        localImagePath(path) ?? path
+    }
+
+    // One image: `![alt](dest)` or `![alt](<dest>)` with an optional title.
+    private static let markdownImagePattern =
+        #"!\[[^\]\r\n]*\]\((?:<([^<>\r\n]+)>|([^\s()<>]+))(?:[\t ]+(?:"[^"\r\n]*"|'[^'\r\n]*'))?[\t ]*\)"#
+    private static let markdownImageExpression = try! NSRegularExpression(pattern: markdownImagePattern)
+    private static let markdownImageLineExpression: NSRegularExpression = {
+        let image = #"(?:\[[\t ]*"# + markdownImagePattern + #"[\t ]*\]\([^()\r\n]*\)|"# + markdownImagePattern + ")"
+        return try! NSRegularExpression(
+            pattern: #"^ {0,3}(?:(?:[-*+]|\d{1,9}[.)])[\t ]+)?"# + image + #"(?:[\t ]+"# + image + #")*[\t ]*$"#
+        )
+    }()
+
     private static let tagExpression = try! NSRegularExpression(
         pattern: #"^<attached-(image|file)[\t ]+path="([^"\r\n]*)"(?:[\t ]+name="([^"\r\n]*)")?[\t ]*/>[\t ]*$"#
     )
@@ -277,6 +346,13 @@ public struct AttachedMessageContent: Hashable, Sendable {
 }
 
 extension Message {
+    /// The text and attachments a bubble shows. Bots get their local
+    /// Markdown images lifted out too, the same split the desktop makes:
+    /// markdown is a bot's, a person's `![x](/p)` stays what they typed.
+    public var displayedContent: AttachedMessageContent {
+        AttachedMessageContent.parse(text ?? "", markdownImages: role == .bot)
+    }
+
     /// Paths are server metadata, passed unchanged to the message-scoped file route.
     public var generatedImages: [DisplayedMessageAttachment] {
         var seen = Set<String>()

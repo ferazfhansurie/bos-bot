@@ -17,7 +17,7 @@ import { trimResultText } from "./mcp-trim.ts";
  * `caCert` change the launch — and each one cost more schema than the tool's
  * own description. */
 export const HARNESS_OWNED_BROWSER_PARAMS: ReadonlySet<string> = new Set([
-  "allowedDomains", "caCert", "clearCaCert", "extraArgs", "idleTimeout", "namespace",
+  "headed", "headless", "allowedDomains", "caCert", "clearCaCert", "extraArgs", "idleTimeout", "namespace",
   "restore", "restoreCheckFn", "restoreCheckText", "restoreCheckUrl", "restoreSave", "session", "timeoutMs",
 ]);
 

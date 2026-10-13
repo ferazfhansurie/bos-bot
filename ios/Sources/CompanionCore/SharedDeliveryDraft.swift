@@ -14,6 +14,8 @@ public struct PendingSharedFile: Identifiable, Sendable {
 /// Owned by the conversation, not a screen. A send can finish while another
 /// chat is open; subscribers see the same files, receipt and recovery state.
 @MainActor public final class SharedDeliveryDraft: ObservableObject {
+    // Preserve the previous four-by-25 MB ceiling while allowing more small files.
+    public nonisolated static let maximumTotalBytes = 100 * 1_024 * 1_024
     @Published public var text: String { didSet { saveText?(text); checkpoint() } }
     @Published public var files: [PendingSharedFile] = [] { didSet { checkpoint() } }
     @Published public var reply: SharedChatMessage? { didSet { checkpoint() } }

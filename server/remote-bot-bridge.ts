@@ -442,8 +442,30 @@ export class RemoteBotBridge {
   // ── public reads ──────────────────────────────────────────────────────
 
   /** Virtual bots for GET /api/bots, shaped like wireBot + tasks + messagePage. */
-  async listBots(limit: number | undefined): Promise<Array<WireBot & { tasks: WireTask[]; messages: WireMessage[]; hasMore: boolean; activeLeafId: string | null }>> {
+  async listBots(limit: number | undefined, budgetMs?: number): Promise<Array<WireBot & { tasks: WireTask[]; messages: WireMessage[]; hasMore: boolean; activeLeafId: string | null }>> {
     this.sync();
+    if (budgetMs !== undefined) {
+      // Local hydration must not wait for every linked home. The relay keeps
+      // refreshing after this shared deadline; late transcript changes are
+      // broadcast, rather than silently populating a cache after the response.
+      const refresh = Promise.all([...this.homes.values()].map(async home => {
+        if (!home.snapshotAt) await this.refreshSnapshot(home);
+        await Promise.all(Object.keys(home.state.bots).map(async botId => {
+          const selected = this.selectedThread(home, botId);
+          if ((limit ?? PAGE_MAX) > 0 && selected && !home.cache.get(selected)?.hydrated) {
+            await this.hydrate(home, selected, true);
+          }
+        }));
+      }));
+      await withTimeout(refresh, budgetMs).catch(() => {});
+      this.sync();
+      return [...this.homes.values()].flatMap(home => Object.keys(home.state.bots).map(botId => {
+        const selected = this.selectedThread(home, botId);
+        const page = selected ? this.cachedPage(home, selected, limit ?? PAGE_MAX)
+          : { messages: [], hasMore: false, activeLeafId: null };
+        return { ...this.virtualBot(home, botId), ...page };
+      }));
+    }
     const bound = this.options.listTimeoutMs ?? 4000;
     await Promise.all([...this.homes.values()].map((home) => withTimeout((async () => {
       if (!home.snapshotAt) await this.refreshSnapshot(home);
@@ -562,6 +584,10 @@ export class RemoteBotBridge {
       return value ?? {};
     };
     const remoteBot = `/api/bots/${botId}`;
+    if(rest === 'model-catalog' && method === 'GET') {
+      const result=await this.call(home,'GET',`${remoteBot}/model-catalog`);
+      return {status:result.status,json:result.status===200?result.body:{error:'Update BOS on the bot’s server to load its accounts and models.'}};
+    }
     if (rest === "" && method === "PATCH") {
       const patch = await body();
       if (Object.keys(patch).some((key) => key !== "pinned" && key !== "unread") || patch.unread === true) return refused();
@@ -634,7 +660,13 @@ export class RemoteBotBridge {
     }
     match = /^tasks\/([\w-]+)$/.exec(rest);
     if (match) {
-      const threadId = this.parse(match[1]!, "rt")?.home === home ? this.parse(match[1]!, "rt")!.remoteId : null;
+      let threadId = this.parse(match[1]!, "rt")?.home === home ? this.parse(match[1]!, "rt")!.remoteId : null;
+      if(method==='PATCH' && match[1]===this.placeholder(home,botId)) {
+        const input=await body();
+        if(!input.modelSelection||Object.keys(input).some(key=>!['modelSelection','resetApprovalToAsk','updateBotDefault'].includes(key))||input.updateBotDefault===true||(input.resetApprovalToAsk!==undefined&&input.resetApprovalToAsk!==true))return refused();
+        threadId=await this.ensureThread(home,botId);
+        readBody=async()=>input;
+      }
       if (!threadId || home.state.threads[threadId]?.botId !== botId || this.isRoomThread(home.state.threads[threadId]!)) return failure(404, "no such task");
       if (method === "POST") {
         const raw = search.get("messages");
@@ -648,8 +680,16 @@ export class RemoteBotBridge {
       }
       if (method === "PATCH") {
         const input = await body();
-        if (Object.keys(input).some((key) => key !== "title" && key !== "archivedAt" && key !== "pinnedMessageId")) return refused();
-        const result = await this.call(home, "PATCH", `${remoteBot}/tasks/${threadId}`, input);
+        // Model selection belongs to this linked conversation. It never changes
+        // the remote bot default or grants stronger permissions.
+        const allowed = new Set(["title", "archivedAt", "pinnedMessageId", "modelSelection", "resetApprovalToAsk", "updateBotDefault"]);
+        if (Object.keys(input).some(key => !allowed.has(key)) ||
+          (input.updateBotDefault !== undefined && input.updateBotDefault !== false) ||
+          (input.resetApprovalToAsk !== undefined && input.resetApprovalToAsk !== true) ||
+          (input.resetApprovalToAsk && !input.modelSelection)) return refused();
+        const { updateBotDefault: _default, ...patch } = input;
+        const result = await this.call(home, "PATCH", `${remoteBot}/tasks/${threadId}`,
+          { ...patch, ...(input.modelSelection ? { requireAvailableModel: true } : {}) });
         if (result.status === 200 && isObject(result.body?.task) && result.body.task.threadId === threadId) {
           home.state.threads[threadId]!.task = safeTask(result.body.task);
           this.persist();

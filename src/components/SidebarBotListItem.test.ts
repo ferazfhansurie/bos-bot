@@ -44,17 +44,13 @@ describe("BotListItem", () => {
     expect(markup).toContain('aria-label="Actions for Atlas"');
     expect(markup).toContain('aria-haspopup="menu"');
   });
-  it("keeps the native thread toggle beside, not inside, the selectable bot row", () => {
+  it("keeps unselected bots compact without a thread expansion toggle", () => {
     const markup = renderRow(bot());
     expect(markup).toContain('role="button" tabindex="0"');
-    expect(markup).toContain('</div><button type="button" aria-label="Expand Atlas threads" aria-expanded="false"');
-    const toggle = markup.match(/<button[^>]*aria-label="Expand Atlas threads"[^>]*>/)?.[0];
-    expect(toggle).toContain("focus-visible:ring-1");
-    expect(toggle).not.toContain("hover:bg-");
+    expect(markup).not.toContain('aria-label="Expand Atlas threads"');
+    expect(markup).not.toContain('aria-label="Atlas threads"');
   });
 
-  // Phase 0 writes a digest row after every turn, so the last row of an idle
-  // chat is now a receipt; the preview must still be the reply a person reads.
   it("previews the last reply, not the digest receipt that follows it", () => {
     const markup = renderRow(bot({
       messages: [
@@ -74,7 +70,7 @@ describe("BotListItem", () => {
     expect(markup).not.toContain('aria-label="Archive Atlas"');
   });
 
-  it("shows the Chief of Staff label on its own line under the name", () => {
+  it("keeps the Chief of Staff label available to screen readers", () => {
     const withTitle = renderRow(bot({ chiefOfStaff: true, title: "Developer" }));
     expect(withTitle).toContain("Chief of Staff</span>");
     // the label sits after the name line, never inside it
@@ -87,37 +83,11 @@ describe("BotListItem", () => {
     expect(renderRow(bot())).not.toContain("Chief of Staff");
   });
 
-  // matches the title line's own class list (see Sidebar.tsx) — used to
-  // assert the marker element itself is present or absent, since checking
-  // for the title text alone can pass by accident when there's no title.
-  const titleLine = /<div class="truncate text-\[11px\][^"]*">([^<]*)<\/div>/;
-
-  it("shows the bot's title on its own line above the name, not a badge beside it", () => {
-    // #866 / #871: a badge next to the name always had to fight the name for
-    // width — a long name crushed the badge, and a long title crushed a long
-    // name right back. Its own line above the name never competes with it.
+  it("keeps roles accessible without adding a third visible row", () => {
     const markup = renderRow(bot({ title: "Developer" }));
-
-    expect(titleLine.exec(markup)?.[1]).toBe("Developer");
-    expect(markup.indexOf(">Developer<")).toBeLessThan(markup.indexOf(">Atlas<"));
-    // the rename hint is unrelated to the bot's title
+    expect(markup).toContain('<div class="sr-only">Developer</div>');
     expect(markup).toContain('title="Double-click to rename"');
-
-    expect(titleLine.test(renderRow(bot()))).toBe(false);
-    expect(titleLine.test(renderRow(bot({ title: "  " })))).toBe(false);
-  });
-
-  it("keeps the title line's own truncate class instead of a shared-line width cap", () => {
-    // renderToStaticMarkup keeps the full text regardless of CSS, so this
-    // can't observe an actual ellipsis — it asserts the title line still
-    // carries `truncate` (so a too-long title clips on its own line) and,
-    // unlike the #871 badge, never a max-width cap shared with the name.
-    const longTitle = "Meta-Agent — opensource team maintainer";
-    const markup = renderRow(bot({ name: "Team Maintainer", title: longTitle }));
-
-    expect(titleLine.exec(markup)?.[1]).toBe(longTitle);
-    expect(markup).toContain(">Team Maintainer<");
-    expect(markup).not.toContain("max-w-[45%]");
+    expect(renderRow(bot({ title: "  " }))).not.toContain('<div class="sr-only">');
   });
 
   it("shows typing dots instead of preview text while the bot works", () => {
@@ -137,8 +107,8 @@ describe("BotListItem", () => {
     const markup = renderRow(bot());
     expect(markup).not.toContain('aria-label="Archive Atlas"');
     expect(markup).toContain('aria-label="Actions for Atlas"');
-    expect(markup).toContain("group-focus-within:opacity-100");
-    expect(markup).toContain("group-hover:pointer-events-auto");
+    expect(markup).toContain("focus:opacity-100");
+    expect(markup).toContain("focus:pointer-events-auto");
     expect(markup).not.toContain("pr-[92px]");
   });
 });

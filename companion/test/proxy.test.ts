@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createProxyHandler } from "../src/proxy.ts";
+import { MAX_SSE_EVENT_BYTES } from "../src/wire.ts";
 import { createConnectedDeviceTracker } from "../src/connected-devices.ts";
 import type { CompanionEndpoint } from "../src/endpoints.ts";
 
@@ -591,7 +592,7 @@ describe("the sidecar in front of an unmodified harness", () => {
   // correct and bounded by nothing. An upstream that opens a `data:` line and
   // never closes it would otherwise be a memory leak with a straight face.
   it("ends a stream whose event never terminates, rather than buffering it", async () => {
-    const TWO_MIB = 2 * 1024 * 1024;
+    const overflowBytes = MAX_SSE_EVENT_BYTES + 64 * 1024;
     const flood = createServer((_req, res) => {
       res.on("error", () => {
         /* the sidecar hangs up on us — that is the pass condition */
@@ -601,7 +602,7 @@ describe("the sidecar in front of an unmodified harness", () => {
       const blob = "x".repeat(64 * 1024);
       let sent = 0;
       const pump = () => {
-        while (sent < TWO_MIB) {
+        while (sent < overflowBytes) {
           sent += blob.length;
           if (!res.write(blob)) return void res.once("drain", pump);
         }
@@ -1019,3 +1020,48 @@ describe("pairing, end to end", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling; paired-mdns-host: saved phone fallback routes continue resolving the same stable LAN hostname
+
+
+describe("mobile browser capability", () => {
+  it("blocks browser requests without computer access and terminates a revoked live viewer", async () => {
+    let enabled = false;
+    let valid = true;
+    let calls = 0;
+    let disconnect: (() => void) | undefined;
+    const upstream = createServer((_req, res) => {
+      calls++;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write('event: ready\ndata: {"viewerId":"viewer-fixture"}\n\n');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+    const relay = createServer(createProxyHandler({
+      harnessPort: (upstream.address() as {port: number}).port,
+      authenticate: t => valid && t === TOKEN ? {id: "browser-phone", cloudDesktopAccess: enabled} : null,
+      redeem: () => ({error: "unused"}), serverName: () => "fixture",
+      connected: (_id, close) => { disconnect = close; return () => { disconnect = undefined; }; },
+    }));
+    await new Promise<void>(resolve => relay.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(relay.address() as {port: number}).port}/api/bots/fixture/browser`;
+    const headers = {authorization: `Bearer ${TOKEN}`};
+    try {
+      expect((await fetch(url + "/live", {headers})).status).toBe(403);
+      expect((await fetch(url + "/action", {method:"POST", headers, body:'{"type":"take"}'})).status).toBe(403);
+      expect(calls).toBe(0);
+      enabled = true;
+      const response = await fetch(url + "/live", {headers});
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain("viewer-fixture");
+      expect(disconnect).toBeTypeOf("function");
+      valid = false;
+      disconnect!();
+      const ended = await reader.read().then(value => value.done, () => true);
+      expect(ended).toBe(true);
+      expect((await fetch(url + "/live", {headers})).status).toBe(401);
+    } finally {
+      upstream.closeAllConnections(); relay.closeAllConnections();
+      await Promise.all([new Promise<void>(r=>upstream.close(()=>r())),new Promise<void>(r=>relay.close(()=>r()))]);
+    }
+  });
+});

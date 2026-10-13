@@ -83,7 +83,8 @@ export function browserStreamPort(value: unknown): number {
 }
 
 type Action = { type: "take" | "release" | "restart" } | { type: "ack"; seq: number }
-  | { type: "command"; args: string[] } | { type: "input"; message: ObjectValue };
+  | { type: "command"; args: string[] } | { type: "input"; message: ObjectValue }
+  | { type: "tap"; seq: number; x: number; y: number };
 
 /** HTTP bodies can select a fixed action, never a CLI command, flag, port or CDP method. */
 export function parseBrowserLiveAction(value: unknown): Action {
@@ -105,6 +106,10 @@ export function parseBrowserLiveAction(value: unknown): Action {
   if (body.type === "tab-select" || body.type === "tab-close") {
     if (typeof body.tabId !== "string" || !/^t[1-9]\d{0,8}$/.test(body.tabId)) throw invalid();
     return { type: "command", args: body.type === "tab-select" ? ["tab", body.tabId] : ["tab", "close", body.tabId] };
+  }
+  if (body.type === "tap") {
+    if (!integer(body.seq, 1, Number.MAX_SAFE_INTEGER) || !number(body.x, 0, 8192) || !number(body.y, 0, 8192)) throw invalid();
+    return { type: "tap", seq: body.seq, x: body.x, y: body.y };
   }
   if (body.type === "input_mouse") {
     if (!["mouseMoved", "mousePressed", "mouseReleased", "mouseWheel"].includes(String(body.eventType))
@@ -148,6 +153,8 @@ interface Viewer extends OpenOptions {
   drainTimer?: NodeJS.Timeout;
   frameSeq?: number;
   frameAt?: number;
+  deliveredFrame?: ObjectValue;
+  acknowledgedFrame?: ObjectValue;
   hiddenFrame?: ObjectValue;
   pendingFrame?: ObjectValue;
   pendingActions: number;
@@ -220,6 +227,7 @@ export class BrowserLive {
     // instead of dropping it and then waiting for an ACK the viewer cannot send.
     if (viewer.blocked) { viewer.pendingFrame = frame; return; }
     viewer.pendingFrame = undefined;
+    viewer.deliveredFrame = frame;
     viewer.frameSeq = frame.seq as number; viewer.frameAt = Date.now();
     this.send(viewer, frame);
   }
@@ -431,6 +439,7 @@ export class BrowserLive {
     if (action.type === "ack") {
       if (viewer.frameSeq === action.seq) {
         this.sendSocket(viewer, { type: "ack", seq: action.seq });
+        viewer.acknowledgedFrame = viewer.deliveredFrame;
         viewer.frameSeq = undefined; viewer.frameAt = undefined;
       }
       return { ok: true };
@@ -452,11 +461,29 @@ export class BrowserLive {
     }
     if (!this.runtime.canControl(viewer.session, viewer.id)) throw new BrowserLiveError("Take control of this browser before interacting.", 409);
     if (viewer.pendingActions >= 32) throw new BrowserLiveError("Too many browser actions are pending. Try again shortly.", 429);
+    const expectedSeq = action.type === "tap" ? action.seq : object(body)?.frameSeq;
+    if (expectedSeq !== undefined) {
+      const frame = viewer.acknowledgedFrame;
+      const metadata = object(frame?.metadata);
+      if (!integer(expectedSeq, 1, Number.MAX_SAFE_INTEGER) || frame?.seq !== expectedSeq || viewer.deliveredFrame?.seq !== expectedSeq || !metadata) {
+        throw new BrowserLiveError("The browser view changed. Wait for the current frame before trying again.", 409);
+      }
+      const point = action.type === "tap" ? action : action.type === "input" && action.message.type === "input_mouse" ? action.message : null;
+      if (point && (!number(point.x, 0, Number(metadata.deviceWidth) - 1) || !number(point.y, 0, Number(metadata.deviceHeight) - 1))) {
+        throw new BrowserLiveError("That point is outside the browser page.", 400);
+      }
+    }
     viewer.pendingActions += 1;
     try {
       await this.runtime.withHumanAction(viewer.session, viewer.id, async () => {
         if (!this.current(viewer)) throw new BrowserLiveError("This browser view closed.", 409);
-        if (action.type === "input") await this.input(viewer, action.message);
+        if (action.type === "tap") {
+          const input = { type: "input_mouse", x: action.x, y: action.y, button: "left", clickCount: 1, modifiers: 0, deltaX: 0, deltaY: 0 };
+          await this.input(viewer, { ...input, eventType: "mousePressed" });
+          try { await this.input(viewer, { ...input, eventType: "mouseReleased" }); }
+          catch (error) { this.abandonPressedInput(viewer); throw error; }
+        }
+        else if (action.type === "input") await this.input(viewer, action.message);
         else if (action.type === "command") await this.command(viewer, action.args);
       });
       return { ok: true };

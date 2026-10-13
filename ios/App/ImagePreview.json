@@ -35,55 +35,32 @@
           "busy": false,
           "activity": "idle",
           "unread": false
-        },
-        {
-          "threadId": "preview-icloud",
-          "title": "Triage iCloud",
-          "createdAt": 1789088460000,
-          "projectId": "email",
-          "modelSelection": {
-            "instanceId": "preview",
-            "model": "preview"
-          },
-          "busy": false,
-          "activity": "idle",
-          "unread": true
-        },
-        {
-          "threadId": "preview-weekend",
-          "title": "Plan weekend",
-          "createdAt": 1789088520000,
-          "modelSelection": {
-            "instanceId": "preview",
-            "model": "preview"
-          },
-          "busy": false,
-          "activity": "queued",
-          "unread": false,
-          "openedBy": {
-            "botId": "preview-pepper",
-            "name": "Pepper",
-            "at": 1789088520000
-          }
-        },
-        {
-          "threadId": "preview-routine",
-          "title": "Internal routine execution",
-          "createdAt": 1789088580000,
-          "projectId": "email",
-          "routineRunId": "preview-routine-run",
-          "busy": false,
-          "unread": false
         }
       ],
       "activeLeafId": "preview-gmail-reply",
       "messages": [
         {
+          "id": "preview-covers-user",
+          "role": "user",
+          "kind": "text",
+          "at": 1789088300000,
+          "text": "send the rea covers again"
+        },
+        {
+          "id": "preview-covers-reply",
+          "parentId": "preview-covers-user",
+          "role": "bot",
+          "kind": "text",
+          "at": 1789088330000,
+          "text": "my mistake. here are the covers:\n\n![a](/fixture/rea/cover-a.png)\n![b](/fixture/rea/cover-b.png)\n\n- [a. type](/fixture/rea/cover-a.png): big headline, small bos in the corner\n- [b. bos chat](/fixture/rea/cover-b.png): you ask \"what is rea?\", bos answers\n\ni'd use b for the cover and a for the slides after it. the headline reads at thumbnail size, the mascot keeps it ours, and the chat frame tells people what the carousel is about before they swipe. if you want a third option i can try a darker one with the sheet card, or push the type bigger so it works as a reel cover too. either way the slides after it stay the same, so picking the cover is the only decision left."
+        },
+        {
           "id": "preview-gmail-user",
           "role": "user",
           "kind": "text",
           "at": 1789088400000,
-          "text": "Please send the screenshot."
+          "text": "Please send the screenshot.",
+          "parentId": "preview-covers-reply"
         },
         {
           "id": "preview-gmail-reply",
@@ -91,7 +68,7 @@
           "role": "bot",
           "kind": "text",
           "at": 1789088430000,
-          "text": "Here is the screenshot.",
+          "text": "Here is the screenshot.\n\n**Ready to share.**\n\n- Original colours\n- Full resolution\n\n```swift\nprint(\"hello\")\n```\n\n<attached-image path=\"/fixture/screenshot.png\" name=\"screenshot.png\" />\n<attached-file path=\"/fixture/notes.txt\" name=\"notes.txt\" />",
           "attachments": [
             {
               "kind": "image",

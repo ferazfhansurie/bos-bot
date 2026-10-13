@@ -15,3 +15,9 @@ hpke-js, Copyright 2023-2024 Ajitomi Daisuke, used under the MIT License.
 Selected provider icon paths are from Simple Icons, used under CC0 1.0.
 The Cohere provider icon path is from Lobe Icons, Copyright 2023 LobeHub,
 used under the MIT License.
+
+The built-in browser bundles Ghostery @ghostery/adblocker 2.20.1 under MPL-2.0.
+Its license and linked dependency notices ship in electron/vendor. Official
+EasyList and EasyPrivacy rule snapshots ship with their original attribution
+and licence headers in electron/resources/adblock. Source and licence pointers
+are recorded in electron/resources/adblock/README.md.

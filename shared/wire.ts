@@ -112,6 +112,7 @@ export interface TaskUsage {
  * session. Wire form: no resumeCursors or lastInstanceId — the harness's
  * own bookkeeping that no client has ever used. */
 export interface WireTask {
+  lastUserMessageAt?: number;
   lastActivityAt?: number;
   /** Computed at projection time; see ThreadState. */
   state?: ThreadState;
@@ -125,6 +126,8 @@ export interface WireTask {
   projectId?: string;
   /** Detached routine execution, reachable through its visible results card. */
   routineRunId?: string;
+  /** External channel history stays addressable without a desktop chat row. */
+  channelTransport?: "discord";
   /** Set when a bot, not a person, opened this thread. */
   openedBy?: TaskOpenedBy;
   /** Set by close_thread; absent while the thread is open. */

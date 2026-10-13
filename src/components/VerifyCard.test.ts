@@ -22,9 +22,8 @@ describe("VerifyCard", () => {
   });
 
   it("lists each step with its label, full command and status, tagging the verified ones, behind labelled controls", () => {
-    const markup = render();
+    const markup = render({ initiallyOpen: true });
     expect(markup).toContain(`aria-label="${t("chat.verify.aria")}"`);
-    expect(markup).toContain(`>${t("chat.verify.title")}<`);
     expect(markup).toContain("3 steps · 2 verified · 1 failed · 1 running");
     expect(markup).toContain(">doctor<");
     expect(markup).toContain(">send<");
@@ -41,30 +40,29 @@ describe("VerifyCard", () => {
     expect(markup).toContain(t("chat.verify.save"));
   });
 
-  it("explains under Save that it fills the message instead of sending", () => {
-    expect(render()).toMatch(new RegExp(`${t("chat.verify.save")}</button><span class="text-\\[12px\\] text-ink-secondary">${t("chat.verify.saveHint")}</span>`));
+  it("explains on Save that it fills the message instead of sending", () => {
+    expect(render()).toContain(`title="${t("chat.verify.saveHint")}"`);
   });
 
   it("announces the summary and makes the step list reachable by keyboard", () => {
-    const markup = render();
+    const markup = render({ initiallyOpen: true });
     expect(markup).toMatch(/<span role="status" aria-live="polite" aria-atomic="true"[^>]*>3 steps · 2 verified · 1 failed · 1 running</);
     expect(markup).toMatch(/<ol tabindex="0" aria-label="[^"]+"/);
     expect(markup).not.toContain('role="region"');
   });
 
-  it("starts collapsed for a long run, keeping only the header", () => {
+  it("starts as one folded line, keeping its Save button", () => {
     const long = Array.from({ length: 7 }, (_, i) => ({ ...steps[0], id: `s${i}`, label: `step${i}` }));
     const markup = render({ steps: long });
     expect(markup).toContain("7 steps · 7 verified");
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain(`aria-label="${t("chat.verify.expand")}"`);
     expect(markup).not.toContain("<ol");
-    expect(markup).not.toContain(t("chat.verify.save"));
-    expect(markup).not.toContain(t("chat.verify.saveHint"));
+    expect(markup).toContain(t("chat.verify.save"));
   });
 
   it("has no footer at all when the run cannot be saved", () => {
-    const markup = render({ canSave: false });
+    const markup = render({ canSave: false, initiallyOpen: true });
     expect(markup).toContain(">doctor<");
     expect(markup).not.toContain(t("chat.verify.save"));
     expect(markup).not.toContain("<button disabled");
@@ -81,7 +79,7 @@ describe("VerifyCard", () => {
 
   it("renders whatever steps it is given; whether one unverified command is worth a card is the caller's call", () => {
     const one = [steps[2]];
-    const markup = render({ steps: one });
+    const markup = render({ steps: one, initiallyOpen: true });
     expect(markup).toContain(`aria-label="${t("chat.verify.aria")}"`);
     expect(markup).toContain("1 step · 1 running");
     expect(markup).toContain(">git push<");

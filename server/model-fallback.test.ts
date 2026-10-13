@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { beforeEach, expect, it } from "vitest";
 import { DATA_DIR } from "./config.ts";
 import { Store, toWireTask } from "./store.ts";
-import { ModelFallbackService, isProviderLimit } from "./model-fallback.ts";
+import { ModelFallbackService, isProviderLimit, fallbackSelection } from "./model-fallback.ts";
 import type { ProviderInstance, RuntimeEvent } from "./contracts.ts";
 import type { ProviderUsage } from "./provider-usage.ts";
 
@@ -141,4 +141,18 @@ it("exhausted cached usage does not hide a signed-out primary provider", async (
   expect(await f.service.beforeTurn(f.bot.id, f.bot.threadId)).toBe(false);
   expect(await f.service.beforeRoomTurn(f.bot.id, "room-member", "ask")).toEqual(primary);
   expect(f.events).toHaveLength(0);
+});
+
+
+it("never borrows a sibling Claude subscription for direct or room fallback", async () => {
+  const f = fixture();
+  f.instances[1] = { ...f.instances[1], driverKind: "claudeAgent" };
+  expect(fallbackSelection(backup.model, f.instances, primary.instanceId)).toBeNull();
+  expect(await f.service.beforeTurn(f.bot.id, f.bot.threadId)).toBe(false);
+  expect(await f.service.afterFailure(f.bot.id, f.bot.threadId, "usage limit reached", false)).toBe(false);
+  expect(await f.service.beforeRoomTurn(f.bot.id, "fixture-room", "ask")).toEqual(primary);
+  expect(f.store.projectBotForTask(f.bot.id, f.bot.threadId)?.modelSelection).toEqual(primary);
+  expect(f.events).toEqual([]);
+  f.instances[0].models.options.push({ id: backup.model, label: "Same account backup" });
+  expect(fallbackSelection(backup.model, f.instances, primary.instanceId)?.instanceId).toBe(primary.instanceId);
 });

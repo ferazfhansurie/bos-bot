@@ -69,6 +69,7 @@ class FakeHome {
       init.signal?.addEventListener("abort", () => { try { this.streams.at(-1)?.error(new Error("aborted")); } catch { /* closed */ } });
       return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
     }
+    if(method==='GET'&&url.pathname==='/api/bots/pixie/model-catalog')return json(200,{instances:[{instanceId:'remote-personal',displayName:'Remote personal',driverKind:'claudeAgent',models:{options:[]},snapshot:{state:'available'},capabilities:{}}]});
     if (method === "GET" && url.pathname === "/api/bots") {
       return json(200, { bots: [this.bot(), ...this.extraBots, { id: "hidden-bot", name: "H", title: "", hidden: true, tasks: [] }],
         botQueuedMessages: { "putri-thread": [{ queueId: "q-secret", text: `${SECRET} queued` }] }, groups: [{ id: "g", messages: [{ text: SECRET }] }] });
@@ -95,7 +96,7 @@ class FakeHome {
       if (this.customApproval) return json(403, { error: "Leaving Custom approval requires confirmation in the packaged desktop app" });
       const patch = body as Record<string, unknown>;
       if (patch.resetApprovalToAsk === true) Object.assign(task, { approvalMode: "ask", autoApprove: false });
-      for (const key of ["title", "archivedAt", "pinnedMessageId"]) if (patch[key] !== undefined) task[key] = patch[key];
+      for (const key of ["title", "archivedAt", "pinnedMessageId", "modelSelection"]) if (patch[key] !== undefined) task[key] = patch[key];
       return json(200, { task, bot: this.bot() });
     }
     if (match && method === "DELETE") {
@@ -209,6 +210,43 @@ describe("RemoteBotBridge", () => {
   afterEach(() => {
     bridge.stop();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("bounds cold remote discovery without pretending the remote home is connected", async () => {
+    bridge.stop();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    bridge = make({ fetcher: (async (input, init) => {
+      if (new URL(String(input)).pathname === "/api/bots") await held;
+      return fake.fetcher(input, init);
+    }) as typeof fetch });
+    const started = Date.now();
+    const listed = await bridge.listBots(50, 20);
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(listed).toEqual([]);
+    expect(bridge.homeForTest(HOME)?.connected).toBe(false);
+    release();
+    await until(() => !!bridge.homeForTest(HOME)?.snapshotAt);
+    expect((await bridge.listBots(50, 20)).map(bot => bot.id)).toContain(botId);
+  });
+
+  it("broadcasts a late transcript after a bounded fleet response", async () => {
+    await bridge.listBots(0);
+    await firstSend();
+    bridge.stop();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    bridge = make({ fetcher: (async (input, init) => {
+      if (new URL(String(input)).pathname === "/api/threads/bridge-1/messages") await held;
+      return fake.fetcher(input, init);
+    }) as typeof fetch });
+    fake.threads.set("bridge-1", [{ id: "late-message", role: "user", kind: "text", text: "late reply", at: 3 }]);
+    frames.length = 0;
+    const listed = await bridge.listBots(50, 20);
+    expect(listed.find(bot => bot.id === botId)?.messages).toEqual([]);
+    release();
+    await until(() => frames.some(frame => frame.kind === "message" && frame.message.id === "late-message"));
+    expect((await bridge.listBots(50, 20)).find(bot => bot.id === botId)?.messages.map(message => message.id)).toContain("late-message");
   });
 
   it("recognises only virtual ids as bridge paths", () => {
@@ -840,6 +878,23 @@ describe("RemoteBotBridge", () => {
     expect((await route("GET", `/api/threads/rt-${KEY}-putri-thread/messages`)).status).toBe(404);
     expect((await route("POST", `/api/bots/${botId}/tasks/rt-${KEY}-putri-thread`)).status).toBe(404);
     expect(fake.calls.filter((call) => call.path.includes("putri-thread") && call.search !== "?messages=0")).toHaveLength(0);
+  });
+
+  it('loads the remote catalog rather than Mac account identifiers',async()=>{await bridge.listBots(0);const catalog=await route('GET',`/api/bots/${botId}/model-catalog`);expect(catalog.status).toBe(200);expect(jsonOf(catalog).instances[0].instanceId).toBe('remote-personal');expect(fake.calls.at(-1)?.path).toBe('/api/bots/pixie/model-catalog');});
+  it('creates a private linked conversation when the first action is a model choice',async()=>{const bots=await bridge.listBots(0);const pending=bots.find(b=>b.id===botId)!.threadId;const result=await route('PATCH',`/api/bots/${botId}/tasks/${pending}`,{modelSelection:{instanceId:'claude',model:'sonnet'}});expect(result.status).toBe(200);expect(jsonOf(result).task.modelSelection.model).toBe('sonnet');expect(fake.created).toBe(1);});
+  it("switches only the linked thread model and blocks bot defaults and permission grants", async () => {
+    await bridge.listBots(0); await firstSend();
+    const path = `/api/bots/${botId}/tasks/rt-${KEY}-bridge-1`;
+    const selection = { instanceId: "codex", model: "gpt-6.1-sol" };
+    const switched = await route("PATCH", path, { modelSelection: selection, updateBotDefault: false });
+    expect(switched.status).toBe(200);
+    expect(jsonOf(switched).task.modelSelection).toEqual(selection);
+    expect(fake.calls.at(-1)?.body).toEqual({ modelSelection: selection, requireAvailableModel: true });
+    for (const input of [{ modelSelection: selection, updateBotDefault: true },
+      { modelSelection: selection, approvalMode: "full" }, { resetApprovalToAsk: true }]) {
+      expect((await route("PATCH", path, input)).status).toBe(403);
+    }
+    expect((await route("PATCH", `/api/bots/${botId}/tasks/rt-${KEY}-putri-thread`, { modelSelection: selection })).status).toBe(404);
   });
 
   it("answers 403 for routes a bot on another Mac cannot serve", async () => {

@@ -36,3 +36,12 @@ it("requires explicit finished-or-stopped confirmation for held outcome review",
  const reviewed=renderToStaticMarkup(createElement(ToolActivity,{tool:{name:"Outcome unknown",ok:false,recovery:{...recovery,reviewedAt:123}}}));
  expect(reviewed).toContain("Outcome reviewed");expect(reviewed).not.toContain("Mark reviewed");
 });
+
+it("renders manual cancellation neutrally, including saved legacy failure chips", () => {
+  const html = renderToStaticMarkup(createElement(ToolActivity, { tool: { name: "turn failed", ok: false }, stopReason: "interrupted" }));
+  expect(html).toContain("stopped");
+  expect(html).not.toContain("turn failed");
+  expect(html).not.toContain("text-danger");
+  const failedTool = renderToStaticMarkup(createElement(ToolActivity, { tool: { name: "Bash", ok: false }, stopReason: "interrupted" }));
+  expect(failedTool).toContain("text-danger");
+});

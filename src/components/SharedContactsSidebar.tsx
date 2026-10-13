@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, UserPlus } from "lucide-react";
-import { api, formatTime, useStore } from "@/state/store";
+import { Check, ChevronRight, Copy, UserPlus } from "lucide-react";
+import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
-import { useShowThreads } from "@/lib/thread-preferences";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
 import type { ReactNode } from "react";
 import { readSessionState } from "@/lib/session";
@@ -15,9 +14,8 @@ export interface LocalConversationRow { id: string; at: number; pinned?: boolean
 
 /** Remote people and person rooms share the conversation list with local bots.
  * Bots on a linked Mac arrive through the bot list itself, never here. */
-export function SharedContactsSidebar({ compact = false, placement = "people", localRows = [], density = "comfortable" }: { compact?: boolean; placement?: "people" | "unified"; localRows?: LocalConversationRow[]; density?: SidebarDensity }) {
+export function SharedContactsSidebar({ compact = false, placement = "people", localRows = [] }: { compact?: boolean; placement?: "people" | "unified"; localRows?: LocalConversationRow[]; density?: SidebarDensity }) {
   const { state, dispatch } = useStore();
-  const showThreads = useShowThreads();
   const [selfId, setSelfId] = useState<string | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -26,6 +24,11 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     catch { return {}; }
   });
   const [error, setError] = useState("");
+  const [peopleOpen, setPeopleOpen] = useState(() => globalThis.localStorage?.getItem("bos.sidebar.people-open") === "1");
+  const togglePeople = (open: boolean) => {
+    setPeopleOpen(open);
+    try { globalThis.localStorage?.setItem("bos.sidebar.people-open", open ? "1" : "0"); } catch { /* private mode */ }
+  };
   const [busyId, setBusyId] = useState<string | null>(null);
   const [owner, setOwner] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
@@ -107,48 +110,62 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   const unifiedContacts = visibleContacts;
   if (placement === "unified") {
     const directRoom = (contact: Contact) => rooms.find(room => isDirectSharedRoom(room) && room.memberIds.includes(selfId ?? "") && room.memberIds.includes(contact.id));
-    const entries: Array<{ id: string; at: number; pinned?: boolean; element: ReactNode }> = [
-      ...localRows,
-      ...unifiedContacts.map(contact => {
+    const personEntries: Array<{ id: string; at: number; unread: boolean; selected: boolean; element: ReactNode }> = unifiedContacts.map(contact => {
         const room = directRoom(contact);
         const at = room?.lastActivity ?? 0;
         const selected = state.activeView === "shared" && Boolean(room) && state.selectedSharedRoomId === room?.id;
         const unread = Boolean(room && roomUnread(room));
-        const avatarPx = compact ? 44 : density === "compact" ? (showThreads ? 26 : 40) : (showThreads ? 32 : 56);
+        const avatarPx = 40;
         const rowClass = cn(
-          "flex w-full items-center rounded-md text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50",
-          compact ? "justify-center px-1 py-1.5"
-            : density === "compact" ? cn(showThreads ? "gap-1.5 py-1 pl-6 pr-9" : "gap-2 py-1.5 pl-2 pr-9")
-              : cn(showThreads ? "gap-2 py-2 pl-6 pr-9" : "gap-3 py-2.5 pl-2 pr-9"),
+          "flex w-full items-center rounded-[10px] text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50",
+          compact ? "justify-center px-1 py-1.5" : "gap-2 px-1 py-3",
           selected ? "bg-raised/70" : "hover:bg-raised/40",
         );
         const subtitle = [contact.title?.trim() || "Person", contact.homeName ? `on ${contact.homeName}` : ""].filter(Boolean).join(" · ");
-        return { id: `contact:${contact.id}`, at, element: <div key={contact.id} className="group relative" title={compact ? contact.name : undefined}>
+        return { id: `contact:${contact.id}`, at, unread, selected, element: <div key={contact.id} className="group relative" title={compact ? contact.name : undefined}>
           <button type="button" disabled={busyId !== null} onClick={() => void openPerson(contact)} aria-label={`Chat with ${contact.name}`} className={rowClass}>
             <span className="relative flex shrink-0">
               {contact.avatar ? <PersonPhoto src={contact.avatar} size={avatarPx} />
                 : <span style={{ width: avatarPx, height: avatarPx }} className="flex shrink-0 items-center justify-center rounded-full bg-accent/20 text-[13px] font-semibold text-accent">{contact.name.slice(0, 1).toUpperCase()}</span>}
             </span>
             {!compact && <div className="min-w-0 flex-1">
-              <div className="truncate text-[11px] font-medium leading-4 text-ink-secondary">{subtitle}</div>
+              <div className="sr-only">{subtitle}</div>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 grow truncate text-[14px] font-semibold text-ink">{contact.name}</span>
-                {selected && at > 0 && <span className="shrink-0 text-xs text-ink-secondary">{formatTime(at)}</span>}
+                <span className="min-w-0 grow truncate text-[14px] font-medium leading-5 text-ink">{contact.name}</span>
               </div>
-              <div className="flex items-center gap-2"><span className="min-w-0 truncate text-[11px] text-ink-secondary">{room?.preview ?? ""}</span>{unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</div>
+              <div className="flex items-center gap-2"><span className="min-w-0 truncate text-[13px] leading-5 text-ink-secondary">{room?.preview ?? ""}</span>{unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</div>
             </div>}
           </button>
         </div> };
-      }),
+      });
+    // People sit in their own list under the bots, folded to one row until
+    // opened — the same shape as the phone's chat list.
+    personEntries.sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
+    const peopleUnread = personEntries.filter(entry => entry.unread).length;
+    const peopleShown = peopleOpen || personEntries.some(entry => entry.selected);
+    const entries: Array<{ id: string; at: number; pinned?: boolean; element: ReactNode }> = [
+      ...localRows,
       ...visibleRooms.map(room => ({ id: `room:${room.id}`, at: room.lastActivity ?? 0, element: <button key={room.id} type="button" onClick={() => dispatch({ type: "selectSharedRoom", roomId: room.id })}
-        aria-label={`Open ${roomName(room)}`} title={roomName(room)} className={cn("flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left text-ink hover:bg-raised/40", state.activeView === "shared" && state.selectedSharedRoomId === room.id && "bg-raised/70")}>
-        <GroupMark members={roomFaces(room)} size={compact ? 44 : 48} />{!compact && <span className="min-w-0 flex-1"><span className="flex justify-between gap-2 text-[14px] font-semibold"><span className="truncate">{roomName(room)}</span>{(room.lastActivity ?? 0) > 0 && <span className="shrink-0 text-xs font-normal text-ink-secondary">{formatTime(room.lastActivity!)}</span>}</span><span className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[11px] text-ink-secondary">{room.preview ?? ""}</span>{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</span></span>}
+        aria-label={`Open ${roomName(room)}`} title={roomName(room)} className={cn("flex w-full items-center gap-2 rounded-[10px] px-1 py-3 text-left text-ink hover:bg-raised/40", state.activeView === "shared" && state.selectedSharedRoomId === room.id && "bg-raised/70")}>
+        <GroupMark members={roomFaces(room)} size={40} />{!compact && <span className="min-w-0 flex-1"><span className="flex justify-between gap-2 text-[14px] font-medium leading-5"><span className="truncate">{roomName(room)}</span></span><span className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-ink-secondary">{room.preview ?? ""}</span>{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</span></span>}
       </button> })),
     ];
     entries.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.at - a.at || a.id.localeCompare(b.id));
-    return <section aria-label="Chats" className="px-1">{!compact && <div className="px-2 pb-1 text-[12px] font-semibold text-ink-secondary">Chats</div>}
+    return <section aria-label="Chats" className="px-1 pt-1.5">
       {entries.map(entry => <div key={entry.id}>{entry.element}</div>)}
-      {owner && !compact && <InviteToggle open={settingUp} onToggle={() => setSettingUp(value => !value)} />}
+      {personEntries.length > 0 && <>
+        {compact
+          ? <div aria-hidden="true" className="mx-auto my-2 h-px w-6 bg-hairline/60" />
+          : <button type="button" onClick={() => togglePeople(!peopleOpen)} aria-expanded={peopleShown}
+              aria-label={`People, ${personEntries.length}${peopleUnread ? `, ${peopleUnread} unread` : ""}`}
+              className="mt-3 flex h-9 w-full items-center gap-2 rounded-[10px] px-2 text-left text-ink-secondary outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-accent/60">
+              <span className="text-[12px] font-semibold uppercase tracking-[0.04em]">People · {personEntries.length}</span>
+              {peopleUnread > 0 && !peopleShown && <span className="rounded-full bg-accent px-1.5 text-[11px] font-semibold leading-[18px] text-white tabular-nums">{peopleUnread > 99 ? "99+" : peopleUnread}</span>}
+              <ChevronRight size={14} className={cn("ml-auto shrink-0 transition-transform motion-reduce:transition-none", peopleShown && "rotate-90")} />
+            </button>}
+        {(peopleShown || compact) && personEntries.map(entry => <div key={entry.id}>{entry.element}</div>)}
+      </>}
+
       {settingUp && owner && !compact && <div className="mb-2 space-y-2 rounded-lg bg-raised p-2 text-xs">
         <p className="font-semibold">Connect a team member</p>
         <p className="text-ink-secondary">Invite once. Both people and their bots then appear in the conversation list.</p>
@@ -188,7 +205,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     {placement === "people" && visibleRooms.map(room => <button key={room.id} type="button" onClick={() => dispatch({ type: "selectSharedRoom", roomId: room.id })}
       aria-label={`Open ${roomName(room)}`} title={roomName(room)}
       className={`flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-[14px] hover:bg-raised/60 ${state.activeView === "shared" && state.selectedSharedRoomId === room.id ? "bg-raised text-ink" : "text-ink-secondary"}`}>
-      <GroupMark members={roomFaces(room)} size={32} />{!compact && <span className="min-w-0 flex-1 truncate">{roomName(room)}</span>}{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
+      <GroupMark members={roomFaces(room)} size={40} />{!compact && <span className="min-w-0 flex-1 truncate">{roomName(room)}</span>}{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}
     </button>)}
     {error && !compact && <p role="status" className="px-2 pt-1 text-[11px] text-danger">{error}</p>}
   </section>;

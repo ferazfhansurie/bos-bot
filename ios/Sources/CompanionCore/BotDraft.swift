@@ -30,11 +30,11 @@ public final class BotDraft {
     public init(directory: URL) {
         disk = SharedDraftDisk(directory: directory)
         do {
-            if let (archive, files) = try disk.load() {
+            if let (archive, files) = try disk.loadBot() {
                 let meta = try JSONDecoder().decode(Metadata.self, from: Data(archive.text.utf8))
                 text = meta.text; reply = meta.reply; previous = meta.previous
                 sendID = meta.sendID; composerText = meta.composerText
-                self.files = files.map { .init(id: $0.id, data: $0.data, name: $0.name, mime: $0.mime, kind: meta.imageIDs.contains($0.id) ? .image : .file) }
+                self.files = files
                 if sendID != nil { error = "An earlier send was interrupted. Review it and retry to confirm delivery." }
             }
         } catch {
@@ -47,7 +47,7 @@ public final class BotDraft {
         do {
             let meta = Metadata(text: text, reply: reply, imageIDs: Set(files.filter { $0.kind == .image }.map(\.id)), previous: previous, sendID: sendID, composerText: composerText)
             let encoded = String(decoding: try JSONEncoder().encode(meta), as: UTF8.self)
-            try disk.save(.init(text: encoded, files: files.map { .init(id: $0.id, name: $0.name, mime: $0.mime) }, reply: nil, previous: nil, previousID: nil, uploads: [:]), files: files.map { .init(id: $0.id, name: $0.name, mime: $0.mime, data: $0.data) })
+            try disk.saveBot(.init(text: encoded, files: files.map { .init(id: $0.id, name: $0.name, mime: $0.mime, fileBacked: $0.fileURL != nil) }, reply: nil, previous: nil, previousID: nil, uploads: [:]), files: files)
             error = nil
         } catch {
             self.error = "Couldn’t save this draft. Check storage before sending."
@@ -58,7 +58,15 @@ public final class BotDraft {
     /// cache is claimed: stable attachment UUIDs request server deduplication.
     public func prepareSend(text: String, priority: MessagePriority) throws -> String {
         let snapshot = Snapshot(text: text, fileIDs: files.map(\.id), replyID: reply?.id, priority: priority.rawValue)
-        if previous != snapshot || composerText != self.text { sendID = UUID().uuidString }
+        // Scheduling preference can change after a lost response (the bot
+        // became idle or the composer reset). It is not a new message.
+        // Keep the saved priority field for archive compatibility, but match
+        // retry identity only on content and the visible composer text.
+        if sendID == nil || previous?.text != snapshot.text
+            || previous?.fileIDs != snapshot.fileIDs || previous?.replyID != snapshot.replyID
+            || composerText != self.text {
+            sendID = UUID().uuidString
+        }
         previous = snapshot; composerText = self.text
         try checkpoint()
         return sendID!

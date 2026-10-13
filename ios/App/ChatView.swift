@@ -25,6 +25,7 @@ struct ChatView: View {
     /// Set when this chat is the side pane of a wide window: there is no
     /// stack to pop, so leaving closes the pane instead.
     var onClose: (() -> Void)?
+    @State private var stoppingThreadId: String?
     @State private var selectedThreadId: String
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
@@ -55,6 +56,8 @@ struct ChatView: View {
     @ObservedObject private var voiceCalls = VoiceCallCenter.shared
     @State private var showingComputer = false
     @State private var showingPlus = false
+    @State private var showingRecordingLibrary = false
+    @State private var finishingVoiceSend = false
     @State private var showingProfile = false
     @State private var showCommandHUD = false
     @State private var shareFile: ShareFile?
@@ -68,8 +71,15 @@ struct ChatView: View {
     @State private var uploadStatus: String?
     @State private var preparingAttachments = false
     @State private var sendingMessage = false
-    /// Queue or block for the next send while a turn runs. Every send puts
-    /// it back to queue, so block is never sticky.
+    private struct PendingSendPreview {
+        let threadId: String
+        let id: String
+        let text: String
+        let steering: Bool
+    }
+    @State private var pendingSendPreview: PendingSendPreview?
+    /// Direct chats default to immediate steer. An explicit Queue choice
+    /// remains selected so the next send respects the person's choice.
     @State private var sendPriority: MessagePriority = .queue
     /// The held send open in the queued-message editor.
     @State private var editingQueued: QueuedSend?
@@ -132,6 +142,7 @@ struct ChatView: View {
         self.chat = chat
         self.onClose = onClose
         _selectedThreadId = State(initialValue: chat.threadId)
+        if case .bot = chat { _sendPriority = State(initialValue: .block) }
     }
 
     /// The live bubble's scroll target. A constant because there is at most
@@ -171,7 +182,7 @@ struct ChatView: View {
     private var selectedThreadWasRemoved: Bool {
         guard case let .bot(bot) = chat else { return false }
         guard let live = session.state.bot(bot.id) else { return true }
-        return live.tasks.map { !$0.contains { $0.threadId == selectedThreadId } } ?? false
+        return live.hasRemovedThread(selectedThreadId)
     }
 
     /// A task changes a bot's thread, but it does not make it a new bot.
@@ -199,7 +210,7 @@ struct ChatView: View {
     /// A room running members side by side has no single tail: each working
     /// member's steps are drawn in its own live row, so those ids are left
     /// out here instead.
-    private func rows(memberSteps: [String: [Message]]) -> [TranscriptRow] {
+    private func rows(messages: [Message], liveSteps: [Message], memberSteps: [String: [Message]]) -> [TranscriptRow] {
         let detail = ActivityDetail(rawValue: activityDetail) ?? .reduced
         let live = Set(memberSteps.values.joined().map(\.id))
         let settled = !live.isEmpty ? messages.filter { !live.contains($0.id) }
@@ -211,21 +222,16 @@ struct ChatView: View {
     }
 
     /// The tail of activity belonging to the turn in flight.
-    private var liveSteps: [Message] {
+    private func liveSteps(in messages: [Message]) -> [Message] {
         guard current.busy, (ActivityDetail(rawValue: activityDetail) ?? .reduced) != .hidden else { return [] }
         // Parallel rooms split their activity per member; see memberSteps.
         if case let .room(room) = current, room.activeBotIds != nil { return [] }
-        var tail: [Message] = []
-        for message in messages.reversed() {
-            guard message.kind == .activity else { break }
-            tail.insert(message, at: 0)
-        }
-        return tail
+        return Array(messages.reversed().prefix { $0.kind == .activity }.reversed())
     }
 
     /// Each working room member's steps so far, for the room's per-member
     /// live rows. Empty outside a room running members side by side.
-    private var memberSteps: [String: [Message]] {
+    private func memberSteps(in messages: [Message]) -> [String: [Message]] {
         guard case let .room(room) = current, let active = room.activeBotIds, !active.isEmpty,
               (ActivityDetail(rawValue: activityDetail) ?? .reduced) != .hidden
         else { return [:] }
@@ -261,9 +267,10 @@ struct ChatView: View {
         // Read the transcript once for this render. Pagination changes the
         // array as a unit; repeatedly reaching through ObservableObject for
         // every row only recomputes the same value.
-        let steps = memberSteps
-        let transcript = rows(memberSteps: steps)
-        let visible = messages
+        let visible = creatingThread ? [] : messages
+        let steps = memberSteps(in: visible)
+        let liveSteps = liveSteps(in: visible)
+        let transcript = rows(messages: visible, liveSteps: liveSteps, memberSteps: steps)
         let _ = arrivals.track(threadId: threadId, messages: visible.map { ($0.id, $0.at) }, now: Date().timeIntervalSince1970)
         // Each row's branch versions, worked out once for the whole
         // transcript rather than by every row scanning all of it.
@@ -293,7 +300,12 @@ struct ChatView: View {
                         // room for the floating face when scrolled to the top
                         Color.clear.frame(height: 4)
 
-                        if session.state.hasMore[threadId] == true {
+                        if creatingThread || (!session.state.hasLoadedPage(forThread: threadId) && transcript.isEmpty && session.actionError == nil) {
+                            ConversationSkeleton(label: creatingThread ? "Creating new thread…" : "Loading conversation…")
+                                .transition(.opacity)
+                        }
+
+                        if !creatingThread && session.state.hasMore[threadId] == true {
                             Button("Load earlier messages") {
                                 // keep the reader where they were: after older
                                 // messages are prepended, sit back on the one
@@ -307,6 +319,12 @@ struct ChatView: View {
                             .font(.footnote)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
+                        }
+
+                        if !creatingThread, transcript.isEmpty, case let .bot(bot) = current {
+                            ForEach(voiceCalls.records(botId: bot.id, threadId: threadId, connectionID: session.connection?.id)) { record in
+                                VoiceCallEndedRow(record: record)
+                            }
                         }
 
                         ForEach(Array(transcript.enumerated()), id: \.element.id) { index, row in
@@ -356,6 +374,7 @@ struct ChatView: View {
                         // one arrives — the store clears it on the same frame
                         // that appends the message, so there is never a beat
                         // where both are on screen.
+                        if !creatingThread {
                         if case let .room(room) = current {
                             ForEach(channelMembers) { bot in
                                 RoomMemberLiveReply(live: session.liveText.entry(RuntimeEvent.roomStreamKey(threadId: threadId, botId: bot.id)), bot: bot,
@@ -386,6 +405,20 @@ struct ChatView: View {
                                 )
                             }
                         }
+                        }
+                        if !creatingThread, let pending = pendingSendPreview, pending.threadId == threadId,
+                           !messages.contains(where: { $0.sendId == pending.id || $0.queueId == pending.id }) {
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(pending.text).textSelection(.enabled)
+                                    .padding(12)
+                                    .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 18))
+                                Text(pending.steering ? "Interrupting…" : "Sending…")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .id("pending-send-" + pending.id)
+                            .onAppear { jumpToLatest(proxy, lastRow: "pending-send-" + pending.id) }
+                        }
                         Color.clear.frame(height: 1).id(Self.bottomId)
                             .modifier(ReportsVisible { visible in
                                 // The geometry callback can miss its last
@@ -400,6 +433,11 @@ struct ChatView: View {
                     .padding(.vertical, 12)
                     .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
                     .frame(maxWidth: .infinity)
+                    // Dismiss only on transcript content. The jump button
+                    // and header are outside this gesture, so they keep focus.
+                    .simultaneousGesture(TapGesture().onEnded {
+                        if composerFocused { composerFocused = false }
+                    })
                 }
                 // The header lives in the scroll view's top safe area: the
                 // transcript starts below it and scrolls under it — that is
@@ -455,16 +493,6 @@ struct ChatView: View {
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                     }
                 }
-                // Tapping the transcript puts the keyboard away. The composer
-                // is a sibling of this scroll view rather than inside it, so
-                // nothing else here drops its focus — until this, the only way
-                // back to the whole conversation was to leave the chat.
-                // Simultaneous, not `.onTapGesture`: a tap that lands on a
-                // link, a card button or a selected word still reaches the row
-                // that owns it, and only also closes the keyboard.
-                .simultaneousGesture(TapGesture().onEnded {
-                    if composerFocused { composerFocused = false }
-                })
                 // And a drag down over the transcript pushes it away, the way
                 // it does in Mail and Messages.
                 .scrollDismissesKeyboard(.interactively)
@@ -474,6 +502,7 @@ struct ChatView: View {
                     mascot.reset(busy: current.busy, cardOpen: cardWaiting)
                 }
                 .onChange(of: current.busy) { _, busy in
+                    if !busy { stoppingThreadId = nil }
                     mascot.busyChanged(busy, mood: settledMood)
                 }
                 .onChange(of: cardWaiting) { _, open in mascot.cardChanged(open) }
@@ -486,7 +515,11 @@ struct ChatView: View {
                     // jump button instead of yanking the page.
                     let mine = transcript.last?.head.role == .user
                     guard mine || follow.pinned else { unseenBelow = true; return }
-                    withAnimation { proxy.scrollTo(Self.bottomId, anchor: .bottom) }
+                    // The end marker in a lazy transcript has an estimated
+                    // offset. Sending while the composer shrinks can scroll
+                    // beyond the real rows into blank space. Use the same
+                    // edge-based landing as the explicit latest button.
+                    jumpToLatest(proxy, lastRow: transcript.last?.id)
                 }
                 // Follow the text as it arrives. Keyed on length rather than
                 // the string so this fires once per delta batch, and without
@@ -494,11 +527,17 @@ struct ChatView: View {
                 // into a stutter, because each scroll interrupts the last.
                 // Subscribed directly, so a token scrolls without asking this
                 // whole view to re-evaluate.
-                .onReceive(session.liveText.entry(threadId).$text.map(\.count).removeDuplicates()) { length in
+                .onReceive(session.liveText.entry(threadId).$text.map { $0.utf8.count }.removeDuplicates()) { length in
                     // Only while the reader is at the newest line; someone
                     // who scrolled up to read is left where they are.
-                    guard !restoringReading, length > 0, follow.pinned else { return }
+                    guard !restoringReading, length > 0, follow.pinned, !follow.interacting else { return }
                     proxy.scrollTo(Self.liveBubbleId, anchor: .bottom)
+                }
+                .onChange(of: composerFocused) { _, focused in
+                    session.liveText.setComposing(focused, by: composerID)
+                    if focused, !restoringReading, follow.pinned {
+                        jumpToLatest(proxy, lastRow: transcript.last?.id)
+                    }
                 }
                 .onChange(of: session.focusedMessageId) { _, messageId in
                     guard let messageId,
@@ -529,7 +568,11 @@ struct ChatView: View {
 
             if let readingError { Text(readingError).font(.caption).foregroundStyle(.secondary) }
             if let uploadStatus { Text(uploadStatus).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("composer-upload-progress") }
-            composer
+            if creatingThread {
+                PendingThreadComposer()
+            } else {
+                composer
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
@@ -591,11 +634,12 @@ struct ChatView: View {
             if unread { Task { await session.markRead(readChat) } }
         }
         .onChange(of: threadId) { previous, next in
+            stoppingThreadId = nil
             session.setNotificationVisible(threadId: previous, visible: false)
             session.setNotificationVisible(threadId: next, visible: true)
             saveReadingPosition()
+            dictation.stopImmediately()
             checkpointDraft()
-            dictation.stop()
             restoreDraft()
             mentionPicks = []
             selectedPhotos = []
@@ -626,12 +670,15 @@ struct ChatView: View {
             checkpointDraft()
             session.setNotificationVisible(threadId: threadId, visible: false)
             session.liveText.setComposing(false, by: composerID)
-            dictation.stop()
+            if !dictation.showingRecorder { dictation.stopImmediately() }
             resetFilePreview()
             cancelThreadOpen()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { saveReadingPosition(); checkpointDraft(); dictation.stop() }
+            if phase == .background {
+                saveReadingPosition(); checkpointDraft(); dictation.checkpoint()
+                if !dictation.meetingMode { dictation.stop() }
+            }
         }
         .onChange(of: showingComputer) { _, shown in
             if shown { dictation.stop() }
@@ -651,8 +698,16 @@ struct ChatView: View {
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey]
             let value = (raw as? NSNumber)?.uintValue ?? (raw as? UInt)
             if value == AVAudioSession.InterruptionType.began.rawValue {
-                dictation.stop()
+                dictation.interrupt()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { note in
+            let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber)?.uintValue
+            if reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { dictation.interrupt() }
+        }
+        .sheet(isPresented: $showingRecordingLibrary) { RecordingLibraryView() }
+        .fullScreenCover(isPresented: $dictation.showingRecorder) {
+            RecordingView(recorder: dictation)
         }
         .onChange(of: dictation.transcript) { _, spoken in
             // Always join against the text frozen at capture start. A newer
@@ -765,7 +820,16 @@ struct ChatView: View {
                       beside: openBeside.map { open in AnyView(OpenBesideMenu(current: current, open: open)) },
                       onNewThread: current.supportsTasks ? { newThread() } : nil,
                       onCall: { Haptics.selection(); startVoice() },
-                      threadDone: threadDone) {
+                      threadDone: threadDone,
+                      onComputer: current.isBot && !current.isRemoteBot ? { showingComputer = true } : nil,
+                      onExport: current.isRemoteBot ? nil : { format in
+                          let exportingThread = threadId
+                          Task {
+                              if let url = await session.export(threadId: exportingThread, format: format) {
+                                  shareFile = ShareFile(url: url)
+                              }
+                          }
+                      }) {
             // The activity feed's face for this exact thread, so the header
             // moves while the bot works here; without a feed entry, the
             // still idle face it always had.
@@ -785,7 +849,7 @@ struct ChatView: View {
     /// no turn running, nothing on its way.
     private var showsEmptyMascot: Bool {
         guard case .bot = current else { return false }
-        return session.state.hasLoadedPage(forThread: threadId) && messages.isEmpty && !current.busy && !sendingMessage
+        return !creatingThread && session.state.hasLoadedPage(forThread: threadId) && messages.isEmpty && !current.busy && !sendingMessage
     }
 
     /// True when a bot's turn here has settled on its own reply, so the next
@@ -800,10 +864,11 @@ struct ChatView: View {
     private func newThread() {
         guard !creatingThread else { return }
         Haptics.selection()
-        creatingThread = true
+        composerFocused = false
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { creatingThread = true }
         let chat = current
         Task {
-            defer { creatingThread = false }
+            defer { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { creatingThread = false } }
             switch chat {
             case let .bot(bot):
                 if let created = await session.createTask(for: bot, title: nil) { selectedThreadId = created.threadId }
@@ -921,97 +986,31 @@ struct ChatView: View {
         composerFocused = true
     }
 
-    // MARK: - The + sheet
+    // MARK: - Add to this message
 
-    /// What the composer's + opens: a glass sheet of the things you can do
-    /// here, each with a line saying what it does. Rises above the composer;
-    /// tapping anywhere else, or the × the + became, puts it away.
     private var plusSheet: some View { ChatActionSheet(showing: $showingPlus, actions: plusActions) }
-
     private typealias PlusAction = ChatActionSheet.Action
 
     private var plusActions: [PlusAction] {
         let canAddAttachment = attachments.count < AttachmentPolicy.maximumItems
             && !preparingAttachments && !sendingMessage
-        var out: [PlusAction] = [
-            PlusAction(
-                id: "photos", systemImage: "photo.on.rectangle", title: "Photo Library",
-                subtitle: "Add a photo or video to this message", disabled: !canAddAttachment
-            ) { showingPhotoPicker = true },
-            PlusAction(
-                id: "files", systemImage: "paperclip", title: "Choose File",
-                subtitle: "Add a document from Files", disabled: !canAddAttachment
-            ) { showingFileImporter = true },
+        return [
+            PlusAction(id: "photos", systemImage: "photo.on.rectangle", title: "Photos & videos", disabled: !canAddAttachment) {
+                showingPhotoPicker = true
+            },
+            PlusAction(id: "files", systemImage: "paperclip", title: "Files", disabled: !canAddAttachment) {
+                showingFileImporter = true
+            },
+            PlusAction(id: "audio", systemImage: "waveform", title: "Audio", children: [
+                PlusAction(id: "meeting", systemImage: "mic", title: "Record audio", disabled: sendingMessage) {
+                    dictation.meetingMode = true
+                    dictation.openRecorder(capturing: draft)
+                },
+                PlusAction(id: "recordings", systemImage: "waveform", title: "Saved recordings") {
+                    dictation.stopImmediately(); showingRecordingLibrary = true
+                },
+            ]) {},
         ]
-        if case let .bot(bot) = current {
-            out.append(PlusAction(
-                id: "task", systemImage: "plus.square.on.square", title: "New thread",
-                subtitle: "Start a fresh thread with \(bot.name)"
-            ) { Task {
-                if let created = await session.createTask(for: bot, title: nil) {
-                    selectedThreadId = created.threadId
-                }
-            } })
-            out.append(PlusAction(
-                id: "tasks", systemImage: "square.stack", title: "Threads",
-                subtitle: "Switch, rename or remove one"
-            ) { showingTasks = true })
-            if bot.remote == nil {
-                out.append(PlusAction(
-                    id: "settings", systemImage: "gearshape", title: "Bot settings",
-                    subtitle: "Model, profile, voice and notifications"
-                ) { showingProfile = true })
-                out.append(PlusAction(
-                    id: "computer", systemImage: "display", title: "Watch computer",
-                    subtitle: "Live view of what \(bot.name) is doing"
-                ) { showingComputer = true })
-            }
-        }
-        if case let .room(room) = current, room.dm != true {
-            out.append(PlusAction(
-                id: "task", systemImage: "plus.square.on.square", title: "New thread",
-                subtitle: "Start a fresh conversation in \(room.name)",
-                disabled: current.busy || hasPendingApproval
-            ) { Task { await session.createTask(for: room, title: nil) } })
-            out.append(PlusAction(
-                id: "tasks", systemImage: "square.stack", title: "Threads",
-                subtitle: "Switch, rename or remove one"
-            ) { showingTasks = true })
-        }
-        // Export is refused for a bot on another Mac.
-        if !current.isRemoteBot {
-        out.append(PlusAction(
-            id: "share", systemImage: "doc.plaintext", title: "Share transcript",
-            subtitle: "This thread as Markdown"
-        ) {
-            Task {
-                if let url = await session.export(threadId: current.threadId, format: "markdown") {
-                    shareFile = ShareFile(url: url)
-                }
-            }
-        })
-        out.append(PlusAction(
-            id: "share-json", systemImage: "curlybraces", title: "Share as JSON",
-            subtitle: "Structured transcript data"
-        ) {
-            Task {
-                if let url = await session.export(threadId: current.threadId, format: "json") {
-                    shareFile = ShareFile(url: url)
-                }
-            }
-        })
-        }
-        out.append(PlusAction(
-            id: "walkie", systemImage: "waveform.circle", title: "Walkie-talkie",
-            subtitle: "Hold to talk, hear the reply read back"
-        ) { openWalkie() })
-        if current.busy, case let .bot(bot) = current {
-            out.append(PlusAction(
-                id: "stop", systemImage: "stop.fill", title: "Interrupt",
-                subtitle: "Stop the current turn", destructive: true
-            ) { Task { await session.interrupt(bot: bot) } })
-        }
-        return out
     }
 
     /// Finished voice calls in this thread that ended after this row and
@@ -1019,7 +1018,7 @@ struct ChatView: View {
     /// the first row rather than vanishing.
     private func voiceRecords(after index: Int, in rows: [TranscriptRow]) -> [VoiceCallRecord] {
         guard case let .bot(bot) = current else { return [] }
-        let records = voiceCalls.records(botId: bot.id, threadId: threadId)
+        let records = voiceCalls.records(botId: bot.id, threadId: threadId, connectionID: session.connection?.id)
         guard !records.isEmpty else { return [] }
         let from = index == 0 ? -Double.infinity : rows[index].at
         let until = index + 1 < rows.count ? rows[index + 1].at : Double.infinity
@@ -1126,7 +1125,7 @@ struct ChatView: View {
         readingStore = nil; savedReading = nil; readingError = nil
         do {
             guard let connection = session.connection,
-                  let token = try BosSharedKeychain.token(for: connection.id) else { return }
+                  let token = try archiveToken(for: connection) else { return }
             let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let store = ReadingPositionStore(root: root.appendingPathComponent("ReadingPositions"), connectionID: connection.id,
                 accountIdentity: token, conversationID: current.id, threadID: threadId)
@@ -1179,10 +1178,20 @@ struct ChatView: View {
         do { try archive.checkpoint() } catch { attachmentError = archive.error }
     }
 
+    private func archiveToken(for connection: Connection) throws -> String? {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-store-preview"),
+           ProcessInfo.processInfo.arguments.contains("-send-scroll-preview"), connection.id == "preview-current" {
+            return "isolated-scroll-fixture-token"
+        }
+#endif
+        return try BosSharedKeychain.token(for: connection.id)
+    }
+
     private func restoreDraft() {
         do {
             guard let connection = session.connection,
-                  let token = try BosSharedKeychain.token(for: connection.id) else {
+                  let token = try archiveToken(for: connection) else {
                 composerDraft.pendingCheckpoint?.cancel(); composerDraft.onEdit = nil
                 activeArchive = nil; activeScope = nil
                 draft = ""; attachments = []; replyTarget = nil
@@ -1208,9 +1217,23 @@ struct ChatView: View {
     }
 
     private func submit(_ explicitText: String? = nil) {
+        guard !creatingThread, !finishingVoiceSend else { return }
+        if dictation.isListening || dictation.isStarting || dictation.isFinishing {
+            finishingVoiceSend = true
+            let capturedThread = threadId
+            Task {
+                await dictation.finishRecording()
+                finishingVoiceSend = false
+                guard capturedThread == threadId else { return }
+                // Read the draft after final words have settled.
+                draft = Dictation.draft(base: dictation.base, transcript: dictation.transcript)
+                submit(explicitText)
+            }
+            return
+        }
         // This also cancels an in-flight permission prompt before it can
         // open the microphone after the message has already been sent.
-        dictation.stop()
+        dictation.stopImmediately()
         let draftAtSend = draft
         let picksAtSend = explicitText == nil ? mentionPicks : []
         let text = (explicitText ?? ChannelMentionPicker.outgoing(draftAtSend, targets: picksAtSend)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1221,14 +1244,14 @@ struct ChatView: View {
               !preparingAttachments,
               !sendingMessage
         else { return }
-        let priorityAtSend: MessagePriority = chatAtSend.busy ? sendPriority : .queue
+        let priorityAtSend = sendPriority
         checkpointDraft()
         guard let archive = activeArchive else { return }
         let durableID: String
         do { durableID = try archive.prepareSend(text: text, priority: priorityAtSend) }
         catch { attachmentError = archive.error; return }
-        sendPriority = .queue
         sendingMessage = true
+        pendingSendPreview = PendingSendPreview(threadId: chatAtSend.threadId, id: durableID, text: text.isEmpty ? outgoingAttachments.map(\.name).joined(separator: "\n") : text, steering: priorityAtSend == .block && chatAtSend.busy)
         attachmentError = nil
         showCommandHUD = false
         showingPlus = false
@@ -1245,6 +1268,7 @@ struct ChatView: View {
                 }
             )
             sendingMessage = false
+            if pendingSendPreview?.id == durableID { pendingSendPreview = nil }
             uploadStatus = nil
             guard sent else {
                 let failure = session.actionError ?? "Couldn't send this message. Try again."
@@ -1385,7 +1409,7 @@ struct ChatView: View {
                     imported.append(candidate)
                     continue
                 }
-                let usedBytes = (existingAttachments + imported).reduce(0) { $0 + $1.data.count }
+                let usedBytes = (existingAttachments + imported).reduce(0) { $0 + $1.bytes }
                 let remainingBytes = max(0, AttachmentPolicy.maximumTotalBytes - usedBytes)
                 let candidate = try await Task.detached(priority: .userInitiated) {
                     try Self.readImportedFile(url, remainingBytes: remainingBytes)
@@ -1432,6 +1456,11 @@ struct ChatView: View {
         let readLimit = min(itemLimit, remainingBytes)
         if let fileSize = values.fileSize, fileSize > readLimit {
             throw AttachmentImportError.tooLarge(name, readLimit)
+        }
+        if kind == .file {
+            let pending = try PendingMessageAttachment(copying: url, name: name, mime: mime)
+            guard pending.bytes <= readLimit else { throw AttachmentImportError.tooLarge(name, readLimit) }
+            return pending
         }
         // Some document providers do not report a size. Never let that turn
         // into an unbounded read of a provider-controlled file: read one byte
@@ -1539,8 +1568,17 @@ struct ChatView: View {
     private var stopAction: (() -> Void)? {
         guard current.busy, case let .bot(bot) = current else { return nil }
         return {
-            Haptics.impact(.light)
-            Task { await session.interrupt(bot: bot) }
+            guard stoppingThreadId != bot.threadId else { return }
+            let target = bot.threadId
+            stoppingThreadId = target
+            Haptics.impact(.medium)
+            Task {
+                await session.interrupt(bot: bot)
+                if session.actionError == nil {
+                    try? await Task.sleep(for: .seconds(15))
+                }
+                if stoppingThreadId == target { stoppingThreadId = nil }
+            }
         }
     }
 
@@ -1553,7 +1591,10 @@ struct ChatView: View {
                 let roomSteer = roomSteerTarget
                 QueuedSendList(sends: heldSends, steerTargetName: roomSteer?.target?.name,
                                steerUnavailable: roomSteer?.unavailable, steer: { send in
-                    await session.steerQueued(send, threadId: threadId, in: current, botId: roomSteer?.target?.id)
+                    let targetThread = threadId
+                    pendingSendPreview = PendingSendPreview(threadId: targetThread, id: send.queueId, text: send.text, steering: roomSteer == nil)
+                    defer { if pendingSendPreview?.id == send.queueId { pendingSendPreview = nil } }
+                    return await session.steerQueued(send, threadId: targetThread, in: current, botId: roomSteer?.target?.id)
                 }, edit: { editingQueued = $0 }) { send in
                     Task { await session.cancelQueued(send, threadId: threadId, in: current) }
                 }
@@ -1737,12 +1778,12 @@ struct ChatView: View {
                     draft: draft, showingPlus: $showingPlus, dictation: dictation,
                     focus: $composerFocused, name: current.name,
                     busy: preparingAttachments || sendingMessage,
-                    hasAttachments: !attachments.isEmpty || !mentionPicks.isEmpty, supportsVoiceChat: true,
+                    hasAttachments: !attachments.isEmpty || !mentionPicks.isEmpty, supportsVoiceChat: false,
                     onDraftChange: { value in
 #if DEBUG
                         MainThreadProbe.shared.typing(!value.isEmpty)
 #endif
-                        session.liveText.setComposing(!value.isEmpty, by: composerID)
+                        session.liveText.setComposing(composerFocused, by: composerID)
                         let wantsHUD = value.hasPrefix("/")
                         if showCommandHUD != wantsHUD {
                             withAnimation(.easeInOut(duration: 0.15)) { showCommandHUD = wantsHUD }
@@ -1751,6 +1792,7 @@ struct ChatView: View {
                     onSend: { submit() },
                     onVoice: { startVoice() },
                     onStop: stopAction,
+                    stopping: stoppingThreadId == threadId,
                     onLongVoice: { openWalkie() }
                 )
             }
@@ -1788,7 +1830,8 @@ extension ChatView {
         Autopilot.log("START \(scenario)")
         if scenario == "scroll" {
             for swipe in 0..<16 {
-                let transcript = rows(memberSteps: memberSteps)
+                let visible = messages
+                let transcript = rows(messages: visible, liveSteps: liveSteps(in: visible), memberSteps: memberSteps(in: visible))
                 // the test's pattern: down, down, up, up
                 if swipe % 4 < 2, let first = transcript.first {
                     withAnimation(.easeOut(duration: 0.4)) { proxy.scrollTo(first.id, anchor: .top) }
@@ -1940,6 +1983,8 @@ struct ChatHeaderBar<Avatar: View>: View {
     var onCall: (() -> Void)? = nil
     /// Mark the open thread done, or bring it back; bot threads only.
     var threadDone: ThreadDoneAction? = nil
+    var onComputer: (() -> Void)? = nil
+    var onExport: ((String) -> Void)? = nil
     @ViewBuilder let avatar: () -> Avatar
 
     var body: some View {
@@ -1960,7 +2005,7 @@ struct ChatHeaderBar<Avatar: View>: View {
             }
             .buttonStyle(.plain).glassCapsule().accessibilityLabel(closesPane ? "Close" : "Back")
             Spacer(minLength: 4)
-            if !canOpenThreads && canOpenSettings {
+            if !canOpenThreads && canOpenSettings && onComputer == nil && onExport == nil {
                 Button(action: onSettings) {
                     HStack(spacing: 8) {
                         avatar()
@@ -1977,6 +2022,13 @@ struct ChatHeaderBar<Avatar: View>: View {
                     Button(threadDone.title, systemImage: threadDone.systemImage, action: threadDone.run)
                         .disabled(threadDone.disabled)
                 }
+                if let onComputer { Button("Watch computer", systemImage: "display", action: onComputer) }
+                if let onExport {
+                    Menu {
+                        Button("Share transcript", systemImage: "doc.plaintext") { onExport("markdown") }
+                        Button("Export JSON", systemImage: "curlybraces") { onExport("json") }
+                    } label: { Label("Share chat", systemImage: "square.and.arrow.up") }
+                }
                 if canOpenSettings { Button("Conversation settings", systemImage: "gearshape", action: onSettings) }
             } label: {
                 HStack(spacing: 8) {
@@ -1986,7 +2038,7 @@ struct ChatHeaderBar<Avatar: View>: View {
                 .padding(.horizontal, 12).frame(height: 44)
             }
             .buttonStyle(.plain).glassCapsule()
-            .accessibilityLabel("\(name), threads and settings")
+            .accessibilityLabel("\(name), chat options")
             .accessibilityIdentifier("chat-options")
             }
             Spacer(minLength: 4)
@@ -2001,8 +2053,6 @@ struct ChatHeaderBar<Avatar: View>: View {
                     .accessibilityLabel("Call \(name)")
                     .accessibilityIdentifier("chat-call")
             }
-            // The live computer view lives in the + menu ("Watch computer"),
-            // not the header: Firaz found it a dead-end preview up here.
             if let membersCount {
                 Button(action: onSettings) {
                     Label("\(membersCount)", systemImage: "person.2")
@@ -2038,48 +2088,63 @@ struct ChatActionSheet: View {
         let id: String
         let systemImage: String
         let title: LocalizedStringKey
-        let subtitle: LocalizedStringKey
         var destructive = false
         var disabled = false
+        var children: [Action] = []
         let run: () -> Void
     }
 
     @Binding var showing: Bool
     let actions: [Action]
 
+    private func perform(_ action: Action) {
+        withAnimation(.snappy(duration: 0.22)) { showing = false }
+        action.run()
+    }
+
+    private func row(_ action: Action) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: action.systemImage)
+                .font(.system(size: 19, weight: .regular)).frame(width: 24)
+            Text(action.title).font(.body)
+            Spacer(minLength: 0)
+            if !action.children.isEmpty {
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .foregroundStyle(action.destructive ? Color.red : Color.primary)
+        .padding(.horizontal, 20).frame(minHeight: 50).contentShape(Rectangle())
+    }
+
     @ViewBuilder var body: some View {
         if showing {
             ZStack(alignment: .bottom) {
-                Color.black.opacity(0.35).ignoresSafeArea()
-                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showing = false } }
+                Color.black.opacity(0.25).ignoresSafeArea()
+                    .onTapGesture { withAnimation(.snappy(duration: 0.22)) { showing = false } }
                 VStack(spacing: 0) {
                     ForEach(actions) { action in
-                        Button {
-                            withAnimation(.snappy(duration: 0.28)) { showing = false }
-                            action.run()
-                        } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: action.systemImage)
-                                    .font(.system(size: 20, weight: .medium))
-                                    .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    .frame(width: 44, height: 44)
-                                    .background(Circle().fill(Color.primary.opacity(0.10)))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(action.title).font(.system(size: 19, weight: .medium))
-                                        .foregroundStyle(action.destructive ? Color.red : Color.primary)
-                                    Text(action.subtitle).font(.system(size: 13)).foregroundStyle(Color.secondary)
-                                }
-                                Spacer(minLength: 0)
+                        Group {
+                            if action.children.isEmpty {
+                                Button { perform(action) } label: { row(action) }
+                            } else {
+                                Menu {
+                                    ForEach(action.children) { child in
+                                        Button { perform(child) } label: { Label(child.title, systemImage: child.systemImage) }
+                                            .disabled(child.disabled)
+                                    }
+                                } label: { row(action) }
                             }
-                            .padding(.horizontal, 18).frame(height: 64).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).disabled(action.disabled)
                         .opacity(action.disabled ? 0.45 : 1)
+                        .accessibilityIdentifier("chat-add-\(action.id)")
                     }
                 }
-                .padding(.vertical, 10)
+                .padding(.vertical, 8)
                 .frame(maxWidth: CompanionLayout.chatWidth, alignment: .leading)
-                .glassSheet(cornerRadius: 30)
+                .glassSheet(cornerRadius: 24)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("chat-add-menu")
                 .padding(.horizontal, 12).padding(.bottom, 70)
                 .frame(maxWidth: .infinity)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -2097,7 +2162,7 @@ struct SendPriorityToggle: View {
     var body: some View {
         HStack(spacing: 2) {
             option(.queue, "Queue", "tray.and.arrow.down")
-            option(.block, "Block", "hand.raised")
+            option(.block, "Steer", "arrow.turn.up.right")
         }
         .padding(3)
         .glassCapsule()
@@ -2140,6 +2205,7 @@ struct ChatComposerBar: View {
     let onVoice: () -> Void
     /// The stop square left of the voice button, while the bot is working.
     var onStop: (() -> Void)? = nil
+    var stopping = false
     /// Long-pressing the voice button: the walkie-talkie.
     var onLongVoice: (() -> Void)? = nil
 
@@ -2172,37 +2238,61 @@ struct ChatComposerBar: View {
                         .padding(.vertical, 11).padding(.leading, 16)
                         .focused(focus)
                         .accessibilityIdentifier("message-input")
-                        .allowsHitTesting(!dictation.isListening && !dictation.isStarting && !busy)
+                        .allowsHitTesting(!dictation.isListening && !dictation.isStarting && !dictation.isFinishing && !busy)
                         .onChange(of: draft) { _, value in onDraftChange(value) }
                         .onKeyPress(.return, phases: .down) { press in
                             if press.modifiers.contains(.shift) { return .ignored }
                             if canSend { onSend() }
                             return .handled
                         }
-                    Button {
-                        focus.wrappedValue = false
-                        dictation.toggle(capturing: draft)
-                    } label: {
-                        Image(systemName: dictation.isListening ? "mic.fill" : "mic")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
-                            .frame(width: 32, height: 32)
-                            .background(Circle().fill(dictation.isListening ? Color.red.opacity(0.2) : Color.secondary.opacity(0.12)))
-                            .symbolEffect(.pulse, isActive: dictation.isListening)
-                    }
-                    .buttonStyle(.plain).disabled(busy).padding(.bottom, 6)
-                    .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+                    Image(systemName: dictation.isListening ? "mic.fill" : "mic")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(dictation.isListening ? Color.red : Color.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                        .gesture(LongPressGesture(minimumDuration: 0.35)
+                            .exclusively(before: TapGesture())
+                            .onEnded { gesture in
+                                guard !busy else { return }
+                                focus.wrappedValue = false
+                                switch gesture {
+                                case .first:
+                                    dictation.openRecorder(capturing: draft)
+                                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                case .second:
+                                    dictation.toggle(capturing: draft)
+                                }
+                            })
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Start dictation")
+                        .accessibilityHint("Hold to lock recording and open the live transcript.")
+                        .accessibilityAction {
+                            guard !busy else { return }
+                            dictation.toggle(capturing: draft)
+                        }
+                        .accessibilityAction(named: "Lock recording") {
+                            guard !busy else { return }
+                            dictation.openRecorder(capturing: draft)
+                        }
                     if !canSend, let onStop {
                         Button(action: onStop) {
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 12, weight: .bold))
+                            HStack(spacing: 6) {
+                                if stopping {
+                                    ProgressView().tint(.white)
+                                    Text("Stopping…").font(.caption.weight(.medium))
+                                } else {
+                                    Image(systemName: "stop.fill").font(.system(size: 12, weight: .bold))
+                                }
+                            }
                                 .foregroundStyle(Color.white)
-                                .frame(width: 36, height: 36)
+                                .padding(.horizontal, stopping ? 10 : 0)
+                                .frame(minWidth: 36, minHeight: 36)
                                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .fill(Color(hex: "#2c2c2e")))
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Stop")
+                        .disabled(stopping)
+                        .accessibilityLabel(stopping ? "Stopping" : "Stop")
                         .padding(.bottom, 4)
                         .transition(.scale.combined(with: .opacity))
                     }
@@ -2218,18 +2308,18 @@ struct ChatComposerBar: View {
                             .opacity(busy ? 0.4 : 1)
                             .onTapGesture {
                                 guard !busy else { return }
-                                dictation.stop(); onVoice()
+                                dictation.stopImmediately(); onVoice()
                             }
                             .onLongPressGesture(minimumDuration: 0.5) {
                                 guard !busy, let onLongVoice else { return }
                                 Haptics.impact(.medium)
-                                dictation.stop(); onLongVoice()
+                                dictation.stopImmediately(); onLongVoice()
                             }
                             .accessibilityElement()
                             .accessibilityAddTraits(.isButton)
                             .accessibilityLabel("Voice call")
-                            .accessibilityAction { if !busy { dictation.stop(); onVoice() } }
-                            .accessibilityAction(named: "Walkie-talkie") { if !busy { dictation.stop(); onLongVoice?() } }
+                            .accessibilityAction { if !busy { dictation.stopImmediately(); onVoice() } }
+                            .accessibilityAction(named: "Walkie-talkie") { if !busy { dictation.stopImmediately(); onLongVoice?() } }
                             .padding(.trailing, 4).padding(.bottom, 4)
                     } else {
                         Button {
@@ -2287,7 +2377,15 @@ struct MessageRow: View {
     /// Transport tags contain paths on the paired computer. They belong in
     /// attachment cards, never on the clipboard or in the text-selection UI.
     private var attachedContent: AttachedMessageContent {
-        AttachedMessageContent.parse(message.text ?? "")
+        message.displayedContent
+    }
+
+    private func steeringLabel(_ status: SteeringStatus) -> String {
+        switch status {
+        case .sentDuringReply: return String(localized: "Sent during reply")
+        case .acceptedDuringReply: return String(localized: "Accepted during reply")
+        case .uncertain: return String(localized: "Delivery uncertain · check before resending")
+        }
     }
 
     private func steeringLabel(_ status: SteeringStatus) -> String {
@@ -2471,7 +2569,7 @@ struct MessageRow: View {
     /// A quoted message as one readable line: attachment transport tags
     /// (paths on the computer) dropped, a file-only message named as such.
     static func quotePreview(_ message: Message) -> String {
-        let content = AttachedMessageContent.parse(message.text ?? "")
+        let content = message.displayedContent
         let text = content.text.split(whereSeparator: \.isNewline).joined(separator: " ")
         if !text.isEmpty { return text }
         return content.attachments.isEmpty ? String(localized: "Earlier message") : String(localized: "Attachment")
@@ -2561,7 +2659,7 @@ struct TextBubble: View {
     }
 
     private var attachedContent: AttachedMessageContent {
-        AttachedMessageContent.parse(message.text ?? "")
+        message.displayedContent
     }
 
     private var parsedDiff: (filename: String, diff: String)? {
@@ -2708,10 +2806,19 @@ struct TextBubble: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
+                    let shared = attachedContent
+                    ForEach(Array(shared.attachments.enumerated()), id: \.offset) { _, attachment in
+                        if !message.generatedImages.contains(where: { $0.path == attachment.path }) {
+                            TranscriptAttachmentView(
+                                attachment: attachment, threadId: chat.threadId,
+                                messageId: message.id, foreground: .primary
+                            )
+                        }
+                    }
                     if ChannelTextPresentation.canCollapse(message) {
-                        ExpandableBotReply(source: message.text ?? "") { openLink($0, message) }
-                    } else {
-                        MarkdownText(source: message.text ?? "") { openLink($0, message) }
+                        ExpandableBotReply(source: shared.text) { openLink($0, message) }
+                    } else if !shared.text.isEmpty {
+                        MarkdownText(source: shared.text) { openLink($0, message) }
                             .foregroundStyle(Color.primary).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -3500,7 +3607,7 @@ private struct RoomMemberLiveReply: View {
             }.id(ChatView.liveBubbleId + ":" + bot.id)
                 // One subscription for both streams, so a token is one
                 // callback however many lanes it touches.
-                .onReceive(live.$text.map(\.count).combineLatest(live.$reasoning.map(\.count)).map { $0 + $1 }.removeDuplicates()) { onContent($0 > 0) }
+                .onReceive(live.$text.map { $0.utf8.count }.combineLatest(live.$reasoning.map { $0.utf8.count }).map { $0 + $1 }.removeDuplicates()) { onContent($0 > 0) }
                 .onChange(of: steps.count) { _, _ in onContent(true) }
         }
     }
@@ -3515,12 +3622,13 @@ private struct RoomMemberLiveReply: View {
 /// newest line: someone who has scrolled up to read is left there.
 final class ScrollFollow {
     var pinned = true
+    var interacting = false
     private var lastScroll: [String: Date] = [:]
     private static let interval: TimeInterval = 0.25
 
     func shouldScroll(_ id: String, hasContent: Bool, now: Date = Date()) -> Bool {
         guard hasContent else { lastScroll[id] = nil; return false }
-        guard pinned else { return false }
+        guard pinned, !interacting else { return false }
         if let last = lastScroll[id], now.timeIntervalSince(last) < Self.interval { return false }
         lastScroll[id] = now
         return true
@@ -3550,6 +3658,9 @@ private struct TrackPinnedToBottom: ViewModifier {
                 follow.pinned = pinned
                 onChange(pinned)
             }
+            .onScrollPhaseChange { _, phase in
+                follow.interacting = phase == .tracking || phase == .interacting || phase == .decelerating
+            }
         } else {
             content
         }
@@ -3578,6 +3689,7 @@ private struct EdgeScrollPosition: ViewModifier {
     @Binding var visibleID: String?
     let jumpToEnd: Int
     @State private var position = ScrollPosition(idType: String.self)
+    @State private var settlingTask: Task<Void, Never>?
     func body(content: Content) -> some View {
         content
             .scrollPosition($position, anchor: .top)
@@ -3585,16 +3697,23 @@ private struct EdgeScrollPosition: ViewModifier {
                 if let id, id != visibleID { visibleID = id }
             }
             .onChange(of: jumpToEnd) { _, _ in
+                settlingTask?.cancel()
                 position.scrollTo(edge: .bottom)
                 // rows near the end replace their estimates as they're
                 // built, which can move the end; land on it again
-                Task { @MainActor in
+                settlingTask = Task { @MainActor in
                     for _ in 0..<3 {
-                        try? await Task.sleep(for: .milliseconds(80))
+                        do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
+                        guard !Task.isCancelled else { return }
                         position.scrollTo(edge: .bottom)
                     }
                 }
             }
+            .onScrollPhaseChange { _, phase in
+                // A finger on the transcript wins over a pending auto-scroll.
+                if phase == .tracking || phase == .interacting { settlingTask?.cancel() }
+            }
+            .onDisappear { settlingTask?.cancel() }
     }
 }
 
@@ -3653,7 +3772,10 @@ struct StreamingBubble: View {
                         isStreaming: true
                     )
                 }
-                if let text, !text.isEmpty {
+                // Image and attachment lines have no message to fetch
+                // through yet; they appear as thumbnails once it settles.
+                if let text = text.map({ AttachedMessageContent.parse($0, markdownImages: true).text }),
+                   !text.isEmpty {
                     // Same renderer as the settled bubble, for the same
                     // reason as the padding: a live reply showing `**bold**`
                     // that snaps to bold on arrival is the message jumping,

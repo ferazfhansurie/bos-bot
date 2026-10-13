@@ -36,10 +36,14 @@ describe("sidebar usage chips", () => {
     expect(usageChips([], { voice, credits: { configured: false } })).toEqual([
       expect.objectContaining({ key: "xai", value: "2.8 min", peak: null }),
     ]);
-    expect(usageChips(null, { voice: { ...voice, calls: 0, seconds: 0 }, credits: { configured: false } })).toEqual([
-      expect.objectContaining({ key: "xai", value: "0 min" }),
-    ]);
+    // never used, no key: a new install shows nothing for xai
+    expect(usageChips(null, { voice: { ...voice, calls: 0, seconds: 0 }, credits: { configured: false } })).toEqual([]);
     expect(usageChips(null, null)).toEqual([]);
+  });
+
+  it("hides a provider that reports no numbers (not signed in)", () => {
+    const blank: UsageAccount = { provider: "claude", account: "none", fiveHour: { usedPercent: null, resetsAt: null }, sevenDay: { usedPercent: null, resetsAt: null }, status: "ok" };
+    expect(usageChips([blank, codex], null).map((chip) => chip.key)).toEqual(["codex"]);
   });
 
   it("picks the account nearest its cap when a provider has two", () => {

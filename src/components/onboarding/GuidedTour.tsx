@@ -11,7 +11,7 @@ import { t } from "@/lib/i18n";
 import type { MausState } from "@/lib/mascot";
 import { hintSeenPatch } from "@/lib/onboarding";
 import type { LocaleKey } from "@/locales";
-import { api, useStore } from "@/state/store";
+import { api, useStore, useStreaming } from "@/state/store";
 import { Spotlight } from "./Spotlight";
 
 const MASCOT: Record<TourStep["id"], MausState> = {
@@ -145,7 +145,14 @@ export function GuidedTour() {
     dispatch({ type: "toggleTour", open: false });
   }, [state.computerOpen, state.pluginsOpen, run, save, dispatch]);
 
-  const active = !dismissed && Boolean(record?.completedAt) && !state.welcomeOpen && step !== null;
+  // the first assignment starts straight after the welcome; the tour waits
+  // until that turn is done and nothing is asking for approval, so it never
+  // covers a card the person has to answer or presses controls mid-turn
+  const { streaming } = useStreaming();
+  const bot = state.bots.find((b) => b.id === state.selectedId) ?? null;
+  const held = Boolean(bot?.busy) || Boolean(bot && streaming[bot.threadId]) ||
+    Boolean(bot?.messages.some((m) => m.kind === "options" && m.card?.requestId && !m.card.answered && !m.card.dismissed));
+  const active = !dismissed && Boolean(record?.completedAt) && !state.welcomeOpen && step !== null && !held;
 
   // entering a step runs its effect once per step
   useEffect(() => {

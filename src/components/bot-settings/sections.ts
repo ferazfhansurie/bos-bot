@@ -38,3 +38,10 @@ export const BOT_SECTIONS: Array<{
   { id: "history", label: "History", icon: History, keywords: ["history", "changes", "undo", "rollback", "log"] },
   { id: "usage", label: "Usage", icon: Coins, keywords: ["tokens", "cost", "billing"] },
 ];
+
+/** Everyday setup first; specialist controls stay one tab away and searchable. */
+export const BOT_SECTION_GROUPS = [
+  { label: "Details", sections: ["overview", "identity", "soul", "voice"] },
+  { label: "Library", sections: ["skills", "memory", "routines", "history"] },
+  { label: "Computer", sections: ["access", "model", "permissions", "usage"] },
+] as const;

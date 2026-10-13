@@ -77,9 +77,11 @@ export function toolsBrowserUrlAllowed(url, { appOrigins } = {}) {
  * false when the initial src is not allowed; the caller must then
  * event.preventDefault(). An empty src is treated as about:blank.
  */
-export function hardenWebviewAttach(webPreferences, params, { appOrigins } = {}) {
+export function hardenWebviewAttach(webPreferences, params, { appOrigins, partition = TOOLS_BROWSER_PARTITION, nativePopups = false } = {}) {
   delete webPreferences.preload;
   delete webPreferences.preloadURL;
+  // Electron gives an explicit Session precedence over partition.
+  delete webPreferences.session;
   Object.assign(webPreferences, {
     nodeIntegration: false,
     nodeIntegrationInSubFrames: false,
@@ -90,14 +92,16 @@ export function hardenWebviewAttach(webPreferences, params, { appOrigins } = {})
     allowRunningInsecureContent: false,
     javascript: true,
     plugins: false,
+    disablePopups: !nativePopups,
     experimentalFeatures: false,
     webviewTag: false,
-    partition: TOOLS_BROWSER_PARTITION,
+    partition,
   });
   if (params) {
     delete params.preload;
     for (const key of ["nodeintegration", "nodeintegrationinsubframes", "plugins", "disablewebsecurity", "allowpopups", "webpreferences"]) delete params[key];
-    params.partition = TOOLS_BROWSER_PARTITION;
+    if (nativePopups) params.allowpopups = "";
+    params.partition = partition;
   }
   const src = params?.src;
   if (src === undefined || src === null || src === "") return true;
@@ -109,9 +113,27 @@ export function hardenWebviewAttach(webPreferences, params, { appOrigins } = {})
  * always denied natively; allowed ones are handed to `onPopup(url)` so the
  * renderer can open them as a new tab.
  */
-export function attachToolsBrowserGuest(guestContents, { appOrigins, onPopup } = {}) {
+let browserModifierKeys = false;
+export function noteBrowserKeyInput(input = {}) { browserModifierKeys = Boolean(input.meta || input.control); }
+
+export function attachToolsBrowserGuest(guestContents, { appOrigins, onPopup, nativePopups = false, onNativePopup, popupOptions = {} } = {}) {
   const allowed = (url) => toolsBrowserUrlAllowed(url, { appOrigins });
-  guestContents.setWindowOpenHandler(({ url }) => {
+  let tabGestureUntil = 0;
+  guestContents.on('before-input-event',(_event,input)=>{
+    noteBrowserKeyInput(input);
+  });
+  guestContents.on('before-mouse-event', (_event, mouse) => {
+    if (mouse.type === 'mouseDown' || mouse.type === 'mouseUp') {
+      const modifiers=mouse.modifiers||[];
+      tabGestureUntil=(mouse.button==='middle'||modifiers.includes('meta')||modifiers.includes('control')||browserModifierKeys) ? Date.now()+1000 : 0;
+    }
+  });
+  guestContents.setWindowOpenHandler(({ url, disposition, postBody, frameName, features }) => {
+    if (nativePopups && allowed(url) && !postBody && !features && (!frameName||frameName==='_blank') && (disposition==='background-tab'||(disposition==='foreground-tab'&&Date.now()<tabGestureUntil))) {
+      try { onPopup?.(url, { background: disposition === 'background-tab' }); } catch {}
+      return { action: "deny" };
+    }
+    if (nativePopups && allowed(url)) return { action: "allow", overrideBrowserWindowOptions: { width: 900, height: 720, ...popupOptions, webPreferences: { session: guestContents.session, nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false } } };
     if (allowed(url) && url !== "about:blank") {
       try {
         onPopup?.(url);
@@ -119,6 +141,7 @@ export function attachToolsBrowserGuest(guestContents, { appOrigins, onPopup } =
     }
     return { action: "deny" };
   });
+  if (nativePopups) guestContents.on("did-create-window", (child) => { attachToolsBrowserGuest(child.webContents, { appOrigins, nativePopups, onPopup, onNativePopup, popupOptions }); onNativePopup?.(child.webContents); });
   const guard = (event, url) => {
     if (!allowed(url)) event.preventDefault();
   };
@@ -152,11 +175,13 @@ export function attachToolsBrowserGuest(guestContents, { appOrigins, onPopup } =
 /** Deny every permission in the tools-browser partition and cancel any
  * request (navigation, fetch, image, websocket) aimed at the app itself.
  * Only ever called with the partition session, never defaultSession. */
-export function configureToolsBrowserSession(ses, { appOrigins } = {}) {
-  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  ses.setPermissionCheckHandler(() => false);
+export function configureToolsBrowserSession(ses, { appOrigins, requestPermission, checkPermission, shouldBlockRequest } = {}) {
+  ses.setPermissionRequestHandler((contents, permission, callback, details) => { if (!requestPermission) { callback(false); return; } Promise.resolve(requestPermission(contents, permission, details)).then(allowed => callback(allowed === true), () => callback(false)); });
+  ses.setPermissionCheckHandler((contents, permission, origin, details) => checkPermission?.(contents, permission, origin, details) === true);
   ses.setDevicePermissionHandler?.(() => false);
   ses.webRequest?.onBeforeRequest?.((details, callback) => {
-    callback({ cancel: isAppOrigin(details.url, { appOrigins }) });
+    let cancel = isAppOrigin(details.url, { appOrigins });
+    if (!cancel) { try { cancel = shouldBlockRequest?.(details) === true; } catch { /* filtering failure leaves app-origin denial intact */ } }
+    callback({ cancel });
   });
 }

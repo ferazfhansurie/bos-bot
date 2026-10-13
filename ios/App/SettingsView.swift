@@ -225,6 +225,9 @@ struct SettingsView: View {
                 }
             }
         }
+        .onChange(of: appearance) { _, _ in Haptics.selection() }
+        .onChange(of: language) { _, _ in Haptics.selection() }
+        .onChange(of: activityDetail) { _, _ in Haptics.selection() }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .task { await session.refreshNotificationAuthorization() }

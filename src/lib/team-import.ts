@@ -6,7 +6,7 @@ export interface PendingTeamImport {
   kind: "team" | "package" | "backup";
   name: string;
   description: string;
-  members: Array<{ name: string; title: string }>;
+  members: Array<{ name: string; title: string; color?: string; mascotBody?: string }>;
   chiefOfStaff?: string;
   rooms: number;
   playbooks: number;
@@ -16,6 +16,16 @@ export interface PendingTeamImport {
   conversations?: number;
   archivedBots?: number;
   warnings?: string[];
+}
+
+/** How a member looks, when the file says: only plain strings survive. */
+function look(source: unknown): { color?: string; mascotBody?: string } {
+  if (!source || typeof source !== "object") return {};
+  const { color, mascotBody } = source as Record<string, unknown>;
+  return {
+    ...(typeof color === "string" ? { color } : {}),
+    ...(typeof mascotBody === "string" ? { mascotBody } : {}),
+  };
 }
 
 /** Small client-side preview only; the server remains the trust boundary. */
@@ -29,7 +39,7 @@ export function teamImportPreview(manifest: unknown): PendingTeamImport {
     const backup = parseTeamBackup(manifest);
     return {
       manifest: backup, kind: "backup", name: backup.name, description: TEAM_BACKUP_CONTENTS,
-      members: backup.bots.map((bot) => ({ name: bot.name, title: bot.title })),
+      members: backup.bots.map((bot) => ({ name: bot.name, title: bot.title, ...look(bot) })),
       rooms: backup.groups.length, playbooks: backup.bots.reduce((total, bot) => total + bot.playbooks.length, 0),
       routines: backup.routines.length, apps: [],
       conversations: [...backup.bots, ...backup.groups].reduce((total, owner) => total + owner.tasks.length, 0),
@@ -58,6 +68,7 @@ export function teamImportPreview(manifest: unknown): PendingTeamImport {
     return {
       name: value.name.trim(),
       title: typeof value.title === "string" ? value.title.trim() : "",
+      ...look(value.appearance),
     };
   });
   return {
@@ -103,7 +114,7 @@ function packagePreview(root: Record<string, unknown>, manifest: unknown): Pendi
     if (!agent || typeof agent !== "object" || Array.isArray(agent)) throw new Error(`Bot ${index + 1} is invalid.`);
     const value = agent as Record<string, unknown>;
     if (typeof value.name !== "string" || !value.name.trim()) throw new Error(`Bot ${index + 1} does not have a name.`);
-    return { name: value.name.trim(), title: typeof value.title === "string" ? value.title.trim() : "" };
+    return { name: value.name.trim(), title: typeof value.title === "string" ? value.title.trim() : "", ...look(value.appearance) };
   });
   const chiefKey = typeof pkg.chiefOfStaff === "string" ? pkg.chiefOfStaff : undefined;
   const chief = chiefKey

@@ -1,3 +1,4 @@
+import {ThreadDoneButton} from './ThreadDoneButton';
 import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   AlertTriangle,
@@ -7,26 +8,20 @@ import {
   ChevronRight,
   Bug,
   Copy,
-  Crown,
-  MessageSquareReply,
   Monitor,
   Pencil,
   Pin,
   PinOff,
   RefreshCw,
   Search,
-  Square,
   Trash2,
   Webhook,
   X,
-  CircleCheck,
-  ArchiveRestore,
 } from "lucide-react";
 import { WorkingDots } from "@/components/WorkingIndicator";
 import { MessageActions, messageActionClass } from "@/components/MessageActions";
 import { useSpeech } from "@/lib/tts/useSpeech";
 import { useCaptionChrome } from "@/components/DesktopCapabilities";
-import { cachedInput, cachedKnown, contextChip, contextDetail, contextShare, costCaption, formatTokens, formatUsd, freshTokens, hasFiniteCost, lastTurnDetail, usageChip, usageDetail } from "@/lib/usage";
 import {
   api,
   currentTaskBot,
@@ -62,7 +57,7 @@ import { OptionCard, shouldHideOnboardingCard } from "./OptionCard";
 import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard } from "./QuestionCard";
 import { Composer } from "./Composer";
-import { ConversationHeader } from "./ConversationChrome";
+import { ConversationHeader, ConversationTools } from "./ConversationChrome";
 import { SharedAttachmentTile } from "./SharedAttachmentTile";
 import type { SharedComposer } from "./shared-conversation";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -117,7 +112,7 @@ import { AttachmentGallery, collectMessageFiles } from "./AttachmentGallery";
 import { ScreenFrame } from "./ScreenFrame";
 import { CompactionChip, DigestChip } from "./DigestChip";
 import { RenameTitle } from "./RenameTitle";
-import { BotActivityPicker, TaskPicker } from "./TaskPicker";
+import { BotActivityPicker } from "./TaskPicker";
 import { ModelPicker } from "./ModelPicker";
 import { ExportTranscriptMenu } from "./ExportTranscriptMenu";
 import { TerminalButton } from "./TerminalPanel";
@@ -125,10 +120,11 @@ import { botControlAvailable, remoteBotHint, remoteBotNotice } from "@/lib/remot
 
 import { SpeakButton } from "./SpeakButton";
 import { BotCallButton, BotCallOverlay } from "./voice-call/BotCall";
+import { callIsOn, useCallSnapshot } from "./voice-call/VoiceCall";
+import { useRealtimeCall } from "@/lib/voice-call/session";
 import { effectivePlace, toolPlace, type EffectivePlace } from "@/lib/place";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
-import { COMPACT_BUBBLE } from "@/lib/compact-chip";
 import { useFocusMessage } from "@/lib/focus-message";
 import { groupTranscript } from "@/lib/activity-runs";
 import { ActivityRun } from "./ActivityRun";
@@ -250,7 +246,7 @@ class MessageBoundary extends Component<{ children: ReactNode; fallbackText: str
   render() {
     if (this.state.failed) {
       return (
-        <div className="chat-text w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">
+        <div className="chat-text conversation-bubble w-fit max-w-[min(42rem,78%)] bg-card px-4 py-2.5 whitespace-pre-wrap text-ink">
           {this.props.fallbackText}
         </div>
       );
@@ -396,6 +392,26 @@ function Bubble({
     );
   }
 
+  // Reactions: a room keeps them in its own message meta; a 1:1 thread
+  // stores them on the message itself (the server echoes it back patched).
+  const sharedReactions = sharedMeta?.reactions ?? {};
+  const ownReactions = Object.entries(
+    (message.reactions ?? []).reduce<Record<string, string[]>>((all, r) => ({ ...all, [r.emoji]: [...(all[r.emoji] ?? []), r.by] }), {}),
+  );
+  const reactionList = shared ? Object.entries(sharedReactions) : ownReactions;
+  const selfActor = shared ? (shared.selfId ?? "") : "user";
+  const react = shared
+    ? shared.annotateMessage
+      ? (emoji: string) => void shared.annotateMessage?.(message.id, { reaction: emoji, active: !sharedReactions[emoji]?.includes(selfActor) })
+      : undefined
+    : remoteClient || bot.remote
+      ? undefined
+      : (emoji: string) => {
+          void api<{ message: Message }>(`/api/threads/${bot.threadId}/messages/${message.id}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) })
+            .then(({ message: patched }) => dispatch({ type: "messagePatched", threadId: bot.threadId, message: patched }))
+            .catch((cause) => dispatch({ type: "error", message: cause instanceof Error ? cause.message : String(cause) }));
+        };
+
   // "‹ 2/3 ›" under an edited message — every fork it belongs to
   const versions = user && !shared ? messageVersions(bot, message) : [message];
   const versionIndex = versions.findIndex((v) => v.id === message.id);
@@ -404,7 +420,7 @@ function Bubble({
   };
 
   return (
-    <div className={cn("group flex w-full flex-col", user ? "animate-msg-in items-end" : "items-start")}>
+    <div className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
       {message.leadAction && <div role="status" className="mb-1 rounded-lg border border-line bg-card px-3 py-2 text-xs text-ink-secondary">
         <span className="font-medium">{message.leadAction.status} · {state.bots.find(b => b.id === message.leadAction?.leadBotId)?.name ?? "Lead"}</span>
         <div>{message.leadAction.requiredAction}</div>
@@ -418,7 +434,7 @@ function Bubble({
       </div>}
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
         {user && (
-          <MessageActions side="user">
+          <MessageActions side="user" onReply={onReply} onReact={react}>
             {/* editing rewinds the thread, so it waits for the turn to end —
                 same rule as the version switcher below */}
             {(shared ? Boolean(shared.editMessage) : botControlAvailable(bot, "edit") && !bot.busy) && message.kind === "text" && !webhookView && !hasAttachments && (
@@ -432,15 +448,7 @@ function Bubble({
               </button>
             )}
             {Boolean(visibleText.trim()) && <CopyButton text={visibleText} className="opacity-100" />}
-            <button
-              type="button"
-              onClick={onReply}
-              aria-label={t("chat.replyToMessage")}
-              title={t("chat.reply")}
-              className={messageActionClass}
-            >
-              <MessageSquareReply size={14} />
-            </button>
+            {shared?.annotateMessage && !sharedMeta?.pinnedBy && <button type="button" onClick={() => void shared.annotateMessage?.(message.id, { pinned: true })} aria-label={t("chat.pinMessage")} title={t("chat.pinMessage")} className={messageActionClass}><Pin size={14} /></button>}
             {shared?.deleteMessage && <button type="button" onClick={() => shared.onRequestDelete?.(message.id)} aria-label="Remove message" title="Remove message" className={cn(messageActionClass, "text-danger")}><Trash2 size={14} /></button>}
             {!shared && <button
               onClick={() =>
@@ -461,7 +469,7 @@ function Bubble({
         )}
         <div
           className={cn(
-            "w-fit max-w-[min(42rem,78%)] rounded-2xl text-[15px] leading-relaxed",
+            "conversation-bubble w-fit max-w-[min(42rem,78%)]",
             emerging && "turn-answer",
             arriving && !emerging && (user ? "msg-spring origin-right" : "msg-spring origin-left"),
             user && webhookView
@@ -543,7 +551,7 @@ function Bubble({
           {sharedMeta?.editedAt && <div className="mt-1 text-[10px] text-ink-secondary" title={new Date(sharedMeta.editedAt).toLocaleString()}>edited</div>}
         </div>
         {!user && (
-          <MessageActions side="bot" forceOpen={viewRaw || speaking}>
+          <MessageActions side="bot" forceOpen={viewRaw || speaking} onReply={onReply} onReact={react}>
             {text && <CopyButton text={text} className="opacity-100" />}
             {text && <RawToggleAction active={viewRaw} onToggle={() => setViewRaw((r) => !r)} className="opacity-100" />}
             {!shared && message.kind === "text" && text && !peer && (
@@ -559,15 +567,6 @@ function Bubble({
                 <RefreshCw size={14} />
               </button>
             )}
-            <button
-              type="button"
-              onClick={onReply}
-              aria-label={t("chat.replyToMessage")}
-              title={t("chat.reply")}
-              className={messageActionClass}
-            >
-              <MessageSquareReply size={14} />
-            </button>
             {!shared && <button
               onClick={() =>
                 dispatch({
@@ -594,10 +593,13 @@ function Bubble({
           {formatTime(message.at)}
         </span>
       </div>
-      {shared?.annotateMessage && <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
-        {Object.entries(sharedMeta?.reactions ?? {}).map(([emoji, actors]) => <button key={emoji} type="button" aria-label={`${emoji}, ${actors.length} reactions`} aria-pressed={actors.includes(shared.selfId ?? "")} onClick={() => void shared.annotateMessage?.(message.id, { reaction: emoji, active: !actors.includes(shared.selfId ?? "") })} className="rounded-full border border-hairline px-2 py-1 hover:bg-raised">{emoji} {actors.length}</button>)}
-        <details className="relative"><summary className="cursor-pointer rounded-full px-2 py-1 text-ink-secondary hover:bg-raised" aria-label="React to message">React</summary><div className="absolute z-20 flex rounded-xl border border-hairline bg-panel p-2 shadow-lg">{["👍", "❤️", "😂", "🎉", "👀", "✅"].map(emoji => <button key={emoji} type="button" aria-label={`React ${emoji}`} className="rounded p-2 hover:bg-raised" onClick={event => { void shared.annotateMessage?.(message.id, { reaction: emoji, active: !sharedMeta?.reactions?.[emoji]?.includes(shared.selfId ?? "") }); event.currentTarget.closest("details")?.removeAttribute("open"); }}>{emoji}</button>)}</div></details>
-        <button type="button" className="rounded-full px-2 py-1 text-ink-secondary hover:bg-raised" onClick={() => void shared.annotateMessage?.(message.id, { pinned: !sharedMeta?.pinnedBy })}>{sharedMeta?.pinnedBy ? "📌 Pinned · Unpin" : "Pin"}</button>
+      {reactionList.length > 0 && <div className={cn("-mt-1.5 flex flex-wrap items-center gap-1 px-2", user ? "justify-end" : "justify-start")}>
+        {reactionList.map(([emoji, actors]) => <button key={emoji} type="button" disabled={!react} aria-label={`${emoji}, ${actors.length} reactions`} aria-pressed={actors.includes(selfActor)} onClick={() => react?.(emoji)} className={cn("relative z-[1] flex h-6 items-center gap-1 rounded-full border px-1.5 text-[12px] tabular-nums shadow-sm", actors.includes(selfActor) ? "border-accent/40 bg-accent/15 text-ink" : "border-hairline/60 bg-app text-ink-secondary", react && "hover:bg-raised")}>
+          <span className="text-[13px] leading-none">{emoji}</span>{actors.length > 1 && actors.length}
+        </button>)}
+      </div>}
+      {shared?.annotateMessage && sharedMeta?.pinnedBy && <div className="mt-1 text-[11px] text-ink-secondary">
+        <button type="button" className="rounded-full px-2 py-0.5 hover:bg-raised" onClick={() => void shared.annotateMessage?.(message.id, { pinned: false })}>Pinned · Unpin</button>
       </div>}
       {versions.length > 1 && botControlAvailable(bot, "versions") && (
         <div className="mt-1 flex items-center gap-0.5 pr-1 text-[12px] text-ink-secondary">
@@ -680,7 +682,7 @@ function ActivityChip({ message, place = "auto" }: { message: Message; place?: E
       </div>
     );
   }
-  return <ToolActivity tool={tool} place={toolPlace(tool.name, place)} />;
+  return <ToolActivity stopReason={message.turnOutcome?.stopReason} tool={tool} place={toolPlace(tool.name, place)} />;
 }
 
 /** The settled transcript, memoized as one unit: during streaming every
@@ -1354,10 +1356,14 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       <BotCallOverlay bot={bot} />
       {/* Header */}
       <ConversationHeader style={headerDragStyle}>
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1" style={headerNoDragStyle}>
+        {/* Grok's header: the bot as one pill in the middle, tools at the end.
+            The empty spacer keeps the pill centred while the tools grow. */}
+        <div className="min-w-0 flex-1 basis-0" aria-hidden="true" />
+        <div className="flex min-w-0 shrink items-center gap-2 rounded-full border border-hairline/50 bg-app py-1 pe-4 ps-1.5 shadow-[0_6px_24px_rgba(0,0,0,0.35)]" style={headerNoDragStyle} data-testid="chat-title-pill">
+          {(messages.length > 0 || bot.busy || shared) && (
           <button
             onClick={() => { if (shared) shared.onOpenDetails?.(); else if (local) dispatch({ type: "toggleSettings", open: true }); }}
-            className="flex size-10 shrink-0 items-center justify-center rounded-lg hover:bg-raised/50"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full hover:bg-raised/50"
             title={shared ? "Conversation details" : t("chat.openProfile")}
             aria-label={shared ? `Open ${bot.name} conversation details` : t("chat.openProfileAria", { name: bot.name })}
           >
@@ -1378,6 +1384,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               />
             )}
           </button>
+          )}
           {shared ? <button type="button" onClick={shared.onOpenDetails} className="truncate text-[15px] font-semibold text-ink hover:underline">{bot.name}</button> : !local ? <span className="truncate text-[15px] font-semibold text-ink">{bot.name}</span> : <RenameTitle
             value={bot.name}
             onCommit={(name) => {
@@ -1390,26 +1397,26 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
               }
             }}
             onActivate={() => dispatch({ type: "toggleSettings", open: true })}
-            showEditButton
             className="truncate text-[15px] font-semibold text-ink"
             inputClassName="max-w-[220px] rounded bg-inset px-1.5 py-0.5 text-[15px] font-semibold"
           />}
           {remoteHint && <span className="shrink-0 truncate text-[12px] text-ink-secondary" data-testid="remote-bot-hint">{remoteHint}</span>}
-          {!shared && bot.chiefOfStaff && (
-            <span className="flex items-center gap-1 rounded-full bg-accent/12 px-2 py-0.5 text-[11px] font-medium text-accent">
-              <Crown size={11} /> {t("chat.chiefOfStaff")}
-            </span>
-          )}
+          {/* The role is spoken, not shown: a coloured title pill next to the
+              name cheapened the header (Firaz, 2026-10-12). */}
+          {!shared && bot.chiefOfStaff && <span className="sr-only">{t("chat.chiefOfStaff")}</span>}
           {bot.busy && <WorkingDots className="text-ink-secondary" />}
         </div>
         <div
-          className="flex shrink-0 items-center gap-2"
+          className="flex min-w-0 flex-1 basis-0 items-center justify-end gap-2"
           // The caption buttons sit over the header's right end; drop this
           // icon row 16px (visual only — the header keeps its height) so the
           // buttons clear the 26px overlay while the rest of the layout stays.
           style={controlsShiftStyle}
         >
           {shared?.actions}
+          {!shared && <HeaderCallSlot bot={bot} />}
+          {!shared&&<ThreadDoneButton key={`${bot.id}:${bot.threadId}`} bot={bot}/>}
+          <ConversationTools key={bot.threadId}>
           {<button
             onClick={() => shared ? shared.onOpenSearch?.() : setFindOpen((open) => !open)}
             aria-label={t("chat.find")}
@@ -1420,45 +1427,19 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             )}
             title={t("chat.findShortcut")}
           >
-            <Search size={18} />
+            <Search size={18} /><span>{t("chat.find")}</span>
           </button>}
+
+
           {!remoteHint && <ExportTranscriptMenu
             title={bot.name}
             messages={messages}
             botName={bot.name}
           />}
-          {!shared && bot.busy && (
-            <button
-              onClick={() => dispatch({ type: "interrupt", botId: bot.id, threadId: bot.threadId })}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
-                COMPACT_BUBBLE,
-              )}
-              title={t("chat.stopTurn")}
-            >
-              <Square size={12} className="fill-current" />
-              <span className="@max-4xl/chathead:hidden">{t("chat.stop")}</span>
-            </button>
-          )}
-          {local && !remoteClient && !bot.busy && (() => {
-            // "Done" closes and archives this thread in one go; an archived
-            // thread offers unarchive instead, which also reopens it.
-            const archived = bot.tasks?.find((task) => task.threadId === bot.threadId)?.archivedAt !== undefined;
-            return <button
-              type="button"
-              onClick={() => dispatch({ type: "updateTask", botId: bot.id, threadId: bot.threadId, patch: { archivedAt: archived ? null : Date.now() } })}
-              aria-label={archived ? t("task.unarchive") : t("task.done")}
-              title={archived ? t("task.unarchive") : t("task.done")}
-              className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
-            >
-              {archived ? <ArchiveRestore size={18} /> : <CircleCheck size={18} />}
-            </button>;
-          })()}
-          {!shared && <TaskPicker bot={bot} />}
-          {local && <div className="@max-3xl/chathead:hidden"><UsageChip bot={bot} /></div>}
-          {local && !remoteClient && <div className="@max-3xl/chathead:hidden"><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}
-          {!shared && <BotCallButton bot={bot} />}
-          {local && <button
+
+          {!shared && !remoteClient && <div className="conversation-model"><ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} /></div>}
+          {local && <TerminalButton target={{ botId: bot.id, threadId: bot.threadId, name: bot.name }} className="rounded-md" />}
+          {local&&<details className="conversation-advanced"><summary className="cursor-pointer list-none rounded-lg px-2.5 py-2 text-xs text-ink-secondary hover:bg-raised">Advanced</summary>          {local && <button
             data-tour="computer"
             onClick={() => dispatch({ type: "toggleComputer" })}
             className={cn(
@@ -1467,21 +1448,10 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             )}
             title={t("chat.computer")}
           >
-            <Monitor size={18} />
+            <Monitor size={18} /><span>{t("chat.computer")}</span>
           </button>}
-          {local && <TerminalButton target={{ botId: bot.id, threadId: bot.threadId, name: bot.name }} className="rounded-md" />}
-          {local && !remoteClient && <button
-            onClick={() => dispatch({ type: "toggleInspector" })}
-            aria-label={t("chat.inspector")}
-            aria-pressed={state.inspectorOpen}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-raised @max-3xl/chathead:hidden",
-              state.inspectorOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
-            )}
-            title={t("chat.inspectorHint")}
-          >
-            <Bug size={18} />
-          </button>}
+          {!remoteClient&&<button className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-ink-secondary hover:bg-raised" onClick={()=>dispatch({type:'toggleInspector'})}><Bug size={15}/>{t('chat.inspector')}</button>}</details>}
+          </ConversationTools>
         </div>
       </ConversationHeader>
 
@@ -1675,8 +1645,12 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
           here. In the dock so its height is measured with the composer's:
           the transcript pad, the jump pill and bottom-follow all move with
           it. */}
-      {lastRunStep && showRun(recordedRun) && runDismissed.get(transcriptKey) !== lastRunStep.id && (
-        <div className="flex justify-end px-5 pb-2">
+      {/* Only once it matters: the run is over and could become a skill (a
+          verified step, or three or more that passed). While the bot works
+          the transcript already shows every step. */}
+      {lastRunStep && showRun(recordedRun) && canSaveRun && (recordedRunCounts.verified > 0 || recordedRunCounts.passed >= 3)
+        && !skillStaged(messages, recordedRun) && runDismissed.get(transcriptKey) !== lastRunStep.id && (
+        <div className="px-5 pb-2">
           <VerifyCard
             key={transcriptKey}
             steps={recordedRun}
@@ -1712,40 +1686,13 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
 
 /** What the open task has spent — quiet until the first turn settles.
  * Click opens the bot's settings, where the Usage card has the breakdown. */
-function UsageChip({ bot }: { bot: Bot }) {
-  const { state, dispatch } = useStore();
-  const usage = bot.tasks?.find((t) => t.threadId === bot.threadId)?.usage;
-  const text = usage ? usageChip(usage) : "";
-  if (!usage || !text) return null;
-  const billing = state.instances.find((i) => i.instanceId === bot.modelSelection.instanceId)?.snapshot.billing;
-  const share = contextShare(usage);
-  const detail = [
-    usage.turns === 1 ? t("chat.usage.turnsOne") : t("chat.usage.turnsMany", { count: usage.turns }),
-    usageDetail(usage),
-    lastTurnDetail(usage),
-    contextDetail(usage),
-    // the whole thread rides along on every turn, so most of "in" is the
-    // model re-reading what it already saw — say so, or the figure reads as
-    // a bug (issue #527); past 80% of the window the fix is a new thread
-    share?.tone === "danger" ? t("chat.usage.contextNudge") : null,
-    cachedInput(usage) > 0 ? (cachedKnown(usage) ? t("chat.usage.newNote") : t("chat.usage.cachedNote")) : null,
-    hasFiniteCost(usage.costUsd) ? `${formatUsd(usage.costUsd)} ${costCaption(billing)}` : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  // folded: one figure — cost when the engine reports one, else new tokens
-  const short = hasFiniteCost(usage.costUsd) ? formatUsd(usage.costUsd) : formatTokens(cachedKnown(usage) ? freshTokens(usage) : usage.input + usage.output);
-  const ctx = contextChip(usage);
-  return (
-    <button
-      onClick={() => dispatch({ type: "toggleSettings", open: true, section: "usage" })}
-      className="whitespace-nowrap rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[12px] tabular-nums text-ink-secondary hover:bg-raised hover:text-ink @max-4xl/chathead:px-2"
-      title={detail}
-      data-testid="usage-chip"
-    >
-      <span className="@max-4xl/chathead:hidden">{text}</span>
-      <span className="hidden @max-4xl/chathead:inline">{short}</span>
-      {ctx && <span className={cn("ml-1.5 @max-4xl/chathead:hidden", share?.tone === "danger" ? "text-danger" : share?.tone === "warning" ? "text-warning" : "")} data-testid="usage-context">{ctx}</span>}
-    </button>
-  );
+/** Starting a voice call lives in the composer (Grok's white wave button)
+ * once xAI voice is set up; the header keeps the live call chip and the
+ * older call mode. */
+function HeaderCallSlot({ bot }: { bot: Bot }) {
+  const { state } = useStore();
+  const engine = useRealtimeCall();
+  const snapshot = useCallSnapshot(engine);
+  if (state.config?.xai?.configured === true && !(engine && callIsOn(snapshot))) return null;
+  return <BotCallButton bot={bot} />;
 }

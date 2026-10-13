@@ -3,7 +3,7 @@
 // snaps it to the 88px avatar rail. Leaving the rail takes a drag past 220px,
 // so a pointer resting near the line doesn't flicker between the two.
 
-export const SIDEBAR_DEFAULT_WIDTH = 280;
+export const SIDEBAR_DEFAULT_WIDTH = 290;
 export const SIDEBAR_MIN_WIDTH = 240;
 export const SIDEBAR_MAX_WIDTH = 400;
 export const SIDEBAR_RAIL_WIDTH = 88;

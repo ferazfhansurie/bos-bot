@@ -343,8 +343,8 @@ struct SharedChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .overlay(alignment: .bottom) {
             ChatActionSheet(showing: $showingPlus, actions: [
-                .init(id: "photos", systemImage: "photo.on.rectangle", title: "Photo Library", subtitle: "Add a photo to this message", disabled: sending || pendingFiles.count >= 4) { showingPhotoPicker = true },
-                .init(id: "files", systemImage: "paperclip", title: "Choose File", subtitle: "Add a document from Files", disabled: sending || pendingFiles.count >= 4) { showingFileImporter = true },
+                .init(id: "photos", systemImage: "photo.on.rectangle", title: "Photos & videos", disabled: sending || pendingFiles.count >= AttachmentPolicy.maximumItems) { showingPhotoPicker = true },
+                .init(id: "files", systemImage: "paperclip", title: "Files", disabled: sending || pendingFiles.count >= AttachmentPolicy.maximumItems) { showingFileImporter = true },
             ])
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -367,7 +367,7 @@ struct SharedChatView: View {
             if let target = deletingMessage { Button("Remove message", role: .destructive) { Task { await edit(target, text: nil) } } }
         }
         .photosPicker(isPresented: $showingPhotoPicker, selection: $selectedPhotos,
-                      maxSelectionCount: max(1, 4 - pendingFiles.count), matching: .images)
+                      maxSelectionCount: max(1, AttachmentPolicy.maximumItems - pendingFiles.count), matching: .images)
         .onChange(of: selectedPhotos) { _, items in Task { await importPhotos(items) } }
         .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.content], allowsMultipleSelection: true) { result in
             importFiles(result)
@@ -655,7 +655,7 @@ struct SharedChatView: View {
 
     private func importPhotos(_ items: [PhotosPickerItem]) async {
         defer { selectedPhotos = [] }
-        for item in items.prefix(max(0, 4 - pendingFiles.count)) {
+        for item in items.prefix(max(0, AttachmentPolicy.maximumItems - pendingFiles.count)) {
             guard let data = try? await item.loadTransferable(type: Data.self) else { error = "Could not read photo"; continue }
             let originalMime = item.supportedContentTypes.first?.preferredMIMEType ?? "image/jpeg"
             if ["image/png", "image/jpeg", "image/gif", "image/webp"].contains(originalMime) {
@@ -668,7 +668,7 @@ struct SharedChatView: View {
 
     private func importFiles(_ result: Result<[URL], Error>) {
         do {
-            for url in try result.get().prefix(max(0, 4 - pendingFiles.count)) {
+            for url in try result.get().prefix(max(0, AttachmentPolicy.maximumItems - pendingFiles.count)) {
                 let opened = url.startAccessingSecurityScopedResource()
                 defer { if opened { url.stopAccessingSecurityScopedResource() } }
                 let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
@@ -682,7 +682,8 @@ struct SharedChatView: View {
 
     private func addPending(name: String, mime: String, data: Data) {
         let limit = mime.hasPrefix("image/") ? 10 : 25
-        guard !data.isEmpty && data.count <= limit * 1024 * 1024 && pendingFiles.count < 4 else { error = "Attachment must be under \(limit) MB"; return }
+        guard !data.isEmpty && data.count <= limit * 1024 * 1024 && pendingFiles.count < AttachmentPolicy.maximumItems else { error = "Attachment must be under \(limit) MB"; return }
+        guard pendingFiles.reduce(0, { $0 + $1.data.count }) + data.count <= SharedDeliveryDraft.maximumTotalBytes else { error = "Those attachments are larger than 100 MB together."; return }
         pendingFiles.append(PendingSharedFile(id: UUID(), name: name, mime: mime, data: data))
         composer.edited()
     }

@@ -12,6 +12,7 @@ struct BotThreadTree: View {
     let open: (Chat) -> Void
     let manage: (Chat) -> Void
     @EnvironmentObject private var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var searching: Bool {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -30,7 +31,7 @@ struct BotThreadTree: View {
                 HStack(spacing: 8) {
                     Button {
                         Haptics.selection()
-                        expanded.toggle()
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) { expanded.toggle() }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
@@ -43,7 +44,7 @@ struct BotThreadTree: View {
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(BosPressStyle())
                     .accessibilityLabel("\(bot.name)'s threads")
                     .accessibilityValue(isExpanded ? "Expanded, \(count) threads" : "Collapsed, \(count) threads")
                     .accessibilityIdentifier("threads-toggle.\(bot.id)")
@@ -51,7 +52,7 @@ struct BotThreadTree: View {
 
                     if isExpanded {
                         Button { createThread(for: bot) } label: {
-                            Image(systemName: "plus").frame(width: 44, height: 44)
+                            Group { if creating { ProgressView().controlSize(.small) } else { Image(systemName: "plus") } }.frame(width: 44, height: 44)
                         }
                         .disabled(creating)
                         .accessibilityLabel("New thread with \(bot.name)")
@@ -107,7 +108,7 @@ struct BotThreadTree: View {
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(BosPressStyle())
                 .accessibilityIdentifier("thread.\(task.threadId)")
             }
         }
@@ -115,6 +116,7 @@ struct BotThreadTree: View {
 
     private func createThread(for bot: Bot) {
         guard !creating else { return }
+        Haptics.selection()
         creating = true
         Task {
             defer { creating = false }

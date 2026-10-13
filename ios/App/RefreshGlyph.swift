@@ -10,6 +10,17 @@ import CompanionCore
 import SwiftUI
 import UIKit
 
+private struct BotRefreshCheckingKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var botRefreshChecking: Bool {
+        get { self[BotRefreshCheckingKey.self] }
+        set { self[BotRefreshCheckingKey.self] = newValue }
+    }
+}
+
 extension View {
     /// `.refreshable`, drawn with the bos mark instead of the stock spinner.
     func bosRefreshable(_ action: @escaping @Sendable () async -> Void) -> some View {
@@ -21,8 +32,19 @@ private struct BosRefreshModifier: ViewModifier {
     let action: @Sendable () async -> Void
     @State private var model = RefreshGlyphModel()
 
+    private var refreshAccessibilityValue: String {
+        if model.phase != .pulling { return "Checking bots" }
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-refresh-ui-test"), model.debugRefreshCompleted { return "Ready, checked" }
+#endif
+        return "Ready"
+    }
+
     func body(content: Content) -> some View {
         content
+            .environment(\.botRefreshChecking, model.phase != .pulling)
+            .accessibilityIdentifier("bos-refresh-surface")
+            .accessibilityValue(refreshAccessibilityValue)
             .background(RefreshGlyphInstaller(model: model))
             .refreshable { await model.run(action) }
     }
@@ -35,19 +57,46 @@ private struct BosRefreshModifier: ViewModifier {
     var progress: CGFloat = 0
     var phase: Phase = .pulling
     var startedAt = Date()
+#if DEBUG
+    var debugRefreshCompleted = false
+#endif
 
     /// The pull at which UIRefreshControl fired last time. The outline
     /// finishes exactly there, so the full mark and the tap coincide.
     private static var threshold: CGFloat = 110
     @ObservationIgnored fileprivate var pull: CGFloat = 0
 
-    func run(_ action: @Sendable () async -> Void) async {
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+
+    func run(_ action: @escaping @Sendable () async -> Void) async {
+        if let refreshTask { await refreshTask.value; return }
+        // Updating the roster's environment can cancel SwiftUI's refresh
+        // action. Own this bounded check independently so that redraw cannot
+        // cancel its network requests or collapse its checking state.
+        let task = Task { @MainActor in await perform(action) }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
+    }
+
+    private func perform(_ action: @Sendable () async -> Void) async {
         if pull > 40 { Self.threshold = min(180, pull) }
         startedAt = .now
         progress = 1
         phase = .refreshing
         Haptics.impact(.light)
+#if DEBUG
+        debugRefreshCompleted = false
+#endif
         await action()
+#if DEBUG
+        // XCTest waits for animations to idle before returning from a drag.
+        // Preserve proof that its five-second check actually completed, rather
+        // than merely asserting Ready after a cancelled 30ms refresh.
+        if ProcessInfo.processInfo.arguments.contains("-refresh-ui-test") {
+            debugRefreshCompleted = !Task.isCancelled && Date().timeIntervalSince(startedAt) >= 4.5
+        }
+#endif
         // a refresh that lands instantly still gets one beat of the arc
         let held = Date().timeIntervalSince(startedAt)
         if held < 0.5 { try? await Task.sleep(for: .seconds(0.5 - held)) }

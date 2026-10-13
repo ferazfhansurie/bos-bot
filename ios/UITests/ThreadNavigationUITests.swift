@@ -4,6 +4,22 @@ import XCTest
 /// paired computer, message sends, or server mutations are involved.
 final class ThreadNavigationUITests: XCTestCase {
     @MainActor
+    func testColdNotificationOpensExactSiblingWhileAnotherThreadRuns() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-store-preview", "-threads-preview", "-notification-tap-preview",
+                               "-companion.prefs.islandIntro", "never",
+                               "-companion.onboarding.welcomeSeen", "YES",
+                               "-companion.onboarding.notificationsSeen", "YES"]
+        app.launch()
+        let reply = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I am reviewing iCloud here")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 15))
+        XCTAssertTrue(transcriptContains("Keep my iCloud inbox in this separate conversation", in: app))
+        XCTAssertFalse(transcriptContains("I’m reviewing Gmail here", in: app))
+        recordScreenshot("Cold notification opens exact sibling", in: app)
+    }
+
+    @MainActor
     func testTopBarOpensThreadsWithIslandIntroEnabledAndSwitches() {
         let app = launchPreview(islandIntro: "always")
         openGmail(in: app)

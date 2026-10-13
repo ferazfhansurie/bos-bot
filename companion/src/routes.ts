@@ -61,6 +61,11 @@ export function isMessageFileDownload(method: string, path: string): boolean {
   return method === MESSAGE_FILE_ROUTE.method && MESSAGE_FILE_ROUTE.path.test(path);
 }
 
+export function isBrowserAccess(method: string, path: string): boolean {
+  return (method === "GET" && /^\/api\/bots\/[\w-]+\/browser\/live$/.test(path))
+    || (method === "POST" && /^\/api\/bots\/[\w-]+\/browser\/action$/.test(path));
+}
+
 export function isCloudDesktopAccess(method: string, path: string): boolean {
   return isCloudDesktopJoin(method, path)
     || (method === CLOUD_DESKTOP_CONTROL_ROUTE.method && CLOUD_DESKTOP_CONTROL_ROUTE.path.test(path));
@@ -73,6 +78,9 @@ export function isCloudDesktopAccess(method: string, path: string): boolean {
  * fails to match and is denied rather than forwarded — the failure mode of
  * a strict pattern is a closed door, which is the one to have. */
 const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
+  // Same device-level computer capability as live desktop access.
+  { method: "GET", path: /^\/api\/bots\/[\w-]+\/browser\/live$/ },
+  { method: "POST", path: /^\/api\/bots\/[\w-]+\/browser\/action$/ },
   // These transport signed owner confirmations; pairing alone cannot elevate.
   { method: "GET", path: /^\/api\/remote-full\/status$/ },
   { method: "POST", path: /^\/api\/remote-full\/(?:prepare|commit|receipt)$/ },

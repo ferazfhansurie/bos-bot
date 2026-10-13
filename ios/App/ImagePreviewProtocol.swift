@@ -19,10 +19,27 @@ final class ImagePreviewProtocol: URLProtocol {
             }
         }
         let payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: String]
+        if request.httpMethod == "POST",
+           request.url?.path == "/api/threads/preview-gmail/messages/preview-gmail-reply/file",
+           request.value(forHTTPHeaderField: "Authorization") == "Bearer image-fixture-token",
+           payload?["path"] == "/fixture/notes.txt" {
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+                "Content-Type": "text/plain", "Content-Disposition": "attachment; filename=notes.txt"
+            ])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data("These are the delivered notes.".utf8))
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        // A reply that embeds its images as Markdown sends the authored
+        // destination through the same route.
+        let embeddedCover = request.url?.path == "/api/threads/preview-gmail/messages/preview-covers-reply/file"
+            && ["/fixture/rea/cover-a.png", "/fixture/rea/cover-b.png"].contains(payload?["path"] ?? "")
+        let generatedImage = request.url?.path == "/api/threads/preview-gmail/messages/preview-gmail-reply/file"
+            && payload?["path"] == "/fixture/screenshot.png"
         guard request.httpMethod == "POST",
-              request.url?.path == "/api/threads/preview-gmail/messages/preview-gmail-reply/file",
+              embeddedCover || generatedImage,
               request.value(forHTTPHeaderField: "Authorization") == "Bearer image-fixture-token",
-              payload?["path"] == "/fixture/screenshot.png",
               let url = Bundle.main.url(forResource: "ImagePreview", withExtension: "png"),
               let data = try? Data(contentsOf: url) else {
             client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))

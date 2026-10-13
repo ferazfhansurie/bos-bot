@@ -25,6 +25,8 @@ export interface WhatsAppStoredMessage extends CapturedMessage {
 }
 
 export interface ListMessagesQuery {
+  accountId?: string;
+  chatIds?: string[];
   chatId?: string;
   /** only messages strictly older than this unix-seconds timestamp */
   before?: number;
@@ -38,6 +40,7 @@ const clampLimit = (value: number | undefined, fallback: number) =>
   Math.max(1, Math.min(MAX_LIMIT, Number.isFinite(value) ? Math.floor(value!) : fallback));
 
 interface Row {
+  account_id: string | null;
   id: string;
   chat_id: string;
   chat_name: string | null;
@@ -52,6 +55,7 @@ interface Row {
 }
 
 const fromRow = (row: Row): WhatsAppStoredMessage => ({
+  accountId: row.account_id ?? null,
   id: row.id,
   chatId: row.chat_id,
   chatName: row.chat_name,
@@ -104,6 +108,8 @@ export class WhatsAppStore {
       CREATE INDEX IF NOT EXISTS whatsapp_messages_time ON whatsapp_messages(timestamp);
     `);
     this.db = db;
+    const columns = db.prepare("PRAGMA table_info(whatsapp_messages)").all() as Array<{ name: string }>;
+    if (!columns.some(column => column.name === "account_id")) db.exec("ALTER TABLE whatsapp_messages ADD COLUMN account_id TEXT");
     return db;
   }
 
@@ -111,8 +117,8 @@ export class WhatsAppStore {
   insert(message: CapturedMessage): boolean {
     const result = this.open().prepare(`
       INSERT OR IGNORE INTO whatsapp_messages
-        (id, chat_id, chat_name, from_id, author, from_me, timestamp, type, body, has_media, captured_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, chat_id, chat_name, from_id, author, from_me, timestamp, type, body, has_media, captured_at, account_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       message.id,
       message.chatId,
@@ -125,6 +131,7 @@ export class WhatsAppStore {
       message.body,
       message.hasMedia ? 1 : 0,
       this.now(),
+      message.accountId ?? null,
     );
     return Number(result.changes) > 0;
   }
@@ -134,20 +141,27 @@ export class WhatsAppStore {
     return Number(row.n);
   }
 
-  listChats(limit?: number): WhatsAppChatSummary[] {
+  message(id: string): WhatsAppStoredMessage | undefined {
+    const row = this.open().prepare("SELECT * FROM whatsapp_messages WHERE id = ?").get(id) as unknown as Row | undefined;
+    return row ? fromRow(row) : undefined;
+  }
+
+  listChats(limit?: number, chatIds?: string[], accountId?: string): WhatsAppChatSummary[] {
+    if (chatIds?.length === 0) return [];
     const rows = this.open().prepare(`
       SELECT m.chat_id, m.chat_name, m.body, m.from_me, m.timestamp, c.n
       FROM (
-        SELECT chat_id, MAX(timestamp) AS last, COUNT(*) AS n FROM whatsapp_messages GROUP BY chat_id
+        SELECT chat_id, MAX(timestamp) AS last, COUNT(*) AS n FROM whatsapp_messages ${chatIds || accountId ? `WHERE ${[...(chatIds ? [`chat_id IN (${chatIds.map(() => "?").join(",")})`] : []), ...(accountId ? ["account_id = ?"] : [])].join(" AND ")}` : ""} GROUP BY chat_id
       ) c
       JOIN whatsapp_messages m ON m.chat_id = c.chat_id AND m.timestamp = c.last
+      ${accountId ? "WHERE m.account_id = ?" : ""}
       GROUP BY m.chat_id
       ORDER BY m.timestamp DESC
       LIMIT ?
-    `).all(clampLimit(limit, 30)) as Array<{ chat_id: string; chat_name: string | null; body: string; from_me: number; timestamp: number; n: number }>;
+    `).all(...(chatIds ?? []), ...(accountId ? [accountId, accountId] : []), clampLimit(limit, 30)) as Array<{ chat_id: string; chat_name: string | null; body: string; from_me: number; timestamp: number; n: number }>;
     return rows.map((row) => ({
       chatId: row.chat_id,
-      chatName: row.chat_name ?? this.latestChatName(row.chat_id),
+      chatName: row.chat_name ?? (accountId ? null : this.latestChatName(row.chat_id)),
       messageCount: Number(row.n),
       lastTimestamp: row.timestamp,
       lastBody: row.body,
@@ -164,8 +178,14 @@ export class WhatsAppStore {
 
   /** newest first */
   listMessages(query: ListMessagesQuery = {}): WhatsAppStoredMessage[] {
+    if (query.chatIds?.length === 0) return [];
     const where: string[] = [];
     const params: Array<string | number> = [];
+    if (query.accountId) { where.push("account_id = ?"); params.push(query.accountId); }
+    if (query.chatIds) {
+      where.push(`chat_id IN (${query.chatIds.map(() => "?").join(",")})`);
+      params.push(...query.chatIds);
+    }
     if (query.chatId) {
       where.push("chat_id = ?");
       params.push(query.chatId);

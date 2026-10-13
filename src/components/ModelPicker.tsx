@@ -6,7 +6,7 @@
 // same row and write through the same action.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, RefreshCw, Search } from "lucide-react";
-import { useStore, currentTaskBot, type Bot, type InstanceInfo, type ModelSelection } from "@/state/store";
+import { api, useStore, currentTaskBot, type Bot, type InstanceInfo, type ModelSelection } from "@/state/store";
 import type { EffortLevel } from "../../shared/wire";
 import type { ModelVariantOption } from "../../shared/runtime-events";
 import { filterCustomModels, partitionCustomModels, suggestedModels } from "@/lib/custom-models";
@@ -63,8 +63,10 @@ export function EffortRow({
   updateBotDefault,
   className,
   label,
+  instance: suppliedInstance,
 }: {
   bot: Bot;
+  instance?: InstanceInfo;
   threadId?: string;
   updateBotDefault?: boolean;
   className?: string;
@@ -72,9 +74,9 @@ export function EffortRow({
 }) {
   const { state, dispatch } = useStore();
   const selection = bot.modelSelection;
-  const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
+  const instance = suppliedInstance ?? (!bot.remote ? state.instances.find((candidate) => candidate.instanceId === selection.instanceId) : undefined);
   if (instance?.capabilities?.modelVariants) {
-    return <ModelVariantRow bot={bot} threadId={threadId} updateBotDefault={updateBotDefault} className={className} label={label} />;
+    return <ModelVariantRow instance={instance} bot={bot} threadId={threadId} updateBotDefault={updateBotDefault} className={className} label={label} />;
   }
   const levels = instance?.capabilities?.effortLevels;
   // An engine with no levels gets no control at all, not an empty one.
@@ -117,8 +119,9 @@ function variantLabel(option: ModelVariantOption): string {
 }
 
 /** ACP variant ids are opaque; their model/session declares the available choices. */
-export function ModelVariantRow({ bot, threadId, updateBotDefault, className, label }: {
+export function ModelVariantRow({ bot, threadId, updateBotDefault, className, label, instance: suppliedInstance }: {
   bot: Bot;
+  instance?: InstanceInfo;
   threadId?: string;
   updateBotDefault?: boolean;
   className?: string;
@@ -126,7 +129,7 @@ export function ModelVariantRow({ bot, threadId, updateBotDefault, className, la
 }) {
   const { state, dispatch } = useStore();
   const selection = bot.modelSelection;
-  const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
+  const instance = suppliedInstance ?? (!bot.remote ? state.instances.find((candidate) => candidate.instanceId === selection.instanceId) : undefined);
   if (!instance?.capabilities?.modelVariants) return null;
   const session = state.modelVariantSessions[threadId ?? bot.threadId];
   const reported = session?.instanceId === selection.instanceId && session.model === selection.model ? session.variants : undefined;
@@ -360,13 +363,17 @@ export function ModelPicker({
   const refreshingRef = useRef(false);
   const lastClaudeIdRef = useRef<string | null>(null);
 
+  const [linkedInstances,setLinkedInstances]=useState<InstanceInfo[]>([]),[linkedCatalogError,setLinkedCatalogError]=useState('');
+  const refreshLinkedInstances=useCallback(async()=>{try{const data=await api(`/api/bots/${bot.id}/model-catalog`);if(!Array.isArray(data.instances))throw new Error('This bot’s server did not return a model catalog.');setLinkedInstances(data.instances);setLinkedCatalogError('');}catch(error){setLinkedCatalogError(error instanceof Error?error.message:'Could not load accounts on this bot’s server.');throw error;}},[bot.id]);
+  useEffect(()=>{setLinkedInstances([]);setLinkedCatalogError('');if(bot.remote)void refreshLinkedInstances().catch(()=>{});},[bot.id,Boolean(bot.remote),refreshLinkedInstances]);
+  const instances=bot.remote?linkedInstances:state.instances;
   const selection = bot.modelSelection;
-  const active = state.instances.find((instance) => instance.instanceId === selection.instanceId);
+  const active = instances.find((instance) => instance.instanceId === selection.instanceId);
   const selectedVariantLabel = selection.variant === undefined ? undefined : variantLabel(
     active?.models.options.find((option) => option.id === selection.model)?.variants?.find((option) => option.id === selection.variant)
       ?? { id: selection.variant, label: selection.variant },
   );
-  const supportedInstances = state.instances.filter((instance) => BOS_DRIVER_KINDS.has(instance.driverKind));
+  const supportedInstances = instances.filter((instance) => BOS_DRIVER_KINDS.has(instance.driverKind));
   const claudeAccounts = supportedInstances.filter((instance) => instance.driverKind === "claudeAgent");
   const multipleClaudeAccounts = claudeAccounts.length > 1;
   const showActiveAccount = multipleClaudeAccounts && active?.driverKind === "claudeAgent";
@@ -379,7 +386,7 @@ export function ModelPicker({
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setRefreshing(true);
-    void refreshInstances()
+    void (bot.remote?refreshLinkedInstances():refreshInstances())
       .catch(() => {
         // Keep the last known catalog when the app is temporarily offline.
       })
@@ -387,15 +394,14 @@ export function ModelPicker({
         refreshingRef.current = false;
         setRefreshing(false);
       });
-  }, [refreshInstances]);
+  }, [refreshInstances,Boolean(bot.remote),refreshLinkedInstances]);
 
   const refreshModels = useCallback(() => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setRefreshing(true);
     const instanceId = railId ?? selection.instanceId;
-    void refreshInstances()
-      .then(() => refreshInstanceModels(instanceId))
+    void (bot.remote?refreshLinkedInstances():refreshInstances().then(() => refreshInstanceModels(instanceId)))
       .catch(() => {
         // Keep the last known catalog when the app is temporarily offline.
       })
@@ -403,7 +409,7 @@ export function ModelPicker({
         refreshingRef.current = false;
         setRefreshing(false);
       });
-  }, [railId, refreshInstanceModels, refreshInstances, selection.instanceId]);
+  }, [railId, refreshInstanceModels, refreshInstances, selection.instanceId,Boolean(bot.remote),refreshLinkedInstances]);
 
   useEffect(() => {
     if (open) refreshLocalInstances();
@@ -458,11 +464,11 @@ export function ModelPicker({
   const pick = (instance: InstanceInfo, model: string) => {
     if (bot.busy) return;
     const nextSelection = modelSelectionForPick(selection, instance, model);
-    const updateBotDefault = !threadId || scope === "bot";
+    const updateBotDefault = !bot.remote && (!threadId || scope === "bot");
     const profile = state.bots.find((candidate) => candidate.id === bot.id) ?? bot;
     const targets = updateBotDefault ? [currentTaskBot(profile, threadId ?? bot.threadId), profile] : [bot];
     if (targets.some((target) => !approvalCarriesAcrossModelSwitch(approvalModeFor(target),
-      state.instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId)?.driverKind,
+      instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId)?.driverKind,
       instance.driverKind, state.config?.approvals?.keepAcrossModelSwitch === true))) {
       setPendingSwitch({ botId: bot.id, threadId: threadId ?? bot.threadId,
         selection: nextSelection, updateBotDefault, name: modelLabel(instance, model) });
@@ -600,10 +606,11 @@ export function ModelPicker({
               : "absolute right-0 top-full z-30 mt-2 w-[380px] max-w-[calc(100vw-2rem)] max-h-[min(480px,calc(100dvh-7rem))] shadow-2xl shadow-black/50",
           )}
         >
+          {linkedCatalogError&&<p role="alert" className="p-3 text-xs text-ink-secondary">{linkedCatalogError}</p>}
           <ModelEngineRail instances={supportedInstances} selectedInstance={railInstance} claudeInstance={claudeRailInstance} onSelect={selectRail} />
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {threadId && (
+            {threadId && !bot.remote && (
               <div className="shrink-0 border-b border-hairline/40 px-3 py-2">
                 <div role="group" aria-label="Apply model changes to" className="flex gap-1">
                   {(["thread", "bot"] as const).map((value) => (
@@ -656,6 +663,7 @@ export function ModelPicker({
                   {railInstance.driverKind === "claudeAgent" && (
                     <ClaudeAccountSelect accounts={claudeAccounts} selectedId={railInstance.instanceId} onSelect={selectRail} />
                   )}
+                  {bot.remote&&<p className="mt-1 text-[11px] text-ink-secondary">Accounts on {bot.remote.homeName}</p>}
                   {railInstance.snapshot.authenticated && railInstance.snapshot.account && (
                     <p className="mt-1 break-words text-[11px] text-ink-secondary">
                       {[railInstance.snapshot.account.email, railInstance.snapshot.account.organization].filter(Boolean).join(" · ")}
@@ -681,7 +689,7 @@ export function ModelPicker({
 
                 {blocked ? (
                   <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1">
-                    {freeCloud ? <FreeModelSetup /> : <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />}
+                    {bot.remote ? <p className="text-xs text-ink-secondary">Sign in or set up this engine on {bot.remote.homeName}. Accounts on this Mac are separate.</p> : freeCloud ? <FreeModelSetup /> : <EngineSetup instance={railInstance} intent={pane === "custom" ? "inject" : "cloud"} />}
                     {railInstance.claudeAccount && needsSignIn(railInstance) && pane !== "custom" && (
                       <p className="mt-2 text-[11.5px] leading-relaxed text-ink-secondary">
                         {railInstance.claudeAccount.signInShell === "powershell" && `${t("engines.account.powershell")} `}
@@ -790,15 +798,16 @@ export function ModelPicker({
                     popover. */}
                 {!contained && (
                   <EffortRow
+                    instance={active}
                     bot={bot}
                     threadId={threadId}
-                    updateBotDefault={Boolean(threadId && scope === "bot")}
+                    updateBotDefault={Boolean(!bot.remote && threadId && scope === "bot")}
                     className="shrink-0 border-t border-hairline/40 px-4 py-3"
                     label={<span className="text-[12.5px] font-medium text-ink">{active?.capabilities?.modelVariants ? "Reasoning" : "Effort"}</span>}
                   />
                 )}
 
-                {freeCloud && !blocked && <div className="max-h-48 shrink-0 overflow-y-auto px-3 pb-3"><FreeModelSetup compact /></div>}
+                {!bot.remote && freeCloud && !blocked && <div className="max-h-48 shrink-0 overflow-y-auto px-3 pb-3"><FreeModelSetup compact /></div>}
                 {pane === "main" && !freeCloud && (
                   <button
                     type="button"

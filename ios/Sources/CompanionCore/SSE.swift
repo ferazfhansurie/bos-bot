@@ -19,10 +19,12 @@ private let log = Logger(subsystem: "com.openmausbot.companion", category: "stre
 /// One event off the wire, before it is understood as a `Frame`.
 public struct SSEEvent: Equatable, Sendable {
     public var id: String?
+    public var name: String?
     public var data: String
 
-    public init(id: String? = nil, data: String) {
+    public init(id: String? = nil, name: String? = nil, data: String) {
         self.id = id
+        self.name = name
         self.data = data
     }
 }
@@ -66,16 +68,18 @@ public struct SSEParser: Sendable {
 
     static func event(from fields: [(name: String, value: String)]) -> SSEEvent? {
         var id: String?
+        var name: String?
         var dataLines: [String] = []
         for field in fields {
             switch field.name {
             case "data": dataLines.append(field.value)
             case "id": id = field.value
+            case "event": name = field.value
             default: break
             }
         }
         guard !dataLines.isEmpty else { return nil }
-        return SSEEvent(id: id, data: dataLines.joined(separator: "\n"))
+        return SSEEvent(id: id, name: name, data: dataLines.joined(separator: "\n"))
     }
 }
 
@@ -94,11 +98,35 @@ public struct SSEParser: Sendable {
 /// Reconnection is *not* handled here — that decision belongs to whatever
 /// knows whether the app is even on screen. This runs until the stream ends
 /// or the consuming task is cancelled.
+private final class StreamLiveness: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = ContinuousClock.now
+    func received() { lock.lock(); last = .now; lock.unlock() }
+    func expired(after timeout: Duration) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return ContinuousClock.now - last >= timeout
+    }
+}
+
 public func eventStream(
     request: URLRequest,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    idleTimeout: Duration = .seconds(35)
 ) -> AsyncThrowingStream<StreamFrame, Error> {
     AsyncThrowingStream { continuation in
+        let liveness = StreamLiveness()
+        // Two missed server pings require cursor replay, even if the socket
+        // still claims to be open. Do not wait for a foreground transition.
+        let watchdog = Task.detached {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: min(idleTimeout, .seconds(1))) }
+                catch { return }
+                if liveness.expired(after: idleTimeout) {
+                    continuation.finish(throwing: URLError(.timedOut))
+                    return
+                }
+            }
+        }
         // Detached so reading bytes, splitting lines and decoding JSON never
         // run on the consumer's actor. The consumer is `Session`, which is
         // on the main actor; only the decoded frame hops there.
@@ -173,6 +201,7 @@ public func eventStream(
                         log.error("dropped an undecodable frame (kind: \(kind, privacy: .public))")
                         continue
                     }
+                    liveness.received()
                     continuation.yield(frame)
                 }
                 continuation.finish()
@@ -180,7 +209,7 @@ public func eventStream(
                 continuation.finish(throwing: error)
             }
         }
-        continuation.onTermination = { _ in task.cancel() }
+        continuation.onTermination = { _ in task.cancel(); watchdog.cancel() }
     }
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

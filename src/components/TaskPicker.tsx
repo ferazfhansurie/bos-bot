@@ -92,7 +92,9 @@ function ConversationTaskPicker({
   onMove,
   attention,
   onAttentionJump,
+  sidebar = false,
 }: {
+  sidebar?: boolean;
   threadId: string;
   tasks: PickerTask[];
   busy: boolean;
@@ -234,20 +236,20 @@ function ConversationTaskPicker({
           else setOpen(true);
         }}
         title={switchTitle}
-        aria-label={t("task.switch")}
+        aria-label={sidebar ? "all threads" : t("task.switch")}
         className={cn(
           "flex max-w-[220px] items-center gap-1.5 rounded-full border border-hairline/40 px-2.5 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink",
           COMPACT_BUBBLE,
         )}
       >
-        <span className="truncate @max-4xl/chathead:hidden">{t("task.switch")}</span>
+        <span className={cn("truncate", !sidebar && "@max-4xl/chathead:hidden")}>{sidebar ? "all threads" : t("task.switch")}</span>
         {/* folded: just the count in the bubble — the title rides the tooltip */}
         <span className="shrink-0 tabular-nums opacity-60 @max-4xl/chathead:opacity-100">{tasks.length}</span>
         <ChevronDown size={12} className="shrink-0 @max-4xl/chathead:hidden" />
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-1 w-[300px] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1 shadow-2xl shadow-black/50">
+        <div style={sidebar ? { position: "fixed", left: Math.min(ref.current?.getBoundingClientRect().left ?? 16, window.innerWidth - 316), top: Math.min((ref.current?.getBoundingClientRect().bottom ?? 100) + 4, Math.max(16, window.innerHeight - 420)), maxHeight: "min(400px, 85vh)", overflowY: "auto" } : undefined} className={cn("absolute top-full z-40 mt-1 w-[300px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1 shadow-2xl shadow-black/50", sidebar ? "left-0" : "right-0")}>
           <div className="px-2 pb-1 pt-1.5">
             <div className="flex items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-2.5 py-1.5 focus-within:border-accent/60">
               <Search size={13} className="shrink-0 text-ink-secondary" />
@@ -436,12 +438,13 @@ export function BotActivityPicker({ bot }: { bot: Bot }) {
   );
 }
 
-export function TaskPicker({ bot }: { bot: Bot }) {
+export function TaskPicker({ bot, sidebar = false }: { bot: Bot; sidebar?: boolean }) {
   const { state, dispatch } = useStore();
   const showThreads = useShowThreads();
   if (!showThreads) return null;
   return (
     <ConversationTaskPicker
+      sidebar={sidebar}
       threadId={bot.threadId}
       tasks={(bot.tasks ?? []).filter((task) => !task.routineRunId)}
       busy={false}

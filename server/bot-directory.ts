@@ -17,6 +17,8 @@ export interface DirectoryBot {
    * any shared team file */
   prompt: string;
   detailUrl: string;
+  /** who submitted it, shown as the bot's maker */
+  contributor?: string;
 }
 
 export interface MatchedDirectoryBot extends DirectoryBot {
@@ -63,6 +65,7 @@ export function parseBotDirectory(value: unknown): DirectoryBot[] {
         : [],
       prompt,
       detailUrl,
+      ...(text(raw.contributor, 80) ? { contributor: text(raw.contributor, 80)! } : {}),
     });
   }
   return bots;

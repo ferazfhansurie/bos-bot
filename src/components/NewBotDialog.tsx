@@ -94,7 +94,7 @@ export function NewBotDialog() {
       >
         <div className="flex items-start justify-between gap-4 px-5 pt-5">
           <div>
-            <h2 className="text-[17px] font-semibold text-ink">{t("sidebar.newBot")}</h2>
+            <h2 className="ui-panel-title">{t("sidebar.newBot")}</h2>
             <p className="mt-1 text-[13px] text-ink-secondary">{t("newBot.intro")}</p>
           </div>
           {creating && <Loader2 aria-hidden="true" size={18} className="mt-1.5 shrink-0 animate-spin text-ink-secondary" />}
@@ -113,7 +113,7 @@ export function NewBotDialog() {
             <span className="flex items-center gap-2 text-[14px] font-medium text-ink">
               <BotIcon size={16} className="text-ink-secondary" /> {t("newBot.blank")}
             </span>
-            <span className="text-[12.5px] leading-relaxed text-ink-secondary">{t("newBot.blankDescription")}</span>
+            <span className="text-[13px] leading-relaxed text-ink-secondary">{t("newBot.blankDescription")}</span>
           </button>
           {BOT_ROLES.map((role) => (
             <button
@@ -127,7 +127,7 @@ export function NewBotDialog() {
               )}
             >
               <span className="text-[14px] font-medium text-ink">{role.title}</span>
-              <span className="text-[12.5px] leading-relaxed text-ink-secondary">{role.description}</span>
+              <span className="text-[13px] leading-relaxed text-ink-secondary">{role.description}</span>
               {role.apps.length > 0 && (
                 <span className="mt-auto flex flex-wrap gap-1 pt-1">
                   {role.apps.map((slug) => (

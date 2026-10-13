@@ -67,15 +67,6 @@ struct ActivityDisclosureRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            if count > 1 {
-                Text("\(count)")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Color.secondary.opacity(0.12), in: Capsule())
-            }
-
             Spacer(minLength: 6)
 
             StepStatusBadge(status: status)
@@ -85,9 +76,7 @@ struct ActivityDisclosureRow: View {
                 .foregroundStyle(Color.secondary.opacity(0.6))
         }
         .padding(.horizontal, 11)
-        .frame(height: 40)
-        .background(isDark ? Color.white.opacity(0.05) : Color.black.opacity(0.035),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(minHeight: 44)
         .contentShape(Rectangle())
     }
 }
@@ -430,18 +419,13 @@ struct WorkingSteps: View {
     let startedAt: Date
     /// The bot's face, when the row above does not already show it (1:1).
     var avatar: AnyView? = nil
-    @State private var now = Date()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private static let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-
-    private var steps: [ToolStep] { items.map(toolStep(from:)) }
-    private var live: ToolStep? { steps.last(where: { $0.status == .running }) }
-    private var finished: [ToolStep] { steps.filter { $0.status != .running }.suffix(3) }
-    /// Thinking until a tool starts, then the step in plain words.
-    private var line: String { live.map { $0.isTool ? $0.label : $0.name } ?? "Thinking" }
-
     var body: some View {
+        let steps = items.map(toolStep(from:))
+        let live = steps.last(where: { $0.status == .running })
+        let finished = steps.filter { $0.status != .running }.suffix(3)
+        let line = live.map { $0.isTool ? $0.label : $0.name } ?? "Thinking"
         VStack(alignment: .leading, spacing: 6) {
             ForEach(finished) { step in
                 ToolStepRow(step: step, dimmed: true)
@@ -456,10 +440,7 @@ struct WorkingSteps: View {
                 }
                 ShimmerLabel(text: line)
                     .lineLimit(1)
-                Text(elapsedLabel(Int(now.timeIntervalSince(startedAt))))
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-                    .monospacedDigit()
+                WorkingElapsedTime(startedAt: startedAt)
                 if steps.count > 1 {
                     Text("· \(steps.count) steps")
                         .font(.system(size: 10.5))
@@ -470,6 +451,18 @@ struct WorkingSteps: View {
         }
         .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: finished.map(\.id))
         .padding(.vertical, 6)
-        .onReceive(Self.tick) { now = $0 }
+    }
+}
+
+/// Only the clock ticks; it must not reparse every tool output each second.
+private struct WorkingElapsedTime: View {
+    let startedAt: Date
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(elapsedLabel(max(0, Int(context.date.timeIntervalSince(startedAt)))))
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(Color.secondary.opacity(0.7))
+                .monospacedDigit()
+        }
     }
 }

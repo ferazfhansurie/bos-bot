@@ -29,6 +29,9 @@ export function Switch({
   );
 }
 
+/** Grok's grouping: a small grey label (and its line of help) sits above a
+ * rounded card that holds the controls. A Card with no controls is just the
+ * label. */
 export function Card({
   title,
   subtitle,
@@ -39,11 +42,15 @@ export function Card({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl bg-card p-4">
-      {title && <div className="text-[15px] font-medium text-ink">{title}</div>}
-      {subtitle && <div className={title ? "mt-0.5 text-[13px] leading-relaxed text-ink-secondary" : "text-[13px] leading-relaxed text-ink-secondary"}>{subtitle}</div>}
-      {children && <div className={title || subtitle ? "mt-4" : undefined}>{children}</div>}
-    </div>
+    <section className="settings-card flex flex-col gap-2">
+      {(title || subtitle) && (
+        <div className="px-1">
+          {title && <div className="text-[13.5px] font-medium text-ink-secondary">{title}</div>}
+          {subtitle && <div className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary/75">{subtitle}</div>}
+        </div>
+      )}
+      {children && <div className="ui-surface bg-card">{children}</div>}
+    </section>
   );
 }
 
@@ -61,11 +68,11 @@ export function SettingRow({
 }) {
   const titleId = useId();
   return (
-    <div role="group" aria-labelledby={titleId} className="setting-row border-t border-hairline/40 py-4 first:border-t-0">
+    <div role="group" aria-labelledby={titleId} className="setting-row border-t border-hairline/25 py-3.5 first:border-t-0">
       <div className="grid min-w-0 grid-cols-1 items-center gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-6">
         <div className="min-w-0">
-          <div id={titleId} className="text-[14px] font-medium text-ink">{title}</div>
-          {subtitle && <div className="mt-1 text-[12px] leading-relaxed text-ink-secondary">{subtitle}</div>}
+          <div id={titleId} className="text-[14.5px] text-ink">{title}</div>
+          {subtitle && <div className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary">{subtitle}</div>}
         </div>
         <div className="min-w-0 sm:max-w-[240px]">{children}</div>
       </div>

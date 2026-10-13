@@ -788,6 +788,23 @@ export function latestSaidByBot(threadIds: readonly string[], botId: string, sin
   }));
 }
 
+/** What the person asked across these threads since `since`, newest first:
+ * the raw material for spotting a repeated manual ask. Bot-relayed lines
+ * (peerAsk) are someone else's words and do not count. */
+export function userAsksSince(threadIds: readonly string[], since: number, limit = 400): Array<{ at: number; text: string }> {
+  if (!threadIds.length) return [];
+  const placeholders = threadIds.map(() => "?").join(", ");
+  const rows = db()
+    .prepare(
+      "SELECT at, substr(text, 1, 600) AS text FROM messages " +
+        `WHERE kind = 'text' AND role = 'user' AND text IS NOT NULL AND at >= ? AND thread_id IN (${placeholders}) ` +
+        "AND json_extract(json, '$.peerAsk') IS NULL " +
+        "ORDER BY at DESC LIMIT ?",
+    )
+    .all(since, ...threadIds, limit) as Array<{ at: number; text: string }>;
+  return rows;
+}
+
 export interface MemoryFileStat {
   path: string;
   mtimeMs: number;
@@ -853,4 +870,10 @@ export function closeMessageDb(): void {
   } catch {}
   handle = null;
   handlePath = null;
+}
+
+/** Latest human message, independent of bot replies and tool activity. */
+export function lastUserMessageAt(threadId: string): number | undefined {
+  const row = db().prepare("SELECT at FROM messages WHERE thread_id = ? AND role = 'user' AND json_extract(json, '$.from.botId') IS NULL ORDER BY at DESC LIMIT 1").get(threadId) as { at: number } | undefined;
+  return row?.at;
 }

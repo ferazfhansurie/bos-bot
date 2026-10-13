@@ -5,6 +5,7 @@ export type UsageWindow = { usedPercent: number | null; resetsAt: number | null 
 export type UsageAccount = {
   provider: "claude" | "codex";
   account: string;
+  instanceId?: string;
   fiveHour?: UsageWindow;
   sevenDay: UsageWindow;
   status: string;
@@ -70,7 +71,9 @@ function peakOf(account: UsageAccount): number | null {
 
 function providerChip(provider: "claude" | "codex", accounts: UsageAccount[]): UsageChip | null {
   const mine = accounts.filter((a) => a.provider === provider);
-  if (mine.length === 0) return null;
+  // a provider that isn't signed in reports no numbers at all; a "–%" chip
+  // just tells a new user about a tool they don't have
+  if (mine.every((account) => peakOf(account) === null)) return null;
   // with two accounts on one provider, the row shows the one nearest its cap
   const worst = mine.reduce((a, b) => ((peakOf(b) ?? -1) > (peakOf(a) ?? -1) ? b : a));
   const list = windows(worst);
@@ -101,6 +104,8 @@ function xaiChip(xai: XaiUsage | null): UsageChip | null {
       title: `xAI credits: ${formatCents(credits.remainingCents)} left of ${formatCents(credits.purchasedCents)}\n${voice}`,
     };
   }
+  // never used and no key: nothing to show
+  if (!xai.credits.configured && xai.voice.seconds === 0 && xai.voice.calls === 0) return null;
   // no management key (or xAI unreachable with nothing cached): minutes instead
   const hint = xai.credits.configured ? "" : "\nadd a management key in Settings → Usage to see credits left";
   return { key: "xai", label: "xai", value: formatSeconds(xai.voice.seconds), peak: null, title: `xAI ${voice}${hint}` };

@@ -1647,3 +1647,142 @@ button:disabled.bg-danger {
 @media (prefers-reduced-motion: reduce) {
   .voice-call-indeterminate { animation: none; transform: translateX(97%); }
 }
+
+/* Conversation geometry is shared by local and linked-home chat. Palette
+   remains owned by the selected skin; these roles only govern visual rhythm. */
+.conversation-bubble {
+  border-radius: 18px;
+  font-size: 15px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.conversation-header { min-height: 64px; gap: 12px; }
+.conversation-composer { border-radius: 26px; }
+.conversation-tools > summary::-webkit-details-marker { display: none; }
+.conversation-tools[open] > summary { background: var(--color-raised); color: var(--color-ink); }
+
+/* App-wide hierarchy: skins own color; these roles own rhythm. */
+@layer components {
+  .ui-page-title { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-ink); }
+  .ui-panel-title { font-size: 17px; line-height: 24px; font-weight: 600; color: var(--color-ink); }
+  .ui-section-title { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--color-ink); }
+  .ui-surface { border-radius: 12px; background: var(--color-card); padding: 16px; }
+  .ui-setup-link { display: flex; min-width: 0; align-items: center; gap: 12px; border-radius: 12px; background: var(--color-card); padding: 12px; text-align: start; }
+  .ui-setup-link:hover { background: var(--color-raised-hover); }
+}
+
+/* Nested pickers align to the tools panel, not a small icon midway across it. */
+.conversation-tools [role="group"] div:has(> [role="dialog"]),
+.conversation-tools [role="group"] div:has(> [role="menu"]) { position: static; }
+.conversation-tools [role="dialog"] { max-height: min(480px, calc(100dvh - 240px)); }
+
+/* Desktop motion stays small and leaves transcript geometry unchanged. */
+@keyframes bos-menu-reveal {
+  from { opacity: 0; transform: translateY(-5px) scale(.97); }
+  to { opacity: 1; transform: none; }
+}
+.conversation-tools[open] > [role="group"] {
+  transform-origin: top right;
+  animation: bos-menu-reveal 180ms var(--room-ease-out) both;
+}
+.conversation-header button, .conversation-header summary,
+.conversation-composer button {
+  transition: transform 150ms var(--room-ease-pop), background-color 150ms ease, color 150ms ease;
+}
+.conversation-header button:active:not(:disabled),
+.conversation-header summary:active,
+.conversation-composer button:active:not(:disabled) { transform: scale(.94); }
+.conversation-composer { transition: box-shadow 180ms ease; }
+.conversation-composer:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent); }
+@keyframes bos-mascot-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-1.5px) scale(1.025, .975); }
+}
+@keyframes bos-mascot-react {
+  0% { transform: scale(1); }
+  35% { transform: translateY(-3px) scale(.96, 1.04); }
+  65% { transform: scale(1.035, .965); }
+  100% { transform: none; }
+}
+.bos-mascot-working, .bos-mascot-motion { transform-origin: 50px 75px; }
+.bos-mascot-working { animation: bos-mascot-breathe 1900ms ease-in-out infinite; }
+.bos-mascot-motion:not([data-motion="none"]) { animation: bos-mascot-react 480ms var(--room-ease-out); }
+@media (prefers-reduced-motion: reduce) {
+  .conversation-tools[open] > [role="group"], .bos-mascot-working, .bos-mascot-motion { animation: none; }
+  .conversation-header button, .conversation-header summary, .conversation-composer,
+  .conversation-composer button { transition: none; }
+  .conversation-header button:active, .conversation-header summary:active,
+  .conversation-composer button:active { transform: none; }
+}
+
+.conversation-tools > [role="group"] > button,
+.conversation-tools > [role="group"] > div > button {
+  display: flex; width: 100%; min-height: 36px; align-items: center;
+  justify-content: flex-start; gap: 10px; padding: 8px 10px; font-size: 13px; text-align: left;
+}
+.conversation-tools > [role="group"] > button { white-space: nowrap; }
+.conversation-tools > [role="group"] > div > button:has(> svg:only-child)::after { content: attr(aria-label); }
+.composer-tools > [role="group"] { transform-origin: bottom left; }
+.composer-tools > [role="group"] > button { width: 100%; min-height: 36px; }
+
+/* Grok's composer: a round "+" on the left, round mic and voice on the right. */
+.conversation-composer .composer-plus {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--color-hairline) 70%, transparent);
+  background: var(--color-raised);
+}
+
+/* The "…" menu beside a message: each icon control becomes a labelled row,
+   its label read from the aria-label the control already carries. */
+.message-menu > button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 7px 10px;
+  opacity: 1 !important;
+  color: var(--color-ink);
+  font-size: 13.5px;
+  line-height: 20px;
+  text-align: start;
+}
+.message-menu > button > svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--color-ink-secondary); }
+.message-menu > button::after { content: attr(aria-label); }
+.message-menu > button:disabled { opacity: .45 !important; }
+.message-menu > button.hidden { display: none; }
+
+/* Settings, Grok-style: rounded cards on a quiet pane, pill buttons, rows of
+   plain text separated by hairlines only. A setting row or row group that
+   sits straight on the pane gets the same card as a titled Card. */
+.settings-dialog .ui-surface { border-radius: 18px; }
+.settings-dialog .settings-card .ui-surface { padding: 16px 20px; }
+.settings-pane > .setting-row,
+.settings-pane > div:has(> .setting-row) { border-radius: 18px; background: var(--color-card); padding-inline: 20px; }
+.settings-pane > div:has(> .setting-row) > .setting-row { border-color: color-mix(in srgb, var(--color-hairline) 25%, transparent); }
+.settings-dialog .ui-button { border-radius: 9999px; padding-inline: 14px; min-height: 2.25rem; background: var(--color-raised); border-color: color-mix(in srgb, var(--color-hairline) 60%, transparent); }
+.settings-dialog select { border-radius: 9999px; }
+
+/* Header controls become menu rows; compact header chip rules do not apply here. */
+.conversation-tools:not(.composer-tools) > [role="group"] > button,
+.conversation-tools:not(.composer-tools) > [role="group"] > div > button {
+  height:auto !important; width:100% !important; max-width:none; border:0; border-radius:7px;
+  background:transparent; min-height:36px; padding:8px 10px !important; justify-content:flex-start !important; gap:10px !important;
+}
+.conversation-tools:not(.composer-tools) > [role="group"] > button:hover,
+.conversation-tools:not(.composer-tools) > [role="group"] > div > button:hover { background:var(--color-raised); }
+.conversation-tools > [role="group"] > div > button[aria-label] > span:first-child { display:inline-flex !important; }
+.conversation-tools > [role="group"] > div > button[aria-label] > span:nth-child(2) { margin-left:auto; }
+.conversation-tools .conversation-usage > button::before { content:"Usage"; margin-right:auto; }
+.conversation-tools:not(.composer-tools) > [role="group"] .conversation-usage > button > span:first-child { display:none !important; }
+.conversation-tools:not(.composer-tools) > [role="group"] .conversation-usage > button > span:nth-child(2) { display:inline !important; }
+.conversation-tools .conversation-usage [data-testid="usage-context"] { display:none !important; }
+.conversation-tools .conversation-model > div > button { width:100% !important; height:auto !important; border:0; border-radius:7px; padding:8px 10px !important; background:transparent; justify-content:flex-start !important; gap:10px !important; }
+.conversation-tools .conversation-model > div > button > span { display:inline-flex !important; }
+.conversation-tools > [role="group"] > button:has(> svg:only-child)::after { content:attr(aria-label); }
+.conversation-advanced { border-top:1px solid var(--color-hairline); margin-top:4px; padding-top:4px; }
+.conversation-advanced > summary::after { content:'›'; float:right; }
+.conversation-advanced[open] > summary::after { content:'⌄'; }
+.conversation-advanced > button { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:7px; font-size:12px; text-align:left; }

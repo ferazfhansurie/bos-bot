@@ -12,25 +12,23 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   Check,
-  Info,
   HelpCircle,
-  Keyboard,
   Loader2,
   RefreshCw,
   Settings as SettingsIcon,
   Smartphone,
-  Mail,
 } from "lucide-react";
 
 import { InitialsAvatar, PersonPhoto } from "./Avatar";
 import { SupportDialog } from "./SupportDialog";
-import { AboutDialog } from "./AboutDialog";
 import { SidebarPopoverMenu, type SidebarMenuItem } from "./SidebarPopoverMenu";
-import { ShortcutHint } from "./ShortcutHint";
 import { phoneSettingsAction, useSidebarPhoneStatus } from "./SidebarPhoneButton";
 import { useStore } from "@/state/store";
 import { useUpdaterState, type UpdaterState } from "@/lib/updater";
 import { cn } from "@/lib/cn";
+import { UsageRings } from "./UsageRings";
+import { ProfileAccountUsage } from "./ProfileAccountUsage";
+import { UpdateMenuBanner, useSidebarUpdate } from "./SidebarUpdate";
 import { t } from "@/lib/i18n";
 
 
@@ -188,11 +186,11 @@ function useUpdateItem(): UpdateEntry | null {
   };
 }
 
-export function SidebarProfileMenu() {
+export function SidebarProfileMenu({ compact = false, extraItems = [] }: { compact?: boolean; extraItems?: SidebarMenuItem[] }) {
   const { state, dispatch } = useStore();
   const phone = useSidebarPhoneStatus();
   const update = useUpdateItem();
-  const [aboutOpen, setAboutOpen] = useState(false);
+  const pendingUpdate = useSidebarUpdate();
   const [supportOpen, setSupportOpen] = useState(false);
   const triggerRef = useRef<HTMLSpanElement>(null);
 
@@ -216,35 +214,14 @@ export function SidebarProfileMenu() {
       icon: <SettingsIcon size={18} />,
       onSelect: () => dispatch({ type: "toggleAppSettings" }),
     },
-    {
-      key: "shortcuts",
-      label: "Keyboard shortcuts",
-      icon: <Keyboard size={18} />,
-      trailing: <ShortcutHint id="shortcuts-cheat-sheet" />,
-      onSelect: () => {
-        // The menu item unmounts; let the dialog restore the profile button.
-        triggerRef.current?.closest("button")?.focus();
-        dispatch({ type: "toggleShortcuts", open: true });
-      },
-    },
-    ...(update ? [update.item] : []),
-    {
-      key: "about",
-      label: t("sidebar.menu.about"),
-      icon: <Info size={18} />,
-      separatorBefore: true,
-      onSelect: () => setAboutOpen(true),
-    },
+    // with something to install, the banner on top owns it; an idle check
+    // lives in Settings → Updates
+    ...(update && !pendingUpdate && (updateNoteworthy(update.phase, update.pending) || update.phase === "up-to-date" || update.phase === "checking") ? [update.item] : []),
     {
       key: "help",
       label: t("sidebar.menu.help"),
       icon: <HelpCircle size={18} />,
-      onSelect: () => setSupportOpen(true),
-    },
-    {
-      key: "feedback",
-      label: t("sidebar.menu.feedback"),
-      icon: <Mail size={17} />,
+      separatorBefore: true,
       onSelect: () => setSupportOpen(true),
     },
   ];
@@ -252,21 +229,34 @@ export function SidebarProfileMenu() {
   return (
     <>
       <SidebarPopoverMenu
-        items={items}
+        items={[...extraItems, ...items]}
         ariaLabel={name}
-        renderTrigger={({ open }) => (
+        header={(close) => <>
+          {pendingUpdate && <UpdateMenuBanner update={pendingUpdate} onDone={close} />}
+          <ProfileAccountUsage onDone={close} />
+        </>}
+        renderTrigger={({ open }) => compact ? (
+          <span ref={triggerRef} className="flex">
+            <UsageRings open={open}>
+              {profile?.avatarUrl ? <PersonPhoto src={profile.avatarUrl} size={28} /> : <InitialsAvatar initials={profileInitials(profile)} size={28} />}
+            </UsageRings>
+            <span className="sr-only">{name}</span>
+          </span>
+        ) : (
           <span
             ref={triggerRef}
             className={cn(
-              "flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors",
+              compact ? "flex size-9 items-center justify-center rounded-full border border-hairline/60 transition-colors" : "flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors",
               open ? "bg-raised" : "hover:bg-raised/50",
             )}
           >
-            {profile?.avatarUrl ? <PersonPhoto src={profile.avatarUrl} size={28} /> : <InitialsAvatar initials={profileInitials(profile)} size={28} />}
-            <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{name}</span>
+            <UsageRings open={open}>
+              {profile?.avatarUrl ? <PersonPhoto src={profile.avatarUrl} size={28} /> : <InitialsAvatar initials={profileInitials(profile)} size={28} />}
+            </UsageRings>
+            <span className={compact ? "sr-only" : "min-w-0 flex-1 truncate text-[14px] text-ink"}>{name}</span>
             {/* an update is the one thing worth interrupting the name for, so
               * it sits on the row rather than waiting to be found in the menu */}
-            {update && updateNoteworthy(update.phase, update.pending) && (
+            {!compact && update && updateNoteworthy(update.phase, update.pending) && (
               <span
                 title={update.label}
                 aria-label={update.label}
@@ -281,7 +271,6 @@ export function SidebarProfileMenu() {
           </span>
         )}
       />
-      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
       <SupportDialog open={supportOpen} onClose={() => setSupportOpen(false)} />
     </>
   );

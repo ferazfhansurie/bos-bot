@@ -58,8 +58,9 @@ final class InboxClientTests: XCTestCase {
         try await client.steerQueued(queueId: "queue-1", to: .bot(id: "bot-1", threadId: "thread-2"))
         XCTAssertEqual(InboxRequestStub.capturedRequest?.url?.path, "/api/bots/bot-1/queue/queue-1/steer")
         XCTAssertEqual(InboxRequestStub.capturedRequest?.httpMethod, "POST")
-        let body = try JSONSerialization.jsonObject(with: XCTUnwrap(InboxRequestStub.capturedBody)) as! [String: String]
-        XCTAssertEqual(body, ["threadId": "thread-2"])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(InboxRequestStub.capturedBody)) as? [String: Any])
+        XCTAssertEqual(body["threadId"] as? String, "thread-2")
+        XCTAssertEqual(body["interrupt"] as? Bool, true)
     }
     func testRoomSteerNamesTheMemberItMustReach() async throws {
         try await client.steerQueued(queueId: "queue-1", to: .room(id: "room-1", threadId: "thread-2"), botId: "pix")

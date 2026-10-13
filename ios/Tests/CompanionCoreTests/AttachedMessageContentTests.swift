@@ -235,4 +235,52 @@ final class AttachedMessageContentTests: XCTestCase {
         XCTAssertTrue(typed.pastes.isEmpty)
         XCTAssertEqual(QueuedSendPreview.parse("first line\n\n  second").display, "first line second")
     }
+    func testBotRepliesLiftStandaloneLocalMarkdownImagesOutOfTheProse() {
+        let source = """
+        here are the covers:
+
+        ![a](/Users/me/outputs/rea/cover-a.png)
+        - ![b](</Users/me/outputs/rea/cover b.png> "B")
+        ![c](file:///Users/me/outputs/rea/cover-c.png) [![d](/Users/me/outputs/rea/cover%20d.png)](/Users/me/outputs/rea/cover%20d.png)
+        <attached-image path="/Users/me/outputs/rea/cover-a.png" name="cover-a.png" />
+
+        i'd use d.
+        """
+        let parsed = AttachedMessageContent.parse(source, markdownImages: true)
+
+        XCTAssertEqual(parsed.text, "here are the covers:\n\n\ni'd use d.")
+        // The authored destination goes to the file route; the tag repeating
+        // cover-a does not show it twice.
+        XCTAssertEqual(parsed.attachments.map(\.path), [
+            "/Users/me/outputs/rea/cover-a.png",
+            "/Users/me/outputs/rea/cover b.png",
+            "file:///Users/me/outputs/rea/cover-c.png",
+            "/Users/me/outputs/rea/cover%20d.png",
+        ])
+        XCTAssertEqual(parsed.attachments.map(\.name), ["cover-a.png", "cover b.png", "cover-c.png", "cover d.png"])
+        XCTAssertTrue(parsed.attachments.allSatisfy { $0.kind == .image })
+    }
+
+    func testMarkdownImagesStayProseWhenRemoteInlineFencedOrFromAPerson() {
+        let source = """
+        ![web](https://example.com/a.png)
+        ![mixed](/tmp/a.png) ![web](https://example.com/b.png)
+        see ![inline](/tmp/inline.png) here
+        ```
+        ![code](/tmp/code.png)
+        ```
+        """
+        let bot = AttachedMessageContent.parse(source, markdownImages: true)
+        XCTAssertEqual(bot.text, source)
+        XCTAssertTrue(bot.attachments.isEmpty)
+
+        let typed = "![mine](/tmp/mine.png)"
+        let person = Message(id: "p", role: .user, kind: .text, at: 1, text: typed).displayedContent
+        XCTAssertEqual(person.text, typed)
+        XCTAssertTrue(person.attachments.isEmpty)
+
+        let reply = Message(id: "r", role: .bot, kind: .text, at: 2, text: typed).displayedContent
+        XCTAssertEqual(reply.text, "")
+        XCTAssertEqual(reply.attachments.map(\.path), ["/tmp/mine.png"])
+    }
 }

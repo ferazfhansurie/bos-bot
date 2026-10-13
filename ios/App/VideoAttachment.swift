@@ -20,7 +20,7 @@ struct PickedMovie: Transferable {
     }
 }
 
-/// Phone videos are far bigger than the 25 MB the upload route takes, so a
+/// Phone videos are far bigger than the 90 MB the upload route takes, so a
 /// video is re-encoded to an mp4 the way a messaging app does: the best size
 /// that fits, stepping down until it does.
 enum VideoAttachment {
@@ -37,15 +37,15 @@ enum VideoAttachment {
     }
 
     static func make(from url: URL, name: String) async throws -> PendingMessageAttachment {
+        try Task.checkCancellation()
         let limit = AttachmentPolicy.maximumFileBytes
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
         let type = UTType(filenameExtension: url.pathExtension)
         // Already small enough and a format the mac takes: send it as it is.
         if size <= limit, let type, let mime = type.preferredMIMEType,
            AttachmentPolicy.videoMIMETypes.contains(AttachmentPolicy.normalizedMIME(mime)) {
-            let data = try Data(contentsOf: url)
-            return PendingMessageAttachment(id: UUID(), data: data, name: fileName(name, type.preferredFilenameExtension ?? "mov"),
-                                            mime: AttachmentPolicy.normalizedMIME(mime), kind: .file)
+            return try PendingMessageAttachment(id: UUID(), copying: url, name: fileName(name, type.preferredFilenameExtension ?? "mov"),
+                                            mime: AttachmentPolicy.normalizedMIME(mime))
         }
 
         let asset = AVURLAsset(url: url)
@@ -59,6 +59,7 @@ enum VideoAttachment {
             AVAssetExportPresetLowQuality,
         ]
         for preset in presets {
+            try Task.checkCancellation()
             guard let session = AVAssetExportSession(asset: asset, presetName: preset),
                   session.supportedFileTypes.contains(.mp4) else { continue }
             // Skip the exports that clearly can't fit; the estimate is rough,
@@ -70,12 +71,14 @@ enum VideoAttachment {
             session.outputURL = out
             session.outputFileType = .mp4
             session.shouldOptimizeForNetworkUse = true
-            await withCheckedContinuation { done in session.exportAsynchronously { done.resume() } }
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { done in session.exportAsynchronously { done.resume() } }
+            } onCancel: { session.cancelExport() }
+            try Task.checkCancellation()
             guard session.status == .completed else { continue }
             let bytes = (try? out.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
             guard bytes <= limit else { continue }
-            let data = try Data(contentsOf: out)
-            return PendingMessageAttachment(id: UUID(), data: data, name: fileName(name, "mp4"), mime: "video/mp4", kind: .file)
+            return try PendingMessageAttachment(id: UUID(), copying: out, name: fileName(name, "mp4"), mime: "video/mp4")
         }
         throw Failure.tooLong(name)
     }

@@ -72,11 +72,12 @@ export function summarizeRuntime(e: RuntimeEvent): { summary: string; tone: Insp
     case "turn.retrying":
       return { summary: `retrying (${e.reason}) · attempt ${e.attempt} · ${Math.round(e.delayMs / 1000)}s`, tone: "plain" };
     case "turn.completed": {
-      const parts = [e.ok ? "turn ok" : "turn failed"];
+      const stopped = e.stopReason === "interrupted";
+      const parts = [stopped ? "stopped" : e.ok ? "turn ok" : "turn failed"];
       if (e.stopReason) parts.push(e.stopReason);
       if (typeof e.cost === "number") parts.push(`$${e.cost.toFixed(4)}`);
       if (e.denials?.length) parts.push(`${e.denials.length} denied`);
-      return { summary: parts.join(" · "), tone: e.ok ? "boundary" : "error" };
+      return { summary: parts.join(" · "), tone: e.ok || stopped ? "boundary" : "error" };
     }
     case "item.started":
       return { summary: `${e.itemType}${e.title ? `: ${clip(oneLine(e.title))}` : " started"}`, tone: "plain" };

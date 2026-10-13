@@ -48,6 +48,14 @@ const bot: Bot = {
 };
 
 describe("thread control placement", () => {
+  it("puts one-click done beside the conversation menu, without moving the chat",()=>{
+    const markup=renderToStaticMarkup(createElement(ChatView,{bot}));
+    expect(markup).toContain('aria-label="Mark thread done"');
+    expect(markup.indexOf('aria-label="Mark thread done"')).toBeLessThan(markup.indexOf('aria-label="Conversation options"'));
+    const done=renderToStaticMarkup(createElement(ChatView,{bot:{...bot,tasks:[{...bot.tasks![0]!,archivedAt:1}]}}));
+    expect(done).toContain('aria-label="Reopen thread"');
+  });
+
   it("keeps human shared chats free of bot-only controls and preserves bot author labels", () => {
     const markup = renderToStaticMarkup(createElement(ChatView, {
       bot: { ...bot, id: "shared:room", threadId: "shared:room", name: "Faeez", tasks: undefined, busy: true, hasMore: true,
@@ -159,8 +167,8 @@ describe("thread control placement", () => {
     const markup = renderToStaticMarkup(createElement(ChatView, { bot }));
     expect(markup.match(/data-test-model-control/g)).toHaveLength(1);
     expect(markup.indexOf("data-test-model-control")).toBeLessThan(markup.indexOf('role="log"'));
-    expect(markup.indexOf("rounded-3xl bg-composer")).toBeGreaterThan(-1);
-    expect(markup.indexOf("data-test-approval-control")).toBeGreaterThan(markup.indexOf("rounded-3xl bg-composer"));
+    expect(markup.indexOf("bg-composer")).toBeGreaterThan(-1);
+    expect(markup.indexOf("data-test-approval-control")).toBeGreaterThan(markup.indexOf("bg-composer"));
     expect(markup.indexOf("data-test-approval-control")).toBeLessThan(markup.indexOf("<textarea"));
     expect(markup).not.toContain('aria-label="Thread settings"');
     expect(fixture.model).toMatchObject({ threadId: "selected", bot: { busy: false, modelSelection: { model: "thread-model" } } });

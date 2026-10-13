@@ -103,7 +103,7 @@ struct ConnectedAppsView: View {
                 .disabled(refreshing)
             }
         }
-        .overlay { if loading { ProgressView() } }
+        .overlay { if loading { RosterSkeleton().padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Color(uiColor: .systemBackground)) } }
         .task { await load() }
         .bosRefreshable { await refreshStatuses() }
         .onChange(of: scenePhase) { _, phase in

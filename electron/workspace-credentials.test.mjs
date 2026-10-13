@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   migrateWorkspaceCredentials,
   workspaceCredentialEnv,
+  savedComposioCredentialEnv,
   WORKSPACE_CREDENTIALS,
 } from "./workspace-credentials.mjs";
 
@@ -154,3 +155,18 @@ describe("workspace credential env", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+
+describe("saved composio credential boot environment", () => {
+  it("restores the saved project key after inherited credentials are discarded", () => {
+    const credentials = JSON.parse(JSON.stringify({ composioApiKey: "ak_fixture_saved", unrelated: "private" }));
+    const child = { COMPOSIO_API_KEY: "ak_inherited_wrong_account" };
+    delete child.COMPOSIO_API_KEY;
+    Object.assign(child, savedComposioCredentialEnv(credentials));
+    expect(child).toEqual({ COMPOSIO_API_KEY: "ak_fixture_saved" });
+    expect(credentials.composioApiKey).toBe("ak_fixture_saved");
+  });
+  it.each([{}, { composioApiKey: "" }, { composioApiKey: "   " }, { composioApiKey: 42 }])("does not invent a key for an empty or unreadable document", credentials => {
+    expect(savedComposioCredentialEnv(credentials)).toEqual({});
+  });
+});

@@ -2,7 +2,9 @@ import { RemoteFullAccess } from "./RemoteFullAccess";
 import { useSharedDelivery } from "@/lib/shared-delivery";
 import { track } from "@/lib/analytics";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
-import { ArrowUp, BookOpen, Clock, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
+import { ArrowUp, AudioLines, BookOpen, Clock, Loader2, Mic, Paperclip, Square, Target, Users, X } from "lucide-react";
+import { startRealtimeCall, useRealtimeCall } from "@/lib/voice-call/session";
+import { callIsOn, useCallSnapshot } from "./voice-call/VoiceCall";
 import { useStore, visibleMessages, currentTaskBot, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
@@ -26,7 +28,7 @@ import {
   type FailedComposerSend,
 } from "@/lib/drafts";
 import { BotAvatar, PersonPhoto } from "./Avatar";
-import { ConversationComposerFrame } from "./ConversationChrome";
+import { ConversationComposerFrame, ConversationTools } from "./ConversationChrome";
 import { MentionTextarea } from "./MentionTextarea";
 import { ComposerAttachments, pathForFile, uploadOnlyIntake } from "./ComposerAttachments";
 import { LocalComputerAutoWarning } from "./LocalComputerAutoWarning";
@@ -124,6 +126,11 @@ export function Composer({
   const { state, dispatch } = useStore();
   const { threads, currentBotId } = useThreadRefs();
   const { capabilities } = useDesktopCapabilities();
+  // Grok's composer ends in the voice button: a 1:1 chat with xAI voice set
+  // up starts the call from here, the header only shows a call in progress.
+  const callEngine = useRealtimeCall();
+  const callSnapshot = useCallSnapshot(callEngine);
+  const voiceCallReady = Boolean(bot && !group && !shared && state.config?.xai?.configured === true && !(callEngine && callIsOn(callSnapshot)));
   const remoteClient = window.ogb?.remoteClient?.active === true;
   // Unified target: a 1:1 bot thread or a room. In a room the @ picker
   // offers members plus @everyone; explicit mentions override the room's
@@ -377,9 +384,27 @@ export function Composer({
     Boolean(approval),
   );
   const [steering, setSteering] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const stopPending = useRef(false);
+  useEffect(() => {
+    stopPending.current = false;
+    setStopping(false);
+  }, [threadId, busy]);
+  useEffect(() => {
+    if (!stopping) return;
+    const timeout = window.setTimeout(() => {
+      stopPending.current = false;
+      setStopping(false);
+    }, 15000);
+    return () => window.clearTimeout(timeout);
+  }, [stopping]);
   const interruptTurn = () => {
-    if (group) dispatch({ type: "interruptGroup", groupId: group.id, threadId });
-    else if (bot) dispatch({ type: "interrupt", botId: bot.id, threadId });
+    if (stopPending.current || (!group && !bot)) return;
+    stopPending.current = true;
+    setStopping(true);
+    const onError = () => { stopPending.current = false; setStopping(false); };
+    if (group) dispatch({ type: "interruptGroup", groupId: group.id, threadId, onError });
+    else if (bot) dispatch({ type: "interrupt", botId: bot.id, threadId, onError });
   };
   const queueHeadId = queuedMessages[0]?.queueId;
   // Rooms run several members at once: the head steers into the member the
@@ -1035,7 +1060,7 @@ export function Composer({
             className="pointer-events-none absolute -left-5 -right-5 -bottom-3 top-1/2 bg-app"
           />
         <ConversationComposerFrame>
-        <div className="flex items-end gap-1">
+        <div className="flex items-end gap-1.5">
           <input
             ref={fileInput}
             type="file"
@@ -1048,7 +1073,7 @@ export function Composer({
             }}
           />
           {!locked && (
-            <div className="flex items-center gap-1">
+            <ConversationTools composer>
               <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
@@ -1056,7 +1081,7 @@ export function Composer({
                 title={t("composer.attach")}
                 className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-control hover:text-ink"
               >
-                <Paperclip size={17} />
+                <Paperclip size={17} /><span>Attach files</span>
               </button>
               {group && !group.dm && (
                 <button
@@ -1111,7 +1136,7 @@ export function Composer({
                   onPin={(surface) => dispatch({ type: "updateTask", botId: modeBot.id, threadId: modeBot.threadId, patch: { surface } })}
                 />
               )}
-            </div>
+            </ConversationTools>
           )}
           <MentionTextarea
           inputRef={inputRef}
@@ -1218,50 +1243,23 @@ export function Composer({
                   : t("composer.placeholder.bot", { name: bot?.name ?? "" })
           }
           aria-label={t("composer.placeholder.bot", { name: group ? group.name : (bot?.name ?? "") })}
-            className="block max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
+            className="block max-h-[9rem] min-h-6 w-full resize-none overflow-y-auto bg-transparent px-1 py-1.5 text-[15px] leading-6 placeholder:text-ink-secondary focus:outline-none"
           />
           <div className="flex items-center gap-1">
-          {priorityVisible && (
-            <div
-              role="group"
-              aria-label={t("composer.priority.aria")}
-              className="flex h-8 shrink-0 items-center rounded-full border border-hairline/20 p-0.5"
-            >
-              {(["queue", "block"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  aria-pressed={priority === option}
-                  title={
-                    option === "block"
-                      ? t("composer.priority.blockHint")
-                      : canSteer
-                        ? t("composer.priority.queueSteerHint")
-                        : t("composer.priority.queueHint")
-                  }
-                  onClick={() => setPriority(option)}
-                  className={cn(
-                    "flex h-7 items-center whitespace-nowrap rounded-full px-2.5 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/60",
-                    priority === option
-                      ? "bg-accent/10 text-accent"
-                      : "text-ink-secondary hover:bg-raised hover:text-ink",
-                  )}
-                >
-                  {option === "block" ? t("composer.priority.block") : t("composer.priority.queue")}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* No queue/block chip: sending while busy queues; option-enter
+              still interrupts for the rare case it is wanted. */}
           {/* Stop stays a stop. Stop-then-steer is named beside the queued
               message above, where its effect is visible before activation. */}
           {busy && !locked && (
           <button
             onClick={interruptTurn}
-            aria-label={t("chat.stopTurn")}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-secondary hover:bg-raised hover:text-ink"
+            disabled={stopping}
+            aria-busy={stopping}
+            aria-label={stopping ? "Stopping…" : t("chat.stopTurn")}
+            className="flex h-9 min-w-9 shrink-0 items-center justify-center gap-2 rounded-full bg-ink px-2.5 text-app transition-transform active:scale-90 disabled:cursor-wait"
             title={t("chat.stop")}
           >
-            <Square size={14} className="fill-current" />
+            {stopping ? <><Loader2 size={14} className="animate-spin" /><span role="status" className="text-xs">Stopping…</span></> : <Square size={14} className="fill-current" />}
           </button>
         )}
         {!locked && !busy && !hasContent && capabilities.dictation.available && (
@@ -1269,14 +1267,26 @@ export function Composer({
             onClick={toggleMic}
             aria-label={recording ? t("composer.dictation.stop") : t("composer.dictation.start")}
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-full",
+              "flex size-9 shrink-0 items-center justify-center rounded-full",
               recording
                 ? "animate-pulse bg-danger/20 text-danger"
-                : "text-ink-secondary hover:bg-raised hover:text-ink",
+                : "bg-raised text-ink-secondary hover:bg-raised-hover hover:text-ink",
             )}
             title={recording ? t("composer.dictation.stopHint") : t("composer.dictation.hint")}
           >
             <Mic size={18} />
+          </button>
+        )}
+        {!locked && !busy && !hasContent && !recording && voiceCallReady && bot && (
+          <button
+            type="button"
+            onClick={() => startRealtimeCall(bot.id)}
+            aria-label={`Call ${bot.name}`}
+            title={`Call ${bot.name}`}
+            data-voice-call-start
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-app hover:bg-ink/90"
+          >
+            <AudioLines size={18} strokeWidth={2.25} />
           </button>
         )}
         {hasContent && !locked && (
@@ -1303,10 +1313,10 @@ export function Composer({
                     : t("chat.send")
             }
             className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-full text-white",
+              "flex size-9 shrink-0 items-center justify-center rounded-full",
               busy && !canSteer && !blockArmed
                   ? "bg-raised text-ink-secondary hover:bg-raised-hover"
-                  : "bg-accent hover:brightness-110",
+                  : "bg-ink text-app hover:bg-ink/90",
             )}
           >
             {busy && !canSteer && !blockArmed ? <Clock size={15} /> : <ArrowUp size={17} />}

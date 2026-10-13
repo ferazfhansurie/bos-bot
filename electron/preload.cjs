@@ -198,6 +198,8 @@ const bridge = {
   },
   /** Mirrors durable unread state into the native Dock/taskbar badge. */
   setUnreadCount: (count) => ipcRenderer.send("desktop:unread-count", count),
+  /** Your own bots, saved for the next launch splash. */
+  saveSplashSquad: (squad) => ipcRenderer.invoke("desktop:splash-squad", squad),
   /** Brings the app window forward after a notification click. A renderer's
    * own window.focus() can't restore a minimised or hidden window on macOS. */
   focusWindow: () => ipcRenderer.send("desktop:focus-window"),
@@ -224,14 +226,29 @@ const bridge = {
       return () => ipcRenderer.removeListener("desktop-workspace:state", handler);
     },
   },
-  /** Partition used by the side-panel Browser tool's <webview>. Main forces
-   * it on every attach regardless of what the renderer sets. */
+  /** Legacy fallback partition. New workspaces request a main-registered
+   * profile; main rejects arbitrary renderer-supplied partitions. */
+  primaryBrowser: process.argv.includes("--bos-primary-browser=1") ? {
+    action: (action, input) => ipcRenderer.invoke("primary-browser:action", action, input),
+    onExternalURL: (cb) => { const handler=(_event,value)=>cb(value); ipcRenderer.on("primary-browser:external-url",handler); return ()=>ipcRenderer.removeListener("primary-browser:external-url",handler); },
+    onSharedState: (cb) => { const handler = (_event, state) => cb(state); ipcRenderer.on("primary-browser:shared-state", handler); return () => ipcRenderer.removeListener("primary-browser:shared-state", handler); },
+    onShortcut: (cb) => { const handler = (_event, input) => cb(input); ipcRenderer.on("primary-browser:shortcut", handler); return () => ipcRenderer.removeListener("primary-browser:shortcut", handler); },
+  } : undefined,
   toolsBrowserPartition: "persist:bos-tools-browser",
+  toolsBrowserPartitionFor: (workspaceId) => ipcRenderer.invoke("tools-browser:partition", workspaceId),
+  toolsBrowserDownloads: (partition) => ipcRenderer.invoke("tools-browser:downloads", partition),
+  onToolsBrowserDownload: (cb) => {
+    const handler = (_event, download) => {
+      if (download && typeof download.partition === "string") cb(download);
+    };
+    ipcRenderer.on("tools-browser:download", handler);
+    return () => ipcRenderer.removeListener("tools-browser:download", handler);
+  },
   /** A page in the Browser tool asked for a new window; main denied it and
    * forwards the (already allowed) URL so the renderer can open a tab. */
   onToolsBrowserPopup: (cb) => {
-    const handler = (_event, url) => {
-      if (typeof url === "string") cb(url);
+    const handler = (_event, url, source) => {
+      if (typeof url === "string") cb(url, source);
     };
     ipcRenderer.on("tools-browser:popup", handler);
     return () => ipcRenderer.removeListener("tools-browser:popup", handler);

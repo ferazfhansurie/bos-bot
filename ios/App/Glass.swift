@@ -67,14 +67,14 @@ struct GlassButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button { Haptics.selection(); action() } label: {
             Image(systemName: systemImage)
                 .font(.system(size: size * 0.42, weight: weight))
                 .foregroundStyle(Color.primary)
                 .frame(width: size, height: size)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(BosPressStyle())
         .glassCapsule()
     }
 }

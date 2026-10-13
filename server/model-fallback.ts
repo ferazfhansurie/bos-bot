@@ -12,7 +12,11 @@ export function isProviderLimit(message: string): boolean {
 }
 
 export function fallbackSelection(model: string, instances: readonly ProviderInstance[], preferred?: string): ModelSelection | null {
-  const offered = instances.filter(instance => instance.models.default === model || instance.models.options.some(option => option.id === model));
+  const source = instances.find(instance => instance.instanceId === preferred);
+  // A model-only fallback never authorizes borrowing a sibling subscription.
+  const offered = instances.filter(instance =>
+    !(source?.driverKind === "claudeAgent" && instance.driverKind === "claudeAgent" && instance.instanceId !== preferred) &&
+    (instance.models.default === model || instance.models.options.some(option => option.id === model)));
   const same = offered.find(instance => instance.instanceId === preferred);
   const target = same ?? (offered.length === 1 ? offered[0] : undefined);
   return target ? { instanceId: target.instanceId, model } : null;

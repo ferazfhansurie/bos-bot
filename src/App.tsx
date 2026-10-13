@@ -1,14 +1,16 @@
 import { RecruitmentWelcome } from "@/components/onboarding/RecruitmentWelcome";
 import { SayHiToFiraz } from "@/components/onboarding/SayHiToFiraz";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Menu } from "lucide-react";
+import { Menu } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
 import { FirstConversationTour } from "@/components/onboarding/FirstConversationTour";
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 import { welcomeDue, teamSetupBot } from "@/lib/onboarding";
+import { splashSquad } from "@/lib/launch-splash";
 import { ThreadRefsProvider } from "@/components/ThreadRefs";
 import { emailGateDone, initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
+import { ConversationSkeleton } from "@/components/Skeleton";
 import { ChatView } from "@/components/ChatView";
 import { VoiceCallHost } from "@/components/voice-call/VoiceCallHost";
 import { GroupView } from "@/components/GroupView";
@@ -138,6 +140,12 @@ function Shell() {
   useEffect(() => {
     window.ogb?.setUnreadCount?.(unreadCount);
   }, [unreadCount]);
+
+  // The next launch splash draws this squad (see lib/launch-splash).
+  const splash = state.bots.length ? JSON.stringify(splashSquad(state.bots)) : "";
+  useEffect(() => {
+    if (splash) void window.ogb?.saveSplashSquad?.(splash)?.catch(() => undefined);
+  }, [splash]);
 
   // Warm connected-account state as soon as the local server is available.
   // The modal then opens with the correct Connect/Add account buttons and
@@ -285,10 +293,11 @@ function Shell() {
       ) : group ? (
         <SplitWorkspace><GroupView key={group.id} group={group} /></SplitWorkspace>
       ) : bot ? (
-        <SplitWorkspace><ChatView bot={bot} /></SplitWorkspace>
+        <SplitWorkspace>{state.pendingThreadSwitch[bot.id] ? <ConversationSkeleton title={bot.tasks?.find(task => task.threadId === state.pendingThreadSwitch[bot.id])?.title} /> : <ChatView bot={bot} />}</SplitWorkspace>
+      ) : !state.rosterLoaded ? (
+        <ConversationSkeleton />
       ) : (
         <main className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary">
-          {!state.rosterLoaded && <Loader2 size={20} className="animate-spin" />}
           <div role="status" className="text-[14px]">
             {state.rosterLoaded ? "Your chats start here" : state.connected ? "Loading your chats…" : "Connecting to BOS…"}
           </div>

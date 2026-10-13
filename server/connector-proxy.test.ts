@@ -1,4 +1,3 @@
-import { compatEnv } from "../electron/branding-env.cjs";
 import { createServer, type RequestListener, type Server } from "node:http";
 import { once } from "node:events";
 import { dirname, join } from "node:path";
@@ -21,8 +20,11 @@ async function listen(handler: RequestListener) {
 }
 
 function start(env: Record<string, string>) {
+  // Fixture values must override every branding alias, never inherit the
+  // actual mounted connector URL or capabilities from this agent session.
+  const isolated = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(OMB_|OPENMAUSBOT_|BOSBOT_|BOS_)/.test(key)));
   child = spawn(process.execPath, ["--experimental-strip-types", ENTRY], {
-    env: { ...compatEnv, ...env },
+    env: { ...isolated, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
   return readline.createInterface({ input: child.stdout });
@@ -44,6 +46,24 @@ afterEach(async () => {
 });
 
 describe("connector MCP bridge", () => {
+  it("mounts autonomous reply schemas only with the scoped flag and carries exact reply input over POST", async () => {
+    let received: any;
+    const harness = await listen((request, response) => {
+      let body = "";
+      request.on("data", chunk => { body += chunk; });
+      request.on("end", () => { received = { method: request.method, url: request.url, body: JSON.parse(body), authorization: request.headers.authorization }; response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ state: "submitted", messageId: "fixture-outbound" })); });
+    });
+    const lines = start({ OMB_HARNESS_URL: harness, OMB_CONNECTOR_TOKEN: "fixture-token", OMB_WHATSAPP_NATIVE: "1", OMB_WHATSAPP_REPLIES: "1" });
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
+    const list = await nextJson(lines);
+    const tool = list.result.tools.find((t: any) => t.name === "BOS_WHATSAPP_REPLY");
+    expect(tool.inputSchema.required).toEqual(["account_id", "chat_id", "message_id", "text"]);
+    const input = { account_id: "60111111111@c.us", chat_id: "60222222222@c.us", message_id: "fixture-inbound", text: "hello" };
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: tool.name, arguments: input } })}\n`);
+    const result = await nextJson(lines);
+    expect(result.result.content[0].text).toContain("submitted");
+    expect(received).toEqual({ method: "POST", url: "/api/internal/connectors/whatsapp/reply", authorization: "Bearer fixture-token", body: input });
+  });
   it("turns agent connection requests into authenticated chat-card requests", async () => {
     let received: any = null;
     const harness = await listen((request, response) => {
@@ -271,7 +291,7 @@ describe("connector MCP bridge", () => {
     child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
     const list = await nextJson(lines);
     const names = list.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toEqual(["BOS_WHATSAPP_LIST_CHATS", "BOS_WHATSAPP_LIST_MESSAGES"]);
+    expect(names).toEqual(["BOS_WHATSAPP_LIST_CHATS", "BOS_WHATSAPP_LIST_MESSAGES", "BOS_WHATSAPP_GET_ACCOUNT", "BOS_WHATSAPP_SYNC_HISTORY"]);
     for (const tool of list.result.tools) expect(tool.annotations?.readOnlyHint).toBe(true);
     expect(names.some((name: string) => /send|reply|seen|mark/i.test(name))).toBe(false);
 

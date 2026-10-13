@@ -349,7 +349,8 @@ export const PEER_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: RegEx
   { methods: ["GET"], path: /^\/api\/threads\/[\w-]+\/messages$/ },
   { methods: ["GET", "POST"], path: /^\/api\/multiplayer\/peer-threads\/[\w-]+\/attachments(?:\/[\w.-]+)?$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/(?:messages|tasks|read|interrupt)$/ },
-  { methods: ["POST", "DELETE"], path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
+  { methods: ["POST", "PATCH", "DELETE"], path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
+  { methods: ["GET"], path: /^\/api\/bots\/[\w-]+\/model-catalog$/ },
 ];
 
 export function peerAllowed(method: string, path: string): boolean {

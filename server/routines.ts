@@ -7,6 +7,7 @@ import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { redactSecretsInText } from "./redact.ts";
+import { isQuietRoutineReply } from "./system-prompt.ts";
 import type { GroupGoalRunStatus } from "../shared/group-goal-run.ts";
 import type { RoutineRequestOperation } from "../shared/routine-request.ts";
 import { normalizeCronSchedule, nextCronRuns, type RoutineCronSchedule } from "../shared/routine-schedule.ts";
@@ -156,6 +157,9 @@ export interface RoutineRun {
   startedAt?: number;
   finishedAt?: number;
   output?: string;
+  /** The run finished with nothing worth surfacing (its whole reply was the
+   * quiet marker): no notification, no unread badge, no carried report. */
+  quiet?: boolean;
   /** Human-readable reason the detached execution is waiting. */
   attention?: string;
   error?: string;
@@ -1607,6 +1611,10 @@ export class RoutineManager {
         return cloneRun(run);
       }
       const pending = this.options.hasPendingDelegations?.(event.threadId) === true;
+      if (!pending && isQuietRoutineReply(run.output)) {
+        run.quiet = true;
+        run.output = undefined;
+      }
       run.status = pending ? "waiting" : "completed";
       run.attention = pending ? "Waiting for delegated work to finish" : undefined;
       if (!pending) run.finishedAt = this.now();

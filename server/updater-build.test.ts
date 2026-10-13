@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stampNativeContract, assertNativeCompatibility } from "../electron/native-contract.mjs";
 import { appDigests, discoverCandidate } from "./updater.ts";
-import { DEFAULT_PROD_BRANCH, DEFAULT_RELEASE_BRANCH, buildCandidate, buildRoot, missingPackages, previewUpdate, readUpdateSource, resolveUpdateTarget, runCommand, toolchainPath, stageFullCandidate, type RunCommand } from "./updater-build.ts";
+import { DEFAULT_PROD_BRANCH, DEFAULT_RELEASE_BRANCH, buildCandidate, buildRoot, missingPackages, previewUpdate, readUpdateSource, resolveUpdateTarget, runCommand, signingIdentity, toolchainPath, stageFullCandidate, type RunCommand } from "./updater-build.ts";
 
 const PYTHON = "/usr/bin/python3";
 const hasPython = existsSync(PYTHON) && spawnSync(PYTHON, ["--version"]).status === 0;
@@ -317,3 +317,27 @@ describe.skipIf(!hasPython)("update build", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+describe("signingIdentity", () => {
+  const authority = "Developer ID Application: Someone (TEAM123)";
+  const leaf = Buffer.from("leaf certificate bytes");
+  const hash = "8B3700109B795BD1ADD5C6223110F23D8EC84BB4";
+  const fake = (identities: string): RunCommand => async (file, args) => {
+    if (file === "/usr/bin/codesign" && args[0] === "-dvv") return { code: 0, stdout: "", stderr: `Executable=x\nAuthority=${authority}\nAuthority=Apple Root CA\n` };
+    if (file === "/usr/bin/codesign") {
+      writeFileSync(`${args[1].slice("--extract-certificates=".length)}0`, leaf);
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (file === "/usr/bin/security") return { code: 0, stdout: identities, stderr: "" };
+    throw new Error(`unexpected ${file}`);
+  };
+
+  it("signs with the hash of the live app's certificate, so a renewed twin is not ambiguous", async () => {
+    const twins = `  1) 16F30AD24B710BA06C6D87F2F49A11AD8AA06173 "${authority}"\n  2) ${hash} "${authority}"\n`;
+    expect(await signingIdentity("/Applications/x.app", fake(twins), {})).toBe(hash);
+  });
+
+  it("falls back to the name when that certificate is not in this keychain", async () => {
+    expect(await signingIdentity("/Applications/x.app", fake(`  1) 16F30AD24B710BA06C6D87F2F49A11AD8AA06173 "${authority}"\n`), {})).toBe(authority);
+  });
+});

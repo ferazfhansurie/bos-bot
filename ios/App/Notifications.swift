@@ -14,7 +14,20 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     private let center = UNUserNotificationCenter.current()
     /// Set by `Session`; kept as an id-only value so the notification layer
     /// does not know about SwiftUI navigation or mutable fleet state.
-    var responseHandler: ((NotificationTarget) -> Void)?
+    var responseHandler: ((NotificationTarget) -> Void)? {
+        didSet {
+            if let target = pendingThreadTarget, let responseHandler {
+                pendingThreadTarget = nil
+                Task { @MainActor in responseHandler(target) }
+            }
+        }
+    }
+    private var pendingThreadTarget: NotificationTarget?
+
+    @MainActor func openThread(_ target: NotificationTarget) {
+        if let responseHandler { responseHandler(target) }
+        else { pendingThreadTarget = target }
+    }
     var pushTokenHandler: ((String) -> Void)?
     var sharedRoomHandler: ((String, String?) -> Void)?
     var foregroundPresentation: (@MainActor (NotificationTarget) -> NotificationPresentation)?
@@ -209,7 +222,10 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         } else if let hint = CloudPushHint(userInfo: response.notification.request.content.userInfo) {
             if let cloudHintHandler { Task { @MainActor in cloudHintHandler(hint) } } else { pendingCloudHint = hint }
         } else if let roomID = strings["roomId"] { sharedRoomHandler?(roomID, strings["connectionId"]) }
-        else if let target = NotificationTarget(payload: strings) { responseHandler?(target) }
+        else if let target = NotificationTarget(payload: strings),
+                response.actionIdentifier != UNNotificationDismissActionIdentifier {
+            Task { @MainActor in self.openThread(target) }
+        }
         completionHandler()
     }
 

@@ -36,6 +36,8 @@ final class LiveActivityCoordinator {
     /// Each bot's look the notification mood faces were last drawn for.
     private var moodFacesDrawn: [String: String] = UserDefaults.standard.dictionary(forKey: "glance.moodFaces") as? [String: String] ?? [:]
     private var lastWidgetReload = Date.distantPast
+    private var pendingWidgetReload: Task<Void, Never>?
+    private var glanceSince: [String: (thread: String, kind: String, at: Date)] = [:]
 
     /// How long the done card stays in the island before it ends, and how
     /// long the ended card then stays on the lock screen.
@@ -241,24 +243,34 @@ final class LiveActivityCoordinator {
                 glance.line = step.line
                 glance.threadId = update.chat.threadId
                 glance.threadTitle = Self.title(update.chat)
-                glance.since = since[bot.id]?.at ?? now
+                if glanceSince[bot.id]?.thread != update.chat.threadId || glanceSince[bot.id]?.kind != glance.status {
+                    glanceSince[bot.id] = (update.chat.threadId, glance.status, now)
+                }
+                glance.since = glanceSince[bot.id]?.at
                 finished.removeValue(forKey: bot.id)
             } else if let done = finished[bot.id] {
+                glanceSince.removeValue(forKey: bot.id)
                 glance.status = "done"
                 glance.face = MausState.celebrate.rawValue
                 glance.line = done.line
                 glance.threadId = done.threadId ?? bot.threadId
                 glance.threadTitle = done.title
                 glance.since = done.at
+            } else {
+                glanceSince.removeValue(forKey: bot.id)
             }
             return glance
         }
         guard BotRosterStore.save(BotRosterSnapshot(bots: glances, updatedAt: now)) else { return }
-        // the app is in the foreground here, where reloads cost no budget;
-        // a short floor still keeps a streaming turn from hammering it
+        // Keep at most one trailing reload. Reserving a future slot per
+        // update built an ever-growing queue during tool-heavy runs.
+        guard pendingWidgetReload == nil else { return }
         let wait = max(0, 1.5 - now.timeIntervalSince(lastWidgetReload))
-        lastWidgetReload = now.addingTimeInterval(wait)
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+        pendingWidgetReload = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(wait)) } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.pendingWidgetReload = nil
+            self.lastWidgetReload = Date()
             WidgetCenter.shared.reloadTimelines(ofKind: BotGlanceWidgetKind.bots)
         }
     }

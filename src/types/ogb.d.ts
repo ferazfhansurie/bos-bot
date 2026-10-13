@@ -1,3 +1,16 @@
+export interface ToolsBrowserDownload {
+  id: string;
+  partition: string;
+  guestId: number;
+  fileName: string;
+  url: string;
+  receivedBytes: number;
+  totalBytes: number;
+  state: string;
+  startedAt: number;
+  completedAt?: number;
+}
+
 // The narrow bridge the Electron preload exposes. Absent in the browser.
 
 declare global {
@@ -243,11 +256,17 @@ const __APP_VERSION__: string;
       onOpenAppSettings?(cb: () => void): () => void;
       /** Updates the native Dock/taskbar unread indicator. */
       setUnreadCount?(count: number): void;
+      /** JSON squad for the next launch splash (lib/launch-splash). */
+      saveSplashSquad?(squad: string): Promise<boolean>;
       focusWindow?(): void;
       /** Partition for the side-panel Browser tool's <webview>. */
+      primaryBrowser?: import("@/lib/primary-browser-types").PrimaryBrowserBridge;
       toolsBrowserPartition?: string;
+      toolsBrowserPartitionFor?(workspaceId: string): Promise<string>;
+      toolsBrowserDownloads?(partition: string): Promise<ToolsBrowserDownload[]>;
+      onToolsBrowserDownload?(cb: (download: ToolsBrowserDownload) => void): () => void;
       /** Popup URLs from the Browser tool (denied natively, open as a tab). */
-      onToolsBrowserPopup?(cb: (url: string) => void): () => void;
+      onToolsBrowserPopup?(cb: (url: string, source?: { guestId: number; partition: string; background?: boolean }) => void): () => void;
       /** Opens a live desktop as a sandboxed window owned by BOS Bot. */
       desktopViewer?: {
         open(url: string, title: string, contextId: string): Promise<boolean>;

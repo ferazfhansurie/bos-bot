@@ -208,6 +208,38 @@ describe("authenticated browser viewer relay", () => {
     expect(res.writableEnded).toBe(false);
     expect(res.chunks).toHaveLength(0);
   });
+  it("accepts mobile taps only on the latest acknowledged frame and releases the button atomically", async () => {
+    const a = await open(); await a.action({ type: "take" });
+    a.socket.receive(frame);
+    await expect(a.action({ type: "tap", seq: 1, x: 20, y: 30 })).rejects.toThrow("view changed");
+    await a.action({ type: "ack", seq: 1 });
+    await a.action({ type: "tap", seq: 1, x: 20, y: 30 });
+    expect(nativeInput.mock.calls.map(([, options]) => JSON.parse(options.body).type)).toEqual(["mousePressed", "mouseReleased"]);
+    nativeInput.mockClear();
+    a.socket.receive({ ...frame, seq: 2 });
+    await expect(a.action({ type: "tap", seq: 1, x: 20, y: 30 })).rejects.toThrow("view changed");
+    await a.action({ type: "ack", seq: 2 });
+    await expect(a.action({ type: "tap", seq: 2, x: 2000, y: 30 })).rejects.toThrow("outside");
+    expect(nativeInput).not.toHaveBeenCalled();
+  });
+  it("stale tap validation never poisons the real runtime control lease", async () => {
+    runtime = new BrowserRuntime(); live = new BrowserLive({ runtime });
+    const a = await open(); await a.action({ type: "take" });
+    a.socket.receive(frame);
+    await expect(a.action({ type: "tap", seq: 1, x: 20, y: 30 })).rejects.toThrow("view changed");
+    expect(runtime.canControl("profile-a", a.res.id)).toBe(true);
+    await a.action({ type: "ack", seq: 1 });
+    await a.action({ type: "tap", seq: 1, x: 20, y: 30 });
+    await a.action({ type: "release" });
+    await expect(runtime.withAgentAction("profile-a", async () => "resumed")).resolves.toBe("resumed");
+  });
+  it("refuses mobile scrolls against an older viewport without issuing input", async () => {
+    const a = await open(); await a.action({ type: "take" });
+    a.socket.receive(frame); await a.action({ type: "ack", seq: 1 });
+    a.socket.receive({ ...frame, seq: 2, metadata: { ...frame.metadata, deviceWidth: 400 } });
+    await expect(a.action({ type: "input_mouse", eventType: "mouseWheel", x: 500, y: 30, deltaY: 100, frameSeq: 1 })).rejects.toThrow("view changed");
+    expect(nativeInput).not.toHaveBeenCalled();
+  });
   it("only acknowledges the exact frame rendered by this bound viewer", async () => {
     const { res, socket, action } = await open();
     socket.receive(frame);

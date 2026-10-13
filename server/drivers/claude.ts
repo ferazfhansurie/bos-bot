@@ -1789,6 +1789,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // a turn still running when the process died is a failed turn; a
         // process that exited between turns (idle close, contract change)
         // is just a session ending
+        if (retryState.get(threadId)?.cancelled) settle(false, "interrupted");
         if (session.turn && !session.turn.settled) {
           // A retained process may be running a later user turn. Its close
           // handler must retry that request, not the process's first prompt.

@@ -35,18 +35,29 @@ struct MarkdownText: View {
 
     var body: some View {
         let blocks = Markdown.blocks(source)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { item in
                 // Equatable, so while a reply streams only the block being
                 // typed re-parses; the finished ones above it are skipped.
                 MarkdownBlockView(block: item.element, tail: caret && item.offset == blocks.count - 1, mentions: mentions)
                     .equatable()
+                    .padding(.top, blockSpacing(blocks, at: item.offset))
             }
         }
         .environment(\.openURL, OpenURLAction { url in
             openLink?(url) ?? .systemAction(url)
         })
     }
+    private func blockSpacing(_ blocks: [MarkdownBlock], at index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        switch (blocks[index - 1], blocks[index]) {
+        case (.bullet, .bullet), (.ordered, .ordered), (.bullet, .ordered), (.ordered, .bullet):
+            return 4
+        case (_, .heading): return 14
+        default: return 10
+        }
+    }
+
 }
 
 /// One block of a reply. Separate from MarkdownText so SwiftUI can compare
@@ -76,6 +87,7 @@ private struct MarkdownBlockView: View, Equatable {
         case let .paragraph(text):
             inline(text, tail: tail)
                 .font(.system(size: bodySize))
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
 
         case let .heading(level, text):
@@ -137,11 +149,12 @@ private struct MarkdownBlockView: View, Equatable {
                 ScrollView(.horizontal, showsIndicators: false) {
                     (Text(text) + caretText(tail))
                         .font(.system(size: codeSize, design: .monospaced))
+                        .lineSpacing(3)
                         .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .fixedSize(horizontal: true, vertical: true)
                 }
             }
-            .padding(10)
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -159,7 +172,7 @@ private struct MarkdownBlockView: View, Equatable {
                 .font(.system(size: bodySize))
                 .foregroundStyle(Color.secondary)
                 .frame(minWidth: 16, alignment: .trailing)
-            inline(text, tail: tail).font(.system(size: bodySize))
+            inline(text, tail: tail).font(.system(size: bodySize)).lineSpacing(3)
         }
         .padding(.leading, CGFloat(indent) * 14)
         .fixedSize(horizontal: false, vertical: true)

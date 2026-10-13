@@ -10,26 +10,35 @@ public enum SoundEffects {
 
 // MARK: - Haptic Feedback
 public enum Haptics {
-    public static func selection() {
-        let generator = UISelectionFeedbackGenerator()
-        generator.prepare()
-        generator.selectionChanged()
-    }
-
+    public static func selection() { Task { @MainActor in HapticEngine.shared.selection() } }
     public static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) {
-        let generator = UIImpactFeedbackGenerator(style: style)
-        generator.prepare()
-        generator.impactOccurred()
+        Task { @MainActor in HapticEngine.shared.impact(style) }
     }
-
     public static func notification(_ type: UINotificationFeedbackGenerator.FeedbackType) {
-        let generator = UINotificationFeedbackGenerator()
-        generator.prepare()
-        generator.notificationOccurred(type)
+        Task { @MainActor in HapticEngine.shared.notification(type) }
     }
+    public static func success() { notification(.success) }
+}
 
-    public static func success() {
-        notification(.success)
+@MainActor
+private final class HapticEngine {
+    static let shared = HapticEngine()
+    private let selectionGenerator = UISelectionFeedbackGenerator()
+    private let notificationGenerator = UINotificationFeedbackGenerator()
+    private var impacts: [UIImpactFeedbackGenerator.FeedbackStyle: UIImpactFeedbackGenerator] = [:]
+    private var lastSelection = Date.distantPast
+    func selection() {
+        guard Date().timeIntervalSince(lastSelection) > 0.08 else { return }
+        lastSelection = Date()
+        selectionGenerator.selectionChanged(); selectionGenerator.prepare()
+    }
+    func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
+        let generator = impacts[style] ?? UIImpactFeedbackGenerator(style: style)
+        impacts[style] = generator
+        generator.impactOccurred(); generator.prepare()
+    }
+    func notification(_ type: UINotificationFeedbackGenerator.FeedbackType) {
+        notificationGenerator.notificationOccurred(type); notificationGenerator.prepare()
     }
 }
 

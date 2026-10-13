@@ -61,6 +61,22 @@ final class RemoteBotTests: XCTestCase {
         XCTAssertEqual(state.bots.first { $0.id == bot.id }?.threadId, "rt-0123456789ab-thread9")
     }
 
+    func testUnstartedRemoteConversationIsNotRemoved() throws {
+        var json = try fixtureBotJSON()
+        json["id"] = "rb-0123456789ab-bot1"
+        json["threadId"] = "rt-0123456789ab-pending-bot1"
+        json["tasks"] = []
+        json["remote"] = ["homeId": "home-b", "homeName": "Studio Mac"]
+        let bot = try JSONDecoder().decode(Bot.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(bot.hasRemovedThread(bot.threadId))
+        XCTAssertTrue(bot.hasRemovedThread("rt-0123456789ab-deleted"))
+        var moved = bot
+        moved.threadId = "rt-0123456789ab-real"
+        XCTAssertTrue(moved.hasRemovedThread(bot.threadId))
+        moved.tasks = nil
+        XCTAssertFalse(moved.hasRemovedThread(bot.threadId))
+    }
+
     func testSharedActivityMessageDecodes() throws {
         let data = Data(#"""
         {"messages":[

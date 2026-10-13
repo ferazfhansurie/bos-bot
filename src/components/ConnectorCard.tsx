@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Loader2, PlugZap, RefreshCw, X } from "lucide-react";
+import { Check, Loader2, RefreshCw, X } from "lucide-react";
 
 import { api, type Message } from "@/state/store";
 import { t } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
+import { ServiceIcon } from "./PluginsPanel";
 import type { LocaleKey } from "@/locales";
 
 async function openConnectionPage(url: string) {
@@ -94,76 +96,67 @@ export function ConnectorCard({ botId, threadId, message }: { botId: string; thr
   const authorizing = connector.status === "authorizing";
   const error = localError ?? connector.error;
 
+  const pill =
+    "flex h-9 shrink-0 items-center gap-1.5 rounded-full px-4 text-[13.5px] font-medium transition-[background-color,transform] active:scale-[0.97] disabled:opacity-50";
+
+  // Grok's connect card: the app's own icon, its name and what the bot wants
+  // it for, and one pill on the right. Status lives in the pill itself.
   return (
     <div className="flex w-full justify-start">
-      <div data-tour="connector" className="w-full max-w-[520px] overflow-hidden rounded-2xl border border-hairline/50 bg-card shadow-sm">
-        <div className="flex items-start gap-3 p-4">
-          <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-control text-[16px] font-semibold text-ink">
-            {connector.label.slice(0, 1).toUpperCase() || <PlugZap size={19} />}
+      <div data-tour="connector" className="animate-pop-in group/connector relative w-full max-w-[520px] rounded-2xl border border-hairline/40 bg-card px-4 py-3.5">
+        <div className="flex items-center gap-3.5">
+          <div className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-raised p-2.5">
+            <ServiceIcon card={{ label: connector.label, logo: `https://logos.composio.dev/api/${encodeURIComponent(connector.slug)}`, domain: null }} className="size-full rounded-lg" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-[14px] font-semibold text-ink">{connector.label}</span>
-              {connected && (
-                <span className="flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-medium text-success">
-                  <Check size={11} /> {t("connectors.card.connected")}
-                </span>
-              )}
-            </div>
-            <p className="mt-0.5 text-[12.5px] leading-relaxed text-ink-secondary">
-              {connected
-                ? connector.resumed
-                  ? t("connectors.card.resumed")
-                  : t("connectors.card.paused")
-                : connector.description}
+            <div className="truncate text-[15px] font-medium text-ink">{connector.label}</div>
+            <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-ink-secondary">
+              {authorizing
+                ? t("connectors.card.waiting")
+                : connected
+                  ? connector.resumed
+                    ? t("connectors.card.resumed")
+                    : t("connectors.card.paused")
+                  : connector.description}
             </p>
-            {!connected && (
-              <p className="mt-1 text-[11.5px] text-ink-secondary/80">
-                {t("connectors.card.signInHint")}
-              </p>
-            )}
-            {error && <p className="mt-2 text-[12px] text-danger">{typeof error === "string" ? error : t(error.key)}</p>}
-          </div>
-          {!connected && (
-            <button onClick={dismiss} aria-label={t("connectors.card.notNow")} title={t("connectors.card.notNow")} className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink">
-              <X size={15} />
-            </button>
-          )}
-        </div>
-        <div className="flex items-center justify-between border-t border-hairline/40 bg-panel/40 px-4 py-2.5">
-          <div className="flex items-center gap-1.5 text-[11.5px] text-ink-secondary">
-            {authorizing ? <Loader2 size={12} className="animate-spin" /> : <PlugZap size={12} />}
-            {authorizing
-              ? t("connectors.card.waiting")
-              : connected
-                ? t("connectors.card.readyToUse")
-                : t("connectors.card.requested")}
           </div>
           {!connected ? (
             <button
+              type="button"
               onClick={() => void connect()}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              title={t("connectors.card.signInHint")}
+              className={cn(pill, "border border-hairline text-ink hover:bg-raised")}
             >
-              {busy || authorizing ? <Loader2 size={13} className="animate-spin" /> : <PlugZap size={13} />}
+              {(busy || authorizing) && <Loader2 size={14} className="animate-spin" />}
               {authorizing
                 ? t("connectors.card.openAgain")
                 : connector.status === "failed"
                   ? t("connectors.card.tryAgain")
-                  : t("connectors.card.connectSecurely")}
+                  : t("connectors.action.connect")}
             </button>
           ) : !connector.resumed ? (
-            <button
-              onClick={() => void resume()}
-              disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12.5px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-            >
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} {t("connectors.card.continueTask")}
+            <button type="button" onClick={() => void resume()} disabled={busy} className={cn(pill, "bg-ink text-app hover:bg-ink/90")}>
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} {t("connectors.card.continueTask")}
             </button>
           ) : (
-            <span className="flex items-center gap-1 text-[12px] font-medium text-success"><Check size={13} /> {t("connectors.card.continuing")}</span>
+            <span className={cn(pill, "bg-success/15 text-success")}>
+              <Check size={14} /> {t("connectors.card.connected")}
+            </span>
           )}
         </div>
+        {error && <p className="mt-2 ps-[70px] text-[12.5px] text-danger">{typeof error === "string" ? error : t(error.key)}</p>}
+        {!connected && (
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label={t("connectors.card.notNow")}
+            title={t("connectors.card.notNow")}
+            className="absolute -end-2 -top-2 flex size-6 items-center justify-center rounded-full border border-hairline/60 bg-menu text-ink-secondary opacity-0 shadow-md transition-opacity hover:text-ink focus-visible:opacity-100 group-hover/connector:opacity-100"
+          >
+            <X size={13} />
+          </button>
+        )}
       </div>
     </div>
   );

@@ -5,6 +5,9 @@ artifactName: BOS-Bot-${version}-${arch}.${ext}
 protocols:
   - name: BOS Bot package install
     schemes: [bosbot, openmausbot]
+  - name: Web links
+    role: Viewer
+    schemes: [http, https]
 
 # In-app auto-update reads latest-mac.yml + the .zip (macOS) or latest.yml +
 # the NSIS .exe (Windows) from the PUBLIC releases in this source repo.
@@ -127,6 +130,11 @@ mac:
     - from: electron/resources/updater/no-downgrade.py
       to: updater/no-downgrade.py
   extendInfo:
+    CFBundleDocumentTypes:
+      - CFBundleTypeRole: Viewer
+        LSHandlerRank: Alternate
+        LSItemContentTypes: [public.html, public.xhtml]
+    NSCameraUsageDescription: BOS Bot uses the camera only when you allow a website to access it.
     NSMicrophoneUsageDescription: BOS Bot uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: BOS Bot transcribes your voice on-device to type messages for you.
     NSAccessibilityUsageDescription: BOS Bot uses Accessibility only when you explicitly let a bot control this Mac.

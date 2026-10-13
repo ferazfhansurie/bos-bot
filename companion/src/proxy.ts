@@ -21,7 +21,7 @@ import {
   MAX_COMPANION_ENDPOINTS,
   type CompanionEndpoint,
 } from "./endpoints.ts";
-import { denyReason, isCloudDesktopAccess, isMessageFileDownload } from "./routes.ts";
+import { denyReason, isBrowserAccess, isCloudDesktopAccess, isMessageFileDownload } from "./routes.ts";
 import { companionStatusSnapshot, type CompanionStatus } from "./status.ts";
 import { CompanionViewerRelay } from "./viewer-relay.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
@@ -291,7 +291,7 @@ export function createProxyHandler(options: ProxyOptions) {
     // Pairing a phone grants the ordinary companion surface, not a browser
     // session with every credential that may exist inside the cloud desktop.
     // The computer owner enables this capability per device, off by default.
-    if (isCloudDesktopAccess(method, path) && !device?.cloudDesktopAccess) {
+    if ((isCloudDesktopAccess(method, path) || isBrowserAccess(method, path)) && !device?.cloudDesktopAccess) {
       return sendJson(res, 403, {
         error: "cloud desktop access is off for this device — enable it in BOS Bot → Settings → Remote access",
       });
@@ -421,12 +421,12 @@ export function createProxyHandler(options: ProxyOptions) {
         if (isStream) {
           const streamStatus = harness.statusCode ?? 500;
           const tracksDeviceConnection = method === "GET"
-            && path === "/api/events"
+            && (path === "/api/events" || isBrowserAccess(method, path))
             && streamStatus >= 200
             && streamStatus < 300
             && Boolean(device?.id);
           const currentDevice = tracksDeviceConnection ? options.authenticate(token) : device;
-          if (tracksDeviceConnection && currentDevice?.id !== device?.id) {
+          if (tracksDeviceConnection && (currentDevice?.id !== device?.id || (isBrowserAccess(method, path) && !currentDevice?.cloudDesktopAccess))) {
             harness.destroy();
             return sendJson(res, 401, {
               error: "pair this device from Remote access settings on the host computer",
@@ -465,7 +465,7 @@ export function createProxyHandler(options: ProxyOptions) {
           // connection.
           res.socket?.setKeepAlive(true, 30_000);
 
-          const scrubStream = createSseScrubber();
+          const scrubStream = createSseScrubber(new URL(req.url ?? "/", "http://localhost").searchParams.get("taskDeltas") === "1");
           harness.setEncoding("utf8");
           harness.on("data", (chunk: string) => {
             let rewritten: string;

@@ -19,8 +19,9 @@ const THREAD_ID = compatEnv.OMB_THREAD_ID ?? "";
 const TOKEN = compatEnv.OMB_CONNECTOR_TOKEN ?? compatEnv.OMB_COMMS_TOKEN ?? "";
 // Native read-only WhatsApp (server/whatsapp-service.ts). Mounted only for a
 // bot whose Connected-apps grant is on; the harness re-checks the grant on
-// every call. There is deliberately no write tool of any kind.
+// every call. The reply tool mounts only with a separate owner policy.
 const WHATSAPP_NATIVE = compatEnv.OMB_WHATSAPP_NATIVE === "1";
+const WHATSAPP_REPLIES = compatEnv.OMB_WHATSAPP_REPLIES === "1";
 const MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 const INITIALIZE_RELAY_TIMEOUT_MS = 1_000;
 const RELAY_TIMEOUT_MS = 10 * 60_000;
@@ -148,12 +149,30 @@ const WHATSAPP_TOOLS = [
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
+  { name: "BOS_WHATSAPP_GET_ACCOUNT", description: "Verify the linked WhatsApp account and owner-configured reply scope.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } },
+  { name: "BOS_WHATSAPP_SYNC_HISTORY", description: "Request history for an exact chat on the verified linked account and capture up to 200 currently available messages. requested does not prove full history. Does not send a message, mark seen or trigger replies to imported history.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, chat_id: { type: "string" } }, required: ["account_id", "chat_id"], additionalProperties: false }, annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true } },
 ] as const;
 
 const WHATSAPP_ROUTES: Record<string, { path: string; params: string[] }> = {
   BOS_WHATSAPP_LIST_CHATS: { path: "chats", params: ["limit"] },
   BOS_WHATSAPP_LIST_MESSAGES: { path: "messages", params: ["chat_id", "before", "query", "limit"] },
 };
+
+const WHATSAPP_REPLY_TOOLS = [
+  { name: "BOS_WHATSAPP_REPLY", description: "Reply without additional approval to one captured incoming text from the last 24 hours, only in the owner's configured scope. Verify account and chat first. No outreach. One attempt per incoming message; never retry outcome_unknown. submitted is not recipient delivery.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, chat_id: { type: "string" }, message_id: { type: "string" }, text: { type: "string", minLength: 1, maxLength: 4000 } }, required: ["account_id", "chat_id", "message_id", "text"], additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true } },
+] as const;
+
+async function whatsappReplyTool(name: string, args: unknown): Promise<string> {
+  const response = await fetch(`${HARNESS}/api/internal/connectors/whatsapp/${name === "BOS_WHATSAPP_GET_ACCOUNT" ? "account" : name === "BOS_WHATSAPP_SYNC_HISTORY" ? "sync-history" : "reply"}`, {
+    method: name === "BOS_WHATSAPP_GET_ACCOUNT" ? "GET" : "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    ...(name !== "BOS_WHATSAPP_GET_ACCOUNT" ? { body: JSON.stringify(args) } : {}),
+    signal: AbortSignal.timeout(45_000),
+  });
+  const body = await readBounded(response);
+  if (!response.ok) throw new Error(`WhatsApp reply tool refused (HTTP ${response.status}): ${body.slice(0, 300)}`);
+  return body;
+}
 
 async function whatsappRead(name: string, args: unknown): Promise<string> {
   const route = WHATSAPP_ROUTES[name];
@@ -276,12 +295,18 @@ async function handle(message: Json): Promise<void> {
     if (id === undefined) return;
     const result = (upstream?.result ?? {}) as Json;
     const tools = Array.isArray(result.tools) ? result.tools : [];
-    send({ ...(upstream ?? { jsonrpc: "2.0", id }), result: { ...result, tools: [...tools, ...WHATSAPP_TOOLS] } });
+    send({ ...(upstream ?? { jsonrpc: "2.0", id }), result: { ...result, tools: [...tools, ...WHATSAPP_TOOLS, ...(WHATSAPP_REPLIES ? WHATSAPP_REPLY_TOOLS : [])] } });
     return;
   }
   if (method === "tools/call") {
     const params = (message.params ?? {}) as Json;
     const name = String(params.name ?? "");
+    if (name === "BOS_WHATSAPP_GET_ACCOUNT" || name === "BOS_WHATSAPP_SYNC_HISTORY" || name === "BOS_WHATSAPP_REPLY") {
+      if (!WHATSAPP_NATIVE || (name === "BOS_WHATSAPP_REPLY" && !WHATSAPP_REPLIES)) { send(textResult(id, "WhatsApp replies are not enabled for this bot", true)); return; }
+      try { send(textResult(id, await whatsappReplyTool(name, params.arguments))); }
+      catch (error) { send(textResult(id, error instanceof Error ? error.message : String(error), true)); }
+      return;
+    }
     if (WHATSAPP_NATIVE && Object.hasOwn(WHATSAPP_ROUTES, name)) {
       try {
         send(textResult(id, await whatsappRead(name, params.arguments)));
@@ -297,7 +322,7 @@ async function handle(message: Json): Promise<void> {
     if (allRequests.length && !requests.length) {
       send(textResult(
         id,
-        "WhatsApp is linked on this Mac, not through a connection card. Ask the user to open Plugins → Connected apps → WhatsApp and scan the QR code. Access is read-only.",
+        "WhatsApp is linked on this Mac, not through a connection card. Ask the user to open Plugins → Connected apps → WhatsApp and scan the QR code. Reply capability depends on the owner-configured bot policy.",
       ));
       return;
     }

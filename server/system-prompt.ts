@@ -21,7 +21,7 @@ export type PromptSection = PromptPart & { bytes: number };
  * contract, which relaunched the CLI — and the provider then re-uploaded the
  * entire conversation at the cache-write rate. Mentions did the same on any
  * turn that tagged a bot. */
-const VOLATILE_SECTIONS = new Set(["memory", "mentions", "outstanding"]);
+const VOLATILE_SECTIONS = new Set(["memory", "mentions", "outstanding", "initiative-signal"]);
 
 export function buildSystemPrompt(
   persona: string,
@@ -86,9 +86,20 @@ export const THREADS_PROMPT =
 const PROPOSAL_RESULT_PROMPT =
   " Follow the tool result: with granted Full Access it may report applied immediately; then continue the requested work without asking for another confirmation. If it reports a pending review, end the turn and wait for the in-app decision. Never claim success before an applied result, and report failures honestly. Full Access does not grant another bot broader permissions.";
 export const ROUTINE_PROMPT =
-  " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. Keep run_on omitted or maus to use the bot's current model and configured computer, including its VPS. A routine's box (legacy cloud) destination switches to a Box-hosted agent, not the configured VPS; choose it only when the user explicitly wants that Box runner. Convert calendar requests such as the first or last day of each month or the second Monday to a five-field cron expression with an explicit IANA timezone; use interval for elapsed every-N-minutes work. Never replace a calendar rule with daily AI date checking or an approximate weekly schedule; clarify ambiguous or unsupported requests." + PROPOSAL_RESULT_PROMPT;
+  " If the user explicitly asks to list or review, schedule, run, or change routines, use list_routines and propose_routine or propose_routine_action. When a request is itself recurring or a watch (\"every morning\", \"remind me\", \"keep an eye on\", \"ping me when\"), propose a routine rather than doing it once. When the person left the timing loose, default to weekdays in waking hours (for example 0 9 * * 1-5 in their timezone) and say so; schedule nights or weekends only when they asked, the job is time-critical, or it is personal life such as a habit or medication. Prefer the coarsest cadence that still delivers the value. For a finite watch, write into the routine's instructions to report once and delete itself when the condition is met or its deadline passes. For a routine that checks for something, write into its instructions to stay quiet when nothing changed. Keep run_on omitted or maus to use the bot's current model and configured computer, including its VPS. A routine's box (legacy cloud) destination switches to a Box-hosted agent, not the configured VPS; choose it only when the user explicitly wants that Box runner. Convert calendar requests such as the first or last day of each month or the second Monday to a five-field cron expression with an explicit IANA timezone; use interval for elapsed every-N-minutes work. Never replace a calendar rule with daily AI date checking or an approximate weekly schedule; clarify ambiguous or unsupported requests." + PROPOSAL_RESULT_PROMPT;
+/** The whole reply of a routine run that found nothing worth surfacing. The
+ * server ends such a run without a notification or an unread badge. */
+export const QUIET_ROUTINE_REPLY = "NOTHING_TO_REPORT";
+export function isQuietRoutineReply(text: string | null | undefined): boolean {
+  return (text ?? "").trim().replace(/[.`*_\s]+$/g, "").replace(/^[`*_\s]+/g, "") === QUIET_ROUTINE_REPLY;
+}
 export const ROUTINE_EXECUTION_PROMPT =
-  " Execute this routine now: use available peer tools for required handoffs rather than merely announcing that you will wait; after an accepted delegation, end this turn for automatic resumption, and report a concrete blocker if no handoff is possible.";
+  " Execute this routine now: use available peer tools for required handoffs rather than merely announcing that you will wait; after an accepted delegation, end this turn for automatic resumption, and report a concrete blocker if no handoff is possible." +
+  ` Nobody is waiting on a routine run. If its instructions say to stay quiet when nothing changed and you found nothing worth surfacing, make your whole final reply exactly ${QUIET_ROUTINE_REPLY} and nothing else; the run then ends without notifying anyone. Never send filler like "no change" otherwise. When there is something, surface it the way you would mention something you remembered to handle, in your normal voice, without announcing that a routine ran or reading its schedule back.`;
+/** The standing rule for proactive help: when a bot may offer or do
+ * something nobody asked for, and how small that offer must stay. */
+export const INITIATIVE_PROMPT =
+  " Initiative: think a step ahead about what this person will want next, grounded in something you actually saw them do or ask, never a generic suggestion they cannot trace to a real signal. When you spot one, either just do it when it is clearly safe and inside the task they gave you, or end with one short offer that names the signal it came from. One nudge at a time, easy to wave off; if they pass, drop it. Signals worth acting on: the same manual ask coming back a second or third time (offer to make it a routine), a task that needed a connection that is not set up (point at it), and a finished task with an obvious recurring or next-step version (offer it once). Initiative never widens your access, never sends anything to other people without approval, and never routes around an approval or safety check. Skip it entirely on quick back-and-forth, when the person is mid-decision, or when you already made an offer in this conversation that they did not take.";
 export const LEARN_PROMPT =
   " If the user sends /learn or asks you to save a reusable procedure from this work, use skills_list and skill_manage. Create new skills; update an existing learned skill only when the user explicitly asks to revise that exact name. Include source provenance." + PROPOSAL_RESULT_PROMPT;
 export const WEBHOOK_PROMPT =

@@ -52,7 +52,12 @@ assert.equal(stamp.native_contract_sha256, sha(readFileSync(join(resources, 'nat
 const { assertNativeCompatibility } = await import(pathToFileURL(join(repo, 'electron/native-contract.mjs')).href);
 const native = assertNativeCompatibility(resources, repo, commit);
 assert.equal(native.shellCommit, commit);
-const authority = 'Apple Development: Firaz Fhansurie (KL78M575FW)';
+// The candidate must carry the same signer as the installed app, whichever
+// certificate that is (it moved from Apple Development to Developer ID).
+const live = spawnSync('/usr/bin/codesign', ['-dvv', '/Applications/BOS Bot.app'], { encoding: 'utf8' }).stderr;
+const authority = live.match(/^Authority=(.+)$/m)?.[1];
+const team = live.match(/^TeamIdentifier=(.+)$/m)?.[1];
+assert.ok(authority && team, 'installed app signer unavailable');
 const identities = [];
 for (const [candidate, installed] of [[app, '/Applications/BOS Bot.app'], [join(resources, 'BOS Bot Speech.app'), '/Applications/BOS Bot.app/Contents/Resources/BOS Bot Speech.app']]) {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', candidate]);
@@ -60,7 +65,7 @@ for (const [candidate, installed] of [[app, '/Applications/BOS Bot.app'], [join(
   const details = spawnSync('/usr/bin/codesign', ['-d', '-r-', '--verbose=4', candidate], { encoding: 'utf8' });
   assert.equal(details.status, 0);
   assert.ok(details.stderr.includes(`Authority=${authority}`));
-  assert.ok(details.stderr.includes('TeamIdentifier=6LH87G88CQ'));
+  assert.ok(details.stderr.includes(`TeamIdentifier=${team}`));
   const old = spawnSync('/usr/bin/codesign', ['-d', '-r-', installed], { encoding: 'utf8' });
   assert.equal(old.status, 0);
   const requirement = `${old.stdout}\n${old.stderr}`.match(/^designated => (.+)$/m)?.[1];

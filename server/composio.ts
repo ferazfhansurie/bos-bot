@@ -140,6 +140,7 @@ export interface ComposioMcpIntegration {
 }
 
 interface IntegrationContext {
+  whatsappReplies?: boolean;
   harnessUrl: string;
   commsToken: string;
   botId: string;
@@ -559,6 +560,7 @@ export async function mcpIntegration(
         OMB_CONNECTOR_UPSTREAM_HEADERS: JSON.stringify({ authorization: `Bearer ${context.commsToken}` }),
       } : {}),
       ...(context.whatsappNative ? { OMB_WHATSAPP_NATIVE: "1" } : {}),
+      OMB_WHATSAPP_REPLIES: context.whatsappReplies ? "1" : "0",
       OMB_HARNESS_URL: context.harnessUrl,
       // Distinct from the agents proxy token: Codex flattens mounted MCP env
       // variables into one process environment, so a shared name would let

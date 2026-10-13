@@ -201,7 +201,7 @@ export function RoomToolChip({ message, roomId }: { message: Message; roomId?: s
       </div>
     );
   }
-  if (!comm) return <ToolActivity tool={tool} />;
+  if (!comm) return <ToolActivity stopReason={message.turnOutcome?.stopReason} tool={tool} />;
   return (
     <div className="step-tag flex justify-start pl-1">
       <div

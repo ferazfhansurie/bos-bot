@@ -6,6 +6,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import formats from "ajv-formats";
 import type { SendTurnInput } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
+import { isReadOnlyAgentTool } from "../agent-tool-policy.ts";
 
 export interface ChatToolDefinition {
   type: "function";
@@ -19,6 +20,8 @@ export interface ChatToolSession {
   definitions: ChatToolDefinition[];
   validate(name: string, args: unknown): void;
   execute(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<ChatToolResult>;
+  /** True only for a reviewed read-only tool of the built-in agents server. */
+  readOnly(name: string): boolean;
   close(): Promise<void>;
 }
 
@@ -248,7 +251,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
   const cancel = () => { void close().catch(() => {}); };
   signal.addEventListener("abort", cancel, { once: true });
   const definitions: ChatToolDefinition[] = [];
-  const registered = new Map<string, { client: ChatMcpClient; name: string; schema: ValidateFunction }>();
+  const registered = new Map<string, { client: ChatMcpClient; name: string; schema: ValidateFunction; readOnly: boolean }>();
   try {
     if (signal.aborted) throw aborted();
     // Start independent servers concurrently; consume results in config order
@@ -258,7 +261,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
         if (signal.aborted || closed) throw aborted();
         const client = new ChatMcpClient(descriptor);
         clients.push(client);
-        try { return { name, client, tools: await client.tools(signal) }; }
+        try { return { name, client, tools: await client.tools(signal), builtinAgents: descriptor === integrations?.agents }; }
         catch (error) {
           if (!(error instanceof McpStartupTimeout) || attempt >= STARTUP_ATTEMPTS) throw error;
           await client.close().catch(() => {});
@@ -267,7 +270,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
     }));
     for (const mount of mounts) {
       if (mount.status === "rejected") throw mount.reason;
-      const { name: server, client, tools } = mount.value;
+      const { name: server, client, tools, builtinAgents } = mount.value;
       const originalNames = new Set<string>();
       for (const tool of tools) {
         if (!object(tool) || typeof tool.name !== "string" || !tool.name.trim() || originalNames.has(tool.name)) throw new Error("MCP server advertised an invalid or duplicate tool name");
@@ -279,7 +282,9 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
         const base = `${server}_${tool.name}`.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64) || "mcp_tool";
         let name = base;
         for (let index = 2; registered.has(name); index += 1) { const suffix = `_${index}`; name = base.slice(0, 64 - suffix.length) + suffix; }
-        registered.set(name, { client, name: tool.name, schema });
+        // Only BOS's own agents server is trusted; a third-party server's
+        // names or annotations never skip the person's approval.
+        registered.set(name, { client, name: tool.name, schema, readOnly: builtinAgents && isReadOnlyAgentTool(tool.name) });
         definitions.push({ type: "function", function: { name, description: typeof tool.description === "string" ? tool.description : "Configured MCP tool", parameters: tool.inputSchema } });
         if (Buffer.byteLength(JSON.stringify(definitions)) > CATALOG_BYTES) throw new Error("MCP tool catalog exceeds the 1MB limit");
       }
@@ -294,6 +299,7 @@ export async function mountChatTools(integrations: SendTurnInput["integrations"]
   };
   return {
     definitions, validate, close,
+    readOnly: (name) => registered.get(name)?.readOnly === true,
     async execute(name, args, callSignal) {
       validate(name, args);
       if (callSignal.aborted) { await close(); throw aborted(); }

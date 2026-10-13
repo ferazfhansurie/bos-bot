@@ -72,3 +72,9 @@ export function workspaceCredentialEnv(credentials) {
   return env;
 }
 // branding compatibility (electron/branding-compat.json): environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+/** Called after inherited Composio variables are removed from the child env. */
+export function savedComposioCredentialEnv(credentials) {
+  const key = credentials?.composioApiKey;
+  return typeof key === "string" && key.trim() ? { COMPOSIO_API_KEY: key.trim() } : {};
+}

@@ -3,6 +3,8 @@ import { createUsageFeed, useFeed } from "@/lib/usage-feed";
 import { Card } from "./SettingsPrimitives";
 import { XaiVoiceTile } from "./XaiUsage";
 import { ago } from "@/lib/usage-chips";
+import { accountRings } from "@/lib/account-usage";
+import { useProfileUsageVisibility } from "@/lib/profile-usage-visibility";
 
 export type { UsageWindow as Window, UsageAccount as Account } from "@/lib/usage-chips";
 import type { UsageWindow as Window, UsageAccount as Account } from "@/lib/usage-chips";
@@ -30,11 +32,16 @@ export function useProviderUsage() {
 
 export function ProviderUsage() {
   const { accounts, failed, stale, fetchedAt } = useProviderUsage();
+  const { hidden, setVisible } = useProfileUsageVisibility();
   return <Card title="Subscription limits" subtitle="Live account quotas. These are separate from bot token usage and spend.">
     <div className="grid gap-4 sm:grid-cols-2">
       {failed ? <div className="text-[13px] text-ink-secondary">Usage unavailable. Retrying automatically.</div> : accounts === null ? <div className="text-[13px] text-ink-secondary">Loading…</div> : accounts.length === 0 ? <div className="text-[13px] text-ink-secondary">No Claude or Codex account configured.</div> :
-        accounts.map((account, index) => <div key={`${account.provider}-${index}`} className="rounded-xl border border-hairline/40 p-3 space-y-3">
+        accountRings(accounts).map(({ account, key }) => <div key={key} className="rounded-xl border border-hairline/40 p-3 space-y-3">
           <div className="text-[13px] font-medium text-ink">{account.provider === "claude" ? "Claude" : "Codex"} · {account.account}</div>
+          <label className="flex items-center gap-2 text-[12px] text-ink-secondary">
+            <input type="checkbox" checked={!hidden.includes(key)} onChange={event => setVisible(key, event.target.checked)} />
+            Show {account.account} around my profile
+          </label>
           {account.fiveHour && <Meter label="5h" window={account.fiveHour} />}
           <Meter label="7d" window={account.sevenDay} />
         </div>)}

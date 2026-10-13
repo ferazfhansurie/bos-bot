@@ -134,6 +134,16 @@ describe("createSseScrubber", () => {
     expect(out).toBe(`data: ${big}\n\n`);
   });
 
+  it("enforces the ceiling even when a complete event arrives in one chunk", () => {
+    expect(() => createSseScrubber()("x".repeat(MAX_SSE_EVENT_BYTES + 1) + "\n\n"))
+      .toThrow(/exceeded/);
+  });
+
+  it("counts UTF-8 bytes rather than string characters", () => {
+    expect(() => createSseScrubber()("界".repeat(Math.floor(MAX_SSE_EVENT_BYTES / 3) + 1)))
+      .toThrow(/without a terminator/);
+  });
+
   it("handles several events arriving in one chunk", () => {
     const out = createSseScrubber()(
       'id: a:1\ndata: {"a":1,"resumeCursors":{}}\n\nid: a:2\ndata: {"b":2}\n\n',

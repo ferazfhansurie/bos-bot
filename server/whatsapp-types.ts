@@ -1,15 +1,11 @@
 // Types shared by the native WhatsApp capture (whatsapp-native.ts), its only
 // whatsapp-web.js touch point (whatsapp-wwebjs.ts) and the local store.
 //
-// READ-ONLY BY CONSTRUCTION. ReadOnlyWhatsAppClient is the entire surface the
-// rest of the server ever sees of a linked WhatsApp session: start it, stop
-// it, ask whether it is alive, and go invisible (presence "unavailable", so
-// this linked session does not hold the account "online" and mute the
-// phone's notifications). There is no method that sends, replies,
-// forwards, reacts, marks as read or changes anything on the account, and
-// incoming messages arrive as plain CapturedMessage records — never as
-// whatsapp-web.js Message objects, which carry reply()/forward()/react().
-// whatsapp-native.test.ts pins this.
+// Capture hands callers plain records, never raw Message objects. The client
+// keeps the raw session private and exposes only narrow lifecycle, history and
+// reply transports. The server checks owner policy, account, recipient and
+// active turn authorization before invoking the optional reply transport.
+// Default bot grants still expose reading/history only.
 
 /** What the tile shows. Never a static "ready": every value is derived from a
  * client event or the liveness probe. */
@@ -22,6 +18,11 @@ export type WhatsAppLinkState =
   | "needs_rescan";
 
 export interface CapturedMessage {
+  /** Linked account which captured this message. Unknown historic rows are
+   * excluded from client-scoped reads and autonomous replies. */
+  accountId?: string | null;
+  /** A history load may emit message_create; never dispatch replies to it. */
+  importedHistory?: boolean;
   /** whatsapp-web.js serialized message id (msg.id._serialized) — the dedupe key */
   id: string;
   chatId: string;
@@ -51,6 +52,9 @@ export interface ReadOnlyClientHandlers {
 
 /** The whole client. Deliberately nothing else. */
 export interface ReadOnlyWhatsAppClient {
+  history?: { accountId(): string | null; sync(chatId: string, accountId: string, authorized: () => boolean): Promise<{ requested: boolean; messages: CapturedMessage[]; warning?: string }> };
+  /** Narrow transport used only behind the owner-configured reply policy. */
+  replies?: import("./whatsapp-replies.ts").ReplyTransport;
   initialize(): Promise<void>;
   /** WAState string (CONNECTED, OPENING, CONFLICT, ...) or null when the page
    * cannot answer. Throws when the browser is gone. */

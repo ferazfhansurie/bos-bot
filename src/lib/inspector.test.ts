@@ -15,6 +15,7 @@ describe("summarizeRuntime", () => {
       tone: "boundary",
     });
     expect(summarizeRuntime({ ...base, type: "turn.completed", ok: false }).tone).toBe("error");
+    expect(summarizeRuntime({ ...base, type: "turn.completed", ok: false, stopReason: "interrupted" })).toEqual({ summary: "stopped · interrupted", tone: "boundary" });
     expect(summarizeRuntime({ ...base, type: "runtime.error", message: "boom", setup: true }).summary).toBe("setup: boom");
   });
 

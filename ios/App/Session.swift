@@ -112,8 +112,26 @@ final class Session: ObservableObject {
     /// Whether the live pairing may administer the workspace — see
     /// `Connection.canAdminister`. Views hide owner-only controls when this
     /// is false rather than offer buttons the server would answer 403 to.
+    var browserClient: CompanionClient? { client }
     var canAdminister: Bool { connection?.canAdminister ?? false }
-    @Published private(set) var status: Status = .unpaired
+    @Published private(set) var status: Status = .unpaired {
+        didSet {
+            let label: String
+            switch status {
+            case .unpaired: label = "unpaired"
+            case .connecting: label = "connecting"
+            case .live: label = "live"
+            case .unauthorized: label = "unauthorized"
+            case .offline: label = "offline"
+            }
+            traceConnection("status \(label)")
+        }
+    }
+    private var lastFrameTrace = Date.distantPast
+    private func traceConnection(_ event: String) {
+        ConnectionTrace.record("satellite=\(isSatellite) generation=\(streamGeneration) \(event)")
+    }
+    @Published private(set) var isRefreshing = false
     /// Transient, user-facing failures from an action they just took.
     @Published var actionError: String?
     /// One exact message the next opened chat should reveal.
@@ -178,6 +196,29 @@ final class Session: ObservableObject {
     /// and persisted — when a stream goes live.
     private var rotation = CandidateRotation(hosts: [])
     private var streamTask: Task<Void, Never>?
+#if DEBUG
+    private var recoveryPreviewSession: URLSession?
+#endif
+    private var streamedMessageIDs = Set<String>()
+    private var sendStreamCheck: Task<Void, Never>?
+
+    /// HTTP acceptance must not conceal a stalled event connection.
+    private func verifySendStream(_ receipt: SendReceipt?) {
+        guard let receipt, receipt.queued != true, let message = receipt.message else { return }
+        guard !streamedMessageIDs.contains(message.id) else { return }
+        sendStreamCheck?.cancel()
+        let generation = streamGeneration
+        sendStreamCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self, self.streamGeneration == generation,
+                  !self.streamedMessageIDs.contains(message.id) else { return }
+            self.sendStreamCheck = nil
+            self.traceConnection("send echo missing; reconnect")
+            // Resume the cursor; never resend the accepted message.
+            self.stopStream()
+            self.connect()
+        }
+    }
     /// Rooms joined on another home stream from that home through
     /// `/api/groups/:id/events`, one stream per home, beside the main one.
     private var remoteStreams: [String: (groupId: String, task: Task<Void, Never>)] = [:]
@@ -275,6 +316,7 @@ final class Session: ObservableObject {
     /// is available. Retain the last explicitly tapped destination until the
     /// paired client can be rebuilt after unlock.
     private var pendingNotification: NotificationTarget?
+    private var notificationOpenID = UUID()
     private var notificationVisibleThreads = Set<String>()
 
     /// The exact route the current client will use for a credential write.
@@ -406,6 +448,14 @@ final class Session: ObservableObject {
     init() {
         Self.removeStaleFilePreviews()
         _ = NotificationCoordinator.shared
+#if DEBUG
+        // Exercise a launch tap before the navigation handler is installed.
+        if ProcessInfo.processInfo.arguments.contains("-notification-tap-preview"),
+           let target = NotificationTarget(botId: "preview-pepper", threadId: "preview-icloud",
+                                           connectionId: "preview-current", kind: "done") {
+            NotificationCoordinator.shared.openThread(target)
+        }
+#endif
         NotificationCoordinator.shared.foregroundPresentation = { [weak self] target in
             self?.home(for: target.connectionId).notificationPresentation(for: target) ?? .quiet
         }
@@ -454,6 +504,17 @@ final class Session: ObservableObject {
         }
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-browser-preview"),
+           let index = arguments.firstIndex(of: "-browser-preview-url"), index + 1 < arguments.count,
+           let url = URL(string: arguments[index + 1]), url.scheme == "http", url.host == "127.0.0.1", let port = url.port,
+           let fixtureURL = Bundle.main.url(forResource: "StorePreview", withExtension: "json"),
+           let data = try? Data(contentsOf: fixtureURL), let fleet = try? JSONDecoder().decode(Fleet.self, from: data) {
+            let preview = Connection(id: "browser-preview", name: "Isolated browser fixture", host: "127.0.0.1", port: port)
+            connection = preview; connections = [preview]
+            client = CompanionClient(connection: preview, token: "browser-fixture-token")
+            state.hydrate(fleet); status = .live
+            return
+        }
         if arguments.contains("-shared-chat-preview") {
             let preview = Connection(id: "shared-preview", name: "Offline alpha preview", host: "shared-preview.invalid", port: 8810)
             let configuration = URLSessionConfiguration.ephemeral
@@ -502,6 +563,11 @@ final class Session: ObservableObject {
             } else {
                 connections = [preview]
             }
+            if arguments.contains("-notification-tap-preview") {
+                let config = URLSessionConfiguration.ephemeral
+                config.protocolClasses = [NotificationPreviewProtocol.self]
+                client = CompanionClient(connection: preview, token: "notification-fixture-token", session: URLSession(configuration: config))
+            }
             if arguments.contains("-images-preview") {
                 let config = URLSessionConfiguration.ephemeral
                 config.protocolClasses = [ImagePreviewProtocol.self]
@@ -511,6 +577,19 @@ final class Session: ObservableObject {
                 let config = URLSessionConfiguration.ephemeral
                 config.protocolClasses = [SteeringPreviewProtocol.self]
                 client = CompanionClient(connection: preview, token: "steering-fixture-token", session: URLSession(configuration: config))
+            }
+            if arguments.contains("-stream-recovery-preview") || arguments.contains("-send-scroll-preview") {
+                let config = URLSessionConfiguration.ephemeral
+                config.protocolClasses = [StreamRecoveryPreviewProtocol.self]
+                let network = URLSession(configuration: config)
+                recoveryPreviewSession = network
+                client = CompanionClient(connection: preview, token: "isolated-fixture", session: network)
+                Task { [weak self] in
+                    guard !arguments.contains("-send-scroll-preview") else { return }
+                    try? await Task.sleep(for: .seconds(1))
+                    guard let self, let bot = self.state.bots.first else { return }
+                    _ = await self.send(text: "recover this live stream", attachments: [], to: .bot(bot), durableSendID: "recovery-send-0001")
+                }
             }
             state.hydrate(fleet)
             if arguments.contains("-threads-preview"),
@@ -823,6 +902,9 @@ final class Session: ObservableObject {
             return
         }
 
+        if VoiceCallCenter.shared.call?.connectionID == connection?.id {
+            VoiceCallCenter.shared.call?.hangUp()
+        }
         stopActiveRuntime()
         registry.select(id: id)
         persistRegistry()
@@ -834,6 +916,7 @@ final class Session: ObservableObject {
 
     func forgetConnection(id: String) {
         guard let forgotten = registry.connection(id: id) else { return }
+        VoiceCallCenter.shared.forget(connectionID: id)
         setLegacyArchived(false, connectionID: id)
         let wasActive = registry.activeConnectionID == id
         // A server session is ended on the server too, best effort: the
@@ -963,8 +1046,10 @@ final class Session: ObservableObject {
 
     /// Called when the app comes to the front, and once at launch.
     func connect() {
+        traceConnection("connect task=\(streamTask != nil)")
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-shared-chat-preview") { status = .live; return }
+        if ProcessInfo.processInfo.arguments.contains("-shared-chat-preview")
+            || ProcessInfo.processInfo.arguments.contains("-notification-tap-preview") { status = .live; return }
 #endif
         // A restore that found the keychain locked left `client` nil on
         // purpose. Coming to the front is the moment worth retrying on: the
@@ -1004,11 +1089,33 @@ final class Session: ObservableObject {
     /// makes the spinner mean what it appears to mean; the deadline is there
     /// so a network that never answers still gives the control back.
     func refresh() async {
-        restartStream()
+        if isRefreshing {
+            while isRefreshing, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+            return
+        }
+        guard client != nil || restorePending else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        // Publish before spawning run(): otherwise a previously live home
+        // can make the refresh return before its new handshake even starts.
+        stopStream()
+        status = .connecting
         connect()
         let deadline = Date().addingTimeInterval(10)
         while status == .connecting, !Task.isCancelled, Date() < deadline {
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+    }
+
+    /// The roster contains every paired home. Check them concurrently so a
+    /// sleeping secondary computer cannot leave stale faces after a pull.
+    func refreshHomes() async {
+        if !isSatellite { syncSatellites() }
+        let homes = [self] + satellites
+        await withTaskGroup(of: Void.self) { group in
+            for home in homes { group.addTask { await home.refresh() } }
         }
     }
 
@@ -1163,6 +1270,7 @@ final class Session: ObservableObject {
     /// anyway; dropping it deliberately means the cursor is written down at
     /// a known point instead of wherever the socket happened to die.
     func disconnect() {
+        traceConnection("disconnect appState=\(UIApplication.shared.applicationState.rawValue)")
         resetCredentialEntry()
         stopStream()
         saveRosterCache()
@@ -1192,6 +1300,7 @@ final class Session: ObservableObject {
     /// the island. After that, iOS suspends us anyway; disconnect cleanly so
     /// the cursor is written down at a known point.
     func linger() {
+        traceConnection("linger appState=\(UIApplication.shared.applicationState.rawValue)")
         guard streamTask != nil, lingerTask == .invalid else { disconnect(); return }
         // A previous request can leave a sleeper behind when iOS refuses the
         // background assertion. Never let it outlive the assertion it belongs
@@ -1223,6 +1332,9 @@ final class Session: ObservableObject {
     /// keeps the cursor and the state in step: every frame that arrived is
     /// either folded with its seq, or was never received.
     private func stopStream() {
+        traceConnection("stopStream")
+        sendStreamCheck?.cancel()
+        sendStreamCheck = nil
         flushFrames()
         activityFeedTask?.cancel()
         activityFeedTask = nil
@@ -1293,6 +1405,12 @@ final class Session: ObservableObject {
             if let seeded = frame(["kind": "message", "threadId": threadId, "message": message]) { state.apply(seeded.frame) }
         }
         if branched { state.activeLeafIds[threadId] = parent }
+        if args.contains("-send-scroll-preview") {
+            if var bot = state.bot("preview-pepper") {
+                bot.busy = false; bot.messages = nil; state.apply(.bot(bot))
+            }
+            return
+        }
         Task { @MainActor [weak self] in
             // Start on the first keystroke so the test can reach the
             // composer while the app is still idle.
@@ -1498,7 +1616,9 @@ final class Session: ObservableObject {
         for case let .voiceRing(ring) in batch.map(\.frame) {
             receivedRing(ring, connectionId: client?.connection.id)
         }
-        applyBadge(state.unreadCount)
+        // Runtime-only batches cannot change unread flags. Avoid walking
+        // every bot and task to recompute an unchanged badge on each token.
+        if !quiet { applyBadge(state.unreadCount) }
     }
 
     /// Announce a held fold once the interval since the last one is up.
@@ -1557,15 +1677,32 @@ final class Session: ObservableObject {
                 // breaking out here instead would fall through to the "the
                 // harness went away" path and flash a lost-connection banner
                 // on what is actually a deliberate reconnect.
-                for try await frame in try client.events(since: state.cursor, screens: screenWatchers > 0) {
+#if DEBUG
+                let events = try client.events(since: state.cursor, screens: screenWatchers > 0, streamingSession: recoveryPreviewSession)
+#else
+                let events = try client.events(since: state.cursor, screens: screenWatchers > 0)
+#endif
+                for try await frame in events {
                     if Task.isCancelled { return }
                     reconnectDelay = 0
+                    if Date().timeIntervalSince(lastFrameTrace) > 5 {
+                        lastFrameTrace = Date()
+                        traceConnection("frame received")
+                    }
+                    if case let .message(_, message) = frame.frame {
+                        if streamedMessageIDs.count >= 500 { streamedMessageIDs.removeAll(keepingCapacity: true) }
+                        streamedMessageIDs.insert(message.id)
+                    }
 
                     if case let .hello(cursor, resumed) = frame.frame {
+                        // Finish the old connection before resetting transport baselines.
+                        flushFrames()
+                        state.apply(frame)
                         // Hello names the current head: replayed events cannot celebrate.
                         mascotLedgers.removeAll()
                         mascotCompletionIDs.removeAll()
                         mascotReplayCutoff = cursor.split(separator: ":").last.flatMap { Int($0) }
+                        traceConnection("hello resumed=\(resumed)")
                         log.info("stream live, resumed=\(resumed, privacy: .public)")
                         // false means the server could not replay the gap —
                         // the one case that costs a full hydrate. Commit the
@@ -1574,6 +1711,7 @@ final class Session: ObservableObject {
                         // reconnecting must still ask for the missing gap.
                         if !resumed {
                             try await hydrate(using: client)
+                            try Task.checkCancellation()
                             state.resetCursor(cursor)
                         }
                         status = .live
@@ -1603,22 +1741,27 @@ final class Session: ObservableObject {
                     }
                     enqueue(frame)
                 }
+                // Cancellation may end AsyncThrowingStream normally. The old
+                // stream must never mark its replacement offline during refresh.
+                if Task.isCancelled { return }
                 flushFrames()
                 // the stream ended without an error — the harness went away
                 log.notice("stream ended without an error")
                 status = .offline(failureMessage(for: URLError(.networkConnectionLost)))
             } catch let error as APIError where error.isUnauthorized {
+                if Task.isCancelled { return }
                 log.error("stream refused: unauthorized")
                 status = .unauthorized
                 return
             } catch {
                 // backgrounding cancels the stream on purpose; that is not a
                 // failure to report, and it must not be retried
-                if Task.isCancelled || error is CancellationError {
+                if Task.isCancelled {
                     log.info("stream closed by us")
                     return
                 }
                 flushFrames()
+                traceConnection("stream error domain=\((error as NSError).domain) code=\((error as NSError).code)")
                 log.error("stream failed: \(error.localizedDescription, privacy: .public)")
                 status = .offline(failureMessage(for: error))
             }
@@ -2020,6 +2163,7 @@ final class Session: ObservableObject {
             actionError = "This computer is offline."
             return false
         }
+        connect()
         let connectionID = client.connection.id
         actionError = nil
         do {
@@ -2076,12 +2220,12 @@ final class Session: ObservableObject {
                         displayName: attachment.name
                     ))
                 case .file:
-                    let file = try await client.uploadFile(
-                        data: attachment.data,
-                        name: attachment.name,
-                        mime: mime,
-                        uploadId: attachment.id.uuidString
-                    )
+                    let file: UploadedFile
+                    if let fileURL = attachment.fileURL {
+                        file = try await client.uploadFile(fileURL: fileURL, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString)
+                    } else {
+                        file = try await client.uploadFile(data: attachment.data, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString)
+                    }
                     uploaded.append(SharedAttachmentReference(
                         path: file.path,
                         kind: .file,
@@ -2097,7 +2241,9 @@ final class Session: ObservableObject {
                 urls: [],
                 attachments: uploaded
             )
+            traceConnection("send begins busy=\(chat.busy)")
             let receipt = try await client.send(text: message, to: destination, sendId: sendID, replyToId: replyToId, priority: priority)
+            traceConnection("send accepted queued=\(receipt.queued == true)")
             // The send succeeded on the computer it was addressed to, so the
             // draft clears either way. Its queue row belongs to that computer,
             // and must not be drawn on one selected mid-upload.
@@ -2151,12 +2297,12 @@ final class Session: ObservableObject {
     /// caller's words with the call's origin, the model's restatement as
     /// `job`. Returns nil on success or the failure text; it never touches
     /// `actionError`, because the call reports failures out loud.
-    func sendFromVoiceCall(_ text: String, job: String, callId: String, botId: String, threadId: String) async -> String? {
-        guard let client else { return "This computer is offline." }
+    func sendFromVoiceCall(_ text: String, job: String, callId: String, botId: String, threadId: String, sendId: String, expectedConnectionID: String?) async -> String? {
+        guard let client, client.connection.id == expectedConnectionID else { return "The call’s computer is no longer connected." }
         let connectionID = client.connection.id
         do {
             let receipt = try await client.send(text: text, toBot: botId, threadId: threadId,
-                                                origin: .voiceCall(callId: callId, job: job))
+                                                origin: .voiceCall(callId: callId, job: job), sendId: sendId)
             if self.client?.connection.id == connectionID { rememberQueuedSend(from: receipt, text: text) }
             return nil
         } catch {
@@ -2168,9 +2314,14 @@ final class Session: ObservableObject {
     /// delivering it. This is wire state, not optimism: the row exists
     /// because the computer said it does, identified by its queueId.
     private func rememberQueuedSend(from receipt: SendReceipt?, text: String) {
-        guard let receipt, receipt.queued == true,
-              let queueId = receipt.queueId, let threadId = receipt.threadId
-        else { return }
+        guard let receipt, let threadId = receipt.threadId else { return }
+        verifySendStream(receipt)
+        // The HTTP receipt is authoritative too. Reconcile the local preview
+        // now, even if its matching event-stream frame arrives later.
+        if let message = receipt.message {
+            state.apply(.message(threadId: threadId, message: message))
+        }
+        guard receipt.queued == true, let queueId = receipt.queueId else { return }
         state.rememberQueued(
             QueuedSend(
                 queueId: queueId,
@@ -2338,12 +2489,16 @@ final class Session: ObservableObject {
         path: String,
         cacheResult: Bool = false
     ) async throws -> DownloadedFile {
-        let download = try await fetchAttachment(
-            threadId: threadId,
-            messageId: messageId,
-            path: path,
-            cacheResult: cacheResult
-        )
+        guard let client else { throw APIError.transport("This computer is offline.") }
+        let generation = attachmentCacheGeneration
+        let download: DownloadedFile
+        do { download = try await client.downloadFileToDisk(threadId: threadId, messageId: messageId, path: path) }
+        catch let error as APIError where error.isUnauthorized {
+            if generation == attachmentCacheGeneration, !Task.isCancelled { status = .unauthorized }
+            throw error
+        }
+        defer { Self.removePreview(at: download.localURL) }
+        guard generation == attachmentCacheGeneration else { throw CancellationError() }
         try Task.checkCancellation()
         let preparation = Task.detached(priority: .userInitiated) {
             // Content-Disposition is the server's canonical, sanitised name.
@@ -2358,6 +2513,7 @@ final class Session: ObservableObject {
         }
         do {
             try Task.checkCancellation()
+            guard generation == attachmentCacheGeneration else { throw CancellationError() }
             return prepared
         } catch {
             Self.removePreview(at: prepared.localURL)
@@ -2410,10 +2566,11 @@ final class Session: ObservableObject {
         )
         let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
         do {
-            try download.data.write(
-                to: fileURL,
-                options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
-            )
+            if let source = download.localURL {
+                try manager.copyItem(at: source, to: fileURL)
+            } else {
+                try download.data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            }
             try Task.checkCancellation()
             return DownloadedFile(
                 data: download.data,
@@ -2436,6 +2593,9 @@ final class Session: ObservableObject {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("BOSFilePreviews", isDirectory: true)
         try? FileManager.default.removeItem(at: root)
+        for name in ["BOSFileDownloads", "BOSPendingAttachments"] {
+            try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent(name))
+        }
     }
 
     func answer(chat: Chat, card: OptionCard, choice: String, rememberingPermission: Bool = true) async {
@@ -2809,14 +2969,35 @@ final class Session: ObservableObject {
         if focusedMessageId == messageId { focusedMessageId = nil }
     }
 
+    @Published private(set) var creatingThreadName: String?
+
     @discardableResult
     func createTask(for bot: Bot, title: String?) async -> Bot? {
+        guard creatingThreadName == nil else { return nil }
+        creatingThreadName = bot.name
+        defer { creatingThreadName = nil }
+#if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-store-preview"), let i = args.firstIndex(of: "-new-thread-delay"), i + 1 < args.count, let seconds = Double(args[i + 1]) {
+            try? await Task.sleep(for: .seconds(seconds))
+            var updated = bot
+            updated.threadId = "preview-created-" + UUID().uuidString
+            updated.messages = []; updated.activeLeafId = nil; updated.busy = false
+            let data = try! JSONSerialization.data(withJSONObject: ["threadId": updated.threadId, "title": "New thread", "createdAt": Date().timeIntervalSince1970 * 1000])
+            let task = try! JSONDecoder().decode(BotTask.self, from: data)
+            updated.tasks = [task] + (bot.tasks ?? [])
+            state.apply(.bot(updated))
+            Haptics.success()
+            return updated
+        }
+#endif
         guard let client else { return nil }
         do {
             let updated = try await client.createTask(botId: bot.id, title: title)
             state.apply(.bot(updated))
+            Haptics.success()
             return updated
-        } catch { actionError = error.localizedDescription; return nil }
+        } catch { Haptics.notification(.error); actionError = error.localizedDescription; return nil }
     }
 
     @discardableResult
@@ -3303,7 +3484,12 @@ final class Session: ObservableObject {
         }
         pendingNotification = nil
         notificationChat = nil
+        // A tap also resumes the app. Start reconnect before capturing its
+        // generation so the foreground callback cannot cancel this navigation.
+        connect()
         let generation = streamGeneration
+        let openID = UUID()
+        notificationOpenID = openID
         do {
             try await hydrate(using: client)
             let page: ThreadPage
@@ -3313,41 +3499,34 @@ final class Session: ObservableObject {
                 page = try await client.messages(threadId: target.threadId)
             }
             try Task.checkCancellation()
-            guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
-            switch target.requestState(in: page.messages) {
-            case .unavailable:
-                throw APIError.status(code: 404, message: "That exact request is no longer available. Open the conversation to review its history.")
-            case .settled:
-                throw APIError.status(code: 409, message: "That request has already been answered or dismissed.")
-            case .pending, .notRequired: break
-            }
+            guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
+            // A tap opens history, it does not answer a request. Settled
+            // approval notifications still lead to their original thread.
+            let focus = target.requestState(in: page.messages) == .unavailable ? nil : target.messageId
             state.merge(page, intoThread: target.threadId)
             if var room = state.rooms.first(where: {
                 $0.threadId == target.threadId || ($0.tasks ?? []).contains(where: { $0.threadId == target.threadId })
             }) {
                 if room.threadId != target.threadId {
                     room = try await client.switchTask(groupId: room.id, threadId: target.threadId)
-                    guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
+                    guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
                     state.apply(.room(room))
                 }
-                focusedMessageId = target.messageId
+                focusedMessageId = focus
                 present(.room(room))
                 return
             }
-            guard var selected = state.bot(target.botId) else {
-                throw APIError.status(code: 404, message: "That agent no longer exists.")
+            guard let selected = state.bot(target.botId)?.projected(forThread: target.threadId) else {
+                throw APIError.status(code: 404, message: "That conversation no longer exists.")
             }
-            if target.requiresTaskSwitch(activeThreadId: selected.threadId) {
-                selected = try await client.switchTask(botId: selected.id, threadId: target.threadId)
-                guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { throw CancellationError() }
-                state.apply(.bot(selected))
-            }
-            focusedMessageId = target.messageId
+            // Selection belongs to this screen, like the thread picker. A
+            // running sibling must not prevent reading the notified thread.
+            focusedMessageId = focus
             present(.bot(selected))
         } catch is CancellationError {
             // A previous connection's response cannot navigate the new account.
         } catch {
-            guard streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { return }
+            guard notificationOpenID == openID, streamGeneration == generation, target.belongs(to: self.client?.connection.id) else { return }
             actionError = "Couldn't open this notification's exact task. " + error.localizedDescription
         }
     }

@@ -1,4 +1,4 @@
-// Native, read-only WhatsApp capture over a whatsapp-web.js linked device.
+// Native WhatsApp capture and gated reply transport over a linked device.
 //
 // One WhatsAppNative owns at most one client at a time (one Chromium on one
 // LocalAuth profile). Its state is never asserted, only observed: every value
@@ -11,8 +11,8 @@
 // exists (a QR flow is the person's to restart), and a circuit breaker stops
 // after maxFailures consecutive failures until the person presses Reconnect.
 //
-// Read-only: the client type (whatsapp-types.ts) has no send/reply/seen
-// method at all, and messages arrive here as plain records.
+// Capture arrives as plain records; optional reply/history transports stay
+// behind server-side account, scope and authorization checks.
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -93,6 +93,7 @@ export interface WhatsAppNativeOptions {
   now?: () => number;
   log?: (line: string) => void;
   onChange?: (snapshot: WhatsAppNativeSnapshot) => void;
+  onCaptured?: (message: CapturedMessage) => void;
   probeIntervalMs?: number;
   probeTimeoutMs?: number;
   /** a start that produces no lifecycle event for this long is a failure */
@@ -171,8 +172,8 @@ export function releaseStaleProfile(sessionDir: string): void {
 }
 
 export class WhatsAppNative {
-  private readonly options: Required<Omit<WhatsAppNativeOptions, "onChange" | "noBrowserReason">> &
-    Pick<WhatsAppNativeOptions, "onChange" | "noBrowserReason">;
+  private readonly options: Required<Omit<WhatsAppNativeOptions, "onChange" | "onCaptured" | "noBrowserReason">> &
+    Pick<WhatsAppNativeOptions, "onChange" | "onCaptured" | "noBrowserReason">;
   readonly sessionDir: string;
 
   private state: WhatsAppLinkState = "not_linked";
@@ -245,6 +246,11 @@ export class WhatsAppNative {
       messageCount,
     };
   }
+
+  replyTransport() {
+    return this.state === "linked" ? this.client?.replies ?? null : null;
+  }
+  historyTransport() { return this.state === "linked" ? this.client?.history ?? null : null; }
 
   /** Server boot: resume a saved session without a QR; otherwise stay idle. */
   autoStart(): Promise<void> {
@@ -427,7 +433,7 @@ export class WhatsAppNative {
       onMessage: (captured) => {
         if (!live()) return;
         try {
-          this.options.store.insert(captured);
+          if (this.options.store.insert(captured) && !captured.importedHistory) this.options.onCaptured?.(captured);
         } catch (error) {
           this.options.log(`could not store message: ${message(error)}`);
         }

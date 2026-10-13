@@ -1,0 +1,1 @@
+export function browserCommand(input: {platform?:string;key?:string;shift?:boolean;shiftKey?:boolean;alt?:boolean;altKey?:boolean;meta?:boolean;metaKey?:boolean;control?:boolean;ctrlKey?:boolean}): string | null;

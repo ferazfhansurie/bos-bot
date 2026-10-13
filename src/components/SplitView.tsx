@@ -36,8 +36,14 @@ function useSplitDragActive(): boolean {
  * right-edge drop target while a sidebar row is dragged. */
 export function SplitWorkspace({ children }: { children: ReactNode }) {
   const { state } = useStore();
-  const { panes, openSplit, closeSplit, terminal, closeTerminal } = useSplitView();
+  const { panes, openSplit, closeSplit, terminal, closeTerminal, toggleTerminal } = useSplitView();
+  useEffect(() => { const bridge=window.ogb?.primaryBrowser;const bot=state.bots.find(b=>b.id===state.selectedId)??state.bots.find(b=>!b.hidden);if(!bridge||!bot)return; const show=()=>{if(!terminal)toggleTerminal({botId:bot.id,threadId:bot.threadId,name:bot.name});};const stop=bridge.onExternalURL(show);void bridge.action("consume-external-link").then(pending=>{if(pending)show();}).catch(()=>{});return stop; }, [state.bots,state.selectedId,terminal,toggleTerminal]);
+  const browserBot = state.bots.find(b=>b.id===state.selectedId);
   const dragging = useSplitDragActive();
+  const [browserExpanded, setBrowserExpanded] = useState(false);
+  const [lastToolsTarget, setLastToolsTarget] = useState(terminal);
+  useEffect(() => { if (terminal) setLastToolsTarget(terminal); else setBrowserExpanded(false); }, [terminal]);
+  useEffect(() => { const handler = (event: Event) => setBrowserExpanded((event as CustomEvent<boolean>).detail === true); window.addEventListener("bos-browser-expand", handler); return () => window.removeEventListener("bos-browser-expand", handler); }, []);
   const [over, setOver] = useState(false);
   useEffect(() => { if (!dragging) setOver(false); }, [dragging]);
   const known = useMemo(() => new Set([...state.bots.filter((bot) => !bot.hidden).map((bot) => bot.id), ...state.groups.map((group) => group.id)]), [state.bots, state.groups]);
@@ -101,10 +107,10 @@ export function SplitWorkspace({ children }: { children: ReactNode }) {
           </section>
         );
       })}
-      {terminal && (
-        <div className="relative flex h-full min-w-0 shrink-0 max-md:hidden" style={{ width: terminalPanel.size }} data-testid="terminal-dock">
+      {(terminal || lastToolsTarget) && (
+        <div className={cn("flex h-full min-w-0 shrink-0 max-md:hidden", !terminal && "hidden", browserExpanded ? "absolute inset-0 z-40" : "relative")} style={{ width: browserExpanded ? "100%" : terminalPanel.size }} data-testid="terminal-dock">
           <PanelResizeHandle panel={terminalPanel} dock="right" label={t("terminal.resize")} testId="terminal-resize-handle" />
-          <ToolsPanel key={`${terminal.botId}:${terminal.threadId}`} target={terminal} onClose={closeTerminal} />
+          <ToolsPanel browserBot={browserBot} target={(terminal || lastToolsTarget)!} browserTarget={browserBot?{botId:browserBot.id,threadId:browserBot.threadId,name:browserBot.name}:undefined} onClose={closeTerminal} />
           <PanelResizeShield active={terminalPanel.resizing} dock="right" />
         </div>
       )}

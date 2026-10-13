@@ -72,7 +72,8 @@ const release: Message[] = [
   asked("u1", "publish the release"),
   chip("c1", "git push origin main", true),
   chip("c2", "cat CHANGELOG.md", true),
-  chip("c3", "npm publish", false),
+  chip("c3", "gh release create v1.2.0", true),
+  chip("c4", "npm publish", true),
 ];
 // An engine with the agents tools, which Save needs alongside the flag.
 const agentsEngine = { instanceId: "test", driverKind: "claude", displayName: "Test", capabilities: { agentsMcp: true } } as unknown as InstanceInfo;
@@ -80,40 +81,28 @@ const saveable = (): void => {
   fixture.state = { instances: [agentsEngine], config: { features: { skillAuthoring: true } } as AppState["config"] };
 };
 const CARD = `aria-label="${t("chat.verify.aria")}"`;
-const TAG = `>${t("chat.verify.verifiedTag")}<`;
 const render = (messages: Message[]) => renderToStaticMarkup(createElement(ChatView, { bot: { ...bot, messages } }));
 const draft = (): string => fixture.appendComposerDraft.mock.calls[0]![1] as string;
 
 describe("The run card in the chat pane", () => {
-  it("appears once the bot runs a control CLI, with the run as a checklist and its verified steps tagged", () => {
-    const markup = render(run);
-    expect(markup).toContain(CARD);
-    expect(markup).toContain(`>${t("chat.verify.title")}<`);
-    expect(markup).toContain("2 steps · 2 verified · 1 failed");
-    expect(markup).not.toContain("Execution timeline");
-    expect(markup).toContain(">doctor<");
-    expect(markup).toContain(">send<");
-    expect(markup.match(new RegExp(TAG, "g"))).toHaveLength(2);
-    // reads are not steps
-    expect(markup).not.toContain(">git status<");
-    expect(markup).not.toContain(">cat<");
-    // no engine in the fixture has the agents tools: no Save, no footer
-    expect(markup).not.toContain(t("chat.verify.save"));
+  it("stays hidden while the run cannot be saved: no agents engine", () => {
+    expect(render(run)).not.toContain(CARD);
   });
 
-  it("withholds Save when skill authoring is switched off in Settings", () => {
+  it("stays hidden when skill authoring is switched off in Settings", () => {
     fixture.state = { instances: [agentsEngine], config: { features: { skillAuthoring: false } } as AppState["config"] };
-    const markup = render(run);
-    expect(markup).toContain(">doctor<");
-    expect(markup).not.toContain(t("chat.verify.save"));
+    expect(render(run)).not.toContain(CARD);
   });
 
-  it("offers Save with an agents engine; Save fills the thread's composer with the run and the request instead of sending", () => {
+  it("shows one folded line once a verified run can be saved; Save fills the composer instead of sending", () => {
     saveable();
     const markup = render(run);
+    expect(markup).toContain(CARD);
+    expect(markup).toContain("2 steps · 2 verified · 1 failed");
+    expect(markup).not.toContain(">doctor<");
     expect(markup).toContain(t("chat.verify.save"));
-    expect(markup).toContain(t("chat.verify.saveHint"));
     expect(fixture.verify?.canSave).toBe(true);
+    expect(runSteps(run).map((step) => step.label)).not.toContain("git status");
 
     fixture.verify!.onSave();
     expect(fixture.appendComposerDraft).toHaveBeenCalledTimes(1);
@@ -122,34 +111,24 @@ describe("The run card in the chat pane", () => {
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
-  it("records a run with no control CLI in it too, and saves that one in plain words the server expands like /learn", () => {
+  it("shows a run with no control CLI only once it has a few passing steps, and saves it in plain words like /learn", () => {
     saveable();
+    expect(render(release.slice(0, 3))).not.toContain(CARD);
     const markup = render(release);
     expect(markup).toContain(CARD);
-    expect(markup).toContain(`>${t("chat.verify.title")}<`);
-    expect(markup).toContain("2 steps · 1 failed");
-    expect(markup).toContain(">git push<");
-    expect(markup).toContain(">npm publish<");
-    expect(markup).not.toContain(TAG);
+    expect(markup).toContain("3 steps<");
 
     fixture.verify!.onSave();
     expect(draft().startsWith(`${SAVE_RUN_AS_SKILL_LINE}\nGoal: publish the release\n`)).toBe(true);
     expect(draft()).not.toContain("/learn");
     expect(draft()).toContain("✓ git push — git push origin main\n");
-    expect(draft()).toContain("✗ npm publish — npm publish\n");
+    expect(draft()).toContain("✓ npm publish — npm publish\n");
     expect(draft()).not.toContain("Create a verification skill");
   });
 
-  it("stays out of a thread whose run is one unverified command", () => {
-    const markup = render([asked("u1", "push it"), chip("c1", "git push origin main", true), chip("c2", "git status", true)]);
-    expect(markup).not.toContain(CARD);
-  });
-
   it("records only the current ask: the person's next message starts a fresh run", () => {
-    const markup = render([...run, asked("u2", "now push"), chip("c5", "git push origin main", true)]);
-    // the verified steps belong to the previous ask; what is left is one unverified command
-    expect(markup).not.toContain(CARD);
-    expect(render([...run, asked("u2", "now publish"), chip("c5", "git push origin main", true), chip("c6", "npm publish", true)]))
-      .toContain("2 steps<");
+    saveable();
+    expect(render([...run, asked("u2", "now push"), chip("c5", "git push origin main", true)])).not.toContain(CARD);
+    expect(render([...run, ...release.slice(0)])).toContain("3 steps<");
   });
 });

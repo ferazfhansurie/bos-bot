@@ -544,12 +544,46 @@ struct LiveChatAvatar: View {
     let size: CGFloat
     var state: MausState = .idle
     var animated = false
-    /// The row's last activity, for the proud look.
     var at: Double = 0
     @Environment(\.listFaces) private var director
+    @Environment(\.botRefreshChecking) private var rosterChecking
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var checking: Bool { rosterChecking || state == .loading }
 
     var body: some View {
-        if let director, case let .bot(bot) = chat {
+        face
+            .scaleEffect(checking && !reduceMotion ? 0.96 : 1)
+            .overlay {
+                if checking {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30,
+                                            paused: reduceMotion || scenePhase != .active)) { timeline in
+                        let angle = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 0.9) / 0.9 * 360
+                        Circle()
+                            .trim(from: 0, to: 0.72)
+                            .stroke(MausPalette.color(chat.color).opacity(0.75),
+                                    style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .rotationEffect(.degrees(angle))
+                    }
+                    .frame(width: size + 10, height: size + 10)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                }
+            }
+            .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: checking)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(chat.name)
+            .accessibilityValue(checking ? "Checking connection" : state == .sleeping ? "Asleep" : "Awake")
+    }
+
+    @ViewBuilder private var face: some View {
+        if checking {
+            // A neutral squint and a separate ring mean checking, not work
+            // and not asleep. Freeze idle poses until the result lands.
+            ChatAvatarView(chat: chat, size: size, state: .drowsy, animated: false)
+        } else if let director, case let .bot(bot) = chat {
             let pose = director.pose(chat.id)
             Group {
                 if !state.showsActivity && ListFace.drawsMascot(bot) {

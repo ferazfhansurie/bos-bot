@@ -4,7 +4,7 @@
 // about what a bot does. Pure presentational — no store, no fetch; the
 // dialog owns loading, errors, and the section switch (onOpen).
 import { useState } from "react";
-import { Circle, Sparkles } from "lucide-react";
+import { Circle, Sparkles, Plug, BookOpen, FolderOpen, FileText } from "lucide-react";
 
 import type { BotOverview } from "@/lib/bot-overview-types";
 import { t } from "@/lib/i18n";
@@ -40,14 +40,28 @@ export function OverviewSection({
   return (
     <div className="flex flex-col gap-4">
       {refreshError && (
-        <div className="rounded-lg bg-inset px-3 py-2 text-[12.5px] text-ink-secondary">
+        <div className="rounded-lg bg-inset px-3 py-2 text-[13px] text-ink-secondary">
           Couldn’t refresh — showing the last loaded overview.
         </div>
       )}
 
+      <div className="grid grid-cols-2 gap-2" aria-label="Bot setup">
+        {([
+          { section: "access", label: "Connected apps", detail: "Connections and access", icon: Plug },
+          { section: "skills", label: "Skills", detail: "Reusable procedures", icon: BookOpen },
+          { section: "soul", label: "Instructions", detail: "How this bot works", icon: FileText },
+          { section: "access", label: "Working folder", detail: "Files and computer", icon: FolderOpen },
+        ] as const).map(({ section, label, detail, icon: Icon }) => (
+          <button key={label} type="button" className="ui-setup-link" onClick={() => onOpen(section)}>
+            <Icon size={18} className="shrink-0 text-ink-secondary" />
+            <span className="min-w-0"><span className="block text-[13px] font-medium text-ink">{label}</span><span className="mt-0.5 block text-[12px] text-ink-secondary">{detail}</span></span>
+          </button>
+        ))}
+      </div>
+
       {remaining.length > 0 && (
         <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-4">
-          <div className="text-[15px] font-medium text-ink">{t("botSetup.ideas")}</div>
+          <div className="ui-section-title">{t("botSetup.ideas")}</div>
           <p className="mt-1 text-[13px] text-ink-secondary">{t("botSetup.optional")}</p>
           <ul className="mt-2 flex flex-col gap-1">
             {remaining.map((step) => (
@@ -76,7 +90,7 @@ export function OverviewSection({
               <button
                 type="button"
                 onClick={onSetup}
-                className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12.5px] font-medium text-accent-ink hover:brightness-110"
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink hover:brightness-110"
               >
                 <Sparkles size={14} /> {t("botSetup.withBot")}
               </button>
@@ -86,8 +100,8 @@ export function OverviewSection({
         </div>
       )}
 
-      <div className="rounded-xl bg-card p-4">
-        <div className="text-[15px] font-medium text-ink">{overview.who.name}</div>
+      <div className="ui-surface">
+        <div className="ui-section-title">{overview.who.name}</div>
         {overview.who.title && <div className="mt-0.5 text-[13px] text-ink-secondary">{overview.who.title}</div>}
         {overview.who.blurb && <p className="mt-2 text-[13px] leading-relaxed text-ink">{overview.who.blurb}</p>}
         {overview.who.soulLead && (
@@ -104,8 +118,8 @@ export function OverviewSection({
         )}
       </div>
 
-      <div className="rounded-xl bg-card p-4">
-        <div className="text-[15px] font-medium text-ink">Does</div>
+      <div className="ui-surface">
+        <div className="ui-section-title">Does</div>
         {overview.does.length === 0 ? (
           <p className="mt-2 text-[13px] text-ink-secondary">Nothing scheduled or learned yet.</p>
         ) : (
@@ -117,8 +131,8 @@ export function OverviewSection({
         )}
       </div>
 
-      <div className="rounded-xl bg-card p-4">
-        <div className="text-[15px] font-medium text-ink">Can reach</div>
+      <div className="ui-surface">
+        <div className="ui-section-title">Can reach</div>
         {overview.reaches.length === 0 ? (
           <p className="mt-2 text-[13px] text-ink-secondary">Nothing yet.</p>
         ) : (
@@ -130,8 +144,8 @@ export function OverviewSection({
         )}
       </div>
 
-      <div className="rounded-xl bg-card p-4">
-        <div className="text-[15px] font-medium text-ink">Won&rsquo;t</div>
+      <div className="ui-surface">
+        <div className="ui-section-title">Won&rsquo;t</div>
         <ul className="mt-2 flex flex-col gap-1.5 text-[13px] leading-relaxed text-ink">
           {overview.wont.map((line, i) => (
             <li key={i}>{line}</li>
@@ -146,9 +160,9 @@ export function OverviewSection({
         onToggle={() => setPromptOpen((current) => !current)}
       />
 
-      <div className="rounded-xl bg-card p-4">
+      <div className="ui-surface">
         <div className="flex items-baseline justify-between gap-3">
-          <div className="text-[15px] font-medium text-ink">Recent changes</div>
+          <div className="ui-section-title">Recent changes</div>
           <button
             type="button"
             onClick={() => onOpen("history")}
@@ -164,7 +178,7 @@ export function OverviewSection({
             {overview.recent.map((entry, i) => (
               <li key={i} className="flex items-baseline justify-between gap-3">
                 <span className="min-w-0 truncate">{entry.summary}</span>
-                <span className="shrink-0 text-[11.5px] text-ink-secondary">· {whenLabel(entry.at)}</span>
+                <span className="shrink-0 text-[12px] text-ink-secondary">· {whenLabel(entry.at)}</span>
               </li>
             ))}
           </ul>

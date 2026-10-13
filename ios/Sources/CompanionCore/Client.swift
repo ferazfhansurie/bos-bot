@@ -484,13 +484,15 @@ public enum WriteAuthority: Sendable {
 /// identify the held line. Every field is optional because the two shapes
 /// are disjoint and the client reads only the half it got.
 public struct SendReceipt: Decodable, Sendable {
+    public var message: Message?
     public var queued: Bool?
     public var queueId: String?
     public var threadId: String?
     /// "capacity" is the known value; anything else still parses.
     public var reason: String?
 
-    public init(queued: Bool? = nil, queueId: String? = nil, threadId: String? = nil, reason: String? = nil) {
+    public init(queued: Bool? = nil, queueId: String? = nil, threadId: String? = nil, reason: String? = nil, message: Message? = nil) {
+        self.message = message
         self.queued = queued
         self.queueId = queueId
         self.threadId = threadId
@@ -608,10 +610,24 @@ private struct InstanceCapabilityResponse: Decodable {
     let instances: [Entry]
 }
 
+private final class BoundedFileDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var rejected = false
+    var exceededLimit: Bool { lock.lock(); defer { lock.unlock() }; return rejected }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        if totalBytesWritten > AttachmentPolicy.maximumFileBytes || totalBytesExpectedToWrite > AttachmentPolicy.maximumFileBytes {
+            lock.lock(); rejected = true; lock.unlock()
+            downloadTask.cancel()
+        }
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
+}
+
 public struct CompanionClient: Sendable {
     public static let maximumImageUploadBytes = AttachmentPolicy.maximumImageBytes
     public static let maximumFileUploadBytes = AttachmentPolicy.maximumFileBytes
-    public static let maximumFileDownloadBytes = AttachmentPolicy.maximumFileBytes
+    public static let maximumFileDownloadBytes = AttachmentPolicy.maximumBufferedFileBytes
 
     public let connection: Connection
     private let token: String?
@@ -874,11 +890,13 @@ public struct CompanionClient: Sendable {
 
     /// Only sends/uploads with a stable identity can be replayed after a lost
     /// response. Other mutations must retain their single-attempt behavior.
-    private func performIdempotent(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    private func performIdempotent(_ request: URLRequest, fromFile: URL? = nil) async throws -> (Data, URLResponse) {
         for attempt in 0..<3 {
             try Task.checkCancellation()
             do {
-                let result = try await session.data(for: request)
+                let result: (Data, URLResponse)
+                if let fromFile { result = try await session.upload(for: request, fromFile: fromFile) }
+                else { result = try await session.data(for: request) }
                 if let http = result.1 as? HTTPURLResponse,
                    [408, 502, 503, 504].contains(http.statusCode), attempt < 2 {
                     try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 500_000_000)
@@ -1144,13 +1162,40 @@ public struct CompanionClient: Sendable {
     ) {
         try Task.checkCancellation()
         let fleet = try await fleet(messages: limit)
-        var waitingThreads: [String: ThreadPage] = [:]
-        for bot in fleet.bots {
-            for task in bot.tasks ?? [] where task.activity == "waiting-on-you"
-                && task.threadId != bot.threadId && waitingThreads[task.threadId] == nil {
-                try Task.checkCancellation()
-                waitingThreads[task.threadId] = try await messages(threadId: task.threadId, limit: limit)
+        var seen = Set<String>()
+        let waitingIDs = fleet.bots.flatMap { bot in
+            (bot.tasks ?? []).compactMap { task -> String? in
+                guard task.activity == "waiting-on-you", task.threadId != bot.threadId,
+                      seen.insert(task.threadId).inserted else { return nil }
+                return task.threadId
             }
+        }
+        // Slow remote pages may overlap, but never fan out without a bound.
+        // The task group still fails the entire snapshot on any missing page;
+        // callers retain their cursor and generation checks before committing.
+        let waitingThreads = try await withThrowingTaskGroup(
+            of: (String, ThreadPage).self, returning: [String: ThreadPage].self
+        ) { group in
+            var next = waitingIDs.makeIterator()
+            for _ in 0..<4 {
+                guard let id = next.next() else { break }
+                group.addTask {
+                    try Task.checkCancellation()
+                    return (id, try await self.messages(threadId: id, limit: limit))
+                }
+            }
+            var pages: [String: ThreadPage] = [:]
+            while let (id, page) = try await group.next() {
+                try Task.checkCancellation()
+                pages[id] = page
+                if let id = next.next() {
+                    group.addTask {
+                        try Task.checkCancellation()
+                        return (id, try await self.messages(threadId: id, limit: limit))
+                    }
+                }
+            }
+            return pages
         }
         try Task.checkCancellation()
         return (fleet, waitingThreads)
@@ -1262,6 +1307,7 @@ public struct CompanionClient: Sendable {
         }
         guard Self.validRouteID(queueId), Self.validRouteID(threadId) else { throw APIError.badURL }
         var body: [String: Any] = ["threadId": threadId]
+        if case .bot = destination { body["interrupt"] = true }
         if case .room = destination, let botId {
             guard Self.validRouteID(botId) else { throw APIError.badURL }
             body["botId"] = botId
@@ -1327,6 +1373,51 @@ public struct CompanionClient: Sendable {
             ? AttachmentPolicy.normalizedMIME(rawContentType)
             : "application/octet-stream"
         return DownloadedFile(data: data, filename: filename, contentType: contentType)
+    }
+
+    /// Materialize large previews directly to disk. The legacy image request
+    /// keeps its small Data result for thumbnails; videos never take that path.
+    public func downloadFileToDisk(threadId: String, messageId: String, path rawPath: String) async throws -> DownloadedFile {
+        guard Self.validRouteID(threadId), Self.validRouteID(messageId),
+              case let .desktopFile(path) = LocalMessageLink.resolve(rawPath) else { throw APIError.badURL }
+        var request = try makeRequest("POST", "/api/threads/\(threadId)/messages/\(messageId)/file", body: ["path": path])
+        request.timeoutInterval = 300
+        let temporary: URL
+        let response: URLResponse
+        let bound = BoundedFileDownload()
+        do { (temporary, response) = try await session.download(for: request, delegate: bound) }
+        catch {
+            if bound.exceededLimit { throw APIError.transport("That file is larger than 90 MB.") }
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+            throw APIError.transport(error.localizedDescription)
+        }
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw APIError.transport("The computer sent something this app couldn't read.") }
+        let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        if !(200...299).contains(http.statusCode) {
+            let handle = try FileHandle(forReadingFrom: temporary)
+            defer { try? handle.close() }
+            try verify(response, try handle.read(upToCount: 16_384) ?? Data())
+        }
+        guard size <= AttachmentPolicy.maximumFileBytes, http.expectedContentLength <= AttachmentPolicy.maximumFileBytes else {
+            throw APIError.transport("That file is larger than 90 MB.")
+        }
+        let filename = Self.downloadFilename(from: http.value(forHTTPHeaderField: "Content-Disposition"), fallbackPath: path)
+        let rawMime = http.value(forHTTPHeaderField: "Content-Type") ?? ""
+        let mime = AttachmentPolicy.validMIME(rawMime) ? AttachmentPolicy.normalizedMIME(rawMime) : "application/octet-stream"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BOSFileDownloads").appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let target = directory.appendingPathComponent(filename)
+        do {
+            try FileManager.default.moveItem(at: temporary, to: target)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            #if os(iOS)
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: target.path)
+            #endif
+            try Task.checkCancellation()
+            return DownloadedFile(data: Data(), filename: filename, contentType: mime, localURL: target)
+        } catch { try? FileManager.default.removeItem(at: directory); throw error }
     }
 
     private static func downloadFilename(from disposition: String?, fallbackPath: String) -> String {
@@ -1586,7 +1677,7 @@ public struct CompanionClient: Sendable {
         guard !displayName.isEmpty,
               displayName.utf8.count <= 255,
               Self.validUploadMime(normalizedMime),
-              data.count <= Self.maximumFileUploadBytes
+              data.count <= AttachmentPolicy.maximumBufferedFileBytes
         else {
             throw APIError.transport("Choose a file up to 25 MB with a valid filename.")
         }
@@ -1600,6 +1691,34 @@ public struct CompanionClient: Sendable {
         request.httpBody = data
         request.timeoutInterval = 300
         let saved = try await send(request, as: FileUploadResponse.self, retrySafe: uploadId != nil)
+        let returnedName = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.validUploadedPath(saved.path), Self.validUploadedName(returnedName) else {
+            throw APIError.transport("The uploaded file could not be used.")
+        }
+        return UploadedFile(path: saved.path, name: returnedName)
+    }
+
+    /// File-backed uploads retain the same UUID and file across retries without
+    /// allocating the whole video as an HTTP body on the phone.
+    public func uploadFile(fileURL: URL, name: String, mime: String, uploadId: String) async throws -> UploadedFile {
+        let displayName = URL(fileURLWithPath: name).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedMime = AttachmentPolicy.normalizedMIME(mime)
+        let values = try fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        guard fileURL.isFileURL, values.isRegularFile == true, let size = values.fileSize,
+              size > 0, size <= Self.maximumFileUploadBytes,
+              !displayName.isEmpty, displayName.utf8.count <= 255,
+              Self.validUploadMime(normalizedMime), Self.validUploadID(uploadId) else {
+            throw APIError.transport("Choose a file up to 90 MB with a valid filename.")
+        }
+        var request = try makeRequest("POST", "/api/files", query: [
+            URLQueryItem(name: "name", value: displayName), URLQueryItem(name: "uploadId", value: uploadId)
+        ])
+        request.setValue(normalizedMime, forHTTPHeaderField: "Content-Type")
+        request.setValue(String(size), forHTTPHeaderField: "Content-Length")
+        request.timeoutInterval = 300
+        let (data, response) = try await performIdempotent(request, fromFile: fileURL)
+        try verify(response, data)
+        let saved = try JSONDecoder().decode(FileUploadResponse.self, from: data)
         let returnedName = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.validUploadedPath(saved.path), Self.validUploadedName(returnedName) else {
             throw APIError.transport("The uploaded file could not be used.")
@@ -1758,15 +1877,19 @@ public struct CompanionClient: Sendable {
 
     @discardableResult
     public func send(text: String, toBot botId: String, threadId: String? = nil,
-                     origin: MessageOrigin? = nil) async throws -> SendReceipt {
+                     origin: MessageOrigin? = nil, sendId: String? = nil) async throws -> SendReceipt {
         var body: [String: Any] = ["text": text]
+        if let sendId {
+            guard Self.validSendID(sendId) else { throw APIError.badURL }
+            body["sendId"] = sendId
+        }
         if let threadId { body["threadId"] = threadId }
         if let origin {
             var wire: [String: Any] = ["kind": origin.kind, "callId": origin.callId]
             if let job = origin.job { wire["job"] = job }
             body["origin"] = wire
         }
-        return try await sendForReceipt(try makeRequest("POST", "/api/bots/\(botId)/messages", body: body))
+        return try await sendForReceipt(try makeRequest("POST", "/api/bots/\(botId)/messages", body: body), retrySafe: sendId != nil)
     }
 
     @discardableResult
@@ -2144,6 +2267,21 @@ public struct CompanionClient: Sendable {
         return URLSession(configuration: configuration)
     }()
 
+    /// A dedicated, capability-gated browser stream. Never part of chat events.
+    public func browserEvents(botId: String, streamingSession: URLSession? = nil) throws -> AsyncThrowingStream<BrowserViewerEvent, Error> {
+        var request = try makeRequest("GET", "/api/bots/\(botId)/browser/live")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 90
+        return browserViewerStream(request: request, session: streamingSession ?? Self.streaming)
+    }
+
+    /// Browser actions are never retried: a lost reply does not prove no click happened.
+    public func browserAction(botId: String, viewerId: String, action: BrowserViewerAction) async throws {
+        var body = action.body
+        body["viewerId"] = viewerId
+        try await send(makeRequest("POST", "/api/bots/\(botId)/browser/action", body: body))
+    }
+
     /// The event stream, resuming from `cursor` when there is one.
     ///
     /// `screens` defaults off, and should stay off unless something is
@@ -2161,7 +2299,7 @@ public struct CompanionClient: Sendable {
         screens: Bool = false,
         streamingSession: URLSession? = nil
     ) throws -> AsyncThrowingStream<StreamFrame, Error> {
-        var query = [URLQueryItem(name: "screens", value: screens ? "on" : "off")]
+        var query = [URLQueryItem(name: "screens", value: screens ? "on" : "off"), URLQueryItem(name: "taskDeltas", value: "1")]
         if let cursor { query.append(URLQueryItem(name: "since", value: cursor)) }
         var streamRequest = try makeRequest("GET", "/api/events", query: query)
         streamRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")

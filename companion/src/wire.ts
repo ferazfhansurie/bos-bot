@@ -1,3 +1,4 @@
+import { createTaskDeltas } from "./task-deltas.ts";
 // What the harness says, minus what a device has no business holding.
 //
 // `resumeCursors` is the harness's own bookkeeping: the native session id to
@@ -47,10 +48,11 @@ export const isJson = (contentType: string | undefined): boolean => {
   return media === "application/json" || media.endsWith("+json");
 };
 
-/** How much of a single SSE event the scrubber will hold while waiting for
- * its terminator. Generous — the largest real frame is a bot payload, orders
- * of magnitude under this — because the number only exists to be a ceiling. */
-export const MAX_SSE_EVENT_BYTES = 1024 * 1024;
+/** Match the proxy's JSON response ceiling: bot snapshots can include several
+ * megabytes of retained conversation. A smaller SSE-only limit disconnects
+ * live clients and traps resumed streams on the same legitimate snapshot.
+ * Enforce this in UTF-8 bytes for complete and fragmented events alike. */
+export const MAX_SSE_EVENT_BYTES = 36 * 1024 * 1024;
 
 /**
  * Rewrites an SSE byte stream, scrubbing each event's `data:` payload while
@@ -84,20 +86,35 @@ export const MAX_SSE_EVENT_BYTES = 1024 * 1024;
  * unterminated corrupts the stream, emitting it unscrubbed defeats the point
  * of this file. The caller drops the connection instead.
  */
-export function createSseScrubber(): (chunk: string) => string {
-  let pending = "";
+export function createSseScrubber(taskDeltas = false): (chunk: string) => string {
+  const project = taskDeltas ? createTaskDeltas() : (value: unknown) => value;
+  // Keep chunks separate until an event completes. Rescanning a growing
+  // image payload on every network chunk made large browser frames quadratic.
+  let pieces: string[] = [];
+  let bufferedBytes = 0;
+  let tail = "";
   return (chunk: string): string => {
-    pending += chunk;
     let out = "";
-    for (;;) {
-      const boundary = nextBoundary(pending);
-      if (!boundary) break;
-      const event = pending.slice(0, boundary.index);
-      pending = pending.slice(boundary.index + boundary.terminator.length);
-      out += scrubEvent(event) + boundary.terminator;
-    }
-    if (pending.length > MAX_SSE_EVENT_BYTES) {
-      throw new Error(`SSE event exceeded ${MAX_SSE_EVENT_BYTES} bytes without a terminator`);
+    while (chunk.length) {
+      const boundary = nextBoundary(tail + chunk);
+      if (!boundary) {
+        bufferedBytes += Buffer.byteLength(chunk, "utf8");
+        if (bufferedBytes > MAX_SSE_EVENT_BYTES) throw new Error(`SSE event exceeded ${MAX_SSE_EVENT_BYTES} bytes without a terminator`);
+        pieces.push(chunk);
+        tail = (tail + chunk).slice(-3);
+        break;
+      }
+      const consumed = boundary.index + boundary.terminator.length - tail.length;
+      const part = chunk.slice(0, consumed);
+      bufferedBytes += Buffer.byteLength(part, "utf8");
+      if (bufferedBytes - Buffer.byteLength(boundary.terminator, "utf8") > MAX_SSE_EVENT_BYTES) {
+        throw new Error(`SSE event exceeded ${MAX_SSE_EVENT_BYTES} bytes`);
+      }
+      pieces.push(part);
+      const event = pieces.join("").slice(0, -boundary.terminator.length);
+      out += scrubEvent(event, project) + boundary.terminator;
+      pieces = []; bufferedBytes = 0; tail = "";
+      chunk = chunk.slice(consumed);
     }
     return out;
   };
@@ -123,7 +140,7 @@ function nextBoundary(text: string): { index: number; terminator: string } | nul
 }
 
 /** One complete SSE event, `data:` payload scrubbed, everything else kept. */
-function scrubEvent(event: string): string {
+function scrubEvent(event: string, project: (value: unknown) => unknown): string {
   // The ending this event arrived with is the one it leaves with.
   const eol = event.includes("\r\n") ? "\r\n" : event.includes("\r") ? "\r" : "\n";
   return event
@@ -134,7 +151,7 @@ function scrubEvent(event: string): string {
       const raw = line.slice(5).trimStart();
       if (!raw) return line;
       try {
-        return `data: ${JSON.stringify(scrub(JSON.parse(raw)))}`;
+        return `data: ${JSON.stringify(project(scrub(JSON.parse(raw))))}`;
       } catch {
         // not JSON: pass it through rather than dropping it. A frame this
         // code does not understand is still the harness's to send.

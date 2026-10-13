@@ -11,7 +11,7 @@ struct ProviderUsageView: View {
     var body: some View {
         List {
             if loading && accounts.isEmpty {
-                ProgressView("Loading limits…").frame(maxWidth: .infinity)
+                RosterSkeleton()
             }
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.secondary)
@@ -24,7 +24,9 @@ struct ProviderUsageView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(accounts) { account in
-                Section("\(account.provider.capitalized) · \(account.account)") {
+                Section("\(account.account) · \(account.providerName)") {
+                    let names = session.state.bots.filter { $0.remote == nil && $0.modelSelection.instanceId == account.instanceId }.map(\.name)
+                    if !names.isEmpty { Text(names.joined(separator: " + ")).font(.caption).foregroundStyle(.secondary) }
                     if let fiveHour = account.fiveHour { meter("5h", fiveHour) }
                     meter("7d", account.sevenDay)
                 }

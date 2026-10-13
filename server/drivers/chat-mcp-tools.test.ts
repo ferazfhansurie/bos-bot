@@ -65,6 +65,19 @@ afterEach(async () => {
 });
 
 describe("Chat MCP session", () => {
+  it("skips approval only for reviewed read-only tools of the built-in agents server", async () => {
+    const f = fixture(`if (message.method === "tools/list") { reply(message, {tools:[{name:"list_bots",description:"x",inputSchema:schema},{name:"write",description:"x",inputSchema:schema}]}); continue; }`);
+    const builtin = await mountChatTools({ agents: f.server }, f.controller.signal);
+    sessions.push(builtin);
+    expect(builtin.readOnly("agents_list_bots")).toBe(true);
+    expect(builtin.readOnly("agents_write")).toBe(false);
+    expect(builtin.readOnly("not_registered")).toBe(false);
+    // a custom server cannot borrow the name to skip approval
+    const custom = await mountChatTools({ custom: { agents: { ...f.server } } }, f.controller.signal);
+    sessions.push(custom);
+    expect(custom.readOnly("agents_list_bots")).toBe(false);
+  });
+
   it("discovers without executing, preserves schemas and validates before forwarding original arguments", async () => {
     const f = fixture();
     const session = await f.mount();

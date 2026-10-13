@@ -1,12 +1,18 @@
+import { createContentBlocker } from './content-blocker.mjs';
+import { browserCommand } from './browser-keybindings.mjs';
+import { registerBrowserApp } from './default-browser.mjs';
 import { compatEnv } from "./branding-env.cjs";
 import { confirmRemoteFull } from "./remote-full-client.mjs";
 import { signInRemoteOwner, authorizeRemoteFull } from "./remote-full-owner-window.mjs";
 import "./staging-bootstrap.mjs";
 import { stagingServerEnvironment } from "./staging-environment.mjs";
 import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEMES } from "./release-channel.mjs";
-import { attachLaunchSplash } from "./launch-splash.mjs";
-import { TOOLS_BROWSER_PARTITION, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach } from "./tools-browser.mjs";
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess } from "electron";
+import { attachLaunchSplash, readSplashSquad, saveSplashSquad } from "./launch-splash.mjs";
+import { createSharedBrowser } from "./shared-browser.mjs";
+import { createPrimaryBrowserController } from "./primary-browser-controller.mjs";
+import { createWorkspaceBrowserRegistry } from "./workspace-browser.mjs";
+import { TOOLS_BROWSER_PARTITION, noteBrowserKeyInput, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach } from "./tools-browser.mjs";
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess, webContents } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -26,7 +32,7 @@ import {
   installDesktopCrashListeners,
   readSafeLogTail,
 } from "./diagnostics.mjs";
-import { migrateWorkspaceCredentials, workspaceCredentialEnv } from "./workspace-credentials.mjs";
+import { migrateWorkspaceCredentials, workspaceCredentialEnv, savedComposioCredentialEnv } from "./workspace-credentials.mjs";
 import { activateExistingWindow, releaseSingleInstanceLock } from "./single-instance.mjs";
 import { closeToTrayEnabled, createCloseToTray } from "./close-to-tray.mjs";
 import { pollServerIdentity } from "./server-boot-probe.mjs";
@@ -255,12 +261,32 @@ function queuePackageInstall(rawLink) {
   return true;
 }
 
+const pendingBrowserLinks = [];
+let pendingBrowserView = false;
+function queueBrowserLink(value) {
+  let url; try { const parsed = new URL(value); if (!["http:","https:"].includes(parsed.protocol) || parsed.username || parsed.password) return false; url = parsed.href; } catch { return false; }
+  pendingBrowserLinks.push(url); if (pendingBrowserLinks.length > 30) pendingBrowserLinks.shift();
+  deliverBrowserLinks(); return true;
+}
+function deliverBrowserLinks() {
+  if (!app.isReady() || !mainWindowShowsLocalUi() || mainWindow.webContents.isLoadingMainFrame()) return;
+  for (const url of pendingBrowserLinks.splice(0)) {
+    const index=primaryBrowser().store.profiles();const d=primaryBrowser().store.read(index.selected);const tab={id:randomUUID(),title:"Loading…",url};
+    primaryBrowser().store.saveTabs(index.selected,{tabs:[...d.tabs.slice(-99),tab],active:tab.id});
+    pendingBrowserView = true;
+    mainWindow.webContents.send("primary-browser:external-url",{profileId:index.selected,url});
+  }
+}
 app.on("open-url", (event, url) => {
+  if (queueBrowserLink(url)) { event.preventDefault(); activateExistingWindow(BrowserWindow.getAllWindows()); return; }
   if (!queuePackageInstall(url)) return;
   event.preventDefault();
 });
 
+for (const arg of process.argv.slice(1)) queueBrowserLink(arg);
+
 app.on("second-instance", (_event, commandLine) => {
+  for (const arg of commandLine) queueBrowserLink(arg);
   const packageUrl = packageUrlFromCommandLine(commandLine);
   if (packageUrl) pendingPackageInstallUrl = packageUrl;
   activateExistingWindow(BrowserWindow.getAllWindows());
@@ -1217,6 +1243,40 @@ function toolsBrowserAppOrigins() {
   return origins;
 }
 
+const sharedPrimaryBrowser = createSharedBrowser({ contentsFromId: id => webContents.fromId(id), notify: state => { if (mainWindowShowsLocalUi()) mainWindow.webContents.send("primary-browser:shared-state", state); } });
+let primaryBrowserController, browserContentBlocker, primaryBrowserFocus;
+function contentBlocker() {
+  return browserContentBlocker ??= createContentBlocker({ root:path.join(app.getPath("userData"),"browser"), filters:["easylist.txt","easyprivacy.txt"].map(file=>fs.readFileSync(new URL(`./resources/adblock/${file}`,import.meta.url),"utf8")).join("\n"), contentsFromId:id=>webContents.fromId(id) });
+}
+function primaryBrowser() {
+  return primaryBrowserController ??= createPrimaryBrowserController({ root: path.join(app.getPath("userData"), "browser"), encryption: safeStorage, registry: toolsBrowserRegistry, contentBlocker: contentBlocker(), sessionFromPartition: p => session.fromPartition(p), contentsFromId: id => webContents.fromId(id), dialog, owner: () => mainWindow, shell, shared: sharedPrimaryBrowser });
+}
+const toolsBrowserRegistry = createWorkspaceBrowserRegistry({
+  onDownload: (p, row, file) => primaryBrowserController?.download(p, row, file),
+  notify: (download) => {
+    if (mainWindowShowsLocalUi()) mainWindow.webContents.send("tools-browser:download", download);
+  },
+});
+const configuredBrowserPartitions = new Set();
+function ensureToolsBrowserSession(partition) {
+  if (configuredBrowserPartitions.has(partition)) return;
+  const ses = session.fromPartition(partition);
+  configureToolsBrowserSession(ses, { appOrigins: toolsBrowserAppOrigins, shouldBlockRequest: details => { const id=primaryBrowserController?.profileFor(partition); return id ? contentBlocker().shouldBlock(id,details) : false; }, requestPermission: (contents, permission, details) => primaryBrowserController?.permission(partition, contents, permission, details) ?? false, checkPermission: (contents, permission, origin) => primaryBrowserController?.checkPermission(partition, contents, permission, origin) ?? false });
+  if (primaryBrowserController?.profileFor(partition)) ses.setDisplayMediaRequestHandler(async (request, callback) => {
+    try {
+      const contents=webContents.fromFrame(request.frame);
+      if (!await primaryBrowser().permission(partition,contents,"display-capture",{requestingUrl:request.securityOrigin})) { callback({}); return; }
+      const sources=await desktopCapturer.getSources({types:["screen","window"],thumbnailSize:{width:0,height:0}});
+      if (!sources.length) { callback({}); return; }
+      const choice=await dialog.showMessageBox(mainWindow,{type:"question",message:"Choose what to share",detail:"Only the selected screen or window will be shared with this website.",buttons:["Cancel",...sources.slice(0,20).map(s=>s.name)],defaultId:0,cancelId:0});
+      if (choice.response<1 || !contents || contents.isDestroyed() || new URL(contents.getURL()).origin !== new URL(request.securityOrigin).origin) { callback({}); return; }
+      callback({video:sources[choice.response-1]});
+    } catch { callback({}); }
+  });
+  ses.on("will-download", (event, item, guest) => toolsBrowserRegistry.trackDownload(partition, event, item, guest));
+  configuredBrowserPartitions.add(partition);
+}
+
 function mainWindowShowsLocalUi() {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
   try {
@@ -1228,23 +1288,51 @@ function mainWindowShowsLocalUi() {
 
 // Webviews may attach only to the main window while it shows the local UI
 // (a remote server's page could otherwise script the guest). Guests run in
-// TOOLS_BROWSER_PARTITION, never session.defaultSession, so the privileged
+// registered workspace partitions, never session.defaultSession, so the privileged
 // header installDesktopMutationHeader() adds there cannot reach web pages.
+app.on("browser-window-blur",()=>noteBrowserKeyInput());
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-attach-webview", (event, webPreferences, params) => {
+    const partition = toolsBrowserRegistry.has(params?.partition) ? params.partition : TOOLS_BROWSER_PARTITION;
     if (!mainWindow || contents !== mainWindow.webContents || !mainWindowShowsLocalUi() ||
-      !hardenWebviewAttach(webPreferences, params, { appOrigins: toolsBrowserAppOrigins })) {
+      !hardenWebviewAttach(webPreferences, params, { appOrigins: toolsBrowserAppOrigins, partition, nativePopups: Boolean(primaryBrowserController?.profileFor(partition)) })) {
       event.preventDefault();
+      return;
     }
+    ensureToolsBrowserSession(partition);
+  });
+  contents.on("before-input-event", (event,input)=>{
+    noteBrowserKeyInput(input);
+    const command=browserCommand(input);
+    if(contents!==mainWindow?.webContents||!mainWindowShowsLocalUi()||!primaryBrowserFocus||input.type!=="keyDown"||!command)return;
+    event.preventDefault();contents.send("primary-browser:shortcut",{command,key:input.key,shift:input.shift,partition:primaryBrowserFocus});
   });
   contents.on("did-attach-webview", (_attachEvent, guest) => {
     if (!mainWindow || contents !== mainWindow.webContents) return;
     const owner = mainWindow;
+    const partition = [...configuredBrowserPartitions].find(p => session.fromPartition(p) === guest.session) ?? guest.getLastWebPreferences().partition;
+    toolsBrowserRegistry.attach(guest, partition);
+    const registerPrimaryGuest = (contents) => {
+      toolsBrowserRegistry.attach(contents, partition);
+      contents.on("did-navigate", (_event, url) => primaryBrowserController?.visit(partition, url, contents.getTitle()));
+      contents.on("did-navigate-in-page", (_event, url, isMainFrame) => { if (isMainFrame) primaryBrowserController?.visit(partition, url, contents.getTitle()); });
+      contents.on("dom-ready", () => {const id=primaryBrowserController?.profileFor(partition);if(id)void contentBlocker().apply(id,contents).catch(()=>{});});
+      contents.once("destroyed",()=>browserContentBlocker?.forget(contents));
+      contents.on("before-input-event", (event, input) => {
+        const command = browserCommand(input);
+        if (contents.getType()!=="webview" || !primaryBrowserController?.profileFor(partition) || input.type !== "keyDown" || !command) return;
+        event.preventDefault();
+        if (mainWindowShowsLocalUi()) owner.webContents.send("primary-browser:shortcut", { command, key: input.key, shift: input.shift, partition });
+      });
+    };
+    registerPrimaryGuest(guest);
     attachToolsBrowserGuest(guest, {
       appOrigins: toolsBrowserAppOrigins,
-      onPopup: (url) => {
+      nativePopups: Boolean(primaryBrowserController?.profileFor(partition)),
+      onNativePopup: registerPrimaryGuest,
+      onPopup: (url, options = {}) => {
         if (owner.isDestroyed() || !mainWindowShowsLocalUi()) return;
-        owner.webContents.send("tools-browser:popup", url);
+        owner.webContents.send("tools-browser:popup", url, { ...toolsBrowserRegistry.source(guest), background: options.background === true });
       },
     });
   });
@@ -1324,6 +1412,9 @@ async function startServerOn(port) {
   delete childEnv.OMB_COMPOSIO_BROKER_URL;
   delete childEnv.OMB_COMPOSIO_BROKER_TOKEN;
   delete childEnv.COMPOSIO_API_KEY;
+  // Discard inherited project keys, then restore only this installation's
+  // saved key. Otherwise a successful encrypted save disappears on reboot.
+  Object.assign(childEnv, savedComposioCredentialEnv(secureCredentials));
   delete childEnv.OMB_BROWSER_CONNECTION;
   slog(`fork ${entry} port=${port}`);
   const proc = utilityProcess.fork(entry, [], {
@@ -1339,6 +1430,13 @@ async function startServerOn(port) {
   proc.on("message", (message) => {
     if (!serverSupervisor.isCurrent(proc)) return;
     try {
+      if (message?.type === "bos:shared-browser-request") {
+        if (typeof message.requestId !== "string" || !Number.isFinite(message.deadline) || message.deadline < Date.now()) return;
+        void sharedPrimaryBrowser.rpc(message.botId, message.threadId, message.method, message.params, message.deadline).then(result => {
+          if (serverSupervisor.isCurrent(proc)) proc.postMessage({ type: "bos:shared-browser-result", requestId: message.requestId, ok: true, result });
+        }, error => { if (serverSupervisor.isCurrent(proc)) proc.postMessage({ type: "bos:shared-browser-result", requestId: message.requestId, ok: false, error: error.message }); });
+        return;
+      }
       if (trustedApprovalMode.receive(proc, message)) return;
       if (managedDesktopRelay.receive(proc, message)) return;
       if (windowsUpdateContract?.receive(proc, message)) return;
@@ -1775,6 +1873,14 @@ ipcMain.on("desktop:unread-count", (event, value) => {
   applyUnreadBadge(sender);
 });
 
+// The renderer's own bots, drawn by the next launch splash.
+const splashSquadFile = () => path.join(app.getPath("userData"), "splash-squad.json");
+ipcMain.handle("desktop:splash-squad", (event, squad) => {
+  const sender = BrowserWindow.fromWebContents(event.sender);
+  if (!sender || sender !== mainWindow || sender.isDestroyed()) return false;
+  return saveSplashSquad(splashSquadFile(), squad);
+});
+
 ipcMain.on("desktop:focus-window", (event) => {
   const sender = BrowserWindow.fromWebContents(event.sender);
   if (!sender || sender !== mainWindow || sender.isDestroyed()) return;
@@ -2094,13 +2200,14 @@ function createWindow() {
       // loopback relay, so it is a trusted local page while also needing the
       // renderer's remote-only feature gates. Keep the two facts independent:
       // upstream's origin boundary must not erase the client-mode marker.
-      additionalArguments: [`--bos-channel=${STAGING ? "staging" : "live"}`, ...desktopCompanionRendererArguments(rendererOrigin(), desktopRemoteAccess),
+      additionalArguments: ["--bos-primary-browser=1", `--bos-channel=${STAGING ? "staging" : "live"}`, ...desktopCompanionRendererArguments(rendererOrigin(), desktopRemoteAccess),
         ...(app.isPackaged && !desktopRemoteAccess ? ["--omb-company-desktop=1"] : [])],
     },
   });
   if (!launchSplashShown) {
     launchSplashShown = true;
-    attachLaunchSplash(win, { WebContentsView, filePath: path.join(__dirname, "resources/bos-splash.html") });
+    attachLaunchSplash(win, { WebContentsView, filePath: path.join(__dirname, "resources/bos-splash.html"),
+      squad: readSplashSquad(splashSquadFile()) });
   }
   mainWindow = win;
   attachUpdaterWindow(win);
@@ -2183,7 +2290,7 @@ function createWindow() {
     });
     void workspaceMenuAction(() => switchEnvironment(LOCAL_ID));
   });
-  win.webContents.on("did-finish-load", () => deliverPackageInstall(win));
+  win.webContents.on("did-finish-load", () => { deliverPackageInstall(win); deliverBrowserLinks(); });
   win.webContents.on("did-finish-load", () => void offerComputerSharing(win));
 
   // Native context menu for text inputs — without this, right-click does
@@ -2355,6 +2462,34 @@ ipcMain.handle("engine:open-terminal", localOnly("engine:open-terminal", async (
 // renderer sandboxed and let the main process open only ordinary web links.
 // A bot's working folder: the native picker, so the path is real and the
 // user never types one. Returns null when they cancel.
+ipcMain.handle("primary-browser:action", localOnly("primary-browser:action", async (event, action, input) => {
+  requireMainWindowSender(event);
+  if (action === "browser-focus") {
+    if (input?.focused === true) primaryBrowserFocus=primaryBrowser().partition(input.profileId);
+    else if (primaryBrowserController?.profileFor(primaryBrowserFocus)===input?.profileId) primaryBrowserFocus=undefined;
+    return true;
+  }
+  if (action === "consume-external-link") { const pending=pendingBrowserView;pendingBrowserView=false;return pending; }
+  if (action === "default-browser") {
+    if (process.platform === "darwin") { await registerBrowserApp({packaged:app.isPackaged,executable:app.getPath("exe")}); await shell.openExternal("x-apple.systempreferences:com.apple.Desktop-Settings.extension"); return true; }
+    return app.setAsDefaultProtocolClient("http") && app.setAsDefaultProtocolClient("https");
+  }
+  const result = await primaryBrowser().action(action, input);
+  if (action === "select" || action === "read") ensureToolsBrowserSession(typeof result === "string" ? result : result.partition);
+  return result;
+}));
+
+ipcMain.handle("tools-browser:partition", localOnly("tools-browser:partition", (event, workspaceId) => {
+  requireMainWindowSender(event);
+  const partition = toolsBrowserRegistry.register(workspaceId);
+  ensureToolsBrowserSession(partition);
+  return partition;
+}));
+ipcMain.handle("tools-browser:downloads", localOnly("tools-browser:downloads", (event, partition) => {
+  requireMainWindowSender(event);
+  return toolsBrowserRegistry.list(partition);
+}));
+
 ipcMain.handle("desktop:pick-folder", localOnly("desktop:pick-folder", async (event, current) => {
   const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
   const result = await dialog.showOpenDialog(win, {
@@ -2927,6 +3062,7 @@ setCuaStateListener((connection) => {
 });
 
 app.whenReady().then(async () => {
+  void registerBrowserApp({packaged:app.isPackaged,executable:app.getPath("exe")}).catch(()=>slog("Browser registration could not refresh"));
   configureToolsBrowserSession(session.fromPartition(TOOLS_BROWSER_PARTITION), { appOrigins: toolsBrowserAppOrigins });
   session.defaultSession.on("will-download", (_event, item) => {
     item.setSavePath(collisionFreeDownloadPath(app.getPath("downloads"), item.getFilename()));

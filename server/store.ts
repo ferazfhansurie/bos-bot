@@ -103,7 +103,7 @@ export function toWireTask(task: TaskRecord): WireTask {
 const TASK_PATCH_FIELDS = [
   "title", "projectId", "modelSelection", "approvalMode", "autoApprove", "alwaysAllow",
   "unread", "rewound", "archivedAt", "pinnedMessageId", "resumeCursors", "lastInstanceId", "cwd",
-  "closeWhenDone", "failureAckedAt", "routineRunId", "surface", "appliedCompactionId", "contextFloor", "lastContextModel", "modelFallback",
+  "closeWhenDone", "failureAckedAt", "routineRunId", "channelTransport", "surface", "appliedCompactionId", "contextFloor", "lastContextModel", "modelFallback",
 ] as const satisfies readonly (keyof TaskRecord)[];
 export type TaskPatch = Partial<Pick<TaskRecord, typeof TASK_PATCH_FIELDS[number]>>;
 
@@ -1235,6 +1235,10 @@ export class Store {
    * per-message parentId are only chained correctly on a full load, so a
    * bounded page missing that context falls back to one rather than
    * returning messages with a broken parent chain. */
+  lastUserMessageAt(threadId: string): number | undefined {
+    return mdb.lastUserMessageAt(this.canonicalThreadId(threadId));
+  }
+
   messagesTail(threadId: string, limit: number): { messages: Message[]; hasMore: boolean; activeLeafId: string | null } {
     threadId = this.canonicalThreadId(threadId);
     let state = this.threads.get(threadId);
@@ -1349,7 +1353,7 @@ export class Store {
     return this.appendMessage(threadId, {
       role: "bot",
       kind: "activity",
-      tool: { name: outcome.ok ? "finished" : "turn failed", ok: outcome.ok, terminal: true },
+      tool: { name: outcome.stopReason === "interrupted" ? "stopped" : outcome.ok ? "finished" : "turn failed", ok: outcome.ok, terminal: true },
       ...(turnId ? { turnId } : {}),
       turnTerminal: true,
       turnOutcome,

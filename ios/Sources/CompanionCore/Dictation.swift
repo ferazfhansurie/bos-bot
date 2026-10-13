@@ -59,7 +59,7 @@ public enum Dictation {
         }
 
         public var text: String {
-            (committed + [live]).reduce("") { draft(base: $0, transcript: $1) }
+            (committed + [live]).filter { !$0.isEmpty }.joined(separator: " ")
         }
 
         /// Take the recognizer's latest reading of the live utterance.
@@ -146,5 +146,22 @@ public enum Dictation {
     /// Lowercased BCP-47 with underscores, so `en-US` and `en_US` collide.
     public static func canonicalIdentifier(_ locale: Locale) -> String {
         locale.identifier.lowercased().replacingOccurrences(of: "-", with: "_")
+    }
+}
+
+extension Dictation {
+    /// Recognition tasks have a duration limit. Late final words from the old
+    /// task still belong before the new task, never after its first partial.
+    public struct RecordingTranscript: Sendable {
+        private var segments: [Int: Transcript] = [:]
+        public init() {}
+        public mutating func apply(segment: Int, text: String, endsUtterance: Bool = false) {
+            var value = segments[segment] ?? Transcript()
+            value.apply(text, endsUtterance: endsUtterance)
+            segments[segment] = value
+        }
+        public var text: String {
+            segments.keys.sorted().compactMap { segments[$0]?.text }.filter { !$0.isEmpty }.joined(separator: " ")
+        }
     }
 }

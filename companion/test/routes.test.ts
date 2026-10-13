@@ -7,7 +7,7 @@
 // and the one that quietly stopped being true once before.
 import { describe, expect, it } from "vitest";
 
-import { denyReason } from "../src/routes.ts";
+import { denyReason, isBrowserAccess } from "../src/routes.ts";
 
 const ask = (method: string, path: string, authenticated = true) =>
   denyReason({ method, path, authenticated });
@@ -314,4 +314,19 @@ describe("what it may not", () => {
     expect(ask(method!, path!)).toBeNull();
     expect(ask(method!, path!, false)).not.toBeNull();
   }
+});
+
+
+describe("browser capability route boundary", () => {
+  it("allows only the dedicated viewer and action routes for paired devices", () => {
+    expect(allowed("GET", "/api/bots/bot-1/browser/live")).toBe(true);
+    expect(allowed("POST", "/api/bots/bot-1/browser/action")).toBe(true);
+    expect(isBrowserAccess("GET", "/api/bots/bot-1/browser/live")).toBe(true);
+    for (const path of ["/api/bots/bot-1/browser/debug", "/api/bots/bot-1/browser/cdp", "/api/bots/bot-1/browser/live/extra", "/api/bots/%2e%2e/browser/live"]) {
+      expect(allowed("GET", path)).toBe(false);
+      expect(isBrowserAccess("GET", path)).toBe(false);
+    }
+    expect(ask("GET", "/api/bots/bot-1/browser/live", false)?.status).toBe(401);
+    expect(allowed("POST", "/api/bots/bot-1/browser/live")).toBe(false);
+  });
 });

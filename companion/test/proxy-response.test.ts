@@ -86,6 +86,64 @@ afterAll(async () => {
 });
 
 describe("preparing a harness response for a device", () => {
+  it("negotiates task deltas only for capable phones and resets on reconnect", async () => {
+    const tasks = Array.from({ length: 1000 }, (_, i) => ({ threadId: `t${i}`, title: "Saved task", busy: false }));
+    const frames = [
+      { kind: "bot", seq: 1, bot: { id: "b", tasks } },
+      { kind: "bot", seq: 2, bot: { id: "b", tasks: tasks.map((task, i) => i === 999 ? { ...task, busy: true } : task) } },
+      { kind: "message", seq: 3, message: { id: "reply", text: "live reply" } },
+    ];
+    respond = res => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      for (const frame of frames) res.write(`id: fixture:${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`);
+      res.end();
+    };
+    const parse = (text: string) => text.split("\n").filter(line => line.startsWith("data:")).map(line => JSON.parse(line.slice(5)));
+    for (let reconnect = 0; reconnect < 2; reconnect++) {
+      const response = await device("/api/events?taskDeltas=1");
+      const received = parse(response.text);
+      expect(received[0].bot.tasks).toHaveLength(1000);
+      expect(received[0].bot.taskOrder).toBeUndefined();
+      expect(received[1].bot.tasks).toEqual([{ threadId: "t999", title: "Saved task", busy: true }]);
+      expect(received[1].bot.taskOrder).toHaveLength(1000);
+      expect(received[2].message.text).toBe("live reply");
+      expect(response.text).toContain("id: fixture:3");
+    }
+    const legacy = parse((await device("/api/events")).text);
+    expect(legacy[1].bot.tasks).toHaveLength(1000);
+  });
+
+  it("delivers a fragmented large bot snapshot and the next live reply", async () => {
+    const snapshot = `id: fixture:2\ndata: ${JSON.stringify({
+      kind: "bot", bot: { messages: [{ text: "x".repeat(2_713_156) }],
+        resumeCursors: { engine: "private-provider-cursor" } },
+    })}\n\n`;
+    respond = (res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write('id: fixture:1\ndata: {"kind":"hello","resumed":true}\n\n');
+      let offset = 0;
+      const write = () => {
+        if (res.destroyed) return;
+        if (offset >= snapshot.length) {
+          res.end('id: fixture:3\ndata: {"kind":"message","text":"live reply"}\n\n');
+          return;
+        }
+        res.write(snapshot.slice(offset, offset + 32_768));
+        offset += 32_768;
+        setImmediate(write);
+      };
+      write();
+    };
+    const result = await device("/api/events?since=fixture:0");
+    expect(result.status).toBe(200);
+    expect(result.text).toContain("id: fixture:2");
+    const botLine = result.text.split("\n").find(line => line.startsWith('data: {"kind":"bot"'))!;
+    expect(JSON.parse(botLine.slice(6)).bot.messages[0].text).toHaveLength(2_713_156);
+    expect(result.text).toContain('"text":"live reply"');
+    expect(result.text).not.toContain("private-provider-cursor");
+    expect(result.text).not.toContain("resumeCursors");
+  });
+
   it("gives only transactional phone credential saves the longer deadline", () => {
     expect(proxyHeadersTimeoutMs("/api/bots/b1/secret-cards/m1/provide")).toBe(105_000);
     expect(proxyHeadersTimeoutMs("/api/bots/b1/messages")).toBe(30_000);

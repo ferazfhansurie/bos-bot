@@ -67,3 +67,12 @@ export function homeLinkHint(bot: { homeLink?: HomeLink }): string | null {
   if (!bot.homeLink) return null;
   return bot.homeLink.online ? bot.homeLink.name : `${bot.homeLink.name} · asleep`;
 }
+
+/** The owner connection has settings and the original history. A peer relay
+ * of that same bot is useful to phone clients, but is not a second desktop
+ * entry. Match the home and exact canonical id, never display names. */
+export function dedupeHomeBots<T extends { id: string; homeLink?: HomeLink; remote?: { homeId: string } }>(bots: T[]): T[] {
+  const owned = bots.filter(bot => bot.homeLink && !bot.remote);
+  return bots.filter(bot => !bot.remote || !owned.some(owner =>
+    owner.homeLink!.id === bot.remote!.homeId && bot.id.endsWith('-' + owner.id)));
+}

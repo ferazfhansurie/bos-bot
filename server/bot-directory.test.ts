@@ -30,6 +30,7 @@ describe("parseBotDirectory", () => {
         integrations: ["GitHub"],
         prompt: "Set up a bot that drafts release notes.",
         detailUrl: "https://botdirectory.ai/bots/release-scribe/",
+        contributor: "someone",
       },
     ]);
   });

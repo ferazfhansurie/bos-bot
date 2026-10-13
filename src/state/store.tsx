@@ -324,6 +324,8 @@ export interface ModelSelection {
 /** One of a bot's separate contexts: its own thread, transcript and
  * provider session. The bot's threadId points at the active one. */
 export interface Task {
+  lastUserMessageAt?: number;
+  lastActivityAt?: number;
   threadId: string;
   /** Internal routine execution; reachable through its run receipt, not history menus. */
   routineRunId?: string;
@@ -886,6 +888,7 @@ export interface AppState {
   /** Threads with a scrollback page in flight, so one click cannot ask the
    * server for the same page twice. */
   loadingOlder: Record<string, true>;
+  pendingThreadSwitch: Record<string, string>;
   /** Bumped whenever a thread's transcript is replaced or its visible branch
    * moves. A scrollback page carries the value it was asked under, so a page
    * that was in flight across an edit, a branch switch or a thread swap is
@@ -1086,6 +1089,7 @@ export type Action =
   | { type: "newTask"; botId: string; projectId?: string }
   | { type: "switchTask"; botId: string; threadId: string }
   | { type: "taskSwitched"; bot: Bot }
+  | { type: "threadSwitchFailed"; botId: string; threadId: string }
   | { type: "renameTask"; botId: string; threadId: string; title: string }
   | { type: "deleteTask"; botId: string; threadId: string }
   | { type: "newBot"; role?: BotRole; onCreated?: () => void; onError?: (message: string) => void }
@@ -1394,6 +1398,7 @@ export function reducer(state: AppState, action: Action): AppState {
         backgroundThreadEvents: {},
         loadingOlder: {},
         transcriptGeneration: {},
+        pendingThreadSwitch: state.pendingThreadSwitch,
         modelVariantSessions: {},
       };
       return reconcileSnapshotQueues(
@@ -2162,13 +2167,15 @@ export function reducer(state: AppState, action: Action): AppState {
     case "switchGroupTask":
     case "deleteGroupTask":
       return state;
-    case "newTask":
-      return { ...state, selectedId: action.botId, activeView: "chat" };
+    case "newTask": {
+      const { [action.botId]: _cancelled, ...pendingThreadSwitch } = state.pendingThreadSwitch;
+      return { ...state, pendingThreadSwitch, selectedId: action.botId, activeView: "chat" };
+    }
     case "switchTask": {
       // Older background frames are already represented by the next server
       // snapshot. Only frames racing that request need replaying over it.
       const { [action.threadId]: _old, ...backgroundThreadEvents } = state.backgroundThreadEvents;
-      return { ...state, backgroundThreadEvents, selectedId: action.botId, activeView: "chat" };
+      return { ...state, backgroundThreadEvents, pendingThreadSwitch: { ...state.pendingThreadSwitch, [action.botId]: action.threadId }, selectedId: action.botId, activeView: "chat" };
     }
     case "renameTask":
       return updateBot(state, action.botId, (bot) => ({
@@ -2198,6 +2205,11 @@ export function reducer(state: AppState, action: Action): AppState {
             : group,
         ),
       };
+    case "threadSwitchFailed": {
+      if (state.pendingThreadSwitch[action.botId] !== action.threadId) return state;
+      const { [action.botId]: _failed, ...pendingThreadSwitch } = state.pendingThreadSwitch;
+      return { ...state, pendingThreadSwitch };
+    }
     case "taskSwitched": {
       let switched = updateBot(bumpTranscriptGeneration(state, action.bot.threadId), action.bot.id, (bot) => ({
         ...bot,
@@ -2212,7 +2224,9 @@ export function reducer(state: AppState, action: Action): AppState {
       }));
       for (const frame of state.backgroundThreadEvents[action.bot.threadId] ?? []) switched = reducer(switched, frame);
       const { [action.bot.threadId]: _settled, ...backgroundThreadEvents } = switched.backgroundThreadEvents;
-      switched = { ...switched, backgroundThreadEvents };
+      const pendingThreadSwitch = { ...switched.pendingThreadSwitch };
+      if (pendingThreadSwitch[action.bot.id] === action.bot.threadId) delete pendingThreadSwitch[action.bot.id];
+      switched = { ...switched, backgroundThreadEvents, pendingThreadSwitch };
       return reconcileModelVariantSessions(reconcileSnapshotQueues(switched, [action.bot]));
     }
     case "newBot":
@@ -2260,6 +2274,7 @@ export function reducer(state: AppState, action: Action): AppState {
 const MAX_KEPT_SCREEN_FRAMES = 8;
 
 export const initialState: AppState = {
+  pendingThreadSwitch: {},
   modelVariantSessions: {},
   backgroundThreadEvents: {},
   loadingOlder: {},
@@ -2345,6 +2360,8 @@ export async function createBotWithRole(role?: BotRole, request: typeof api = ap
  * Kept at the server's own page maximum so one page fills more than the
  * transcript window mounts. */
 export const MESSAGE_PAGE_SIZE = 200;
+// A switch needs only the mounted tail. Older messages use the existing pager.
+export const THREAD_SWITCH_PAGE_SIZE = 80;
 
 /** A bot row follows the server's current selection (including daily
  * rollover). Background announcements alone must not navigate a window.
@@ -3481,12 +3498,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // A new task's thread is empty, so only the switch needs a page.
           void ready.then(() => api<{ bot: Bot }>(action.type === "newTask"
             ? `/api/bots/${action.botId}/tasks`
-            : `/api/bots/${action.botId}/tasks/${action.threadId}?messages=${MESSAGE_PAGE_SIZE}`, { method: "POST", body: JSON.stringify(action.type === "newTask" ? { projectId: action.projectId } : {}) }))
+            : `/api/bots/${action.botId}/tasks/${action.threadId}?messages=${THREAD_SWITCH_PAGE_SIZE}`, { method: "POST", body: JSON.stringify(action.type === "newTask" ? { projectId: action.projectId } : {}) }))
             .then((r) => {
-              if (!r?.bot || navigation.get(action.botId) !== revision) return;
+              if (navigation.get(action.botId) !== revision) return;
+              if (!r?.bot || r.bot.id !== action.botId || (action.type === "switchTask" && r.bot.threadId !== action.threadId)) throw new Error("Could not load that conversation. Try again.");
               dispatch({ type: "taskSwitched", bot: r.bot });
             })
-            .catch(showError);
+            .catch((error) => {
+              if (navigation.get(action.botId) !== revision) return;
+              if (action.type === "switchTask") rawDispatch({ type: "threadSwitchFailed", botId: action.botId, threadId: action.threadId });
+              showError(error);
+            });
           break;
         }
         case "renameTask":
@@ -3510,7 +3532,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "switchGroupTask":
           if (onAnotherHome(action.groupId)) break;
-          api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}?messages=${MESSAGE_PAGE_SIZE}`, { method: "POST" })
+          api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}?messages=${THREAD_SWITCH_PAGE_SIZE}`, { method: "POST" })
             .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
             .catch(showError);
           break;

@@ -308,6 +308,8 @@ public struct Message: Codable, Hashable, Identifiable, Sendable {
     /// when it held the message, echoed back on the line that finally landed.
     /// Clients match it against their held-send rows to retire them.
     public var queueId: String?
+    /// Stable client identity for reconciling an optimistic send.
+    public var sendId: String?
     /// Mid-turn delivery evidence, preserved through transcript and cache reads.
     public var steered: Bool?
     /// Kept as a string so a newer server cannot break an older phone's decoder.
@@ -538,6 +540,8 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
     /// older harness included) means the shipped `cursor` silhouette.
     public var mascotEyes: String? = nil
     public var mascotBody: String?
+    /// Present only on negotiated stream deltas; lists the complete task order.
+    public var taskOrder: [String]? = nil
     public var tasks: [BotTask]?
     public var projects: [BotProject]?
     public var messages: [Message]?
@@ -570,6 +574,13 @@ public struct Bot: Codable, Hashable, Identifiable, Sendable {
             return left.threadId < right.threadId
         }.first
         return chosen.flatMap { projected(forThread: $0.threadId) } ?? self
+    }
+
+    /// An unstarted remote conversation has a valid selected placeholder but
+    /// no tasks yet. Absence from tasks only means removal after selection moves.
+    public func hasRemovedThread(_ selectedThreadId: String) -> Bool {
+        if selectedThreadId == threadId { return false }
+        return tasks.map { !$0.contains { $0.threadId == selectedThreadId } } ?? false
     }
 
     /// Older computers only send the profile default. Newer ones snapshot
@@ -1596,12 +1607,13 @@ public struct ProviderUsageResponse: Decodable, Sendable {
 }
 
 public struct ProviderUsageAccount: Decodable, Sendable, Identifiable {
+    public let instanceId: String?
     public let provider: String
     public let account: String
     public let fiveHour: ProviderUsageWindow?
     public let sevenDay: ProviderUsageWindow
     public let status: String
-    public var id: String { "\(provider):\(account)" }
+    public var id: String { "\(provider):\(instanceId ?? account)" }
 
     /// "Claude" / "Codex", as the mac sidebar names them.
     public var providerName: String { provider == "claude" ? "Claude" : "Codex" }

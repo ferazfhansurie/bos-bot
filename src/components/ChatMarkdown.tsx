@@ -15,6 +15,10 @@
 // exception: fenced blocks and inline spans pin dir="ltr" and isolate
 // themselves, so a snippet never reorders and never scrambles the RTL
 // sentence holding it.
+import { RichChart } from "./RichChart";
+import { parseChartSpec } from "./rich-chart";
+import { parseStats, StatCards } from "./RichStats";
+import { rehypeNumericColumns } from "../lib/rich-table";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -554,7 +558,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
       <Markdown
         remarkPlugins={[remarkGfm, remarkWindowsPathDestinations, unwrapLinkedImages, [remarkMentions, { peers: mentionPeers, everyone }], remarkThreadRefs(threads, currentBotId)]}
-        rehypePlugins={streaming ? STREAM_REHYPE : undefined}
+        rehypePlugins={streaming ? [rehypeNumericColumns, ...STREAM_REHYPE] : [rehypeNumericColumns]}
         urlTransform={chatUrlTransform}
         components={{
           pre({ children }: { children?: ReactNode }) {
@@ -567,6 +571,15 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
             const flat = (n: any): string =>
               typeof n === "string" ? n : Array.isArray(n) ? n.map(flat).join("") : (n?.props?.children ? flat(n.props.children) : "");
             const code = flat(child?.props?.children).replace(/\n$/, "");
+            if (lang === "chart") {
+              const spec = parseChartSpec(code);
+              if (spec) return <RichChart spec={spec} />;
+            }
+            if (lang === "stats") {
+              const items = parseStats(code);
+              if (items) return <StatCards items={items} />;
+            }
+            if (streaming && (lang === "chart" || lang === "stats")) return <div role="status" className="rounded-2xl border border-hairline p-4 text-ink-secondary">Preparing visual…</div>;
             return <CodeBlock code={code} lang={lang} streaming={streaming} />;
           },
           img(props) {
@@ -637,13 +650,13 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
               </div>
             );
           },
-          th({ children }: { children?: ReactNode }) {
+          th({ children, className }: { children?: ReactNode; className?: string }) {
             return (
-              <th className="border-b border-hairline/40 px-2 py-1.5 text-start font-semibold">{children}</th>
+              <th className={`border-b border-hairline/40 px-2 py-1.5 text-start font-semibold ${className?.includes("num") ? "!text-right tabular-nums" : ""}`}>{children}</th>
             );
           },
-          td({ children }: { children?: ReactNode }) {
-            return <td className="border-b border-hairline/20 px-2 py-1.5 align-top">{children}</td>;
+          td({ children, className }: { children?: ReactNode; className?: string }) {
+            return <td className={`border-b border-hairline/20 px-2 py-1.5 align-top ${className?.includes("num") ? "text-right tabular-nums whitespace-nowrap" : ""}`}>{children}</td>;
           },
           p({ node, children }: BlockProps) {
             return <p dir={blockDirection(node)}>{children}</p>;

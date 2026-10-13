@@ -82,6 +82,27 @@ describe("organizational folders through an isolated HTTP fixture", () => {
     expect((await getBot(bot.id)).tasks.some((task: any) => task.threadId === originalThread)).toBe(true);
   });
 
+  it("keeps discord channel history out of desktop lists while it works", async () => {
+    const bot = (await api("POST", "/api/bots", { name: "Discord transport fixture", modelSelection: selection(models[0]) })).body.bot;
+    const original = bot.threadId;
+    const channel = (await api("POST", `/api/bots/${bot.id}/tasks`, { title: "discord fixture", activate: false })).body.task;
+    expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${channel.threadId}`, { channelTransport: "unknown" })).status).toBe(400);
+    const marked = await api("PATCH", `/api/bots/${bot.id}/tasks/${channel.threadId}`, { channelTransport: "discord" });
+    expect(marked.status).toBe(200);
+    expect(marked.body.bot.tasks.some((t: any) => t.threadId === channel.threadId)).toBe(false);
+    expect(persistedBot(bot.id).tasks.find((t: any) => t.threadId === channel.threadId).channelTransport).toBe("discord");
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, { threadId: channel.threadId, text: "Channel history retained" })).status).toBe(202);
+    await expect.poll(async () => (await api("PATCH", `/api/bots/${bot.id}/tasks/${channel.threadId}`, {})).body.task.busy).toBe(true);
+    const visible = await getBot(bot.id);
+    expect(visible.tasks.some((t: any) => t.threadId === channel.threadId)).toBe(false);
+    expect(visible.threadId).toBe(original);
+    const transcript = await api("GET", `/api/threads/${channel.threadId}/messages?limit=20`);
+    expect(transcript.body.messages.some((m: any) => m.text === "Channel history retained")).toBe(true);
+    expect((await api("POST", `/api/bots/${bot.id}/interrupt`, { threadId: channel.threadId })).status).toBe(200);
+    expect((await api("PATCH", `/api/bots/${bot.id}/tasks/${channel.threadId}`, { channelTransport: null })).status).toBe(200);
+    expect((await getBot(bot.id)).tasks.some((t: any) => t.threadId === channel.threadId)).toBe(true);
+  });
+
   it("creates empty folders, saves and clears emoji, and persists their chosen order", async () => {
     const bot = (await api("POST", "/api/bots", { name: "Folder metadata" })).body.bot;
     const before = await getBot(bot.id);

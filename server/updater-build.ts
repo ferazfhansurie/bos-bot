@@ -14,8 +14,9 @@ import { compatEnv, compatEnvironment } from "../electron/branding-env.cjs";
 // have. Native compatibility is checked before using this tree recipe.
 import { assertNativeCompatibility, stampNativeContract } from "../electron/native-contract.mjs";
 import { execFile, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { writeFileAtomic } from "./atomic.ts";
 import { CANDIDATE_DIRNAME, discoverCandidate, appDigests, updatesDir, writeCandidateManifest, type CandidateManifest, type Candidate, type UpdateCheck } from "./updater.ts";
@@ -301,12 +302,33 @@ export function missingPackages(nodeModules: string, packageJson: string): strin
   return [...names].filter(name => !existsSync(join(nodeModules, name, "package.json")));
 }
 
-async function signingIdentity(liveApp: string, run: RunCommand, env: NodeJS.ProcessEnv): Promise<string> {
+export async function signingIdentity(liveApp: string, run: RunCommand, env: NodeJS.ProcessEnv): Promise<string> {
   const explicit = str(compatEnvironment(env).OMB_UPDATE_SIGN_IDENTITY);
   if (explicit) return explicit;
   const result = await run("/usr/bin/codesign", ["-dvv", liveApp], { timeoutMs: 30_000 }).catch(() => null);
   const authority = /^Authority=(.+)$/m.exec(result?.stderr ?? "")?.[1]?.trim();
-  return authority && !/^Apple (Root|Worldwide)/.test(authority) ? authority : "-";
+  if (!authority || /^Apple (Root|Worldwide)/.test(authority)) return "-";
+  return await signingCertHash(liveApp, run) ?? authority;
+}
+
+/** The SHA-1 of the exact certificate that signed the live app, when that
+ * certificate is a usable identity here. A keychain holding two certificates
+ * with the same name (a renewed Developer ID) makes codesign refuse the name
+ * as ambiguous; the hash always names one. */
+async function signingCertHash(liveApp: string, run: RunCommand): Promise<string | null> {
+  const dir = mkdtempSync(join(tmpdir(), "bos-signer-"));
+  try {
+    await run("/usr/bin/codesign", ["-d", `--extract-certificates=${join(dir, "cert")}`, liveApp], { timeoutMs: 30_000 });
+    const leaf = join(dir, "cert0");
+    if (!existsSync(leaf)) return null;
+    const hash = createHash("sha1").update(readFileSync(leaf)).digest("hex").toUpperCase();
+    const identities = await run("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"], { timeoutMs: 30_000 });
+    return identities.stdout.toUpperCase().includes(hash) ? hash : null;
+  } catch {
+    return null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Build `target` into <dataDir>/updates/candidate. Any earlier candidate is

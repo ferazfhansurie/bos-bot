@@ -2188,3 +2188,35 @@ it("only finishes initial chat loading when the roster snapshot arrives", () => 
   expect(loaded.rosterLoaded).toBe(true);
   expect(reducer(loaded, { type: "connected", value: false }).rosterLoaded).toBe(true);
 });
+
+
+describe("thread switch feedback", () => {
+  const bot = { id: "bot", threadId: "first", messages: [], tasks: [{ threadId: "first", title: "first", createdAt: 1 }, { threadId: "second", title: "second", createdAt: 2 }] } as unknown as Bot;
+  const start = () => ({ ...initialState, bots: [bot] });
+  it("marks the clicked destination immediately without repinning the old composer", () => {
+    const state = reducer(start(), { type: "switchTask", botId: "bot", threadId: "second" });
+    expect(state.pendingThreadSwitch.bot).toBe("second");
+    expect(state.bots[0].threadId).toBe("first");
+    const ready = reducer(state, { type: "taskSwitched", bot: { ...bot, threadId: "second" } });
+    expect(ready.pendingThreadSwitch.bot).toBeUndefined();
+    expect(ready.bots[0].threadId).toBe("second");
+  });
+  it("clears switch feedback when a new thread supersedes the request", () => {
+    let state = reducer(start(), { type: "switchTask", botId: "bot", threadId: "second" });
+    state = reducer(state, { type: "newTask", botId: "bot" });
+    expect(state.pendingThreadSwitch.bot).toBeUndefined();
+    state = reducer(state, { type: "taskSwitched", bot: { ...bot, threadId: "new-thread" } });
+    expect(state.pendingThreadSwitch.bot).toBeUndefined();
+    expect(state.bots[0].threadId).toBe("new-thread");
+  });
+  it("does not clear a newer navigation for a late failure or snapshot", () => {
+    let state = reducer(start(), { type: "switchTask", botId: "bot", threadId: "second" });
+    state = reducer(state, { type: "switchTask", botId: "bot", threadId: "third" });
+    state = reducer(state, { type: "threadSwitchFailed", botId: "bot", threadId: "second" });
+    expect(state.pendingThreadSwitch.bot).toBe("third");
+    state = reducer(state, { type: "taskSwitched", bot: { ...bot, threadId: "second" } });
+    expect(state.pendingThreadSwitch.bot).toBe("third");
+    state = reducer(state, { type: "threadSwitchFailed", botId: "bot", threadId: "third" });
+    expect(state.pendingThreadSwitch.bot).toBeUndefined();
+  });
+});

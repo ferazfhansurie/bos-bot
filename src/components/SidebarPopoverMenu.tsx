@@ -47,7 +47,10 @@ export function SidebarPopoverMenu({
   ariaLabel,
   openOnHover = false,
   renderTrigger,
+  header,
 }: {
+  /** rendered above the items (the update banner); gets a close callback */
+  header?: (close: () => void) => React.ReactNode;
   /** `data-tour` id for the trigger button */
   tourId?: string;
   items: SidebarMenuItem[];
@@ -151,8 +154,9 @@ export function SidebarPopoverMenu({
           id={menuId}
           role="menu"
           aria-label={ariaLabel}
-          className="animate-pop-in absolute bottom-full left-0 right-0 z-40 mb-1 overflow-hidden rounded-xl border border-hairline/50 bg-menu py-1.5 shadow-2xl shadow-black/50"
+          className="animate-pop-in absolute bottom-full left-0 right-0 z-40 min-w-60 mb-1 overflow-hidden rounded-xl border border-hairline/50 bg-menu py-1.5 shadow-2xl shadow-black/50"
         >
+          {header?.(close)}
           {items.map((item) => (
             <div key={item.key}>
               {item.separatorBefore && <div className="my-1.5 h-px bg-hairline/50" />}

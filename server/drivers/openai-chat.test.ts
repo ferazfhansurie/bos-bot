@@ -105,6 +105,41 @@ describe("createOpenAIChatRuntime tool approvals", () => {
   it("answers for the person under Full access, so no card is raised", async () => {
     expect(await cardRaisedFor("full")).toBe(false);
   }, 20_000);
+
+  const sse = (...chunks: string[]) => chunks.map((c) => `data: ${c}\n\n`).join("");
+  const toolCall = (id: string, args: string) => sse(
+    JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id, type: "function", function: { name: "fx_write", arguments: args } }] } }] }),
+    JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }),
+  );
+  const finalText = sse(
+    JSON.stringify({ choices: [{ index: 0, delta: { content: "done" } }] }),
+    JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }),
+  );
+  const turnOk = async (rounds: string[]) => {
+    let round = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => !String(url).endsWith("/chat/completions") ? new Response("{}", { status: 404 }) : new Response(rounds[Math.min(round++, rounds.length - 1)], { status: 200, headers: { "content-type": "text/event-stream" } })));
+    const instance = await OpenAICompatDriver.create({
+      instanceId: "compat", displayName: "Compat", enabled: true,
+      config: OpenAICompatDriver.decodeConfig({ url: "https://api.example.com/v1", apiKeyEnv: "K", model: "m" }),
+      environment: { K: "secret" },
+    });
+    const events: RuntimeEvent[] = [];
+    instance.adapter.onEvent((event) => events.push(event));
+    await instance.adapter.sendTurn({ threadId: "thread", text: "hi", approvalMode: "full", integrations: { custom: { fx: toolServer() } } });
+    await vi.waitFor(() => {
+      if (!events.some((e) => e.type === "turn.completed")) throw new Error("waiting");
+    }, { timeout: 10_000 });
+    await instance.dispose();
+    return (events.find((e) => e.type === "turn.completed") as { ok?: boolean }).ok;
+  };
+
+  it("finishes a turn whose failed tool call the model fixed and retried", async () => {
+    expect(await turnOk([toolCall("c1", '{"bad":1}'), toolCall("c2", "{}"), finalText])).toBe(true);
+  }, 20_000);
+
+  it("still fails a turn that ends with a tool call never recovered", async () => {
+    expect(await turnOk([toolCall("c1", '{"bad":1}'), finalText])).toBe(false);
+  }, 20_000);
 });
 
 describe("createOpenAIChatRuntime stream termination", () => {

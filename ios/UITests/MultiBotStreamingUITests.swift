@@ -55,6 +55,9 @@ final class MultiBotStreamingUITests: XCTestCase {
         }
         let started = Date()
         for _ in 0..<6 { input.typeText("the quick brown fox jumps over the lazy dog ") }
+        XCTAssertEqual(input.value as? String, String(repeating: "the quick brown fox jumps over the lazy dog ", count: 6),
+                       "parallel work must not lose or duplicate keystrokes")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
         keep("typing", started: started)
     }
 

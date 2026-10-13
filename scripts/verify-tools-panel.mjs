@@ -16,7 +16,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const fixtureFlag = "--omb-tools-panel-fixture";
 
 if (process.versions.electron && process.argv.includes(fixtureFlag)) {
-  const { app, BrowserWindow, session, webContents } = await import("electron");
+  const { app, BrowserWindow, session, webContents, ipcMain } = await import("electron");
   const { TOOLS_BROWSER_PARTITION, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach } = await import("../electron/tools-browser.mjs");
   const [url, pageUrl, output, oldPreload, expectFix, only] = process.argv.slice(process.argv.indexOf(fixtureFlag) + 1);
   const fixed = expectFix === "fix";
@@ -28,10 +28,18 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   let modern = null;
   app.on("web-contents-created", (_event, contents) => {
     contents.on("will-attach-webview", (event, webPreferences, params) => {
-      if (contents !== modern?.webContents || !hardenWebviewAttach(webPreferences, params, { appOrigins })) event.preventDefault();
+      if (contents !== modern?.webContents || !hardenWebviewAttach(webPreferences, params, { appOrigins, partition: registry.has(params.partition) ? params.partition : TOOLS_BROWSER_PARTITION })) event.preventDefault();
     });
     contents.on("did-attach-webview", (_attach, guest) => attachToolsBrowserGuest(guest, { appOrigins }));
   });
+  const { createWorkspaceBrowserRegistry } = await import("../electron/workspace-browser.mjs");
+  const registry = createWorkspaceBrowserRegistry();
+  ipcMain.handle("tools-browser:partition", (_event, id) => {
+    const partition = registry.register(id);
+    configureToolsBrowserSession(session.fromPartition(partition), { appOrigins });
+    return partition;
+  });
+  ipcMain.handle("tools-browser:downloads", (_event, partition) => registry.list(partition));
   const results = {};
   app.whenReady().then(async () => {
     configureToolsBrowserSession(session.fromPartition(TOOLS_BROWSER_PARTITION), { appOrigins });
@@ -77,8 +85,21 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
       result.loaded = await until(() => guest()?.getURL() === pageUrl && guest()?.getTitle() === "Fixture page", null, 160);
       result.guestUrl = guest()?.getURL() ?? null;
       result.webviewElements = await evaluate("document.querySelectorAll('webview').length");
-      result.tabTitles = await evaluate("[...document.querySelectorAll('button.truncate')].map(b => b.textContent.trim())");
+      result.tabTitles = await evaluate("[...document.querySelectorAll('button[aria-pressed]')].map(b => b.textContent.trim())");
       await shot("browser");
+      if (result.loaded) {
+        await evaluate("document.querySelector('[aria-label=\"New browser tab\"]').click()");
+        await until(() => evaluate("document.querySelectorAll('[data-tool=files]').length > 0"), "new tab chooser");
+        await evaluate("document.querySelector('[data-tool=files]').click()");
+        await until(() => evaluate("document.querySelector('[aria-label=\"Search workspace files\"]') !== null"), "file explorer");
+        await until(() => evaluate("[...document.querySelectorAll('button')].some(el => el.textContent === 'notes.txt')"), "fixture file listed");
+        await evaluate("[...document.querySelectorAll('button')].find(el => el.textContent === 'notes.txt').click()");
+        await until(() => evaluate("document.querySelector('pre')?.textContent === 'fixture file content'"), "file preview");
+        result.filePreview = await evaluate("document.querySelector('pre').textContent");
+        await evaluate("document.querySelector('[aria-pressed=false]').click()");
+        result.guestRetainedAcrossTools = guest()?.getURL() === pageUrl;
+        await shot("files-and-browser");
+      }
       console.error(`[${shell}] loaded`, JSON.stringify(result));
       if (result.loaded && !compatEnv.SKIP_APP_ORIGIN) {
         await go(new URL(url).origin + "/");
@@ -100,10 +121,13 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   const args = process.argv.slice(2);
   const baseAt = args.indexOf("--base");
   const base = baseAt >= 0 ? args.splice(baseAt, 2)[1] : null;
-  const oldPreload = args[0];
-  assert.ok(oldPreload, "pass the pre-1.6 preload.cjs (e.g. extracted from an installed app.asar)");
+  let oldPreload = args[0];
   const output = compatEnv.OMB_FIXTURE_OUTPUT ?? mkdtempSync(join(tmpdir(), "omb-tools-panel-"));
   mkdirSync(output, { recursive: true });
+  if (!oldPreload) {
+    oldPreload = join(output, "old-preload.cjs");
+    writeFileSync(oldPreload, 'const {contextBridge}=require("electron");contextBridge.exposeInMainWorld("ogb",{});');
+  }
   const userData = join(output, "user-data");
   const { build } = await import("esbuild");
   const panel = base ? execFileSync("git", ["show", `${base}:src/components/ToolsPanel.tsx`], { cwd: root, encoding: "utf8" }) : null;
@@ -129,7 +153,10 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   const listen = (handler) => new Promise((resolve) => { const s = createServer(handler).listen(0, "127.0.0.1", () => resolve(s)); });
   const ui = await listen((req, res) => {
     if (req.url === "/bundle.js") { res.writeHead(200, { "content-type": "text/javascript" }); res.end(js); return; }
-    if (req.url?.startsWith("/api/")) { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); return; }
+    if (req.url?.startsWith("/api/")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(req.url.includes("/read?") ? { content: "fixture file content", binary: false, size: 20, truncated: false } : { entries: [{name: "notes.txt", path: "notes.txt", kind: "file"}], truncated: false })); return;
+    }
     res.writeHead(200, { "content-type": "text/html" }); res.end(html);
   });
   const page = await listen((_req, res) => { res.writeHead(200, { "content-type": "text/html" }); res.end("<title>Fixture page</title><h1>fixture guest page</h1>"); });
@@ -159,11 +186,13 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
     assert.equal(results["1.3"].loaded, false);
     assert.equal(results["1.3"].guestUrl, null);
   } else {
-    for (const shell of ["1.3", "1.6"]) assert.deepEqual(results[shell].tiles, ["Terminal", "Browser"]);
+    for (const shell of ["1.3", "1.6"]) assert.deepEqual(results[shell].tiles, ["Terminal", "Files", "Browser"]);
     assert.equal(results["1.3"].webviewElements, 0);
     assert.match(results["1.3"].notice, /too old for the browser/);
     assert.equal(results["1.6"].loaded, true);
     assert.equal(results["1.6"].guestUrl, pageUrl);
+    assert.equal(results["1.6"].filePreview, "fixture file content");
+    assert.equal(results["1.6"].guestRetainedAcrossTools, true);
     assert.notEqual(new URL(results["1.6"].appOriginBlockedUrl ?? "about:blank").origin, new URL(url).origin);
   }
   console.log(`tools panel fixture passed (${base ? `base ${base}` : "working tree"}); evidence in ${output}`);

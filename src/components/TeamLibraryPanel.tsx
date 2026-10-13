@@ -1,3 +1,4 @@
+import { ShareBotPackage } from "./ShareBotPackage";
 import { track } from "@/lib/analytics";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -19,10 +20,10 @@ import {
   Plug,
   Search,
   UploadCloud,
-  Users,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BotStore, MemberMascot } from "./BotStore";
 import { createPortal } from "react-dom";
 
 import { MAX_TEAM_BACKUP_BYTES, TEAM_BACKUP_EXCLUSIONS } from "../../shared/team-backup";
@@ -56,7 +57,7 @@ export interface TeamImportResult {
 }
 
 type ImportSource = "library" | "file" | "github";
-type TeamTab = "explore" | "import" | "scout";
+type TeamTab = "explore" | "import" | "scout" | "share";
 
 /** the scout endpoint's answer, as far as this panel renders it — the
  * manifest itself stays opaque and goes back to the server verbatim */
@@ -84,13 +85,6 @@ interface DirectoryCandidate {
 /** appearance colors for community bots folded into a scouted team */
 const DIRECTORY_COLORS = ["cyan", "red", "purple", "green", "orange"] as const;
 
-const TEAM_GLYPHS = [
-  "bg-purple-500/15 text-purple-300",
-  "bg-cyan-500/15 text-cyan-300",
-  "bg-orange-500/15 text-orange-300",
-  "bg-emerald-500/15 text-emerald-300",
-] as const;
-
 async function openExternal(url: string): Promise<void> {
   if (window.ogb?.openExternal) {
     await window.ogb.openExternal(url);
@@ -100,10 +94,21 @@ async function openExternal(url: string): Promise<void> {
   if (opened) opened.opener = null;
 }
 
-function TeamGlyph({ index }: { index: number }) {
+/** A team in the library: three of its mascots huddled together. */
+function TeamGlyph({ slug, members }: { slug: string; members: number }) {
+  const shown = Math.max(1, Math.min(3, members));
+  const spots = ["left-0 top-[14px] z-[1]", "right-0 top-[14px] z-[1]", "left-1/2 top-0 -translate-x-1/2"];
   return (
-    <div className={cn("flex size-11 shrink-0 items-center justify-center rounded-xl", TEAM_GLYPHS[index % TEAM_GLYPHS.length])}>
-      <Users size={20} />
+    <div className="relative size-14 shrink-0" aria-hidden="true">
+      {shown === 1 ? (
+        <div className="absolute inset-0 flex items-center justify-center"><MemberMascot name={`${slug}-0`} size={44} /></div>
+      ) : (
+        Array.from({ length: shown }, (_, index) => (
+          <div key={index} className={cn("absolute", spots[index])}>
+            <MemberMascot name={`${slug}-${index}`} size={shown === 2 ? 34 : 30} />
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -430,8 +435,8 @@ export function TeamLibraryPanel({
                   <ArrowLeft size={18} />
                 </button>
               )}
-              <h2 id="team-library-title" className="truncate text-[22px] font-semibold tracking-[-0.01em] text-ink">
-                {pending ? pending.name : "Templates"}
+              <h2 id="team-library-title" className="truncate ui-page-title">
+                {pending ? pending.name : "Bot marketplace"}
               </h2>
             </div>
             <p className={cn("mt-1 text-[13px] text-ink-secondary", pending && "ml-9")}>
@@ -441,14 +446,14 @@ export function TeamLibraryPanel({
                     : pending.kind === "package"
                     ? `${pending.members.length} bots · portable Markdown playbook`
                     : `${pending.members.length} ready-to-load bots`
-                  : "Start with a complete playbook or bring your own."}
+                  : "Find a bot, make it yours, or share what you built."}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {!pending && (
               <button
                 onClick={() => void openExternal(catalog?.repositoryUrl ?? COMMUNITY_TEAMS_REPOSITORY)}
-                className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink"
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink"
                 title="Open the community templates repository"
               >
                 <Github size={16} />
@@ -460,7 +465,7 @@ export function TeamLibraryPanel({
               onClick={onClose}
               disabled={importing}
               className="rounded-lg p-2 text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-50"
-              aria-label="Close templates"
+              aria-label="Close bot marketplace"
             >
               <X size={21} />
             </button>
@@ -471,14 +476,14 @@ export function TeamLibraryPanel({
           <>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-6 sm:px-8">
               {pending.description && (
-                <p className="max-w-2xl text-[13.5px] leading-relaxed text-ink-secondary">{pending.description}</p>
+                <p className="max-w-2xl text-[14px] leading-relaxed text-ink-secondary">{pending.description}</p>
               )}
-              {Boolean(pending.warnings?.length) && <div className="mt-4 rounded-xl border border-hairline px-4 py-3 text-[12.5px] text-ink-secondary">
+              {Boolean(pending.warnings?.length) && <div className="mt-4 rounded-xl border border-hairline px-4 py-3 text-[13px] text-ink-secondary">
                 <div className="mb-2 font-medium text-ink">Backup notes</div>
                 {pending.warnings?.map((warning, index) => <p key={index}>{warning}</p>)}
               </div>}
               {(pending.kind === "package" || pending.kind === "backup") && (
-                <div className="mt-5 flex flex-wrap gap-2 text-[11.5px] text-ink-secondary">
+                <div className="mt-5 flex flex-wrap gap-2 text-[12px] text-ink-secondary">
                   {pending.chiefOfStaff && <span className="flex items-center gap-1.5 rounded-full bg-raised px-3 py-1.5"><Crown size={13} />{pending.chiefOfStaff} leads</span>}
                   <span className="flex items-center gap-1.5 rounded-full bg-raised px-3 py-1.5"><MessageSquare size={13} />{pending.rooms} {pending.rooms === 1 ? "group chat" : "group chats"}</span>
                   <span className="flex items-center gap-1.5 rounded-full bg-raised px-3 py-1.5"><BookOpen size={13} />{pending.playbooks} playbooks</span>
@@ -487,7 +492,7 @@ export function TeamLibraryPanel({
                 </div>
               )}
               {Boolean(pending.skills?.length) && (
-                <div className="mt-4 rounded-xl border border-hairline px-4 py-3 text-[12.5px] text-ink-secondary">
+                <div className="mt-4 rounded-xl border border-hairline px-4 py-3 text-[13px] text-ink-secondary">
                   <div className="font-medium text-ink">Included skills — disabled on import</div>
                   <p className="mt-1 break-words">{pending.skills?.join(", ")}</p>
                   <p className="mt-1">Review each skill in its bot profile before enabling it. Imported instructions do not run automatically.</p>
@@ -497,18 +502,16 @@ export function TeamLibraryPanel({
               <div className="mt-2 grid grid-cols-1 gap-x-10 md:grid-cols-2">
                 {pending.members.map((member, index) => (
                   <div key={`${member.name}-${index}`} className="flex min-h-[72px] items-center gap-3 border-b border-hairline/35 px-1 py-3">
-                    <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-semibold", TEAM_GLYPHS[index % TEAM_GLYPHS.length])}>
-                      {member.name.slice(0, 1).toUpperCase()}
-                    </div>
+                    <MemberMascot name={member.name} color={member.color} body={member.mascotBody} />
                     <div className="min-w-0">
                       <div className="truncate text-[14px] font-medium text-ink">{importedNames[index]}</div>
-                      {importedNames[index] !== member.name && <div className="text-[11.5px] text-ink-secondary">New copy of {member.name}</div>}
-                      <div className="mt-0.5 truncate text-[12.5px] text-ink-secondary">{member.title || "General assistant"}</div>
+                      {importedNames[index] !== member.name && <div className="text-[12px] text-ink-secondary">New copy of {member.name}</div>}
+                      <div className="mt-0.5 truncate text-[13px] text-ink-secondary">{member.title || "General assistant"}</div>
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="mt-6 flex items-start gap-2.5 rounded-xl bg-raised/45 px-4 py-3 text-[12.5px] leading-relaxed text-ink-secondary">
+              <div className="mt-6 flex items-start gap-2.5 rounded-xl bg-raised/45 px-4 py-3 text-[13px] leading-relaxed text-ink-secondary">
                 <Check size={15} className="mt-0.5 shrink-0 text-success" />
                 <p>
                   {pending.kind === "backup"
@@ -518,11 +521,11 @@ export function TeamLibraryPanel({
                     : "Only roles and appearance are loaded. Your conversations, account connections, permissions, and computer access stay private."}
                 </p>
               </div>
-              {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+              {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">{error}</div>}
             </div>
 
             <footer className="flex flex-col gap-3 border-t border-hairline/35 px-6 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-              <div className="text-[12.5px] text-ink-secondary">
+              <div className="text-[13px] text-ink-secondary">
                 Your {currentBotCount > 0 ? `${currentBotCount} existing ${currentBotCount === 1 ? "bot and its" : "bots and their"}` : "existing"} conversations stay unchanged.
                 {" "}{pending.kind === "backup"
                   ? t("teamImport.backupCopies")
@@ -531,7 +534,7 @@ export function TeamLibraryPanel({
               <button
                 onClick={() => void importTeam()}
                 disabled={importing}
-                className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-white hover:bg-accent/90 disabled:opacity-60"
+                className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-medium text-white hover:bg-accent/90 disabled:opacity-60"
               >
                 {importing && <Loader2 size={15} className="animate-spin" />}
                 {importing
@@ -543,7 +546,7 @@ export function TeamLibraryPanel({
         ) : (
           <>
             <div className="flex flex-col gap-3 px-6 pb-4 pt-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-              <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Template source">
+              <div className="flex w-fit max-w-full flex-wrap rounded-xl bg-raised/70 p-1" role="tablist" aria-label="Template source">
                 <button
                   role="tab"
                   aria-selected={tab === "explore"}
@@ -552,7 +555,7 @@ export function TeamLibraryPanel({
                     setError("");
                   }}
                   className={cn(
-                    "rounded-lg px-4 py-2 text-[13.5px] transition-colors",
+                    "rounded-lg px-4 py-2 text-[14px] transition-colors",
                     tab === "explore" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
                   )}
                 >
@@ -566,7 +569,7 @@ export function TeamLibraryPanel({
                     setError("");
                   }}
                   className={cn(
-                    "rounded-lg px-4 py-2 text-[13.5px] transition-colors",
+                    "rounded-lg px-4 py-2 text-[14px] transition-colors",
                     tab === "import" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
                   )}
                 >
@@ -580,12 +583,13 @@ export function TeamLibraryPanel({
                     setError("");
                   }}
                   className={cn(
-                    "rounded-lg px-4 py-2 text-[13.5px] transition-colors",
+                    "rounded-lg px-4 py-2 text-[14px] transition-colors",
                     tab === "scout" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink",
                   )}
                 >
                   From a folder
                 </button>
+                <button role="tab" aria-selected={tab === "share"} onClick={() => { setTab("share"); setError(""); }} className={cn("rounded-lg px-4 py-2 text-[14px] transition-colors", tab === "share" ? "bg-card text-ink shadow-sm" : "text-ink-secondary hover:text-ink")}>Share a bot</button>
               </div>
               {tab === "explore" && (
                 <label className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-raised/70 px-3.5 sm:w-[320px]">
@@ -593,8 +597,8 @@ export function TeamLibraryPanel({
                   <input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search templates"
-                    aria-label="Search templates"
+                    placeholder="Search bots and teams"
+                    aria-label="Search bots and teams"
                     className="min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
                   />
                 </label>
@@ -602,10 +606,12 @@ export function TeamLibraryPanel({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-7 pt-5 sm:px-8">
+              {tab === "share" && <ShareBotPackage />}
               {tab === "explore" && (
                 <div>
-                  <div className="mb-3 text-[12px] font-medium text-ink-secondary">
-                    {search ? "Search results" : "Community templates"}
+                  <BotStore search={search} onGot={() => onClose()} openExternal={(url) => void openExternal(url)} />
+                  <div className="mb-3 mt-9 text-[15px] font-semibold text-ink">
+                    Teams
                   </div>
                   {catalogLoading && (
                     <div className="flex items-center justify-center gap-2 py-24 text-[13px] text-ink-secondary">
@@ -620,13 +626,13 @@ export function TeamLibraryPanel({
                   )}
                   {!catalogLoading && catalog && (
                     <div className="grid grid-cols-1 gap-x-10 md:grid-cols-2">
-                      {visibleTeams.map((entry, index) => (
+                      {visibleTeams.map((entry) => (
                         <article key={entry.slug} className="flex min-h-[104px] items-center gap-3 border-b border-hairline/35 px-1 py-4">
-                          <TeamGlyph index={index} />
+                          <TeamGlyph slug={entry.slug} members={entry.members} />
                           <div className="min-w-0 flex-1">
                             <h3 className="truncate text-[14px] font-medium text-ink">{entry.name}</h3>
-                            <p className="mt-0.5 truncate text-[12.5px] text-ink-secondary">{entry.outcome ?? entry.summary}</p>
-                            <p className="mt-1 truncate text-[11.5px] text-ink-secondary/80">
+                            <p className="mt-0.5 truncate text-[13px] text-ink-secondary">{entry.outcome ?? entry.summary}</p>
+                            <p className="mt-1 truncate text-[12px] text-ink-secondary/80">
                               {entry.members} bots · {entry.skills.length} playbooks
                               {entry.requires.apps.length > 0 && ` · ${entry.requires.apps.join(", ")}`}
                               {entry.setupMinutes && ` · ~${entry.setupMinutes} min`}
@@ -635,7 +641,7 @@ export function TeamLibraryPanel({
                           <button
                             onClick={() => void loadLibraryTeam(entry)}
                             disabled={busySlug !== null}
-                            className="flex min-w-[72px] items-center justify-center gap-1.5 rounded-full bg-raised px-3.5 py-2 text-[12.5px] text-ink hover:bg-raised-hover disabled:opacity-40"
+                            className="flex min-w-[72px] items-center justify-center gap-1.5 rounded-full bg-raised px-3.5 py-2 text-[13px] text-ink hover:bg-raised-hover disabled:opacity-40"
                           >
                             {busySlug === entry.slug && <Loader2 size={13} className="animate-spin" />}
                             {busySlug === entry.slug ? "Loading" : "Load"}
@@ -647,7 +653,7 @@ export function TeamLibraryPanel({
                   {!catalogLoading && catalog && visibleTeams.length === 0 && (
                     <div className="flex min-h-56 flex-col items-center justify-center text-center">
                       <div className="text-[14px] font-medium text-ink">No templates found</div>
-                      <div className="mt-1 text-[12.5px] text-ink-secondary">Try a different search.</div>
+                      <div className="mt-1 text-[13px] text-ink-secondary">Try a different search.</div>
                     </div>
                   )}
                 </div>
@@ -690,13 +696,13 @@ export function TeamLibraryPanel({
                     >
                       <UploadCloud size={27} className="text-accent" />
                       <span className="mt-3 text-[14px] font-medium text-ink">Choose a backup or team file</span>
-                      <span className="mt-1 text-[12.5px] text-ink-secondary">Drop a .mausbackup.json, BotMRR .md or legacy .mausteam.json here. You’ll preview it before anything is added.</span>
+                      <span className="mt-1 text-[13px] text-ink-secondary">Drop a .mausbackup.json, BotMRR .md or legacy .mausteam.json here. You’ll preview it before anything is added.</span>
                     </button>
 
                     <div className="flex min-h-56 flex-col justify-center rounded-2xl bg-raised/25 px-6">
                       <Github size={25} className="text-ink-secondary" />
                       <h3 className="mt-3 text-[14px] font-medium text-ink">Load from GitHub</h3>
-                      <p className="mt-1 text-[12.5px] leading-relaxed text-ink-secondary">Paste a public repo or a direct team JSON link.</p>
+                      <p className="mt-1 text-[13px] leading-relaxed text-ink-secondary">Paste a public repo or a direct team JSON link.</p>
                       <div className="mt-4 flex gap-2">
                         <input
                           value={githubUrl}
@@ -717,14 +723,14 @@ export function TeamLibraryPanel({
                       </div>
                     </div>
                   </div>
-                  {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+                  {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">{error}</div>}
                 </div>
               )}
 
               {tab === "scout" && (
                 <div>
                   <div className="mb-3 text-[12px] font-medium text-ink-secondary">Start from a project folder</div>
-                  <p className="max-w-2xl text-[12.5px] leading-relaxed text-ink-secondary">
+                  <p className="max-w-2xl text-[13px] leading-relaxed text-ink-secondary">
                     Point the scout at a folder. It reads what&apos;s in there — README, dependencies, layout — and
                     suggests a team for it. Nothing is created until you say so.
                   </p>
@@ -762,12 +768,12 @@ export function TeamLibraryPanel({
                       <div className="rounded-2xl bg-raised/25 px-5 py-4">
                         <div className="text-[15px] font-semibold text-ink">{scouted.profile.name}</div>
                         {scouted.profile.summary && (
-                          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-secondary">{scouted.profile.summary}</p>
+                          <p className="mt-1 text-[13px] leading-relaxed text-ink-secondary">{scouted.profile.summary}</p>
                         )}
                         {scouted.profile.stacks.length > 0 && (
                           <div className="mt-2.5 flex flex-wrap gap-1.5">
                             {scouted.profile.stacks.map((stack) => (
-                              <span key={stack} className="rounded-full bg-raised px-2.5 py-1 text-[11.5px] text-ink-secondary">
+                              <span key={stack} className="rounded-full bg-raised px-2.5 py-1 text-[12px] text-ink-secondary">
                                 {stack}
                               </span>
                             ))}
@@ -777,11 +783,9 @@ export function TeamLibraryPanel({
 
                       <div className="mt-5 text-[12px] font-medium text-ink-secondary">Suggested team</div>
                       <div className="mt-1 grid grid-cols-1 gap-x-10 md:grid-cols-2">
-                        {scouted.suggestion.manifest.team.members.map((member, index) => (
+                        {scouted.suggestion.manifest.team.members.map((member) => (
                           <div key={member.key} className="flex min-h-[64px] items-center gap-3 border-b border-hairline/35 px-1 py-3">
-                            <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-semibold", TEAM_GLYPHS[index % TEAM_GLYPHS.length])}>
-                              {member.name.slice(0, 1).toUpperCase()}
-                            </div>
+                            <MemberMascot name={member.name} color={member.appearance?.color} />
                             <div className="min-w-0">
                               <div className="truncate text-[14px] font-medium text-ink">
                                 {member.name} <span className="font-normal text-ink-secondary">· {member.title}</span>
@@ -815,7 +819,7 @@ export function TeamLibraryPanel({
                                     className="size-4 accent-accent"
                                   />
                                   <div className="min-w-0 flex-1">
-                                    <div className="truncate text-[13.5px] font-medium text-ink">
+                                    <div className="truncate text-[14px] font-medium text-ink">
                                       {candidate.name}
                                       {candidate.category && <span className="font-normal text-ink-secondary"> · {candidate.category}</span>}
                                     </div>
@@ -848,7 +852,7 @@ export function TeamLibraryPanel({
                         <button
                           onClick={() => void createProject()}
                           disabled={creating}
-                          className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13.5px] font-medium text-white hover:bg-accent/90 disabled:opacity-60"
+                          className="flex shrink-0 items-center justify-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[14px] font-medium text-white hover:bg-accent/90 disabled:opacity-60"
                         >
                           {creating && <Loader2 size={15} className="animate-spin" />}
                           {creating ? "Creating…" : "Create group chat"}
@@ -859,7 +863,7 @@ export function TeamLibraryPanel({
                       </p>
                     </div>
                   )}
-                  {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+                  {error && <div role="alert" className="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-[13px] text-danger">{error}</div>}
                 </div>
               )}
             </div>

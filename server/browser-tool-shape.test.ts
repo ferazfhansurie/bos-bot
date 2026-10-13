@@ -7,7 +7,7 @@ const snapshotTool = {
   inputSchema: {
     type: "object", additionalProperties: false,
     properties: {
-      interactive: { type: "boolean", default: true }, compact: { type: "boolean", default: false }, depth: { type: "integer" }, selector: { type: "string" },
+      headed:{type:"boolean"},headless:{type:"boolean"}, interactive: { type: "boolean", default: true }, compact: { type: "boolean", default: false }, depth: { type: "integer" }, selector: { type: "string" },
       session: { type: "string" }, namespace: { type: "string" }, extraArgs: { type: "array" }, caCert: { type: "string" }, clearCaCert: { type: "boolean" },
       allowedDomains: { type: "array" }, idleTimeout: { type: "string" }, timeoutMs: { type: "integer" }, restore: { type: "boolean" },
       restoreCheckFn: { type: "string" }, restoreCheckText: { type: "string" }, restoreCheckUrl: { type: "string" }, restoreSave: { type: "string" },
@@ -32,7 +32,7 @@ describe("browser tool shaping", () => {
   it("drops harness-owned arguments from a call and leaves ordinary calls identical", () => {
     const ordinary = { name: "agent_browser_click", arguments: { ref: "@e3" } };
     expect(stripHarnessOwnedArguments(ordinary)).toBe(ordinary);
-    expect(stripHarnessOwnedArguments({ name: "agent_browser_open", arguments: { url: "https://example.com", session: "other-bot", extraArgs: ["--remote-debugging-port=9222"], caCert: "/tmp/x.pem" } }))
+    expect(stripHarnessOwnedArguments({ name: "agent_browser_open", arguments: { url: "https://example.com", headed:true,headless:false,session: "other-bot", extraArgs: ["--remote-debugging-port=9222"], caCert: "/tmp/x.pem" } }))
       .toEqual({ name: "agent_browser_open", arguments: { url: "https://example.com" } });
     expect(stripHarnessOwnedArguments({ name: "agent_browser_close" })).toEqual({ name: "agent_browser_close" });
   });

@@ -4,15 +4,13 @@
 // dist-server/whatsapp-wwebjs.js with whatsapp-web.js + puppeteer inlined —
 // the packaged app ships no node_modules.
 //
-// READ-ONLY. The raw whatsapp-web.js Client never leaves this function's
-// closure. What is returned is a three-method object (initialize, getState,
-// destroy) and incoming messages are copied into plain CapturedMessage
-// records before they leave, so no caller can ever reach the Message/Chat
-// methods that write to the account. Do not add a passthrough here: the
-// no-send test in whatsapp-native.test.ts scans this file.
+// The raw Client stays in this closure. Capture emits plain records; history
+// and replies expose narrow operations with account and live-authorization
+// checks. Replies are reachable only through the owner-configured server gate.
 import wwebjs from "whatsapp-web.js";
 
 import { captureFields, serializedWid } from "./whatsapp-capture.ts";
+import { historyStage, WhatsAppHistoryError } from "./whatsapp-history.ts";
 import type {
   CapturedMessage,
   ReadOnlyClientHandlers,
@@ -21,6 +19,8 @@ import type {
 } from "./whatsapp-types.ts";
 
 const { Client, LocalAuth } = wwebjs;
+type HistoryChat = Pick<wwebjs.Chat, "id" | "name" | "fetchMessages" | "syncHistory">;
+const RuntimeChat = (wwebjs as unknown as { Chat: new (client: wwebjs.Client, data: unknown) => HistoryChat }).Chat;
 
 const CHAT_NAME_TTL_MS = 10 * 60_000;
 /** a chat lookup that takes longer than this stores the message without a name */
@@ -70,6 +70,7 @@ export function createReadOnlyClient(
   });
 
   const chatNames = new Map<string, { name: string | null; chatId: string; at: number }>();
+  const historyImportedBefore = new Map<string, number>();
   async function chatOf(message: RawMessage, fallbackId: string): Promise<{ chatId: string; chatName: string | null }> {
     const cached = chatNames.get(fallbackId);
     if (cached && Date.now() - cached.at < CHAT_NAME_TTL_MS) return { chatId: cached.chatId, chatName: cached.name };
@@ -93,14 +94,41 @@ export function createReadOnlyClient(
     }
   }
 
-  async function capture(message: RawMessage): Promise<CapturedMessage | null> {
+  async function capture(message: RawMessage, knownChat?: { chatId: string; chatName: string | null }): Promise<CapturedMessage | null> {
+    const accountId = serializedWid(client.info?.wid);
     const fields = captureFields(message);
     if (fields.skip !== null) {
       if (!fields.expected) handlers.onDropped(fields.skip);
       return null;
     }
-    const { chatId, chatName } = await chatOf(message, fields.fallbackChatId);
-    return { ...fields.message, chatId, chatName };
+    if (knownChat && fields.fallbackChatId !== knownChat.chatId) return null;
+    const { chatId, chatName } = knownChat ?? await chatOf(message, fields.fallbackChatId);
+    if (accountId !== serializedWid(client.info?.wid)) return null;
+    return { ...fields.message, chatId, chatName, accountId, ...(fields.message.timestamp <= (historyImportedBefore.get(chatId) ?? 0) ? { importedHistory: true } : {}) };
+  }
+
+  async function historyChatFor(chatId: string): Promise<HistoryChat> {
+    try {
+      const chat = await historyStage("chat_lookup", () => client.getChatById(chatId));
+      if (!chat || serializedWid(chat.id) !== chatId) throw new WhatsAppHistoryError(502, "chat_lookup");
+      return chat;
+    }
+    catch (error) {
+      // wwebjs 1.34.7 getChatModel queries lastReceivedKey._serialized;
+      // newer WA uses $1, causing IndexedDB get(undefined). The SDK's own
+      // fetchMessages uses getAsModel:false and avoids this metadata path.
+      // Read only the requested chat's id/title and use the exported SDK
+      // Chat methods; no injected model mutation or all-chat enumeration.
+      const page = client.pupPage;
+      if (!page) throw error;
+      const data = await historyStage("history_chat_lookup", () => page.evaluate(`(async () => {
+        const chat = await window.WWebJS.getChat(${JSON.stringify(chatId)}, { getAsModel: false });
+        if (!chat) return null;
+        return { id: { _serialized: chat.id._serialized }, formattedTitle: chat.formattedTitle || null };
+      })()`)) as { id: { _serialized: string }; formattedTitle: string | null } | null;
+      if (!data || serializedWid(data.id) !== chatId) throw new WhatsAppHistoryError(403, "account_or_scope_changed");
+      return new RuntimeChat(client, data);
+    }
   }
 
   // any of these means whatsapp-web.js's auth flow is moving on its own
@@ -153,6 +181,39 @@ export function createReadOnlyClient(
   }
 
   return {
+    history: {
+      accountId: () => serializedWid(client.info?.wid) || null,
+      sync: async (chatId, accountId, authorized) => {
+        if (serializedWid(client.info?.wid) !== accountId || !authorized()) throw new WhatsAppHistoryError(403, "account_or_scope_changed");
+        const chat = await historyChatFor(chatId);
+        if (serializedWid(chat.id) !== chatId || serializedWid(client.info?.wid) !== accountId || !authorized()) throw new WhatsAppHistoryError(403, "account_or_scope_changed");
+        // Loading earlier messages can emit message_create. Capture them,
+        // but suppress event-driven replies for messages predating the load.
+        historyImportedBefore.set(chatId, Date.now() / 1000);
+        // A peer-history request can be unsupported even while fetching the
+        // existing chat works. Still recover available history, honestly.
+        let requested = false;
+        let warning: string | undefined;
+        try { requested = await chat.syncHistory(); }
+        catch { warning = "peer_history_request_failed"; }
+        if (serializedWid(client.info?.wid) !== accountId || !authorized()) throw new WhatsAppHistoryError(403, "account_or_scope_changed");
+        const raw = await historyStage("fetch_messages", () => chat.fetchMessages({ limit: 200 }));
+        const messages = (await historyStage("capture_messages", () => Promise.all(raw.map(message => capture(message, { chatId, chatName: chat.name || null }))))).filter((m): m is CapturedMessage => !!m);
+        if (serializedWid(client.info?.wid) !== accountId || !authorized()) throw new WhatsAppHistoryError(403, "account_or_scope_changed");
+        return { requested, messages, ...(warning ? { warning } : {}) };
+      },
+    },
+    replies: {
+      accountId: () => serializedWid(client.info?.wid) || null,
+      reply: async (input, authorized) => {
+        if (serializedWid(client.info?.wid) !== input.account_id) throw new Error("WhatsApp account changed");
+        const recipient = input.chat_id.endsWith("@c.us") ? await client.getNumberId(input.chat_id.split("@")[0]) : (await client.getChatById(input.chat_id)).id;
+        if (await client.getState() !== "CONNECTED" || serializedWid(recipient) !== input.chat_id || serializedWid(client.info?.wid) !== input.account_id) throw new Error("WhatsApp account or recipient mismatch");
+        if (!authorized()) throw new Error("WhatsApp reply authorization revoked");
+        const sent = await client.sendMessage(input.chat_id, input.text, { sendSeen: false, quotedMessageId: input.message_id });
+        return serializedWid(sent.id) ?? "";
+      },
+    },
     initialize: async () => {
       await client.initialize();
       await resumeIfAlreadySynced();

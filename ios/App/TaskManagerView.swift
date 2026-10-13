@@ -122,6 +122,7 @@ struct TaskManagerView: View {
                 ToolbarItem(placement: .primaryAction) {
                     if !isSelecting {
                         Button("New thread", systemImage: "plus") {
+                            Haptics.selection()
                             perform { await create() }
                         }
                         .disabled(isMutating || (!current.isBot && current.busy))
@@ -131,6 +132,9 @@ struct TaskManagerView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if isSelecting { bulkDeleteBar }
+            }
+            .overlay {
+                if let name = session.creatingThreadName { NewThreadSkeleton(name: name) }
             }
             .overlay(alignment: .bottom) {
                 if isMutating {

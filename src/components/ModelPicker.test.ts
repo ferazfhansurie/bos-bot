@@ -331,3 +331,11 @@ describe("Claude provider and account selection", () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(personal);
   });
 });
+
+it('never borrows a Mac account label or effort catalog for a linked bot',()=>{
+ fixture.instances=[{...engine(['low','high']),displayName:'Mac personal account'}];
+ const linked={...bot(),remote:{homeId:'remote',homeName:'Fixture laptop',ownerName:'Owner',online:true}};
+ const html=renderToStaticMarkup(createElement(ModelPicker,{bot:linked}));expect(html).not.toContain('Mac personal account');
+ expect(renderToStaticMarkup(createElement(EffortRow,{bot:linked}))).toBe('');
+ expect(renderToStaticMarkup(createElement(EffortRow,{bot:linked,instance:{...engine(['low']),displayName:'Laptop personal'}}))).toContain('Low');
+});

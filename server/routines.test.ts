@@ -1400,6 +1400,20 @@ describe("RoutineManager", () => {
     expect(h.manager.runForThread("thread-1")).toMatchObject({ status: "completed", output: "Reviewed the teammate's result.", cost: 0.05 });
   });
 
+  it("marks a run that had nothing to report as quiet, with no output to surface", async () => {
+    const h = harness();
+    const routine = h.manager.create({
+      name: "PR watch", prompt: "Check the PR queue; stay quiet if nothing changed", botId: "maus-1",
+      schedule: { type: "daily", time: "09:00", weekdays: [1] },
+    });
+    h.manager.runNow(routine.id);
+    await h.manager.tick();
+    const base = { eventId: "quiet", provider: "fake", threadId: "thread-1", createdAt: new Date().toISOString() };
+    h.manager.handleRuntimeEvent({ ...base, type: "item.completed", itemType: "assistant_text", text: "NOTHING_TO_REPORT" });
+    h.manager.handleRuntimeEvent({ ...base, type: "turn.completed", ok: true });
+    expect(h.manager.runForThread("thread-1")).toMatchObject({ status: "completed", quiet: true, output: undefined });
+  });
+
   it("catches up at most the latest interval occurrence without a backlog", async () => {
     const h = harness();
     const anchorAt = new Date(2026, 7, 17, 8, 5).getTime();

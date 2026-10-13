@@ -18,26 +18,34 @@ const render = (props: Partial<Omit<Props, "children">> = {}) =>
   );
 
 describe("MessageActions", () => {
-  it("shows one collapsed handle with the controls tucked into a zero-width tray", () => {
-    const html = render();
+  it("shows grok's hover row: react, reply and a menu holding the rest", () => {
+    const html = render({ onReply: () => {}, onReact: () => {} });
+    expect(html).toContain('aria-label="React"');
+    expect(html).toContain('aria-label="Reply to message"');
     expect(html).toContain('aria-label="Message actions"');
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).toContain("grid-cols-[0fr]");
-    expect(html).toContain("group-hover/actions:grid-cols-[1fr]");
-    expect(html).toContain(">copy<");
-    expect(html).toContain(">reply<");
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain("opacity-0");
+    expect(html).toContain("group-hover:opacity-100");
+    // the rest sits in the menu, hidden until asked for
+    expect(html).toMatch(/role="menu"[^>]*hidden=""[\s\S]*>copy</);
     expect(html).not.toContain('data-open="true"');
   });
 
-  it("stays open while a control must remain reachable", () => {
-    const html = render({ forceOpen: true });
-    expect(html).toContain('aria-expanded="true"');
-    expect(html).toContain('data-open="true"');
-    expect(html).toContain("grid-cols-[1fr]");
-    expect(html).not.toContain("grid-cols-[0fr]");
+  it("drops react and reply when the message cannot take them", () => {
+    const html = render();
+    expect(html).not.toContain('aria-label="React"');
+    expect(html).toContain('aria-label="Message actions"');
   });
 
-  it("mirrors the tray on the user side so it slides away from the bubble", () => {
+  it("stays visible with its controls inline while one must remain reachable", () => {
+    const html = render({ forceOpen: true });
+    expect(html).toContain('data-open="true"');
+    expect(html).toContain(">copy<");
+    expect(html).not.toContain('role="menu"');
+    expect(html).not.toContain("opacity-0");
+  });
+
+  it("mirrors the row on the user side so react stays nearest the bubble", () => {
     expect(render({ side: "user" })).toContain("flex-row-reverse");
     expect(render({ side: "bot" })).not.toContain("flex-row-reverse");
   });

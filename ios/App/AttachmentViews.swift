@@ -3,6 +3,7 @@ import ImageIO
 import QuickLook
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 private struct SendableAttachmentImage: @unchecked Sendable {
     let value: CGImage?
@@ -53,7 +54,7 @@ struct PendingAttachmentChip: View {
                 Text(attachment.name)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
-                Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file))
+                Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.bytes), countStyle: .file))
                     .font(.system(size: 11))
                     .foregroundStyle(Color.secondary)
             }
@@ -235,10 +236,22 @@ struct TranscriptAttachmentView: View {
         .accessibilityHint(thumbnail == nil ? "Loads the image preview" : "Opens the image full screen")
     }
 
+    private var fileType: UTType? { UTType(filenameExtension: (attachment.name as NSString).pathExtension) }
+    private var fileSymbol: String {
+        if fileType?.conforms(to: .movie) == true { return "play.rectangle.fill" }
+        if fileType?.conforms(to: .audio) == true { return "waveform" }
+        if fileType?.conforms(to: .pdf) == true { return "doc.richtext" }
+        return "doc.fill"
+    }
+    private var fileAction: String {
+        fileType?.conforms(to: .movie) == true || fileType?.conforms(to: .audio) == true
+            ? "Tap to play" : "Tap to preview"
+    }
+
     private var fileCard: some View {
         Button(action: openPreview) {
             HStack(spacing: 10) {
-                Image(systemName: "doc.fill")
+                Image(systemName: fileSymbol)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(foreground)
                     .frame(width: 38, height: 38)
@@ -249,7 +262,7 @@ struct TranscriptAttachmentView: View {
                     Text(attachment.name)
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
-                    Text(previewLoading ? "Opening…" : "Tap to preview")
+                    Text(previewLoading ? "Opening…" : fileAction)
                         .font(.system(size: 11))
                         .foregroundStyle(foreground.opacity(0.68))
                 }
@@ -280,7 +293,7 @@ struct TranscriptAttachmentView: View {
         .buttonStyle(.plain)
         .disabled(previewLoading)
         .accessibilityLabel("File: \(attachment.name)")
-        .accessibilityHint("Opens a preview")
+        .accessibilityHint(fileAction)
     }
 
     @MainActor
@@ -434,9 +447,16 @@ struct FilePreviewItem: Identifiable {
 
     var text: String {
         let limit = 2 * 1_024 * 1_024
-        let visible = data.prefix(limit)
+        let payload: Data
+        let total: Int
+        if data.isEmpty, let handle = try? FileHandle(forReadingFrom: url) {
+            defer { try? handle.close() }
+            payload = (try? handle.read(upToCount: limit)) ?? Data()
+            total = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? payload.count
+        } else { payload = Data(data.prefix(limit)); total = data.count }
+        let visible = payload.prefix(limit)
         var decoded = String(decoding: visible, as: UTF8.self)
-        if data.count > limit {
+        if total > limit {
             decoded += "\n\n— Preview truncated. Share or open the file to read the rest. —"
         }
         return decoded

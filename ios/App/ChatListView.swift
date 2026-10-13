@@ -39,7 +39,6 @@ struct ChatListView: View {
     @State private var collapsedFolders = Set<String>()
     @State private var creatingThreads = Set<String>()
     @State private var managingThreads: Chat?
-    @State private var showingJobs = false
     @State private var sharedMe: SharedMe?
     @State private var sharedContacts: [SharedContact] = []
     @State private var sharedRooms: [SharedRoomSummary] = []
@@ -80,6 +79,12 @@ struct ChatListView: View {
         let _ = MainThreadProbe.shared.listBody()
 #endif
         layout
+            .overlay {
+                if path.isEmpty, let name = session.creatingThreadName {
+                    NewThreadSkeleton(name: name).transition(.opacity)
+                }
+            }
+            .onChange(of: path.count) { _, _ in Haptics.selection() }
             .task(id: session.connection?.id) {
                 pinnedChats = PinnedChats.load(scope: session.connection?.id ?? "")
                 while !Task.isCancelled {
@@ -237,12 +242,6 @@ struct ChatListView: View {
                 Button("OK", role: .cancel) { botRemoveError = nil }
             } message: {
                 Text(botRemoveError ?? "")
-            }
-            .sheet(isPresented: $showingJobs) {
-                JobInboxView { chat in
-                    showingJobs = false
-                    open(chat)
-                }
             }
             .sheet(item: $managingThreads) { chat in
                 TaskManagerView(chat: chat) { threadId in
@@ -420,12 +419,10 @@ struct ChatListView: View {
                                 .padding(.top, 14)
                                 .padding(.bottom, 4)
                         } else if searching {
-                            ProgressView()
-                                .controlSize(.small)
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 24)
+                            RosterSkeleton().padding(.horizontal, 20)
                         }
 
+                        if chats.isEmpty && session.status == .connecting { RosterSkeleton().padding(.horizontal, 20) }
                         botRows(chats)
                     }
                 }
@@ -433,9 +430,11 @@ struct ChatListView: View {
             }
             .coordinateSpace(.named("roster"))
             .bosRefreshable {
-                await session.refresh(); await refreshShared()
+                async let shared: Void = refreshShared()
+                await session.refreshHomes()
+                await shared
 #if DEBUG
-                if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") { try? await Task.sleep(for: .seconds(3)) }
+                if ProcessInfo.processInfo.arguments.contains("-pull-refresh-preview") || ProcessInfo.processInfo.arguments.contains("-refresh-ui-test") { try? await Task.sleep(for: .seconds(5)) }
 #endif
             }
             .environment(\.listFaces, listFaces)
@@ -475,7 +474,7 @@ struct ChatListView: View {
                         } description: {
                             Text("Keep BOS open on your Mac. Your chats will appear when the connection is ready.")
                         } actions: {
-                            Button("Try again") { Task { await session.refresh(); await refreshShared() } }
+                            Button("Try again") { Task { await session.refreshHomes(); await refreshShared() } }
                                 .buttonStyle(.bordered)
                         }
                     } else {
@@ -700,20 +699,6 @@ struct ChatListView: View {
         if conversationFilter != "all" && shownConversations.isEmpty {
             Text("No conversations match this filter.")
                 .foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 12)
-        }
-        if conversationFilter == "all" {
-            Button {
-                Haptics.selection()
-                showingJobs = true
-            } label: {
-                Label("Jobs", systemImage: "checklist")
-                    .font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 20)
-            .accessibilityIdentifier("job-inbox-entry")
         }
         if conversationFilter == "all" && !attention.isEmpty {
             sectionLabel(Text("Needs attention"))
@@ -1210,11 +1195,17 @@ struct ChatListView: View {
 
     /// A home that is not connected right now shows its bots asleep.
     private static func face(_ chat: Chat, in home: Session) -> MausState {
-        home.status == .live ? MausState.forChat(chat, in: home.state) : .sleeping
+        switch BotConnectionPhase.resolve(refreshing: home.isRefreshing, connecting: home.status == .connecting,
+                                          live: home.status == .live) {
+        case .checking: return .loading
+        case .awake: return MausState.forChat(chat, in: home.state)
+        case .asleep: return .sleeping
+        }
     }
 
     private static func homeLabel(_ home: Session) -> String {
-        home.status == .live ? home.homeLabel : home.homeLabel + " · asleep"
+        if home.isRefreshing || home.status == .connecting { return home.homeLabel + " · checking" }
+        return home.status == .live ? home.homeLabel : home.homeLabel + " · asleep"
     }
 
     @ViewBuilder
@@ -1894,6 +1885,10 @@ struct StatusBanner: View {
     var body: some View {
         Group {
             switch session.status {
+            case _ where session.isRefreshing:
+                // The refresh control already owns this feedback. Inserting a
+                // banner here changes the scroll inset under the user's finger.
+                EmptyView()
             case .live, .unpaired:
                 EmptyView()
             case .connecting where quietWhenAnotherHomeIsLive && session.anotherHomeIsLive,
