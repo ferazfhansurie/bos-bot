@@ -44,8 +44,15 @@ jobs:
       - run: pnpm build:cua:win
       # Keep the reviewed portable bundles; host-dependent esbuild labels
       # must not dirty the exact source commit before the package gate.
-      - run: git restore electron/vendor/electron-updater.cjs electron/vendor/update-yaml.cjs
+      - run: git restore electron/vendor
       - run: node scripts/release-contract.mjs package live win
+      - name: Use the reviewed fixture-isolation verifier
+        shell: bash
+        env:
+          VERIFIER_SHA: ${{ github.sha }}
+        run: |
+          git fetch --depth=1 origin "$VERIFIER_SHA"
+          git show "$VERIFIER_SHA:scripts/smoke-browser-bundle.mjs" > scripts/smoke-browser-bundle.mjs
       - name: "Gate: bundled browser works with an empty home"
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
       - name: "Gate: packaged Windows server discovers its browser"
@@ -83,6 +90,7 @@ jobs:
         run: |
           v=$(node -p "require('./package.json').version")
           cp "release/BOS-Bot-$v-setup.exe" release/BOS-Bot-setup.exe
+      - run: git restore scripts/smoke-browser-bundle.mjs
       - name: Verify packaged release contract
         run: node scripts/release-contract.mjs packaged live win "release/win-unpacked/resources"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
