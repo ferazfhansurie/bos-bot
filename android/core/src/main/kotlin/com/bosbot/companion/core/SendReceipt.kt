@@ -29,7 +29,7 @@ sealed interface SendReceipt {
      * In the transcript now. [steered] means it went into a turn that was
      * already running rather than starting one.
      */
-    data class Sent(val threadId: String?, val steered: Boolean) : SendReceipt
+    data class Sent(val threadId: String?, val steered: Boolean, val delivery: String? = null, val interrupted: Boolean = false, val outcomeUnknown: Boolean = false, val message: Message? = null) : SendReceipt
 
     /** Held in the harness's steer queue until the current turn settles. */
     data class Queued(val queueId: String, val threadId: String) : SendReceipt
@@ -46,12 +46,17 @@ data class SendReceiptBody(
     val queued: Boolean? = null,
     val queueId: String? = null,
     val steered: Boolean? = null,
+    val steerDelivery: String? = null,
+    val delivery: String? = null,
+    val interrupted: Boolean? = null,
+    val outcomeUnknown: Boolean? = null,
+    val message: Message? = null,
 ) {
     fun receipt(): SendReceipt =
         if (queued == true && queueId != null && threadId != null) {
             SendReceipt.Queued(queueId, threadId)
         } else {
-            SendReceipt.Sent(threadId, steered == true)
+            SendReceipt.Sent(threadId, steered == true, steerDelivery ?: delivery, interrupted == true, outcomeUnknown == true, message)
         }
 }
 
@@ -76,3 +81,40 @@ internal fun QueuedSend.toJsonObject(): JsonObject = buildJsonObject {
     put("text", text)
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+
+enum class MessagePriority { QUEUE, BLOCK }
+enum class SteeringStatus { SENT_DURING_REPLY, ACCEPTED_DURING_REPLY, UNCERTAIN }
+val Message.steeringStatus: SteeringStatus?
+    get() = if (role != Message.Role.USER) null else when (steerDelivery) {
+        "transport_written" -> SteeringStatus.SENT_DURING_REPLY
+        "provider_accepted" -> SteeringStatus.ACCEPTED_DURING_REPLY
+        "outcome_unknown" -> SteeringStatus.UNCERTAIN
+        else -> if (steered == true) SteeringStatus.SENT_DURING_REPLY else null
+    }
+
+@Serializable
+data class SteerReceipt(
+    val steered: Boolean? = null,
+    val interrupted: Boolean? = null,
+    val outcomeUnknown: Boolean? = null,
+    val queued: Boolean? = null,
+    val reason: String? = null,
+    val threadId: String? = null,
+    val messages: List<Message>? = null,
+    val queueIds: List<String>? = null,
+    val delivery: String? = null,
+) {
+    fun apply(state: CompanionState, expectedThreadId: String): CompanionState {
+        if (threadId != expectedThreadId || !(steered == true || outcomeUnknown == true ||
+                (interrupted == true && queued != true))) return state
+        var next = state
+        messages.orEmpty().forEach { message ->
+            next = next.apply(Frame.Message(expectedThreadId, message.copy(
+                steerDelivery = message.steerDelivery ?: if (outcomeUnknown == true) "outcome_unknown" else delivery,
+            )))
+        }
+        queueIds.orEmpty().forEach { next = next.consumeQueued(it, expectedThreadId) }
+        return next
+    }
+}

@@ -363,7 +363,7 @@ private fun ShareSheetContent(
             ) {
                 HeaderBackButton(onBack = { if (canCancel) cancel() })
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Send to BOS Bot", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text(localized("Send to BOS Bot"), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                     Text(headerSubtitle(phase), color = secondaryTint, fontSize = 13.sp)
                 }
                 if (phase == ShareSheetPhase.SENDING) {
@@ -384,7 +384,7 @@ private fun ShareSheetContent(
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("SHARING", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
+                            Text(localized("SHARING"), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
                             SharePolicy.previewChip(preview).forEach { label ->
                                 Text(label, fontSize = 15.sp)
                             }
@@ -400,7 +400,7 @@ private fun ShareSheetContent(
                 }
 
                 if (computers.isNotEmpty()) {
-                    Text("COMPUTER", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
+                    Text(localized("COMPUTER"), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
                     TextButton(
                         onClick = { choosingComputer = true },
                         enabled = (phase == ShareSheetPhase.READY || phase == ShareSheetPhase.FAILED) && computers.size > 1,
@@ -414,7 +414,7 @@ private fun ShareSheetContent(
                 }
 
                 if (destinations.isNotEmpty()) {
-                    Text("SEND TO", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
+                    Text(localized("SEND TO"), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
                     TextButton(
                         onClick = { choosingDestination = true },
                         enabled = canEdit,
@@ -427,7 +427,7 @@ private fun ShareSheetContent(
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 if (selectedDestinationId != null && selectedDestinationId == rememberedDestinationId) {
-                                    Text("LAST USED", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                                    Text(localized("LAST USED"), fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                                 }
                             }
                             selectedDestination?.subtitle?.let {
@@ -444,8 +444,8 @@ private fun ShareSheetContent(
                             instruction = it
                             pendingDelivery = null
                         },
-                        label = { Text("Instruction (optional)") },
-                        placeholder = { Text("For example: summarize this and list the next steps") },
+                        label = { Text(localized("Instruction (optional)")) },
+                        placeholder = { Text(localized("For example: summarize this and list the next steps")) },
                         enabled = canEdit,
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth(),
@@ -463,7 +463,7 @@ private fun ShareSheetContent(
                 if (phase == ShareSheetPhase.LOADING && preview.isEmpty) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                        Text("Reading shared content", color = secondaryTint)
+                        Text(localized("Reading shared content"), color = secondaryTint)
                     }
                 }
             }
@@ -480,7 +480,7 @@ private fun ShareSheetContent(
                 Button(
                     onClick = ::send,
                     enabled = canSend,
-                ) { Text("Send") }
+                ) { Text(localized("Send")) }
             }
         }
     }
@@ -488,7 +488,7 @@ private fun ShareSheetContent(
     if (choosingComputer) {
         AlertDialog(
             onDismissRequest = { choosingComputer = false },
-            title = { Text("Computer") },
+            title = { Text(localized("Computer")) },
             text = {
                 Column {
                     computers.forEach { computer ->
@@ -520,14 +520,14 @@ private fun ShareSheetContent(
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { choosingComputer = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { choosingComputer = false }) { Text(localized("Cancel")) } },
         )
     }
 
     if (choosingDestination) {
         AlertDialog(
             onDismissRequest = { choosingDestination = false },
-            title = { Text("Send to") },
+            title = { Text(localized("Send to")) },
             text = {
                 Column {
                     destinations.forEach { destination ->
@@ -548,7 +548,7 @@ private fun ShareSheetContent(
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { choosingDestination = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { choosingDestination = false }) { Text(localized("Cancel")) } },
         )
     }
 }

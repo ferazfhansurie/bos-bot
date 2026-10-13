@@ -59,7 +59,8 @@ class MultiComputerSessionTest {
         assertEquals(pro.id, connections.registry.activeConnectionId)
         assertEquals("air-token", tokens.tokens[air.id])
         assertEquals("pro-token", tokens.tokens[pro.id])
-        assertEquals(pro.id to "pro-token", dialed.last())
+        assertTrue(pro.id to "pro-token" in dialed)
+        assertTrue(dialed.all { (id, token) -> token == if (id == air.id) "air-token" else "pro-token" })
 
         session.forgetConnection(pro.id)
         runCurrent()

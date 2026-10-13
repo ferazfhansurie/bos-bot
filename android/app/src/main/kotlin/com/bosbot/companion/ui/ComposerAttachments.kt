@@ -74,7 +74,7 @@ object AttachmentImportRules {
 
     /** Whatever the 50 MB total has left after what is already attached. */
     fun remainingBytes(attached: List<PendingMessageAttachment>): Int =
-        max(0, AttachmentPolicy.MAXIMUM_TOTAL_BYTES - attached.sumOf { it.data.size })
+        max(0, AttachmentPolicy.MAXIMUM_TOTAL_BYTES - attached.sumOf { it.bytes }.toInt())
 
     /** The most one more item of this kind may read: its own cap, or the total's remainder. */
     fun readLimit(kind: PendingMessageAttachment.Kind, remainingBytes: Int): Int {
@@ -112,7 +112,7 @@ object AttachmentImport {
     private const val PHOTO_MAX_PIXELS = 3_072
 
     /** A document (or an image) from the system file picker. */
-    fun readDocument(resolver: ContentResolver, uri: Uri, remainingBytes: Int): PendingMessageAttachment {
+    fun readDocument(resolver: ContentResolver, uri: Uri, remainingBytes: Int, cacheDirectory: java.io.File? = null): PendingMessageAttachment {
         val name = safeName(displayName(resolver, uri) ?: "that file")
         val mime = AttachmentPolicy.normalizedMime(
             resolver.getType(uri)?.takeIf { it.isNotBlank() && it != "*/*" }
@@ -120,6 +120,26 @@ object AttachmentImport {
                 ?: "application/octet-stream",
         )
         val kind = AttachmentPolicy.kindForMime(mime) ?: throw AttachmentImportException(AttachmentImportRules.unsupported(name))
+        if (kind == PendingMessageAttachment.Kind.FILE && cacheDirectory != null) {
+            val limit = min(90 * 1024 * 1024, remainingBytes)
+            cacheDirectory.mkdirs()
+            val file = java.io.File.createTempFile("attachment-", ".media", cacheDirectory)
+            try {
+                var count = 0L
+                resolver.openInputStream(uri)?.use { source -> file.outputStream().use { destination ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = source.read(buffer)
+                        if (read < 0) break
+                        count += read
+                        if (count > limit) throw AttachmentImportException(AttachmentImportRules.tooLarge(name, limit))
+                        destination.write(buffer, 0, read)
+                    }
+                } } ?: throw AttachmentImportException(AttachmentImportRules.unreadable(name))
+                if (count == 0L) throw AttachmentImportException(AttachmentImportRules.unreadable(name))
+                return PendingMessageAttachment(name = name, mime = mime, kind = kind, file = file)
+            } catch (error: Exception) { file.delete(); throw error }
+        }
         val limit = AttachmentImportRules.readLimit(kind, remainingBytes)
         val data = readBounded(resolver, uri, limit)
             ?: throw AttachmentImportException(AttachmentImportRules.tooLarge(name, limit))
@@ -254,7 +274,7 @@ internal fun PendingAttachmentChip(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = AttachmentImportRules.formatBytes(attachment.data.size.toLong()),
+                text = AttachmentImportRules.formatBytes(attachment.bytes),
                 fontSize = 11.sp,
                 color = secondaryTint,
             )

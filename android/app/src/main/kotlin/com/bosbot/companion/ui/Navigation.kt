@@ -37,6 +37,11 @@ sealed interface Destination {
 
     /** A bot's computer, watch-only. Addressed by bot id for the same reason. */
     data class Computer(val botId: String) : Destination
+    data class Browser(val botId: String, val connectionId: String? = null) : Destination
+    data class HomeChat(val connectionId: String, val target: ChatTarget) : Destination
+    data class SharedChat(val connectionId: String, val room: com.openmausbot.companion.core.SharedRoomSummary, val selfId: String, val contacts: List<com.openmausbot.companion.core.SharedContact>) : Destination
+    data class Walkie(val connectionId: String, val target: ChatTarget? = null) : Destination
+    data class VoiceCall(val target: com.openmausbot.companion.audio.VoiceCallTarget, val opener: String? = null, val consentRuntimeIdentity: Any? = null) : Destination
 
     /**
      * A bot's read-only "What this bot does" — who it is, what it does, what it
@@ -79,6 +84,23 @@ class CompanionNavigator(initial: List<Destination> = listOf(Destination.Roster)
         push(Destination.Chat(chat.target))
     }
 
+    fun openShared(connectionId: String, room: com.openmausbot.companion.core.SharedRoomSummary, selfId: String, contacts: List<com.openmausbot.companion.core.SharedContact>) { push(Destination.SharedChat(connectionId, room, selfId, contacts)) }
+    fun updateShared(from: Destination.SharedChat, room: com.openmausbot.companion.core.SharedRoomSummary) { if (current == from) stack = stack.dropLast(1) + from.copy(room = room) }
+
+    fun openHome(connectionId: String, chat: Chat) { push(Destination.HomeChat(connectionId, chat.target)) }
+    fun selectHomeTask(from: Destination.HomeChat, target: ChatTarget) {
+        if (stack.last() == from) stack = stack.dropLast(1) + from.copy(target = target)
+    }
+
+    fun browserChatTarget(botId: String, connectionId: String?): ChatTarget.Bot? = stack.asReversed().firstNotNullOfOrNull { destination ->
+        val target = when {
+            destination is Destination.HomeChat && destination.connectionId == connectionId -> destination.target
+            destination is Destination.Chat && connectionId == null -> destination.target
+            else -> null
+        }
+        (target as? ChatTarget.Bot)?.takeIf { it.botId == botId }
+    }
+
     fun pop() {
         if (canGoBack) stack = stack.dropLast(1)
     }
@@ -95,7 +117,7 @@ class CompanionNavigator(initial: List<Destination> = listOf(Destination.Roster)
      */
     fun retainsChatDraft(chatId: String): Boolean =
         stack.any { destination ->
-            destination is Destination.Chat && when (val target = destination.target) {
+            (destination is Destination.Chat || destination is Destination.HomeChat) && when (val target = if (destination is Destination.Chat) destination.target else (destination as Destination.HomeChat).target) {
                 is ChatTarget.Bot -> target.botId == chatId
                 is ChatTarget.Room -> target.roomId == chatId
             }
@@ -142,11 +164,14 @@ class CompanionNavigator(initial: List<Destination> = listOf(Destination.Roster)
         private const val CONNECTED_APPS = "connected-apps"
         private const val THREAD = "thread:"
         private const val COMPUTER = "computer:"
+        private const val HOME_CHAT = "home-chat:"
+        private const val VOICE = "voice:"
+        private const val BROWSER = "browser:"
         private const val OVERVIEW = "overview:"
         private const val BOT_CHAT = "botchat:"
         private const val ROOM_CHAT = "roomchat:"
 
-        fun encode(stack: List<Destination>): List<String> = stack.map {
+        fun encode(stack: List<Destination>): List<String> = stack.mapNotNull {
             when (it) {
                 Destination.Roster -> ROSTER
                 Destination.Settings -> SETTINGS
@@ -154,6 +179,14 @@ class CompanionNavigator(initial: List<Destination> = listOf(Destination.Roster)
                 Destination.ConnectedApps -> CONNECTED_APPS
                 is Destination.Thread -> THREAD + it.threadId
                 is Destination.Computer -> COMPUTER + it.botId
+                is Destination.Browser -> BROWSER + join(it.connectionId.orEmpty(), it.botId)
+                is Destination.HomeChat -> HOME_CHAT + join(it.connectionId, when(val target = it.target) {
+                    is ChatTarget.Bot -> BOT_CHAT + join(target.botId, target.threadId)
+                    is ChatTarget.Room -> ROOM_CHAT + join(target.roomId, target.threadId)
+                })
+                is Destination.SharedChat -> null // Re-open with current room membership and actor identity.
+                is Destination.Walkie -> null
+                is Destination.VoiceCall -> null // A restored screen never restores microphone authorization.
                 is Destination.Overview -> OVERVIEW + it.botId
                 is Destination.Chat -> when (val target = it.target) {
                     is ChatTarget.Bot -> BOT_CHAT + join(target.botId, target.threadId)
@@ -170,6 +203,16 @@ class CompanionNavigator(initial: List<Destination> = listOf(Destination.Roster)
                 it == CONNECTED_APPS -> Destination.ConnectedApps
                 it.startsWith(THREAD) -> Destination.Thread(it.removePrefix(THREAD))
                 it.startsWith(COMPUTER) -> Destination.Computer(it.removePrefix(COMPUTER))
+                it.startsWith(BROWSER) -> split(it.removePrefix(BROWSER))?.let { (home, bot) -> Destination.Browser(bot, home.takeIf(String::isNotEmpty)) }
+                it.startsWith(HOME_CHAT) -> split(it.removePrefix(HOME_CHAT))?.let { (home, body) ->
+                    val target = when {
+                        body.startsWith(BOT_CHAT) -> split(body.removePrefix(BOT_CHAT))?.let { (bot, thread) -> ChatTarget.Bot(bot, thread) }
+                        body.startsWith(ROOM_CHAT) -> split(body.removePrefix(ROOM_CHAT))?.let { (room, thread) -> ChatTarget.Room(room, thread) }
+                        else -> null
+                    }
+                    target?.let { Destination.HomeChat(home, it) }
+                }
+                it.startsWith(VOICE) -> null
                 it.startsWith(OVERVIEW) -> Destination.Overview(it.removePrefix(OVERVIEW))
                 it.startsWith(BOT_CHAT) -> split(it.removePrefix(BOT_CHAT))
                     ?.let { (owner, thread) -> Destination.Chat(ChatTarget.Bot(owner, thread)) }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +43,7 @@ internal fun BotAvatar(
     bot: Bot,
     size: Dp,
     state: MausState = MausState.IDLE,
-    animated: Boolean = true,
+    animated: Boolean = false,
     /**
      * Left null where the name is already beside the face — the row would
      * otherwise be read out twice, which is why [MausAvatar] clears its own
@@ -50,6 +51,7 @@ internal fun BotAvatar(
      */
     contentDescription: String? = null,
     modifier: Modifier = Modifier,
+    gaze: androidx.compose.ui.geometry.Offset = androidx.compose.ui.geometry.Offset.Zero,
 ) {
     val crop = bot.avatarCrop ?: AvatarCrop.MASCOT
     val path = bot.avatarUrl
@@ -96,6 +98,8 @@ internal fun BotAvatar(
         MausAvatar(
             color = bot.color,
             bodyId = bot.mascotBody,
+            eyeStyle = bot.mascotEyes ?: "glyph",
+            gaze = gaze,
             size = size,
             state = state,
             animated = animated,
@@ -110,7 +114,7 @@ internal fun ChatAvatar(
     chat: Chat,
     size: Dp,
     state: MausState = MausState.IDLE,
-    animated: Boolean = true,
+    animated: Boolean = false,
     contentDescription: String? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -123,8 +127,8 @@ internal fun ChatAvatar(
             contentDescription = contentDescription,
             modifier = modifier,
         )
-        is Chat.RoomChat -> MausAvatar(
-            color = "blue",
+        is Chat.RoomChat -> RoomAvatar(
+            room = chat.room,
             size = size,
             state = state,
             animated = animated,
@@ -152,3 +156,28 @@ internal object BotAvatarRules {
     }
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+@Composable
+private fun RoomAvatar(room: com.openmausbot.companion.core.Room, size: Dp, state: MausState, animated: Boolean, modifier: Modifier) {
+    val session = LocalCompanion.current.session
+    val connection by session.connection.collectAsState()
+    val source = connection?.id
+    var image by remember(room.avatarUrl, source) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(room.avatarUrl, source) {
+        if (source != null && room.avatarUrl != null) image = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val data = try { session.roomAvatarData(room, source) } catch (failure: Exception) { if (failure is kotlinx.coroutines.CancellationException) throw failure; null }
+        data?.let { bytes ->
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0 || bounds.outWidth > 16384 || bounds.outHeight > 16384) null
+            else {
+                var sample = 1
+                while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+            }
+        }
+        }
+    }
+    image?.let { Image(it.asImageBitmap(), null, modifier.size(size).clip(CircleShape), contentScale = ContentScale.Crop) }
+        ?: MausAvatar("blue", size = size, state = state, animated = animated, modifier = modifier)
+}

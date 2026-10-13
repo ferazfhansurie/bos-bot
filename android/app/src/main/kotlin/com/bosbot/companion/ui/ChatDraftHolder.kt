@@ -26,7 +26,7 @@ import com.openmausbot.companion.core.VolatileDraft
  * [ChatComposerDraft.saveableValue] through [ChatComposerDraft.saver].
  */
 class ChatDraftHolder {
-    class Attachments {
+    class Attachments(val scopeKey: String = "") {
         val items = mutableStateListOf<PendingMessageAttachment>()
         val preparing = mutableStateOf(false)
         val sending = mutableStateOf(false)
@@ -45,7 +45,7 @@ class ChatDraftHolder {
     }
 
     fun attachments(conversationId: String): Attachments =
-        attachments.getOrPut(conversationId) { Attachments() }
+        attachments.getOrPut(conversationId) { Attachments(conversationId) }
 
     fun clearOwner(ownerId: String) {
         owners.remove(ownerId)?.forEach(::clear)

@@ -54,7 +54,7 @@ class SessionStreamRecoveryTest {
                     withTimeout(5_000) { session.state.first { it.cursor == "stream:5" } }
                     assertEquals("primary.fixture.ts.net:${primary.port}", primary.takeRequest().getHeader("Host"))
                     val recovered = backup.takeRequest()
-                    assertEquals("/api/events?screens=off", recovered.path)
+                    assertEquals("/api/events?taskDeltas=1&screens=off", recovered.path)
                     assertEquals("Bearer fixture-token", recovered.getHeader("Authorization"))
                     assertEquals(second.url, session.connection.value?.activeEndpoint?.url)
                 } finally {

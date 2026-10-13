@@ -27,7 +27,12 @@ data class Connection(
     val allowedRouteKinds: Set<CompanionEndpointKind>? = null,
     /** Exact normalized cleartext origins shown on the pairing confirmation. */
     val allowedLocalRouteURLs: Set<String>? = null,
+    val serverEnvironmentId: String? = null,
+    val serverScopes: List<String>? = null,
 ) {
+    val canAdminister: Boolean
+        get() = serverEnvironmentId == null || serverScopes?.contains("admin") == true
+
     val baseUrl: URI?
         get() {
             activeEndpoint?.let { endpoint ->
@@ -351,6 +356,20 @@ data class PairingInvite(val connection: Connection, val credential: String) {
         private const val MAX_ENDPOINTS = 8
 
         fun parse(url: URI): PairingInvite? {
+            if (url.scheme in listOf("http", "https") && url.host != null && url.path == "/pair" && url.rawQuery == null) {
+                val fields = linkedMapOf<String, String>()
+                for (pair in url.rawFragment.orEmpty().split('&')) {
+                    val parts = pair.split('=', limit = 2)
+                    if (parts.size != 2) return null
+                    val key = decodeQuery(parts[0]) ?: return null
+                    val value = decodeQuery(parts[1]) ?: return null
+                    if (fields.put(key, value) != null) return null
+                }
+                val code = fields["code"]?.let(CompanionClient::normalizedServerCode) ?: return null
+                if (url.rawUserInfo != null) return null
+                val origin = URI(url.scheme, null, url.host, url.port, null, null, null)
+                return Connection.parse(origin.toString())?.let { PairingInvite(it.establishingRoutePolicyFromInvite(), code) }
+            }
             if (!(url.scheme.equals("openmausbot", ignoreCase = true) || url.scheme.equals("bosbot", ignoreCase = true)) ||
                 !url.host.equals("pair", ignoreCase = true)
             ) {
@@ -412,7 +431,7 @@ data class PairingInvite(val connection: Connection, val credential: String) {
                 if (suffix.all { it.isLetterOrDigit() && it.code < 128 || it == '-' || it == '_' }) return token
                 return null
             }
-            return values["code"]?.takeIf { code -> code.length == 6 && code.all { it in '0'..'9' } }
+            return values["code"]?.let { code -> CompanionClient.normalizedServerCode(code) ?: code.takeIf { it.length == 6 && it.all { char -> char in '0'..'9' } } }
         }
 
         private fun decodeEndpoints(encoded: String): List<CompanionEndpoint>? {

@@ -89,7 +89,7 @@ internal fun BotThreadTree(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 DisclosureIcon(isExpanded)
-                Text("Threads", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = secondaryTint)
+                Text(localized("Threads"), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = secondaryTint)
                 Text(count.toString(), fontSize = 13.sp, color = secondaryTint)
             }
             if (isExpanded) {

@@ -247,7 +247,7 @@ internal fun TasksRoutinesScreen(onBack: () -> Unit, onOpenChat: (Chat) -> Unit)
     deleting?.let { routine ->
         AlertDialog(
             onDismissRequest = { deleting = null },
-            title = { Text("Delete ${routine.name}?") },
+            title = { Text(localized("Delete ${routine.name}?")) },
             text = { Text(RoutineRules.DELETE_MESSAGE) },
             confirmButton = {
                 TextButton(
@@ -258,11 +258,11 @@ internal fun TasksRoutinesScreen(onBack: () -> Unit, onOpenChat: (Chat) -> Unit)
                         }
                     },
                 ) {
-                    Text("Delete routine", color = MaterialTheme.colorScheme.error)
+                    Text(localized("Delete routine"), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { deleting = null }) { Text("Cancel") }
+                TextButton(onClick = { deleting = null }) { Text(localized("Cancel")) }
             },
         )
     }
@@ -409,7 +409,7 @@ private fun RoutineRow(
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 DropdownMenuItem(
-                    text = { Text("Run now") },
+                    text = { Text(localized("Run now")) },
                     onClick = {
                         menuOpen = false
                         onRunNow()
@@ -425,14 +425,14 @@ private fun RoutineRow(
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text("Edit") },
+                    text = { Text(localized("Edit")) },
                     onClick = {
                         menuOpen = false
                         onEdit()
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                    text = { Text(localized("Delete"), color = MaterialTheme.colorScheme.error) },
                     onClick = {
                         menuOpen = false
                         onDelete()

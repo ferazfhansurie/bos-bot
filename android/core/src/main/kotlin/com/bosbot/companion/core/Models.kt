@@ -196,6 +196,10 @@ data class Message(
      * rather than one that started a turn of its own.
      */
     val steered: Boolean? = null,
+    val steerDelivery: String? = null,
+    val origin: MessageOrigin? = null,
+    val turnTerminal: Boolean? = null,
+    val sendId: String? = null,
     /**
      * The steer-queue entry this user line drained from. It is how a client
      * showing the held message knows which row to retire when the real line
@@ -363,11 +367,14 @@ data class Bot(
      * harness included) means the shipped `cursor` silhouette.
      */
     val mascotBody: String? = null,
+    val mascotEyes: String? = null,
     val tasks: List<BotTask>? = null,
+    val taskOrder: List<String>? = null,
     val messages: List<Message>? = null,
     val activeLeafId: String? = null,
     val hasMore: Boolean? = null,
     val projects: List<BotProject>? = null,
+    val remote: BotRemote? = null,
 )
 
 /** Project only task-local controls; the original fleet record stays profile-global. */
@@ -404,6 +411,7 @@ object AvatarCropSerializer : KSerializer<AvatarCrop> {
     }
 
     override fun serialize(encoder: Encoder, value: AvatarCrop) {
+
         encoder.encodeString(value.name.lowercase())
     }
 }
@@ -429,6 +437,14 @@ data class Room(
     val tasks: List<BotTask>? = null,
     val messages: List<Message>? = null,
     val hasMore: Boolean? = null,
+    val home: RoomHome? = null,
+    val peopleIds: List<String>? = null,
+    val people: List<RoomPerson>? = null,
+    val memberBots: List<RoomMemberBot>? = null,
+    val memberReplyModes: Map<String, String>? = null,
+    val avatarUrl: String? = null,
+    val notifications: String? = null,
+    val activeBotIds: List<String>? = null,
 )
 
 @Serializable(with = FleetSerializer::class)
@@ -745,6 +761,8 @@ data class ConfigFlag(
      * server's own fallback; nothing should compare this string directly.
      */
     val provider: String? = null,
+    val baseUrl: String? = null,
+    val model: String? = null,
 )
 
 @Serializable
@@ -757,6 +775,7 @@ data class ConfigStatus(
     val tts: ConfigFlag? = null,
     val imageGen: ConfigFlag? = null,
     val profile: Profile? = null,
+    val threads: ThreadConfig? = null,
 ) {
     /**
      * "This engine can speak", not "a key is on file" — under the built-in
@@ -877,6 +896,9 @@ data class BotProfilePatch(
     val avatarCrop: AvatarCrop? = null,
     val voice: String? = null,
     val speakReplies: Boolean? = null,
+    val mascotBody: String? = null,
+    val mascotEyes: String? = null,
+    val color: String? = null,
 ) {
     sealed interface AvatarURL {
         data class Set(val path: String) : AvatarURL
@@ -923,6 +945,9 @@ object BotProfilePatchSerializer : KSerializer<BotProfilePatch> {
             value.avatarCrop?.let { put("avatarCrop", it.name.lowercase()) }
             value.voice?.let { put("voice", it) }
             value.speakReplies?.let { put("speakReplies", it) }
+            value.mascotBody?.let { put("mascotBody", it) }
+            value.mascotEyes?.let { put("mascotEyes", it) }
+            value.color?.let { put("color", it) }
         })
     }
 
@@ -970,6 +995,9 @@ object BotProfilePatchSerializer : KSerializer<BotProfilePatch> {
             avatarCrop = crop,
             voice = string("voice"),
             speakReplies = boolean("speakReplies"),
+            mascotBody = string("mascotBody"),
+            mascotEyes = string("mascotEyes"),
+            color = string("color"),
         )
     }
 }
@@ -1204,3 +1232,56 @@ data class MessageImageAttachment(
     val mime: String? = null,
 )
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+@Serializable data class ThreadConfig(val maxConcurrentPerBot: Int? = null, val autoSettleDays: Int? = null)
+@Serializable data class ProviderUsageResponse(val accounts: List<ProviderUsageAccount> = emptyList())
+@Serializable data class ProviderUsageWindow(val usedPercent: Double? = null, val resetsAt: Double? = null)
+@Serializable data class ProviderUsageAccount(
+    val instanceId: String? = null, val provider: String, val account: String,
+    val fiveHour: ProviderUsageWindow? = null, val sevenDay: ProviderUsageWindow,
+    val status: String,
+) {
+    val id: String get() = "$provider:${instanceId ?: account}"
+    val providerName: String get() = if (provider == "claude") "Claude" else "Codex"
+    val windows: List<Pair<String, ProviderUsageWindow>> get() = listOfNotNull(fiveHour?.let { "5h" to it }, "7d" to sevenDay)
+    val compactSummary: String get() = windows.joinToString(" · ") { (label, window) -> "$label ${window.usedPercent?.let { "${kotlin.math.round(it).toInt()}%" } ?: "–"}" }
+    val peakPercent: Double? get() = windows.mapNotNull { it.second.usedPercent }.maxOrNull()
+}
+@Serializable data class UpdateStatusResponse(
+    val state: String, val current: Build, val candidate: Build? = null,
+    val busyTurns: List<BusyTurn>? = null, val lastResult: LastResult? = null,
+) {
+    @Serializable data class Build(val version: String, val sha: String)
+    @Serializable data class BusyTurn(val botId: String, val threadId: String)
+    @Serializable data class LastResult(val state: String, val detail: String? = null)
+    val isRunning: Boolean get() = state in setOf("checkpointing", "stopping", "applying", "relaunching", "verifying")
+    val summary: String get() = when (state) {
+        "checkpointing" -> "Updating · saving open work"
+        "stopping" -> "Updating · pausing bots"
+        "applying" -> "Updating · installing"
+        "relaunching" -> "Updating · relaunching"
+        "verifying" -> "Updating · checking the new build"
+        "ready" -> "${candidate?.version ?: "New build"} ready · update from the mac"
+        else -> when (lastResult?.state) {
+            "rolled_back" -> "Rolled back: ${lastResult.detail ?: "the new build failed its check"}"
+            "failed" -> "Update failed: ${lastResult.detail ?: "unknown error"}"
+            else -> "Up to date"
+        }
+    }
+}
+
+@Serializable data class BotRemote(
+    val homeId: String, val homeName: String, val ownerName: String? = null,
+    val online: Boolean? = null, val availability: String? = null,
+)
+
+val Bot.isRemote: Boolean get() = remote != null
+
+@Serializable data class ServerSession(val id: String, val label: String, val scopes: List<String>, val expiresAt: Double? = null) {
+    val isAdmin: Boolean get() = "admin" in scopes
+}
+@Serializable data class ServerEnvironment(val environmentId: String, val label: String, val platform: String? = null, val version: String? = null)
+@Serializable data class ServerPairResponse(val token: String, val session: ServerSession, val environment: ServerEnvironment)
+val BotTask.canMarkDone: Boolean get() = !isArchived && !isWorking
+
+@Serializable data class RoomHome(val id: String, val name: String, val available: Boolean? = null)

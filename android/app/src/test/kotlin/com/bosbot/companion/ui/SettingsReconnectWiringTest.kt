@@ -19,6 +19,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.flow
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.RecordedRequest
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,7 +51,12 @@ class SettingsReconnectWiringTest {
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     private val reconnect = "Try reconnecting"
-    private val mac = Connection(id = "c1", name = "Mac", host = "127.0.0.1", port = 8810)
+    private val server = MockWebServer().apply {
+        dispatcher = object : Dispatcher() { override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(404) }
+        start()
+    }
+    private val mac = Connection(id = "c1", name = "Mac", host = "127.0.0.1", port = server.port)
+    @After fun closeServer() { server.shutdown() }
 
     @Test
     fun `the reconnect button opens one stream and stays dead until it settles`() {
@@ -73,7 +83,9 @@ class SettingsReconnectWiringTest {
         compose.waitForIdle()
         assertEquals(0, scene.streamStarts.get(), "mounting Settings must not dial anything")
 
-        // The section sits below the fold on a phone-sized screen.
+        compose.onNodeWithText("Mac").performClick()
+        compose.onNodeWithText("Mac").performClick()
+        // Connection security sits one level below everyday settings.
         compose.onNodeWithText(reconnect).performScrollTo().assertIsEnabled().performClick()
         compose.waitUntil(5_000) { scene.streamStarts.get() == 1 }
 

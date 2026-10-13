@@ -92,7 +92,7 @@ class SessionLingerTest {
         assertEquals(kind, frame.kind)
         assertEquals(7, seq)
         assertEquals(channel, NotificationMapping.channelId(frame))
-        assertEquals(listOf(frame), session.state.value.notifications)
+        assertEquals(listOf(frame.copy(connectionId = null)), session.state.value.notifications)
         assertEquals("s:7", session.state.value.cursor)
         // One SSE connection throughout — not a reconnect that happened to
         // catch the frame.

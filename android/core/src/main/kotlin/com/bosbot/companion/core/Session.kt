@@ -6,16 +6,22 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -76,6 +82,8 @@ class Session(
     /** Test seam for the handoff between a completed transfer and its caller. */
     private val afterAttachmentDownload: suspend () -> Unit = {},
     /** Test seam: override the activity feed snapshot ([ACTIVITY_FEED_SNAPSHOT_PATH]). */
+    private val roomEventsFn: (CompanionClient, String) -> Flow<StreamFrame> = { client, groupId -> client.roomEvents(groupId) },
+    private val satelliteMode: Boolean = false,
     private val activityFn: suspend (CompanionClient) -> List<ActivityFeedEntry> = { client ->
         client.activityFeed()
     },
@@ -103,11 +111,130 @@ class Session(
      * empty set means "we do not know", and the wording falls back to the
      * weaker promise, which is the one that is always true.
      */
+    private val _voiceRings = MutableSharedFlow<VoiceRing>(extraBufferCapacity = 32)
+    val voiceRings: SharedFlow<VoiceRing> = _voiceRings.asSharedFlow()
+    private val seenRingIds = linkedSetOf<String>()
+    private val remoteStreams = mutableMapOf<String, Job>()
+
+    suspend fun ackRing(ringId: String, expectedConnectionId: String? = connection.value?.id) {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        if (connection.value?.id != expectedConnectionId) throw APIError.Transport("The call’s computer is no longer connected.")
+        active.ackRing(ringId)
+    }
+
+    fun landedVoiceReplies(botId: String, threadId: String, callId: String, since: Double = System.currentTimeMillis().toDouble(),
+        expectedConnectionId: String? = connection.value?.id): Flow<VoiceReply> = kotlinx.coroutines.flow.flow {
+        val delivered = mutableSetOf<String>()
+        state.collect { snapshot ->
+            if (connection.value?.id != expectedConnectionId) throw CancellationException("The call’s computer changed.")
+            val bot = snapshot.bot(botId)?.forTask(threadId) ?: return@collect
+            com.openmausbot.companion.core.landedVoiceReplies(snapshot.visibleTranscript(threadId), callId, since, bot.busy == true)
+                .filter { delivered.add(it.id) }.forEach { emit(it) }
+        }
+    }
+
     private val _steeringInstanceIds = MutableStateFlow<Set<String>>(emptySet())
     val steeringInstanceIds: StateFlow<Set<String>> = _steeringInstanceIds.asStateFlow()
 
     private val _connection = MutableStateFlow<Connection?>(null)
     val connection: StateFlow<Connection?> = _connection.asStateFlow()
+    val canAdminister: Boolean get() = connection.value?.canAdminister == true
+
+    data class Home(val session: Session, val connection: Connection, val state: CompanionState, val status: Status)
+    private val _satellites = MutableStateFlow<List<Session>>(emptyList())
+    val satellites: StateFlow<List<Session>> = _satellites.asStateFlow()
+    private val _homesState = MutableStateFlow<List<Home>>(emptyList())
+    val homesState: StateFlow<List<Home>> = _homesState.asStateFlow()
+    private val satelliteScopes = mutableMapOf<String, CoroutineScope>()
+    private var appliedHomeBadge: Int? = null
+
+    private fun publishHomes() {
+        _homesState.value = (listOf(this) + _satellites.value).mapNotNull { session ->
+            session.connection.value?.let { Home(session, it, session.state.value, session.status.value) }
+        }
+        if (!satelliteMode) {
+            val badge = _homesState.value.sumOf { it.state.unreadCount }
+            if (appliedHomeBadge != badge) { appliedHomeBadge = badge; notificationSink.setBadge(badge) }
+        }
+    }
+    fun home(connectionId: String?): Session? = (listOf(this) + _satellites.value)
+        .firstOrNull { it.connection.value?.id == connectionId && connectionId != null }
+
+    /** Resolve exactly one owning pairing; duplicate imported ids require an explicit home. */
+    fun owner(chat: Chat, expectedConnectionId: String? = null): Session? {
+        fun holds(session: Session) = when (chat) {
+            is Chat.BotChat -> session.state.value.bot(chat.bot.id)?.let { bot ->
+                bot.threadId == chat.threadId || bot.tasks.orEmpty().any { it.threadId == chat.threadId }
+            } == true
+            is Chat.RoomChat -> session.state.value.rooms.any { room -> room.id == chat.room.id &&
+                (room.threadId == chat.threadId || room.tasks.orEmpty().any { it.threadId == chat.threadId }) }
+        }
+        if (expectedConnectionId != null) return home(expectedConnectionId)?.takeIf(::holds)
+        return (listOf(this) + _satellites.value).filter(::holds).singleOrNull()
+    }
+
+    private fun ownerForChat(chat: Chat): Session {
+        if (satelliteMode) return this
+        owner(chat)?.let { return it }
+        val matches = (listOf(this) + _satellites.value).filter { session -> when (chat) {
+            is Chat.BotChat -> session.state.value.bot(chat.bot.id) != null
+            is Chat.RoomChat -> session.state.value.rooms.any { it.id == chat.room.id }
+        } }
+        if (matches.size > 1) throw APIError.Transport("Choose this chat’s computer before changing it.")
+        return matches.singleOrNull() ?: this
+    }
+    private fun ownerForBot(bot: Bot): Session = ownerForChat(Chat.BotChat(bot))
+
+    private suspend fun syncSatellitesLocked() {
+        if (satelliteMode) return
+        val wanted = registry.connections.filter { it.id != _connection.value?.id }
+        val wantedIds = wanted.mapTo(mutableSetOf(), Connection::id)
+        val existing = _satellites.value.associateBy { it.connection.value?.id }
+        satelliteScopes.keys.toList().filter { it !in wantedIds }.forEach { id ->
+            existing[id]?.disconnect()
+            satelliteScopes.remove(id)?.cancel()
+        }
+        val homes = mutableListOf<Session>()
+        wanted.forEach { saved ->
+            existing[saved.id]?.let { homes += it; return@forEach }
+            val stored = tokenStore.read(saved.id) as? TokenStore.ReadResult.Found ?: return@forEach
+            val homeScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+            val store = object : ConnectionStore {
+                private var current = saved
+                override suspend fun load() = current
+                override suspend fun save(connection: Connection) { current = connection }
+                override suspend fun clear() = Unit
+            }
+            val tokens = object : TokenStore {
+                override suspend fun read(connectionId: String): TokenStore.ReadResult =
+                    if (connectionId == saved.id) stored else TokenStore.ReadResult.Missing
+                override suspend fun save(connectionId: String, token: String) = Unit
+                override suspend fun remove(connectionId: String) = Unit
+            }
+            val homeSink = object : NotificationSink {
+                override fun deliver(notification: NotificationFrame, sequence: Int?) = notificationSink.deliver(notification.copy(connectionId = saved.id), sequence)
+                override fun setBadge(count: Int) = Unit
+            }
+            val child = Session(homeScope, store, tokens, InMemoryOnboardingStore(), deviceNameProvider,
+                notificationSink = homeSink, httpClient = httpClient, clientFactory = clientFactory,
+                pairFn = pairFn, eventsFn = eventsFn, hydrateFn = hydrateFn, instancesFn = instancesFn,
+                metadataFn = metadataFn, afterAttachmentDownload = afterAttachmentDownload,
+                roomEventsFn = roomEventsFn, satelliteMode = true, activityFn = activityFn)
+            child.awaitRestored()
+            satelliteScopes[saved.id] = homeScope
+            homes += child
+            homeScope.launch { combine(child.state, child.connection, child.status) { _, _, _ -> Unit }.collect { publishHomes() } }
+            homeScope.launch { child.voiceRings.collect { _voiceRings.emit(it.copy(connectionId = saved.id)) } }
+        }
+        _satellites.value = homes
+        publishHomes()
+        homes.forEach { it.connect() }
+    }
+
+    private fun syncSatellites() {
+        if (satelliteMode) return
+        scope.launch { restored.await(); gate.withLock { syncSatellitesLocked() } }
+    }
 
     private val _connections = MutableStateFlow<List<Connection>>(emptyList())
     /** All locally paired computers. Only [connection] has an active runtime. */
@@ -136,12 +263,32 @@ class Session(
     val pairingRequested: StateFlow<Boolean> = _pairingRequested.asStateFlow()
 
     private var registry = ConnectionRegistry()
-    private var client: CompanionClient? = null
+    private val sharedRuntimeLock = Any()
+    private val _sharedRuntimeRevision = MutableStateFlow(0L)
+    val sharedRuntimeRevision: StateFlow<Long> = _sharedRuntimeRevision.asStateFlow()
+    @Volatile private var sharedRuntimeMarker: Any = Any()
+    @Volatile private var client: CompanionClient? = null
+        set(value) {
+            synchronized(sharedRuntimeLock) {
+                if (field !== value) {
+                    field = value
+                    sharedRuntimeMarker = Any()
+                    _sharedRuntimeRevision.update { it + 1 }
+                }
+            }
+        }
     private var token: String? = null
     private var rotation = CandidateRotation(emptyList())
     private var streamJob: Job? = null
     private var endpointRefreshJob: Job? = null
+    private data class ArchiveKey(val botId: String, val threadId: String)
+    private class PendingArchive(val client: CompanionClient, val previous: Double?, val desired: Double?) {
+        @Volatile var acknowledged: Boolean = false
+    }
+    private val pendingArchives = java.util.concurrent.ConcurrentHashMap<ArchiveKey, PendingArchive>()
     private var streamGeneration = 0
+    private var sendStreamCheck: Job? = null
+    private val streamedMessageIds = java.util.Collections.synchronizedSet(linkedSetOf<String>())
     private var reconnectDelaySeconds: Long = 0
     private var screenWatchers = 0
     private val gate = Mutex()
@@ -165,6 +312,7 @@ class Session(
     private var deferredInvite: PairingInvite? = null
 
     init {
+        scope.launch { combine(_state, _connection, _status) { _, _, _ -> Unit }.collect { publishHomes() } }
         // No Exception other than cancellation leaves this launch: it is a root
         // coroutine with no caller to catch for it, so [restoreLocked] reports a
         // failed read instead of throwing it. An Error still propagates, on
@@ -251,6 +399,9 @@ class Session(
                     allowedRouteKinds = invited.allowedRouteKinds,
                     allowedLocalRouteURLs = invited.allowedLocalRouteURLs,
                 )
+                outcome.serverPair?.let { server ->
+                    stored = stored.copy(serverEnvironmentId = server.environment.environmentId, serverScopes = server.session.scopes)
+                }
                 if (paired.serverName.isNotEmpty()) stored = stored.copy(name = paired.serverName)
                 stored = stored.applyingPairingAdvertisement(paired.hosts, paired.endpoints)
                 val winner = outcome.connection.activeEndpoint
@@ -503,7 +654,16 @@ class Session(
         scope.launch {
             awaitRestored()
             gate.withLock {
-                if (registry.connection(id) == null) return@withLock
+                val forgotten = registry.connection(id) ?: return@withLock
+                if (forgotten.serverEnvironmentId != null) {
+                    val storedToken = tokenStore.read(id) as? TokenStore.ReadResult.Found
+                    storedToken?.let { saved ->
+                        scope.launch {
+                            try { clientFactory(forgotten, saved.token).logout() }
+                            catch (error: Throwable) { if (error is CancellationException) throw error }
+                        }
+                    }
+                }
                 val wasActive = registry.activeConnectionId == id
                 if (wasActive) stopActiveRuntimeLocked()
                 tokenStore.remove(id)
@@ -523,6 +683,12 @@ class Session(
     }
 
     private fun stopActiveRuntimeLocked() {
+        stopRemoteStreams()
+        pendingArchives.clear()
+        seenRingIds.clear()
+        sendStreamCheck?.cancel()
+        sendStreamCheck = null
+        streamedMessageIds.clear()
         attachmentDownloads.clear()
         streamGeneration += 1
         streamJob?.cancel()
@@ -552,6 +718,7 @@ class Session(
 
     /** Called when the app comes to the front, and once at launch. */
     fun connect() {
+        syncSatellites()
         scope.launch {
             restored.await()
             gate.withLock {
@@ -760,6 +927,7 @@ class Session(
 
     private fun restartStreamLocked() {
         if (streamJob == null) return
+        stopRemoteStreams()
         streamJob?.cancel()
         streamJob = null
         if (client == null) return
@@ -784,6 +952,8 @@ class Session(
 
     /** Called when the app leaves the screen — deliberate disconnect so the cursor is known. */
     fun disconnect() {
+        _satellites.value.forEach { it.disconnect() }
+        stopRemoteStreams()
         streamJob?.cancel()
         streamJob = null
         endpointRefreshJob?.cancel()
@@ -793,6 +963,17 @@ class Session(
     private suspend fun runStream() {
         while (currentCoroutineContext().isActive) {
             val activeClient = client ?: return
+            activeClient.connection.serverEnvironmentId?.let { expected ->
+                val environment = try { activeClient.environment() } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
+                    null
+                }
+                if (environment != null && environment.environmentId != expected) {
+                    _status.value = Status.Unauthorized
+                    return
+                }
+            }
+
             _status.value = Status.Connecting
             var receivedHello = false
             try {
@@ -801,8 +982,23 @@ class Session(
                         currentCoroutineContext().ensureActive()
                         reconnectDelaySeconds = 0
 
+                        if (frame.frame is Frame.Message) {
+                            synchronized(streamedMessageIds) {
+                                if (streamedMessageIds.size >= 500) streamedMessageIds.clear()
+                                streamedMessageIds.add(frame.frame.message.id)
+                            }
+                        }
+                        if (frame.frame is Frame.Bot) {
+                            val bot = frame.frame.bot
+                            bot.tasks.orEmpty().forEach { task ->
+                                pendingArchives[ArchiveKey(bot.id, task.threadId)]?.let { pending ->
+                                    if (pending.client === activeClient && task.archivedAt == pending.desired) pending.acknowledged = true
+                                }
+                            }
+                        }
                         when (val payload = frame.frame) {
                             is Frame.Hello -> {
+                                _state.update { it.apply(frame) }
                                 receivedHello = true
                                 if (!payload.resumed) {
                                     hydrate()
@@ -811,13 +1007,22 @@ class Session(
                                 _status.value = Status.Live
                                 promoteWorkingRoute()
                                 refreshConnectionMetadata(activeClient)
+                                reconcileRemoteStreams(activeClient)
+                            }
+                            is Frame.VoiceRing -> {
+                                val key = "${activeClient.connection.id}:${payload.ring.ringId}"
+                                if (seenRingIds.add(key)) {
+                                    if (seenRingIds.size > 100) seenRingIds.remove(seenRingIds.first())
+                                    _voiceRings.emit(payload.ring.copy(connectionId = activeClient.connection.id, runtimeIdentity = sharedRuntimeIdentity(activeClient.connection.id)))
+                                }
                             }
                             else -> {
                                 _state.update { it.apply(frame) }
+                                if (payload is Frame.Room || payload is Frame.RoomDeleted) reconcileRemoteStreams(activeClient)
                                 if (payload is Frame.Notify) {
-                                    notificationSink.deliver(payload.notification, frame.seq)
+                                    notificationSink.deliver(payload.notification.copy(connectionId = activeClient.connection.id), frame.seq)
                                 }
-                                notificationSink.setBadge(_state.value.unreadCount)
+                                publishHomes()
                                 _state.update { it.advance(frame.seq) }
                             }
                         }
@@ -845,11 +1050,52 @@ class Session(
         }
     }
 
+    private fun stopRemoteStreams() = synchronized(remoteStreams) {
+        remoteStreams.values.forEach { it.cancel() }
+        remoteStreams.clear()
+    }
+
+    private fun reconcileRemoteStreams(active: CompanionClient) = synchronized(remoteStreams) {
+        if (streamJob == null || client !== active) return@synchronized stopRemoteStreams()
+        val wanted = remoteRoomStreams(_state.value.rooms)
+        remoteStreams.keys.toList().filter { it !in wanted }.forEach { remoteStreams.remove(it)?.cancel() }
+        wanted.forEach { (homeId, roomId) ->
+            if (homeId !in remoteStreams) remoteStreams[homeId] = scope.launch {
+                var retry = 0L
+                while (isActive && client === active) {
+                    if (retry > 0) delay(retry * 1000)
+                    try {
+                        roomEventsFn(active, roomId).collect { frame ->
+                            if (client !== active) throw CancellationException("The selected computer changed.")
+                            retry = 0
+                            if (frame.frame is Frame.Hello) {
+                                _state.value.rooms.filter { it.home?.id == homeId }.forEach { room ->
+                                    try {
+                                        val page = active.messages(room.threadId)
+                                        if (client === active && _state.value.rooms.any { it.id == room.id && it.home?.id == homeId }) {
+                                            _state.update { it.merge(page, room.threadId) }
+                                        }
+                                    } catch (error: Throwable) { if (error is CancellationException) throw error }
+                                }
+                            } else {
+                                _state.update { state -> remoteRoomFrame(state.rooms, homeId, frame.frame)?.let { state.apply(it) } ?: state }
+                            }
+                        }
+                    } catch (error: Throwable) {
+                        if (error is CancellationException) throw error
+                        if (error is APIError.Status && error.code in setOf(401, 403, 404)) return@launch
+                    }
+                    retry = if (retry == 0L) 2 else minOf(retry * 2, 30)
+                }
+            }
+        }
+    }
+
     private suspend fun hydrate() {
         val activeClient = client ?: return
         val fleet = hydrateFn(activeClient, 50)
         _state.update { it.hydrate(fleet) }
-        notificationSink.setBadge(_state.value.unreadCount)
+        publishHomes()
         refreshActivityFeed(activeClient)
         // Deliberately off hydrate's critical path: this only words the
         // composer, and the cursor commit — and with it the whole stream —
@@ -1096,13 +1342,7 @@ class Session(
     // MARK: - Actions
 
     suspend fun send(text: String, to: Chat) {
-        perform {
-            val receipt = when (to) {
-                is Chat.BotChat -> it.sendToBot(to.bot.id, text, to.threadId)
-                is Chat.RoomChat -> it.sendToRoom(to.room.id, text, to.threadId)
-            }
-            record(receipt, text, to.threadId)
-        }
+        send(text, emptyList(), to)
     }
 
     /**
@@ -1111,6 +1351,24 @@ class Session(
      * what the person typed; the harness echoes back only an id.
      */
     private fun record(receipt: SendReceipt, text: String, fallbackThreadId: String) {
+        val sent = receipt as? SendReceipt.Sent
+        sent?.message?.let { message ->
+            val threadId = sent.threadId ?: fallbackThreadId
+            _state.update { it.apply(Frame.Message(threadId, message)) }
+            if (!streamedMessageIds.contains(message.id)) {
+                sendStreamCheck?.cancel()
+                val generation = streamGeneration
+                val active = client
+                sendStreamCheck = scope.launch {
+                    delay(1_000)
+                    gate.withLock {
+                        if (streamGeneration == generation && client === active && !streamedMessageIds.contains(message.id)) {
+                            restartStreamLocked()
+                        }
+                    }
+                }
+            }
+        }
         val queued = receipt as? SendReceipt.Queued ?: return
         val threadId = queued.threadId.ifEmpty { fallbackThreadId }
         _state.update { it.rememberQueued(QueuedSend(queued.queueId, text), threadId) }
@@ -1121,7 +1379,217 @@ class Session(
      * once the harness confirms, so a failed cancel leaves the words on
      * screen still waiting — which is what is actually true.
      */
+    /** Shared human conversations use this pairing's actor; never retry arbitrary writes. */
+    /** Opaque identity only: no token, actor metadata or endpoint escapes through this handle. */
+    fun sharedRuntimeIdentity(expectedConnectionId: String): Any = synchronized(sharedRuntimeLock) {
+        if (client == null || connection.value?.id != expectedConnectionId) throw APIError.Transport("This computer is offline.")
+        sharedRuntimeMarker
+    }
+    suspend fun validateSharedActor(expectedConnectionId: String, expectedActor: String, expectedRuntimeIdentity: Any): Boolean =
+        withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedMe().actorId == expectedActor }
+
+    private suspend fun <T> withSharedClient(expectedConnectionId: String, expectedRuntimeIdentity: Any? = null, action: suspend (CompanionClient) -> T): T {
+        val active = synchronized(sharedRuntimeLock) {
+            val captured = client ?: throw APIError.Transport("This computer is offline.")
+            if (connection.value?.id != expectedConnectionId || (expectedRuntimeIdentity != null && sharedRuntimeMarker !== expectedRuntimeIdentity))
+                throw APIError.Transport("The shared account changed. Reopen this conversation.")
+            captured
+        }
+        val result = try { action(active) } catch (error: APIError) {
+            if (error.isUnauthorized && client === active && connection.value?.id == expectedConnectionId) _status.value = Status.Unauthorized
+            throw error
+        }
+        currentCoroutineContext().ensureActive()
+        if (client !== active || connection.value?.id != expectedConnectionId) throw CancellationException("The selected computer changed.")
+        return result
+    }
+    suspend fun sharedRoster(expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedRoster = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { active ->
+        val me = active.sharedMe()
+        if (me.actorId == null) SharedRoster(me, emptyList(), emptyList()) else coroutineScope {
+            val contacts = async { active.sharedContacts() }; val rooms = async { active.sharedRooms() }
+            SharedRoster(me, contacts.await(), rooms.await())
+        }
+    }
+    suspend fun sharedContacts(expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): List<SharedContact> = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedContacts() }
+    suspend fun sharedRooms(expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): List<SharedRoomSummary> = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedRooms() }
+    suspend fun openSharedDM(targetId: String, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedRoomSummary = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.openSharedDM(targetId) }
+    suspend fun createSharedRoom(name: String, memberIds: List<String>, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedRoomSummary = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.createSharedRoom(name, memberIds) }
+    suspend fun sharedBots(roomId: String, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): List<SharedEligibleBot> = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedBots(roomId) }
+    suspend fun updateSharedRoom(id: String, revision: Int, name: String? = null, memberIds: List<String>? = null, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedRoomSummary = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.updateSharedRoom(id, revision, name, memberIds) }
+    suspend fun leaveSharedRoom(id: String, revision: Int, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null) = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.leaveSharedRoom(id, revision) }
+    suspend fun deleteSharedRoom(id: String, revision: Int, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null) = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.deleteSharedRoom(id, revision) }
+    suspend fun removeRemoteBot(id: String, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null) = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { active ->
+        active.removeRemoteBot(id)
+        if (client === active) _state.update { it.apply(Frame.BotDeleted(id)) }
+    }
+    suspend fun sharedMessagePage(roomId: String, after: Int = 0, version: Int = 0, before: Int? = null, latest: Boolean = false, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedMessagesResponse = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedMessagePage(roomId, after, version, before, latest) }
+    suspend fun sharedMessages(roomId: String, after: Int, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): List<SharedChatMessage> = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedMessages(roomId, after) }
+    suspend fun sendSharedMessage(roomId: String, text: String, sendId: String, attachments: List<SharedAttachment> = emptyList(), replyTo: String? = null, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null) = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sendSharedMessage(roomId, text, sendId, attachments, replyTo) }
+    suspend fun editSharedMessage(roomId: String, messageId: String, text: String?, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedChatMessage = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.editSharedMessage(roomId, messageId, text) }
+    suspend fun annotateSharedMessage(roomId: String, messageId: String, reaction: String? = null, active: Boolean? = null, pinned: Boolean? = null, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedChatMessage = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.annotateSharedMessage(roomId, messageId, reaction, active, pinned) }
+    suspend fun sharedTyping(roomId: String, active: Boolean, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null) = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedTyping(roomId, active) }
+    suspend fun sharedPreferences(roomId: String, readSequence: Int? = null, notifications: String? = null, replyMode: String? = null, replyBotId: String? = null, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedConversationPreferences = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedPreferences(roomId, readSequence, notifications, replyMode, replyBotId) }
+    suspend fun uploadSharedAttachment(roomId: String, name: String, mime: String, data: ByteArray, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedAttachment = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.uploadSharedAttachment(roomId, name, mime, data) }
+    suspend fun sharedAttachment(roomId: String, attachmentId: String, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedAttachmentData = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedAttachment(roomId, attachmentId) }
+    suspend fun searchSharedMessages(roomId: String, text: String, kind: String = "all", author: String = "", before: Int? = null, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedSearchResponse = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.searchSharedMessages(roomId, text, kind, author, before) }
+    suspend fun sharedFiles(roomId: String, before: Int? = null, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedFilesResponse = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedFiles(roomId, before) }
+    suspend fun sharedRequests(roomId: String, before: Int? = null, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedRequestsResponse = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.sharedRequests(roomId, before) }
+    suspend fun cancelSharedRequest(roomId: String, requestId: String, expectedConnectionId: String, expectedRuntimeIdentity: Any? = null): SharedBotRequest = withSharedClient(expectedConnectionId, expectedRuntimeIdentity) { it.cancelSharedRequest(roomId, requestId) }
+
+    private fun capturedRoomClient(roomId: String?, expectedConnectionId: String, manage: Boolean): CompanionClient {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        if (connection.value?.id != expectedConnectionId) throw APIError.Transport("The selected computer changed.")
+        if (manage && !canAdminister) throw APIError.Status(403, "Owner access is required for room settings.")
+        if (roomId != null) {
+            val room = _state.value.rooms.firstOrNull { it.id == roomId } ?: throw APIError.Status(404, "This room is no longer available.")
+            if (manage && room.home != null) throw APIError.Status(403, "Manage this room on its home computer.")
+        }
+        return active
+    }
+    private fun verifyRoomClient(active: CompanionClient, expectedConnectionId: String) {
+        if (client !== active || connection.value?.id != expectedConnectionId) throw CancellationException("The selected computer changed.")
+    }
+    suspend fun updateRoomSettings(roomId: String, patch: kotlinx.serialization.json.JsonObject, expectedConnectionId: String): Room {
+        val active = capturedRoomClient(roomId, expectedConnectionId, true)
+        val room = active.updateRoomSettings(roomId, patch)
+        verifyRoomClient(active, expectedConnectionId)
+        _state.update { it.apply(Frame.Room(room)) }
+        return room
+    }
+    suspend fun addRoomPerson(roomId: String, personId: String, expectedConnectionId: String): Room {
+        val active = capturedRoomClient(roomId, expectedConnectionId, true)
+        val room = active.addRoomPerson(roomId, personId)
+        verifyRoomClient(active, expectedConnectionId); _state.update { it.apply(Frame.Room(room)) }; return room
+    }
+    suspend fun removeRoomPerson(roomId: String, personId: String, expectedConnectionId: String): Room {
+        val active = capturedRoomClient(roomId, expectedConnectionId, true)
+        val room = active.removeRoomPerson(roomId, personId)
+        verifyRoomClient(active, expectedConnectionId); _state.update { it.apply(Frame.Room(room)) }; return room
+    }
+    suspend fun createRoomInvite(roomIds: List<String>, expectedConnectionId: String): RoomInvite {
+        val active = capturedRoomClient(null, expectedConnectionId, true)
+        roomIds.forEach { capturedRoomClient(it, expectedConnectionId, true) }
+        val invite = active.createRoomInvite(roomIds)
+        verifyRoomClient(active, expectedConnectionId); return invite
+    }
+    suspend fun roomBotGrants(roomId: String, expectedConnectionId: String): List<String> {
+        val active = capturedRoomClient(roomId, expectedConnectionId, false)
+        val grants = active.roomBotGrants(roomId); verifyRoomClient(active, expectedConnectionId); return grants
+    }
+    suspend fun setRoomBotGrants(roomId: String, botIds: List<String>, expectedConnectionId: String): List<String> {
+        val active = capturedRoomClient(roomId, expectedConnectionId, true)
+        val grants = active.setRoomBotGrants(roomId, botIds); verifyRoomClient(active, expectedConnectionId); return grants
+    }
+    suspend fun uploadRoomPhoto(roomId: String, data: ByteArray, mime: String, expectedConnectionId: String): Room {
+        val active = capturedRoomClient(roomId, expectedConnectionId, true)
+        val path = active.uploadAvatar(data, AttachmentPolicy.normalizedMime(mime))
+        verifyRoomClient(active, expectedConnectionId)
+        val room = active.updateRoomSettings(roomId, kotlinx.serialization.json.buildJsonObject {
+            put("avatarUrl", kotlinx.serialization.json.JsonPrimitive(path))
+        })
+        verifyRoomClient(active, expectedConnectionId); _state.update { it.apply(Frame.Room(room)) }; return room
+    }
+    suspend fun roomAvatarData(room: Room, expectedConnectionId: String): ByteArray? {
+        val path = room.avatarUrl ?: return null
+        val active = capturedRoomClient(room.id, expectedConnectionId, false)
+        val data = active.avatar(path); verifyRoomClient(active, expectedConnectionId); return data
+    }
+
+    suspend fun sharedMe(expectedConnectionId: String? = connection.value?.id, expectedRuntimeIdentity: Any? = null): SharedMe? =
+        withSharedClient(expectedConnectionId ?: throw APIError.Transport("This computer is offline."), expectedRuntimeIdentity) { it.sharedMe() }
+    suspend fun setProfilePhoto(jpegBase64: String?, expectedConnectionId: String? = connection.value?.id, expectedRuntimeIdentity: Any? = null) =
+        withSharedClient(expectedConnectionId ?: throw APIError.Transport("This computer is offline."), expectedRuntimeIdentity) { active ->
+            if (!canAdminister) throw APIError.Status(403, "Owner access is required to change the profile photo.")
+            active.setProfilePhoto(jpegBase64)
+        }
+    suspend fun synthesizeWalkie(text: String, voiceId: String?, expectedConnectionId: String): ByteArray {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        if (connection.value?.id != expectedConnectionId) throw APIError.Transport("The selected computer changed.")
+        val audio = active.previewVoice(text.take(500), voiceId.orEmpty())
+        if (client !== active || connection.value?.id != expectedConnectionId) throw CancellationException("The selected computer changed.")
+        return audio
+    }
+
+    suspend fun startVoiceCall(botId: String, language: String?, callId: String?, expectedConnectionId: String? = connection.value?.id,
+        expectedRuntimeIdentity: Any? = null): kotlinx.serialization.json.JsonObject =
+        withSharedClient(expectedConnectionId ?: throw APIError.Transport("This computer is offline."), expectedRuntimeIdentity) {
+            it.voiceCall(botId, language, callId)
+        }
+
+    suspend fun sendVoiceTask(botId: String, threadId: String, request: String, callId: String,
+        sendId: String = UUID.randomUUID().toString(), job: String = request,
+        expectedConnectionId: String? = connection.value?.id, expectedRuntimeIdentity: Any? = null): String? {
+        return try {
+            withSharedClient(expectedConnectionId ?: throw APIError.Transport("This computer is offline."), expectedRuntimeIdentity) { active ->
+                val receipt = active.sendVoiceTask(botId, threadId, request, callId, sendId, job)
+                if (client === active) record(receipt, request, threadId)
+            }
+            null
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            val message = error.message ?: "The voice task could not be sent."
+            if (connection.value?.id == expectedConnectionId && (expectedRuntimeIdentity == null ||
+                runCatching { sharedRuntimeIdentity(expectedConnectionId!!) === expectedRuntimeIdentity }.getOrDefault(false))) {
+                _actionError.value = "Voice task delivery could not be confirmed: $message"
+            }
+            message
+        }
+    }
+
+    suspend fun reportVoiceUsage(botId: String, callId: String, seconds: Int, expectedConnectionId: String? = connection.value?.id,
+        expectedRuntimeIdentity: Any? = null) {
+        withSharedClient(expectedConnectionId ?: throw APIError.Transport("This computer is offline."), expectedRuntimeIdentity) {
+            it.reportVoiceCallUsage(callId, seconds)
+        }
+    }
+
+    private fun Chat.destination(): MessageDestination = when (this) {
+        is Chat.BotChat -> MessageDestination.Bot(bot.id, threadId)
+        is Chat.RoomChat -> MessageDestination.Room(room.id, threadId)
+    }
+
+    suspend fun editQueued(send: QueuedSend, chat: Chat, text: String): Boolean = ownerForChat(chat).let { owner ->
+        if (owner !== this) return@let owner.editQueued(send, chat, text)
+        mutateTask(false) { active ->
+        active.editQueued(send.queueId, chat.destination(), send.text, text)
+        if (client === active) _state.update { state ->
+            state.copy(pendingQueued = state.pendingQueued + (chat.threadId to
+                state.pendingQueued[chat.threadId].orEmpty().map { if (it.queueId == send.queueId) it.copy(text = text) else it }))
+        }
+        true
+    }
+    }
+
+    suspend fun steerQueued(send: QueuedSend, chat: Chat, botId: String? = null): SteerReceipt? = ownerForChat(chat).let { owner ->
+        if (owner !== this) return@let owner.steerQueued(send, chat, botId)
+        mutateTask(null) { active ->
+        val receipt = active.steerQueued(send.queueId, chat.destination(), botId)
+        if (client === active) _state.update { receipt.apply(it, chat.threadId) }
+        receipt
+    }
+    }
+
+    fun browserEvents(botId: String, expectedConnectionId: String? = connection.value?.id): Flow<BrowserViewerEvent> {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        if (connection.value?.id != expectedConnectionId) throw APIError.Transport("The selected computer changed.")
+        return kotlinx.coroutines.flow.flow {
+            active.browserEvents(botId).collect { event ->
+                if (client !== active || connection.value?.id != expectedConnectionId) throw CancellationException("The selected computer changed.")
+                emit(event)
+            }
+        }
+    }
+
+    suspend fun browserAction(botId: String, viewerId: String, action: BrowserViewerAction,
+        expectedConnectionId: String? = connection.value?.id) {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        if (connection.value?.id != expectedConnectionId) throw APIError.Transport("The selected computer changed.")
+        active.browserAction(botId, viewerId, action)
+    }
+
     suspend fun cancelQueued(send: QueuedSend, chat: Chat) {
+        val owner = ownerForChat(chat)
+        if (owner !== this) return owner.cancelQueued(send, chat)
         val activeClient = client ?: return
         val destination = when (chat) {
             is Chat.BotChat -> MessageDestination.Bot(chat.bot.id, chat.threadId)
@@ -1147,6 +1615,8 @@ class Session(
         val destination: MessageDestination,
         val text: String,
         val attachmentIds: List<String>,
+        val replyToId: String? = null,
+        val priority: MessagePriority = MessagePriority.QUEUE,
     )
 
     private val attachmentSendIds = LinkedHashMap<AttachmentDraftKey, String>()
@@ -1158,12 +1628,22 @@ class Session(
      * delay can move the message elsewhere. Callers only clear their draft when
      * this returns true.
      */
-    suspend fun send(text: String, attachments: List<PendingMessageAttachment>, to: Chat): Boolean {
+    suspend fun send(text: String, attachments: List<PendingMessageAttachment>, to: Chat,
+        replyToId: String? = null, priority: MessagePriority = MessagePriority.QUEUE,
+        durableSendId: String? = null, uploadProgress: ((String, Int, Int) -> Unit)? = null): Boolean {
+        if (!satelliteMode) {
+            val target = try { ownerForChat(to) } catch (error: APIError) {
+                _actionError.value = error.message
+                return false
+            }
+            if (target !== this) return target.send(text, attachments, to, replyToId, priority, durableSendId, uploadProgress)
+        }
         val activeClient = client ?: run {
             _actionError.value = "This computer is offline."
             return false
         }
         val connectionId = _connection.value?.id
+        connect()
         _actionError.value = null
         return try {
             AttachmentPolicy.validate(attachments)
@@ -1185,24 +1665,27 @@ class Session(
                 }
             }
             val destination = when (to) {
-                is Chat.BotChat -> MessageDestination.Bot(to.bot.id, to.bot.threadId)
-                is Chat.RoomChat -> MessageDestination.Room(to.room.id, to.room.threadId)
+                is Chat.BotChat -> MessageDestination.Bot(to.bot.id, to.threadId)
+                is Chat.RoomChat -> MessageDestination.Room(to.room.id, to.threadId)
             }
-            val key = AttachmentDraftKey(destination, text, attachments.map { it.id })
+            val key = AttachmentDraftKey(destination, text, attachments.map { it.id }, replyToId, priority)
             if (attachmentSendIds.size >= 20 && key !in attachmentSendIds) attachmentSendIds.clear()
-            val sendId = attachmentSendIds.getOrPut(key) { UUID.randomUUID().toString() }
+            val sendId = durableSendId ?: attachmentSendIds.getOrPut(key) { UUID.randomUUID().toString() }
+            attachmentSendIds[key] = sendId
 
-            val uploaded = attachments.map { attachment ->
+            val uploaded = attachments.mapIndexed { index, attachment ->
+                uploadProgress?.invoke(attachment.name, index, attachments.size)
                 currentCoroutineContext().ensureActive()
                 val mime = AttachmentPolicy.normalizedMime(attachment.mime)
                 when (attachment.kind) {
                     PendingMessageAttachment.Kind.IMAGE -> SharedAttachmentReference(
-                        path = activeClient.uploadImage(attachment.data, mime, attachment.id),
+                        path = activeClient.uploadImage(attachment.file?.readBytes() ?: attachment.data, mime, attachment.id),
                         kind = SharedAttachmentKind.IMAGE,
                         displayName = attachment.name,
                     )
                     PendingMessageAttachment.Kind.FILE -> {
-                        val file = activeClient.uploadFile(attachment.data, attachment.name, mime, attachment.id)
+                        val file = attachment.file?.let { activeClient.uploadFile(it, attachment.name, mime, attachment.id) }
+                            ?: activeClient.uploadFile(attachment.data, attachment.name, mime, attachment.id)
                         SharedAttachmentReference(file.path, SharedAttachmentKind.FILE, file.name)
                     }
                 }
@@ -1213,12 +1696,15 @@ class Session(
                 urls = emptyList(),
                 attachments = uploaded,
             )
-            val receipt = activeClient.send(message, destination, sendId)
+            uploadProgress?.invoke("Sending message", attachments.size, attachments.size)
+            val receipt = activeClient.send(message, destination, sendId, replyToId, priority)
             // The row shows what was typed, not what was sent: `message`
             // carries the <attached-file …> tags the harness reads, and a
             // held message is a person's own words waiting, not transport.
             // An attachment-only send has no words, so it falls back.
-            record(receipt, text.trim().ifEmpty { message }, to.threadId)
+            if (client === activeClient && _connection.value?.id == connectionId) {
+                record(receipt, text.trim().ifEmpty { message }, to.threadId)
+            }
             attachmentSendIds.remove(key)
             _actionError.value = null
             true
@@ -1454,6 +1940,8 @@ class Session(
     }
 
     suspend fun alwaysAllow(bot: Bot, card: OptionCard) {
+        val owner = ownerForBot(bot)
+        if (owner !== this) return owner.alwaysAllow(bot, card)
         val key = card.allowKey ?: return
         perform { it.alwaysAllow(bot.id, key, bot.threadId) }
     }
@@ -1502,10 +1990,14 @@ class Session(
     }
 
     suspend fun interrupt(bot: Bot) {
+        val owner = ownerForBot(bot)
+        if (owner !== this) return owner.interrupt(bot)
         perform { it.interrupt(bot.id, bot.threadId) }
     }
 
     suspend fun cloudDesktop(forBot: Bot): URI {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.cloudDesktop(forBot)
         val activeClient = client ?: throw APIError.Transport("This computer is offline.")
         val connectionId = _connection.value?.id
         return try {
@@ -1659,7 +2151,7 @@ class Session(
             _state.update { current ->
                 if (current !== before) current else current.copy(bots = fleet.bots, rooms = fleet.groups)
             }
-            notificationSink.setBadge(_state.value.unreadCount)
+            publishHomes()
             true
         }
     }
@@ -1740,13 +2232,18 @@ class Session(
         }
     }
 
-    suspend fun createTask(forBot: Bot, title: String?): Bot? = mutateTask(null) { client ->
+    suspend fun createTask(forBot: Bot, title: String?): Bot? = ownerForBot(forBot).let { owner ->
+        if (owner !== this) return@let owner.createTask(forBot, title)
+        mutateTask(null) { client ->
         client.createTask(forBot.id, title).also { updated ->
             _state.update { it.apply(Frame.Bot(updated)) }
         }
     }
+    }
 
     suspend fun switchTask(task: BotTask, forBot: Bot): Bot? {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.switchTask(task, forBot)
         if (task.threadId == forBot.threadId) return forBot
         return mutateTask(null) { client ->
             client.switchTask(forBot.id, task.threadId).also { updated ->
@@ -1755,22 +2252,49 @@ class Session(
         }
     }
 
-    suspend fun renameTask(task: BotTask, forBot: Bot, title: String): Boolean = mutateTask(false) { client ->
+    suspend fun renameTask(task: BotTask, forBot: Bot, title: String): Boolean = ownerForBot(forBot).let { owner ->
+        if (owner !== this) return@let owner.renameTask(task, forBot, title)
+        mutateTask(false) { client ->
         client.renameTask(forBot.id, task.threadId, title)
         refresh()
         true
     }
-
-    suspend fun archiveTask(task: BotTask, forBot: Bot, archivedAt: Double?): Boolean = mutateTask(false) { client ->
-        client.setTaskArchived(forBot.id, task.threadId, archivedAt)
-        refresh()
-        true
     }
 
-    suspend fun deleteTask(task: BotTask, forBot: Bot): Bot? = mutateTask(null) { client ->
+    suspend fun archiveTask(task: BotTask, forBot: Bot, archivedAt: Double?): Boolean = ownerForBot(forBot).let { owner ->
+        if (owner !== this) return@let owner.archiveTask(task, forBot, archivedAt)
+        mutateTask(false) { active ->
+            val current = _state.value.bot(forBot.id)?.tasks?.firstOrNull { it.threadId == task.threadId } ?: task
+            if (archivedAt != null && current.isWorking) {
+                _actionError.value = "A working thread cannot be marked done."
+                return@mutateTask false
+            }
+            val key = ArchiveKey(forBot.id, task.threadId)
+            val pending = PendingArchive(active, current.archivedAt, archivedAt)
+            pendingArchives[key] = pending
+            _state.update { it.withTaskArchive(forBot.id, task.threadId, archivedAt) }
+            try {
+                active.setTaskArchived(forBot.id, task.threadId, archivedAt)
+                pendingArchives.remove(key, pending)
+                true
+            } catch (error: Throwable) {
+                val stillOwns = pendingArchives.remove(key, pending) && client === active
+                if (error !is CancellationException && pending.acknowledged && client === active) return@mutateTask true
+                if (stillOwns && !pending.acknowledged) {
+                    _state.update { it.withTaskArchive(forBot.id, task.threadId, pending.previous, expected = archivedAt, requireExpected = true) }
+                }
+                throw error
+            }
+        }
+    }
+
+    suspend fun deleteTask(task: BotTask, forBot: Bot): Bot? = ownerForBot(forBot).let { owner ->
+        if (owner !== this) return@let owner.deleteTask(task, forBot)
+        mutateTask(null) { client ->
         client.deleteTask(forBot.id, task.threadId).also { updated ->
             _state.update { it.apply(Frame.Bot(updated)) }
         }
+    }
     }
 
     suspend fun createTask(forRoom: Room, title: String?): Room? = mutateTask(null) { client ->
@@ -1801,10 +2325,13 @@ class Session(
     }
 
     suspend fun updateProfile(patch: BotProfilePatch, forBot: Bot): Bot? {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.updateProfile(patch, forBot)
         val activeClient = client ?: return null
         return try {
             val updated = activeClient.updateProfile(forBot.id, patch)
             currentCoroutineContext().ensureActive()
+            if (client !== activeClient) throw CancellationException("The selected computer changed.")
             _state.update { it.apply(Frame.Bot(updated)) }
             updated
         } catch (error: Throwable) {
@@ -1829,16 +2356,22 @@ class Session(
         }
     }
 
-    suspend fun updateModel(selection: ModelSelection, forBot: Bot): Bot? {
+    suspend fun updateModel(selection: ModelSelection, forBot: Bot, resetApprovalToAsk: Boolean = false, needsConfirmation: (() -> Unit)? = null): Bot? {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.updateModel(selection, forBot, resetApprovalToAsk, needsConfirmation)
         val activeClient = client ?: return null
         return try {
-            val updated = activeClient.updateModel(forBot.id, selection, forBot.threadId)
+            val updated = activeClient.updateModel(forBot.id, selection, forBot.threadId, resetApprovalToAsk)
             currentCoroutineContext().ensureActive()
+            if (client !== activeClient) throw CancellationException("The selected computer changed.")
             _state.update { it.apply(Frame.Bot(updated)) }
             updated.forTask(forBot.threadId)
         } catch (error: Throwable) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            _actionError.value = error.message
+            if (!resetApprovalToAsk && error is APIError.Status && error.code == 400 &&
+                error.message?.contains("(resetApprovalToAsk)") == true && needsConfirmation != null) {
+                needsConfirmation()
+            } else _actionError.value = error.message
             null
         }
     }
@@ -1869,10 +2402,13 @@ class Session(
     }
 
     suspend fun generateAvatar(prompt: String, forBot: Bot): Bot? {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.generateAvatar(prompt, forBot)
         val activeClient = client ?: return null
         return try {
             val updated = activeClient.generateAvatar(forBot.id, prompt)
             currentCoroutineContext().ensureActive()
+            if (client !== activeClient) throw CancellationException("The selected computer changed.")
             _state.update { it.apply(Frame.Bot(updated)) }
             updated
         } catch (error: Throwable) {
@@ -1883,6 +2419,8 @@ class Session(
     }
 
     suspend fun avatarData(forBot: Bot): ByteArray? {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.avatarData(forBot)
         val path = forBot.avatarUrl ?: return null
         return try {
             client?.avatar(path)
@@ -1904,6 +2442,8 @@ class Session(
     }
 
     suspend fun previewVoice(voiceId: String, forBot: Bot): ByteArray? {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.previewVoice(voiceId, forBot)
         val activeClient = client ?: return null
         return try {
             activeClient.previewVoice("Hello, I'm ${forBot.name}.", voiceId)
@@ -1912,6 +2452,51 @@ class Session(
             _actionError.value = error.message
             null
         }
+    }
+
+    private val _hostPlatform = MutableStateFlow<String?>(null)
+    val hostPlatform: StateFlow<String?> = _hostPlatform.asStateFlow()
+    val hostIsMac: Boolean get() = _hostPlatform.value == "darwin"
+    suspend fun serverEnvironment(): ServerEnvironment? {
+        val active = client ?: return null
+        val environment = try { active.environment() } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            null
+        }
+        if (client !== active) return null
+        _hostPlatform.value = environment?.platform
+        return environment
+    }
+    suspend fun loadHostPlatform(): String? {
+        val active = client ?: return null
+        val platform = try { active.environment().platform } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            null
+        }
+        if (client !== active) return null
+        _hostPlatform.value = platform
+        return platform
+    }
+    suspend fun saveChatterboxServer(baseURL: String, model: String): ConfigStatus {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        return active.saveChatterboxServer(baseURL, model)
+    }
+
+    suspend fun loadProviderUsage(): List<ProviderUsageAccount> {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        val accounts = active.providerUsage().accounts
+        if (client !== active) throw CancellationException("The selected computer changed.")
+        return accounts
+    }
+    suspend fun loadUpdateStatus(): UpdateStatusResponse? = try {
+        client?.updateStatus()
+    } catch (error: Throwable) {
+        if (error is CancellationException) throw error
+        null
+    }
+    suspend fun setThreadSettlement(days: Int): ConfigStatus {
+        val active = client ?: throw APIError.Transport("This computer is offline.")
+        return active.setThreadSettlement(days)
     }
 
     suspend fun configStatus(): ConfigStatus? = try {
@@ -2065,10 +2650,14 @@ class Session(
     }
 
     suspend fun edit(message: Message, forBot: Bot, text: String) {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.edit(message, forBot, text)
         perform { it.edit(forBot.id, message.id, text, forBot.threadId) }
     }
 
     suspend fun switchVersion(to: Message, forBot: Bot) {
+        val owner = ownerForBot(forBot)
+        if (owner !== this) return owner.switchVersion(to, forBot)
         val activeClient = client ?: return
         try {
             val leaf = activeClient.setActiveBranch(forBot.id, to.id, forBot.threadId)
@@ -2120,7 +2709,7 @@ class Session(
         /** High-entropy QR token — distinct from a retryable six-digit code. */
         fun isQrCredential(credential: String): Boolean =
             credential.startsWith("omb_pair_") ||
-                !(credential.length == 6 && credential.all { it in '0'..'9' })
+                (CompanionClient.normalizedServerCode(credential) == null && !(credential.length == 6 && credential.all { it in '0'..'9' }))
     }
 }
 

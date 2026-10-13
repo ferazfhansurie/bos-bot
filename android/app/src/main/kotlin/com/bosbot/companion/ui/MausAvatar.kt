@@ -50,61 +50,16 @@ import kotlinx.coroutines.flow.collectLatest
 internal fun MausAvatar(
     color: String,
     /** Which catalog body to draw; null and unknown ids fall back to the cursor. */
-    bodyId: String? = MausSilhouette.defaultBody,
+    bodyId: String? = null,
     size: Dp = 52.dp,
     state: MausState = MausState.IDLE,
     /** Off draws the state's resting face, still. For lists of many. */
-    animated: Boolean = true,
+    animated: Boolean = false,
     modifier: Modifier = Modifier,
+    eyeStyle: String = "glyph",
+    gaze: androidx.compose.ui.geometry.Offset = androidx.compose.ui.geometry.Offset.Zero,
 ) {
-    val engine = remember { MausFaceEngine() }
-    val geometry = remember { MausFaceGeometry() }
-    val clock = remember { MausFrameClock() }
-    val body = remember(color, bodyId) {
-        // The gradient runs corner to corner of the body's own bounds.
-        val bounds = MausSilhouette.faceBoxBounds(bodyId)
-        Brush.linearGradient(
-            colorStops = MausPalette.gradient(color)
-                .map { (position, argb) -> position to Color(argb) }
-                .toTypedArray(),
-            start = Offset(bounds.right, bounds.top),
-            end = Offset(bounds.left, bounds.bottom),
-        )
-    }
-
-    var moving by remember { mutableStateOf(false) }
-    // A lazy list keeps rows composed past the edge of what it shows, and a face
-    // nobody can see has no business asking for frames.
-    var shown by remember { mutableStateOf(true) }
-
-    LaunchedEffect(animated) {
-        // Android says "reduce motion" through the animator duration scale, which
-        // is the same signal Compose's own animations honour. At zero the face
-        // holds the still pose of whatever state it is in.
-        val durationScale = coroutineContext[MotionDurationScale]
-        snapshotFlow { animated && shown && (durationScale?.scaleFactor ?: 1f) > 0f }
-            .collectLatest { live ->
-                moving = live
-                if (!live) return@collectLatest
-                while (true) withFrameNanos(clock.onFrame)
-            }
-    }
-
-    Canvas(
-        modifier = modifier
-            .size(size)
-            // Empty bounds mean every ancestor has clipped this away, or it is off
-            // the window — the two ways a composed avatar can be invisible.
-            .onGloballyPositioned { shown = !it.boundsInWindow().isEmpty }
-            // The mascot repeats the name beside it; announcing it twice is noise.
-            .semantics { },
-    ) {
-        val now = clock.nanos.longValue
-        val live = moving
-        engine.setState(state, now)
-        if (live) engine.advance(now) else engine.rest()
-        drawMaus(engine, geometry, body, bodyId, live, now)
-    }
+    GlyphAvatar(color, bodyId, size, state, animated, modifier, eyeStyle, gaze)
 }
 
 /**

@@ -23,6 +23,22 @@ class ChatPreferences(
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE),
     )
 
+    private val _theme = MutableStateFlow(prefs.getString("display.theme", "midnight") ?: "midnight")
+    val theme: StateFlow<String> = _theme.asStateFlow()
+    private val _brightness = MutableStateFlow(prefs.getString("display.brightness", "system") ?: "system")
+    val brightness: StateFlow<String> = _brightness.asStateFlow()
+    private val _language = MutableStateFlow(prefs.getString("display.language", "system") ?: "system")
+    val language: StateFlow<String> = _language.asStateFlow()
+    private val _introAnimationPolicy = MutableStateFlow(prefs.getString("chat.introAnimationPolicy", "oncePerBot") ?: "oncePerBot")
+    val introAnimationPolicy: StateFlow<String> = _introAnimationPolicy.asStateFlow()
+    fun setIntroAnimationPolicy(value: String) { prefs.edit().putString("chat.introAnimationPolicy", value).commit(); _introAnimationPolicy.value = value }
+    private val _introAnimation = MutableStateFlow(prefs.getBoolean("chat.introAnimation", true))
+    val introAnimation: StateFlow<Boolean> = _introAnimation.asStateFlow()
+    fun setTheme(value: String) { prefs.edit().putString("display.theme", value).commit(); _theme.value = value }
+    fun setBrightness(value: String) { prefs.edit().putString("display.brightness", value).commit(); _brightness.value = value }
+    fun setLanguage(value: String) { prefs.edit().putString("display.language", value).commit(); _language.value = value }
+    fun setIntroAnimation(value: Boolean) { prefs.edit().putBoolean("chat.introAnimation", value).commit(); _introAnimation.value = value }
+
     private val _activityDetail = MutableStateFlow(
         ActivityDetail.fromWire(prefs.getString(ACTIVITY_DETAIL, null)),
     )

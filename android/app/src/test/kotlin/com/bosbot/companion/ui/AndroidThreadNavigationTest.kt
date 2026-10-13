@@ -127,14 +127,14 @@ class AndroidThreadNavigationTest {
         compose.onNodeWithText("First thread").performClick()
         compose.waitUntil(5_000) { (navigator.current as? Destination.Chat)?.target?.threadId == "first" }
         compose.onNode(hasSetTextAction()).assertTextEquals("Draft for the first thread")
-        assertEquals("Draft for the second thread", scene.environment.chatDrafts.get("second")?.text)
+        assertEquals("Draft for the second thread", scene.environment.chatDrafts.get("${scene.session.connection.value?.id}:second")?.text)
         assertEquals("first", scene.session.state.value.bot(fixture.id)?.threadId)
         assertTrue(requests.none { it.method == "POST" && it.path?.contains("/tasks/") == true })
 
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Fixture Home").assertIsDisplayed()
-        assertNull(scene.environment.chatDrafts.get("first"))
-        assertNull(scene.environment.chatDrafts.get("second"))
+        assertNull(scene.environment.chatDrafts.get("${scene.session.connection.value?.id}:first"))
+        assertNull(scene.environment.chatDrafts.get("${scene.session.connection.value?.id}:second"))
     }
 
     @Test

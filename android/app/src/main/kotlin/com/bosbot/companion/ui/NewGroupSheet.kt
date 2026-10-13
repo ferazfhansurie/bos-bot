@@ -77,7 +77,7 @@ internal fun NewGroupSheet(onCreated: (Room) -> Unit, onDismiss: () -> Unit) {
                     onClick = onDismiss,
                     modifier = Modifier.align(Alignment.CenterStart),
                 ) {
-                    Text("Cancel")
+                    Text(localized("Cancel"))
                 }
                 Text(
                     text = "New group",
@@ -103,14 +103,14 @@ internal fun NewGroupSheet(onCreated: (Room) -> Unit, onDismiss: () -> Unit) {
                     enabled = NewGroupRules.canCreate(members, creating),
                     modifier = Modifier.align(Alignment.CenterEnd),
                 ) {
-                    Text("Create")
+                    Text(localized("Create"))
                 }
             }
 
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Group name (optional)") },
+                label = { Text(localized("Group name (optional)")) },
                 singleLine = true,
                 // A room's name is a label, not prose; iOS turns autocorrect off
                 // here for the same reason.

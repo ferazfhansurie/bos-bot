@@ -94,7 +94,7 @@ class MicPermissionController(
  * reaches for, provided once at the top of the composition.
  */
 @Immutable
-class CompanionEnvironment(
+data class CompanionEnvironment(
     val session: Session,
     val permissions: CompanionPermissions,
     val discovery: CompanionDiscovery,

@@ -82,6 +82,7 @@ import com.openmausbot.companion.core.AttachedMessageContent
 import com.openmausbot.companion.core.generatedImages
 import com.openmausbot.companion.core.DisplayedMessageAttachment
 import com.openmausbot.companion.core.DownloadedFile
+import com.openmausbot.companion.core.displayedContent
 import com.openmausbot.companion.core.Message
 import com.openmausbot.companion.core.OptionCard
 import com.openmausbot.companion.core.ThreadRef
@@ -260,7 +261,7 @@ fun MessageRow(
             MessageActions.copyableText(message)?.let { text ->
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("Copy") },
+                    text = { Text(localized("Copy")) },
                     onClick = {
                         menuOpen = false
                         scope.launch {
@@ -271,7 +272,7 @@ fun MessageRow(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("Select text") },
+                    text = { Text(localized("Select text")) },
                     onClick = {
                         menuOpen = false
                         selectingText = text
@@ -284,7 +285,7 @@ fun MessageRow(
             if (editableText != null && bot != null) {
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("Edit and retry") },
+                    text = { Text(localized("Edit and retry")) },
                     enabled = bot.busy != true,
                     onClick = {
                         menuOpen = false
@@ -299,14 +300,14 @@ fun MessageRow(
     if (editing && bot != null) {
         AlertDialog(
             onDismissRequest = { editing = false },
-            title = { Text("Edit and retry") },
+            title = { Text(localized("Edit and retry")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("This creates a new version and continues from there.", fontSize = 14.sp)
+                    Text(localized("This creates a new version and continues from there."), fontSize = 14.sp)
                     OutlinedTextField(
                         value = editText,
                         onValueChange = { editText = it },
-                        label = { Text("Message") },
+                        label = { Text(localized("Message")) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -324,10 +325,10 @@ fun MessageRow(
                         if (text.isEmpty()) return@TextButton
                         scope.launch { session.edit(message, bot, text) }
                     },
-                ) { Text("Send") }
+                ) { Text(localized("Send")) }
             },
             dismissButton = {
-                TextButton(onClick = { editing = false }) { Text("Cancel") }
+                TextButton(onClick = { editing = false }) { Text(localized("Cancel")) }
             },
         )
     }
@@ -349,7 +350,7 @@ private fun SelectableTextDialog(text: String, onDismiss: () -> Unit) {
     var copied by remember(text) { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Select text") },
+        title = { Text(localized("Select text")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SelectionContainer {
@@ -383,7 +384,7 @@ private fun SelectableTextDialog(text: String, onDismiss: () -> Unit) {
                 },
             ) { Text(if (copied) "Copied" else "Copy all") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(localized("Done")) } },
     )
 }
 
@@ -435,7 +436,7 @@ private fun TextBubble(
     val card = remember(message.id, message.role, message.text) { TranscriptCards.of(message) }
     // Shared attachments are protocol tags in stored user text. They are not
     // prose, and a server-controlled path must never be presented as a link.
-    val attached = remember(message.id, message.text) { AttachedMessageContent.parse(message.text.orEmpty()) }
+    val attached = remember(message.id, message.text) { message.displayedContent }
     // A card brings its own surface, so it drops the bubble — and with it the
     // tail, which is a bubble's chin and not a card's.
     val bubble = card == null
@@ -551,7 +552,7 @@ private fun SharedAttachmentView(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("FILE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = BubbleColor.mineText.copy(alpha = 0.68f))
+        Text(localized("FILE"), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = BubbleColor.mineText.copy(alpha = 0.68f))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 attachment.name,
@@ -561,7 +562,7 @@ private fun SharedAttachmentView(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text("Tap to preview", fontSize = 12.sp, color = BubbleColor.mineText.copy(alpha = 0.68f))
+            Text(localized("Tap to preview"), fontSize = 12.sp, color = BubbleColor.mineText.copy(alpha = 0.68f))
         }
     }
 }
@@ -662,7 +663,7 @@ private fun AttachmentLoadFailure(label: String, foreground: Color = BubbleColor
             modifier = Modifier.size(20.dp),
         )
         Text(label, fontSize = 13.sp, color = foreground.copy(alpha = 0.80f))
-        TextButton(onClick = onRetry) { Text("Retry") }
+        TextButton(onClick = onRetry) { Text(localized("Retry")) }
     }
 }
 
@@ -966,7 +967,7 @@ private fun CardView(chat: Chat, message: Message, haptics: Haptics) {
                     },
                     enabled = !answering,
                 ) {
-                    Text("Always allow this tool", fontSize = 14.sp)
+                    Text(localized("Always allow this tool"), fontSize = 14.sp)
                 }
             }
         } else {
@@ -1045,8 +1046,8 @@ private fun ScreenShot(threadId: String, message: Message) {
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(20.dp),
                     )
-                    Text("Screenshot unavailable", fontSize = 13.sp, color = secondaryTint)
-                    TextButton(onClick = { attempt += 1 }) { Text("Retry") }
+                    Text(localized("Screenshot unavailable"), fontSize = 13.sp, color = secondaryTint)
+                    TextButton(onClick = { attempt += 1 }) { Text(localized("Retry")) }
                 }
                 is ScreenShotState.Ready -> Image(
                     bitmap = current.image,

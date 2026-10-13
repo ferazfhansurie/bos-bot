@@ -161,7 +161,7 @@ internal fun QuestionCardView(chat: Chat, message: Message, haptics: Haptics) {
                 modifier = Modifier.weight(1f),
             )
             if (questions.size > 1 && !settled) {
-                Text("$answeredCount of ${questions.size}", fontSize = 12.sp, color = secondaryTint)
+                Text(localized("$answeredCount of ${questions.size}"), fontSize = 12.sp, color = secondaryTint)
             }
         }
 
@@ -234,7 +234,7 @@ internal fun QuestionCardView(chat: Chat, message: Message, haptics: Haptics) {
         }
 
         if (current.allowsMultiple) {
-            Text("Choose all that apply", fontSize = 12.sp, color = secondaryTint)
+            Text(localized("Choose all that apply"), fontSize = 12.sp, color = secondaryTint)
         }
 
         Column(
@@ -271,7 +271,7 @@ internal fun QuestionCardView(chat: Chat, message: Message, haptics: Haptics) {
                 OutlinedTextField(
                     value = custom[index].orEmpty(),
                     onValueChange = { custom[index] = it },
-                    placeholder = { Text("Type your own answer") },
+                    placeholder = { Text(localized("Type your own answer")) },
                     singleLine = false,
                     maxLines = 4,
                     enabled = !answering,

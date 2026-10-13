@@ -30,6 +30,10 @@ data class NotificationFrame(
     val threadId: String,
     val title: String,
     val body: String,
+    val callId: String? = null,
+    val messageId: String? = null,
+    val requestId: String? = null,
+    val connectionId: String? = null,
 ) {
     val isBlocking: Boolean get() = kind == "approval" || kind == "question"
 }
@@ -40,7 +44,15 @@ data class RuntimeEvent(
     val threadId: String,
     val delta: String? = null,
     val streamKind: String? = null,
-)
+    val roomBotId: String? = null,
+    val turnId: String? = null,
+    val ok: Boolean? = null,
+) {
+    val streamKey: String get() = roomBotId?.let { roomStreamKey(threadId, it) } ?: threadId
+    companion object {
+        fun roomStreamKey(threadId: String, botId: String): String = "$threadId:room:$botId"
+    }
+}
 
 @Serializable(with = FrameSerializer::class)
 sealed interface Frame {
@@ -58,6 +70,7 @@ sealed interface Frame {
     data class Computer(val botId: String, val state: String) : Frame
     data object Config : Frame
     data class Runtime(val event: RuntimeEvent) : Frame
+    data class VoiceRing(val ring: com.openmausbot.companion.core.VoiceRing) : Frame
 
     /**
      * The activity feed ([ACTIVITY_FEED_EVENT]). [replace] is a whole snapshot —
@@ -139,6 +152,11 @@ object FrameSerializer : KSerializer<Frame> {
                 RuntimeEvent.serializer(),
                 objectValue.required("event"),
             ))
+            "voice_ring" -> runCatching {
+                val ring = input.json.decodeFromJsonElement(com.openmausbot.companion.core.VoiceRing.serializer(), objectValue)
+                require(ring.ringId.isNotEmpty() && ring.botId.isNotEmpty())
+                Frame.VoiceRing(ring.copy(threadId = ring.threadId?.takeIf { it.isNotEmpty() }, connectionId = null))
+            }.getOrElse { Frame.Unknown(kind) }
             ACTIVITY_FEED_EVENT -> decodeActivity(objectValue) ?: Frame.Unknown(kind)
             else -> Frame.Unknown(kind)
         }
@@ -282,6 +300,11 @@ private fun Frame.toJsonObject(output: JsonEncoder): JsonObject = buildJsonObjec
             put("botId", botId)
             put("png", png)
             put("mime", mime)
+        }
+        is Frame.VoiceRing -> {
+            put("kind", "voice_ring")
+            output.json.encodeToJsonElement(com.openmausbot.companion.core.VoiceRing.serializer(), ring).jsonObject
+                .filterKeys { it != "connectionId" }.forEach { (key, value) -> put(key, value) }
         }
         is Frame.Computer -> {
             put("kind", "computer")

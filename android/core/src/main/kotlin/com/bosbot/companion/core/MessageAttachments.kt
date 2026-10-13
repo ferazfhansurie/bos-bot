@@ -17,14 +17,15 @@ import kotlinx.coroutines.async
  */
 class PendingMessageAttachment(
     val id: String = UUID.randomUUID().toString(),
-    val data: ByteArray,
+    val data: ByteArray = byteArrayOf(),
     val name: String,
     val mime: String,
     val kind: Kind,
+    val file: java.io.File? = null,
 ) {
     enum class Kind { IMAGE, FILE }
 
-    val bytes: Int get() = data.size
+    val bytes: Long get() = file?.length() ?: data.size.toLong()
 }
 
 class AttachmentPolicyException(message: String) : Exception(message)
@@ -35,10 +36,14 @@ class AttachmentPolicyException(message: String) : Exception(message)
  * attachment that the authenticated upload route will reject.
  */
 object AttachmentPolicy {
-    const val MAXIMUM_ITEMS: Int = 4
-    const val MAXIMUM_TOTAL_BYTES: Int = 50 * 1_024 * 1_024
+    const val MAXIMUM_ITEMS: Int = 32
+    const val MAXIMUM_TOTAL_BYTES: Int = 200 * 1_024 * 1_024
     const val MAXIMUM_IMAGE_BYTES: Int = 10 * 1_024 * 1_024
-    const val MAXIMUM_FILE_BYTES: Int = 25 * 1_024 * 1_024
+    const val MAXIMUM_FILE_BYTES: Int = 90 * 1_024 * 1_024
+
+    const val MAXIMUM_IN_MEMORY_BYTES: Int = 50 * 1_024 * 1_024
+    const val MAXIMUM_BUFFERED_FILE_BYTES: Int = 25 * 1_024 * 1_024
+    val VIDEO_MIME_TYPES = setOf("video/mp4", "video/quicktime", "video/x-m4v")
 
     val IMAGE_MIME_TYPES: Set<String> = setOf("image/png", "image/jpeg", "image/gif", "image/webp")
 
@@ -56,8 +61,8 @@ object AttachmentPolicy {
         "application/vnd.oasis.opendocument.presentation",
     )
 
-    const val TOO_MANY_ITEMS: String = "Attach up to 4 items at a time."
-    const val TOTAL_TOO_LARGE: String = "Those attachments are larger than 50 MB together."
+    const val TOO_MANY_ITEMS: String = "Attach up to 32 items at a time."
+    const val TOTAL_TOO_LARGE: String = "Those attachments are larger than 200 MB together."
     const val INVALID_NAME: String = "That file doesn't have a valid filename."
 
     fun unsupportedType(name: String): String =
@@ -72,31 +77,38 @@ object AttachmentPolicy {
     fun kindForMime(value: String): PendingMessageAttachment.Kind? {
         val mime = normalizedMime(value)
         if (mime in IMAGE_MIME_TYPES) return PendingMessageAttachment.Kind.IMAGE
-        if (mime in DOCUMENT_MIME_TYPES) return PendingMessageAttachment.Kind.FILE
+        if (mime in DOCUMENT_MIME_TYPES || mime in VIDEO_MIME_TYPES) return PendingMessageAttachment.Kind.FILE
         return null
     }
 
     /** Throws [AttachmentPolicyException] with the sentence the composer shows. */
     fun validate(attachments: List<PendingMessageAttachment>) {
         if (attachments.size > MAXIMUM_ITEMS) throw AttachmentPolicyException(TOO_MANY_ITEMS)
-        if (attachments.sumOf { it.data.size.toLong() } > MAXIMUM_TOTAL_BYTES) {
+        if (attachments.sumOf { it.bytes } > MAXIMUM_TOTAL_BYTES) {
             throw AttachmentPolicyException(TOTAL_TOO_LARGE)
         }
+        if (attachments.sumOf { it.data.size.toLong() } > MAXIMUM_IN_MEMORY_BYTES) {
+            throw AttachmentPolicyException("Those attachments need too much memory. Choose files from disk instead.")
+        }
         for (attachment in attachments) {
+            if (attachment.file != null && (!attachment.file.isFile || !attachment.file.canRead())) {
+                throw AttachmentPolicyException("${attachment.name} is no longer available. Choose it again.")
+            }
             val name = attachment.name.trim()
             if (!validDisplayName(name)) throw AttachmentPolicyException(INVALID_NAME)
             val mime = normalizedMime(attachment.mime)
             when (attachment.kind) {
                 PendingMessageAttachment.Kind.IMAGE -> {
                     if (mime !in IMAGE_MIME_TYPES) throw AttachmentPolicyException(unsupportedType(name))
-                    if (attachment.data.size > MAXIMUM_IMAGE_BYTES) {
+                    if (attachment.bytes > MAXIMUM_IMAGE_BYTES) {
                         throw AttachmentPolicyException(itemTooLarge(name, 10))
                     }
                 }
                 PendingMessageAttachment.Kind.FILE -> {
-                    if (mime !in DOCUMENT_MIME_TYPES) throw AttachmentPolicyException(unsupportedType(name))
-                    if (attachment.data.size > MAXIMUM_FILE_BYTES) {
-                        throw AttachmentPolicyException(itemTooLarge(name, 25))
+                    if (mime !in DOCUMENT_MIME_TYPES && mime !in VIDEO_MIME_TYPES) throw AttachmentPolicyException(unsupportedType(name))
+                    val limit = if (attachment.file == null) MAXIMUM_BUFFERED_FILE_BYTES else MAXIMUM_FILE_BYTES
+                    if (attachment.bytes > limit) {
+                        throw AttachmentPolicyException(itemTooLarge(name, limit / 1_024 / 1_024))
                     }
                 }
             }

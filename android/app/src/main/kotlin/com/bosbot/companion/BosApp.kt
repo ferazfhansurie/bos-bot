@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -63,6 +64,7 @@ class BosApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.openmausbot.companion.storage.ComposerDraftStore(this).cleanOrphans()
         shareInbox = ShareInbox()
         ShareInbox.cleanStale(cacheDir)
         // Launch stays non-blocking. The preview store awaits the shared
@@ -87,6 +89,34 @@ class BosApp : Application() {
         )
         avatars = AvatarImageStore(fetch = session::avatarData)
         voicePreview = VoicePreviewPlayer(this)
+
+        appScope.launch {
+            session.voiceRings.collect { ring ->
+                val home = session.home(ring.connectionId) ?: return@collect
+                if (ring.runtimeIdentity == null || runCatching { home.sharedRuntimeIdentity(ring.connectionId!!) !== ring.runtimeIdentity }.getOrDefault(true)) return@collect
+                val bot = home.state.value.bot(ring.botId) ?: return@collect
+                val threadId = ring.threadId ?: bot.threadId
+                if (threadId != bot.threadId && bot.tasks.orEmpty().none { it.threadId == threadId }) return@collect
+                val target = com.openmausbot.companion.audio.VoiceCallTarget(home.connection.value?.id ?: return@collect, bot.id, threadId, bot.name)
+                val incoming = com.openmausbot.companion.audio.IncomingVoiceCall(ring.ringId, target, ring.reason, runtimeIdentity = ring.runtimeIdentity)
+                val center = com.openmausbot.companion.audio.VoiceCallCenter.get(this@BosApp)
+                center.ring(incoming) { home.ackRing(it, target.connectionId) }
+                com.openmausbot.companion.audio.VoiceRingNotifications.post(this@BosApp, incoming)
+                appScope.launch {
+                    kotlinx.coroutines.flow.combine(center.incoming, home.sharedRuntimeRevision) { current, _ ->
+                        current?.ringId != ring.ringId || runCatching { home.sharedRuntimeIdentity(target.connectionId) !== ring.runtimeIdentity }.getOrDefault(true)
+                    }.first { it }
+                    if (center.incoming.value?.ringId == ring.ringId) center.declineRing()
+                    com.openmausbot.companion.audio.VoiceRingNotifications.cancel(this@BosApp, ring.ringId)
+                }
+            }
+        }
+
+        appScope.launch {
+            session.homesState.map { homes -> homes.map { it.connection.id }.toSet() }.distinctUntilChanged().collect {
+                com.openmausbot.companion.audio.VoiceCallCenter.get(this@BosApp).reconcileConnectedHomes(it)
+            }
+        }
 
         // iOS resets the avatar cache inside signOut. Observe Unpaired here so
         // the platform cache cannot outlive the pairing that minted its URLs.

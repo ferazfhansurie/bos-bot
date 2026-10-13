@@ -192,7 +192,11 @@ fun CompanionRoot(
         tapCoordinator.onPending(session, target, onPendingTargetConsumed)
     }
 
-    CompanionTheme {
+    val chosenTheme by environment.chatPreferences.theme.collectAsState()
+    val chosenBrightness by environment.chatPreferences.brightness.collectAsState()
+    val chosenLanguage by environment.chatPreferences.language.collectAsState()
+    androidx.compose.runtime.CompositionLocalProvider(LocalInterfaceLanguage provides chosenLanguage) {
+    CompanionTheme(theme = chosenTheme, brightness = chosenBrightness) {
         // One place for system insets: the app draws edge to edge, and every
         // screen wants the same answer — keep content clear of the status bar,
         // the gesture bar, and the keyboard.
@@ -302,6 +306,8 @@ fun CompanionRoot(
     }
 }
 
+}
+
 /**
  * Which of the three worlds the pairing is in, as the router asks the question.
  *
@@ -348,6 +354,7 @@ private fun PairedScreen(
     bondGeneration: Int,
     onCommit: (NotificationTapCoordinator.Resolution, CompanionNavigator) -> Unit,
 ) {
+    val session = LocalCompanion.current.session
     val navigator = rememberCompanionNavigator(bondGeneration)
 
     // Session already resolved the exact task; the coordinator records the
@@ -360,6 +367,7 @@ private fun PairedScreen(
 
     BackHandler(enabled = navigator.canGoBack) { navigator.pop() }
 
+    Box(Modifier.fillMaxSize()) {
     when (val destination = navigator.current) {
         Destination.Roster -> RosterScreen(navigator)
         Destination.Settings -> SettingsScreen(
@@ -392,12 +400,30 @@ private fun PairedScreen(
         is Destination.Computer -> ComputerScreen(
             botId = destination.botId,
             onBack = navigator::pop,
+            onOpenBrowser = { navigator.push(Destination.Browser(destination.botId)) },
         )
+        is Destination.Browser -> ScopedBrowserDestination(destination, navigator)
+        is Destination.HomeChat -> HomeChatDestination(destination, navigator)
+        is Destination.SharedChat -> ScopedSharedDestination(destination, navigator)
+        is Destination.Walkie -> ScopedWalkieDestination(destination, navigator)
+        is Destination.VoiceCall -> VoiceDestination(destination, navigator)
         is Destination.Overview -> BotOverviewScreen(
             botId = destination.botId,
             onBack = navigator::pop,
         )
     }
+        Box(Modifier.align(Alignment.BottomCenter)) {
+            DoneUndoPill()
+            MinimizedVoiceCall(onExpand = { navigator.push(Destination.VoiceCall(it)) })
+        }
+        IncomingVoiceCallOverlay(onAnswer = { incoming ->
+            val home = session.home(incoming.target.connectionId)
+            val runtime = home?.let { runCatching { it.sharedRuntimeIdentity(incoming.target.connectionId) }.getOrNull() }
+            if (incoming.canAnswer(runtime)) navigator.push(Destination.VoiceCall(incoming.target,
+                "You called about: ${incoming.reason}. Tell me what needs my attention.", consentRuntimeIdentity = incoming.runtimeIdentity))
+        })
+    }
+
 }
 
 @Composable
@@ -406,10 +432,10 @@ private fun ActionErrorDialog(session: Session) {
     val text = message ?: return
     AlertDialog(
         onDismissRequest = { session.actionError = null },
-        title = { Text("Something went wrong") },
+        title = { Text(localized("Something went wrong")) },
         text = { Text(text) },
         confirmButton = {
-            TextButton(onClick = { session.actionError = null }) { Text("OK") }
+            TextButton(onClick = { session.actionError = null }) { Text(localized("OK")) }
         },
     )
 }
@@ -425,9 +451,9 @@ private fun UnpairedScreen(onPairAgain: () -> Unit, onChooseAnother: (() -> Unit
         title = "This phone was unpaired",
         description = "It was removed from the computer's Phone settings, or the pairing was reset.",
     ) {
-        Button(onClick = onPairAgain) { Text("Pair again") }
+        Button(onClick = onPairAgain) { Text(localized("Pair again")) }
         onChooseAnother?.let { choose ->
-            TextButton(onClick = choose) { Text("Use another computer") }
+            TextButton(onClick = choose) { Text(localized("Use another computer")) }
         }
     }
 }

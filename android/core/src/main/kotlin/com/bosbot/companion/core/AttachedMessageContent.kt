@@ -16,8 +16,9 @@ data class AttachedMessageContent(
 ) {
     companion object {
         /** Split only exact standalone tags; inline examples remain ordinary prose. */
-        fun parse(source: String): AttachedMessageContent {
+        fun parse(source: String, markdownImages: Boolean = false): AttachedMessageContent {
             val attachments = mutableListOf<DisplayedMessageAttachment>()
+            val seenImagePaths = mutableSetOf<String>()
             val visible = StringBuilder()
             var fence: Fence? = null
             var htmlBlock: HtmlBlock? = null
@@ -59,14 +60,16 @@ data class AttachedMessageContent(
                         }
                         val path = decodeAttribute(match.groupValues[2])
                         val provided = match.groups[3]?.value?.let(::decodeAttribute)
-                        attachments += DisplayedMessageAttachment(
-                            kind = kind,
-                            name = displayName(provided, path, kind),
-                            path = path,
-                        )
+                        if (!markdownImages || kind != DisplayedMessageAttachment.Kind.IMAGE || seenImagePaths.add(imageIdentity(path))) {
+                            attachments += DisplayedMessageAttachment(kind, displayName(provided, path, kind), path)
+                        }
                         consumedTransportTag = true
                     } else {
-                        htmlBlock = htmlBlockStarting(line)
+                        val images = if (markdownImages) localMarkdownImages(line) else null
+                        if (images != null) {
+                            images.filter { seenImagePaths.add(imageIdentity(it.path)) }.forEach { attachments += it }
+                            consumedTransportTag = true
+                        } else htmlBlock = htmlBlockStarting(line)
                     }
                 }
 
@@ -77,6 +80,30 @@ data class AttachedMessageContent(
                 text = visible.toString().trim(),
                 attachments = attachments,
             )
+        }
+
+        private val MARKDOWN_IMAGE_PATTERN = """!\[[^\]\r\n]*\]\((?:<([^<>\r\n]+)>|([^\s()<>]+))(?:[\t ]+(?:"[^"\r\n]*"|'[^'\r\n]*'))?[\t ]*\)"""
+        private val MARKDOWN_IMAGE = Regex(MARKDOWN_IMAGE_PATTERN)
+        private val MARKDOWN_IMAGE_LINE = run {
+            val image = "(?:\\[[\\t ]*$MARKDOWN_IMAGE_PATTERN[\\t ]*\\]\\([^()\\r\\n]*\\)|$MARKDOWN_IMAGE_PATTERN)"
+            Regex("^ {0,3}(?:(?:[-*+]|\\d{1,9}[.)])[\\t ]+)?$image(?:[\\t ]+$image)*[\\t ]*$")
+        }
+        private fun localImagePath(path: String): String? {
+            if (path.startsWith("file:", ignoreCase = true)) return (LocalMessageLink.resolve(path) as? LocalMessageLink.DesktopFile)?.path
+            if (!(path.startsWith('/') && !path.startsWith("//")) && !Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(path)) return null
+            return runCatching { java.net.URLDecoder.decode(path.replace("+", "%2B"), "UTF-8") }.getOrNull()
+        }
+        private fun imageIdentity(path: String): String = localImagePath(path) ?: path
+        private fun localMarkdownImages(line: String): List<DisplayedMessageAttachment>? {
+            if (!MARKDOWN_IMAGE_LINE.matches(line)) return null
+            val images = mutableListOf<DisplayedMessageAttachment>()
+            MARKDOWN_IMAGE.findAll(line).forEach { match ->
+                val path = match.groups[1]?.value ?: match.groups[2]?.value ?: return null
+                val local = localImagePath(path) ?: return null
+                images += DisplayedMessageAttachment(DisplayedMessageAttachment.Kind.IMAGE,
+                    displayName(null, local, DisplayedMessageAttachment.Kind.IMAGE), path)
+            }
+            return images.takeIf { it.isNotEmpty() }
         }
 
         private data class Fence(val character: Char, val length: Int)
@@ -209,3 +236,6 @@ val Message.generatedImages: List<DisplayedMessageAttachment>
             )
         }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+val Message.displayedContent: AttachedMessageContent
+    get() = AttachedMessageContent.parse(text.orEmpty(), markdownImages = role == Message.Role.BOT)

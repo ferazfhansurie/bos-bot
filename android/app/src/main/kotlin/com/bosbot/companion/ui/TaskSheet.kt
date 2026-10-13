@@ -279,7 +279,7 @@ fun TaskSheet(chat: Chat, onDismiss: () -> Unit, onSelectTask: (ChatTarget) -> U
                         .padding(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.End,
                 ) {
-                    TextButton(onClick = onDismiss, enabled = !saving) { Text("Done") }
+                    TextButton(onClick = onDismiss, enabled = !saving) { Text(localized("Done")) }
                 }
             }
         }
@@ -312,7 +312,7 @@ fun TaskSheet(chat: Chat, onDismiss: () -> Unit, onSelectTask: (ChatTarget) -> U
     pendingDelete?.let { task ->
         AlertDialog(
             onDismissRequest = { if (!saving) pendingDelete = null },
-            title = { Text("Delete ${TaskRules.title(task)}?") },
+            title = { Text(localized("Delete ${TaskRules.title(task)}?")) },
             text = { Text(error ?: "This conversation will be deleted. Generated files are kept.") },
             confirmButton = {
                 TextButton(enabled = !saving && TaskRules.canDelete(task, current), onClick = {
@@ -330,9 +330,9 @@ fun TaskSheet(chat: Chat, onDismiss: () -> Unit, onSelectTask: (ChatTarget) -> U
                             }
                         }
                     }
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }) { Text(localized("Delete"), color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = { TextButton(enabled = !saving, onClick = { pendingDelete = null; error = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(enabled = !saving, onClick = { pendingDelete = null; error = null }) { Text(localized("Cancel")) } },
         )
     }
 }
@@ -465,7 +465,7 @@ private fun TaskTitleDialog(
         confirmButton = {
             TextButton(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmText) }
         },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text(localized("Cancel")) } },
     )
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

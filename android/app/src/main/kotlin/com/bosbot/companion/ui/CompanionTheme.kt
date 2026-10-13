@@ -6,6 +6,11 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import org.json.JSONObject
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextDirection
@@ -19,15 +24,18 @@ import androidx.compose.ui.text.style.TextDirection
 private val Green = Color(MausPalette.argb("green"))
 
 private val LightColors = lightColorScheme(
-    primary = Green,
-    onPrimary = Color.White,
-    secondary = Green,
+    primary = Color(0xFF377FE6), onPrimary = Color.White,
+    secondary = Color(0xFF8E8E93), onSecondary = Color.White,
+    background = Color.White, surface = Color.White,
+    surfaceVariant = Color(0xFFF2F2F7), surfaceContainerHigh = Color(0xFFF2F2F7),
+    onSurface = Color(0xFF111111), onSurfaceVariant = Color(0xFF6C6C70),
 )
-
 private val DarkColors = darkColorScheme(
-    primary = Green,
-    onPrimary = Color.White,
-    secondary = Green,
+    primary = Color(0xFF377FE6), onPrimary = Color.White,
+    secondary = Color(0xFF8E8E93), onSecondary = Color.White,
+    background = Color.Black, surface = Color.Black,
+    surfaceVariant = Color(0xFF1C1C1E), surfaceContainerHigh = Color(0xFF1C1C1E),
+    onSurface = Color.White, onSurfaceVariant = Color(0xFF98989E),
 )
 
 /**
@@ -107,19 +115,37 @@ private val ContentDirectedTypography: Typography = Typography().run {
     )
 }
 
+internal val LocalThemeName = androidx.compose.runtime.staticCompositionLocalOf { "midnight" }
+
 @Composable
 fun CompanionTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    theme: String = "midnight",
+    brightness: String = "system",
     content: @Composable () -> Unit,
 ) {
+    val resolvedDark = when (brightness) { "light" -> false; "dark" -> true; else -> darkTheme }
+    androidx.compose.runtime.CompositionLocalProvider(LocalThemeName provides theme) {
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = themedColorScheme(resolvedDark, theme),
         typography = ContentDirectedTypography,
         content = content,
     )
+    }
 }
 
 /** SwiftUI's `Color.secondary` — the muted foreground everything quiet uses. */
 val secondaryTint: Color
     @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+@Composable
+private fun themedColorScheme(dark: Boolean, theme: String): androidx.compose.material3.ColorScheme {
+    val context = LocalContext.current
+    val table = remember { JSONObject(context.assets.open("theme-palettes.json").bufferedReader().use { it.readText() }) }
+    val base = if (dark) DarkColors else LightColors
+    val palette = table.optJSONObject(theme)?.optJSONObject(if (dark) "dark" else "light") ?: return base
+    fun paint(key: String) = Color(android.graphics.Color.parseColor(palette.getString(key)))
+    return base.copy(background = paint("app"), surface = paint("app"), surfaceVariant = paint("panel"),
+        surfaceContainerHigh = paint("raised"), primary = paint("accent"))
+}

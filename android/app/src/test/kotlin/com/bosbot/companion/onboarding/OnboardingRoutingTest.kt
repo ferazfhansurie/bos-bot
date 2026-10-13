@@ -95,10 +95,10 @@ class OnboardingRoutingTest {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Connect a computer").assertIsDisplayed()
-        compose.onNodeWithText("Enable notifications").assertIsDisplayed()
+        compose.onNodeWithText("Notifications").assertIsDisplayed()
         // And nothing that needs a pairing to mean anything.
         compose.onNodeWithText("Unpair this phone").assertDoesNotExist()
-        compose.onNodeWithText("Tasks & Routines").assertDoesNotExist()
+        compose.onNodeWithText("Threads & Routines").assertDoesNotExist()
 
         assertEquals(emptyList(), scene.asked(), "declining setup still spent a prompt")
 
@@ -147,7 +147,7 @@ class OnboardingRoutingTest {
         )
         mount(scene)
 
-        compose.onNodeWithText("No bots yet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Your profile and settings").assertIsDisplayed()
         assertEquals(
             emptyList(),
             scene.asked(),
@@ -184,7 +184,7 @@ class OnboardingRoutingTest {
         )
         // And the step is over: it does not come back for the same pairing, in
         // this process or the next one.
-        compose.onNodeWithText("No bots yet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Your profile and settings").assertIsDisplayed()
         assertFalse(
             scene.relaunchedOnboarding().notificationPending.value,
             "the prompt was fired but the marker is still pending",
@@ -205,7 +205,7 @@ class OnboardingRoutingTest {
         compose.onNodeWithText(OnboardingCopy.NOT_NOW).performClick()
         compose.waitForIdle()
 
-        compose.onNodeWithText("No bots yet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Your profile and settings").assertIsDisplayed()
         assertEquals(emptyList(), scene.asked(), "\"Not now\" fired the prompt anyway")
         // And the answer reached disk: a relaunch finds no step still owing.
         // Read through a store that never saw this process, because a marker
@@ -227,7 +227,7 @@ class OnboardingRoutingTest {
         )
         mount(scene)
 
-        compose.onNodeWithText("No bots yet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Your profile and settings").assertIsDisplayed()
         assertEquals(emptyList(), scene.asked())
     }
 
@@ -248,7 +248,7 @@ class OnboardingRoutingTest {
             welcomeSeen = false,
         )
         mount(scene)
-        compose.onNodeWithText("No bots yet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Your profile and settings").assertIsDisplayed()
 
         scene.session.signOut()
         compose.waitUntil(5_000) { scene.session.connection.value == null }
@@ -297,7 +297,7 @@ class OnboardingRoutingTest {
 
         compose.onNodeWithText(OnboardingCopy.NOT_NOW).performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("No bots yet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Your profile and settings").assertIsDisplayed()
 
         scene.session.signOut()
         compose.waitUntil(5_000) { scene.session.connection.value == null }
@@ -377,7 +377,7 @@ class OnboardingRoutingTest {
         )
         mount(scene)
 
-        compose.onNodeWithText("No bots yet").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Your profile and settings").assertIsDisplayed()
         compose.onNodeWithText(OnboardingCopy.NOTIFICATIONS_TITLE).assertDoesNotExist()
         assertEquals(emptyList(), scene.asked())
     }

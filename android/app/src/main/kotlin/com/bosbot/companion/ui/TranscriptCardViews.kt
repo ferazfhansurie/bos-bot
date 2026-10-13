@@ -206,7 +206,7 @@ fun DiffCard(card: TranscriptCard.Diff, modifier: Modifier = Modifier) {
         HorizontalDivider(color = secondaryTint.copy(alpha = 0.2f))
 
         TextButton(onClick = { copy(card.text) }) {
-            Text("Copy Diff", fontSize = 13.sp)
+            Text(localized("Copy Diff"), fontSize = 13.sp)
         }
     }
 }
@@ -320,7 +320,7 @@ fun DataTableCard(card: TranscriptCard.Table, modifier: Modifier = Modifier) {
         HorizontalDivider(color = secondaryTint.copy(alpha = 0.2f))
 
         TextButton(onClick = { copy(card.csv()) }) {
-            Text("Copy CSV", fontSize = 13.sp)
+            Text(localized("Copy CSV"), fontSize = 13.sp)
         }
     }
 }

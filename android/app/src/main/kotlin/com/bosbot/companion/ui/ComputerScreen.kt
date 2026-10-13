@@ -54,7 +54,7 @@ import kotlinx.coroutines.launch
  * for the composable's lifetime.
  */
 @Composable
-fun ComputerScreen(botId: String, onBack: () -> Unit) {
+fun ComputerScreen(botId: String, onBack: () -> Unit, onOpenBrowser: () -> Unit = {}) {
     val environment = LocalCompanion.current
     val session = environment.session
     val scope = rememberCoroutineScope()
@@ -82,6 +82,8 @@ fun ComputerScreen(botId: String, onBack: () -> Unit) {
     var opening by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
 
+    var waitingTooLong by remember(botId) { mutableStateOf(false) }
+    LaunchedEffect(botId) { kotlinx.coroutines.delay(10_000); waitingTooLong = true }
     val frame = state.screens[botId]
     val image: ImageBitmap? = remember(frame) {
         frame?.data
@@ -99,11 +101,18 @@ fun ComputerScreen(botId: String, onBack: () -> Unit) {
             )
         } else {
             Waiting(
-                headline = ComputerPolicy.waitingHeadline(bot),
+                loading = !waitingTooLong,
+                headline = if (waitingTooLong) "No screen activity yet" else ComputerPolicy.waitingHeadline(bot),
                 explanation = ComputerPolicy.IDLE_EXPLANATION.takeIf {
                     ComputerPolicy.explainsIdle(bot)
                 },
             )
+        }
+
+        if (session.canAdminister && bot.computer != "cloud") {
+            androidx.compose.material3.TextButton(onClick = onOpenBrowser, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)) {
+                Text(localized("Open browser"), color = Color.White)
+            }
         }
 
         Row(
@@ -142,7 +151,7 @@ fun ComputerScreen(botId: String, onBack: () -> Unit) {
             )
         }
 
-        if (ComputerPolicy.showsCloudDesktop(bot)) {
+        if (session.canAdminister && ComputerPolicy.showsCloudDesktop(bot)) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -209,23 +218,23 @@ fun ComputerScreen(botId: String, onBack: () -> Unit) {
                             }
                         }
                     },
-                ) { Text("Open desktop") }
+                ) { Text(localized("Open desktop")) }
             },
             dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text("Cancel") }
+                TextButton(onClick = { confirming = false }) { Text(localized("Cancel")) }
             },
         )
     }
 }
 
 @Composable
-private fun Waiting(headline: String, explanation: String?) {
+private fun Waiting(headline: String, explanation: String?, loading: Boolean = true) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CircularProgressIndicator(
+        if (loading) CircularProgressIndicator(
             modifier = Modifier.size(24.dp),
             strokeWidth = 2.dp,
             color = Color.White,

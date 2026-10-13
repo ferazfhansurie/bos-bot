@@ -133,7 +133,7 @@ fun ConnectedAppsScreen(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HeaderBackButton(onBack)
-            Text("Connected Apps", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(localized("Connected Apps"), fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             TextButton(
                 onClick = { scope.launch { refresh(showProgress = true) } },
                 enabled = !refreshing,
@@ -158,7 +158,7 @@ fun ConnectedAppsScreen(onBack: () -> Unit) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("Search apps") },
+                    label = { Text(localized("Search apps")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -173,7 +173,7 @@ fun ConnectedAppsScreen(onBack: () -> Unit) {
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            Text("Connected apps need setup", fontWeight = FontWeight.SemiBold)
+                            Text(localized("Connected apps need setup"), fontWeight = FontWeight.SemiBold)
                             Text(
                                 "Configure Composio on your computer first. Provider credentials are never returned to this phone.",
                                 color = secondaryTint,
@@ -198,7 +198,7 @@ fun ConnectedAppsScreen(onBack: () -> Unit) {
                 }
 
                 if (!loading && catalog?.cards.isNullOrEmpty()) {
-                    Text("No connected apps are available from this computer.", color = secondaryTint)
+                    Text(localized("No connected apps are available from this computer."), color = secondaryTint)
                 }
 
                 if (loading) {
@@ -214,13 +214,13 @@ fun ConnectedAppsScreen(onBack: () -> Unit) {
         val normalized = ConnectedAppsRules.additionalAccountAlias(alias)
         AlertDialog(
             onDismissRequest = { aliasTarget = null },
-            title = { Text("Account alias") },
+            title = { Text(localized("Account alias")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = alias,
                         onValueChange = { alias = it },
-                        label = { Text("Work, Personal, Client…") },
+                        label = { Text(localized("Work, Personal, Client…")) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -238,9 +238,9 @@ fun ConnectedAppsScreen(onBack: () -> Unit) {
                         aliasTarget = null
                         authorize(target.slug, normalized)
                     },
-                ) { Text("Continue") }
+                ) { Text(localized("Continue")) }
             },
-            dismissButton = { TextButton(onClick = { aliasTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { aliasTarget = null }) { Text(localized("Cancel")) } },
         )
     }
 }
@@ -262,7 +262,7 @@ private val AliasTargetSaver = listSaver<AliasTarget?, String>(
 private fun CredentialStoreWarning(hasLastKnownInventory: Boolean) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Accounts could not be re-checked", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.tertiary)
+            Text(localized("Accounts could not be re-checked"), fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.tertiary)
             Text(
                 if (hasLastKnownInventory) {
                     "Showing what was connected last time. Your computer could not open its credential store just now, so these accounts could not be re-checked. Nothing has been disconnected — restarting BOS Bot on your computer usually clears this."
@@ -296,13 +296,13 @@ private fun ConnectorCardView(
                     Text(card.label, fontWeight = FontWeight.SemiBold)
                     Text(card.blurb, color = secondaryTint, fontSize = 13.sp)
                 }
-                if (pending) Text("Connecting…", color = secondaryTint, fontSize = 13.sp)
+                if (pending) Text(localized("Connecting…"), color = secondaryTint, fontSize = 13.sp)
             }
 
             when {
-                !hasAuthoritativeInventory -> Text("Connection unknown", color = secondaryTint)
+                !hasAuthoritativeInventory -> Text(localized("Connection unknown"), color = secondaryTint)
                 accounts.isEmpty() && !connected && !pending -> Button(onClick = onConnect, enabled = configured) {
-                    Text("Connect ${card.label}")
+                    Text(localized("Connect ${card.label}"))
                 }
                 accounts.isEmpty() -> {
                     Text(if (pending) "Connecting…" else "Connected")
@@ -320,7 +320,7 @@ private fun ConnectorCardView(
                     TextButton(
                         onClick = onAddAccount,
                         enabled = ConnectedAppsRules.canAddAnotherAccount(accounts),
-                    ) { Text("Add another account") }
+                    ) { Text(localized("Add another account")) }
                 }
             }
         }

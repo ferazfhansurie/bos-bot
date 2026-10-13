@@ -46,6 +46,7 @@ data class CompanionState(
      * Empty against a server without one; faces then fall back to the bot record.
      */
     val activity: ActivityFeed = ActivityFeed(),
+    private val streamTasks: Map<String, List<BotTask>> = emptyMap(),
 ) {
     /** Threads holding at least one queued send. The row label, the Updates
      * pill, and the closed-thread fold all read this, never task activity. */
@@ -209,7 +210,26 @@ data class CompanionState(
             .sortedWith(compareBy<Message> { it.at }.thenBy { it.id })
     }
 
-    fun apply(streamFrame: StreamFrame): CompanionState = apply(streamFrame.frame)
+    fun apply(streamFrame: StreamFrame): CompanionState {
+        val frame = streamFrame.frame
+        return when (frame) {
+            is Frame.Hello -> copy(streamTasks = emptyMap()).apply(frame)
+            is Frame.BotDeleted -> copy(streamTasks = streamTasks - frame.botId).apply(frame)
+            is Frame.Bot -> {
+                var bot = frame.bot
+                bot.taskOrder?.let { order ->
+                    val baseline = streamTasks[bot.id] ?: return this
+                    val tasks = baseline.associateByTo(linkedMapOf(), BotTask::threadId)
+                    bot.tasks.orEmpty().forEach { tasks[it.threadId] = it }
+                    if (order.any { it !in tasks }) return this
+                    bot = bot.copy(tasks = order.map { tasks.getValue(it) }, taskOrder = null)
+                }
+                val next = if (bot.tasks == null) streamTasks - bot.id else streamTasks + (bot.id to bot.tasks!!)
+                copy(streamTasks = next).apply(Frame.Bot(bot))
+            }
+            else -> apply(frame)
+        }
+    }
 
     fun apply(frame: Frame): CompanionState = when (frame) {
         is Frame.Hello -> this
@@ -233,7 +253,12 @@ data class CompanionState(
                 },
             )
             if (frame.message.role == Message.Role.BOT && frame.message.kind == Message.Kind.TEXT) {
-                result = result.clearStream(frame.threadId)
+                val sender = frame.message.from?.botId
+                val lane = sender?.let { RuntimeEvent.roomStreamKey(frame.threadId, it) }
+                result = if (lane != null && (roomOwningTask(frame.threadId) != null || lane in streaming)) {
+                    result.clearStream(lane).copy(streaming = result.streaming - lane - frame.threadId,
+                        reasoning = result.reasoning - lane - frame.threadId)
+                } else result.clearStream(frame.threadId)
             }
             frame.message.queueId?.let { result = result.retireQueued(it, frame.threadId) }
             result
@@ -270,14 +295,14 @@ data class CompanionState(
         )
         is Frame.Screen -> copy(screens = screens + (frame.botId to ScreenFrame(frame.png, frame.mime)))
 
-        is Frame.Computer, Frame.Config, is Frame.Unknown -> this
+        is Frame.Computer, Frame.Config, is Frame.Unknown, is Frame.VoiceRing -> this
     }
 
     fun clearScreen(botId: String): CompanionState = copy(screens = screens - botId)
 
     fun clearStream(threadId: String): CompanionState = copy(
-        streaming = streaming - threadId,
-        reasoning = reasoning - threadId,
+        streaming = streaming.filterKeys { it != threadId && !it.startsWith("$threadId:room:") },
+        reasoning = reasoning.filterKeys { it != threadId && !it.startsWith("$threadId:room:") },
     )
 
     // MARK: - Held mid-turn sends
@@ -356,6 +381,8 @@ data class CompanionState(
         copy(drainedQueueIds = (drainedQueueIds + queueId).takeLast(MAX_DRAINED_QUEUE_IDS))
 
     /** Drop a row because its line landed, and leave a tombstone behind. */
+    fun consumeQueued(queueId: String, threadId: String): CompanionState = retireQueued(queueId, threadId)
+
     private fun retireQueued(queueId: String, threadId: String): CompanionState {
         return forgetQueued(queueId, threadId).markDrained(queueId)
     }
@@ -497,16 +524,17 @@ data class CompanionState(
                 } else {
                     when (event.streamKind) {
                         "assistant_text" -> copy(
-                            streaming = streaming + (event.threadId to (streaming[event.threadId].orEmpty() + delta)),
+                            streaming = streaming + (event.streamKey to (streaming[event.streamKey].orEmpty() + delta)),
                         )
                         "reasoning_text" -> copy(
-                            reasoning = reasoning + (event.threadId to (reasoning[event.threadId].orEmpty() + delta)),
+                            reasoning = reasoning + (event.streamKey to (reasoning[event.streamKey].orEmpty() + delta)),
                         )
                         else -> this
                     }
                 }
             }
-            "turn.completed", "turn.failed", "turn.aborted" -> clearStream(event.threadId)
+            "item.completed" -> if (event.roomBotId != null) clearStream(event.streamKey) else this
+            "turn.completed", "turn.failed", "turn.aborted" -> clearStream(event.streamKey)
             else -> this
         }
     }

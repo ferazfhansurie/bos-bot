@@ -36,9 +36,9 @@ class AttachmentRulesTest {
     }
 
     @Test
-    fun `adding stops at four and while anything is in flight`() {
-        assertTrue(AttachmentImportRules.canAdd(3, preparing = false, sending = false))
-        assertFalse(AttachmentImportRules.canAdd(4, preparing = false, sending = false))
+    fun `adding stops at the shared cap and while anything is in flight`() {
+        assertTrue(AttachmentImportRules.canAdd(AttachmentPolicy.MAXIMUM_ITEMS - 1, preparing = false, sending = false))
+        assertFalse(AttachmentImportRules.canAdd(AttachmentPolicy.MAXIMUM_ITEMS, preparing = false, sending = false))
         assertFalse(AttachmentImportRules.canAdd(0, preparing = true, sending = false))
         assertFalse(AttachmentImportRules.canAdd(0, preparing = false, sending = true))
     }

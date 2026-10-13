@@ -172,7 +172,7 @@ object SearchPolicy {
  * with a task list get the same task controls as an agent. Exporting is not a
  * bot idea — a room has a transcript like anything else.
  */
-enum class ChatActionId { PHOTOS, FILES, NEW_TASK, TASKS, WATCH_COMPUTER, SETTINGS, SHARE_MARKDOWN, SHARE_JSON, INTERRUPT }
+enum class ChatActionId { AUDIO, RECORD_AUDIO, SAVED_RECORDINGS, PHOTOS, FILES, NEW_TASK, TASKS, WATCH_COMPUTER, SETTINGS, SHARE_MARKDOWN, SHARE_JSON, INTERRUPT }
 
 data class ChatAction(
     val id: ChatActionId,
@@ -184,6 +184,16 @@ data class ChatAction(
 )
 
 object ChatActions {
+    fun composer(canAddAttachment: Boolean, sending: Boolean): List<ChatAction> = listOf(
+        ChatAction(ChatActionId.PHOTOS, "Photos & videos", "", enabled = canAddAttachment),
+        ChatAction(ChatActionId.FILES, "Files", "", enabled = canAddAttachment),
+        ChatAction(ChatActionId.AUDIO, "Audio", "", enabled = !sending),
+    )
+    fun audio(sending: Boolean): List<ChatAction> = listOf(
+        ChatAction(ChatActionId.RECORD_AUDIO, "Record audio", "", enabled = !sending),
+        ChatAction(ChatActionId.SAVED_RECORDINGS, "Saved recordings", ""),
+    )
+
     /**
      * What the + opens, in the Swift's order.
      *

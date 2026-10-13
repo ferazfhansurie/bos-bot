@@ -2,6 +2,10 @@ package com.openmausbot.companion.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +25,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,6 +81,7 @@ import com.openmausbot.companion.core.Instance
 import com.openmausbot.companion.core.ModelSelection
 import com.openmausbot.companion.core.Voice
 import com.openmausbot.companion.core.VoiceProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -106,6 +113,19 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
     val opened = remember { bot }
     val current = state.bot(opened.id) ?: opened
     val currentTask = current.forTask(opened.threadId)
+    val connection by session.connection.collectAsState()
+    val canAdminister = connection?.canAdminister == true
+    val actionError by session.actionErrorFlow.collectAsState()
+    var confirmingDiscard by remember { mutableStateOf(false) }
+    var pendingModel by remember { mutableStateOf<ModelSelection?>(null) }
+    var chatterboxURL by rememberSaveable { mutableStateOf("") }
+    var chatterboxModel by rememberSaveable { mutableStateOf("") }
+    var savingServer by remember { mutableStateOf(false) }
+    var serverProblem by remember { mutableStateOf<String?>(null) }
+    var hostIsMac by remember { mutableStateOf(false) }
+    var previewBot by remember { mutableStateOf<Bot?>(null) }
+    var heroGaze by remember { mutableStateOf(Offset.Zero) }
+    var heroMood by remember { mutableStateOf(MausState.HAPPY) }
 
     var form by rememberSaveable(stateSaver = ProfileFormSaver) {
         mutableStateOf(ProfileForm.of(opened))
@@ -122,7 +142,7 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
     // The Model section. The draft survives rotation; the catalog is reloaded.
     var instances by remember { mutableStateOf<List<Instance>>(emptyList()) }
     var modelsLoaded by remember { mutableStateOf(false) }
-    var savedModel by remember { mutableStateOf(opened.modelSelection) }
+    var savedModel by remember { mutableStateOf(opened.forTask(opened.threadId)?.modelSelection ?: opened.modelSelection) }
     var selectedInstanceId by rememberSaveable { mutableStateOf(opened.modelSelection.instanceId) }
     var selectedModelId by rememberSaveable { mutableStateOf(opened.modelSelection.model) }
     // "" is the engine default; the picker has no null row.
@@ -138,13 +158,17 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
         selectedEffort = selection.effort.orEmpty()
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(opened.id, connection?.id) {
+        if (current.remote != null) { onDismiss(); return@LaunchedEffect }
         val loaded = coroutineScope {
             val status = async { session.configStatus() }
             val options = async { session.voiceOptions() }
-            val catalog = async { session.modelInstances() }
+            val catalog = async { if (canAdminister) session.modelInstances() else emptyList() }
             Triple(status.await(), options.await(), catalog.await())
         }
+        hostIsMac = session.serverEnvironment()?.platform == "darwin"
+        chatterboxURL = loaded.first?.tts?.baseUrl.orEmpty()
+        chatterboxModel = loaded.first?.tts?.model.orEmpty()
         config = loaded.first
         voices = loaded.second
         instances = loaded.third
@@ -193,8 +217,35 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
         }
     }
 
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+
+    suspend fun saveProfile(): Boolean {
+        if (!ProfileRules.canSave(form, busy)) return false
+        busy = true
+        return try {
+            val updated = session.updateProfile(ProfileRules.patch(form, baseline, config), liveBot()) ?: return false
+            form = ProfileForm.of(updated); baseline = ProfileForm.of(updated)
+            true
+        } finally { busy = false }
+    }
+    fun requestDismiss() {
+        if (busy) return
+        if (ProfileSheetPolicy.hasUnsavedIdentity(form, baseline)) confirmingDiscard = true else onDismiss()
+    }
+    fun applyModel(selection: ModelSelection, reset: Boolean = false) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            try {
+                val target = liveBot().forTask(opened.threadId) ?: return@launch
+                val updated = session.updateModel(selection, target, resetApprovalToAsk = reset, needsConfirmation = { pendingModel = selection })
+                if (updated != null) { savedModel = updated.forTask(opened.threadId)?.modelSelection ?: updated.modelSelection; showModel(savedModel) }
+            } finally { busy = false }
+        }
+    }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { next ->
+        if (next == SheetValue.Hidden && (busy || ProfileSheetPolicy.hasUnsavedIdentity(form, baseline))) { if (!busy) confirmingDiscard = true; false } else true
+    })
+    ModalBottomSheet(onDismissRequest = ::requestDismiss, sheetState = sheetState) {
         Box {
             Column(
                 modifier = Modifier
@@ -204,10 +255,11 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
             ) {
                 Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
                     TextButton(
-                        onClick = onDismiss,
+                        onClick = ::requestDismiss,
+                        enabled = !busy,
                         modifier = Modifier.align(Alignment.CenterStart),
                     ) {
-                        Text("Done")
+                        Text(localized("Done"))
                     }
                     Text(
                         text = "Bot settings",
@@ -225,7 +277,7 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                     )
                 }
 
-                FormSection(header = "Model", footer = ModelRules.FOOTER) {
+                if (canAdminister) FormSection(header = "Model", footer = ModelRules.FOOTER) {
                     val instanceChoices = ModelRules.instanceChoices(instances, savedModel)
                     if (!modelsLoaded) {
                         Row(
@@ -305,21 +357,7 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                                 draft = modelDraft,
                                 saved = savedModel,
                             ),
-                            onClick = {
-                                scope.launch {
-                                    busy = true
-                                    try {
-                                        val target = liveBot().forTask(opened.threadId) ?: return@launch
-                                        val updated = session.updateModel(modelDraft, target)
-                                        if (updated != null) {
-                                            savedModel = updated.modelSelection
-                                            showModel(updated.modelSelection)
-                                        }
-                                    } finally {
-                                        busy = false
-                                    }
-                                }
-                            },
+                            onClick = { applyModel(modelDraft) },
                         )
                     }
                 }
@@ -330,9 +368,17 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                         contentAlignment = Alignment.Center,
                     ) {
                         BotAvatar(
-                            bot = current,
+                            bot = (previewBot ?: current).copy(avatarCrop = form.crop),
                             size = 112.dp,
-                            state = MausState.HAPPY,
+                            animated = true,
+                            state = heroMood,
+                            gaze = heroGaze,
+                            modifier = if (form.crop == AvatarCrop.MASCOT || current.avatarUrl == null) Modifier
+                                .pointerInput(Unit) { detectTapGestures { val moods = listOf(MausState.HAPPY, MausState.SURPRISED, MausState.CURIOUS, MausState.PLAYFUL); heroMood = moods[(moods.indexOf(heroMood) + 1) % moods.size] } }
+                                .pointerInput(Unit) {
+                                    fun gazeAt(point: Offset) { heroGaze = Offset(((point.x / size.width.coerceAtLeast(1)) - .5f) * 12f, ((point.y / size.height.coerceAtLeast(1)) - .5f) * 12f) }
+                                    detectDragGestures(onDragStart = { gazeAt(it) }, onDragEnd = { heroGaze = Offset.Zero }, onDragCancel = { heroGaze = Offset.Zero }) { change, _ -> change.consume(); gazeAt(change.position) }
+                                } else Modifier,
                             contentDescription = "${current.name} avatar",
                         )
                     }
@@ -352,6 +398,11 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                                 Text(ProfileRules.cropLabel(option))
                             }
                         }
+                    }
+
+                    if (form.crop == AvatarCrop.MASCOT) MascotProfileControls(previewBot ?: current, busy) { patch ->
+                        previewBot = current.copy(color = patch.color ?: current.color, mascotBody = patch.mascotBody ?: current.mascotBody, mascotEyes = patch.mascotEyes ?: current.mascotEyes)
+                        scope.launch { busy = true; try { session.updateProfile(patch, liveBot()) } finally { busy = false; previewBot = null } }
                     }
 
                     ActionRow(
@@ -392,14 +443,14 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                     }
                 }
 
-                FormSection(
+                if (canAdminister) FormSection(
                     header = "Generate an avatar",
                     footer = ProfileRules.generateFooter(config),
                 ) {
                     OutlinedTextField(
                         value = prompt,
                         onValueChange = { prompt = it },
-                        label = { Text("Art direction") },
+                        label = { Text(localized("Art direction")) },
                         minLines = 2,
                         maxLines = 5,
                         modifier = Modifier.fillMaxWidth(),
@@ -412,28 +463,11 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                             scope.launch {
                                 busy = true
                                 try {
-                                    val intended = AvatarImageRules.intendedUploadCrop(form.crop)
-                                    val generated = session.generateAvatar(
-                                        ProfileRules.generatePrompt(prompt),
-                                        liveBot(),
-                                    ) ?: return@launch
-                                    // Generation picks a safe crop server-side;
-                                    // the selector is the user's explicit choice,
-                                    // so persist it against the returned
-                                    // attachment rather than leaving the two out
-                                    // of sync.
-                                    val updated = session.updateProfile(
-                                        BotProfilePatch(avatarCrop = intended),
-                                        generated,
-                                    )
-                                    val crop = if (updated != null) {
-                                        updated.avatarCrop ?: intended
-                                    } else {
-                                        // Generation itself succeeded: reflect its
-                                        // authoritative fallback rather than
-                                        // claiming the requested crop was saved.
-                                        generated.avatarCrop ?: AvatarCrop.MASCOT
-                                    }
+                                    val cropAtStart = form.crop
+                                    val generated = session.generateAvatar(ProfileRules.generatePrompt(prompt), liveBot()) ?: return@launch
+                                    val resolved = ProfileSheetPolicy.generatedCrop(cropAtStart, form.crop, generated.avatarCrop)
+                                    val updated = if (form.crop != cropAtStart) session.updateProfile(BotProfilePatch(avatarCrop = resolved), generated) else generated
+                                    val crop = updated?.avatarCrop ?: generated.avatarCrop ?: AvatarCrop.CIRCLE
                                     form = form.copy(crop = crop)
                                     baseline = baseline.copy(crop = crop)
                                 } finally {
@@ -448,7 +482,7 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                     OutlinedTextField(
                         value = form.name,
                         onValueChange = { form = form.copy(name = it) },
-                        label = { Text("Name") },
+                        label = { Text(localized("Name")) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.Words,
@@ -458,28 +492,40 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                     OutlinedTextField(
                         value = form.title,
                         onValueChange = { form = form.copy(title = it) },
-                        label = { Text("Title") },
+                        label = { Text(localized("Title")) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
                         value = form.description,
                         onValueChange = { form = form.copy(description = it) },
-                        label = { Text("What this agent does") },
+                        label = { Text(localized("What this agent does")) },
                         minLines = 3,
                         maxLines = 8,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     SwitchRow(
-                        label = "Agent notifications",
+                        label = "Notifications",
                         checked = form.notifications,
                         onCheckedChange = { form = form.copy(notifications = it) },
                     )
                 }
 
+                if (config?.voiceProvider == VoiceProvider.CHATTERBOX) FormSection(header = "Chatterbox server") {
+                    OutlinedTextField(chatterboxURL, { chatterboxURL = it; serverProblem = null }, label = { Text(localized("Chatterbox server address")) }, placeholder = { Text(localized("http://127.0.0.1:4123")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(chatterboxModel, { chatterboxModel = it }, label = { Text(localized("Chatterbox model")) }, placeholder = { Text(localized("chatterbox-turbo")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    serverProblem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    if (savingServer) CircularProgressIndicator(Modifier.size(20.dp))
+                    ActionRow("Save server", enabled = !savingServer && !busy && chatterboxURL.trim().isNotEmpty()) {
+                        if (!ProfileSheetPolicy.chatterboxAddressValid(chatterboxURL)) serverProblem = "The server address must start with http:// or https://."
+                        else scope.launch { savingServer = true; serverProblem = null; try { config = session.saveChatterboxServer(chatterboxURL.trim(), chatterboxModel.trim()); voices = session.voiceOptions() } catch (error: CancellationException) { throw error } catch (error: Exception) { serverProblem = error.message ?: "Could not save this server." } finally { savingServer = false } }
+                    }
+                }
+
                 VoiceSection(
                     config = config,
-                    switching = switchingEngine,
+                    switching = switchingEngine || busy,
+                    hostIsMac = hostIsMac,
                     onSwitchEngine = { next ->
                         // The desktop's Voice engine group: one field of the
                         // ordinary config write, then a fresh voice list,
@@ -559,24 +605,12 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
                     }
                 }
 
+                actionError?.let { FormSection(header = null) { Text(it, color = MaterialTheme.colorScheme.error) } }
                 FormSection(header = null) {
                     ActionRow(
                         text = "Save profile changes",
                         enabled = ProfileRules.canSave(form, busy),
-                        onClick = {
-                            scope.launch {
-                                busy = true
-                                val updated = session.updateProfile(
-                                    ProfileRules.patch(form, baseline, config),
-                                    liveBot(),
-                                )
-                                if (updated != null) {
-                                    form = ProfileForm.of(updated)
-                                    baseline = ProfileForm.of(updated)
-                                }
-                                busy = false
-                            }
-                        },
+                        onClick = { scope.launch { saveProfile() } },
                     )
                 }
             }
@@ -591,6 +625,11 @@ internal fun AgentProfileSheet(bot: Bot, onDismiss: () -> Unit, onOpenOverview: 
             }
         }
     }
+    if (confirmingDiscard) AlertDialog(onDismissRequest = { confirmingDiscard = false }, title = { Text(localized("Save your changes?")) }, text = { Text(localized("You changed this agent's profile but haven't saved it.")) },
+        confirmButton = { TextButton(enabled = form.name.trim().isNotEmpty() && !busy, onClick = { scope.launch { if (saveProfile()) { confirmingDiscard = false; onDismiss() } } }) { Text(localized("Save changes")) } },
+        dismissButton = { Column { TextButton(onClick = { confirmingDiscard = false; onDismiss() }) { Text(localized("Discard changes"), color = MaterialTheme.colorScheme.error) }; TextButton(onClick = { confirmingDiscard = false }) { Text(localized("Keep editing")) } } })
+    pendingModel?.let { selection -> AlertDialog(onDismissRequest = { pendingModel = null }, title = { Text(localized("Switch with Ask permissions?")) }, text = { Text(localized("This model needs different permissions. Switching will set this conversation to Ask, so actions may require your approval.")) },
+        confirmButton = { TextButton(onClick = { pendingModel = null; applyModel(selection, true) }) { Text(localized("Switch with Ask")) } }, dismissButton = { TextButton(onClick = { pendingModel = null }) { Text(localized("Cancel")) } }) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -615,7 +654,7 @@ internal fun ChoicePicker(
             onValueChange = {},
             readOnly = true,
             enabled = enabled,
-            label = { Text(label) },
+            label = { Text(localized(label)) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
@@ -661,6 +700,7 @@ internal fun ChoicePicker(
 internal fun VoiceSection(
     config: ConfigStatus?,
     switching: Boolean = false,
+    hostIsMac: Boolean = true,
     onSwitchEngine: (VoiceProvider) -> Unit = {},
     canSpeak: @Composable () -> Unit,
 ) {
@@ -668,7 +708,7 @@ internal fun VoiceSection(
     FormSection(header = "Voice", footer = copy.footer) {
         ChoicePicker(
             label = "Voice engine",
-            choices = ProfileRules.providerChoices(),
+            choices = ProfileRules.providerChoices().map { if (it.id == VoiceProvider.SYSTEM.wire) it.copy(enabled = hostIsMac) else it },
             selected = (config?.voiceProvider ?: VoiceProvider.ELEVENLABS).wire,
             onSelect = { next -> onSwitchEngine(VoiceProvider.fromWire(next)) },
             enabled = !switching,
@@ -697,7 +737,7 @@ internal fun FormSection(
     ) {
         header?.let {
             Text(
-                text = it.uppercase(),
+                text = localized(it).uppercase(),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = secondaryTint,
@@ -746,7 +786,7 @@ internal fun ActionRow(
                 modifier = Modifier.size(20.dp),
             )
         }
-        Text(text = text, fontSize = 15.sp, color = tint)
+        Text(text = localized(text), fontSize = 15.sp, color = tint)
     }
 }
 
@@ -771,7 +811,7 @@ internal fun SwitchRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = label,
+            text = localized(label),
             fontSize = 15.sp,
             color = if (enabled) Color.Unspecified else secondaryTint.copy(alpha = 0.5f),
             modifier = Modifier.weight(1f),

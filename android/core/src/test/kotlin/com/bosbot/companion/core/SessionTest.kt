@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotSame
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -16,6 +17,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -1942,6 +1944,59 @@ class SessionTest {
         session.connect()
         assertEquals(2, opens)
         scope.cancel()
+    }
+
+    @Test
+    fun sameComputerRePairInvalidatesSharedActorAndRejectsOldRuntimeBeforeMutation() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            val connection = requireNotNull(Connection.parse(server.url("/").toString())).copy(id = "same-home")
+            val session = session(connectionStore = FakeConnectionStore(connection), tokenStore = FakeTokenStore().apply { saved[connection.id] = "old-actor-token" },
+                pairFn = { _, _, _ -> PairResponse("new-actor-token", PairedDevice("d", "Pixel", 1.0, 1.0), "Fixture") })
+            session.awaitRestored()
+            val marker = session.sharedRuntimeIdentity(connection.id)
+            val revision = session.sharedRuntimeRevision.value
+            server.enqueue(MockResponse().setBody("""{"actorId":"old-person","homeId":"home"}"""))
+            server.enqueue(MockResponse().setResponseCode(403))
+            assertTrue(session.validateSharedActor(connection.id, "old-person", marker))
+            assertEquals(2, server.requestCount)
+            session.pair(connection, "123456")
+            assertEquals(connection.id, session.connection.value?.id)
+            assertTrue(session.sharedRuntimeRevision.value > revision)
+            assertNotSame(marker, session.sharedRuntimeIdentity(connection.id))
+            assertFailsWith<APIError.Transport> { session.sendSharedMessage("room", "old person's draft", "01234567-89ab-cdef-0123-456789abcdef", expectedConnectionId = connection.id, expectedRuntimeIdentity = marker) }
+            assertFailsWith<APIError.Transport> { session.validateSharedActor(connection.id, "old-person", marker) }
+            assertEquals(2, server.requestCount)
+        }
+    }
+
+    @Test
+    fun sharedChatGuardsSourceBeforeHttpAndDropsInFlightResultAfterForget() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            val connection = requireNotNull(Connection.parse(server.url("/").toString())).copy(id = "home")
+            val session = session(connectionStore = FakeConnectionStore(connection), tokenStore = FakeTokenStore().apply { saved["home"] = "fixture-token" })
+            session.awaitRestored()
+            assertFailsWith<APIError.Transport> { session.sharedRooms("another-home") }
+            assertEquals(0, server.requestCount)
+            val started = CompletableDeferred<Unit>()
+            val release = java.util.concurrent.CountDownLatch(1)
+            server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                    started.complete(Unit)
+                    release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    return MockResponse().setBody("""{"rooms":[]}""")
+                }
+            }
+            val pending = async { session.sharedRooms("home") }
+            started.await()
+            session.forgetConnection("home")
+            runCurrent()
+            assertNull(session.connection.value)
+            release.countDown()
+            assertFailsWith<kotlinx.coroutines.CancellationException> { pending.await() }
+            assertEquals(1, server.requestCount)
+        }
     }
 
     private fun kotlinx.coroutines.test.TestScope.session(

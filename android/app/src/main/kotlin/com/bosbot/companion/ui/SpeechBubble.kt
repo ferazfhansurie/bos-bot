@@ -194,7 +194,9 @@ private const val QUARTER = 90f
  */
 object BubbleColor {
     /** What you said. The mascot palette's blue, not the system's. */
-    val mine: Color = Color(MausPalette.argb("blue"))
+    val classicMine: Color = Color(MausPalette.argb("blue"))
+    val mine: Color
+        @Composable get() = MaterialTheme.colorScheme.primary
     val mineText: Color = Color.White
 
     private val theirsDark = Color(0xFF262629)
@@ -207,6 +209,7 @@ object BubbleColor {
      */
     val theirs: Color
         @Composable get() =
-            if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) theirsDark else theirsLight
+            if (LocalThemeName.current != "midnight" && LocalThemeName.current in themeNames) MaterialTheme.colorScheme.surfaceContainerHigh
+            else if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) theirsDark else theirsLight
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

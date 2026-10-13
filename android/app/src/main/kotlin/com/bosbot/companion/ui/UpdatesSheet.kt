@@ -163,7 +163,7 @@ internal fun UpdatesSheet(onOpen: (Chat) -> Unit, onDismiss: () -> Unit) {
                         .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Updates", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text(localized("Updates"), fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     Text(UpdatesSummary.count(updates), fontSize = 13.sp, color = secondaryTint)
                 }

@@ -1,0 +1,164 @@
+{
+  "pink": {
+    "light": {
+      "app": "#FDF7F9",
+      "panel": "#F9EEF2",
+      "raised": "#F2DDE5",
+      "card": "#F7E7ED",
+      "composer": "#FFFBFC",
+      "accent": "#C2185B"
+    },
+    "dark": {
+      "app": "#141016",
+      "panel": "#1C1620",
+      "raised": "#2E2331",
+      "card": "#261D29",
+      "composer": "#2E2331",
+      "accent": "#C73A6E"
+    }
+  },
+  "atelier": {
+    "light": {
+      "app": "#F5F1EB",
+      "panel": "#EFE9E0",
+      "raised": "#E8E0D4",
+      "card": "#FBF8F2",
+      "composer": "#FFFFFF",
+      "accent": "#A05F25"
+    },
+    "dark": {
+      "app": "#14110E",
+      "panel": "#1B1713",
+      "raised": "#2A241D",
+      "card": "#221D17",
+      "composer": "#2A241D",
+      "accent": "#D08A4A"
+    }
+  },
+  "foundry": {
+    "light": {
+      "app": "#FAF5EA",
+      "panel": "#F3EAD8",
+      "raised": "#EADDC4",
+      "card": "#FBF4E6",
+      "composer": "#FFFDF8",
+      "accent": "#B67B29"
+    },
+    "dark": {
+      "app": "#100E0B",
+      "panel": "#171410",
+      "raised": "#262019",
+      "card": "#1E1A14",
+      "composer": "#262019",
+      "accent": "#D99A3E"
+    }
+  },
+  "lagoon": {
+    "light": {
+      "app": "#E9F2F1",
+      "panel": "#DFECEB",
+      "raised": "#D1E4E2",
+      "card": "#F3F8F7",
+      "composer": "#FFFFFF",
+      "accent": "#11736D"
+    },
+    "dark": {
+      "app": "#0C1413",
+      "panel": "#121C1B",
+      "raised": "#21302E",
+      "card": "#1A2725",
+      "composer": "#21302E",
+      "accent": "#2FA39B"
+    }
+  },
+  "graphite": {
+    "light": {
+      "app": "#F1F2F4",
+      "panel": "#E8EAED",
+      "raised": "#DEE1E6",
+      "card": "#F7F8F9",
+      "composer": "#FFFFFF",
+      "accent": "#4F6F96"
+    },
+    "dark": {
+      "app": "#111214",
+      "panel": "#181A1D",
+      "raised": "#2A2D32",
+      "card": "#22252A",
+      "composer": "#2A2D32",
+      "accent": "#6A8FBD"
+    }
+  },
+  "linen": {
+    "light": {
+      "app": "#F5F6F8",
+      "panel": "#ECEFF3",
+      "raised": "#E0E5EC",
+      "card": "#F9FAFB",
+      "composer": "#FFFFFF",
+      "accent": "#355F8A"
+    },
+    "dark": {
+      "app": "#0F1216",
+      "panel": "#161A20",
+      "raised": "#262C35",
+      "card": "#1E232A",
+      "composer": "#262C35",
+      "accent": "#5B8BC0"
+    }
+  },
+  "dusk": {
+    "light": {
+      "app": "#F6F3F8",
+      "panel": "#EEE8F2",
+      "raised": "#E3DAEA",
+      "card": "#FAF7FC",
+      "composer": "#FFFFFF",
+      "accent": "#765683"
+    },
+    "dark": {
+      "app": "#121014",
+      "panel": "#19161C",
+      "raised": "#2B2630",
+      "card": "#231F27",
+      "composer": "#2B2630",
+      "accent": "#9A74AB"
+    }
+  },
+  "matcha": {
+    "light": {
+      "app": "#F4F6EF",
+      "panel": "#EAEFE2",
+      "raised": "#DDE5D2",
+      "card": "#F8FAF4",
+      "composer": "#FFFFFF",
+      "accent": "#4F7A3A"
+    },
+    "dark": {
+      "app": "#0F120D",
+      "panel": "#161B13",
+      "raised": "#252D20",
+      "card": "#1D241A",
+      "composer": "#252D20",
+      "accent": "#7FAE63"
+    }
+  },
+  "sunset": {
+    "light": {
+      "app": "#FDF5F0",
+      "panel": "#F8E9DF",
+      "raised": "#F1DACB",
+      "card": "#FBF0E9",
+      "composer": "#FFFBF8",
+      "accent": "#D0582A"
+    },
+    "dark": {
+      "app": "#150F0C",
+      "panel": "#1D1511",
+      "raised": "#2F231C",
+      "card": "#261C16",
+      "composer": "#2F231C",
+      "accent": "#EF7D4A"
+    }
+  }
+}

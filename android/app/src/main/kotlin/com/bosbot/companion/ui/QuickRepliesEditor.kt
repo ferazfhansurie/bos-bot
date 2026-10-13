@@ -51,7 +51,7 @@ fun QuickRepliesEditor(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Quick replies") },
+        title = { Text(localized("Quick replies")) },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -79,20 +79,20 @@ fun QuickRepliesEditor(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                            TextButton(onClick = { editing = reply }) { Text("Edit") }
+                            TextButton(onClick = { editing = reply }) { Text(localized("Edit")) }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                             TextButton(
                                 enabled = index > 0,
                                 onClick = { preferences.setQuickReplies(replies.move(index, index - 1)) },
-                            ) { Text("Move up") }
+                            ) { Text(localized("Move up")) }
                             TextButton(
                                 enabled = index < replies.lastIndex,
                                 onClick = { preferences.setQuickReplies(replies.move(index, index + 1)) },
-                            ) { Text("Move down") }
+                            ) { Text(localized("Move down")) }
                             TextButton(
                                 onClick = { preferences.setQuickReplies(replies.filterNot { it.id == reply.id }) },
-                            ) { Text("Remove") }
+                            ) { Text(localized("Remove")) }
                         }
                         HorizontalDivider()
                     }
@@ -101,7 +101,7 @@ fun QuickRepliesEditor(
         },
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = { adding = true }) { Text("Add") }
+                TextButton(onClick = { adding = true }) { Text(localized("Add")) }
                 // Discards the list the user built: `Button(role: .destructive)`
                 // in `ios/App/QuickRepliesEditor.swift:97`.
                 TextButton(
@@ -109,8 +109,8 @@ fun QuickRepliesEditor(
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error,
                     ),
-                ) { Text("Reset") }
-                TextButton(onClick = onDismiss) { Text("Done") }
+                ) { Text(localized("Reset")) }
+                TextButton(onClick = onDismiss) { Text(localized("Done")) }
             }
         },
         dismissButton = {},
@@ -139,8 +139,8 @@ fun QuickRepliesEditor(
     if (confirmReset) {
         AlertDialog(
             onDismissRequest = { confirmReset = false },
-            title = { Text("Reset quick replies?") },
-            text = { Text("This restores the four chips the app came with and discards your own.") },
+            title = { Text(localized("Reset quick replies?")) },
+            text = { Text(localized("This restores the four chips the app came with and discards your own.")) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -150,9 +150,9 @@ fun QuickRepliesEditor(
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error,
                     ),
-                ) { Text("Reset") }
+                ) { Text(localized("Reset")) }
             },
-            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text(localized("Cancel")) } },
         )
     }
 }
@@ -178,19 +178,19 @@ private fun QuickReplyForm(
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Label") },
+                    label = { Text(localized("Label")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = prompt,
                     onValueChange = { prompt = it },
-                    label = { Text("Prompt") },
+                    label = { Text(localized("Prompt")) },
                     minLines = 2,
                     maxLines = 5,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text("Icon", fontSize = 13.sp, color = secondaryTint)
+                Text(localized("Icon"), fontSize = 13.sp, color = secondaryTint)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -219,9 +219,9 @@ private fun QuickReplyForm(
             TextButton(
                 enabled = cleanTitle.isNotEmpty() && cleanPrompt.isNotEmpty(),
                 onClick = { onSave(initial.copy(title = cleanTitle, prompt = cleanPrompt, icon = icon)) },
-            ) { Text("Save") }
+            ) { Text(localized("Save")) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(localized("Cancel")) } },
     )
 }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -60,6 +61,7 @@ fun BotOverviewScreen(botId: String, onBack: () -> Unit) {
         if (showProgress) refreshing = true
         try {
             val loaded = session.loadOverview(botId)
+            if (session.connection.value?.id != connectionId) return
             failed = loaded == null
             if (loaded != null) overview = loaded
         } finally {
@@ -115,6 +117,7 @@ fun BotOverviewScreen(botId: String, onBack: () -> Unit) {
                     current != null -> OverviewBody(current)
                     failed -> FormSection(header = null) {
                         Text(OverviewRules.FAILED, color = secondaryTint)
+                        TextButton(enabled = !refreshing, onClick = { scope.launch { refresh(showProgress = true) } }) { Text(localized("Try again")) }
                     }
                 }
             }
@@ -147,16 +150,14 @@ private fun OverviewBody(overview: BotOverview) {
         }
     }
 
-    // No empty-state copy on either phone: the server sends this only when
-    // there is something to say, and an empty list here is just a header
-    // with nothing under it (`ios/App/BotOverviewView.swift:39-43`).
-    FormSection(header = OverviewRules.REACHES) {
+    // Like iOS, empty reach/refusal lists have no bare headings.
+    if (overview.reaches.isNotEmpty()) FormSection(header = OverviewRules.REACHES) {
         overview.reaches.forEach { line ->
             IconNote(text = line, painter = R.drawable.ic_hub)
         }
     }
 
-    FormSection(header = OverviewRules.WONT) {
+    if (overview.wont.isNotEmpty()) FormSection(header = OverviewRules.WONT) {
         overview.wont.forEach { line ->
             IconNote(text = line, painter = R.drawable.ic_block)
         }

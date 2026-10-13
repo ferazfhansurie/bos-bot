@@ -72,7 +72,7 @@ fun QrScannerScreen(onCancel: () -> Unit, validate: (String) -> String?) {
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
             TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterStart)) {
-                Text("Cancel")
+                Text(localized("Cancel"))
             }
             Text(
                 text = "Scan QR Code",
@@ -97,7 +97,7 @@ fun QrScannerScreen(onCancel: () -> Unit, validate: (String) -> String?) {
                 description = "Allow camera access to scan the pairing QR code shown by " +
                     "BOS Bot, or go back and enter the address and code by hand.",
             ) {
-                Button(onClick = environment.openAppSettings) { Text("Open Settings") }
+                Button(onClick = environment.openAppSettings) { Text(localized("Open Settings")) }
             }
 
             else -> ScannerSurface(

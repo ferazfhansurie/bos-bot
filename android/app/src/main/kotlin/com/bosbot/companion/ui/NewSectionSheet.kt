@@ -123,7 +123,7 @@ internal fun NewSectionSheet(onDismiss: () -> Unit) {
                     },
                     modifier = Modifier.align(Alignment.CenterEnd),
                 ) {
-                    Text("Save")
+                    Text(localized("Save"))
                 }
             }
 
@@ -140,7 +140,7 @@ internal fun NewSectionSheet(onDismiss: () -> Unit) {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Section name") },
+                label = { Text(localized("Section name")) },
                 isError = trimmed.length > SectionRules.MAX_NAME_LENGTH,
                 supportingText = {
                     Row(modifier = Modifier.fillMaxWidth()) {

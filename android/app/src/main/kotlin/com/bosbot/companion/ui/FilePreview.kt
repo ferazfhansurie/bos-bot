@@ -453,7 +453,7 @@ internal fun FilePreviewSheet(
                     modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onDismiss) { Text("Done") }
+                    TextButton(onClick = onDismiss) { Text(localized("Done")) }
                     Text(
                         text = item.filename,
                         fontSize = 17.sp,
@@ -463,8 +463,8 @@ internal fun FilePreviewSheet(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                     )
-                    TextButton(onClick = { actionError = onShare() }) { Text("Share") }
-                    TextButton(onClick = { actionError = onOpen() }) { Text("Open") }
+                    TextButton(onClick = { actionError = onShare() }) { Text(localized("Share")) }
+                    TextButton(onClick = { actionError = onOpen() }) { Text(localized("Open")) }
                 }
                 HorizontalDivider()
                 actionError?.let { message ->
@@ -539,7 +539,7 @@ private fun FullScreenImage(item: FilePreviewItem) {
         when {
             image != null -> ZoomableImage(image, item.filename)
             !finished -> CircularProgressIndicator(color = Color.White, modifier = Modifier.size(28.dp))
-            else -> Text("This image couldn't be displayed.", color = Color.White)
+            else -> Text(localized("This image couldn't be displayed."), color = Color.White)
         }
     }
 }
@@ -587,7 +587,7 @@ private fun ZoomableImage(image: ImageBitmap, name: String) {
                     .padding(8.dp)
                     .background(Color.Black.copy(alpha = 0.55f), androidx.compose.foundation.shape.RoundedCornerShape(18.dp)),
             ) {
-                Text("Reset", color = Color.White)
+                Text(localized("Reset"), color = Color.White)
             }
         }
     }

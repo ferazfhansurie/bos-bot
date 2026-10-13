@@ -103,7 +103,7 @@ class MessageAttachmentsTest {
         val valid = PendingMessageAttachment(data = byteArrayOf(1), name = "notes.txt", mime = "text/plain", kind = PendingMessageAttachment.Kind.FILE)
         assertEquals(
             AttachmentPolicy.TOO_MANY_ITEMS,
-            assertFailsWith<AttachmentPolicyException> { AttachmentPolicy.validate(List(5) { valid }) }.message,
+            assertFailsWith<AttachmentPolicyException> { AttachmentPolicy.validate(List(33) { valid }) }.message,
         )
         assertEquals(
             "archive.zip isn't a supported file. Try PDF, text, Word, Excel, or PowerPoint.",

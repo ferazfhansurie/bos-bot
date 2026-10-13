@@ -108,7 +108,14 @@ class OnboardingScene(
         tokenStore = FakeTokenStore(savedConnection?.id, savedToken),
         onboardingStore = onboarding,
         deviceNameProvider = { "Pixel" },
-        clientFactory = { c, token -> CompanionClient(c, token) },
+        // These onboarding fixtures must never contact a developer's live server.
+        // Unmodelled roster endpoints answer unsupported; auth revocation is
+        // driven solely by the explicit stream fixture below.
+        clientFactory = { c, token -> CompanionClient(c, token, okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(404).message("fixture endpoint unsupported")
+                .body(okhttp3.ResponseBody.create(null, "{}")).build()
+        }.build()) },
         pairFn = { c, _, _, _ ->
             pairSuspendsUntil?.await()
             PairingOutcome(

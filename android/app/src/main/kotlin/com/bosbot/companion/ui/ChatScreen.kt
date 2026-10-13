@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -98,6 +99,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.openmausbot.companion.R
 import com.openmausbot.companion.core.AttachmentPolicy
 import com.openmausbot.companion.core.Chat
+import com.openmausbot.companion.core.isRemote
+import com.openmausbot.companion.core.canMarkDone
 import com.openmausbot.companion.core.ChatTarget
 import com.openmausbot.companion.core.LocalMessageLink
 import com.openmausbot.companion.core.PendingMessageAttachment
@@ -183,12 +186,13 @@ private fun OpeningThread(onBack: () -> Unit) {
             BackPill(unreadElsewhere = 0, onBack = onBack)
         }
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+            ConversationSkeleton()
         }
     }
 }
 
 @Composable
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 private fun LoadedChat(
     chat: Chat,
     state: CompanionState,
@@ -202,9 +206,12 @@ private fun LoadedChat(
     // This screen's selected task, independent of the desktop's selection.
     val threadId = chat.threadId
     val chatId = chat.id
-    val draftKey = chat.threadId
+    val draftKey = "${LocalCompanion.current.session.connection.value?.id}:${chat.threadId}"
+    val draftOwner = "${LocalCompanion.current.session.connection.value?.id}:${chat.id}"
     val environment = LocalCompanion.current
     val session = environment.session
+    val originConnectionId = remember(draftKey) { session.connection.value?.id.orEmpty() }
+    val voiceRuntimeIdentity = remember(draftKey) { runCatching { session.sharedRuntimeIdentity(originConnectionId) }.getOrNull() }
     val dictation = environment.dictation
     val chatDrafts = environment.chatDrafts
     val haptics = rememberHaptics()
@@ -246,6 +253,15 @@ private fun LoadedChat(
             scope.launch { session.interrupt(target) }
         }
     }
+    var showingRecording by remember { mutableStateOf(false) }
+    var showingAudioActions by remember { mutableStateOf(false) }
+    var recordingMeeting by remember { mutableStateOf(false) }
+    var recordingLibrary by remember { mutableStateOf(false) }
+    var showingRoomSettings by remember { mutableStateOf(false) }
+    var showingWalkie by remember { mutableStateOf(false) }
+    var showingCall by remember { mutableStateOf(false) }
+    var pendingSendId by rememberSaveable(threadId) { mutableStateOf<String?>(null) }
+    var pendingPayload by remember(draftKey) { mutableStateOf<String?>(null) }
     var showingTasks by remember { mutableStateOf(false) }
     var creatingThread by remember(chatId) { mutableStateOf(false) }
     // Saveable: the profile form is a form, and a rotation must not throw away
@@ -254,10 +270,12 @@ private fun LoadedChat(
     var showingPlus by remember(threadId) { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
+    val draftStore = remember(context.applicationContext) { com.openmausbot.companion.storage.ComposerDraftStore(context) }
+    var draftRestored by remember(draftKey) { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
 
     val attachmentDraft = remember(draftKey, chatDrafts) {
-        chatDrafts.register(chatId, draftKey)
+        chatDrafts.register(draftOwner, draftKey)
         chatDrafts.attachments(draftKey)
     }
     val attachments = attachmentDraft.items
@@ -299,17 +317,21 @@ private fun LoadedChat(
         }
         target.preparing.value = true
         target.error.value = null
+        val imported = mutableListOf<PendingMessageAttachment>()
         try {
-            val imported = mutableListOf<PendingMessageAttachment>()
             for (index in 0 until count) {
                 val remaining = AttachmentImportRules.remainingBytes(existing + imported)
                 val candidate = withContext(Dispatchers.IO) { read(index, remaining) }
-                AttachmentPolicy.validate(existing + imported + candidate)
+                try { AttachmentPolicy.validate(existing + imported + candidate) }
+                catch (error: Exception) { draftStore.dispose(candidate); throw error }
                 imported += candidate
             }
+            withContext(Dispatchers.IO) { draftStore.save(target.scopeKey.ifEmpty { draftKey },
+                chatDrafts.get(target.scopeKey.ifEmpty { draftKey })?.typedSnapshot.orEmpty(), pendingSendId, existing + imported) }
             target.items += imported
             haptics.play(HapticCue.SELECT)
         } catch (error: Exception) {
+            imported.forEach(draftStore::dispose)
             if (error is kotlinx.coroutines.CancellationException) throw error
             target.error.value = error.message ?: "Couldn't add that attachment."
         } finally {
@@ -324,7 +346,7 @@ private fun LoadedChat(
         val target = pickerDraft
         scope.launch {
             importInto(target, uris.size) { index, remaining ->
-                AttachmentImport.readPhoto(context.contentResolver, uris[index], index, uris.size, remaining)
+                if (context.contentResolver.getType(uris[index])?.startsWith("video/") == true) { AttachmentImport.readDocument(context.contentResolver, uris[index], remaining, java.io.File(context.filesDir, "composer-attachments")) } else { AttachmentImport.readPhoto(context.contentResolver, uris[index], index, uris.size, remaining) }
             }
         }
     }
@@ -333,7 +355,7 @@ private fun LoadedChat(
         val target = pickerDraft
         scope.launch {
             importInto(target, uris.size) { index, remaining ->
-                AttachmentImport.readDocument(context.contentResolver, uris[index], remaining)
+                AttachmentImport.readDocument(context.contentResolver, uris[index], remaining, java.io.File(context.filesDir, "composer-attachments"))
             }
         }
     }
@@ -465,6 +487,28 @@ private fun LoadedChat(
         )
     }
     val draft = composer.text
+    LaunchedEffect(draftKey) {
+        val saved = withContext(Dispatchers.IO) { draftStore.restore(draftKey) }
+        if (saved != null) {
+            if (composer.text.isEmpty()) composer.onTypedChange(saved.typed)
+            if (attachments.isEmpty()) attachments += saved.attachments
+            if (pendingSendId == null) { pendingSendId = saved.sendId; pendingPayload = saved.payload }
+        }
+        draftRestored = true
+    }
+    LaunchedEffect(draftKey, draftRestored, composer.saveableValue, attachments.map { it.id }, pendingSendId) {
+        if (draftRestored) {
+            delay(150)
+            val typed = composer.saveableValue
+            val media = attachments.toList()
+            val sendId = pendingSendId
+            try { withContext(Dispatchers.IO) { draftStore.save(draftKey, typed, sendId, media, pendingPayload) } }
+            catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                attachmentError = error.message ?: "The draft could not be saved."
+            }
+        }
+    }
     // The command HUD opens from the button *or* from a draft that starts with a
     // slash — and typing anything else closes it again. iOS drives that from
     // `onChange(of: draft)`, which fires however the draft moved, so the rule
@@ -494,10 +538,10 @@ private fun LoadedChat(
 
     // Drop the in-memory entry when the chat leaves the stack (roster pop or
     // stack rewrite). Keep it when Computer is pushed on top.
-    DisposableEffect(chatId) {
+    DisposableEffect(draftOwner) {
         onDispose {
             if (!retainsDraft(chatId)) {
-                chatDrafts.clearOwner(chatId)
+                chatDrafts.clearOwner(draftOwner)
             }
         }
     }
@@ -545,7 +589,10 @@ private fun LoadedChat(
     // One slot at the bottom, whichever of the three is in it — iOS gives all of
     // them the same `.id(Self.liveBubbleId)` for the same reason: they replace
     // one another, they do not stack.
-    val liveCount = if (tail == TranscriptTail.NONE) 0 else 1
+    val roomLanePrefix = "$threadId:room:"
+    val roomLanes = if (chat is Chat.RoomChat) (state.streaming.keys + state.reasoning.keys)
+        .filter { it.startsWith(roomLanePrefix) }.distinct() else emptyList()
+    val liveCount = if (roomLanes.isNotEmpty()) roomLanes.size else if (tail == TranscriptTail.NONE) 0 else 1
     val itemCount = headerCount + transcript.size + liveCount
 
     // A conversation grows from the bottom: opening a chat starts on the newest
@@ -592,10 +639,13 @@ private fun LoadedChat(
     // there is — including both export formats.
     val onAction: (ChatActionId) -> Unit = { action ->
         when (action) {
+            ChatActionId.AUDIO -> { showingAudioActions = true; showingPlus = true }
+            ChatActionId.RECORD_AUDIO -> { recordingMeeting = true; recordingLibrary = false; showingRecording = true; showingPlus = false }
+            ChatActionId.SAVED_RECORDINGS -> { recordingLibrary = true; showingRecording = true; showingPlus = false }
             ChatActionId.PHOTOS -> {
                 pickerDraft = attachmentDraft
                 pickPhotos.launch(
-                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
                 )
             }
             ChatActionId.FILES -> {
@@ -666,8 +716,15 @@ private fun LoadedChat(
             attachmentError = null
             showingPlus = false
             scope.launch {
+                val payload = composerPayload(text, outgoing)
+                val sendId = pendingSendId?.takeIf { pendingPayload == payload } ?: java.util.UUID.randomUUID().toString().also { pendingSendId = it; pendingPayload = payload }
                 val sent = try {
-                    session.send(text, outgoing, chat)
+                    withContext(Dispatchers.IO) { draftStore.save(draftKey, draftAtSend, sendId, outgoing, payload) }
+                    session.send(text, outgoing, chat, durableSendId = sendId)
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    attachmentError = error.message ?: "The draft could not be saved."
+                    false
                 } finally {
                     sendingMessage = false
                 }
@@ -683,23 +740,41 @@ private fun LoadedChat(
                     publishFrom(composer)
                 }
                 if (attachments.map { it.id } == outgoing.map { it.id }) attachments.clear()
+                pendingSendId = null
+                pendingPayload = null
+                try {
+                    withContext(Dispatchers.IO) { draftStore.save(draftKey, composer.saveableValue, null, attachments.toList()) }
+                    outgoing.forEach(draftStore::dispose)
+                } catch (failure: Exception) {
+                    if (failure is kotlinx.coroutines.CancellationException) throw failure
+                    attachmentError = "Message delivered. The saved draft could not be cleared yet."
+                }
                 haptics.play(HapticCue.SEND)
             }
             return
         }
         if (text.isEmpty()) return
-        composer.onSend()
-        // Clearing the draft closes the HUD through the rule above, which is
-        // how iOS's `showCommandHUD = false` on submit happens as well.
-        publishFrom(composer)
-        // Where iOS plays `SoundEffects.playSent()` and a medium impact. The
-        // motor only: the sound there is an Apple system id with no counterpart
-        // here, and the keyboard already owns that job on this platform.
-        haptics.play(HapticCue.SEND)
-        // Deliberately not disabled while the bot is busy: the harness answers
-        // 409 and Session surfaces "The bot is busy — stop it first." That is a
-        // clearer answer than a dead button.
-        scope.launch { session.send(text, chat) }
+        if (sendingMessage) return
+        val draftAtSend = composer.text
+        val payload = composerPayload(text, emptyList())
+        val sendId = pendingSendId?.takeIf { pendingPayload == payload } ?: java.util.UUID.randomUUID().toString().also { pendingSendId = it; pendingPayload = payload }
+        sendingMessage = true
+        showingPlus = false
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { draftStore.save(draftKey, composer.saveableValue, sendId, emptyList(), payload) }
+                if (session.send(text, emptyList(), chat, durableSendId = sendId)) {
+                    if (composer.text == draftAtSend) { composer.onSend(); publishFrom(composer) }
+                    pendingSendId = null
+                    pendingPayload = null
+                    withContext(Dispatchers.IO) { draftStore.save(draftKey, composer.saveableValue, null, attachments.toList()) }
+                    haptics.play(HapticCue.SEND)
+                }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                attachmentError = error.message ?: "The message could not be sent."
+            } finally { sendingMessage = false }
+        }
     }
 
     fun selectCommand(command: SlashCommand) {
@@ -818,7 +893,7 @@ private fun LoadedChat(
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("Load earlier messages", fontSize = 13.sp)
+                                Text(localized("Load earlier messages"), fontSize = 13.sp)
                             }
                         }
                     }
@@ -858,7 +933,23 @@ private fun LoadedChat(
                         }
                     }
 
-                    if (liveCount == 1) {
+                    if (rawTranscript.isEmpty() && state.hasLoadedPage(threadId) && !chat.busy && chat is Chat.BotChat) {
+                        item(key = "empty-thread-mascot") {
+                            Box(Modifier.fillMaxWidth().height(280.dp), contentAlignment = Alignment.Center) {
+                                ChatAvatar(chat = chat, size = 120.dp, state = MausState.IDLE, animated = false)
+                            }
+                        }
+                    }
+
+                    if (roomLanes.isNotEmpty()) {
+                        items(roomLanes, key = { "live-room-$it" }) { lane ->
+                            val speaker = state.bots.firstOrNull { it.id == lane.removePrefix(roomLanePrefix) }
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(speaker?.name ?: "Bot", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = secondaryTint)
+                                StreamingBubble(text = state.streaming[lane], reasoning = state.reasoning[lane])
+                            }
+                        }
+                    } else if (liveCount == 1) {
                         item(key = LIVE_BUBBLE_KEY) {
                             if (tail == TranscriptTail.WORKING) {
                                 WorkingBubble(name = chat.name, color = chat.color)
@@ -880,6 +971,25 @@ private fun LoadedChat(
                         (state.unreadCount - if (chat.unread) 1 else 0).coerceAtLeast(0)
                     },
                     onBack = { leaveToRoster() },
+                    onNewThread = { onAction(ChatActionId.NEW_TASK) },
+                    onCall = { dictation.stop(); if (bot != null && !bot.isRemote) showingCall = true else showingWalkie = true },
+                    onRecord = { dictation.stop(); recordingMeeting = true; recordingLibrary = false; showingRecording = true },
+                    doneTitle = if (bot?.tasks?.firstOrNull { it.threadId == threadId }?.archivedAt != null) "Unarchive" else "Mark done",
+                    canDone = bot?.tasks?.firstOrNull { it.threadId == threadId }?.let { it.archivedAt != null || it.canMarkDone } == true,
+                    showsAvatar = !(rawTranscript.isEmpty() && state.hasLoadedPage(threadId) && !chat.busy),
+                    onDone = {
+                        val currentBot = (chat as? Chat.BotChat)?.bot
+                        val task = currentBot?.tasks?.firstOrNull { it.threadId == threadId }
+                        if (currentBot != null && task != null && !chat.busy) scope.launch {
+                            val archived = task.archivedAt != null
+                            if (session.archiveTask(task, currentBot, if (archived) null else System.currentTimeMillis().toDouble())) {
+                                if (!archived) {
+                                    DoneUndo.offer(task.title ?: "Thread") { session.archiveTask(task, currentBot, null) }
+                                    leaveToRoster()
+                                }
+                            }
+                        }
+                    },
                     onOpenThreads = {
                         dictation.stop()
                         focusManager.clearFocus()
@@ -898,7 +1008,7 @@ private fun LoadedChat(
                         } else {
                             dictation.stop()
                             focusManager.clearFocus()
-                            showingPlus = true
+                            showingRoomSettings = true
                         }
                     },
                     modifier = Modifier
@@ -942,8 +1052,15 @@ private fun LoadedChat(
                 attachmentError = fileOpenError ?: attachmentError,
                 onRemoveAttachment = { attachment ->
                     if (!preparingAttachments && !sendingMessage) {
-                        attachments.removeAll { it.id == attachment.id }
-                        attachmentError = null
+                        scope.launch {
+                            val remaining = attachments.filterNot { it.id == attachment.id }
+                            try {
+                                withContext(Dispatchers.IO) { draftStore.save(draftKey, composer.saveableValue, pendingSendId, remaining) }
+                                attachments.removeAll { it.id == attachment.id }
+                                draftStore.dispose(attachment)
+                                attachmentError = null
+                            } catch (error: Exception) { attachmentError = error.message ?: "The draft could not be saved." }
+                        }
                     }
                 },
                 onDismissError = {
@@ -955,6 +1072,7 @@ private fun LoadedChat(
                     // keyboard under it would leave the sheet nowhere to go.
                     dictation.stop()
                     if (!showingPlus) focusManager.clearFocus()
+                    showingAudioActions = false
                     showingPlus = !showingPlus
                 },
                 onDraftChange = { next ->
@@ -962,6 +1080,7 @@ private fun LoadedChat(
                     composer.onTypedChange(next)
                     publishFrom(composer)
                 },
+                onRecordAudio = { dictation.stop(); recordingMeeting = false; recordingLibrary = false; showingRecording = true },
                 onToggleDictation = {
                     focusManager.clearFocus()
                     dictation.toggle(capturing = draft)
@@ -984,17 +1103,52 @@ private fun LoadedChat(
             )
         }
 
+        if (creatingThread || !state.hasLoadedPage(threadId)) {
+            ConversationSkeleton(Modifier.fillMaxSize())
+        }
+
         PlusSheet(
             open = showingPlus,
-            actions = remember(chat, pendingApproval, canAddAttachment) {
-                ChatActions.sheet(chat, hasPendingApproval = pendingApproval, canAddAttachment = canAddAttachment)
-            },
+            actions = if (showingAudioActions) ChatActions.audio(sendingMessage) else ChatActions.composer(canAddAttachment, sendingMessage),
             onDismiss = { showingPlus = false },
             onAction = {
                 showingPlus = false
                 onAction(it)
             },
         )
+    }
+
+    if (showingRecording) androidx.compose.material3.ModalBottomSheet(
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { value -> value != androidx.compose.material3.SheetValue.Hidden || !com.openmausbot.companion.audio.RecordingCenter.recorder(context).state.value.let { it.recording || it.finishing } }),
+        onDismissRequest = { showingRecording = false }) {
+        RecordingScreen(initialLibrary = recordingLibrary, autoStart = !recordingLibrary, initialMeeting = recordingMeeting, onClose = { showingRecording = false }, onSend = { _, transcriptText, meeting ->
+            if (transcriptText.isBlank()) false else {
+                val text = if (meeting) "Summarize this meeting and list decisions and next steps:\n\n$transcriptText" else transcriptText
+                val sent = session.send(text, emptyList(), chat)
+                if (sent) showingRecording = false
+                sent
+            }
+        })
+    }
+    if (showingRoomSettings && chat is Chat.RoomChat) androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showingRoomSettings = false }) {
+        ChannelSettingsScreen(chat.room.id, onClose = { showingRoomSettings = false })
+    }
+    if (showingWalkie) androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showingWalkie = false }) {
+        WalkieScreen(session, chat, onClose = { showingWalkie = false }, onOpen = { showingWalkie = false; onOpenChat(it) })
+    }
+    if (showingCall) androidx.compose.material3.ModalBottomSheet(onDismissRequest = { showingCall = false }) {
+        val voiceBot = (chat as? Chat.BotChat)?.bot
+        if (voiceBot != null) VoiceCallScreen(botName = chat.name, onClose = { showingCall = false },
+            startCall = { language, callId -> session.startVoiceCall(voiceBot.id, language, callId, originConnectionId, voiceRuntimeIdentity) },
+            sendTask = { request, callId -> session.sendVoiceTask(voiceBot.id, threadId, request, callId, expectedConnectionId = originConnectionId, expectedRuntimeIdentity = voiceRuntimeIdentity) },
+            recall = { check(session.connection.value?.id == originConnectionId && session.sharedRuntimeIdentity(originConnectionId) === voiceRuntimeIdentity) { "The call computer changed." }; kotlinx.serialization.json.buildJsonObject { put("messages", kotlinx.serialization.json.JsonArray(rawTranscript.takeLast(12).map { kotlinx.serialization.json.JsonPrimitive(it.text.orEmpty()) })) } },
+            reportUsage = { callId, seconds -> session.reportVoiceUsage(voiceBot.id, callId, seconds, originConnectionId, voiceRuntimeIdentity) },
+            target = com.openmausbot.companion.audio.VoiceCallTarget(originConnectionId, voiceBot.id, threadId, chat.name),
+            autoStart = true,
+            sendSpokenTask = { words, job, callId -> session.sendVoiceTask(voiceBot.id, threadId, words, callId, job = job, expectedConnectionId = originConnectionId, expectedRuntimeIdentity = voiceRuntimeIdentity) },
+            ownerConnection = session.connection, ownerRuntimeRevision = session.sharedRuntimeRevision,
+            settledReplies = remember(voiceBot.id, threadId, originConnectionId) { voiceReplies(com.openmausbot.companion.audio.VoiceCallCenter.get(context), session, com.openmausbot.companion.audio.VoiceCallTarget(originConnectionId, voiceBot.id, threadId, chat.name)) })
+        else Text(localized("Choose a bot to call."), modifier = Modifier.padding(24.dp))
     }
 
     if (showingTasks) {
@@ -1058,7 +1212,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedKeyed(
 // name pill before its first row.
 private val HEADER_BAR = 56.dp
 private val HEADER_SCRIM_FADE = 24.dp
-private val HEADER_CLEARANCE = 128.dp
+private val HEADER_CLEARANCE = 76.dp
 
 /**
  * Back on the left with the rest-of-app unread count, the bot's computer on the
@@ -1070,73 +1224,39 @@ private val HEADER_CLEARANCE = 128.dp
  */
 @Composable
 private fun ChatHeader(
-    chat: Chat,
-    face: MascotFace,
-    unreadElsewhere: Int,
-    onBack: () -> Unit,
-    onWatchComputer: () -> Unit,
-    onOpenProfile: () -> Unit,
-    onOpenThreads: () -> Unit,
-    modifier: Modifier = Modifier,
+    chat: Chat, face: MascotFace, unreadElsewhere: Int, onBack: () -> Unit,
+    onWatchComputer: () -> Unit, onOpenProfile: () -> Unit, onOpenThreads: () -> Unit,
+    onNewThread: () -> Unit, onCall: () -> Unit, onRecord: () -> Unit, onDone: () -> Unit,
+    doneTitle: String = "Mark done", canDone: Boolean = false,
+    showsAvatar: Boolean = true, modifier: Modifier = Modifier,
 ) {
-    val surface = MaterialTheme.colorScheme.surface
-    Box(modifier = modifier.fillMaxWidth()) {
-        Spacer(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(HEADER_BAR + HEADER_SCRIM_FADE)
-                .drawWithCache {
-                    val solid = HEADER_BAR.toPx() / size.height
-                    val brush = Brush.verticalGradient(
-                        0f to surface,
-                        solid to surface,
-                        1f to Color.Transparent,
-                    )
-                    onDrawBehind { drawRect(brush) }
-                },
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            BackPill(unreadElsewhere = unreadElsewhere, onBack = onBack)
-            Spacer(Modifier.weight(1f))
-            // The computer is a bot idea; a room has none (§12).
-            if (chat is Chat.BotChat) {
-                ChromeButton(
-                    painter = painterResource(R.drawable.ic_display),
-                    contentDescription = "Watch ${chat.name}'s computer",
-                    onClick = onWatchComputer,
-                )
-            } else {
-                Spacer(Modifier.size(MIN_TOUCH_TARGET))
-            }
+    var more by remember { mutableStateOf(false) }
+    Row(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface.copy(alpha = .97f))
+        .padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        BackPill(unreadElsewhere, onBack)
+        Column(Modifier.weight(1f).clickable(role = Role.Button, onClick = onOpenThreads)) {
+            Text(chat.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (chat.threadTitle.isNotBlank()) Text(chat.threadTitle, fontSize = 11.sp, color = secondaryTint, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 2.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            ChatAvatar(
-                chat = chat,
-                size = 60.dp,
-                state = face.state,
-                animated = face.animated,
-                modifier = if (chat is Chat.BotChat) {
-                    Modifier
-                        .clickable(role = Role.Button, onClick = onOpenProfile)
-                        .semantics { contentDescription = "Open ${chat.name} settings" }
-                } else {
-                    Modifier
-                },
-            )
-            NamePill(chat = chat, onOpen = if (chat.supportsTasks) onOpenThreads else onOpenProfile)
+        if (showsAvatar) ChatAvatar(chat = chat, size = 30.dp, state = face.state, animated = face.animated,
+            modifier = Modifier.clickable(role = Role.Button, onClick = onOpenProfile))
+        ChromeButton(painter = painterResource(R.drawable.ic_mic), contentDescription = "Call ${chat.name}", onClick = onCall, size = 36.dp)
+        Box {
+            ChromeButton(Icons.Filled.MoreVert, "Conversation options", { more = true }, size = 36.dp)
+            androidx.compose.material3.DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                fun dismiss(run: () -> Unit) { more = false; run() }
+                if (chat.supportsTasks) {
+                    androidx.compose.material3.DropdownMenuItem(text = { Text(localized("New thread")) }, onClick = { dismiss(onNewThread) })
+                    androidx.compose.material3.DropdownMenuItem(text = { Text(localized("Threads")) }, onClick = { dismiss(onOpenThreads) })
+                }
+                if (chat is Chat.BotChat) {
+                    androidx.compose.material3.DropdownMenuItem(text = { Text(localized(doneTitle)) }, enabled = canDone, onClick = { dismiss(onDone) })
+                    androidx.compose.material3.DropdownMenuItem(text = { Text(localized("Bot settings")) }, onClick = { dismiss(onOpenProfile) })
+                    androidx.compose.material3.DropdownMenuItem(text = { Text(localized("Computer")) }, onClick = { dismiss(onWatchComputer) })
+                }
+                androidx.compose.material3.DropdownMenuItem(text = { Text(localized("Record audio")) }, onClick = { dismiss(onRecord) })
+            }
         }
     }
 }
@@ -1312,13 +1432,13 @@ private fun BoxScope.PlusSheet(
                     }
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            text = action.title,
+                            text = localized(action.title),
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Medium,
                             color = tint.copy(alpha = alpha),
                         )
-                        Text(
-                            text = action.subtitle,
+                        if (action.subtitle.isNotBlank()) Text(
+                            text = localized(action.subtitle),
                             fontSize = 13.sp,
                             color = secondaryTint.copy(alpha = alpha),
                         )
@@ -1359,6 +1479,7 @@ private fun ComposerStatusLine(text: String) {
 private fun ChatActionIcon(id: ChatActionId, tint: Color) {
     val modifier = Modifier.size(22.dp)
     when (id) {
+        ChatActionId.AUDIO, ChatActionId.RECORD_AUDIO, ChatActionId.SAVED_RECORDINGS -> Icon(painterResource(R.drawable.ic_mic), null, tint = tint)
         ChatActionId.PHOTOS ->
             Icon(painterResource(R.drawable.ic_photo), null, tint = tint, modifier = modifier)
         ChatActionId.FILES ->
@@ -1393,6 +1514,7 @@ private fun Composer(
     onTogglePlus: () -> Unit,
     onDraftChange: (String) -> Unit,
     onToggleDictation: () -> Unit,
+    onRecordAudio: () -> Unit,
     onSend: () -> Unit,
     onToggleHud: () -> Unit,
     onCloseHud: () -> Unit,
@@ -1646,6 +1768,7 @@ private fun Composer(
 
                 TouchTarget(
                     onClick = onToggleDictation,
+                    onLongClick = onRecordAudio,
                     contentDescription = if (dictationListening) {
                         "Stop dictation"
                     } else {
@@ -1697,3 +1820,14 @@ private fun Composer(
     }
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+internal fun composerPayload(text: String, media: List<com.openmausbot.companion.core.PendingMessageAttachment>): String {
+    val raw = kotlinx.serialization.json.buildJsonObject {
+        put("text", kotlinx.serialization.json.JsonPrimitive(text))
+        put("media", kotlinx.serialization.json.JsonArray(media.map { kotlinx.serialization.json.buildJsonObject {
+            put("id", kotlinx.serialization.json.JsonPrimitive(it.id)); put("name", kotlinx.serialization.json.JsonPrimitive(it.name))
+            put("mime", kotlinx.serialization.json.JsonPrimitive(it.mime)); put("bytes", kotlinx.serialization.json.JsonPrimitive(it.bytes))
+        } }))
+    }.toString()
+    return java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
+}

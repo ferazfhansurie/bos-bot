@@ -277,7 +277,7 @@ fun PairingScreen(onCancel: () -> Unit) {
             // the same place. Refused while a redemption is in flight, because a
             // credential that may already have reached the computer must not be
             // abandoned halfway (§6) — the port of `.disabled(!allowsNavigation)`.
-            TextButton(onClick = onCancel, enabled = !pairing) { Text("Not now") }
+            TextButton(onClick = onCancel, enabled = !pairing) { Text(localized("Not now")) }
         }
 
         val selected = pending
@@ -424,10 +424,10 @@ internal fun pairingFailureDisposition(
 @Composable
 private fun SetupSection(onScan: () -> Unit) {
     SectionCard(title = "On your computer") {
-        Text("1.  Open BOS Bot → Settings → Phone", fontSize = 15.sp)
-        Text("2.  Choose Set up a phone", fontSize = 15.sp)
+        Text(localized("1.  Open BOS Bot → Settings → Phone"), fontSize = 15.sp)
+        Text(localized("2.  Choose Set up a phone"), fontSize = 15.sp)
         Button(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
-            Text("Scan QR Code")
+            Text(localized("Scan QR Code"))
         }
         Text(
             text = "Scan the QR code, check the computer name, and confirm. The address and " +
@@ -456,7 +456,7 @@ private fun DiscoverySection(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Text("Looking…", color = secondaryTint, fontSize = 15.sp)
+                    Text(localized("Looking…"), color = secondaryTint, fontSize = 15.sp)
                 }
                 if (searchedLongEnough) {
                     // NSD is multicast: it does not cross subnets, and guest
@@ -505,7 +505,7 @@ private fun ManualSection(
         OutlinedTextField(
             value = address,
             onValueChange = onAddressChange,
-            placeholder = { Text("https://mac.example or 192.168.1.42:8810") },
+            placeholder = { Text(localized("https://mac.example or 192.168.1.42:8810")) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.fillMaxWidth(),
@@ -515,7 +515,7 @@ private fun ManualSection(
             enabled = address.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Continue")
+            Text(localized("Continue"))
         }
         Text(
             text = "Whatever Phone settings on your computer shows — a secure https:// " +
@@ -543,7 +543,7 @@ private fun CodeSection(
         // digits are about to be typed.
         Text(confirmation.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
         Row(modifier = Modifier.fillMaxWidth()) {
-            Text("Address", color = secondaryTint, fontSize = 15.sp)
+            Text(localized("Address"), color = secondaryTint, fontSize = 15.sp)
             Spacer(Modifier.weight(1f))
             Text(confirmation.address, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
         }
@@ -558,7 +558,7 @@ private fun CodeSection(
                 if (pairing) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
-                    Text("Pair with this computer")
+                    Text(localized("Pair with this computer"))
                 }
             }
 
@@ -566,7 +566,7 @@ private fun CodeSection(
                 OutlinedTextField(
                     value = code,
                     onValueChange = onCodeChange,
-                    placeholder = { Text("000000") },
+                    placeholder = { Text(localized("000000")) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     textStyle = MaterialTheme.typography.headlineSmall.copy(
@@ -586,7 +586,7 @@ private fun CodeSection(
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Text("Connect")
+                        Text(localized("Connect"))
                     }
                 }
             }
@@ -599,7 +599,7 @@ private fun CodeSection(
         }
 
         OutlinedButton(onClick = onCancel, enabled = !pairing, modifier = Modifier.fillMaxWidth()) {
-            Text("Choose a different computer")
+            Text(localized("Choose a different computer"))
         }
     }
 }

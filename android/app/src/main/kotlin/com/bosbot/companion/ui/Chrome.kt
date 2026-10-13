@@ -1,6 +1,7 @@
 package com.openmausbot.companion.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -13,6 +14,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -172,17 +179,22 @@ internal fun HeaderBackButton(onBack: () -> Unit, modifier: Modifier = Modifier)
 @Composable
 internal fun TouchTarget(
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     size: Dp = MIN_TOUCH_TARGET,
     enabled: Boolean = true,
     contentDescription: String? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
+    val interactions = remember { MutableInteractionSource() }
+    val pressed by interactions.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(if (pressed) .95f else 1f, label = "control press")
     Box(
         modifier = modifier
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
             .size(if (size > MIN_TOUCH_TARGET) size else MIN_TOUCH_TARGET)
             .clip(CircleShape)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .combinedClickable(enabled = enabled, role = Role.Button, interactionSource = interactions, indication = null, onClick = onClick, onLongClick = onLongClick)
             .then(
                 if (contentDescription == null) {
                     Modifier
