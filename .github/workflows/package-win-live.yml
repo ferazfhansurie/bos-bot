@@ -45,7 +45,11 @@ jobs:
       # Keep the reviewed portable bundles; host-dependent esbuild labels
       # must not dirty the exact source commit before the package gate.
       - run: git restore electron/vendor
-      - run: node scripts/release-contract.mjs package live win
+      - run: node scripts/release-contract.mjs check live win
+      - name: Package the exact clean live source
+        env:
+          SOURCE_SHA: ${{ inputs.ref }}
+        run: pnpm exec electron-builder --config electron-builder.live.cjs --win --publish never --config.extraMetadata.bosSourceCommit=$env:SOURCE_SHA
       - name: Use the reviewed fixture-isolation verifier
         shell: bash
         env:

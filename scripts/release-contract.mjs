@@ -66,7 +66,7 @@ if(process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])
  if(command === 'check') { if(channel === 'live') { releaseSigning(platform,compatEnv); releaseFeed(compatEnv); assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),'','live packaging requires a clean source commit'); } }
  else if(command === 'package') {
   if(channel === 'live') { releaseSigning(platform,compatEnv); assert.equal(execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim(),'','live packaging requires a clean source commit'); }
-  const result=spawnSync('pnpm',['exec','electron-builder','--config',channel === 'live' ? 'electron-builder.live.cjs' : 'electron-builder.staging.yml',`--${platform}`,'--publish','never',`--config.extraMetadata.bosSourceCommit=${sha}`],{stdio:'inherit',env:packageEnvironment(channel,platform,compatEnv)});
+  const result=spawnSync(process.execPath,[createRequire(import.meta.url).resolve('electron-builder/cli.js'),'--config',channel === 'live' ? 'electron-builder.live.cjs' : 'electron-builder.staging.yml',`--${platform}`,'--publish','never',`--config.extraMetadata.bosSourceCommit=${sha}`],{stdio:'inherit',env:packageEnvironment(channel,platform,compatEnv)});
   process.exit(result.status ?? 1);
  } else if(command === 'packaged') {
   const res=arg;
