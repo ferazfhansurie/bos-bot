@@ -1,0 +1,76 @@
+name: Publish verified desktop site release
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact public commit used for both desktop builds
+        required: true
+        type: string
+      windows_run:
+        description: Successful Package Windows Live run id
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Validate release source and Windows run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          WINDOWS_RUN: ${{ inputs.windows_run }}
+        run: |
+          test "$GITHUB_REPOSITORY" = ferazfhansurie/bos-bot
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(node -p 'require("./package.json").version')" = 1.9.8
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$WINDOWS_RUN" > /tmp/run.json
+          node -e 'const r=require("/tmp/run.json"); if(r.conclusion!=="success"||r.path!==".github/workflows/package-win-live.yml") process.exit(1)'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.windows_run }}
+          name: windows-release
+          path: assets
+      - name: Retrieve notarized mac artifacts and verification receipt
+        run: |
+          for arch in arm64 x64; do
+            for kind in zip dmg; do
+              name="BOS-Bot-1.9.8-$arch.$kind"
+              curl --fail --location --retry 3 "https://bos.aihlete.com/updates/$name" --output "assets/$name"
+              curl --fail --location --retry 3 "https://bos.aihlete.com/updates/$name.blockmap" --output "assets/$name.blockmap"
+            done
+          done
+          curl --fail --location https://bos.aihlete.com/updates/latest-mac.yml --output assets/latest-mac.yml
+          curl --fail --location https://bos.aihlete.com/updates/release-contract-mac.json --output assets/release-contract-mac.json
+      - name: Verify both contracts and all updater bytes
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          node --input-type=module - <<'JS'
+          import {readFileSync,statSync} from 'node:fs'; import{createHash}from'node:crypto';import assert from'node:assert/strict';
+          for(const platform of ['mac','win']){const c=JSON.parse(readFileSync(`assets/release-contract-${platform}.json`));assert.equal(c.sha,process.env.SOURCE_SHA);assert.equal(c.version,'1.9.8');assert.equal(c.channel,'live');}
+          for(const feed of ['latest-mac.yml','latest.yml']) {const y=readFileSync(`assets/${feed}`,'utf8');assert.match(y,/^version: 1\.9\.8$/m);const entries=[...y.matchAll(/-\s+url:\s+(\S+)[\s\S]*?sha512:\s+(\S+)\n\s+size:\s+(\d+)/g)];assert.equal(entries.length,feed==='latest.yml'?1:4);for(const[,name,hash,size]of entries){assert.match(name,/^BOS-Bot-1\.9\.8-[a-z0-9-]+\.(?:zip|dmg|exe)$/);const p=`assets/${name}`;assert.equal(createHash('sha512').update(readFileSync(p)).digest('base64'),hash);assert.equal(statSync(p).size,Number(size));}}
+          JS
+          cp assets/BOS-Bot-1.9.8-arm64.dmg assets/BOS-Bot.dmg
+          cp assets/BOS-Bot-1.9.8-x64.dmg assets/BOS-Bot-intel.dmg
+      - name: Publish canonical desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          if gh release view v1.9.8 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            test "$(gh release view v1.9.8 --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          else
+            gh release create v1.9.8 --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --draft --title 'BOS Bot 1.9.8' --notes 'mac builds are Developer ID signed and notarized. windows remains an unsigned preview. live desktop installs can update in settings → updates. older staging installs require the live installer once. android is available from bos.aihlete.com.'
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1.9.8" --jq .object.sha)" = "$SOURCE_SHA"
+          gh release upload v1.9.8 assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit v1.9.8 --repo "$GITHUB_REPOSITORY" --draft=false --latest

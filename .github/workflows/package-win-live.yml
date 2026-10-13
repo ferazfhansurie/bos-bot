@@ -38,8 +38,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Clean generated output
         shell: bash
-        run: rm -rf dist dist-server release
-      - run: pnpm package:win:live
+        run: git clean -fdX -- dist dist-server release
+      - run: node scripts/release-contract.mjs check live win
+      - run: pnpm package:prepare
+      - run: pnpm build:cua:win
+      # Keep the reviewed portable bundles; host-dependent esbuild labels
+      # must not dirty the exact source commit before the package gate.
+      - run: git restore electron/vendor/electron-updater.cjs electron/vendor/update-yaml.cjs
+      - run: node scripts/release-contract.mjs package live win
       - name: "Gate: bundled browser works with an empty home"
         run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
       - name: "Gate: packaged Windows server discovers its browser"
