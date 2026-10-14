@@ -29,6 +29,8 @@ export class DelegatedJobs {
   }
   private save() { writeFileAtomic(this.file, JSON.stringify(this.jobs), { mode: 0o600 }); }
   pending() { return this.failed ? [] : this.jobs.filter(job => job.status === "queued"); }
+  /** Peer sessions whose delegated work has run in this thread. */
+  sessionsForThread(threadId: string) { return [...new Set(this.jobs.filter(job => job.threadId === threadId).map(job => job.identity.sessionId))]; }
   get(id: string, identity: DelegatedIdentity) {
     if (this.failed) throw new DelegatedJobError("Delegated receipt storage is unavailable", 503);
     return this.jobs.find(job => job.id === id && sameIdentity(job.identity, identity));

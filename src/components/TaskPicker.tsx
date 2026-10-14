@@ -5,7 +5,7 @@
 // own transcript and its own provider session — so sensitive work, a
 // long job and a quick question can sit side by side under one agent.
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Activity, Check, ChevronDown, FolderInput, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Check, ChevronDown, FolderInput, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useStore, formatTime, type Bot, type BotProject, type Group, type Task } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -14,7 +14,7 @@ import { formatTaskTokens } from "@/lib/usage";
 import { nextRename } from "@/lib/rename";
 import { FolderIcon, NewThreadButton } from "./BotProjects";
 import { useShowThreads } from "@/lib/thread-preferences";
-import { AttentionThreadRows, crossBotAttentionThreads, sidebarBotActivityTasks, type AttentionThread } from "./SidebarBotActivity";
+import { sidebarBotActivityTasks } from "./SidebarBotActivity";
 import { orderedSidebarThreads, threadByline } from "./SidebarThreadRow";
 
 /** Click-to-switch used to close this menu immediately, which unmounted the
@@ -90,8 +90,6 @@ function ConversationTaskPicker({
   onRename,
   onDelete,
   onMove,
-  attention,
-  onAttentionJump,
   sidebar = false,
 }: {
   sidebar?: boolean;
@@ -104,8 +102,6 @@ function ConversationTaskPicker({
   onRename: (threadId: string, title: string) => void;
   onDelete: (threadId: string) => void;
   onMove?: (threadId: string, projectId: string | null) => void;
-  attention?: AttentionThread[];
-  onAttentionJump?: (entry: AttentionThread) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -217,15 +213,8 @@ function ConversationTaskPicker({
       : t("task.switch");
   const grouped = bot ? groupThreadTasks(tasks, bot.projects ?? [], query) : null;
   const visible = grouped ? grouped.flatMap((group) => group.tasks) : filterTasks(tasks, query);
-  // The attention section rides above the tree and obeys the same search:
-  // a query narrows it by thread title or bot name rather than hiding it.
-  const attentionNeedle = query.trim().toLowerCase();
-  const attentionRows = (attention ?? []).filter((entry) =>
-    !attentionNeedle || entry.task.title.toLowerCase().includes(attentionNeedle) || entry.botName.toLowerCase().includes(attentionNeedle));
   const looking = query.trim();
-  // One result list for keyboard, count, and empty state: an attention row
-  // that matches the query is a real result even when no tree thread does.
-  const results = [...attentionRows.map((entry) => ({ kind: "attention" as const, entry })), ...visible.map((task) => ({ kind: "task" as const, task }))];
+  const results = visible;
 
   return (
     <div className="relative" ref={ref}>
@@ -251,7 +240,7 @@ function ConversationTaskPicker({
       {open && (
         <div style={sidebar ? { position: "fixed", left: Math.min(ref.current?.getBoundingClientRect().left ?? 16, window.innerWidth - 316), top: Math.min((ref.current?.getBoundingClientRect().bottom ?? 100) + 4, Math.max(16, window.innerHeight - 420)), maxHeight: "min(400px, 85vh)", overflowY: "auto" } : undefined} className={cn("absolute top-full z-40 mt-1 w-[300px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-hairline/50 bg-card py-1 shadow-2xl shadow-black/50", sidebar ? "left-0" : "right-0")}>
           <div className="px-2 pb-1 pt-1.5">
-            <div className="flex items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-2.5 py-1.5 focus-within:border-accent/60">
+            <div className="flex items-center gap-2 rounded-lg border border-hairline/40 bg-inset px-2.5 py-1.5 focus-within:border-hairline">
               <Search size={13} className="shrink-0 text-ink-secondary" />
               <input
                 autoFocus
@@ -271,8 +260,7 @@ function ConversationTaskPicker({
                     e.preventDefault();
                     const first = results[0];
                     if (!first) return;
-                    if (first.kind === "attention") onAttentionJump?.(first.entry);
-                    else if (first.task.threadId !== threadId) onSwitch(first.task.threadId);
+                    if (first.threadId !== threadId) onSwitch(first.threadId);
                     closeMenu();
                   }
                 }}
@@ -283,10 +271,6 @@ function ConversationTaskPicker({
             </div>
           </div>
           <div className="max-h-[320px] overflow-y-auto" role="group" aria-label={looking ? t("task.matching", { count: results.length }) : t("task.list")}>
-            {attentionRows.length > 0 && <div className="pb-1">
-              <div className="flex items-center gap-1.5 px-3 pb-1 pt-1.5 text-[11px] font-medium text-ink-secondary"><Activity size={12} />{t("attention.title")}</div>
-              <AttentionThreadRows entries={attentionRows} onJump={(entry) => { onAttentionJump?.(entry); closeMenu(); }} />
-            </div>}
             {results.length === 0 ? (
               <div className="px-3 py-6 text-center text-[13px] text-ink-secondary">
                 {t("task.noMatch", { query: looking })}
@@ -439,7 +423,7 @@ export function BotActivityPicker({ bot }: { bot: Bot }) {
 }
 
 export function TaskPicker({ bot, sidebar = false }: { bot: Bot; sidebar?: boolean }) {
-  const { state, dispatch } = useStore();
+  const { dispatch } = useStore();
   const showThreads = useShowThreads();
   if (!showThreads) return null;
   return (
@@ -449,14 +433,12 @@ export function TaskPicker({ bot, sidebar = false }: { bot: Bot; sidebar?: boole
       tasks={(bot.tasks ?? []).filter((task) => !task.routineRunId)}
       busy={false}
       bot={bot}
-      attention={crossBotAttentionThreads(state.bots, state.pendingQueued, bot.id)}
       onNew={() => dispatch({ type: "newTask", botId: bot.id })}
       onSwitch={(threadId) => dispatch({ type: "switchTask", botId: bot.id, threadId })}
       onRename={(threadId, title) => dispatch({ type: "renameTask", botId: bot.id, threadId, title })}
       onDelete={(threadId) => dispatch({ type: "deleteTask", botId: bot.id, threadId })}
       // folders stay with the owner of a bot relayed from a linked Mac
       onMove={bot.remote ? undefined : (threadId, projectId) => dispatch({ type: "updateTask", botId: bot.id, threadId, patch: { projectId } })}
-      onAttentionJump={(entry) => dispatch({ type: "switchTask", botId: entry.botId, threadId: entry.task.threadId })}
     />
   );
 }

@@ -14,7 +14,7 @@ export function engineReady(instance: InstanceInfo): boolean {
 const providers: Record<string, string> = {
   claudeAgent: "Anthropic", codex: "OpenAI", grok: "xAI", grokAgent: "xAI",
   kimiAgent: "Moonshot AI", droidAgent: "Factory", cursorAgent: "Cursor",
-  antigravityAgent: "Google", opencodeGo: "OpenCode", qwenAgent: "Qwen",
+  antigravityAgent: "Google · Gemini", geminiAgent: "Google · Gemini CLI", opencodeGo: "OpenCode", qwenAgent: "Qwen",
   hermesAgent: "Nous Research", piAgent: "pi.dev",
 };
 

@@ -444,7 +444,12 @@ private fun LoadedChat(
     val dictationError by dictation.error.collectAsState()
     val dictationLocked = dictationListening || dictationStarting
 
-    val rawTranscript = remember(state, threadId) { state.visibleTranscript(threadId) }
+    // Keyed on this thread's own messages and branch, not the whole state: another
+    // bot streaming elsewhere publishes a new state per token, and refolding this
+    // transcript for each one is wasted work.
+    val threadMessages = state.transcript(threadId)
+    val branch = if (state.activeLeafIds.containsKey(threadId)) state.activeLeafIds[threadId] else state.botForThread(threadId)?.activeLeafId
+    val rawTranscript = remember(threadMessages, branch, threadId) { state.visibleTranscript(threadId) }
     val activityDetail by environment.chatPreferences.activityDetail.collectAsState()
     val quickReplies by environment.chatPreferences.quickReplies.collectAsState()
     // The source transcript stays intact for approvals, mascot state and

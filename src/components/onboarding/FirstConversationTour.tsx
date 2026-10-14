@@ -45,6 +45,7 @@ export function FirstConversationTour() {
 
   const eligible =
     !remoteClient &&
+    record?.marketerAssignment?.botId !== state.selectedId &&
     !state.welcomeOpen &&
     Boolean(record?.completedAt) &&
     currentStep(record) === null &&

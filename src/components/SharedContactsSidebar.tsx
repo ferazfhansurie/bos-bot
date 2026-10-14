@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
-import { Check, ChevronRight, Copy, UserPlus } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Check, ChevronRight, ClipboardCopy, Copy, MessageCircle, Pin, PinOff, UserPlus } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
 import type { ReactNode } from "react";
 import { readSessionState } from "@/lib/session";
 import { GroupMark, PersonPhoto } from "./Avatar";
-import { isDirectSharedRoom, sharedRoomUnread } from "./shared-conversation";
+import { isDirectSharedRoom, sharedRoomUnread, sidebarPeople } from "./shared-conversation";
+import { openRowMenu, RowContextMenu, type RowMenuAt, type RowMenuItem } from "./RowContextMenu";
 
 interface Contact { id: string; name: string; kind: "person" | "bot"; homeId?: string; homeName?: string; title?: string; avatar?: string | null; color?: string | null; mascotBody?: string | null }
 interface Room { id: string; name: string; kind?: "direct" | "group"; memberIds: string[]; lastActivity?: number; preview?: string; unreadCount?: number; readSequence?: number; notifications?: "all" | "mentions" | "muted" }
@@ -17,6 +18,8 @@ export interface LocalConversationRow { id: string; at: number; pinned?: boolean
 export function SharedContactsSidebar({ compact = false, placement = "people", localRows = [] }: { compact?: boolean; placement?: "people" | "unified"; localRows?: LocalConversationRow[]; density?: SidebarDensity }) {
   const { state, dispatch } = useStore();
   const [selfId, setSelfId] = useState<string | null>(null);
+  // everyone the roster knows (room faces and names), and the people worth a row
+  const [roster, setRoster] = useState<Contact[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [seenRooms, setSeenRooms] = useState<Record<string, number>>(() => {
@@ -30,6 +33,20 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     try { globalThis.localStorage?.setItem("bos.sidebar.people-open", open ? "1" : "0"); } catch { /* private mode */ }
   };
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ at: RowMenuAt; label: string; items: RowMenuItem[] } | null>(null);
+  const closeRowMenu = useCallback(() => setRowMenu(null), []);
+  const [pins, setPins] = useState<string[]>(() => {
+    try { const stored = JSON.parse(globalThis.localStorage?.getItem("bos.sidebar.pinned-people") ?? "[]"); return Array.isArray(stored) ? stored.filter((v): v is string => typeof v === "string") : []; }
+    catch { return []; }
+  });
+  const togglePin = (id: string) => setPins(current => {
+    const next = current.includes(id) ? current.filter(p => p !== id) : [...current, id];
+    try { globalThis.localStorage?.setItem("bos.sidebar.pinned-people", JSON.stringify(next)); } catch { /* private mode */ }
+    return next;
+  });
+  const pinItem = (id: string): RowMenuItem => pins.includes(id)
+    ? { key: "pin", label: "Unpin", icon: <PinOff size={16} className="text-ink-secondary" />, onSelect: () => togglePin(id) }
+    : { key: "pin", label: "Pin", icon: <Pin size={16} className="text-ink-secondary" />, onSelect: () => togglePin(id) };
   const [owner, setOwner] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
   const [pairingUrl, setPairingUrl] = useState("");
@@ -50,16 +67,17 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     let alive = true;
     const refresh = async () => {
       try {
-        const me = await api<{ actorId: string | null; homeId: string }>("/api/multiplayer/me");
+        const me = await api<{ actorId: string | null; homeId: string; name?: string | null }>("/api/multiplayer/me");
         if (!alive) return;
         setSelfId(me.actorId);
         if (!me.actorId) return;
-        const [roster, shared] = await Promise.all([
+        const [listed, shared] = await Promise.all([
           api<{ contacts: Contact[] }>("/api/multiplayer/contacts"),
           api<{ rooms: Room[] }>("/api/multiplayer/rooms"),
         ]);
         if (!alive) return;
-        setContacts(roster.contacts.filter(contact => contact.id !== me.actorId && contact.kind === "person"));
+        setRoster(listed.contacts);
+        setContacts(sidebarPeople(listed.contacts, me));
         setRooms(shared.rooms);
         setError("");
       } catch { if (alive) setError("Shared chats unavailable"); }
@@ -96,12 +114,12 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
     } catch { setError("Could not open chat"); }
     finally { setBusyId(null); }
   };
-  const visibleRooms = rooms.filter(room => !(isDirectSharedRoom(room) && room.memberIds.includes(selfId ?? "") && room.memberIds.some(id => contacts.some(contact => contact.id === id))));
+  const visibleRooms = rooms.filter(room => !(isDirectSharedRoom(room) && room.memberIds.includes(selfId ?? "") && room.memberIds.some(id => roster.some(contact => contact.id === id && contact.kind === "person"))));
   // everyone but me first, so the mark shows who else is here
   const roomFaces = (room: Room) => [...room.memberIds.filter(id => id !== selfId), ...(selfId ? [selfId] : [])]
-    .map(id => contacts.find(contact => contact.id === id)).filter((contact): contact is Contact => Boolean(contact));
+    .map(id => roster.find(contact => contact.id === id)).filter((contact): contact is Contact => Boolean(contact));
   const roomName = (room: Room) => room.name === "Group chat"
-    ? room.memberIds.filter(id => id !== selfId).map(id => contacts.find(contact => contact.id === id)?.name).filter(Boolean).join(", ") || room.name
+    ? room.memberIds.filter(id => id !== selfId).map(id => roster.find(contact => contact.id === id)?.name).filter(Boolean).join(", ") || room.name
     : room.name;
   const roomUnread = (room: Room) => typeof room.unreadCount === "number"
     ? sharedRoomUnread(room, 0)
@@ -110,20 +128,25 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
   const unifiedContacts = visibleContacts;
   if (placement === "unified") {
     const directRoom = (contact: Contact) => rooms.find(room => isDirectSharedRoom(room) && room.memberIds.includes(selfId ?? "") && room.memberIds.includes(contact.id));
-    const personEntries: Array<{ id: string; at: number; unread: boolean; selected: boolean; element: ReactNode }> = unifiedContacts.map(contact => {
+    const personEntries: Array<{ id: string; at: number; pinned: boolean; unread: boolean; selected: boolean; element: ReactNode }> = unifiedContacts.map(contact => {
         const room = directRoom(contact);
         const at = room?.lastActivity ?? 0;
         const selected = state.activeView === "shared" && Boolean(room) && state.selectedSharedRoomId === room?.id;
         const unread = Boolean(room && roomUnread(room));
         const avatarPx = 40;
         const rowClass = cn(
-          "flex w-full items-center rounded-[10px] text-left outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50",
+          "flex w-full items-center rounded-[10px] text-left outline-none focus-visible:ring-1 focus-visible:ring-hairline disabled:opacity-50",
           compact ? "justify-center px-1 py-1.5" : "gap-2 px-1 py-3",
           selected ? "bg-raised/70" : "hover:bg-raised/40",
         );
         const subtitle = [contact.title?.trim() || "Person", contact.homeName ? `on ${contact.homeName}` : ""].filter(Boolean).join(" · ");
-        return { id: `contact:${contact.id}`, at, unread, selected, element: <div key={contact.id} className="group relative" title={compact ? contact.name : undefined}>
-          <button type="button" disabled={busyId !== null} onClick={() => void openPerson(contact)} aria-label={`Chat with ${contact.name}`} className={rowClass}>
+        return { id: `contact:${contact.id}`, at, pinned: pins.includes(`contact:${contact.id}`), unread, selected, element: <div key={contact.id} className="group relative" title={compact ? contact.name : undefined}>
+          <button type="button" disabled={busyId !== null} onClick={() => void openPerson(contact)} aria-label={`Chat with ${contact.name}`} className={rowClass}
+            onContextMenu={event => openRowMenu(event, at => setRowMenu({ at, label: `${contact.name} actions`, items: [
+              { key: "open", label: "Open chat", icon: <MessageCircle size={16} className="text-ink-secondary" />, onSelect: () => void openPerson(contact) },
+              pinItem(`contact:${contact.id}`),
+              { key: "copy", label: "Copy name", icon: <ClipboardCopy size={16} className="text-ink-secondary" />, onSelect: () => void navigator.clipboard?.writeText(contact.name).catch(() => {}) },
+            ] }))}>
             <span className="relative flex shrink-0">
               {contact.avatar ? <PersonPhoto src={contact.avatar} size={avatarPx} />
                 : <span style={{ width: avatarPx, height: avatarPx }} className="flex shrink-0 items-center justify-center rounded-full bg-accent/20 text-[13px] font-semibold text-accent">{contact.name.slice(0, 1).toUpperCase()}</span>}
@@ -131,7 +154,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
             {!compact && <div className="min-w-0 flex-1">
               <div className="sr-only">{subtitle}</div>
               <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 grow truncate text-[14px] font-medium leading-5 text-ink">{contact.name}</span>
+                <span className="flex min-w-0 grow items-center gap-1.5 truncate text-[14px] font-medium leading-5 text-ink">{pins.includes(`contact:${contact.id}`) && <Pin size={12} className="shrink-0 text-ink-secondary" />}<span className="truncate">{contact.name}</span></span>
               </div>
               <div className="flex items-center gap-2"><span className="min-w-0 truncate text-[13px] leading-5 text-ink-secondary">{room?.preview ?? ""}</span>{unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</div>
             </div>}
@@ -140,14 +163,18 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
       });
     // People sit in their own list under the bots, folded to one row until
     // opened — the same shape as the phone's chat list.
-    personEntries.sort((a, b) => b.at - a.at || a.id.localeCompare(b.id));
+    personEntries.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.at - a.at || a.id.localeCompare(b.id));
     const peopleUnread = personEntries.filter(entry => entry.unread).length;
     const peopleShown = peopleOpen || personEntries.some(entry => entry.selected);
     const entries: Array<{ id: string; at: number; pinned?: boolean; element: ReactNode }> = [
       ...localRows,
-      ...visibleRooms.map(room => ({ id: `room:${room.id}`, at: room.lastActivity ?? 0, element: <button key={room.id} type="button" onClick={() => dispatch({ type: "selectSharedRoom", roomId: room.id })}
+      ...visibleRooms.map(room => ({ id: `room:${room.id}`, at: room.lastActivity ?? 0, pinned: pins.includes(`room:${room.id}`), element: <button key={room.id} type="button" onClick={() => dispatch({ type: "selectSharedRoom", roomId: room.id })}
+        onContextMenu={event => openRowMenu(event, at => setRowMenu({ at, label: `${roomName(room)} actions`, items: [
+          { key: "open", label: "Open", icon: <MessageCircle size={16} className="text-ink-secondary" />, onSelect: () => dispatch({ type: "selectSharedRoom", roomId: room.id }) },
+          pinItem(`room:${room.id}`),
+        ] }))}
         aria-label={`Open ${roomName(room)}`} title={roomName(room)} className={cn("flex w-full items-center gap-2 rounded-[10px] px-1 py-3 text-left text-ink hover:bg-raised/40", state.activeView === "shared" && state.selectedSharedRoomId === room.id && "bg-raised/70")}>
-        <GroupMark members={roomFaces(room)} size={40} />{!compact && <span className="min-w-0 flex-1"><span className="flex justify-between gap-2 text-[14px] font-medium leading-5"><span className="truncate">{roomName(room)}</span></span><span className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-ink-secondary">{room.preview ?? ""}</span>{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</span></span>}
+        <GroupMark members={roomFaces(room)} size={40} />{!compact && <span className="min-w-0 flex-1"><span className="flex items-center gap-1.5 text-[14px] font-medium leading-5">{pins.includes(`room:${room.id}`) && <Pin size={12} className="shrink-0 text-ink-secondary" />}<span className="truncate">{roomName(room)}</span></span><span className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-ink-secondary">{room.preview ?? ""}</span>{roomUnread(room) && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="Unread" />}</span></span>}
       </button> })),
     ];
     entries.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.at - a.at || a.id.localeCompare(b.id));
@@ -158,7 +185,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
           ? <div aria-hidden="true" className="mx-auto my-2 h-px w-6 bg-hairline/60" />
           : <button type="button" onClick={() => togglePeople(!peopleOpen)} aria-expanded={peopleShown}
               aria-label={`People, ${personEntries.length}${peopleUnread ? `, ${peopleUnread} unread` : ""}`}
-              className="mt-3 flex h-9 w-full items-center gap-2 rounded-[10px] px-2 text-left text-ink-secondary outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-accent/60">
+              className="mt-3 flex h-9 w-full items-center gap-2 rounded-[10px] px-2 text-left text-ink-secondary outline-none hover:text-ink focus-visible:ring-1 focus-visible:ring-hairline">
               <span className="text-[12px] font-semibold uppercase tracking-[0.04em]">People · {personEntries.length}</span>
               {peopleUnread > 0 && !peopleShown && <span className="rounded-full bg-accent px-1.5 text-[11px] font-semibold leading-[18px] text-white tabular-nums">{peopleUnread > 99 ? "99+" : peopleUnread}</span>}
               <ChevronRight size={14} className={cn("ml-auto shrink-0 transition-transform motion-reduce:transition-none", peopleShown && "rotate-90")} />
@@ -166,6 +193,7 @@ export function SharedContactsSidebar({ compact = false, placement = "people", l
         {(peopleShown || compact) && personEntries.map(entry => <div key={entry.id}>{entry.element}</div>)}
       </>}
 
+      {rowMenu && <RowContextMenu at={rowMenu.at} label={rowMenu.label} items={rowMenu.items} onClose={closeRowMenu} />}
       {settingUp && owner && !compact && <div className="mb-2 space-y-2 rounded-lg bg-raised p-2 text-xs">
         <p className="font-semibold">Connect a team member</p>
         <p className="text-ink-secondary">Invite once. Both people and their bots then appear in the conversation list.</p>

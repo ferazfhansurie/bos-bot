@@ -1,7 +1,8 @@
 /** Split view: the main column can show up to three conversations side by
  * side. The primary pane is always the sidebar selection; the extra panes
- * hold other bots or rooms by id, left to right. The store keeps one live
- * thread per bot, so a bot appears in at most one pane. */
+ * hold other bots or rooms by id, left to right. A bot id shows that bot's
+ * live thread; a thread pane id (`thread:<botId>:<threadId>`) pins one of
+ * its other threads, so the same bot can run in several panes at once. */
 
 export const SPLIT_DRAG_TYPE = "application/x-bos-split-pane";
 /** Panes beside the primary one: three columns in total. */
@@ -10,6 +11,25 @@ const STORAGE_KEY = "bos.splitPanes";
 
 /** Add a pane at the right edge. The primary id and ids already open are
  * ignored; when full, the new pane replaces the rightmost one. */
+const THREAD_PANE_PREFIX = "thread:";
+
+export function threadPaneId(botId: string, threadId: string): string {
+  return `${THREAD_PANE_PREFIX}${botId}:${threadId}`;
+}
+
+export function parseThreadPane(id: string): { botId: string; threadId: string } | null {
+  if (!id.startsWith(THREAD_PANE_PREFIX)) return null;
+  const rest = id.slice(THREAD_PANE_PREFIX.length);
+  const at = rest.indexOf(":");
+  if (at <= 0 || at === rest.length - 1) return null;
+  return { botId: rest.slice(0, at), threadId: rest.slice(at + 1) };
+}
+
+/** The bot a pane belongs to: its own id, or the owner of a thread pane. */
+export function paneOwnerId(id: string): string {
+  return parseThreadPane(id)?.botId ?? id;
+}
+
 export function addSplitPane(panes: readonly string[], id: string, primaryId: string): string[] {
   if (!id || id === primaryId || panes.includes(id)) return [...panes];
   const next = [...panes, id];
@@ -29,9 +49,17 @@ export function swapIntoPrimary(panes: readonly string[], selectedId: string, pr
   return panes.map((pane, index) => (index === at ? previousId : pane));
 }
 
-/** Drop panes whose bot or room no longer exists, and the primary itself. */
-export function visibleSplitPanes(panes: readonly string[], knownIds: ReadonlySet<string>, primaryId: string): string[] {
-  return panes.filter((pane, index) => pane !== primaryId && knownIds.has(pane) && panes.indexOf(pane) === index).slice(0, MAX_EXTRA_PANES);
+/** Drop panes whose bot or room no longer exists, the primary itself, and
+ * thread panes whose thread is already on screen as a bot's live thread
+ * (`liveThread` gives a bot's current thread id). */
+export function visibleSplitPanes(panes: readonly string[], knownIds: ReadonlySet<string>, primaryId: string, liveThread: (botId: string) => string | undefined = () => undefined): string[] {
+  const shownBots = new Set([primaryId, ...panes.filter((pane) => !parseThreadPane(pane))]);
+  return panes.filter((pane, index) => {
+    if (pane === primaryId || panes.indexOf(pane) !== index) return false;
+    const thread = parseThreadPane(pane);
+    if (!thread) return knownIds.has(pane);
+    return knownIds.has(thread.botId) && !(shownBots.has(thread.botId) && liveThread(thread.botId) === thread.threadId);
+  }).slice(0, MAX_EXTRA_PANES);
 }
 
 export function loadSplitPanes(storage: Pick<Storage, "getItem"> | undefined = globalThis.localStorage): string[] {
@@ -66,12 +94,11 @@ export function clampPaneShare(share: number, extraCount: number): number {
   return Math.min(max, Math.max(MIN_PANE_SHARE, share));
 }
 
-/** Share for an extra pane whose left edge was dragged to `pointerX`. Panes
- * to its right keep their width, so the dragged pane spans from the pointer
- * to the right edge minus those panes. */
+/** All extra panes share a width. A divider with N panes to its right
+ * controls N + 1 equal shares between that divider and the column edge. */
 export function shareFromPointer(pointerX: number, left: number, width: number, panesToRight: number, share: number): number {
   if (width <= 0) return share;
-  return (left + width - pointerX) / width - panesToRight * share;
+  return (left + width - pointerX) / width / (panesToRight + 1);
 }
 
 export function loadPaneShare(storage: Pick<Storage, "getItem"> | undefined = globalThis.localStorage): number {

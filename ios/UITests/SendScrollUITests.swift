@@ -1,5 +1,25 @@
 import XCTest
 final class SendScrollUITests: XCTestCase {
+    @MainActor func testComposerClearsBeforeSlowAcknowledgementAndKeepsNextDraft() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-store-preview", "-threads-preview", "-stream-preview", "-stream-preview-history", "300", "-send-scroll-preview", "-send-delay-preview", "-mention-draft", "", "-open-first", "-companion.prefs.islandIntro", "never", "-companion.onboarding.welcomeSeen", "YES", "-companion.onboarding.notificationsSeen", "YES"]
+        app.launch()
+        let input = app.descendants(matching: .any).matching(identifier: "message-input").firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 12))
+        input.tap(); input.typeText("keep this message visible")
+        app.buttons["Send message"].tap()
+        XCTAssertEqual(input.value as? String, "", "the composer clears before the delayed HTTP receipt")
+        XCTAssertTrue(app.staticTexts["keep this message visible"].firstMatch.waitForExistence(timeout: 1))
+        input.typeText("my next draft")
+        XCTAssertEqual(input.value as? String, "my next draft")
+        let preserved = NSPredicate(format: "value == %@", "my next draft")
+        expectation(for: preserved, evaluatedWith: input)
+        waitForExpectations(timeout: 8)
+        Thread.sleep(forTimeInterval: 5.5)
+        XCTAssertEqual(input.value as? String, "my next draft", "acknowledging the earlier send must not clear newer typing")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+    }
     @MainActor func testSendingInLongHistoryKeepsMessageAboveKeyboard() {
         continueAfterFailure = false
         let app = XCUIApplication()

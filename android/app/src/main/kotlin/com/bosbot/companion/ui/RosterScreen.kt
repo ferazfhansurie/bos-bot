@@ -59,6 +59,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -97,6 +98,9 @@ import com.openmausbot.companion.core.chatSummaries
 import com.openmausbot.companion.core.forTask
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
@@ -120,7 +124,10 @@ fun RosterScreen(navigator: CompanionNavigator) {
     val session = environment.session
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
-    val state by session.state.collectAsState()
+    // A streaming bot publishes a state per token. The list only needs to keep
+    // up with the eye, so it folds the fleet at most four times a second (the
+    // iOS session coalesces its loud publishes the same way).
+    val state by remember(session) { session.state.throttleLatest(250) }.collectAsState(session.state.value)
     val homes by session.homesState.collectAsState()
     val connection by session.connection.collectAsState()
     val status by session.status.collectAsState()
@@ -220,7 +227,7 @@ fun RosterScreen(navigator: CompanionNavigator) {
     // The cross-bot Needs attention section rides above every roster section.
     val attention = remember(state) { state.crossBotAttention() }
 
-    val allConversations = buildList {
+    val allConversations = remember(summaries, homes, activityDetail, session, rosterScope) { buildList {
         summaries.forEach { add(RosterConversation(it, session, rosterScope, null)) }
         homes.filter { it.connection.id != connection?.id }.forEach { home ->
             home.state.chatSummaries(activityDetail).forEach { summary ->
@@ -228,7 +235,7 @@ fun RosterScreen(navigator: CompanionNavigator) {
                 add(RosterConversation(summary, home.session, home.connection.id, label))
             }
         }
-    }
+    } }
     fun matchesFilter(entry: RosterConversation): Boolean = when(conversationFilter) {
         "unread" -> entry.summary.chat.unread
         "waiting" -> entry.summary.id in RosterLayout.waitingChats(entry.owner.state.value, entry.owner.state.value.pendingApprovals)
@@ -238,9 +245,13 @@ fun RosterScreen(navigator: CompanionNavigator) {
     val pinnedConversations = allConversations.filter { it.key in pinnedIds && it.key !in hiddenIds && matchesFilter(it) }
     val hiddenConversations = allConversations.filter { it.key in hiddenIds }
     val entry: @Composable (ChatSummary, Boolean) -> Unit = { summary, last ->
-        val conversation = RosterConversation(summary, session, rosterScope, null)
+        // Remembered per chat, reading the newest summary when tapped: a fresh
+        // lambda each frame would make the row's inputs differ and redraw it.
+        val latest by rememberUpdatedState(summary)
+        val onClick = remember(summary.id, session, rosterScope) { { open(RosterConversation(latest, session, rosterScope, null)) } }
+        val onLongClick = remember(summary.id, session, rosterScope) { { conversationMenu = RosterConversation(latest, session, rosterScope, null) } }
         ChatRow(summary, faces[summary.id] ?: MascotFace(MausState.IDLE), summary.id in waiting, last,
-            onClick = { open(conversation) }, onLongClick = { conversationMenu = conversation })
+            onClick = onClick, onLongClick = onLongClick)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -807,7 +818,7 @@ private fun ChatRow(
                             modifier = Modifier.weight(1f),
                         )
                         if (chat.busy) {
-                            CircularProgressIndicator(
+                            TickSpinner(
                                 modifier = Modifier
                                     .padding(top = 3.dp)
                                     .size(12.dp),
@@ -1055,5 +1066,19 @@ private fun RosterCreateMenu(canCreateBot: Boolean, canCreateSection: Boolean, o
             DropdownMenuItem(text = { Text(localized("New section")) }, enabled = canCreateSection, onClick = { expanded = false; onSection() })
             DropdownMenuItem(text = { Text(localized("New bot")) }, enabled = canCreateBot, onClick = { expanded = false; onBot() })
         }
+    }
+}
+
+/**
+ * The newest value, at most once per [millis]: the first after a quiet spell goes
+ * straight through, a burst lands its last value when the window closes.
+ */
+private fun <T> Flow<T>.throttleLatest(millis: Long): Flow<T> = channelFlow {
+    var sent = 0L
+    collectLatest { value ->
+        val wait = sent + millis - android.os.SystemClock.uptimeMillis()
+        if (wait > 0) delay(wait)
+        sent = android.os.SystemClock.uptimeMillis()
+        send(value)
     }
 }

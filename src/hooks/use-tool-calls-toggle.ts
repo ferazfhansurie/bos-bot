@@ -5,7 +5,7 @@ import { t } from "@/lib/i18n";
 
 /** The show/hide tool calls switch, shared by Settings and the room header.
  * It lives in the server config, so the choice follows the person to every
- * device they open BOS on; off until they turn it on. */
+ * device they open BOS on; on until they turn it off. */
 export function useToolCallsToggle() {
   const { state, dispatch } = useStore();
   const enabled = showToolCallsEnabled(state.config);

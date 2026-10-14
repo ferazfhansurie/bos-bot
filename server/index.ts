@@ -1,3 +1,6 @@
+import { firstAssignment } from "../shared/bos-onboarding.ts";
+import { onboardingMarketer } from "./onboarding-marketer.ts";
+import { ComputerPreview, createHostPreview, previewError, type PreviewSource } from "./computer-preview.ts";
 import { peerTaskPatchViolation, peerModelCatalog } from './peer-model-settings.ts';
 import { compatEnv } from "../electron/branding-env.cjs";
 import { DesktopBrowserBridge } from "./desktop-browser-bridge.ts";
@@ -24,6 +27,7 @@ import { sharedMentionTargets } from "../shared/shared-mentions.ts";
 // folds one SSE event stream; every provider process runs here.
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, rmSync, mkdirSync } from "node:fs";
+import { TelegramChannels } from "./telegram-channels.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -109,6 +113,8 @@ import {
 import { approvalHeldNote, approvalHeldReason, approvalModeForOrigin, autoVerdict, deliverFullAccessApproval, delegationInheritsFullAccess } from "./auto-approve.ts";
 import { updateClaudeCli } from "./claude-update.ts";
 import { configuredAccountDirectory, assertSeparateClaudeAccount, claudeAccountInfo, createClaudeAccountSchema, instanceSettingsSchema, newClaudeAccount } from "./claude-accounts.ts";
+import { fetchSetupModels } from "./cli-api-setup.ts";
+import { apiConnectionSchema, apiConnectionUrl, apiModelsSchema, newApiConnection, removableApiConnection } from "./api-connections.ts";
 import { providerUsage } from "./provider-usage.ts";
 import { ModelFallbackService, fallbackSelection, isProviderLimit } from "./model-fallback.ts";
 import { providerIconPatchSchema, withInstanceIcon } from "./provider-icon.ts";
@@ -124,6 +130,8 @@ import * as checkpoints from "./checkpoints.ts";
 import { commandReceipt } from "./commands.ts";
 import { buildTurnDigest, coverageForDriver, digestPromptLine, renderDigest, toolEvidence } from "./digest.ts";
 import { appendDecision, readDecisions, flushDecisionLog } from "./decision-log.ts";
+import { createApprovalRules } from "./approval-rules.ts";
+import { APPROVAL_RULE_OFFER_AT, approvalRuleKey, approvalRuleRisky } from "../shared/approval-rules.ts";
 import { validateBotCwd } from "./bot-cwd.ts";
 import {
   ATTACHMENTS_DIR,
@@ -176,7 +184,7 @@ import {
 import * as composio from "./composio.ts";
 import { WhatsAppService, WHATSAPP_NATIVE_PROMPT, WHATSAPP_REPLY_PROMPT } from "./whatsapp-service.ts";
 import type { CapturedMessage } from "./whatsapp-types.ts";
-import type { ReplyInput } from "./whatsapp-replies.ts";
+import type { ReplyInput, SendInput } from "./whatsapp-replies.ts";
 import { historyFailure } from "./whatsapp-history.ts";
 import { chiefOfStaffSystemPrompt } from "./chief-of-staff.ts";
 import { canAccessTeam, canMessagePeer, canReachPeer, messageablePeers, peerAllowed, peerName, peerRosterSystemPrompt, peerStatus, peerStatusWords, reachablePeers, resolveTeammate, roomPeerRosterSystemPrompt, roomRosterLine, PEER_ACCESS_HELP } from "./peer-roster.ts";
@@ -218,6 +226,7 @@ import {
   sharedComputersEnabled,
   builtInBrowserEnabled,
   llmThreadTitlesEnabled,
+  marketplacePublisherEnabled,
   browserProfileReplacementConflict,
   browserProfilePartitionTarget,
   syncCredentialEnv,
@@ -290,6 +299,7 @@ import type { GroupGoalRunCardData, GroupGoalRunStatus } from "../shared/group-g
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { getOrCreateChannel, mirrorActivity, mirrorExchange, mirrorReply, type CommsBus } from "./comms-visibility.ts";
 import { readMessageText, recallMessages, recentMessages, searchMessages, closeMessageDb, chatFollowups, cancelledChatFollowup, settleChatFollowups, userAsksSince } from "./message-db.ts";
+import { turnCount } from "./turn-page.ts";
 import { briefCrossingLabel, claimRecallCrossings, recallCrossingLabel } from "./recall-disclosure.ts";
 import { parseSince, recentWork, recentWorkPrompt, turnOutcomeLine } from "./recent-work.ts";
 import { chiefForBot, INCIDENTS_THREAD_TITLE, IncidentLedger, incidentChip, incidentText, type Incident, type IncidentKind } from "./incidents.ts";
@@ -301,6 +311,7 @@ import { promptWithReply, transcriptText } from "./replies.ts";
 import { _loadPending, buildDelegationFailurePrompt, buildDelegationRevivalPrompt, DELEGATION_TTL_MS, DelegationWakeBudget, discardDelegations, drainDelegations, expireStaleDelegations, findDelegationReceipt, pendingDelegationInfo, pendingDelegationSnapshot, pendingThreads, queueDelegation, recordDelegationReceipt, releaseDelegationsWaitingOn, summarizeDelegatedActivity, type DelegationReceipt, type QueueResult } from "./delegations.ts";
 import {
   editSteeredMessage,
+  reorderSteeredMessages,
   cancelSteeredMessage,
   drainSteeredMessages,
   hasQueuedSteeredMessages,
@@ -317,6 +328,7 @@ import {
 } from "./steer-queue.ts";
 import {
   editChannelMessage,
+  reorderChannelMessages,
   cancelChannelMessage,
   channelQueueHead,
   queuedChannelSnapshot,
@@ -465,7 +477,8 @@ import { redactSecretsInText } from "./redact.ts";
 import * as vps from "./vps-computer.ts";
 import { RoutineManager, type RoutineRun, type RoutineRunOn, type RoutineRunTrigger } from "./routines.ts";
 import { CalendarCallManager, type CalendarCall } from "./calendar-calls.ts";
-import { BUILT_IN_BROWSER_SYSTEM_PROMPT } from "./browser-engine.ts";
+import { BUILT_IN_BROWSER_SYSTEM_PROMPT, DESKTOP_BROWSER_SYSTEM_PROMPT } from "./browser-engine.ts";
+import { shapeBrowserToolResult, stripHarnessOwnedArguments } from "./browser-tool-shape.ts";
 import { BrowserRuntime } from "./browser-runtime.ts";
 import { BrowserLive } from "./browser-live.ts";
 import {
@@ -493,10 +506,16 @@ import { DelegatedClient } from "./delegated-client.ts";
 import { TeamSetupError, TeamSetupRequestService, type TeamSetupOptions } from "./team-setup-requests.ts";
 import type { TeamSetupRequest, TeamSetupResult } from "../shared/team-setup.ts";
 import { profileRevision, profileSnapshot } from "./profile-revision.ts";
+import {
+  applySetupImport, checkSync, detectSetups, readLinks, removeLink, resolveConflict, setLinkSync, startSyncWatcher,
+  SETUP_SOURCES, type SetupImportDeps,
+} from "./setup-import.ts";
 import { flushAllProfileHistory, flushProfileHistory, readHistory, recordProfileChange } from "./profile-versions.ts";
-import { fetchBotDirectory, matchDirectoryBots, type MatchedDirectoryBot } from "./bot-directory.ts";
-import { scoutProject, suggestTeam } from "./project-scout.ts";
-import { fetchGithubTeam, fetchLibraryTeam, fetchTeamCatalog } from "./team-library.ts";
+import { fetchGithubTeam } from "./package-link.ts";
+import {
+  addRentRequest, loadMarketplace, marketplaceEntry, parseMarketplaceCatalog, parsePublishInput,
+  publishedCatalogFile, withCatalogEntry, writePublishedCatalog,
+} from "./marketplace.ts";
 import { BOT_PACKAGE_MAX_SKILLS, isBotPackage, packageAgentAsMember, parseBotPackage, renderBotPackageMarkdown } from "./bot-package.ts";
 import { createTeamManifest, importedMemberProfile, parseTeamManifest } from "./team-manifest.ts";
 import { takeImportName } from "../shared/import-name.ts";
@@ -587,6 +606,8 @@ ensureDirs();
 // claim; a standalone/headless server owns the primary lease itself. Acquire
 // before any durable identity, sessions, config, or Store state is loaded.
 const dataDirLease = acquireDataDirLeaseForProcess(DATA_DIR);
+// "approve these for me" rules the person made from an inline offer.
+const approvalRules = createApprovalRules(DATA_DIR);
 let dataDirLeaseReleaseAttempted = false;
 function releaseDataDirLeaseAtExit(): void {
   if (dataDirLeaseReleaseAttempted) return;
@@ -654,6 +675,12 @@ function workspaceActor(auth: RequestAuth): string | null {
 const peerThreads = new PeerThreads(join(DATA_DIR, "peer-threads.json"));
 const roomAttachmentUploads = new RoomAttachmentUploads(join(DATA_DIR, "room-attachment-uploads.json"));
 const trustedPeers = new TrustedPeers(join(DATA_DIR, "trusted-peers.json"));
+/** A link the owner marked trusted runs the bot as it runs at home, so the
+ * threads it uses follow the bot's own approval level. Every other link's
+ * threads stay pinned to Ask with no standing grants. */
+const peerThreadApproval = (sessionId: string): Parameters<typeof store.patchTask>[2] => trustedPeers.has(sessionId)
+  ? { approvalMode: undefined, autoApprove: undefined, alwaysAllow: undefined }
+  : { approvalMode: "ask", autoApprove: false, alwaysAllow: [] };
 const peerHandoffs = new PeerHandoffs(join(DATA_DIR, "peer-handoffs.json"));
 // A phone paired through the companion sidecar has no harness session; its
 // push registration is bound to the sidecar's device id instead, and lives
@@ -734,6 +761,12 @@ function personPhoto(id: string): { mime: string; bytes: Buffer } | null {
 function personPhotoUrl(id: string): string | null {
   const has = id === multiplayerActors.ownerId ? Boolean(cfg.profile?.avatarUrl) : Boolean(multiplayerLinks.avatarForPerson(multiplayerActors.nameFor(id) ?? ""));
   return has ? `/api/multiplayer/people/${encodeURIComponent(id)}/photo` : null;
+}
+/** Why a profile photo write was refused without changing anything. */
+function profilePhotoConflict(expected: unknown): string {
+  return expected === undefined
+    ? "this app can't replace the owner's profile photo; update BOS on this device and change it from the profile screen"
+    : "the profile photo changed on another device; reload and try again";
 }
 function ownerPhotoData(): string | null {
   const name = cfg.profile?.avatarUrl?.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.(?:png|jpg|gif|webp))$/)?.[1];
@@ -869,6 +902,8 @@ type UtilityParentPort = {
 // SAFETY: Electron's utility-process runtime is the only environment that
 // supplies parentPort; plain Node intentionally leaves it absent.
 const utilityParentPort = (process as NodeJS.Process & { parentPort?: UtilityParentPort }).parentPort;
+const computerPreviews = new ComputerPreview();
+const hostPreview = createHostPreview(utilityParentPort);
 type DesktopPrivateMessage = BrowserCleanupWireRequest | {
   type: "openmausbot:browser-control";
   botId: string;
@@ -1074,6 +1109,8 @@ function revokeInternalCapabilityGeneration(threadId: string, generation: string
   }
   if (activeInternalGenerationByThread.get(threadId) === generation) {
     activeInternalGenerationByThread.delete(threadId);
+    // The turn is over: tabs it drove in the desktop browser go back to the person.
+    desktopBrowserBridge.release(threadId, generation);
   }
   internalGenerationByProviderTurn.deleteGeneration(threadId, generation);
   for (const [id, owner] of roomRequestOwners) if (owner.runtimeThreadId === threadId && owner.generation === generation) roomRequestOwners.delete(id);
@@ -1561,6 +1598,71 @@ const browserRuntime = new BrowserRuntime({ closeBrowser: closeAgentBrowser });
 // Native read-only WhatsApp capture (whatsapp-service.ts): one linked-device
 // client under <data dir>/whatsapp, resumed at boot when a session exists.
 const whatsapp = new WhatsAppService({ dataDir: DATA_DIR, native: { onCaptured: (message) => queueWhatsAppReply(message) } });
+const telegramChannelTurns = new Map<string, { threadId: string; sendId: string }>();
+const telegramChannels = new TelegramChannels({
+  dataDir: DATA_DIR, managerToken: process.env.BOS_TELEGRAM_MANAGER_TOKEN,
+  hooks: {
+    exists: botId => Boolean(store.bot(botId) && !store.bot(botId)?.hidden),
+    cancel: botId => {
+      const turn = telegramChannelTurns.get(botId);
+      if (!turn) return;
+      const latest = store.messagesFor(turn.threadId).findLast(m => m.role === "user");
+      if (latest?.sendId === turn.sendId) void interruptDirectThread(botId, turn.threadId).catch(() => {});
+    },
+    run: async (job, active, progress) => {
+      const title = `telegram · ${job.chatId} · ${job.topic ?? 0}`;
+      const remembered = telegramChannels.conversation(job.botId, job.chatId, job.topic ?? 0);
+      let task = remembered ? store.taskByThread(job.botId, remembered) ?? undefined : undefined;
+      if (!task) {
+        task = store.createTask(job.botId, title, false) ?? undefined;
+        if (task) {
+          store.patchTask(job.botId, task.threadId, { channelTransport: "telegram" });
+          telegramChannels.rememberConversation(job.botId, job.chatId, job.topic ?? 0, task.threadId);
+        }
+      }
+      if (!task) throw new Error("could not create channel conversation");
+      const threadId = task.threadId;
+      if (threadBusy(job.botId, threadId) || pendingThreads().includes(threadId)) throw new Error("channel needs attention in bos");
+      let watching = true;
+      const guard = () => { if (!watching || !active()) throw new Error("telegram access ended"); };
+      guard();
+      telegramChannelTurns.set(job.botId, { threadId, sendId: job.id });
+      try {
+      let dispatched = false;
+      let dispatchError: unknown;
+      void startTurn(job.botId, job.text, { threadId, sendId: job.id, sender: { name: `telegram ${job.actor}` },
+        roomContext: `This message comes from an explicitly paired Telegram person (${job.actor}) in chat ${job.chatId}. Reply to this conversation only. Do not include private conversations from other chats. Existing tool permissions and approval requirements still apply.`,
+        admissionGuard: guard, dispatchGuard: guard }).then(() => { dispatched = true; }, error => { dispatchError = error; dispatched = true; });
+      const startedAt = Date.now();
+      const deadline = Date.now() + 30 * 60_000;
+      while (active()) {
+        if (dispatchError) throw dispatchError;
+        const all = store.messagesFor(threadId);
+        const index = all.findIndex(m => m.sendId === job.id && m.role === "user");
+        const following = index < 0 ? [] : all.slice(index + 1);
+        const nextUser = following.findIndex(m => m.role === "user");
+        const replies = nextUser < 0 ? following : following.slice(0, nextUser);
+        const text = replies.filter(m => m.role === "bot" && m.kind === "text").map(m => m.text ?? "").join("\n\n");
+        if (pendingThreads().includes(threadId)) {
+          await progress("i need your approval in bos before continuing.");
+          if (Date.now() > deadline) throw new Error("approval wait timed out");
+          await new Promise(resolve => setTimeout(resolve, 4000));
+          continue;
+        }
+        if (dispatched && !threadBusy(job.botId, threadId)) return { text: text || "the turn ended without a text reply. open bos to check the result." };
+        await progress(text || `working… ${Math.floor((Date.now() - startedAt) / 1000)}s`);
+        if (Date.now() > deadline) throw new Error("telegram wait timed out; inspect bos before retrying");
+        await new Promise(resolve => setTimeout(resolve, 4000));
+      }
+      throw new Error("telegram disconnected");
+      } catch (error) {
+        const latest = store.messagesFor(threadId).findLast(m => m.role === "user");
+        if (latest?.sendId === job.id) await interruptDirectThread(job.botId, threadId).catch(() => {});
+        throw error;
+      } finally { watching = false; if (telegramChannelTurns.get(job.botId)?.sendId === job.id) telegramChannelTurns.delete(job.botId); }
+    },
+  },
+});
 const whatsappReplyQueues = new Map<string, Promise<void>>();
 const whatsappReplyQueueSizes = new Map<string, number>();
 function queueWhatsAppReply(captured: CapturedMessage): void {
@@ -1654,6 +1756,26 @@ async function browserIntegration(botId: string, profile: string | undefined, tu
   } };
 }
 let engineUnavailableLogged = false;
+/** Desktop app without the headless engine: the turn still gets the browser
+ * tools, served by the person's own BOS browser through the private bridge. */
+function desktopBrowserIntegration(botId: string, turn: { threadId: string; generation: string }) {
+  if (!utilityParentPort) return null;
+  const token = mintInternalCapability({ botId, ...turn, browserSession: `desktop:${botId}`,
+    kind: "browser", depth: 0, skillAuthoring: false, createdBots: 0, openedThreads: 0 });
+  return { integration: {
+    command: process.execPath, args: [SPAWNED_PROXIES.browser], env: {
+      ...AGENTS_NODE_FLAG, OMB_BROWSER_TOKEN: token, OMB_HARNESS_URL: `http://127.0.0.1:${PORT}`,
+    },
+  } };
+}
+/** How long the desktop browser may spend on one tool call. */
+function desktopBrowserTimeout(name: string, args: unknown): number {
+  if (name.startsWith("agent_browser_wait_for_")) {
+    const wait = Number((args as { waitTimeoutMs?: unknown } | undefined)?.waitTimeoutMs) || 10000;
+    return Math.min(30000, Math.max(1000, wait)) + 5000;
+  }
+  return /^agent_browser_(open|read|tab_new|tab_switch|back|forward|reload|screenshot)$/.test(name) ? 30000 : 20000;
+}
 
 let browserEngineInstall: Promise<void> | null = null;
 let browserEngineInstallError: string | null = null;
@@ -2225,7 +2347,7 @@ const visibleThreadBot = (bot: BotRecord): BotRecord => {
 
 const wireBot = (bot: BotRecord, selectedRoom = false): WireBot => {
   if (!selectedRoom) bot = visibleThreadBot(bot);
-  const { resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, roomModelFallbacks: _roomModelFallbacks, ...rest } = bot;
+  const { onboardingOffer: _onboardingOffer, onboardingOfferAssignment: _onboardingOfferAssignment, resumeCursors: _resumeCursors, tasks, approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, roomModelFallbacks: _roomModelFallbacks, ...rest } = bot;
   // An elevated selection is inert until the desktop confirms its exact
   // private reply. Every ordinary client sees the effective Ask state during
   // that two-phase window, never a grant that may still roll back.
@@ -2257,7 +2379,7 @@ function peerBotView(bot: BotRecord, sessionId: string) {
 /** The correlated private response carries the requested value so Electron
  * can validate it before sending the confirmation that makes it effective. */
 const wireTrustedApprovalBot = (bot: NonNullable<ReturnType<typeof store.bot>>) => {
-  const { resumeCursors: _resumeCursors, tasks, approvalGrant: _approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, ...rest } = bot;
+  const { onboardingOffer: _onboardingOffer, onboardingOfferAssignment: _onboardingOfferAssignment, resumeCursors: _resumeCursors, tasks, approvalGrant: _approvalGrant, lastProfileRequestId: _lastProfileRequestId, lastTeamSetupReceipt: _lastTeamSetupReceipt, lastRemoteFullReceipt: _lastRemoteFullReceipt, ...rest } = bot;
   return { ...rest, approvalMode: approvalModeFor(rest), avatarUrl: rest.avatarUrl ?? null, ...(tasks ? { tasks: tasks.filter(task => !isHiddenChannelTask(task)).map(task => wireTask(task, bot.id)) } : {}) };
 };
 
@@ -2326,7 +2448,7 @@ function previewSystemPrompt(bot: BotRecord) {
       ? `${composio.configured(cfg) ? COMPOSIO_PROMPT : ""}${whatsapp.toolsAvailable() ? (whatsapp.replies.policy(bot.id) ? WHATSAPP_REPLY_PROMPT : WHATSAPP_NATIVE_PROMPT) : ""}`
       : "" },
     { id: "mcp", label: "MCP servers", text: caps?.customMcp ? customMcpPrompt(Object.keys(customMcpServers(cfg, bot.mcpServers))) : "" },
-    { id: "browser", label: "Browser", text: previewPlan.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
+    { id: "browser", label: "Browser", text: previewPlan.browser ? (utilityParentPort ? DESKTOP_BROWSER_SYSTEM_PROMPT : BUILT_IN_BROWSER_SYSTEM_PROMPT) : "" },
     { id: "coordination", label: "Team", text: agentsMounted && coordination ? ` ${coordination}` : "" },
     { id: "credential", label: "Credentials", text: agentsMounted ? CREDENTIAL_PROMPT : "" },
     { id: "routine", label: "Routines", text: agentsMounted ? ROUTINE_PROMPT : "" },
@@ -2439,6 +2561,11 @@ const approvalModeForTurn = (bot: BotRecord, peerInitiated = false): ApprovalMod
 function fullAccessForSource(botId: string, threadId: string): boolean {
   const owner = connectorThread(botId, threadId);
   if (!owner) return false;
+  // A thread a peer link uses is Full only while every live link on it is
+  // trusted, whatever its stored fields say after a revoke.
+  const peerSessions = [...peerThreads.liveSessionsFor(threadId, id => sessions.isLive(id)),
+    ...delegatedJobs.sessionsForThread(threadId).filter(id => sessions.isLive(id))];
+  if (peerSessions.some(id => !trustedPeers.has(id))) return false;
   const bot = store.projectBotForTask(botId, threadId) ?? owner.bot;
   // Origin changes Custom to Auto, never Full; no live-turn state is needed.
   return approvalModeForTurn(bot) === "full";
@@ -3919,7 +4046,14 @@ function slimMessage(message: Message): Message | Record<string, unknown> {
  * newest rows from SQLite instead of hydrating the whole transcript first.
  * Paging further back with `before` still needs the full, cached array to
  * seek to an arbitrary point in history. */
-function messagePage(threadId: string, limit: number | undefined, before?: string | null) {
+function messagePage(threadId: string, limit: number | undefined, before?: string | null, turns?: number) {
+  if (turns !== undefined) {
+    // `?turns=` (2.0): `limit` becomes the minimum row count and the page
+    // reaches back to the Nth newest prompt on the active branch. See
+    // server/turn-page.ts for the contract.
+    const page = store.messagesByTurns(threadId, { turns, minRows: limit ?? 0, before });
+    if (page) return { messages: page.messages.map(slimMessage), hasMore: page.hasMore, activeLeafId: page.activeLeafId };
+  }
   if (limit === undefined) {
     return { messages: store.messagesFor(threadId), activeLeafId: store.activeLeaf(threadId) };
   }
@@ -5637,9 +5771,22 @@ bus.subscribe((event: RuntimeEvent) => {
       const asker = bot ?? (speaker ? store.bot(speaker.botId) : undefined);
       const unattended = permission && asker && event.requestId ? isUnattended(asker.id, event.threadId) : false;
       const effectiveApprovalMode = asker ? approvalModeForTurn(asker, isInternalTurn(event.threadId)) : "ask";
-      const verdict = permission && asker && event.requestId
+      const modeVerdict = permission && asker && event.requestId
         ? autoVerdict(effectiveApprovalMode, event.tool, { requiresExplicitApproval: event.requiresExplicitApproval })
         : null;
+      // The person's own rule answers only what their mode left for them,
+      // never a sandbox widening, and never a risky action (approvalRuleRisky).
+      const personRule = modeVerdict && !modeVerdict.approve && modeVerdict.source !== "explicit-approval-block" && asker
+        ? approvalRules.match(asker.id, event.threadId, {
+          tool: event.tool,
+          summary: event.summary,
+          approvalScope: event.approvalScope,
+          requiresExplicitApproval: event.requiresExplicitApproval,
+        })
+        : undefined;
+      const verdict = personRule
+        ? { approve: `approved ${event.tool} (your rule)`, source: "approval-rule" as const }
+        : modeVerdict;
       // Auto's reviewer is the engine's own. Claude accepts `--permission-mode
       // auto` for any model and starts in Manual without a word when auto is
       // unavailable (Haiku 4.5, Sonnet 4.5, an org that disabled it), so the
@@ -5687,8 +5834,10 @@ bus.subscribe((event: RuntimeEvent) => {
             if (outcome !== "unavailable") pushMessage({
               role: "bot", kind: "activity",
               tool: { name: outcome === "rejected"
-                ? "The provider rejected this action despite Full access."
-                : "error: could not deliver Full access to the provider; retry the task after reconnecting.", ok: false },
+                ? personRule ? "The provider rejected this action despite your approval rule." : "The provider rejected this action despite Full access."
+                : personRule
+                  ? "error: could not deliver your approval rule to the provider; retry the task after reconnecting."
+                  : "error: could not deliver Full access to the provider; retry the task after reconnecting.", ok: false },
             });
             return;
           }
@@ -5707,6 +5856,7 @@ bus.subscribe((event: RuntimeEvent) => {
             summary,
             decision: "auto-approved",
             source: verdict.source,
+            rule: personRule?.key,
           });
         })().catch(() => {
           // A receipt failure must neither crash the server nor manufacture
@@ -9315,13 +9465,16 @@ async function startTurn(
         const selectedProfile = liveBot.browserProfile;
         browser = await browserIntegration(bot.id, selectedProfile, { threadId, generation: dispatchClaimId });
         if (browser) integrations.browser = browser.integration;
+        else { const desktop = desktopBrowserIntegration(bot.id, { threadId, generation: dispatchClaimId }); if (desktop) integrations.browser = desktop.integration; }
         // The browser lost its frame source when the Electron surface was
         // removed: previewCapture is set by the computer branches above, and
         // nothing replaced it here. A bot with only a browser was pictured
         // not at all; a bot with both was pictured on its desktop even while
         // the work was a web page, because agent-browser runs its own headless
         // Chrome on the host rather than inside that desktop.
-        if (browser) {
+        // On the desktop the tools drive the visible BOS browser, so a headless
+        // frame would picture a browser the work is not happening in.
+        if (browser && !utilityParentPort) {
           const frame = { binaryPath: browser.spec.command, env: browser.spec.env };
           const session = browser.session;
           // The preview shares the profile with tool calls: claim the same
@@ -9386,7 +9539,7 @@ async function startTurn(
           ? `${integrations.composio.env.OMB_CONNECTOR_UPSTREAM_URL ? COMPOSIO_PROMPT : ""}${integrations.composio.env.OMB_WHATSAPP_NATIVE === "1" ? (integrations.composio.env.OMB_WHATSAPP_REPLIES === "1" ? WHATSAPP_REPLY_PROMPT : WHATSAPP_NATIVE_PROMPT) : ""}`
           : "" },
         { id: "mcp", label: "MCP servers", text: customMcpPrompt(Object.keys(integrations.custom ?? {})) },
-        { id: "browser", label: "Browser", text: integrations.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
+        { id: "browser", label: "Browser", text: integrations.browser ? (utilityParentPort ? DESKTOP_BROWSER_SYSTEM_PROMPT : BUILT_IN_BROWSER_SYSTEM_PROMPT) : "" },
         { id: "coordination", label: "Team", text: coordinationPrompt ? ` ${coordinationPrompt}` : "" },
         { id: "assignment", label: "Teammate task", text: coordinationNode ? `\n${coordinationSystemInstructions()}` : "" },
         { id: "outstanding", label: "Outstanding teammate work", text: outstandingAssignmentsPrompt(threadId) },
@@ -10428,9 +10581,9 @@ async function drainDelegatedJobs() {
         const pair = store.resolvePairConversation({ id: `dh-${job.identity.homeId}-${job.identity.botId}`, name: "Remote Chief" }, target.id,
           { label: job.label, working: threadId => threadBusy(target.id, threadId) || queuedThreadPosition(target.id, threadId) !== null });
         if (!pair) throw new Error("Recipient was removed");
-        // Ask applies to this remote-owned conversation only; sibling threads
-        // and bot-level permissions remain untouched.
-        store.patchTask(target.id, pair.task.threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [] });
+        // Ask applies to this remote-owned conversation only (unless the owner
+        // trusts the link); sibling threads and bot-level permissions remain untouched.
+        store.patchTask(target.id, pair.task.threadId, peerThreadApproval(job.identity.sessionId));
         const beforeIds = new Set(store.messagesFor(pair.task.threadId).map(message => message.id));
         delegatedJobs.patch(job, { status: "running", threadId: pair.task.threadId });
         const finish = (error?: string) => {
@@ -11241,6 +11394,7 @@ async function executeGroupMemberTurn(
     const selectedProfile = readyBot.browserProfile;
     const browser = await browserIntegration(readyBot.id, selectedProfile, { threadId, generation: internalGeneration });
     if (browser) integrations.browser = browser.integration;
+    else { const desktop = desktopBrowserIntegration(readyBot.id, { threadId, generation: internalGeneration }); if (desktop) integrations.browser = desktop.integration; }
   }
   // Stop/delete may land while browser state is being prepared. Capability
   // publication and this exact claim are both fenced; finally releases only
@@ -11444,7 +11598,7 @@ async function executeGroupMemberTurn(
     { id: "computer", label: "Computer", text: computerPrompt(roomTeamComputer || roomComputerKind === "box" ? instance.driverKind === "boxAgent" ? "box-agent" : "box" : roomVmTarget ? localVmMode(cfg) === "per-bot" ? "vm-private" : "vm-shared" : roomComputerKind) },
     { id: "team-computer", label: "Team computer", text: teamComputerPrompt(roomTeamComputer) },
     { id: "plan", label: "Surface", text: surfacePrompt({ computer: roomTeamComputer ? "cloud" : roomVmTarget ? "vm" : surfaceOfComputerKind(roomComputerKind), browser: Boolean(integrations.browser) }, { note: roomPlan.note }) },
-    { id: "browser", label: "Browser", text: integrations.browser ? BUILT_IN_BROWSER_SYSTEM_PROMPT : "" },
+    { id: "browser", label: "Browser", text: integrations.browser ? (utilityParentPort ? DESKTOP_BROWSER_SYSTEM_PROMPT : BUILT_IN_BROWSER_SYSTEM_PROMPT) : "" },
     { id: "recall", label: "Recall", text: integrations.agents ? SESSION_SEARCH_SYSTEM_PROMPT : "" },
     { id: "work-continuity", label: "Work continuity", text: workPrompt(bot.id, threadId) },
     { id: "recent", label: "Recent work", text: recentWorkPrompt(recentLines) },
@@ -13675,12 +13829,16 @@ function configStatus() {
       // Plugins → MCP servers switch: Claude bots also see this machine's
       // own Claude Code MCP servers
       claudeUserMcp: claudeUserMcpEnabled(cfg),
+      marketplacePublisher: marketplacePublisherEnabled(cfg),
     },
     // first-run progress — not a secret; the app decides whether to show
     // the welcome tour from this, never from browser storage
     onboarding: {
       businessBrief: cfg.onboarding?.businessBrief,
       firstAssignment: cfg.onboarding?.firstAssignment,
+      marketerAssignment: cfg.onboarding?.marketerAssignment,
+      marketerBrief: cfg.onboarding?.marketerBrief,
+      pendingOffer: cfg.onboarding?.pendingOffer,
       completedAt: cfg.onboarding?.completedAt ?? "",
       version: cfg.onboarding?.version ?? 0,
       reelSeen: cfg.onboarding?.reelSeen === true,
@@ -13811,10 +13969,64 @@ function persistMcpServers(next: Record<string, unknown>): void {
   cfg.mcpServers = next;
 }
 
-// The 15 engine drivers BOS stopped shipping in 931fbbf. Old configs and the
-// default fleet still name them, so they'd list as dead "unknown driver"
-// rows. Hide just these; any other unknown driver stays a visible shadow so
-// a mistyped custom engine can still be repaired.
+// "Bring your setup" (server/setup-import.ts) writes through the same paths
+// as the settings screens: validated profile writes recorded in history, the
+// app-wide MCP registry, and the bot's MCP allowlist.
+const setupImportDeps: SetupImportDeps = {
+  bot: (botId) => store.bot(botId),
+  writeProfile: (botId, patch) => {
+    const bot = store.bot(botId);
+    if (!bot) return { ok: false, error: "no such bot" };
+    const next: { soul?: string; cwd?: string } = {};
+    if (patch.soul !== undefined) {
+      const parsed = parseBotProfilePatch({ soul: patch.soul });
+      if (!parsed.ok) return { ok: false, error: parsed.error };
+      next.soul = parsed.patch.soul ?? "";
+    }
+    if (patch.cwd !== undefined) {
+      const checked = validateBotCwd(patch.cwd);
+      if (!checked.ok) return { ok: false, error: checked.error };
+      if (checked.cwd) next.cwd = checked.cwd;
+    }
+    // patchBotProfile mutates the live record; snapshot first.
+    const before = profileSnapshot(bot);
+    const updated = store.patchBotProfile(botId, next);
+    if (!updated) return { ok: false, error: "no such bot" };
+    recordProfileChange(botId, "import", "setup-import", before, profileSnapshot(updated));
+    broadcast({ kind: "bot", bot: wireBot(updated) });
+    return { ok: true };
+  },
+  mcpConfig: () => ({ ...(cfg.mcpServers ?? {}) }),
+  persistMcp: (next) => persistMcpServers(next),
+  setBotMcpServers: (botId, names) => {
+    const updated = store.patchBot(botId, { mcpServers: names });
+    if (updated) broadcast({ kind: "bot", bot: wireBot(updated) });
+  },
+  redact: redactSecretsInText,
+};
+
+/** A sync link as the renderer sees it: no stored instruction text. */
+function setupLinkWire(link: ReturnType<typeof readLinks>[number]) {
+  return {
+    id: link.id,
+    source: link.source,
+    botId: link.botId,
+    sync: link.sync,
+    updatedAt: link.updatedAt,
+    lastCheckedAt: link.lastCheckedAt ?? null,
+    instructions: link.instructions
+      ? { mode: link.instructions.mode, files: link.instructions.files, diverged: link.instructions.diverged === true }
+      : null,
+    skills: Object.keys(link.skills).sort(),
+    conflicts: link.conflicts,
+  };
+}
+
+// The 15 engine drivers BOS stopped shipping in 931fbbf. The agent CLI ones
+// are registered again (builtIn.ts) and drop out of this set below; the rest
+// are still named by old configs and the default fleet, so they'd list as
+// dead "unknown driver" rows. Hide just these; any other unknown driver stays
+// a visible shadow so a mistyped custom engine can still be repaired.
 const REMOVED_DRIVER_KINDS: ReadonlySet<string> = new Set([
   "grok", "grokAgent", "geminiAgent", "kimiAgent", "droidAgent", "cursorAgent", "opencodeGo",
   "qwenAgent", "hermesAgent", "customAcp", "piAgent", "openai-compat", "antigravityAgent", "boxAgent", "minimax",
@@ -15073,6 +15285,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (typeof body?.sessionId !== "string" || typeof body?.trusted !== "boolean") return json(res, 400, { error: "sessionId and trusted are required" });
           if (!peerThreads.list(body.sessionId).length && body.trusted) return json(res, 404, { error: "no peer link with that session" });
           trustedPeers.set(body.sessionId, body.trusted);
+          // A running turn keeps the level it started with. Trust applies from
+          // the next idle turn; a revoke pins every thread at once.
+          for (const grant of peerThreads.list(body.sessionId)) {
+            if (!body.trusted || !threadBusy(grant.botId, grant.threadId)) store.patchTask(grant.botId, grant.threadId, peerThreadApproval(body.sessionId));
+          }
         }
         const peers = sessions.list().filter(entry => entry.scopes.includes("peer") && peerThreads.list(entry.id).length).map(entry => ({
           sessionId: entry.id, label: entry.label, trusted: trustedPeers.has(entry.id),
@@ -15159,7 +15376,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           if (threadBusy(entry.botId, entry.threadId)) return json(res, 409, { error: "wait for the bridge thread to finish before migrating" });
           threads.push({ botId: entry.botId, threadId: entry.threadId });
         }
-        for (const entry of threads) store.patchTask(entry.botId, entry.threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [] });
+        for (const entry of threads) store.patchTask(entry.botId, entry.threadId, peerThreadApproval(auth.session.id));
         const issued = sessions.issue({ label: "BOS peer bridge", scopes: ["peer"] });
         try {
           peerThreads.grant(issued.session.id, threads);
@@ -15223,7 +15440,18 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (method === "PUT" && path === "/api/multiplayer/profile-photo") {
         if (!auth.scopes.includes("admin")) return json(res, 403, { error: "owner access required" });
         const body = await readBody(req, 400_000);
+        // This is the home owner's photo. A device paired here as admin is
+        // not necessarily the owner's: someone else's phone that can reach
+        // this Mac used to push its own photo on every connect (and clear
+        // ours when it had none), so two linked owners kept swapping faces.
+        // A write must name the photo it replaces; a client that does not
+        // (older builds) may only fill an empty photo.
+        const current = cfg.profile?.avatarUrl ?? "";
+        const expected: unknown = body?.expected;
+        if (expected !== undefined && typeof expected !== "string") return json(res, 400, { error: "expected must be the current photo URL" });
         if (body?.photo === null) {
+          if (!current) return json(res, 200, { avatarUrl: "" });
+          if (expected !== current) return json(res, 409, { error: profilePhotoConflict(expected), avatarUrl: current });
           saveConfig({ profile: { avatarUrl: "" } });
           Object.assign(cfg, loadConfig());
           return json(res, 200, { avatarUrl: "" });
@@ -15231,8 +15459,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (typeof body?.photo !== "string" || !/^[A-Za-z0-9+/=]{1,350000}$/.test(body.photo)) return json(res, 400, { error: "JPEG profile photo required" });
         const bytes = Buffer.from(body.photo, "base64");
         if (bytes.byteLength > 256_000 || bytes.byteLength < 16 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return json(res, 400, { error: "JPEG profile photo exceeds 256 KB or is invalid" });
-        const previous = cfg.profile?.avatarUrl?.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.jpg)$/)?.[1];
-        if (previous && readAttachment(previous)?.bytes.equals(bytes)) return json(res, 200, { avatarUrl: cfg.profile?.avatarUrl });
+        const previous = current.match(/^\/api\/attachments\/([A-Za-z0-9-]+\.jpg)$/)?.[1];
+        if (previous && readAttachment(previous)?.bytes.equals(bytes)) return json(res, 200, { avatarUrl: current });
+        if (expected === undefined ? Boolean(current) : expected !== current) return json(res, 409, { error: profilePhotoConflict(expected), avatarUrl: current });
         const saved = saveImage(bytes, "image/jpeg");
         const avatarUrl = botAvatarUrlFromStoredPath(saved.path);
         if (!avatarUrl) return json(res, 500, { error: "profile photo could not be stored" });
@@ -16239,18 +16468,38 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         if (!bot || bot.browser === false || bot.computer === "off" || !builtInBrowserEnabled(cfg)) {
           return json(res, 403, { error: "browser tools are not enabled for this bot" });
         }
-        if (utilityParentPort && (body?.method === "tools/list" || (body?.method === "tools/call" && typeof body.params?.name === "string" && body.params.name.startsWith("bos_browser_")))) {
+        if (body?.method !== "tools/list" && body?.method !== "tools/call") {
+          return json(res, 400, { error: "unsupported browser method" });
+        }
+        // Desktop app: the person's own BOS browser serves the agent_browser_*
+        // tools. It answers {unavailable:true} only when no window can show
+        // it, and then the headless engine (if installed) takes over.
+        if (utilityParentPort) {
           requireActiveInternalCapability();
-          const shared = await desktopBrowserBridge.request(bot.id, internalCapability.threadId, body.method, body.params ?? {}) as { tools?: unknown[] };
+          const toolName = body.method === "tools/call" && typeof body.params?.name === "string" ? body.params.name : "";
+          const params = body.method === "tools/call" ? stripHarnessOwnedArguments(body.params ?? {}) : (body.params ?? {});
+          let desktop: unknown;
+          try {
+            desktop = await desktopBrowserBridge.request(bot.id, internalCapability.threadId, body.method, params,
+              desktopBrowserTimeout(toolName, (params as { arguments?: unknown }).arguments),
+              { generation: internalCapability.generation, profileId: bot.browserProfile });
+          } catch (error) {
+            requireActiveInternalCapability();
+            const message = error instanceof Error ? error.message : "The browser request failed.";
+            if (body.method === "tools/call") return json(res, 200, { result: { content: [{ type: "text", text: message }], isError: true } });
+            desktop = { unavailable: true };
+          }
           requireActiveInternalCapability();
-          if (body.method === "tools/call" || shared.tools?.length) return json(res, 200, { result: shared });
+          if (!(desktop && typeof desktop === "object" && (desktop as { unavailable?: unknown }).unavailable === true)) {
+            return json(res, 200, { result: body.method === "tools/call" ? shapeBrowserToolResult(desktop, { toolName }) : desktop });
+          }
+          if (internalCapability.browserSession?.startsWith("desktop:")) {
+            return json(res, 409, { error: "The BOS browser is not open on this desktop. Ask the person to open the BOS window, then try again." });
+          }
         }
         const browser = await browserIntegration(bot.id, bot.browserProfile);
         if (!browser || browser.session !== internalCapability.browserSession) {
           return json(res, 409, { error: "this browser profile changed; start a new turn" });
-        }
-        if (body?.method !== "tools/list" && body?.method !== "tools/call") {
-          return json(res, 400, { error: "unsupported browser method" });
         }
         const result = await browserRuntime.agentRpc(browser.session, browser.spec, body.method, body.params, () => {
           requireActiveInternalCapability();
@@ -17786,6 +18035,13 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           try { return json(res, 200, await whatsapp.replies.reply(currentSender.id, body as unknown as ReplyInput, authorized)); }
           catch { return json(res, 403, { error: "WhatsApp reply refused: check account, client scope, incoming message and previous attempt" }); }
         }
+        if (path === "/api/internal/connectors/whatsapp/send" && method === "POST") {
+          const body = await readInternalBody();
+          const authorized = () => { const live = store.bot(currentSender.id); return internalCapabilityIsActive(internalCapability) && !!live && live.composio !== false && !live.hidden; };
+          if (!authorized()) return json(res, 403, { error: "connected apps are not enabled for this bot" });
+          try { return json(res, 200, await whatsapp.replies.send(currentSender.id, body as unknown as SendInput, authorized)); }
+          catch { return json(res, 403, { error: "WhatsApp send refused: outreach must be granted for this account and named chat; one attempt per send_key" }); }
+        }
         const answer = whatsapp.handleInternal(method, path, url.searchParams, currentSender.id);
         if (answer) return json(res, answer.status, answer.body);
       }
@@ -18422,6 +18678,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       const limit = pageSize(url.searchParams.get("limit"));
       if (limit === null) return json(res, 400, { error: "limit must be a non-negative whole number" });
+      const turns = turnCount(url.searchParams.get("turns"));
+      if (turns === null) return json(res, 400, { error: "turns must be a positive whole number" });
       const before = url.searchParams.get("before");
       const around = url.searchParams.get("around");
       const afterId = url.searchParams.get("after");
@@ -18446,7 +18704,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (before && !store.messagesFor(threadId).some((msg) => msg.id === before)) {
         return json(res, 404, { error: "no such message" });
       }
-      return json(res, 200, { ...messagePage(threadId, limit ?? DEFAULT_PAGE, before), activeLeafId: store.activeLeaf(threadId) });
+      // With `turns`, an absent limit means no minimum: the turns decide.
+      return json(res, 200, { ...messagePage(threadId, turns === undefined ? limit ?? DEFAULT_PAGE : limit, before, turns), activeLeafId: store.activeLeaf(threadId) });
     }
 
     // the pixels of one screen message, fetched only when something shows it
@@ -18894,23 +19153,65 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 400, { error: error instanceof Error ? error.message : "Team could not be exported" });
       }
     }
-    if (method === "GET" && path === "/api/team-library/catalog") {
+    // ── BOS marketplace: bots BOS Bot publishes (server/marketplace.ts) ──
+    if (method === "GET" && path === "/api/marketplace") {
+      const listing = await loadMarketplace({ fresh: url.searchParams.get("fresh") === "1" });
+      return json(res, 200, { ...listing, publisher: marketplacePublisherEnabled(cfg) && !privateRestricted });
+    }
+    if (method === "POST" && path === "/api/marketplace/rent-requests") {
+      // No rent backend exists yet: the request is kept here as pending and
+      // the app prefills an email to the publisher.
       try {
-        return json(res, 200, await fetchTeamCatalog());
+        const { catalog } = await loadMarketplace();
+        return json(res, 201, { request: await addRentRequest(DATA_DIR, catalog, await readBody(req)) });
       } catch (error) {
-        return json(res, 502, { error: error instanceof Error ? error.message : "The team library is unavailable" });
+        return json(res, (error as { status?: number }).status ?? 500, { error: error instanceof Error ? error.message : "The request could not be saved" });
       }
     }
-    m = path.match(/^\/api\/team-library\/teams\/([a-z0-9][a-z0-9-]*)$/);
-    if (m && method === "GET") {
+    if (method === "POST" && path === "/api/marketplace/publish") {
+      // Owner-only and off unless this install is the publisher's. There is
+      // no hosted upload: the merged catalog is written for the owner to
+      // commit as shared/marketplace-catalog.json.
+      if (!marketplacePublisherEnabled(cfg) || privateRestricted || requestActor !== multiplayerActors.ownerId) {
+        return json(res, 403, { error: "Only the BOS Bot publisher can publish to the marketplace" });
+      }
       try {
-        return json(res, 200, await fetchLibraryTeam(m[1]));
+        const publish = parsePublishInput(await readBody(req));
+        const bot = store.bot(publish.botId);
+        if (!bot || bot.hidden || bot.remote) return json(res, 404, { error: "Choose one of your own bots to publish" });
+        const document = createBotPackageExport({
+          name: bot.name,
+          authorName: "BOS Bot",
+          bots: [bot],
+          groups: [],
+          routines: [],
+          skillsByBot: collectExportSkills([bot], listSkills(bot.id).map((skill) => skill.name)),
+        });
+        const instance = bot.modelSelection
+          ? (await describeInstances()).find((candidate) => candidate.instanceId === bot.modelSelection!.instanceId)
+          : undefined;
+        const entry = marketplaceEntry({
+          publish,
+          document,
+          bot,
+          ...(instance && bot.modelSelection
+            ? { model: { driverKind: instance.driverKind, model: bot.modelSelection.model, ...(bot.modelSelection.effort ? { effort: bot.modelSelection.effort } : {}) } }
+            : {}),
+        });
+        // Publishing twice before the file is committed keeps both bots.
+        let base = (await loadMarketplace()).catalog;
+        try {
+          const pending = parseMarketplaceCatalog(JSON.parse(readFileSync(publishedCatalogFile(DATA_DIR), "utf8")));
+          for (const earlier of pending.bots) base = withCatalogEntry(base, earlier, pending.updatedAt ?? "");
+        } catch { /* nothing published from here yet */ }
+        const catalog = withCatalogEntry(base, entry, new Date().toISOString().slice(0, 10));
+        const file = await writePublishedCatalog(DATA_DIR, catalog);
+        return json(res, 201, { entry, file, bots: catalog.bots.length });
       } catch (error) {
-        const status = (error as { status?: number }).status === 404 ? 404 : 502;
-        return json(res, status, { error: error instanceof Error ? error.message : "The team could not be loaded" });
+        return json(res, (error as { status?: number }).status ?? 400, { error: error instanceof Error ? error.message : "The bot could not be published" });
       }
     }
-    if (method === "POST" && path === "/api/team-library/github") {
+    if (method === "POST" && path === "/api/marketplace/link") {
       const body = await readBody(req);
       if (typeof body.url !== "string" || !body.url.trim()) {
         return json(res, 400, { error: "A GitHub URL is required" });
@@ -18921,48 +19222,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const status = (error as { status?: number }).status === 404 ? 404 : 400;
         return json(res, status, { error: error instanceof Error ? error.message : "The GitHub team could not be loaded" });
       }
-    }
-    if (method === "GET" && path === "/api/teams/scout") {
-      // The scout reads a folder and answers with a suggestion — it creates
-      // nothing. Bots and the room come into being only when the human sends
-      // the suggested manifest through /api/teams/import, so "the agent
-      // proposes, the person imports" is enforced by the route split itself.
-      // The folder is whatever validateBotCwd accepts: the same local-user
-      // trust boundary as pointing any bot's working folder at a path.
-      // Deliberately offline — the community directory lives on its own
-      // route below, so a slow network can never delay the suggestion.
-      const validated = validateBotCwd(url.searchParams.get("cwd"));
-      if (!validated.ok) return json(res, 400, { error: validated.error });
-      if (!validated.cwd) return json(res, 400, { error: "scout needs a folder to read" });
-      const profile = scoutProject(validated.cwd);
-      return json(res, 200, { profile, suggestion: suggestTeam(profile) });
-    }
-    if (method === "GET" && path === "/api/bot-directory") {
-      // The marketplace's Explore shelf: every community bot, read-only.
-      // Getting one goes through POST /api/bots like any new bot, with the
-      // community prompt as its description, after the person has read it.
-      try {
-        return json(res, 200, { bots: await fetchBotDirectory() });
-      } catch (error) {
-        return json(res, 502, { error: error instanceof Error ? error.message : "The bot directory is unavailable" });
-      }
-    }
-    if (method === "GET" && path === "/api/teams/scout/directory") {
-      // Community bots that fit the scouted folder — a separate, lazy call
-      // so an unreachable directory degrades to "no extra candidates", never
-      // to a broken scout.
-      const validated = validateBotCwd(url.searchParams.get("cwd"));
-      if (!validated.ok) return json(res, 400, { error: validated.error });
-      if (!validated.cwd) return json(res, 400, { error: "scout needs a folder to read" });
-      let directory: MatchedDirectoryBot[] = [];
-      try {
-        directory = matchDirectoryBots(scoutProject(validated.cwd), await fetchBotDirectory());
-      } catch (error) {
-        // an unreachable directory is a fact of life, not an error — but an
-        // empty section should still be diagnosable from the server log
-        console.warn("bot directory lookup failed:", error instanceof Error ? error.message : String(error));
-      }
-      return json(res, 200, { directory });
     }
     if (method === "POST" && path === "/api/teams/import") {
       // Import is additive-only. A manifest is untrusted input (catalog,
@@ -19269,6 +19528,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const requestedMessages = url.searchParams.get("messages");
       const switchLimit = pageSize(requestedMessages);
       if (switchLimit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
+      const switchTurns = turnCount(url.searchParams.get("turns"));
+      if (switchTurns === null) return json(res, 400, { error: "turns must be a positive whole number" });
       const switched = store.switchGroupTask(group.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such channel task" });
       const switchedSettings = { ...publicGroupState(switched), tasks: wireGroupTasks(switched) };
@@ -19290,7 +19551,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? switchedSettings
         : switchLimit === undefined
           ? groupWithThread(switched)
-          : { ...switchedSettings, ...messagePage(switched.threadId, switchLimit) };
+          : { ...switchedSettings, ...messagePage(switched.threadId, switchLimit, null, switchTurns) };
       return json(res, 200, { group: responseGroup });
     }
     if (m && method === "PATCH") {
@@ -19549,6 +19810,37 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
       if (!edited) return json(res, 409, { error: "queued message changed or is no longer waiting; edits were not saved", code: "queue_edit_conflict" });
       return json(res, 200, { ok: true, queueId, threadId: body.threadId, text: body.text });
+    }
+
+    // Reorder a thread's waiting sends. The head is what drains or steers
+    // next; `order` must list every waiting id, so a stale view refuses.
+    m = path.match(/^\/api\/(bots|groups)\/([\w-]+)\/queue-order$/);
+    if (m && method === "POST") {
+      const body = await readBody(req);
+      assertPrivateRequest();
+      if (foreignClient || peerSessionId) return json(res, 403, { error: "only the workspace owner can reorder queued messages" });
+      if (!body || typeof body !== "object" || Array.isArray(body)
+        || typeof body.threadId !== "string" || !/^[\w-]+$/.test(body.threadId)
+        || !Array.isArray(body.order) || !body.order.length || body.order.length > 200
+        || body.order.some((id: unknown) => typeof id !== "string" || !/^[\w-]+$/.test(id))) {
+        return json(res, 400, { error: "threadId and order (queue ids) required" });
+      }
+      const [, kind, ownerId] = m;
+      let reordered: boolean;
+      if (kind === "bots") {
+        requirePinnedClientThread(ownerId, body.threadId);
+        if (!peerOwns(ownerId, body.threadId)) return json(res, 403, { error: "thread is not part of this peer link" });
+        const bot = requestedTaskBot(ownerId, body.threadId);
+        reordered = reorderSteeredMessages(bot.id, bot.threadId, body.order);
+      } else {
+        const group = store.group(ownerId);
+        if (!group) return json(res, 404, { error: "no such room" });
+        const owns = group.dm ? group.threadId === body.threadId : Boolean(store.groupTaskByThread(group.id, body.threadId));
+        if (!owns) return json(res, 409, { error: "room no longer owns this queued thread", code: "queue_order_conflict" });
+        reordered = reorderChannelMessages(group.id, body.threadId, body.order);
+      }
+      if (!reordered) return json(res, 409, { error: "the queue changed; order was not saved", code: "queue_order_conflict" });
+      return json(res, 200, { ok: true, threadId: body.threadId, order: body.order });
     }
 
     m = path.match(/^\/api\/groups\/([\w-]+)\/queue\/([\w-]+)$/);
@@ -19837,6 +20129,47 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const visible = wireBot(bot);
       broadcast({ kind: "bot", bot: visible });
       return json(res, 200, { bot: visible });
+    }
+    // "approve these for me": the person's own rules, offered after they
+    // approved the same kind of action APPROVAL_RULE_OFFER_AT times in a
+    // thread. Owner-only; a rule is created only from those real approvals.
+    if (path === "/api/approval-rules" && method === "GET") {
+      assertPrivateRequest();
+      if (foreignClient || peerSessionId) return json(res, 403, { error: "only the workspace owner can see approval rules" });
+      return json(res, 200, { rules: approvalRules.list() });
+    }
+    if (path === "/api/approval-rules" && method === "POST") {
+      const body = await readBody(req);
+      assertPrivateRequest();
+      if (foreignClient || peerSessionId) return json(res, 403, { error: "only the workspace owner can create approval rules" });
+      const botId = typeof body?.botId === "string" ? body.botId : "";
+      const threadId = typeof body?.threadId === "string" ? body.threadId : "";
+      const key = typeof body?.key === "string" ? body.key : "";
+      const scope = body?.scope === "bot" ? "bot" : body?.scope === "thread" ? "thread" : null;
+      if (!/^[\w-]+$/.test(botId) || !/^[\w-]+$/.test(threadId) || !key || key.length > 300 || !scope) {
+        return json(res, 400, { error: "botId, threadId, key and scope (thread or bot) required" });
+      }
+      if (!store.bot(botId)) return json(res, 404, { error: "no such bot" });
+      const ownsThread = Boolean(store.projectBotForTask(botId, threadId));
+      const approved = store.messagesFor(threadId).filter((message) => {
+        const card = message.card;
+        if (!card?.tool || card.answered !== "allow" || card.dismissed === true || card.approvalScope) return false;
+        if ((message.from?.botId ?? (ownsThread ? botId : undefined)) !== botId) return false;
+        if (approvalRuleKey(card.tool, card.subtitle) !== key) return false;
+        return !approvalRuleRisky({ tool: card.tool, summary: card.subtitle, approvalScope: card.approvalScope });
+      });
+      if (approved.length < APPROVAL_RULE_OFFER_AT) {
+        return json(res, 409, { error: "approve this action yourself a few more times first", code: "approval_rule_unearned" });
+      }
+      const rule = approvalRules.add({ botId, key, tool: approved[0]!.card!.tool!, ...(scope === "thread" ? { threadId } : {}) });
+      return json(res, 200, { rule });
+    }
+    m = path.match(/^\/api\/approval-rules\/([\w-]+)$/);
+    if (m && method === "DELETE") {
+      assertPrivateRequest();
+      if (foreignClient || peerSessionId) return json(res, 403, { error: "only the workspace owner can revoke approval rules" });
+      if (!approvalRules.remove(m[1]!)) return json(res, 404, { error: "no such approval rule" });
+      return json(res, 200, { ok: true });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/always-allow$/);
     if (m && method === "POST") {
@@ -20397,6 +20730,76 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (m && method === "DELETE") {
       const result = await deleteBotWithLifecycle(m[1]);
       return json(res, result.status, result.body);
+    }
+
+    // ── bring your setup: claude code / codex / cursor → a bot ─────────
+    // Detection never returns a secret value (env and header names only).
+    // See server/setup-import.ts for what maps where and the sync rules.
+    if (path === "/api/setup-import" && method === "GET") {
+      assertPrivateRequest();
+      return json(res, 200, {
+        sources: detectSetups(redactSecretsInText),
+        links: readLinks().filter((link) => currentPrivateAccess(link.botId)).map(setupLinkWire),
+      });
+    }
+    if (path === "/api/setup-import/apply" && method === "POST") {
+      assertPrivateRequest();
+      const parsed = z.object({
+        source: z.enum(SETUP_SOURCES as [string, ...string[]]),
+        botId: z.string().min(1).max(200),
+        instructions: z.object({ mode: z.enum(["replace", "append"]) }).nullable(),
+        skills: z.array(z.string().max(200)).max(200),
+        mcpServers: z.array(z.string().max(64)).max(200),
+        project: z.string().max(4096).nullable(),
+        sync: z.boolean(),
+      }).strict().safeParse(await readBody(req));
+      if (!parsed.success) return json(res, 400, { error: parsed.error.issues[0]?.message ?? "invalid import" });
+      if (!store.bot(parsed.data.botId) || !currentPrivateAccess(parsed.data.botId)) return json(res, 404, { error: "no such bot" });
+      const touchesMcp = parsed.data.mcpServers.length > 0;
+      if (touchesMcp && mcpConfigBusy) return json(res, 409, { error: "MCP servers are already being updated." });
+      if (touchesMcp) mcpConfigBusy = true;
+      try {
+        const result = applySetupImport(setupImportDeps, parsed.data as Parameters<typeof applySetupImport>[1]);
+        if ("error" in result) return json(res, 422, { error: result.error });
+        return json(res, 200, { ...result, link: result.link ? setupLinkWire(result.link) : null });
+      } finally {
+        if (touchesMcp) mcpConfigBusy = false;
+      }
+    }
+    if (path === "/api/setup-import/check" && method === "POST") {
+      assertPrivateRequest();
+      const report = checkSync(setupImportDeps);
+      return json(res, 200, { report, links: readLinks().filter((link) => currentPrivateAccess(link.botId)).map(setupLinkWire) });
+    }
+    m = path.match(/^\/api\/setup-import\/links\/([\w-]+)(\/resolve)?$/);
+    if (m) {
+      assertPrivateRequest();
+      const existing = readLinks().find((link) => link.id === m![1]);
+      if (!existing || !currentPrivateAccess(existing.botId)) return json(res, 404, { error: "no such import" });
+      if (!m[2] && method === "PATCH") {
+        const parsed = z.object({ sync: z.boolean() }).strict().safeParse(await readBody(req));
+        if (!parsed.success) return json(res, 400, { error: "sync must be true or false" });
+        const link = setLinkSync(existing.id, parsed.data.sync);
+        if (!link) return json(res, 404, { error: "no such import" });
+        if (link.sync) checkSync(setupImportDeps);
+        const fresh = readLinks().find((candidate) => candidate.id === link.id) ?? link;
+        return json(res, 200, { link: setupLinkWire(fresh) });
+      }
+      if (!m[2] && method === "DELETE") {
+        removeLink(existing.id);
+        return json(res, 200, { removed: true });
+      }
+      if (m[2] && method === "POST") {
+        const parsed = z.object({
+          kind: z.enum(["instructions", "skill"]),
+          name: z.string().min(1).max(200),
+          keep: z.enum(["source", "bos"]),
+        }).strict().safeParse(await readBody(req));
+        if (!parsed.success) return json(res, 400, { error: "kind, name and keep are required" });
+        const link = resolveConflict(setupImportDeps, existing.id, parsed.data.kind, parsed.data.name, parsed.data.keep);
+        if ("error" in link) return json(res, 409, { error: link.error });
+        return json(res, 200, { link: setupLinkWire(link) });
+      }
     }
 
     // ── bot skills: imported Agent Skills (SKILL.md) ────────────────────
@@ -20978,7 +21381,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
             const admissionGuard = () => {
               assertPrivateRequest();
               const current = store.projectBotForTask(bot.id, threadId);
-              if (!current || approvalModeFor(current) !== "ask" || current.autoApprove === true || current.alwaysAllow?.length) {
+              if (!current || approvalModeFor(current) !== "ask" || current.autoApprove === true || current.alwaysAllow?.length || approvalRules.has(current.id, threadId)) {
                 throw Object.assign(new Error("guarded sends require Ask mode without remembered permissions"), { status: 409, code: "guarded_permissions" });
               }
               if (store.activeLeaf(threadId) !== body.expectedActiveLeafId) {
@@ -21431,7 +21834,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const task = store.createTask(bot.id, typeof body.title === "string" ? body.title : undefined, activate, body.projectId);
       if (!task) return json(res, 500, { error: "couldn't create that task" });
       if (peerSessionId) {
-        store.patchTask(bot.id, task.threadId, { approvalMode: "ask", autoApprove: false, alwaysAllow: [] });
+        store.patchTask(bot.id, task.threadId, peerThreadApproval(peerSessionId));
         peerThreads.add(peerSessionId, { botId: bot.id, threadId: task.threadId });
         if (roomThread) peerThreads.markRoom(task.threadId);
       }
@@ -21452,10 +21855,12 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const requestedMessages = url.searchParams.get("messages");
       const switchLimit = pageSize(requestedMessages);
       if (switchLimit === null) return json(res, 400, { error: "messages must be a non-negative whole number" });
+      const switchTurns = turnCount(url.searchParams.get("turns"));
+      if (switchTurns === null) return json(res, 400, { error: "turns must be a positive whole number" });
       if (peerSessionId) return json(res, 200, { bot: {
         ...peerBotView(bot, peerSessionId),
         threadId: m[2],
-        ...messagePage(m[2], switchLimit ?? DEFAULT_PAGE),
+        ...messagePage(m[2], switchLimit ?? DEFAULT_PAGE, null, switchTurns),
       } });
       const switched = store.switchTask(bot.id, m[2]);
       if (!switched) return json(res, 404, { error: "no such task" });
@@ -21473,7 +21878,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         ? switchedSettings
         : switchLimit === undefined
           ? botWithThread(switched)
-          : { ...switchedSettings, ...messagePage(switched.threadId, switchLimit) };
+          : { ...switchedSettings, ...messagePage(switched.threadId, switchLimit, null, switchTurns) };
       return json(res, 200, { bot: responseBot });
     }
     if (m && method === "PATCH") {
@@ -22091,6 +22496,26 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       return selections;
     });
 
+    // Explicit local owner setup. A marketing link never grants access or creates a bot.
+    if (method === "POST" && path === "/api/onboarding/digital-marketer") {
+      if (auth.scopes.includes("peer") || workspaceActor(auth) !== multiplayerActors.ownerId || authorizedInternalCapability(req.headers.authorization)) return json(res, 403, { error: "Set up your digital marketer in your own BOS workspace." });
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
+      const body = await readBody(req, 8192);
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "Session ended" });
+      if (!body?.modelSelection || Object.keys(body).some(key => key !== "modelSelection" && key !== "businessBrief")) return json(res, 400, { error: "Choose your own connected model first." });
+      const brief = z.object({ business: z.string().trim().min(1).max(1000), customers: z.string().trim().min(1).max(500), outcome: z.literal("digital-marketer"), approach: z.enum(["bos", "specialist"]) }).strict().safeParse(body.businessBrief);
+      if (!brief.success) return json(res, 400, { error: "Describe your business and customers before starting setup." });
+      const original = store.bots.find(bot => bot.onboardingOffer === "digital-marketer")?.onboardingOfferAssignment;
+      const checked = checkedModelSelection(original?.selection ?? body.modelSelection, undefined, true);
+      if (!checked.ok) return json(res, checked.status, { error: checked.error });
+      const instances = await describeInstances();
+      if (!instances.some(instance => instance.instanceId === checked.selection.instanceId && instanceEngineReady(instance))) return json(res, 409, { error: "Sign in to your chosen AI provider before starting your digital marketer." });
+      if (auth.kind === "session" && !sessions.isLive(auth.session.id)) return json(res, 401, { error: "Session ended" });
+      if (workspaceActor(auth) !== multiplayerActors.ownerId) return json(res, 403, { error: "Workspace ownership changed. Reconnect before starting setup." });
+      const bot = onboardingMarketer(store, MAX_WORKSPACE_BOTS, checked.selection, firstAssignment(brief.data));
+      return json(res, 200, { bot: { ...wireBot(bot), messages: store.messagesFor(bot.threadId), activeLeafId: store.activeLeaf(bot.threadId) }, assignment: bot.onboardingOfferAssignment, billing: { available: false } });
+    }
+
     // Explicit owner action; default admin scope and no provider dispatch.
     if (method === "POST" && path === "/api/onboarding/chief") {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(res, 415, { error: "content-type must be application/json" });
@@ -22231,6 +22656,41 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         const { instanceId, instances } = newClaudeAccount(cfg, parsed.data);
         await persistProviderInstance(instanceId, instances);
         return json(res, 201, { instanceId, instances: await describeInstances() });
+      } finally { providerConfigBusy = false; }
+    }
+
+    // Settings → Engines → Add a model. Listing models is a free GET to the
+    // provider; the key travels only to that provider and is never logged.
+    if (method === "POST" && path === "/api/instances/api-models") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const parsed = apiModelsSchema.safeParse(await readBody(req, 8192));
+      if (!parsed.success) return json(res, 400, { error: parsed.error.issues[0]?.message ?? "Choose a provider and enter its API key." });
+      try {
+        const models = await fetchSetupModels(apiConnectionUrl(parsed.data), parsed.data.key);
+        res.setHeader("cache-control", "no-store");
+        return json(res, 200, { models });
+      } catch (error) {
+        return json(res, 400, { error: error instanceof Error ? error.message : "Could not load this provider's models." });
+      }
+    }
+
+    if (method === "POST" && path === "/api/instances/api-connections") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const parsed = apiConnectionSchema.safeParse(await readBody(req, 8192));
+      if (!parsed.success) return json(res, 400, { error: parsed.error.issues[0]?.message ?? "Choose a provider, enter its API key and a model." });
+      if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
+      providerConfigBusy = true;
+      try {
+        let created: ReturnType<typeof newApiConnection>;
+        try { created = newApiConnection(cfg, parsed.data); }
+        catch (error) { return json(res, 400, { error: error instanceof Error ? error.message : String(error) }); }
+        await persistProviderInstance(created.instanceId, created.instances);
+        broadcast({ kind: "config", ...configStatus() });
+        return json(res, 201, { instanceId: created.instanceId, instances: await describeInstances() });
       } finally { providerConfigBusy = false; }
     }
 
@@ -22392,7 +22852,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 400, { error: "Account settings are currently available for Claude only." });
         }
         if (body.tools !== undefined) {
-          if (!["openai-compat", "grok", "minimax"].includes(entry.driver)) {
+          if (!["openai-compat", "api-key", "grok", "minimax"].includes(entry.driver)) {
             return json(res, 400, { error: "The tools setting is available for OpenAI-compatible, Grok API and MiniMax API instances only." });
           }
           entry.config = { ...entry.config as Record<string, unknown>, tools: body.tools };
@@ -22422,8 +22882,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       if (providerConfigBusy) return json(res, 409, { error: "provider settings are already being updated" });
       const instances = persistableInstanceConfigs(cfg);
       if (!Object.hasOwn(instances, instanceId)) return json(res, 404, { error: "unknown instance" });
-      if (instances[instanceId].driver !== "claudeAgent" || instanceId === "claude") {
-        return json(res, 400, { error: "Only added Claude accounts can be removed here." });
+      const addedClaude = instances[instanceId].driver === "claudeAgent" && instanceId !== "claude";
+      if (!addedClaude && !removableApiConnection(instanceId, instances[instanceId])) {
+        return json(res, 400, { error: "Only added Claude accounts and API connections can be removed here." });
       }
       if (cfg.defaultModelSelection?.instanceId === instanceId || store.bots.some((bot) =>
         bot.modelSelection.instanceId === instanceId || store.tasks(bot.id).some((task) => task.modelSelection?.instanceId === instanceId)) ||
@@ -23128,6 +23589,19 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       }
     }
 
+    // Channel setup is owner-only, never exposed to bot tool or peer sessions.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/telegram-channel(?:\/(connect|invite))?$/);
+    if (m && ["GET", "POST", "DELETE"].includes(method)) {
+      if (!auth.scopes.includes("admin") || peerSessionId || authorizedInternalCapability(req.headers.authorization)) return json(res, 403, { error: "owner access required" });
+      const bot = store.bot(m[1]);
+      if (!bot || !currentPrivateAccess(bot.id)) return json(res, 404, { error: "no such bot" });
+      if (method === "GET" && !m[2]) return json(res, 200, telegramChannels.status(bot.id));
+      if (method === "DELETE" && !m[2]) { telegramChannels.disconnect(bot.id); return json(res, 200, telegramChannels.status(bot.id)); }
+      if (method === "POST" && m[2] === "connect") return json(res, 200, await telegramChannels.connect(bot.id, bot.name, () => currentPrivateAccess(bot.id) && (auth.kind !== "session" || sessions.isLive(auth.session.id))));
+      if (method === "POST" && m[2] === "invite") return json(res, 200, telegramChannels.invite(bot.id));
+      return json(res, 405, { error: "unsupported channel operation" });
+    }
+
     // ── native WhatsApp (tile connect/QR/state); before the generic authorize ──
     m = path.match(/^\/api\/bots\/([\w-]+)\/whatsapp-replies$/);
     if (m && (method === "GET" || method === "PUT")) {
@@ -23344,6 +23818,44 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         return json(res, 200, { dismissed: true });
       }
       return json(res, 405, { error: "method not allowed" });
+    }
+
+    // Read only: the selected conversation determines the source, never a fallback.
+    m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/preview$/);
+    if (m && method === "GET") {
+      const botId = m[1];
+      const threadId = url.searchParams.get("threadId");
+      if (!threadId) return json(res, 400, { error: "threadId is required for a computer preview" });
+      const resolve = async (): Promise<PreviewSource> => {
+        const currentAuth = resolveRequestAuth(req, { sessions, cookieName: SESSION_COOKIE, streamPath: "/api/events", url,
+          loopbackMutationToken: desktopMutationToken, companionMutationToken }).auth;
+        if (!currentAuth?.scopes.includes("admin") || peerSessionId || foreignClient || authorizedInternalCapability(req.headers.authorization)) throw previewError("owner access required", 403);
+        const bot = computerPreviewBot(botId, url);
+        if (!bot || !currentPrivateAccess(botId)) throw previewError("no such bot", 404);
+        if (bot.remote || bot.sharedWorkComputer) throw previewError("This computer's preview is not available from this workspace");
+        const surface = await computerPreviewSurface(bot, threadId);
+        if (surface !== "local" && surface !== "vm" && surface !== "cloud") throw previewError(surface === "browser" ? "Use the browser preview for this conversation" : "Computer access is off for this conversation");
+        const team = inheritedTeamComputer(bot);
+        const provider = turnProvider(bot, undefined, threadId) ?? (bot.cloudBackend === "vps" ? "vps" : "box");
+        if (surface === "cloud" && computerProviderConfigTransitions.has(provider)) throw previewError(providerTransitionMessage(provider));
+        const key = surface === "local" ? "host" : surface === "vm" ? `vm:${localVmTargetForBot(bot.id).key}` : `cloud:${provider}:${team ? teamComputerOwner(team.id) : bot.id}`;
+        if (boxLifecycleBusyBots.has(bot.id) || (team && boxLifecycleBusyBots.has(teamComputerOwner(team.id))) || (surface === "vm" && localVmLifecycleBusy.has(localVmTargetForBot(bot.id).key))) throw previewError("This computer is being changed; retry its preview");
+        return { surface, key, fingerprint: JSON.stringify([bot.computer, bot.cloudBackend, bot.sharedWorkComputer, bot.modelSelection, team?.id, store.taskByThread(bot.id, threadId)?.surface, surface === "cloud" && provider === "vps" ? cfg.vps?.sshAlias : null]) };
+      };
+      const result = await computerPreviews.capture(resolve, async source => {
+        const bot = computerPreviewBot(botId, url)!;
+        if (source.surface === "local") return hostPreview();
+        if (source.surface === "vm") {
+          const image = await containerComputerScreenshot(undefined, undefined, localVmTargetForBot(bot.id));
+          const match = /^data:image\/(png|jpeg);base64,(.+)$/.exec(image);
+          if (!match) throw previewError("The Local VM returned an invalid preview", 502);
+          return { png: match[2], format: match[1] };
+        }
+        const team = inheritedTeamComputer(bot);
+        return team ? box.screenshotBox(cfg, teamComputerOwner(team.id)) : source.key.startsWith("cloud:vps:") ? vps.vpsComputerScreenshot(cfg, bot.id) : box.screenshotBox(cfg, bot.id);
+      });
+      res.setHeader("cache-control", "private, no-store");
+      return json(res, 200, result);
     }
 
     // ── the bot's cloud computer (Box) ──
@@ -23563,6 +24075,7 @@ const server = createServer(handleRequest);
 server.on("upgrade", (req, socket, head) => terminals.upgrade(req, socket, head));
 
 calendarCalls.start();
+void telegramChannels.start();
 
 // Resolve the edition before accepting requests so /api/edition is never a guess.
 console.log(describeEdition(await loadEnterpriseLayer()));
@@ -23978,6 +24491,12 @@ server.listen(PORT, "127.0.0.1", () => {
   // ordinary chat. Start only once every registry is initialized and the
   // endpoint is listening; earlier dispatch can hit uninitialized bindings.
   routines!.start();
+  // Keep-in-sync imports: one mtime check now, then a watcher on the source
+  // folders. A change on both sides is recorded as a conflict, never applied.
+  startSyncWatcher(setupImportDeps, (report) => {
+    if (report.applied.length) console.log(`[setup-import] synced ${report.applied.join(", ")}`);
+    if (report.conflicts) console.log(`[setup-import] ${report.conflicts} change(s) need a choice in settings > import`);
+  });
   // Finish the update that quit the previous process: record its result once
   // and give each interrupted conversation one continuation turn.
   void updateCoordinator.boot().catch(error => console.error("[update] boot:", error instanceof Error ? error.message : error));
@@ -24051,6 +24570,7 @@ const gracefulShutdown = createGracefulShutdown({
       routines?.stop();
       remoteBots.stop();
       calendarCalls?.stop();
+      telegramChannels.stop();
       webhookIngress?.server.close();
       tunnelListener?.close();
     },

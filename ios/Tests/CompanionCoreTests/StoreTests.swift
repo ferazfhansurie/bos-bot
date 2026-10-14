@@ -106,6 +106,122 @@ final class StoreTests: XCTestCase {
         }
     }
 
+    // Refreshes carry raw tails, so 50 tool calls must not erase the
+    // prompts, answers and scrollback the person has already loaded.
+    func historyTool(_ number: Int, ok: Bool? = true) -> Message {
+        var row = Message(id: "tool-\(number)", role: .bot, kind: .activity, at: Double(number + 100))
+        row.tool = ToolActivity(name: "Read", ok: ok)
+        return row
+    }
+
+    func testToolHeavyFleetTailPreservesLoadedConversationAndFreshOverlap() throws {
+        var source = try fleet()
+        let thread = source.bots[0].threadId
+        var answer = message("answer", at: 3, text: "the earlier result")
+        answer.role = .bot
+        let conversation = [message("prompt", at: 2, text: "check the files"), answer]
+        let tools = (0..<120).map { historyTool($0) }
+        source.bots[0].messages = conversation + tools
+        source.bots[0].hasMore = true
+        var state = CompanionState()
+        state.hydrate(source)
+        state.prepend(ThreadPage(messages: [message("older-prompt", at: 1)], hasMore: false), toThread: thread)
+
+        var updated = historyTool(70, ok: false)
+        updated.tool?.output = "file no longer exists"
+        source.bots[0].messages = [updated] + (71..<121).map { historyTool($0) }
+        source.bots[0].hasMore = true
+        state.hydrate(source)
+
+        let rows = state.transcript(forThread: thread)
+        XCTAssertEqual(rows.map(\.id), ["older-prompt", "prompt", "answer"] + (0..<121).map { "tool-\($0)" })
+        XCTAssertEqual(rows.first { $0.id == "answer" }?.text, "the earlier result")
+        XCTAssertEqual(rows.first { $0.id == "tool-70" }?.tool?.ok, false)
+        XCTAssertEqual(rows.first { $0.id == "tool-70" }?.tool?.output, "file no longer exists")
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
+        XCTAssertEqual(state.hasMore[thread], false, "The loaded oldest-page boundary survives a tail refresh.")
+        // Repeated reconnects must not duplicate rows or reopen scrollback.
+        state.hydrate(source)
+        XCTAssertEqual(state.transcript(forThread: thread), rows)
+        XCTAssertEqual(state.hasMore[thread], false)
+    }
+
+    func testToolHeavyRoomTailAlsoRetainsItsLoadedPromptAndAnswer() throws {
+        var source = try fleet()
+        let thread = source.groups[0].threadId
+        var answer = message("room-answer", at: 2, text: "room result")
+        answer.role = .bot
+        source.groups[0].messages = [message("room-prompt", at: 1), answer] + (0..<80).map { historyTool($0) }
+        source.groups[0].hasMore = false
+        var state = CompanionState()
+        state.hydrate(source)
+        source.groups[0].messages = (30..<81).map { historyTool($0) }
+        source.groups[0].hasMore = true
+        state.hydrate(source)
+        XCTAssertEqual(state.transcript(forThread: thread).map(\.id), ["room-prompt", "room-answer"] + (0..<81).map { "tool-\($0)" })
+        XCTAssertEqual(state.hasMore[thread], false)
+    }
+
+    func testMetadataRefreshThenMergeTailRestoresHistoryAndKeepsLiveRows() throws {
+        var source = try fleet()
+        let thread = source.bots[0].threadId
+        var answer = message("answer", at: 2, text: "the previous answer")
+        answer.role = .bot
+        source.bots[0].messages = [message("prompt", at: 1), answer] + (0..<80).map { historyTool($0) }
+        source.bots[0].hasMore = false
+        var state = CompanionState()
+        state.hydrate(source)
+        source.bots[0].messages = nil
+        state.hydrate(source)
+        XCTAssertFalse(state.hasLoadedPage(forThread: thread))
+        state.apply(.message(threadId: thread, message: historyTool(81)))
+        var updated = historyTool(30, ok: false)
+        updated.tool?.output = "fresh failure"
+        state.mergeTail(ThreadPage(messages: [updated] + (31..<81).map { historyTool($0) }, hasMore: true, activeLeafId: "tool-80"), intoThread: thread)
+        let rows = state.transcript(forThread: thread)
+        XCTAssertEqual(rows.map(\.id), ["prompt", "answer"] + (0..<82).map { "tool-\($0)" })
+        XCTAssertEqual(rows.first { $0.id == "tool-30" }?.tool?.output, "fresh failure")
+        XCTAssertTrue(state.hasLoadedPage(forThread: thread))
+        XCTAssertEqual(state.hasMore[thread], false)
+        XCTAssertEqual(state.activeLeafIds[thread], "tool-80")
+    }
+
+    func testTailHistoryIsScopedToItsThreadAcrossTaskSwitches() throws {
+        var source = try fleet()
+        let oldThread = source.bots[0].threadId
+        source.bots[0].messages = [message("old-prompt", at: 1)] + (0..<80).map { historyTool($0) }
+        source.bots[0].hasMore = false
+        var state = CompanionState()
+        state.hydrate(source)
+        source.bots[0].threadId = "different-task"
+        source.bots[0].messages = [historyTool(30), message("new-prompt", at: 999)]
+        source.bots[0].hasMore = true
+        state.hydrate(source)
+        XCTAssertEqual(state.transcript(forThread: "different-task").map(\.id), ["tool-30", "new-prompt"], "Even overlapping IDs cannot join history from another thread.")
+        state.mergeTail(ThreadPage(messages: (30..<81).map { historyTool($0) }, hasMore: true), intoThread: oldThread)
+        XCTAssertEqual(state.transcript(forThread: oldThread).map(\.id), ["old-prompt"] + (0..<81).map { "tool-\($0)" })
+        XCTAssertFalse(state.transcript(forThread: oldThread).contains { $0.id == "new-prompt" })
+        XCTAssertEqual(state.hasMore[oldThread], false)
+        XCTAssertEqual(state.hasMore["different-task"], true)
+    }
+
+    func testTailRefreshDoesNotInventContinuityAcrossGapOrCompleteReplacement() throws {
+        for complete in [false, true] {
+            var source = try fleet()
+            let thread = source.bots[0].threadId
+            source.bots[0].messages = [message("old-prompt", at: 1)] + (0..<80).map { historyTool($0) }
+            source.bots[0].hasMore = false
+            var state = CompanionState()
+            state.hydrate(source)
+            let tail = complete ? (30..<81).map { historyTool($0) } : (100..<151).map { historyTool($0) }
+            source.bots[0].messages = tail
+            source.bots[0].hasMore = !complete
+            state.hydrate(source)
+            XCTAssertEqual(state.transcript(forThread: thread), tail)
+            XCTAssertEqual(state.hasMore[thread], !complete)
+        }
+    }
+
     func testBackgroundLiveTailStillNeedsItsInitialPage() throws {
         var state = try hydrated()
         let threadId = "background-thread"

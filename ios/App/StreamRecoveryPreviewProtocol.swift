@@ -4,6 +4,7 @@ import Foundation
 /// Isolated network fixture: the first stream remains open but stops delivering.
 /// HTTP accepts the send; only a resumed stream delivers its reply.
 final class StreamRecoveryPreviewProtocol: URLProtocol {
+    private var delayedResponse: DispatchWorkItem?
     private static let lock = NSLock()
     private static var streams = 0
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -25,9 +26,16 @@ final class StreamRecoveryPreviewProtocol: URLProtocol {
             let message: [String: Any] = ["id": "scroll-user", "parentId": "stream-history-299",
                 "role": "user", "kind": "text", "at": 1890000000000, "text": "keep this message visible"]
             let body: [String: Any] = ["ok": true, "threadId": "preview-gmail", "message": message]
-            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: body))
-            client?.urlProtocolDidFinishLoading(self)
+            let respond = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.client?.urlProtocol(self, didReceive: HTTPURLResponse(url: self.request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+                self.client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: body))
+                self.client?.urlProtocolDidFinishLoading(self)
+            }
+            if ProcessInfo.processInfo.arguments.contains("-send-delay-preview") {
+                delayedResponse = respond
+                DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: respond)
+            } else { respond.perform() }
             return
         }
         let body: [String: Any] = request.httpMethod == "POST" && path.hasSuffix("/messages")
@@ -44,6 +52,6 @@ final class StreamRecoveryPreviewProtocol: URLProtocol {
         let data = try! JSONSerialization.data(withJSONObject: body)
         client?.urlProtocol(self, didLoad: Data("data: ".utf8) + data + Data("\n\n".utf8))
     }
-    override func stopLoading() {}
+    override func stopLoading() { delayedResponse?.cancel() }
 }
 #endif

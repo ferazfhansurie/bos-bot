@@ -10,8 +10,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
@@ -112,11 +112,11 @@ internal fun GlyphAvatar(color: String, bodyId: String?, size: Dp, state: MausSt
     val phase = remember { mutableLongStateOf(0L) }
     LaunchedEffect(animated) {
         if (!animated || (coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f) == 0f) return@LaunchedEffect
-        var last = 0L
-        while (true) withFrameNanos { now -> if (now - last >= 33_333_333) { phase.longValue = now; last = now } }
+        while (true) awaitMotionTick { now -> phase.longValue = now }
     }
     val face = art.faces.getJSONObject(state.glyphState())
-    Canvas(modifier.size(size)) {
+    // Its own layer when it moves: a tick then re-records this face, not the screen.
+    Canvas(modifier.size(size).then(if (animated) Modifier.graphicsLayer() else Modifier)) {
         val side = min(this.size.width, this.size.height)
         val k = side / 100f
         val bounds = body.getBounds()

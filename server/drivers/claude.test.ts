@@ -1324,7 +1324,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       JSON.stringify({
         mcpServers: {
           // stdio, as the harness mounts its own
-          shop: { command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"] },
+          shop: { command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"], env: { SHOP_LABEL: "project", OMB_THREAD_ID: "spoof-project", OMB_BOT_ID: "spoof-bot" } },
           // and a transport the harness never mounts itself: forwarded
           // verbatim, because the CLI is the one that has to understand it
           hosted: { type: "http", url: "https://example.test/mcp" },
@@ -1334,7 +1334,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       }),
     );
 
-    await instance.adapter.sendTurn({ threadId: "t-project-mcp", text: "hi", cwd: projectDir });
+    await instance.adapter.sendTurn({ threadId: "t-project-mcp", botId: "b-project", text: "hi", cwd: projectDir });
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
@@ -1342,6 +1342,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.parse(seen.mcpConfig.mcpServers.shop.env.OMB_GATE_UPSTREAM)).toMatchObject({
       command: "npx",
       args: ["-y", "mcp-remote", "https://example.test/shop"],
+      env: { SHOP_LABEL: "project", OMB_THREAD_ID: "t-project-mcp", OMB_BOT_ID: "b-project" },
     });
     expect(seen.mcpConfig.mcpServers.hosted).toMatchObject({ type: "http", url: "https://example.test/mcp" });
     expect(seen.mcpConfig.mcpServers.ogb.args).not.toContain("evil");
@@ -1356,8 +1357,9 @@ describe("ClaudeDriver turns (fake CLI)", () => {
 
     await instance.adapter.sendTurn({
       threadId: "t-gate",
+      botId: "b-gate",
       text: "hi",
-      integrations: { custom: { shop: { command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"], env: { SHOP_TOKEN: "secret" } } } },
+      integrations: { custom: { shop: { command: "npx", args: ["-y", "mcp-remote", "https://example.test/shop"], env: { SHOP_TOKEN: "secret", OMB_BOT_ID: "spoof-bot", OMB_THREAD_ID: "spoof-thread" } } } },
     });
     await recorder.until((e) => e.type === "turn.completed");
 
@@ -1368,7 +1370,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(JSON.parse(shop.env.OMB_GATE_UPSTREAM)).toMatchObject({
       command: "npx",
       args: ["-y", "mcp-remote", "https://example.test/shop"],
-      env: { SHOP_TOKEN: "secret" },
+      env: { SHOP_TOKEN: "secret", OMB_BOT_ID: "b-gate", OMB_THREAD_ID: "t-gate" },
     });
     expect(shop.env.OMB_GATE_NAME).toBe("shop");
     expect(Number(shop.env.OMB_GATE_BUDGET)).toBeGreaterThan(0);
@@ -1385,12 +1387,30 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await instance.adapter.sendTurn({
       threadId: "t-gate-off",
       text: "hi",
-      integrations: { custom: { shop: { command: "npx", args: ["shop"], env: {} } } },
+      integrations: { custom: { shop: { command: "npx", args: ["shop"], env: { OMB_BOT_ID: "spoof-bot", OMB_THREAD_ID: "spoof-thread", SHOP_LABEL: "direct" } } } },
     });
     await recorder.until((e) => e.type === "turn.completed");
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
-    expect(seen.mcpConfig.mcpServers.shop).toMatchObject({ command: "npx", args: ["shop"] });
+    expect(seen.mcpConfig.mcpServers.shop).toMatchObject({ command: "npx", args: ["shop"], env: { OMB_BOT_ID: "", OMB_THREAD_ID: "t-gate-off", SHOP_LABEL: "direct" } });
+  });
+
+  it("binds custom stdio callers separately while two native threads are busy", async () => {
+    await create("hang");
+    const custom = { shop: { command: "fixture-shop", args: [], env: { SHOP_LABEL: "shared", OMB_THREAD_ID: "spoof" } } };
+    for (const threadId of ["t-mcp-first", "t-mcp-second"]) {
+      const dump = join(scratch, `${threadId}.json`);
+      compatEnv.FAKE_CLAUDE_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId, botId: "b-shop", text: "hi", integrations: { custom } });
+      await expect.poll(() => existsSync(dump)).toBe(true);
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(JSON.parse(seen.mcpConfig.mcpServers.shop.env.OMB_GATE_UPSTREAM).env).toEqual({
+        SHOP_LABEL: "shared", OMB_BOT_ID: "b-shop", OMB_THREAD_ID: threadId,
+      });
+    }
+    expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(2);
+    expect(recorder.events.filter((e) => e.type === "turn.completed")).toHaveLength(0);
+    expect(custom.shop.env).toEqual({ SHOP_LABEL: "shared", OMB_THREAD_ID: "spoof" });
   });
 
   it("leaves an http project server unmounted by the gate rather than mangling it", async () => {
@@ -1832,13 +1852,15 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     await create();
     const dump = join(scratch, "dump.json");
     compatEnv.FAKE_CLAUDE_DUMP = dump;
-    await instance.adapter.sendTurn({ threadId: "t-live", text: "one" });
+    const integrations = { custom: { notes: { command: "fixture-notes", args: [], env: {} } } };
+    await instance.adapter.sendTurn({ threadId: "t-live", botId: "b-live", text: "one", integrations });
     await recorder.until((e) => e.type === "turn.completed");
     const dumpBefore = readFileSync(dump, "utf8");
     const announced = (recorder.events.find((e) => e.type === "session.started") as { sessionId: string }).sessionId;
-    const second = await instance.adapter.sendTurn({ threadId: "t-live", text: "two", ...(withCursor ? { resumeCursor: announced } : {}) });
+    const second = await instance.adapter.sendTurn({ threadId: "t-live", botId: "b-live", text: "two", integrations, ...(withCursor ? { resumeCursor: announced } : {}) });
     await recorder.until((e) => e.type === "turn.completed" && e.turnId === second.turnId);
     expect(readFileSync(dump, "utf8")).toBe(dumpBefore);
+    expect(JSON.parse(JSON.parse(dumpBefore).mcpConfig.mcpServers.notes.env.OMB_GATE_UPSTREAM).env).toEqual({ OMB_BOT_ID: "b-live", OMB_THREAD_ID: "t-live" });
     expect(recorder.events.filter((e) => e.type === "turn.started")).toHaveLength(2);
     expect(recorder.events.filter((e) => e.type === "turn.completed")).toHaveLength(2);
   });

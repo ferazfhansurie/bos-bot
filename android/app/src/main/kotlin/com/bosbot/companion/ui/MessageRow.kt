@@ -55,7 +55,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
@@ -789,7 +788,7 @@ fun ActivityRunChip(items: List<Message>, openThread: ((ThreadRef) -> Unit)? = n
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (running) {
-                    CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 1.5.dp)
+                    TickSpinner(modifier = Modifier.size(13.dp), strokeWidth = 1.5.dp)
                 } else {
                     Icon(
                         imageVector = Icons.Filled.Check,
@@ -1137,7 +1136,7 @@ fun WorkingBubble(name: String, color: String) {
             .collectLatest { live ->
                 moving = live
                 if (!live) return@collectLatest
-                while (true) withFrameNanos(clock.onFrame)
+                while (true) awaitMotionTick(clock.onFrame)
             }
     }
 

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StoreProvider } from "@/state/store";
 import * as store from "@/state/store";
-import { ApiKeyRow, OpenAiCompatUrl } from "./ApiKeys";
+import { ApiKeyRow } from "./ApiKeys";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -47,12 +47,5 @@ describe("provider key rows", () => {
     expect(openai).toContain("sk-or-v1-…");
 
     expect(render(createElement(ApiKeyRow, { section: "xai", testProvider: "xai" }))).toContain("xAI API key");
-  });
-
-  it("offers the base URL as a setting next to the key", () => {
-    const html = render(createElement(OpenAiCompatUrl));
-    expect(html).toContain("OpenAI-compatible base URL");
-    expect(html).toContain('placeholder="https://openrouter.ai/api/v1"');
-    expect(html).toContain("api.openai.com/v1");
   });
 });

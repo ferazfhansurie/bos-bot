@@ -1,3 +1,6 @@
+import { isMarketerLink, marketerIntentStore } from "./marketer-link.mjs";
+import { configureAboutPanel } from "./about-panel.mjs";
+import { createComputerPreviewHandler } from "./computer-preview.mjs";
 import { createContentBlocker } from './content-blocker.mjs';
 import { browserCommand } from './browser-keybindings.mjs';
 import { registerBrowserApp } from './default-browser.mjs';
@@ -9,9 +12,11 @@ import { stagingServerEnvironment } from "./staging-environment.mjs";
 import { STAGING, SERVER_PORTS, RELAY_PORTS, PACKAGE_SCHEMES } from "./release-channel.mjs";
 import { attachLaunchSplash, readSplashSquad, saveSplashSquad } from "./launch-splash.mjs";
 import { createSharedBrowser } from "./shared-browser.mjs";
+import { registerAttentionNotifications } from "./attention-notifications.mjs";
 import { createPrimaryBrowserController } from "./primary-browser-controller.mjs";
 import { createWorkspaceBrowserRegistry } from "./workspace-browser.mjs";
-import { TOOLS_BROWSER_PARTITION, noteBrowserKeyInput, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach } from "./tools-browser.mjs";
+import { TOOLS_BROWSER_PARTITION, noteBrowserKeyInput, attachToolsBrowserGuest, configureToolsBrowserSession, hardenWebviewAttach, toolsBrowserUrlAllowed } from "./tools-browser.mjs";
+import { webURL } from "./primary-browser.mjs";
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, Tray, utilityProcess, webContents } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -39,6 +44,7 @@ import { pollServerIdentity } from "./server-boot-probe.mjs";
 import { createServerSupervisor } from "./server-supervisor.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
 import { windowChromeOptions } from "./window-chrome.mjs";
+import { createWorkspaceWindows } from "./workspace-window.mjs";
 import { collisionFreeDownloadPath, defaultSaveName, withSavableFile } from "./save-file.mjs";
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
 import { WELCOME_PARTITION, sameWelcomeOrigin, welcomePermissionAllowed, welcomeWindowUrl } from "./welcome-window.mjs";
@@ -277,7 +283,28 @@ function deliverBrowserLinks() {
     mainWindow.webContents.send("primary-browser:external-url",{profileId:index.selected,url});
   }
 }
+let pendingMarketerLink = false;
+const marketerIntent = () => marketerIntentStore(app.getPath("userData"));
+function deliverMarketerLink(win) {
+  if (!win || win.isDestroyed() || !app.isReady() || win.webContents.isLoadingMainFrame()) return;
+  try {
+    if (new URL(win.webContents.getURL()).origin !== rendererOrigin()) return;
+    if (pendingMarketerLink) { marketerIntent().remember(); pendingMarketerLink = false; }
+    if (marketerIntent().pending()) win.webContents.send("marketer:setup");
+  } catch { /* The explicit Settings action remains available if storage fails. */ }
+}
+function queueMarketerLink(raw) {
+  if (!isMarketerLink(raw)) return false;
+  pendingMarketerLink = true;
+  if (app.isReady()) { try { marketerIntent().remember(); } catch {} }
+  activateExistingWindow(BrowserWindow.getAllWindows());
+  deliverMarketerLink(BrowserWindow.getAllWindows().find(win => !win.isDestroyed()));
+  return true;
+}
+for (const arg of process.argv.slice(1)) queueMarketerLink(arg);
+
 app.on("open-url", (event, url) => {
+  if (queueMarketerLink(url)) { event.preventDefault(); return; }
   if (queueBrowserLink(url)) { event.preventDefault(); activateExistingWindow(BrowserWindow.getAllWindows()); return; }
   if (!queuePackageInstall(url)) return;
   event.preventDefault();
@@ -286,7 +313,7 @@ app.on("open-url", (event, url) => {
 for (const arg of process.argv.slice(1)) queueBrowserLink(arg);
 
 app.on("second-instance", (_event, commandLine) => {
-  for (const arg of commandLine) queueBrowserLink(arg);
+  for (const arg of commandLine) { queueMarketerLink(arg); queueBrowserLink(arg); }
   const packageUrl = packageUrlFromCommandLine(commandLine);
   if (packageUrl) pendingPackageInstallUrl = packageUrl;
   activateExistingWindow(BrowserWindow.getAllWindows());
@@ -349,6 +376,9 @@ const serverSupervisor = createServerSupervisor({
     }
   },
   onUnavailable() {
+    // Includes crashes, failed boot and shutdown. Old pending browser calls
+    // must lose authority before a replacement server can start work.
+    sharedPrimaryBrowser.releaseAll();
     serverReady = false;
     serverProc = null;
     companyBackupSchedule?.reconcile();
@@ -1243,13 +1273,34 @@ function toolsBrowserAppOrigins() {
   return origins;
 }
 
-const sharedPrimaryBrowser = createSharedBrowser({ contentsFromId: id => webContents.fromId(id), notify: state => { if (mainWindowShowsLocalUi()) mainWindow.webContents.send("primary-browser:shared-state", state); } });
+// The bot drives the person's own browser tabs (see shared-browser.mjs). The
+// renderer reports its tab strip; main asks it to open/show/close tabs.
+const sharedPrimaryBrowser = createSharedBrowser({
+  contentsFromId: id => webContents.fromId(id),
+  urlAllowed: url => Boolean(webURL(url)) && toolsBrowserUrlAllowed(url, { appOrigins: toolsBrowserAppOrigins }),
+  guestValid: (guestId, profileId) => {
+    try {
+      const guest = webContents.fromId(guestId);
+      return Boolean(guest && !guest.isDestroyed() && guest.getType() === "webview" && guest.hostWebContents === mainWindow?.webContents && toolsBrowserRegistry.source(guest)?.partition === primaryBrowser().partition(profileId));
+    } catch { return false; }
+  },
+  host: {
+    available: () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindowShowsLocalUi() && !mainWindow.webContents.isLoadingMainFrame()),
+    reveal: () => {
+      if (!mainWindowShowsLocalUi()) return;
+      pendingBrowserView = true;
+      try { mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true }); } catch {}
+    },
+    command: command => { if (!mainWindowShowsLocalUi() || !sharedPrimaryBrowser.mounted()) return false; mainWindow.webContents.send("primary-browser:agent-command", command); return true; },
+  },
+  notify: state => { if (mainWindowShowsLocalUi()) mainWindow.webContents.send("primary-browser:agent-state", state); },
+});
 let primaryBrowserController, browserContentBlocker, primaryBrowserFocus;
 function contentBlocker() {
   return browserContentBlocker ??= createContentBlocker({ root:path.join(app.getPath("userData"),"browser"), filters:["easylist.txt","easyprivacy.txt"].map(file=>fs.readFileSync(new URL(`./resources/adblock/${file}`,import.meta.url),"utf8")).join("\n"), contentsFromId:id=>webContents.fromId(id) });
 }
 function primaryBrowser() {
-  return primaryBrowserController ??= createPrimaryBrowserController({ root: path.join(app.getPath("userData"), "browser"), encryption: safeStorage, registry: toolsBrowserRegistry, contentBlocker: contentBlocker(), sessionFromPartition: p => session.fromPartition(p), contentsFromId: id => webContents.fromId(id), dialog, owner: () => mainWindow, shell, shared: sharedPrimaryBrowser });
+  return primaryBrowserController ??= createPrimaryBrowserController({ root: path.join(app.getPath("userData"), "browser"), encryption: safeStorage, registry: toolsBrowserRegistry, contentBlocker: contentBlocker(), sessionFromPartition: p => session.fromPartition(p), contentsFromId: id => webContents.fromId(id), dialog, owner: () => mainWindow, shell });
 }
 const toolsBrowserRegistry = createWorkspaceBrowserRegistry({
   onDownload: (p, row, file) => primaryBrowserController?.download(p, row, file),
@@ -1326,6 +1377,18 @@ app.on("web-contents-created", (_event, contents) => {
       });
     };
     registerPrimaryGuest(guest);
+    // Background tabs throttle; a crashed tab reloads instead of staying grey.
+    // Tabs the bot drives are handled (and un-throttled) by shared-browser.mjs.
+    if (primaryBrowserController?.profileFor(partition)) {
+      guest.setBackgroundThrottling(true);
+      let crashes = [];
+      guest.on("render-process-gone", (_event, details) => {
+        if (details?.reason === "clean-exit") return;
+        const now = Date.now(); crashes = crashes.filter(at => now - at < 60000); crashes.push(now);
+        if (crashes.length <= 3) setTimeout(() => { try { if (!guest.isDestroyed()) guest.reload(); } catch {} }, 500);
+      });
+      guest.once("destroyed", () => { try { if (guest.debugger.isAttached()) guest.debugger.detach(); } catch {} });
+    }
     attachToolsBrowserGuest(guest, {
       appOrigins: toolsBrowserAppOrigins,
       nativePopups: Boolean(primaryBrowserController?.profileFor(partition)),
@@ -1427,16 +1490,30 @@ async function startServerOn(port) {
   }));
   proc.stdout?.on("data", (d) => slog(`[out] ${String(d).trimEnd()}`));
   proc.stderr?.on("data", (d) => slog(`[err] ${String(d).trimEnd()}`));
+  const receiveComputerPreview = createComputerPreviewHandler({
+    isCurrent: () => serverSupervisor.isCurrent(proc) && !desktopShutdownStarted,
+    allowed: () => !desktopRemoteAccess && (process.platform !== "darwin" || systemPreferences.getMediaAccessStatus("screen") === "granted"),
+    send: message => proc.postMessage(message),
+    capture: async () => {
+      const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 800 } });
+      const primaryId = String(screen.getPrimaryDisplay().id);
+      const source = sources.find(item => item.display_id === primaryId) ?? sources[0];
+      if (!source || source.thumbnail.isEmpty()) throw new Error("This computer has no available screen preview");
+      return source.thumbnail.toPNG().toString("base64");
+    },
+  });
   proc.on("message", (message) => {
     if (!serverSupervisor.isCurrent(proc)) return;
     try {
+      if (receiveComputerPreview(message)) return;
       if (message?.type === "bos:shared-browser-request") {
         if (typeof message.requestId !== "string" || !Number.isFinite(message.deadline) || message.deadline < Date.now()) return;
-        void sharedPrimaryBrowser.rpc(message.botId, message.threadId, message.method, message.params, message.deadline).then(result => {
+        void sharedPrimaryBrowser.rpc(message.botId, message.threadId, message.method, message.params, message.deadline, { generation: message.generation, profileId: message.profileId }).then(result => {
           if (serverSupervisor.isCurrent(proc)) proc.postMessage({ type: "bos:shared-browser-result", requestId: message.requestId, ok: true, result });
         }, error => { if (serverSupervisor.isCurrent(proc)) proc.postMessage({ type: "bos:shared-browser-result", requestId: message.requestId, ok: false, error: error.message }); });
         return;
       }
+      if (message?.type === "bos:shared-browser-release") { if (typeof message.threadId === "string") sharedPrimaryBrowser.release(message.threadId, message.generation); return; }
       if (trustedApprovalMode.receive(proc, message)) return;
       if (managedDesktopRelay.receive(proc, message)) return;
       if (windowsUpdateContract?.receive(proc, message)) return;
@@ -1890,6 +1967,9 @@ ipcMain.on("desktop:focus-window", (event) => {
   if (process.platform === "darwin") app.focus({ steal: true });
 });
 
+// Approval, question, done and bot-message banners (electron/attention-notifications.mjs).
+registerAttentionNotifications({ mainWindow: () => mainWindow });
+
 // ── environments: this computer's server, or a paired remote one ──────
 // The app switches by loading the chosen server's own UI (electron/menu.mjs).
 // Only {id, name, origin} is stored here; the session credential is the
@@ -2195,6 +2275,8 @@ function createWindow() {
       // Only for the side-panel Browser tool. Every attach is hardened and
       // forced into its own partition by the will-attach-webview guard.
       webviewTag: true,
+      // Chromium's pdf viewer, for pdfs in the workspace files tab.
+      plugins: true,
       // The preload exposes the full bridge only to this origin (see preload.cjs).
       // Companion client mode still serves the bundled UI from its own
       // loopback relay, so it is a trusted local page while also needing the
@@ -2261,6 +2343,15 @@ function createWindow() {
   // server, inside this preload-bearing window.
   win.webContents.on("will-frame-navigate", (details) => {
     if (details.isMainFrame) return;
+    // A chat HTML preview (src/components/HtmlArtifact.tsx) is a sandboxed
+    // srcdoc page with no network. It may not navigate itself anywhere else,
+    // which would load a page without that CSP. Match the current srcdoc
+    // document, not the frame name, which the page itself can change.
+    if (details.frame?.url === "about:srcdoc" && !/^about:(?:srcdoc|blank)$/.test(details.url)) {
+      details.preventDefault();
+      slog("blocked navigation out of a chat HTML preview");
+      return;
+    }
     let target = null;
     let page = null;
     try {
@@ -2290,7 +2381,7 @@ function createWindow() {
     });
     void workspaceMenuAction(() => switchEnvironment(LOCAL_ID));
   });
-  win.webContents.on("did-finish-load", () => { deliverPackageInstall(win); deliverBrowserLinks(); });
+  win.webContents.on("did-finish-load", () => { deliverPackageInstall(win); deliverBrowserLinks(); deliverMarketerLink(win); });
   win.webContents.on("did-finish-load", () => void offerComputerSharing(win));
 
   // Native context menu for text inputs — without this, right-click does
@@ -2424,6 +2515,8 @@ function createWindow() {
 
 // Local-control screen preview — served from the main process so the Screen
 // Recording permission prompt attributes to the app, never the server
+ipcMain.handle("marketer:pending", localOnly("marketer:pending", () => marketerIntent().pending()));
+ipcMain.handle("marketer:clear", localOnly("marketer:clear", () => marketerIntent().clear()));
 ipcMain.handle("screen:frame", localOnly("screen:frame", async () => {
   if (process.platform !== "darwin") return null;
   const sources = await desktopCapturer.getSources({
@@ -2470,6 +2563,9 @@ ipcMain.handle("primary-browser:action", localOnly("primary-browser:action", asy
     return true;
   }
   if (action === "consume-external-link") { const pending=pendingBrowserView;pendingBrowserView=false;return pending; }
+  if (action === "agent-tabs") return sharedPrimaryBrowser.reportTabs(input);
+  if (action === "reveal") { pendingBrowserView = true; mainWindow.webContents.send("primary-browser:external-url", { profileId: primaryBrowser().store.profiles().selected, url: "", reveal: true }); return true; }
+  if (action === "agent-take-over" || action === "agent-give-back" || action === "agent-stop") return sharedPrimaryBrowser.person(action.slice(6), typeof input?.tabId === "string" ? input.tabId : "");
   if (action === "default-browser") {
     if (process.platform === "darwin") { await registerBrowserApp({packaged:app.isPackaged,executable:app.getPath("exe")}); await shell.openExternal("x-apple.systempreferences:com.apple.Desktop-Settings.extension"); return true; }
     return app.setAsDefaultProtocolClient("http") && app.setAsDefaultProtocolClient("https");
@@ -2594,6 +2690,17 @@ ipcMain.handle("desktop:open-external", localOnly("desktop:open-external", async
   await shell.openExternal(externalWebUrl(rawUrl));
   return true;
 }));
+
+// Thread workspace tabs moved into their own window, and files opened in
+// another app. See electron/workspace-window.mjs.
+const workspaceWindows = createWorkspaceWindows({
+  BrowserWindow, shell, externalWebUrl, icon: APP_ICON,
+  preload: path.join(__dirname, "preload.cjs"),
+  rendererArguments: () => [`--bos-channel=${STAGING ? "staging" : "live"}`, ...desktopCompanionRendererArguments(rendererOrigin(), desktopRemoteAccess),
+    ...(app.isPackaged && !desktopRemoteAccess ? ["--omb-company-desktop=1"] : [])],
+});
+ipcMain.handle("workspace:open-window", localOnly("workspace:open-window", (event, spec) => workspaceWindows.open(event.sender, spec)));
+ipcMain.handle("workspace:open-in", localOnly("workspace:open-in", (_event, filePath, target) => workspaceWindows.openIn(filePath, target)));
 
 // The Box VNC viewer must be a top-level page for its token exchange. A
 // sandboxed modal BrowserWindow satisfies that requirement while keeping the
@@ -3062,6 +3169,7 @@ setCuaStateListener((connection) => {
 });
 
 app.whenReady().then(async () => {
+  configureAboutPanel(app, process.resourcesPath);
   void registerBrowserApp({packaged:app.isPackaged,executable:app.getPath("exe")}).catch(()=>slog("Browser registration could not refresh"));
   configureToolsBrowserSession(session.fromPartition(TOOLS_BROWSER_PARTITION), { appOrigins: toolsBrowserAppOrigins });
   session.defaultSession.on("will-download", (_event, item) => {

@@ -722,7 +722,7 @@ export class RemoteBotBridge {
     const remoteThread = `/api/threads/${threadId}`;
     if (rest === "messages" && method === "GET") {
       const query = new URLSearchParams();
-      for (const key of ["limit", "before", "around"]) {
+      for (const key of ["limit", "before", "around", "turns"]) {
         const value = search.get(key);
         if (value !== null) {
           if (!ID.test(value)) return failure(400, `${key} is invalid`);

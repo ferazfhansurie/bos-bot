@@ -53,12 +53,21 @@ describe("BosUpdate", () => {
     expect(html).toContain("Restart");
   });
 
-  it("no candidate: check button and the guard's reason", () => {
-    const idle = { ...status, state: "idle" as const, candidate: undefined, reason: "already on the newest prod build" };
+  it("no candidate: check button and one up-to-date line", () => {
+    const idle = { ...status, state: "idle" as const, candidate: undefined, reason: "already on the newest prod build", lastResult: { state: "done" as const, at: "now", to: status.current } };
     const html = renderToStaticMarkup(createElement(UpdatesPanel, { view: view({ status: idle, state: "idle" }), busy: [], onApply: noop, onRestart: noop, onCheck: noop }));
     expect(html).toContain("Check for updates");
-    expect(html).toContain("already on the newest prod build");
     expect(html).toContain("Up to date");
+    // the badge is the whole story: no second "latest"/"updated" line repeats it
+    expect(html).not.toContain("already on the newest prod build");
+    expect(html).not.toContain("Updated to");
+  });
+
+  it("no candidate and not current: the guard's reason is the status line", () => {
+    const idle = { ...status, state: "idle" as const, candidate: undefined, reason: "check failed: source unavailable" };
+    const html = renderToStaticMarkup(createElement(UpdatesPanel, { view: view({ status: idle, state: "idle" }), busy: [], onApply: noop, onRestart: noop, onCheck: noop }));
+    expect(html).toContain("check failed: source unavailable");
+    expect(html).not.toContain("Up to date");
   });
 
   it("does not call a missing full shell current", () => {

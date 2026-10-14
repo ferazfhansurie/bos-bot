@@ -14,10 +14,17 @@ describe("first business assignment", () => {
     expect(text).toContain("Do not publish, spend or contact anyone without asking");
   });
   it("lets BOS own the work directly and states prototype limits",()=>{
-    for(const outcome of FIRST_OUTCOMES){
+    for(const outcome of FIRST_OUTCOMES.filter(item=>item.id!=="digital-marketer")){
       const text=firstAssignment({...brief,outcome:outcome.id,approach:"bos"});
       expect(text).toContain("Work with me directly as my team coordinator");expect(text).toContain(outcome.deliverable);
     }
+  });
+  it("starts a private marketer intake without claiming paid access or requiring accounts",()=>{
+    const text=firstAssignment({...brief,outcome:"digital-marketer"});
+    expect(text).toContain(brief.business);expect(text).toContain(brief.customers);
+    expect(text).toContain("initial marketing audit or plan");expect(text).toContain("Account connections can come later");
+    expect(text).toContain("one essential question at a time");
+    expect(text).not.toContain("coordinate_bots");
   });
   it("rejects missing context and unknown outcomes",()=>{
     for(const patch of [{business:" "},{customers:""},{outcome:"unknown"}])expect(()=>firstAssignment({...brief,...patch})).toThrow();

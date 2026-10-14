@@ -1,10 +1,12 @@
-// Owner-configured client-only replies. No proactive sends, groups, or retries.
+// Owner-configured client-only replies. No groups or retries. Proactive sends only
+// with an explicit outreach grant, and only to the policy's named chat list.
 import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, openSync, closeSync, fsyncSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { WhatsAppStore, WhatsAppStoredMessage } from "./whatsapp-store.ts";
 
-export interface ReplyPolicy { accountId: string; chatIds: string[] | null; autoDispatch: boolean; enabledAt: number }
+export interface ReplyPolicy { accountId: string; chatIds: string[] | null; autoDispatch: boolean; enabledAt: number; outreach?: boolean }
+export interface SendInput { account_id: string; chat_id: string; text: string; send_key: string }
 export interface ReplyInput { account_id: string; chat_id: string; message_id: string; text: string }
 export interface ReplyReceipt { state: "sending" | "submitted" | "outcome_unknown"; messageId?: string; fingerprint: string }
 export interface ReplyTransport {
@@ -12,7 +14,9 @@ export interface ReplyTransport {
   reply(input: ReplyInput, authorized: () => boolean): Promise<string>;
 }
 const individual = /^\d{6,20}@c\.us$/;
-const chat = /^(\d{6,20}@c\.us|[\d-]{6,40}@g\.us)$/;
+// WhatsApp now addresses many one-to-one chats by a privacy id (<digits>@lid) instead of the phone number
+const person = /^(\d{6,20}@c\.us|\d{6,25}@lid)$/;
+const chat = /^(\d{6,20}@c\.us|\d{6,25}@lid|[\d-]{6,40}@g\.us)$/;
 
 export class WhatsAppReplies {
   private root: string;
@@ -45,8 +49,8 @@ export class WhatsAppReplies {
     if (value === null) { if (policies[botId]) policies[botId] = { ...policies[botId], chatIds: [], enabledAt: this.now() }; }
     else {
       const p = value as ReplyPolicy;
-      if (!p || !individual.test(p.accountId) || (p.chatIds !== null && (!Array.isArray(p.chatIds) || p.chatIds.length > 200 || p.chatIds.some(id => typeof id !== "string" || !chat.test(id) || id === p.accountId))) || (p.autoDispatch !== undefined && typeof p.autoDispatch !== "boolean") || (p.chatIds === null && p.autoDispatch === true)) throw new Error("accountId required; chatIds is an explicit list or null for owner-granted shared access. automatic dispatch requires a named chat list");
-      policies[botId] = { accountId: p.accountId, chatIds: p.chatIds === null ? null : [...new Set(p.chatIds)], autoDispatch: p.autoDispatch === true, enabledAt: this.now() };
+      if (!p || !individual.test(p.accountId) || (p.chatIds !== null && (!Array.isArray(p.chatIds) || p.chatIds.length > 200 || p.chatIds.some(id => typeof id !== "string" || !chat.test(id) || id === p.accountId))) || (p.autoDispatch !== undefined && typeof p.autoDispatch !== "boolean") || (p.chatIds === null && p.autoDispatch === true) || (p.outreach !== undefined && typeof p.outreach !== "boolean") || (p.chatIds === null && p.outreach === true)) throw new Error("accountId required; chatIds is an explicit list or null for owner-granted shared access. automatic dispatch and outreach require a named chat list");
+      policies[botId] = { accountId: p.accountId, chatIds: p.chatIds === null ? null : [...new Set(p.chatIds)], autoDispatch: p.autoDispatch === true, enabledAt: this.now(), ...(p.outreach === true ? { outreach: true } : {}) };
     }
     this.write("reply-policies.json", policies);
   }
@@ -94,6 +98,42 @@ export class WhatsAppReplies {
       receipt = messageId ? { state: "submitted", messageId, fingerprint } : { state: "outcome_unknown", fingerprint };
     } catch { receipt = { state: "outcome_unknown", fingerprint }; }
     finally { clearTimeout(timer); }
+    const latest = this.read<Record<string, ReplyReceipt>>("reply-receipts.json", {});
+    latest[key] = receipt;
+    this.write("reply-receipts.json", latest);
+    return receipt;
+  }
+  /** Outreach grant: start or continue a conversation in a named individual chat
+   * without an incoming message or time window. One attempt per send_key. */
+  async send(botId: string, input: SendInput, authorized: () => boolean = () => true): Promise<ReplyReceipt> {
+    if (!input || typeof input.account_id !== "string" || typeof input.chat_id !== "string" || typeof input.send_key !== "string" || !/^[\w.:-]{1,120}$/.test(input.send_key) || typeof input.text !== "string" || !input.text.trim() || input.text.length > 4000)
+      throw new Error("account_id, chat_id, send_key (1–120 word characters) and text (1–4000 characters) required");
+    const granted = () => {
+      const p = this.policy(botId);
+      return !!p && p.outreach === true && Array.isArray(p.chatIds) && p.chatIds.includes(input.chat_id) && p.accountId === input.account_id;
+    };
+    const transport = this.transport();
+    if (!granted() || !transport || transport.accountId() !== input.account_id || !person.test(input.chat_id) || input.chat_id === input.account_id)
+      throw new Error("outreach is not granted for this account and chat");
+    const key = createHash("sha256").update(JSON.stringify([input.account_id, "send", botId, input.send_key])).digest("hex");
+    const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    const ledger = this.read<Record<string, ReplyReceipt>>("reply-receipts.json", {});
+    if (ledger[key]) {
+      if (ledger[key].fingerprint !== fingerprint) throw new Error("this send_key already has a send attempt; no retry allowed");
+      return { ...ledger[key], state: ledger[key].state === "sending" ? "outcome_unknown" : ledger[key].state };
+    }
+    ledger[key] = { state: "sending", fingerprint };
+    this.write("reply-receipts.json", ledger);
+    let receipt: ReplyReceipt;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const messageId = await Promise.race([transport.reply({ account_id: input.account_id, chat_id: input.chat_id, message_id: "", text: input.text }, () => authorized() && granted()), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("send timed out")), 30_000); })]);
+      receipt = messageId ? { state: "submitted", messageId, fingerprint } : { state: "outcome_unknown", fingerprint };
+    } catch {
+      receipt = { state: "outcome_unknown", fingerprint };
+    } finally {
+      clearTimeout(timer);
+    }
     const latest = this.read<Record<string, ReplyReceipt>>("reply-receipts.json", {});
     latest[key] = receipt;
     this.write("reply-receipts.json", latest);

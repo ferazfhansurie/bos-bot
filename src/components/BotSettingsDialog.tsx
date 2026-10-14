@@ -20,6 +20,7 @@ import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { AccessSection } from "./bot-settings/AccessSection";
 import { ModelSection } from "./bot-settings/ModelSection";
 import { PermissionsSection } from "./bot-settings/PermissionsSection";
+import { ChannelsSection } from "./bot-settings/ChannelsSection";
 import { VoiceSection } from "./bot-settings/VoiceSection";
 import { HistorySection, type HistoryRow } from "./bot-settings/HistorySection";
 import { UsageSection } from "./bot-settings/UsageSection";
@@ -271,6 +272,8 @@ export function BotSettingsDialog({ bot }: { bot: Bot }) {
         return <ModelSection bot={bot} />;
       case "permissions":
         return <PermissionsSection bot={bot} derived={derived} />;
+      case "channels":
+        return <ChannelsSection key={bot.id} bot={bot} />;
       case "voice":
         return <VoiceSection bot={bot} derived={derived} />;
       case "history":

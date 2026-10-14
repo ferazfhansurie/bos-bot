@@ -7,6 +7,9 @@ import { BOS_ONBOARDING_VERSION } from "../../shared/bos-onboarding.js";
 // see the same hints as already dismissed.
 
 export interface OnboardingStatus {
+  pendingOffer?: "generic" | "digital-marketer";
+  marketerAssignment?: import("../../shared/bos-onboarding.js").FirstAssignment;
+  marketerBrief?: import("../../shared/bos-onboarding.js").BusinessBrief;
   firstAssignment?: import("../../shared/bos-onboarding.js").FirstAssignment;
   businessBrief?: import("../../shared/bos-onboarding.js").BusinessBrief;
   /** ISO timestamp; "" until the welcome flow has been finished or skipped. */
@@ -67,7 +70,7 @@ export function hintSeenPatch(
 
 // ── beats ──────────────────────────────────────────────────────────────
 
-export type BeatId = "hello" | "reel" | "engines" | "permissions" | "phone" | "bot";
+export type BeatId = "hello" | "reel" | "engines" | "import" | "permissions" | "phone" | "bot";
 
 export interface BeatOptions {
   /** The desktop app can ask for the microphone; a browser cannot. */
@@ -75,6 +78,8 @@ export interface BeatOptions {
   /** The feature reel ships in a later phase; it is a beat the machine
    * already knows so that turning it on is one flag. */
   reel: boolean;
+  /** A Claude Code, Codex or Cursor setup was found on this computer. */
+  setupImport?: boolean;
 }
 
 /** Beats in order for this session. The exit beat is always last so the
@@ -83,6 +88,7 @@ export function beatsFor(options: BeatOptions): BeatId[] {
   const beats: BeatId[] = ["hello"];
   if (options.reel) beats.push("reel");
   beats.push("engines");
+  if (options.setupImport) beats.push("import");
   if (options.dictation) beats.push("permissions");
   beats.push("phone", "bot");
   return beats;
@@ -108,6 +114,7 @@ export function beatWidth(beat: BeatId): number {
     case "engines":
       return 680;
     case "phone":
+    case "import":
       return 620;
     case "reel":
       return 720;
@@ -130,4 +137,12 @@ export function reducedMotion(): boolean {
 /** Recovery remains pinned to its original bot, never a replacement coordinator. */
 export function teamSetupBot<T extends { id: string; hidden?: boolean; chiefOfStaff?: boolean }>(bots: T[], saved?: { botId: string }): T | null {
   return (saved ? bots.find(bot => bot.id === saved.botId) : bots.find(bot => !bot.hidden && bot.chiefOfStaff)) ?? null;
+}
+
+/** Pick the saved local setup after restart; public offer intent is not identity. */
+export function onboardingEntry(status: Partial<OnboardingStatus> | undefined, offer?: "digital-marketer") {
+  const marketer = offer === "digital-marketer" || status?.pendingOffer === "digital-marketer"
+    || (!status?.firstAssignment && Boolean(status?.marketerAssignment || status?.marketerBrief));
+  return { marketer, brief: marketer ? status?.marketerBrief : status?.businessBrief,
+    assignment: marketer ? status?.marketerAssignment : status?.firstAssignment };
 }

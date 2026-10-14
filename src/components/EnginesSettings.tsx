@@ -17,6 +17,8 @@ import { AddClaudeAccount, ClaudeAccountSettings } from "./ClaudeAccountSettings
 import { FreeModelSetup } from "./onboarding/FreeModelSetup";
 import { isFreeCloud } from "@/lib/engine-rail";
 import { CodexAccountSettings } from "./CodexAccountSettings";
+import { AddModelCard, RemoveApiConnection, isApiConnection } from "./AddModelCard";
+import { ApiKeyRow } from "./ApiKeys";
 
 interface ProbeResult {
   ok: boolean;
@@ -257,6 +259,12 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
     {!engineReady(instance) && <p className="mt-2 text-[12px] text-ink-secondary">{t("organization.engineUnavailable")}</p>}
   </EngineCard>;
 
+  if (isApiConnection(instance)) return <EngineCard instance={instance}>
+    <ProviderIconPicker instance={instance} />
+    {instance.snapshot.warning && <EngineWarningNotice warning={instance.snapshot.warning} className="mt-3" />}
+    <RemoveApiConnection instance={instance} />
+  </EngineCard>;
+
   if (isFreeCloud(instance)) return <EngineCard instance={instance}>
     <p className="text-[13px] leading-relaxed text-ink-secondary">Use the free models connection above to connect or reconnect OpenRouter. Free models run in the cloud and have provider usage limits.</p>
   </EngineCard>;
@@ -343,12 +351,28 @@ function EngineRow({ instance }: { instance: InstanceInfo }) {
   );
 }
 
+// Agent CLI engines offered under "Add an engine", in the order they list.
+// Claude and Codex always sit in the main list; any engine here moves up
+// there once it is installed and signed in.
+const ADDABLE_ENGINES = [
+  "opencodeGo", "piAgent", "antigravityAgent", "geminiAgent", "cursorAgent",
+  "droidAgent", "grokAgent", "kimiAgent", "qwenAgent", "hermesAgent",
+];
+
+function addableEngine(instance: InstanceInfo): boolean {
+  return ADDABLE_ENGINES.includes(instance.driverKind) && !instance.readOnly && !engineReady(instance);
+}
+
 export function EnginesSettings() {
   const { state } = useStore();
   // every KNOWN-driver instance has cliDefault; unknown-driver shadows have
   // neither unless an override was set. Including them keeps a Reset-able row
   // (and a Set CLI… path) for engines the running build doesn't recognize.
-  const rows = state.instances.filter((i) => isFreeCloud(i) || i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable");
+  const known = state.instances.filter((i) => isFreeCloud(i) || isApiConnection(i) || i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable");
+  const rows = known.filter((i) => !addableEngine(i));
+  const addable = known
+    .filter(addableEngine)
+    .sort((a, b) => ADDABLE_ENGINES.indexOf(a.driverKind) - ADDABLE_ENGINES.indexOf(b.driverKind));
 
   return (
     <div className="flex min-w-0 flex-col gap-6 pb-2">
@@ -361,7 +385,26 @@ export function EnginesSettings() {
       </div>
       <FreeModelSetup />
       <EngineSections instances={rows} renderEngine={(instance) => <EngineRow instance={instance} />} />
+      <section aria-labelledby="add-engine-title" className="flex min-w-0 flex-col gap-3 border-t border-hairline/40 pt-5">
+        <div>
+          <h2 id="add-engine-title" className="text-[15px] font-semibold tracking-tight text-ink">{t("engines.add.title")}</h2>
+          <p className="mt-1 max-w-lg text-[12.5px] leading-relaxed text-ink-secondary">{t("engines.add.subtitle")}</p>
+        </div>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))] items-start gap-3">
+          {addable.map((instance) => <div key={instance.instanceId} className="contents"><EngineRow instance={instance} /></div>)}
+          {addable.length === 0 && <p className="col-span-full text-[12.5px] text-ink-secondary">{t("engines.add.allAdded")}</p>}
+          <AddModelCard />
+        </div>
+      </section>
       <div className="border-t border-hairline/40 pt-4"><AddClaudeAccount /></div>
+      {/* Claude Code on a workspace Anthropic key instead of a sign-in. Other
+          providers' keys go through Add an engine → Any other model above. */}
+      <details className="rounded-xl border border-hairline/40 px-4 py-3">
+        <summary className="cursor-pointer text-[13px] text-ink-secondary hover:text-ink">{t("engines.builtInKeys")}</summary>
+        <div className="mt-4">
+          <ApiKeyRow section="anthropic" testProvider="anthropic" />
+        </div>
+      </details>
     </div>
   );
 }

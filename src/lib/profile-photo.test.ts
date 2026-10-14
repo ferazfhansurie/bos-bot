@@ -9,17 +9,22 @@ describe("profile persistence", () => {
     await saveProfileField("email", " ADA@EXAMPLE.COM ", request);
     expect(JSON.parse(request.mock.calls[1]![1].body).profile).toEqual({ email: "ada@example.com" });
   });
-  it("removes only the profile photo using the existing scoped route", async () => {
-    const request = vi.fn().mockResolvedValue({ avatarUrl: "" });
+  it("removes only the profile photo using the existing scoped route, naming the photo it replaces", async () => {
+    const request = vi.fn(async (path: string) => path === "/api/config" ? { profile: { avatarUrl: "/api/attachments/mine.jpg" } } : { avatarUrl: "" });
     expect(await saveProfilePhoto(null, request)).toBe("");
-    expect(request.mock.calls[0]).toEqual(["/api/multiplayer/profile-photo", { method: "PUT", body: '{"photo":null}' }]);
+    expect(request.mock.calls[1]).toEqual(["/api/multiplayer/profile-photo", { method: "PUT", body: '{"photo":null,"expected":"/api/attachments/mine.jpg"}' }]);
+  });
+  it("names an empty photo when the owner has none yet", async () => {
+    const request = vi.fn(async (path: string, _init?: RequestInit) => path === "/api/config" ? { profile: { name: "Ada" } } : { avatarUrl: "/api/attachments/new.jpg" });
+    expect(await saveProfilePhoto("/9j/AA==", request)).toBe("/api/attachments/new.jpg");
+    expect(JSON.parse(request.mock.calls[1]![1]!.body as string)).toEqual({ photo: "/9j/AA==", expected: "" });
   });
   it("propagates save failure instead of replacing the current avatar", async () => {
     const request = vi.fn().mockRejectedValue(new Error("offline"));
     await expect(saveProfilePhoto("jpeg", request)).rejects.toThrow("offline");
   });
   it("rejects invalid saved avatar paths", async () => {
-    await expect(saveProfilePhoto("jpeg", vi.fn().mockResolvedValue({ avatarUrl: "https://tracking.invalid/a.jpg" }))).rejects.toThrow("saved profile photo");
+    await expect(saveProfilePhoto("jpeg", vi.fn().mockResolvedValue({ profile: {}, avatarUrl: "https://tracking.invalid/a.jpg" }))).rejects.toThrow("saved profile photo");
   });
 });
 describe("profile image preparation", () => {

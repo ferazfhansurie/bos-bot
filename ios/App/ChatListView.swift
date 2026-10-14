@@ -99,11 +99,11 @@ struct ChatListView: View {
                     open(room)
                 } else { Task { await refreshShared() } }
             }
-            .task(id: "\(session.connection?.id ?? "")|\(personalAvatar.hashValue)") {
-                guard session.connection != nil else { return }
-                try? await session.setProfilePhoto(personalAvatar.isEmpty ? nil : personalAvatar)
-                await refreshShared()
-            }
+            // No upload on connect: this phone's photo is not the owner photo
+            // of every computer it can reach. Pushing it on each connection
+            // overwrote (or cleared) the other owner's photo whenever someone
+            // paired a phone to a linked Mac. Only an explicit change below
+            // writes, and it names the photo it replaces.
             .onChange(of: session.notificationChat) { _, chat in
                 guard let chat else { return }
                 open(chat)
@@ -135,12 +135,12 @@ struct ChatListView: View {
                 // `-open-chat room-hq`: any chat by id, rooms included
                 let args = ProcessInfo.processInfo.arguments
                 if let i = args.firstIndex(of: "-open-chat"), i + 1 < args.count, path.isEmpty,
-                   let match = session.state.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
+                   let match = session.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
                     open(match.chat)
                 }
                 // `-open-beside oracle`: a second chat in a wide window's side pane
                 if let i = args.firstIndex(of: "-open-beside"), i + 1 < args.count, usesSplit,
-                   let match = session.state.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
+                   let match = session.chatSummaries(activity: activity).first(where: { $0.id == args[i + 1] }) {
                     openBeside(homeChat(match.chat))
                 }
                 if Autopilot.scenario == "switch" { Task { await runSwitchAutopilot() } }
@@ -552,10 +552,15 @@ struct ChatListView: View {
                         }
                         if !personalAvatar.isEmpty {
                             Button("Remove photo", role: .destructive) {
-                                personalAvatar = ""
-                                Task { try? await session.setProfilePhoto(nil); await refreshShared() }
+                                Task {
+                                    guard (try? await session.setProfilePhoto(nil)) != nil else { return }
+                                    personalAvatar = ""
+                                    await refreshShared()
+                                }
                             }
                         }
+                    } footer: {
+                        Text("Changes the owner photo on \(session.connection?.name ?? "this computer") only.")
                     }
                     Section {
                         NavigationLink("Settings & computers") { SettingsView() }
@@ -574,7 +579,10 @@ struct ChatListView: View {
                         let thumbnail = UIGraphicsImageRenderer(size: size).image { _ in
                             photo.draw(in: CGRect(origin: .zero, size: size))
                         }
-                        personalAvatar = thumbnail.jpegData(compressionQuality: 0.85)?.base64EncodedString() ?? ""
+                        guard let encoded = thumbnail.jpegData(compressionQuality: 0.85)?.base64EncodedString(),
+                              (try? await session.setProfilePhoto(encoded)) != nil else { return }
+                        personalAvatar = encoded
+                        await refreshShared()
                     }
                 }
             }
@@ -986,12 +994,12 @@ struct ChatListView: View {
         // A room or bot on another home this phone is also paired with comes
         // twice: once through this computer's link to it, once from that home
         // itself. The home's own copy, with its label, is the one kept.
-        let direct = Set(session.satellites.flatMap { $0.state.chatSummaries(activity: activity).map(\.chat.id) })
+        let direct = Set(session.satellites.flatMap { $0.chatSummaries(activity: activity).map(\.chat.id) })
         let homes = [session] + session.satellites
         let shownHomes = Set(homes.compactMap(\.roomHomeId))
         let shownBotIDs = Set(homes.flatMap { $0.state.bots.filter { $0.remote == nil }.map(\.id) })
         let entries: [(ConversationEntry, Double)] =
-            session.state.chatSummaries(activity: activity)
+            session.chatSummaries(activity: activity)
                 .filter { summary in
                     switch summary.chat {
                     case let .room(room): return room.home == nil || !direct.contains(room.id)
@@ -1001,7 +1009,7 @@ struct ChatListView: View {
                 }
                 .map { (.local($0), $0.lastActivity) }
             + session.satellites.flatMap { home in
-                home.state.chatSummaries(activity: activity)
+                home.chatSummaries(activity: activity)
                     .filter { summary in
                         // Another home's copy of a bot that lives on a home
                         // already in this list (partner's "bos" is this mac's bos).
@@ -1198,7 +1206,7 @@ struct ChatListView: View {
         switch BotConnectionPhase.resolve(refreshing: home.isRefreshing, connecting: home.status == .connecting,
                                           live: home.status == .live) {
         case .checking: return .loading
-        case .awake: return MausState.forChat(chat, in: home.state)
+        case .awake: return MausState.forChat(chat, in: home.state, transcript: home.visibleTranscript(forThread: chat.threadId))
         case .asleep: return .sleeping
         }
     }
@@ -1473,7 +1481,7 @@ struct ChatListView: View {
                 Autopilot.log("SWITCH_SECONDS back \(Date().timeIntervalSince(back))")
             }
             try? await Task.sleep(for: .milliseconds(500))
-            guard let summary = session.state.chatSummaries(activity: activity).first(where: { $0.chat.name == name }) else {
+            guard let summary = session.chatSummaries(activity: activity).first(where: { $0.chat.name == name }) else {
                 Autopilot.log("MISSING \(name)"); continue
             }
             let tapped = Date()
@@ -1504,7 +1512,7 @@ struct ChatListView: View {
     private var activity: ActivityDetail { .hidden }
 
     private var chats: [ChatSummary] {
-        let all = session.state.chatSummaries(activity: activity)
+        let all = session.chatSummaries(activity: activity)
         guard !query.isEmpty else {
             // rooms live in the strip; the list is bots
             return all.filter { if case .bot = $0.chat { return true } else { return false } }
@@ -1529,7 +1537,7 @@ struct ChatListView: View {
 
     private func summaries(for bots: [Bot]) -> [ChatSummary] {
         let ids = Set(bots.map(\.id))
-        return session.state.chatSummaries(activity: activity).filter { summary in
+        return session.chatSummaries(activity: activity).filter { summary in
             if case let .bot(bot) = summary.chat { return ids.contains(bot.id) }
             return false
         }

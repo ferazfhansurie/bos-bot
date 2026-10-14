@@ -11,7 +11,6 @@ import {
   companionAccountActionError,
   companionPairingMode,
   deriveCompanionPanelStatus,
-  deriveTailscalePairingStatus,
   loadCompanionBridgeState,
   pairingSurfaceCopy,
   shouldHydrateCompanionEmail,
@@ -196,46 +195,17 @@ describe("companion pairing availability", () => {
   });
 });
 
-describe("Tailscale pairing onboarding", () => {
-  it("keeps HTTPS as the recommended default surface", () => {
+describe("pairing surface copy", () => {
+  it("leads with the one secure route and names a fallback only when one is in use", () => {
     expect(pairingSurfaceCopy({ localFallback: false, tailscaleFallback: false })).toEqual({
-      title: "Secure HTTPS pairing",
-      subtitle: "Recommended — the simplest setup, and it keeps working when the paired device leaves this Wi-Fi.",
+      title: "Connect your phone or another computer",
+      subtitle: "Sign in once, then scan the code. It keeps working away from home.",
     });
     expect(pairingSurfaceCopy({ localFallback: false, tailscaleFallback: true }).title).toBe(
       "Tailscale pairing",
     );
-  });
-
-  it("explains every step between unchecked and ready", () => {
-    expect(deriveTailscalePairingStatus({ enabled: false }, false)).toMatchObject({
-      kind: "unchecked",
-      detail: expect.stringContaining("turns on Remote access"),
-    });
-    expect(deriveTailscalePairingStatus({ enabled: true }, false).kind).toBe("unavailable");
-    expect(deriveTailscalePairingStatus({
-      enabled: true,
-      tailscale: "100.99.1.2",
-    }, false).kind).toBe("magicdns");
-    expect(deriveTailscalePairingStatus({
-      enabled: true,
-      tailscale: "100.99.1.2",
-      tailnetName: "mac.tail1234.ts.net",
-    }, true)).toMatchObject({
-      kind: "ready",
-      title: "Ready on mac.tail1234.ts.net",
-    });
-  });
-
-  it("surfaces sidecar failures instead of pretending Tailscale is merely absent", () => {
-    expect(deriveTailscalePairingStatus({
-      enabled: true,
-      error: "the companion is not responding",
-    }, false)).toEqual({
-      kind: "error",
-      title: "Remote access needs attention",
-      detail: "the companion is not responding",
-    });
+    expect(pairingSurfaceCopy({ localFallback: true, tailscaleFallback: false }).title).toBe(
+      "Direct Wi-Fi pairing",
+    );
   });
 });
-// branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support

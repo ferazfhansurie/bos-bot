@@ -14,6 +14,7 @@ import type { BotProfilePatch } from "./bot-profile.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR, EVENTS_DIR, NATIVE_DIR, loadBrowserProfileIdAliases, loadConfig, defaultApprovalMode } from "./config.ts";
 import * as mdb from "./message-db.ts";
+import { TURN_PAGE_ROW_MAX, turnPageStart } from "./turn-page.ts";
 import { runCommand, type Command } from "./commands.ts";
 import { workspaceDir } from "./workspace.ts";
 import { newId, type ModelSelection } from "./contracts.ts";
@@ -332,6 +333,9 @@ export function titleFromLlm(raw: string): string | null {
  * server-private (stripped by wireBot). avatarUrl is optional in the record
  * but always present (string | null) on the wire, so the record widens it. */
 export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
+  /** Atomic receipt for the local digital marketer setup action. Server-only. */
+  onboardingOffer?: "digital-marketer";
+  onboardingOfferAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment;
   /** Per-room member quota recovery, separate from defaults and private tasks. */
   roomModelFallbacks?: Record<string, NonNullable<TaskRecord["modelFallback"]> & { mode: ApprovalMode }>;
   /** every task this bot has, newest first */
@@ -365,7 +369,7 @@ export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
  * WireTask[], avatarUrl is coerced to always-present). The exactness
  * assertion fails to compile when either side drifts, so a new server
  * field forces a decision — wire-visible or private here. */
-export type BotWirePrivateKeys = "resumeCursors" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt" | "lastRemoteFullReceipt" | "roomModelFallbacks";
+export type BotWirePrivateKeys = "onboardingOffer" | "onboardingOfferAssignment" | "resumeCursors" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt" | "lastRemoteFullReceipt" | "roomModelFallbacks";
 export type BotWireProjection = Pick<BotRecord, Exclude<keyof BotRecord, BotWirePrivateKeys>>;
 export type BotWireProjectionIsExact = AssertExact<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection> & AssertSameKeys<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection>;
 export const botWireProjectionIsExact: BotWireProjectionIsExact = true;
@@ -1260,6 +1264,45 @@ export class Store {
     return { messages: messages.slice(start), hasMore: start > 0, activeLeafId };
   }
 
+  /** A turn page (see turn-page.ts): contiguous raw rows ending before
+   * `before` (or at the newest row) that reach back to the `turns`-th newest
+   * user prompt on the active branch, at least `minRows` and at most
+   * `maxRows` long. `null` means `before` is not a message in this thread.
+   * Without a cursor an uncached thread is read from the tail in growing
+   * steps, so a short reopen never hydrates a ten-thousand-row history. */
+  messagesByTurns(
+    threadId: string,
+    { turns, minRows, maxRows = TURN_PAGE_ROW_MAX, before }: { turns: number; minRows: number; maxRows?: number; before?: string | null },
+  ): { messages: Message[]; hasMore: boolean; activeLeafId: string | null } | null {
+    threadId = this.canonicalThreadId(threadId);
+    if (!before && !this.threads.has(threadId)) {
+      for (let size = Math.max(minRows, 256); ; size = Math.min(size * 4, maxRows)) {
+        const tail = mdb.readThreadTail(threadId, messagesFile(threadId), size);
+        const legacyRows = tail.hasMore !== undefined && tail.messages.some((m) => m.parentId === undefined);
+        if (tail.hasMore !== true || legacyRows) {
+          // The whole thread came back, or rows that only chain on a full
+          // load: cache it like messagesTail() does and page it in memory.
+          this.cacheThread(threadId, legacyRows ? mdb.readThread(threadId, messagesFile(threadId)) : tail);
+          break;
+        }
+        const leaf = tail.activeLeafId ?? tail.messages.at(-1)?.id ?? null;
+        const found = turnPageStart(tail.messages, leaf, tail.messages.length, turns, minRows, maxRows, false);
+        if ("start" in found) {
+          return { messages: tail.messages.slice(found.start), hasMore: true, activeLeafId: leaf };
+        }
+        if (size >= maxRows) {
+          return { messages: tail.messages.slice(-maxRows), hasMore: true, activeLeafId: leaf };
+        }
+      }
+    }
+    const { messages, activeLeafId } = this.thread(threadId);
+    const stop = before ? messages.findIndex((m) => m.id === before) : messages.length;
+    if (stop < 0) return null;
+    const found = turnPageStart(messages, activeLeafId, stop, turns, minRows, maxRows, true);
+    const start = "start" in found ? found.start : Math.max(0, stop - maxRows);
+    return { messages: messages.slice(start, stop), hasMore: start > 0, activeLeafId };
+  }
+
   /** Used only with newly allocated import threads. No live actions are
    * replayed: the importer supplies inert text and freshly remapped IDs. */
   importTranscript(threadId: string, messages: Message[], activeLeafId: string | null,
@@ -1538,6 +1581,8 @@ export class Store {
       seedMessages?: boolean;
       /** Internal owner onboarding only: persist profile and coordinator role together. */
       chiefOfStaff?: boolean;
+      /** Clean local offer template; grants stay Ask even under a Full default. */
+      onboardingOffer?: { kind: "digital-marketer"; prompt: string };
     } = {},
   ): BotRecord {
     this.rememberSections([profile.section]);
@@ -1546,6 +1591,7 @@ export class Store {
     if (opts.chiefOfStaff && this.bots.some(bot => bot.chiefOfStaff && sectionKey(bot.section) === section)) throw new Error("This team already has a coordinator");
     const bot: BotRecord = {
       ...(opts.chiefOfStaff ? { chiefOfStaff: true } : {}),
+      ...(opts.onboardingOffer ? { onboardingOffer: opts.onboardingOffer.kind, visibility: "private" as const, approvalMode: "ask" as const, autoApprove: false, approvePeerComms: false, composio: false } : {}),
       id: newId(),
       threadId: newId(),
       name,
@@ -1566,7 +1612,7 @@ export class Store {
       createdAt: Date.now(),
       // Only a non-default level is written: an Ask bot keeps the historical
       // record shape, where an absent level means Ask.
-      ...(newBotApprovalMode() === "ask" ? {} : { approvalMode: newBotApprovalMode() }),
+      ...(opts.onboardingOffer || newBotApprovalMode() === "ask" ? {} : { approvalMode: newBotApprovalMode() }),
     };
     if (section) bot.section = section;
     bot.tasks = [{
@@ -1580,6 +1626,10 @@ export class Store {
       activity: "idle",
       busy: false,
     }];
+    if (opts.onboardingOffer) bot.onboardingOfferAssignment = {
+      botId: bot.id, threadId: bot.threadId, sendId: `marketer_${bot.threadId}`,
+      text: opts.onboardingOffer.prompt, selection: structuredClone(bot.modelSelection),
+    };
     this.bots.unshift(bot);
     try { this.saveBots(); } catch (error) { this.bots = this.bots.filter(item => item !== bot); throw error; }
     // The folder exists from the first moment, so the user can open

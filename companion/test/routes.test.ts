@@ -330,3 +330,11 @@ describe("browser capability route boundary", () => {
     expect(allowed("POST", "/api/bots/bot-1/browser/live")).toBe(false);
   });
 });
+
+it("allows only read-only exact computer previews behind the computer capability", async () => {
+  const { isCloudDesktopAccess } = await import("../src/routes.ts");
+  expect(ask("GET", "/api/bots/b/computer/preview")).toBeNull();
+  expect(isCloudDesktopAccess("GET", "/api/bots/b/computer/preview")).toBe(true);
+  expect(ask("POST", "/api/bots/b/computer/preview")).not.toBeNull();
+  expect(ask("GET", "/api/bots/b/computer/preview", false)?.status).toBe(401);
+});

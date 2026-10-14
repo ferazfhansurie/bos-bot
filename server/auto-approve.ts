@@ -77,6 +77,8 @@ const ASKS_A_PERSON = new Set(["askuserquestion", "ask_user"]);
  * `no-grant` is an Ask or Edits card, where asking is the whole point. */
 export type AutoVerdictSource =
   | "full-access"
+  // the person's own "approve these for me" rule (approval-rules.ts)
+  | "approval-rule"
   | "native-approval"
   | "explicit-approval-block"
   | "no-grant";

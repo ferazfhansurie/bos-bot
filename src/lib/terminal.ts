@@ -12,7 +12,9 @@ export interface TerminalTarget {
 
 export type TerminalClientFrame =
   | { type: "input"; data: string }
-  | { type: "resize"; cols: number; rows: number };
+  | { type: "resize"; cols: number; rows: number }
+  /** End the shell now instead of leaving it for a reattach. */
+  | { type: "close" };
 
 export type TerminalServerFrame =
   | { type: "ready"; cwd: string }
@@ -73,15 +75,18 @@ export function terminalSocketUrl(ticket: string, location: Pick<Location, "prot
   return `${scheme}//${location.host}/api/terminal?ticket=${encodeURIComponent(ticket)}`;
 }
 
-export async function requestTerminalTicket(target: Pick<TerminalTarget, "botId" | "threadId">, fetcher: typeof fetch = fetch): Promise<string> {
+/** `tabId` names a shell that outlives its socket for a while, so the same
+ * tab reattaches after a reload or from another window. `resume` only
+ * reattaches: the server refuses rather than starting a new shell. */
+export async function requestTerminalTicket(target: Pick<TerminalTarget, "botId" | "threadId">, fetcher: typeof fetch = fetch, session?: { tabId: string; resume?: boolean }): Promise<string> {
   const response = await fetcher("/api/terminal/ticket", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ botId: target.botId, threadId: target.threadId }),
+    body: JSON.stringify({ botId: target.botId, threadId: target.threadId, ...(session ? { tabId: session.tabId, ...(session.resume ? { resume: true } : {}) } : {}) }),
   });
   const body = await response.json().catch(() => null) as { ticket?: unknown; error?: unknown } | null;
   if (!response.ok || typeof body?.ticket !== "string" || !body.ticket) {
-    throw new Error(typeof body?.error === "string" && body.error ? body.error : `terminal unavailable (${response.status})`);
+    throw Object.assign(new Error(typeof body?.error === "string" && body.error ? body.error : `terminal unavailable (${response.status})`), { status: response.status });
   }
   return body.ticket;
 }

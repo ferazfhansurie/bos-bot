@@ -108,6 +108,9 @@ const PAIRS = [
   ["--color-hairline", "--color-app", 1.5],
   ["--color-accent", "--color-app", 3],
   ["--color-scrollbar", "--color-app", 1.5],
+  // usage rings: each AI account's hue sits on the sidebar (the ring) and on
+  // menus (the tooltip dot and the profile menu bar)
+  ...[1, 2, 3, 4, 5].flatMap((n) => [[`--color-usage-${n}`, "--color-panel", 3], [`--color-usage-${n}`, "--color-menu", 3]]),
   // The focus ring sits outside the control (outline-offset: 2px), so it
   // lands on whatever surface is behind it — a skin that inherits another
   // skin's ring keeps a colour that was never checked against its ground.

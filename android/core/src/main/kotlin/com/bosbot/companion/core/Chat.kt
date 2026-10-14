@@ -125,7 +125,7 @@ fun CompanionState.chatSummaries(
             val messages = visibleTranscript(chat.threadId)
             ChatSummary(
                 chat = chat,
-                preview = rosterPreview(messages, activity),
+                preview = TranscriptMemo.preview.get(chat.threadId, messages, activity) { rosterPreview(messages, activity) },
                 lastActivity = messages.lastOrNull()?.at ?: 0.0,
                 pinned = pinned(chat),
             )

@@ -15,6 +15,11 @@ describe("ToolActivity", () => {
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
   });
+  it("does not invent input from a summary or tool name", () => {
+    const html = renderToStaticMarkup(createElement(ToolActivity, { tool: { name: "Read", summary: "settings.json", ok: true } }));
+    expect(html).toContain("No input was recorded");
+    expect(html).not.toContain(">settings.json</pre>");
+  });
   it("distinguishes pending, failed and unrecorded output", () => {
     const render = (ok?: boolean) => renderToStaticMarkup(createElement(ToolActivity, { tool: { name: "Read", ok } }));
     expect(render()).toContain("Waiting for the tool to finish");

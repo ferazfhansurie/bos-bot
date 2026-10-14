@@ -29,3 +29,16 @@ test("a durable-write failure opens a circuit instead of repeatedly dispatching"
     expect(() => jobs.get(job.id, input.identity)).toThrow(/storage/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+test("a thread reports every peer session whose delegated work ran in it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "delegated-jobs-"));
+  try {
+    const jobs = new DelegatedJobs(join(dir, "jobs.json"));
+    const identity = (sessionId: string) => ({ sessionId, tokenHash: "a".repeat(64), homeId: "putri", botId: "pixie" });
+    const one = jobs.enqueue({ identity: identity("old"), targetBotId: "bos", requestKey: "one", message: "fixture" }).job;
+    const two = jobs.enqueue({ identity: identity("new"), targetBotId: "bos", requestKey: "two", message: "fixture" }).job;
+    jobs.enqueue({ identity: identity("other"), targetBotId: "bos", requestKey: "three", message: "fixture" });
+    jobs.patch(one, { threadId: "t1" }); jobs.patch(two, { threadId: "t1" });
+    expect(jobs.sessionsForThread("t1").sort()).toEqual(["new", "old"]);
+    expect(jobs.sessionsForThread("t2")).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

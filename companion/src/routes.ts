@@ -67,7 +67,8 @@ export function isBrowserAccess(method: string, path: string): boolean {
 }
 
 export function isCloudDesktopAccess(method: string, path: string): boolean {
-  return isCloudDesktopJoin(method, path)
+  return (method === "GET" && /^\/api\/bots\/[\w-]+\/computer\/preview$/.test(path))
+    || isCloudDesktopJoin(method, path)
     || (method === CLOUD_DESKTOP_CONTROL_ROUTE.method && CLOUD_DESKTOP_CONTROL_ROUTE.path.test(path));
 }
 
@@ -78,6 +79,7 @@ export function isCloudDesktopAccess(method: string, path: string): boolean {
  * fails to match and is denied rather than forwarded — the failure mode of
  * a strict pattern is a closed door, which is the one to have. */
 const ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
+  { method: "GET", path: /^\/api\/bots\/[\w-]+\/computer\/preview$/ },
   // Same device-level computer capability as live desktop access.
   { method: "GET", path: /^\/api\/bots\/[\w-]+\/browser\/live$/ },
   { method: "POST", path: /^\/api\/bots\/[\w-]+\/browser\/action$/ },

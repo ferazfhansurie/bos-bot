@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,16 +64,16 @@ it("lists the root dirs-first with a case-insensitive sort, skipping .git and es
   const body = await (await get("list", { path: "" })).json() as any;
   expect(body.root).toBe(root); expect(body.path).toBe(""); expect(body.truncated).toBe(false);
   expect(body.entries.map((e: any) => e.name)).toEqual(["src", "Zeta", "A.md", "alias", "b.txt", "blob.bin"]);
-  expect(body.entries[0]).toEqual({ name: "src", path: "src", kind: "dir" });
-  expect(body.entries.find((e: any) => e.name === "alias")).toEqual({ name: "alias", path: "alias", kind: "file", size: 11 });
+  expect(body.entries[0]).toEqual(expect.objectContaining({ name: "src", path: "src", kind: "dir", mtime: expect.any(Number) }));
+  expect(body.entries.find((e: any) => e.name === "alias")).toEqual(expect.objectContaining({ name: "alias", path: "alias", kind: "file", size: 11, mtime: expect.any(Number) }));
   const sub = await (await get("list", { path: "src" })).json() as any;
-  expect(sub.entries).toEqual([{ name: "util.ts", path: "src/util.ts", kind: "file", size: 9 }]);
+  expect(sub.entries).toEqual([expect.objectContaining({ name: "util.ts", path: "src/util.ts", kind: "file", size: 9, mtime: expect.any(Number) })]);
   expect((await get("list", { path: "b.txt" })).status).toBe(409);
   expect((await get("list", { path: "missing" })).status).toBe(404);
 });
 it("reads text, flags binary and refuses folders", async () => {
-  expect(await (await get("read", { path: "b.txt" })).json()).toEqual({ path: "b.txt", size: 11, binary: false, truncated: false, content: "hello world" });
-  expect(await (await get("read", { path: "blob.bin" })).json()).toEqual({ path: "blob.bin", size: 4, binary: true, truncated: false, content: "" });
+  expect(await (await get("read", { path: "b.txt" })).json()).toEqual(expect.objectContaining({ path: "b.txt", size: 11, mtime: expect.any(Number), binary: false, truncated: false, content: "hello world" }));
+  expect(await (await get("read", { path: "blob.bin" })).json()).toEqual(expect.objectContaining({ path: "blob.bin", size: 4, mtime: expect.any(Number), binary: true, truncated: false, content: "" }));
   writeFileSync(join(root, "big.txt"), "x".repeat(300 * 1024));
   const big = await (await get("read", { path: "big.txt" })).json() as any;
   expect(big.truncated).toBe(true); expect(big.content.length).toBe(256 * 1024);
@@ -104,3 +105,27 @@ it("ranks basename and contiguous matches above scattered deep matches", () => {
   expect(rankFilePaths(["a.ts", "b.ts"], "zz", 10)).toEqual([]);
 });
 // branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1
+
+ it("reverts only the exact file, refuses directories and escaping parents before mutations", async () => {
+  rmSync(join(root, ".git"), {recursive: true});
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], {stdio: "pipe"});
+  git("init");
+  writeFileSync(join(root, ".gitattributes"), "b.txt filter=fixture\n");
+  git("config", "filter.fixture.smudge", "touch filter-ran; cat");
+  git("add", ".gitattributes", "b.txt", "src/util.ts");
+  git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture");
+  git("config", "filter.fixture.clean", "touch clean-ran; cat");
+  writeFileSync(join(root, "b.txt"), "edited"); writeFileSync(join(root, "src/util.ts"), "changed");
+  const revert = (path: string) => fetch(`${url}/api/workspace-files/revert`, {method: "POST", headers: {"content-type": "application/json", "x-openmausbot-desktop-owner": "fixture-owner-capability", origin: url}, body: JSON.stringify({botId: "bot", threadId: "thread", path})});
+  expect((await get("changes")).status).toBe(200);
+  expect((await get("stat", {path: "clean-ran"})).status).toBe(404);
+  expect((await revert("src")).status).toBe(409);
+  expect(((await (await get("read", {path: "src/util.ts"})).json()) as {content: string}).content).toBe("changed");
+  symlinkSync(base, join(root, "outside-dir"));
+  expect((await revert("outside-dir/secret.txt")).status).toBe(403);
+  expect((await revert("../secret.txt")).status).toBe(400);
+  expect((await revert("b.txt")).status).toBe(200);
+  expect((await get("stat", {path: "filter-ran"})).status).toBe(404);
+  expect(((await (await get("read", {path: "b.txt"})).json()) as {content: string}).content).toBe("hello world");
+  expect(((await (await get("read", {path: "src/util.ts"})).json()) as {content: string}).content).toBe("changed");
+});

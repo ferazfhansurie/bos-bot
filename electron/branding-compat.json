@@ -474,14 +474,6 @@
       "why": "saved phone fallback routes continue resolving the same stable LAN hostname"
     },
     {
-      "id": "upstream-team-library",
-      "pattern": "https://(?:github\\.com|raw\\.githubusercontent\\.com)/milind-soni/openmausbot-teams[^\\s\\x22\\x27<>`)]*",
-      "files": [
-        "**"
-      ],
-      "why": "the existing upstream playbook library remains the configured source until a BOS library is published"
-    },
-    {
       "id": "upstream-crypto-test-vector",
       "pattern": "(?<=[\"'])openmausbot(?=[\"'])",
       "files": [

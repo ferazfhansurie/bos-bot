@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { accountRings } from "@/lib/account-usage";
+import { accountRings, USAGE_DANGER } from "@/lib/account-usage";
 import { useProfileUsageVisibility } from "@/lib/profile-usage-visibility";
 import { cn } from "@/lib/cn";
 import { formatCents, type UsageAccount, type UsageWindow } from "@/lib/usage-chips";
@@ -7,7 +7,6 @@ import { useProviderUsage } from "./ProviderUsage";
 import { useXaiUsage } from "./XaiUsage";
 
 const STROKE = 2.5;
-const DANGER = "#EF4444";
 
 function windowsOf(account: UsageAccount): Array<UsageWindow & { label: string }> {
   return [
@@ -28,7 +27,7 @@ function resetLabel(resetsAt: number | null): string {
 function Ring({ radius, color, peak, size }: { radius: number; color: string; peak: number | null; size: number }) {
   const SIZE = size;
   const circumference = 2 * Math.PI * radius;
-  const tone = (peak ?? 0) >= 85 ? DANGER : color;
+  const tone = color;
   return (
     <>
       <circle cx={SIZE / 2} cy={SIZE / 2} r={radius} fill="none" stroke={tone} strokeOpacity={peak === null ? 0.5 : 0.2} strokeDasharray={peak === null ? "2 3" : undefined} strokeWidth={STROKE} />
@@ -67,6 +66,7 @@ export function UsageRings({ children, open = false }: { children: ReactNode; op
     );
   }
 
+  const spent = rings.some(ring => (ring.peak ?? 0) >= USAGE_DANGER);
   const summary = rings.map((ring) => `${ring.label} ${ring.peak === null ? "usage unavailable" : `${Math.round(ring.peak)}%`}`).join(", ");
   return (
     <span className="group/usage relative flex shrink-0 items-center justify-center" style={{ width: SIZE, height: SIZE }}>
@@ -75,6 +75,8 @@ export function UsageRings({ children, open = false }: { children: ReactNode; op
       </svg>
       <span className="sr-only">Usage: {summary}</span>
       {children}
+      {/* an account nearly spent: one quiet dot, so the ring keeps its own hue */}
+      {spent && <span aria-hidden="true" className="pointer-events-none absolute right-0 top-0 size-2 rounded-full border border-panel bg-danger" />}
       {/* the exact numbers, on hover only and never over the open menu */}
       {!open && (
         <span
@@ -90,7 +92,7 @@ export function UsageRings({ children, open = false }: { children: ReactNode; op
                   <span className="min-w-0 flex-1 truncate">{ring.label}</span>
                 </span>
                 <span className="pl-4 text-[11.5px] text-ink-secondary">
-                  {windowsOf(ring.account).map(window => `${window.label} ${window.usedPercent === null ? "unavailable" : `${Math.round(window.usedPercent)}%`}${window.resetsAt ? ` · resets ${resetLabel(window.resetsAt)}` : ""}`).join(" · ")}
+                  {windowsOf(ring.account).map((window, i) => <span key={window.label}>{i > 0 && " · "}<span className={cn((window.usedPercent ?? 0) >= USAGE_DANGER && "font-medium text-danger")}>{`${window.label} ${window.usedPercent === null ? "unavailable" : `${Math.round(window.usedPercent)}%`}`}</span>{window.resetsAt ? ` · resets ${resetLabel(window.resetsAt)}` : ""}</span>)}
                 </span>
               </span>
             ))}

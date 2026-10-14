@@ -293,7 +293,16 @@ function Shell() {
       ) : group ? (
         <SplitWorkspace><GroupView key={group.id} group={group} /></SplitWorkspace>
       ) : bot ? (
-        <SplitWorkspace>{state.pendingThreadSwitch[bot.id] ? <ConversationSkeleton title={bot.tasks?.find(task => task.threadId === state.pendingThreadSwitch[bot.id])?.title} /> : <ChatView bot={bot} />}</SplitWorkspace>
+        <SplitWorkspace>{state.pendingThreadSwitch[bot.id] ? (() => {
+          // A thread visited earlier renders from memory at once; the
+          // server's page replaces it in the same ChatView (same slot, same
+          // type) when it lands.
+          const pending = state.pendingThreadSwitch[bot.id]!;
+          const cached = state.threadCache[pending];
+          return cached
+            ? <ChatView bot={{ ...bot, threadId: pending, messages: cached.messages, activeLeafId: cached.activeLeafId ?? null, hasMore: cached.hasMore }} />
+            : <ConversationSkeleton title={bot.tasks?.find(task => task.threadId === pending)?.title} />;
+        })() : <ChatView bot={bot} />}</SplitWorkspace>
       ) : !state.rosterLoaded ? (
         <ConversationSkeleton />
       ) : (
@@ -364,6 +373,15 @@ function Shell() {
 function WelcomeGate() {
   const { state, dispatch } = useStore();
   const [dismissed, setDismissed] = useState(false);
+  const [marketerOpen, setMarketerOpen] = useState(false);
+  useEffect(() => {
+    const open = () => { if (window.ogb?.remoteClient?.active !== true) { setMarketerOpen(true); dispatch({ type: "toggleWelcome", open: true }); } };
+    const dispose = window.ogb?.marketerSetup?.onOpen(open);
+    let active = true;
+    void window.ogb?.marketerSetup?.pending().then(pending => { if (active && pending) open(); }).catch(() => {});
+    window.addEventListener("bos:setup-marketer", open);
+    return () => { active = false; dispose?.(); window.removeEventListener("bos:setup-marketer", open); };
+  }, [dispatch]);
   const [hello, setHello] = useState(false);
   /** Only a real first run ends in "say hi to Firaz", never a replay. */
   const firstRun = useRef(false);
@@ -380,12 +398,14 @@ function WelcomeGate() {
     dispatch({ type: "toggleWelcome", open: false });
   }} />;
   // Explicit desktop connection Settings need no local provider onboarding.
-  // Organisation remains optional; closing Settings resumes the normal tour.
-  if (state.appSettingsOpen && ["desktopWorkspaces", "organization"].includes(state.appSettingsSection)) return null;
-  if (!state.welcomeOpen && !due) return null;
+  // Closing Settings resumes the normal tour.
+  if (state.appSettingsOpen && state.appSettingsSection === "desktopWorkspaces") return null;
+  if (!marketerOpen && !state.welcomeOpen && !due) return null;
   const bot = teamSetupBot(state.bots, state.config?.onboarding?.firstAssignment);
-  return <RecruitmentWelcome bot={bot} onDone={() => {
-    const sayHi = firstRun.current;
+  return <RecruitmentWelcome key={marketerOpen ? "marketer" : "generic"} offer={marketerOpen ? "digital-marketer" : undefined} bot={bot} onDone={() => {
+    const sayHi = firstRun.current && !marketerOpen;
+    if (marketerOpen) void window.ogb?.marketerSetup?.clear().catch(() => {});
+    setMarketerOpen(false);
     firstRun.current = false;
     setDismissed(true);
     setHello(sayHi);

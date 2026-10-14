@@ -2,6 +2,65 @@ import XCTest
 @testable import CompanionCore
 
 final class BotDraftTests: XCTestCase {
+    func testPendingHandoffKeepsPayloadAndNewDraftUntilAcknowledgement() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let draft = BotDraft(directory: directory)
+        let file = PendingMessageAttachment(data: Data([1, 2]), name: "a.txt", mime: "text/plain", kind: .file)
+        draft.text = "first"; draft.files = [file]
+        let id = try draft.prepareSend(text: "first", priority: .queue)
+        try draft.handoff(sendID: id)
+        XCTAssertTrue(draft.text.isEmpty); XCTAssertTrue(draft.files.isEmpty)
+        draft.text = "next message"; try draft.checkpoint()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(file.id.uuidString).path))
+        XCTAssertFalse(draft.restoreFailedSend(sendID: id))
+        draft.complete(sendID: id)
+        XCTAssertEqual(draft.text, "next message")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(file.id.uuidString).path))
+        XCTAssertEqual(BotDraft(directory: directory).text, "next message")
+    }
+
+    func testFailedHandoffRestoresExactPayloadWithSameRetryID() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let draft = BotDraft(directory: directory)
+        let file = PendingMessageAttachment(data: Data([1, 2]), name: "a.txt", mime: "text/plain", kind: .file)
+        draft.text = "first"; draft.files = [file]
+        let id = try draft.prepareSend(text: "first", priority: .queue)
+        try draft.handoff(sendID: id)
+        XCTAssertTrue(draft.restoreFailedSend(sendID: id))
+        XCTAssertEqual(draft.files, [file]); XCTAssertEqual(draft.text, "first")
+        XCTAssertEqual(try draft.prepareSend(text: "first", priority: .queue), id)
+    }
+
+    func testFailedSendCannotOverwriteANewerReply() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let draft = BotDraft(directory: directory)
+        draft.text = "first"
+        let id = try draft.prepareSend(text: "first", priority: .queue)
+        try draft.handoff(sendID: id)
+        let newer = try JSONDecoder().decode(Message.self, from: Data(#"{"id":"new-reply","role":"bot","kind":"text","at":2,"text":"new quote"}"#.utf8))
+        draft.reply = newer; try draft.checkpoint()
+        XCTAssertFalse(draft.restoreFailedSend(sendID: id))
+        draft.complete(sendID: id)
+        XCTAssertEqual(draft.reply, newer)
+        XCTAssertEqual(BotDraft(directory: directory).reply, newer)
+    }
+
+    func testRestartDuringUploadPreservesEarlierPayload() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let draft = BotDraft(directory: directory)
+        let file = PendingMessageAttachment(data: Data([1, 2]), name: "a.txt", mime: "text/plain", kind: .file)
+        draft.text = "first"; draft.files = [file]
+        let id = try draft.prepareSend(text: "first", priority: .queue)
+        try draft.handoff(sendID: id)
+        let restored = BotDraft(directory: directory)
+        XCTAssertNotNil(restored.error); XCTAssertEqual(restored.files, [file]); XCTAssertEqual(restored.text, "first")
+        XCTAssertEqual(try restored.prepareSend(text: "first", priority: .queue), id)
+    }
+
     func testFileBackedVideoSurvivesPickerDeletionAndRestartWithoutLoadingBytes() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

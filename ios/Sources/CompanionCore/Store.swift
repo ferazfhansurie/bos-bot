@@ -33,6 +33,9 @@ public struct CompanionState: Sendable {
     public var hasMore: [String: Bool] = [:]
     /// Branch heads belong to threads, not the bot's globally selected tab.
     public var activeLeafIds: [String: String] = [:]
+    /// Older pages held across a refresh for threads the fleet snapshot did
+    /// not carry, until their tail is fetched again.
+    private var heldHistory: [String: (messages: [Message], hasMore: Bool)] = [:]
     /// The last frame we folded — what a reconnect resumes from.
     public var cursor: String?
     /// Notifications that arrived while connected, newest last. Kept as a
@@ -246,20 +249,42 @@ public struct CompanionState: Sendable {
         rosterLoaded = true
         bots = fleet.bots
         rooms = fleet.groups
+        // The fleet carries only each thread's newest raw rows, and on a
+        // tool-heavy thread that tail is nothing but tool calls. Keep the
+        // older pages already scrolled in, re-joined onto the fresh tail at
+        // their overlap, so returning to the app does not cut a long thread
+        // down to its last 50 rows.
+        let heldMessages = messages
+        let heldHasMore = hasMore
+        for (threadId, held) in heldMessages where heldHasMore[threadId] != nil && !held.isEmpty {
+            heldHistory[threadId] = (held, heldHasMore[threadId] ?? false)
+        }
         messages.removeAll()
         hasMore.removeAll()
         activeLeafIds.removeAll()
         for bot in fleet.bots {
-            messages[bot.threadId] = bot.messages ?? []
-            if bot.messages != nil { hasMore[bot.threadId] = bot.hasMore ?? false }
+            if let page = bot.messages {
+                let joined = Self.stitch(history: heldHistory[bot.threadId], page: page, pageHasMore: bot.hasMore ?? false)
+                messages[bot.threadId] = joined.messages
+                hasMore[bot.threadId] = joined.hasMore
+                heldHistory.removeValue(forKey: bot.threadId)
+            } else {
+                messages[bot.threadId] = []
+            }
             activeLeafIds[bot.threadId] = bot.activeLeafId
         }
         for room in fleet.groups {
-            messages[room.threadId] = room.messages ?? []
-            if room.messages != nil { hasMore[room.threadId] = room.hasMore ?? false }
+            if let page = room.messages {
+                let joined = Self.stitch(history: heldHistory[room.threadId], page: page, pageHasMore: room.hasMore ?? false)
+                messages[room.threadId] = joined.messages
+                hasMore[room.threadId] = joined.hasMore
+                heldHistory.removeValue(forKey: room.threadId)
+            } else {
+                messages[room.threadId] = []
+            }
         }
         for (threadId, page) in waitingThreads where bot(forThread: threadId) != nil {
-            merge(page, intoThread: threadId)
+            mergeTail(page, intoThread: threadId)
         }
         // The fleet route returns the whole queue snapshot beside the bots,
         // so every refresh re-seeds it; landed lines then retire their rows.
@@ -267,6 +292,34 @@ public struct CompanionState: Sendable {
             replaceBotQueues(queues)
         }
         reconcileAllQueued()
+    }
+
+    /// Join a fresh newest-rows page onto history held from before a
+    /// refresh. The page wins wherever they overlap; history older than the
+    /// page survives only when the page's first row is found in it, so a
+    /// gap is never papered over.
+    static func stitch(
+        history: (messages: [Message], hasMore: Bool)?, page: [Message], pageHasMore: Bool
+    ) -> (messages: [Message], hasMore: Bool) {
+        guard pageHasMore, let history, let first = page.first,
+              let cut = history.messages.firstIndex(where: { $0.id == first.id }), cut > 0
+        else { return (page, pageHasMore) }
+        let fresh = Set(page.map(\.id))
+        let older = history.messages[..<cut].filter { !fresh.contains($0.id) }
+        return (older + page, history.hasMore)
+    }
+
+    /// Load a thread's newest page, keeping older history held from before
+    /// the last refresh when the page joins onto it.
+    public mutating func mergeTail(_ page: ThreadPage, intoThread threadId: String) {
+        if let history = heldHistory.removeValue(forKey: threadId) {
+            let joined = Self.stitch(history: history, page: page.messages, pageHasMore: page.hasMore ?? false)
+            if joined.messages.count != page.messages.count {
+                merge(ThreadPage(messages: joined.messages, hasMore: joined.hasMore, activeLeafId: page.activeLeafId), intoThread: threadId)
+                return
+            }
+        }
+        merge(page, intoThread: threadId)
     }
 
     /// Prepend an older page fetched for scrollback.

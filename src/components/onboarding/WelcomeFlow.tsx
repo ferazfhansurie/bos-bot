@@ -27,6 +27,8 @@ import {
 import { api, useStore, type Bot } from "@/state/store";
 import { EnginesBeat } from "./beats/EnginesBeat";
 import { HelloBeat } from "./beats/HelloBeat";
+import { ImportBeat } from "./beats/ImportBeat";
+import { detectSetups, hasImportable, type DetectedSource } from "@/components/SetupImport";
 import { MeetYourBotBeat } from "./beats/MeetYourBotBeat";
 import { PermissionsBeat } from "./beats/PermissionsBeat";
 import { PhoneBeat } from "./beats/PhoneBeat";
@@ -41,6 +43,7 @@ const MASCOT_FOR_BEAT: Record<BeatId, MausState> = {
   hello: "happy",
   reel: "curious",
   engines: "searching",
+  import: "curious",
   permissions: "listening",
   phone: "sending",
   bot: "celebrate",
@@ -52,6 +55,8 @@ function beatTitle(beat: BeatId): string | null {
       return t("onboarding.welcome", { app: brand().name });
     case "engines":
       return t("onboarding.engines.title");
+    case "import":
+      return t("onboarding.import.title");
     case "permissions":
       return t("onboarding.perms.title");
     case "bot":
@@ -93,7 +98,19 @@ export function WelcomeFlow({
 }) {
   const { dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
-  const beats = beatsFor({ dictation: dictation ?? capabilities.dictation.available, reel });
+  // Found setups decide whether the import beat appears. The scan is local
+  // and quick; until it answers the flow is on its first beat anyway.
+  const [setups, setSetups] = useState<DetectedSource[]>([]);
+  useEffect(() => {
+    let live = true;
+    detectSetups()
+      .then((found) => live && setSetups(found.sources.filter(hasImportable)))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const beats = beatsFor({ dictation: dictation ?? capabilities.dictation.available, reel, setupImport: setups.length > 0 });
   const [beat, setBeat] = useState<BeatId>(() => (initialBeat && beats.includes(initialBeat) ? initialBeat : "hello"));
   const [mascot, setMascot] = useState<MausState>(MASCOT_FOR_BEAT[beat]);
   const [motion, setMotion] = useState<{ kind: Motion; key: number }>({ kind: "blink", key: 0 });
@@ -250,6 +267,7 @@ export function WelcomeFlow({
           {beat === "hello" && <HelloBeat {...beatProps} />}
           {beat === "reel" && <FeatureReel {...beatProps} />}
           {beat === "engines" && <EnginesBeat {...beatProps} />}
+          {beat === "import" && <ImportBeat {...beatProps} bot={bot} sources={setups} />}
           {beat === "permissions" && <PermissionsBeat {...beatProps} />}
           {beat === "phone" && <PhoneBeat {...beatProps} />}
           {beat === "bot" && (

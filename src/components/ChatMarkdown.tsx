@@ -18,11 +18,12 @@
 import { RichChart } from "./RichChart";
 import { parseChartSpec } from "./rich-chart";
 import { parseStats, StatCards } from "./RichStats";
+import { ARTIFACT_LANGS, HtmlArtifact } from "./HtmlArtifact";
 import { rehypeNumericColumns } from "../lib/rich-table";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, Download, LoaderCircle, RotateCcw, WrapText } from "lucide-react";
+import { Check, Copy, Download, FolderTree, LoaderCircle, RotateCcw, WrapText } from "lucide-react";
 import { remarkMentions, type MentionPeer } from "@/lib/mentions";
 
 import {
@@ -37,6 +38,9 @@ import { windowsPathDestinations } from "../../shared/markdown-windows-paths";
 import { looksLikeThreadRefUrl, parseThreadRefUrl, resolveThreadRefAddress, remarkThreadRefs } from "../lib/thread-refs";
 import { MarkdownImagePreview, useLocalFileSave, type MessageAttachmentContext } from "./AttachmentPreview";
 import { ThreadLink, threadLinkFromProps, useThreadRefs } from "./ThreadRefs";
+import { RowContextMenu, openRowMenu, type RowMenuAt } from "./RowContextMenu";
+import { openInItems } from "./workspace/open-in";
+import { useWorkspace } from "./workspace/WorkspaceContext";
 
 // tiny highlight cache so revisiting a thread doesn't re-tokenize settled
 // blocks; keys are content-hashed and capped. Streamed partials may land here
@@ -376,6 +380,20 @@ export function CodeBlock({ code, lang, streaming }: CodeBlockProps) {
 }
 
 // A bot handing over a file it created renders as a button, not an anchor.
+/** `src/app.ts` or `/abs/notes.md` in inline code: clicking it opens the
+ * file in the thread's files tab when it is inside the working folder. */
+const PATH_LIKE = /^(?:~?\/|\.{1,2}\/)?(?:[\w@.+-]+\/)*[\w@+-][\w@.+-]*\.(?:md|mdx|txt|json|ya?ml|toml|csv|sql|html?|css|scss|[cm]?[jt]sx?|py|go|rs|rb|php|java|kt|swift|c|h|cpp|sh|pdf|png|jpe?g|gif|svg|webp)$/i;
+function CodePath({ path, threadId }: { path: string; threadId: string }) {
+  const workspace = useWorkspace();
+  const className = "rounded bg-inset px-1 py-px text-[13px] break-words [unicode-bidi:isolate]";
+  if (!workspace.available) return <code dir="ltr" className={className}>{path}</code>;
+  return (
+    <code dir="ltr" role="link" tabIndex={0} title="open in files" className={`${className} cursor-pointer decoration-ink-secondary/50 underline-offset-2 hover:underline`}
+      onClick={() => void workspace.openFile(path, threadId)}
+      onKeyDown={(event) => { if (event.key === "Enter") void workspace.openFile(path, threadId); }}>{path}</code>
+  );
+}
+
 // Two reasons the href is dropped rather than merely preventDefault()ed:
 // an absolute path in an href resolves against the page origin, so the link
 // pointed at http://127.0.0.1:8799<path> and opened the chat UI in a browser;
@@ -384,6 +402,9 @@ export function CodeBlock({ code, lang, streaming }: CodeBlockProps) {
 // process' containment check.
 function LocalFileLink({ filePath, children, message }: { filePath: string; children?: ReactNode; message?: MessageAttachmentContext }) {
   const save = useLocalFileSave(filePath, undefined, message);
+  const workspace = useWorkspace();
+  const [menuAt, setMenuAt] = useState<RowMenuAt | null>(null);
+  const closeMenu = useCallback(() => setMenuAt(null), []);
   if (!message) {
     return <span title="Unavailable legacy file reference" className="break-words text-ink-secondary">{children}</span>;
   }
@@ -399,9 +420,15 @@ function LocalFileLink({ filePath, children, message }: { filePath: string; chil
     <span dir="ltr" className="inline-flex flex-wrap items-center gap-x-1.5 [unicode-bidi:isolate]">
       <button
         type="button"
-        onClick={() => void save.save()}
+        onClick={() => {
+          // inside the thread's working folder it opens in the files tab;
+          // anything else is saved as before
+          if (!workspace.available) { void save.save(); return; }
+          void workspace.openFile(filePath, message.threadId).then((opened) => { if (!opened) void save.save(); });
+        }}
+        onContextMenu={workspace.available ? (event) => openRowMenu(event, setMenuAt) : undefined}
         disabled={save.state === "saving"}
-        title="Save a copy"
+        title={workspace.available ? "open in files" : "Save a copy"}
         className="inline-flex items-center gap-1 break-words text-start text-accent underline decoration-accent/40 hover:decoration-accent disabled:cursor-wait"
       >
         {children}
@@ -411,10 +438,17 @@ function LocalFileLink({ filePath, children, message }: { filePath: string; chil
           <Check size={12} className="shrink-0 text-success" aria-hidden="true" />
         ) : save.state === "failed" ? (
           <RotateCcw size={12} className="shrink-0" aria-hidden="true" />
-        ) : (
+        ) : workspace.available ? null : (
           <Download size={12} className="shrink-0" aria-hidden="true" />
         )}
       </button>
+      {menuAt && (
+        <RowContextMenu at={menuAt} label="file" onClose={closeMenu} items={[
+          { key: "files", label: "open in files", icon: <FolderTree size={15} />, onSelect: () => void workspace.openFile(filePath, message.threadId) },
+          ...(filePath.startsWith("/") || /^[a-z]:[\\/]/i.test(filePath) ? openInItems(filePath) : []),
+          { key: "save", label: "save a copy", icon: <Download size={15} />, onSelect: () => void save.save() },
+        ]} />
+      )}
       {label && (
         <span
           role={save.state === "failed" ? "alert" : "status"}
@@ -579,6 +613,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
               const items = parseStats(code);
               if (items) return <StatCards items={items} />;
             }
+            if (ARTIFACT_LANGS.has(lang.toLowerCase())) return <HtmlArtifact code={code} lang={lang.toLowerCase()} streaming={streaming} />;
             if (streaming && (lang === "chart" || lang === "stats")) return <div role="status" className="rounded-2xl border border-hairline p-4 text-ink-secondary">Preparing visual…</div>;
             return <CodeBlock code={code} lang={lang} streaming={streaming} />;
           },
@@ -606,6 +641,7 @@ function ChatMarkdownComponent({ text, streaming = false, message, mentionPeers 
             // the bubble is wide, and an unbreakable token has nowhere to go
             // but outside it — off the left edge in a right-to-left paragraph,
             // where the line ends.
+            if (typeof children === "string" && message && PATH_LIKE.test(children)) return <CodePath path={children} threadId={message.threadId} />;
             return (
               <code dir="ltr" className="rounded bg-inset px-1 py-px text-[13px] break-words [unicode-bidi:isolate]">{children}</code>
             );

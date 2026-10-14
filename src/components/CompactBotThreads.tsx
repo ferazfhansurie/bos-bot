@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Loader2, Pin, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { type Bot, type Task, useStore } from "@/state/store";
 import { useActivityFeed, withLiveActivity } from "@/lib/activity-feed";
-import { cn } from "@/lib/cn";
+import { SidebarThreadRow } from "./SidebarThreadRow";
+import { useSplitView } from "./SplitViewContext";
+import { threadPaneId } from "@/lib/split-view";
 import { TaskPicker } from "./TaskPicker";
 
 export function compactThreads(tasks: Task[], pins: string[], active: string): Task[] {
@@ -21,7 +23,8 @@ export function threadTime(at: number, now = Date.now()): string {
 }
 
 export function CompactBotThreads({ bot }: { bot: Bot }) {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
+  const { openSplit } = useSplitView();
   useActivityFeed();
   const key = `bos-thread-pins:${bot.id}`;
   const [pins, setPins] = useState<string[]>(() => {
@@ -35,19 +38,17 @@ export function CompactBotThreads({ bot }: { bot: Bot }) {
   return <div className="mb-2 ml-5 space-y-0.5 border-l border-hairline/30 pl-2" aria-label={`${bot.name} threads`}>
     {compactThreads(bot.tasks ?? [], pins, bot.threadId).map(task => {
       const live = withLiveActivity(bot.id, task);
-      const current = task.threadId === bot.threadId;
-      const pinned = pins.includes(task.threadId);
-      return <div key={task.threadId} className={cn("group/thread flex items-center rounded-lg", current ? "bg-raised" : "hover:bg-raised/50")}>
-        <button type="button" data-sidebar-thread-row={task.threadId} aria-current={current ? "page" : undefined}
-          onClick={() => dispatch({ type: "switchTask", botId: bot.id, threadId: task.threadId })}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-[12px] text-ink-secondary focus-visible:outline-accent">
-          <span className={cn("min-w-0 flex-1 truncate", (current || task.unread) && "font-medium text-ink")}>{task.title}</span>
-          {live.busy || live.activity === "working" ? <Loader2 size={11} className="shrink-0 animate-spin" aria-label="running" /> : task.unread ? <span className="size-1.5 shrink-0 rounded-full bg-accent" aria-label="unread" /> : null}
-          {task.lastUserMessageAt && <time dateTime={new Date(task.lastUserMessageAt).toISOString()} title={`your last message: ${new Date(task.lastUserMessageAt).toLocaleString()}`} className="shrink-0 text-[10px] tabular-nums text-ink-secondary/70">{threadTime(task.lastUserMessageAt)}</time>}
-        </button>
-        <button type="button" onClick={() => togglePin(task.threadId)} aria-label={`${pinned ? "unpin" : "pin"} ${task.title}`} aria-pressed={pinned}
-          className={cn("mr-1 rounded p-1 text-ink-secondary focus-visible:opacity-100 group-hover/thread:opacity-100", !pinned && "opacity-0")}><Pin size={10} /></button>
-      </div>;
+      return <SidebarThreadRow key={task.threadId} task={{ ...task, busy: live.busy, activity: live.activity }} ownerId={bot.id} current={task.threadId === bot.threadId} dense
+        splitId={!bot.remote && !bot.homeLink ? threadPaneId(bot.id, task.threadId) : undefined}
+        onOpenBeside={!bot.remote && !bot.homeLink && !(state.selectedId === bot.id && task.threadId === bot.threadId) ? () => openSplit(threadPaneId(bot.id, task.threadId)) : undefined}
+        pinned={pins.includes(task.threadId)} onTogglePin={() => togglePin(task.threadId)} folders={bot.remote ? [] : bot.projects}
+        trailing={task.lastUserMessageAt ? <time dateTime={new Date(task.lastUserMessageAt).toISOString()} title={`your last message: ${new Date(task.lastUserMessageAt).toLocaleString()}`} className="shrink-0 text-[10px] font-normal tabular-nums text-ink-secondary/70">{threadTime(task.lastUserMessageAt)}</time> : null}
+        onSelect={() => dispatch({ type: "switchTask", botId: bot.id, threadId: task.threadId })}
+        onRename={(title) => dispatch({ type: "renameTask", botId: bot.id, threadId: task.threadId, title })}
+        onDelete={() => dispatch({ type: "deleteTask", botId: bot.id, threadId: task.threadId })}
+        onMove={(projectId) => dispatch({ type: "updateTask", botId: bot.id, threadId: task.threadId, patch: { projectId } })}
+        onArchive={(archivedAt) => dispatch({ type: "updateTask", botId: bot.id, threadId: task.threadId, patch: { archivedAt } })}
+        onReopen={() => dispatch({ type: "updateTask", botId: bot.id, threadId: task.threadId, patch: { closed: false } })} />;
     })}
     <div className="flex items-center justify-between py-1">
       <TaskPicker bot={bot} sidebar />

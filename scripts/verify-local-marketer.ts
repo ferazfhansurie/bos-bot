@@ -1,0 +1,64 @@
+// Real HTTP API and fake model, entirely inside two disposable customer homes.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
+import { launchVerificationServer } from "./control-omb.ts";
+import { fixtureApi } from "./testing/preview-fixture.ts";
+const first = await launchVerificationServer();
+const second = await launchVerificationServer();
+const offline = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_MODE: "not-logged-in", FAKE_CLAUDE_AUTH: "out" });
+try {
+  const api = fixtureApi(first.info.url), other = fixtureApi(second.info.url);
+  const instances = (await api("GET", "/api/instances")).instances;
+  const instance = instances.find((item: any) => item.instanceId === "claude");
+  const modelSelection = { instanceId: "claude", model: instance.models.default };
+  const brief = { business: "fixture bakery", customers: "local neighbours", outcome: "digital-marketer", approach: "bos" };
+  const body = { modelSelection, businessBrief: brief };
+  const original = await api("POST", "/api/bots", { name: "money", soul: "OWNER_PRIVATE_SENTINEL" });
+  await api("PUT", "/api/config", { approvals: { defaultMode: "full" } });
+  const created = await api("POST", "/api/onboarding/digital-marketer", body);
+  assert.notEqual(created.bot.id, original.bot.id);
+  assert.equal(created.bot.visibility, "private"); assert.equal(created.bot.approvalMode, "ask");
+  assert.equal(created.bot.chiefOfStaff, undefined); assert.equal(created.billing.available, false);
+  assert.equal(created.bot.onboardingOffer, undefined); assert.equal(created.bot.onboardingOfferAssignment, undefined);
+  assert.equal(created.assignment.text.includes("OWNER_PRIVATE_SENTINEL"), false);
+  const unicode = await api("POST", "/api/onboarding/digital-marketer", { ...body, businessBrief: { ...brief, business: "店".repeat(1000), customers: "客".repeat(500) } });
+  assert.deepEqual(unicode.assignment, created.assignment);
+  const canonical = structuredClone(created.assignment);
+  await api("POST", `/api/bots/${created.bot.id}/tasks`, { title: "another task" });
+  const replay = await api("POST", "/api/onboarding/digital-marketer", { ...body, businessBrief: { ...brief, business: "changed input" } });
+  assert.deepEqual(replay.assignment, canonical);
+  const generic = { botId: original.bot.id, threadId: original.bot.threadId, sendId: "onboarding_original_fixture", text: "original generic assignment", selection: modelSelection };
+  await api("PUT", "/api/config", { onboarding: { firstAssignment: generic, marketerAssignment: canonical, marketerBrief: brief, pendingOffer: "digital-marketer" } });
+  const readback = await api("GET", "/api/config");
+  assert.deepEqual(readback.onboarding.firstAssignment, generic);
+  assert.deepEqual(readback.onboarding.marketerAssignment, canonical);
+  assert.deepEqual(readback.onboarding.marketerBrief, brief);
+  const payload = { text: canonical.text, threadId: canonical.threadId, sendId: canonical.sendId };
+  await api("POST", `/api/bots/${created.bot.id}/messages`, payload);
+  await api("POST", `/api/bots/${created.bot.id}/messages`, payload);
+  let conversation: any;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const task = await api("GET", `/api/threads/${canonical.threadId}/messages`);
+    conversation = task;
+    if (task.messages?.some((message: any) => message.role === "bot" && message.kind === "text")) break;
+    await delay(100);
+  }
+  const messages = conversation.messages ?? conversation.task?.messages ?? [];
+  assert.equal(messages.filter((message: any) => message.role === "user" && message.text === canonical.text).length, 1);
+  assert.ok(messages.some((message: any) => message.role === "bot" && message.kind === "text"));
+  assert.equal(readFileSync(first.fixtureDumpPath, "utf8").includes("OWNER_PRIVATE_SENTINEL"), false);
+  const customerTwo = await other("POST", "/api/onboarding/digital-marketer", { ...body, businessBrief: { ...brief, business: "second customer business" } });
+  assert.notEqual(customerTwo.bot.id, created.bot.id);
+  const denied = await fetch(`${second.info.url}/api/threads/${canonical.threadId}/messages`);
+  assert.equal(denied.status, 404);
+  const pairing = await api("POST", "/api/auth/pairing", { scopes: ["client"], label: "fixture non-admin" });
+  const paired = await api("POST", "/api/auth/pair", { code: pairing.code });
+  const forbidden = await fetch(`${first.info.url}/api/onboarding/digital-marketer`, { method: "POST", headers: { authorization: `Bearer ${paired.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal(forbidden.status, 403);
+  const blocked = await fetch(`${offline.info.url}/api/onboarding/digital-marketer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal(blocked.status, 409);
+  const untouched = await fixtureApi(offline.info.url)("GET", "/api/bots");
+  assert.equal(untouched.bots.some((bot: any) => bot.title === "Your digital marketer"), false);
+  console.log(JSON.stringify({ result: "passed", checks: ["clean private role", "ask under full default", "original task receipt", "generic assignment preserved", "durable intake", "one send", "model response", "no owner context", "customer isolation", "client denial", "signed-out refusal"], billing: "unavailable", logs: [first.info.logPath, second.info.logPath, offline.info.logPath] }));
+} finally { await Promise.all([first.close(), second.close(), offline.close()]); }

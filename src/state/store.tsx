@@ -39,7 +39,8 @@ import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { answerResponse, dismissResponse } from "@/lib/card-answer";
 import { currentCall } from "@/lib/call";
-import { notificationIcon, showNotification, type NotificationTarget } from "@/lib/notify";
+import { dismissAttention, notificationIcon, showNotification, type NotificationTarget } from "@/lib/notify";
+import { attentionPreferences } from "@/lib/attention-preferences";
 import { speaker } from "@/lib/tts";
 import { roleProfilePatch, type BotRole } from "@/lib/bot-roles";
 import { t } from "@/lib/i18n";
@@ -627,7 +628,7 @@ export interface ConfigStatus {
   /** UI language override; "" (or absent) follows the system language. */
   language?: string;
   /** Opt-in flags. Absent means off. */
-  features?: { skillAuthoring: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean };
+  features?: { skillAuthoring: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; marketplacePublisher?: boolean };
   /** First-run progress: whether the welcome tour was finished and which
    * one-time hints were dismissed. Server-owned so it follows the workspace. */
   onboarding?: OnboardingStatus;
@@ -765,15 +766,13 @@ export interface InstanceInfo {
 
 export type AppSettingsSection =
   | "general"
+  | "import"
   | "desktopWorkspaces"
-  | "organization"
   | "appearance"
-  | "experimental"
   | "connections"
   | "engines"
   | "companion"
   | "remote"
-  | "computer"
   | "usage"
   | "people"
   | "backups"
@@ -781,6 +780,7 @@ export type AppSettingsSection =
   | "updates";
 
 export type BotSettingsSection =
+  | "channels"
   | "overview"
   | "identity"
   | "soul"
@@ -885,6 +885,13 @@ export interface AppState {
   /** Frames arriving outside the visible thread, including the small gap
    * between a switch snapshot and its HTTP response. */
   backgroundThreadEvents: Record<string, Array<Extract<Action, { type: "messageAdded" | "messagePatched" | "threadActive" | "optimisticMessageRemoved" }>>>;
+  /** Transcripts of threads open in a split pane that are not their bot's
+   * active thread. The active thread always lives on the bot itself. */
+  threadPanes: Record<string, ThreadPane>;
+  /** Bot threads recently switched away from, so returning renders the
+   * transcript at once while the server page loads, and older pages already
+   * read are not thrown away. Bounded by THREAD_CACHE_MAX. */
+  threadCache: Record<string, CachedThread>;
   /** Threads with a scrollback page in flight, so one click cannot ask the
    * server for the same page twice. */
   loadingOlder: Record<string, true>;
@@ -972,6 +979,95 @@ function replaceBotQueues(state: AppState, queues: AppState["pendingQueued"]): A
 
 export type BotAnnouncement = Omit<Bot, "messages"> & { messages?: Message[] };
 
+/** A transcript as it was when its thread was left. */
+export interface CachedThread {
+  messages: Message[];
+  activeLeafId?: string | null;
+  hasMore?: boolean;
+  at: number;
+}
+
+/** Threads whose transcripts stay in memory after being left. */
+export const THREAD_CACHE_MAX = 8;
+
+function cacheThread(cache: Record<string, CachedThread>, threadId: string, entry: Omit<CachedThread, "at">): Record<string, CachedThread> {
+  const next = { ...cache, [threadId]: { ...entry, at: Date.now() } };
+  const ids = Object.keys(next);
+  if (ids.length > THREAD_CACHE_MAX) {
+    ids.sort((a, b) => next[a]!.at - next[b]!.at);
+    for (const id of ids.slice(0, ids.length - THREAD_CACHE_MAX)) delete next[id];
+  }
+  return next;
+}
+
+/** The server's switch page is the authority for the newest rows; rows the
+ * client had already paged back through are kept beneath it when the two
+ * overlap, so returning to a long thread does not shrink it back to one page.
+ * With no overlap (much happened while away) the page stands alone. */
+export function mergeCachedHistory(
+  page: { messages: Message[]; hasMore?: boolean },
+  cached: CachedThread | undefined,
+): { messages: Message[]; hasMore?: boolean } {
+  const first = page.messages[0];
+  if (!cached || !first || !page.hasMore) return page;
+  const at = cached.messages.findIndex((message) => message.id === first.id);
+  if (at <= 0) return page;
+  return { messages: [...cached.messages.slice(0, at), ...page.messages], hasMore: cached.hasMore };
+}
+
+/** One background thread shown beside the primary conversation. */
+export interface ThreadPane {
+  botId: string;
+  messages: Message[];
+  activeLeafId?: string | null;
+  hasMore?: boolean;
+  loaded: boolean;
+}
+
+/** Message-shaped actions a thread pane answers the same way the bot would. */
+const THREAD_PANE_ACTIONS = new Set(["messageAdded", "messagePatched", "optimisticMessageRemoved", "threadActive", "send", "editMessage", "switchBranch", "olderMessages"]);
+
+/** The bot as seen through one of its threads: that thread's transcript and
+ * turn state, everything else shared. */
+export function botForThread(bot: Bot, threadId: string, pane: ThreadPane | undefined): Bot {
+  if (bot.threadId === threadId) return bot;
+  const task = bot.tasks?.find((candidate) => candidate.threadId === threadId);
+  return {
+    ...bot,
+    threadId,
+    messages: pane?.messages ?? [],
+    activeLeafId: pane?.activeLeafId ?? null,
+    hasMore: pane?.hasMore,
+    busy: Boolean(task?.busy),
+    activity: task?.activity ?? (task?.busy ? "working" : "idle"),
+    turnStartedAt: task?.turnStartedAt ?? null,
+    pinnedMessageId: task?.pinnedMessageId,
+    modelSelection: task?.modelSelection ?? bot.modelSelection,
+    approvalMode: task?.approvalMode ?? bot.approvalMode,
+    autoApprove: task?.autoApprove ?? bot.autoApprove,
+    awaitingThreadSnapshot: false,
+  };
+}
+
+/** Run a message action against a pane by borrowing the bot reducer: the
+ * pane becomes the bot's only thread for one step, and only its transcript
+ * is kept. */
+function reduceThreadPane(state: AppState, action: Action & { threadId: string }): AppState {
+  const pane = state.threadPanes[action.threadId]!;
+  const bot = state.bots.find((candidate) => candidate.id === pane.botId);
+  if (!bot) return state;
+  const view = botForThread(bot, action.threadId, pane);
+  const scratch = reducer({ ...state, bots: [view], groups: [], threadPanes: {}, backgroundThreadEvents: {} }, action);
+  const after = scratch.bots[0];
+  if (!after) return state;
+  return {
+    ...state,
+    loadingOlder: scratch.loadingOlder,
+    transcriptGeneration: scratch.transcriptGeneration,
+    threadPanes: { ...state.threadPanes, [action.threadId]: { ...pane, messages: after.messages, activeLeafId: after.activeLeafId, hasMore: after.hasMore } },
+  };
+}
+
 export type Action =
   | { type: "homes"; homes: LinkedHome[] }
   | { type: "homeHydrate"; home: LinkedHome; bots: Bot[] }
@@ -1058,6 +1154,10 @@ export type Action =
   | { type: "steerQueued"; botId: string; queueId: string; threadId?: string; onError?: () => void; onSettled?: () => void }
   | { type: "cancelGroupQueued"; groupId: string; threadId: string; queueId: string }
   | { type: "steerGroupQueued"; groupId: string; queueId: string; threadId?: string; botId?: string; onError?: () => void; onSettled?: () => void }
+  // queued words edited in place (text only; attachments never change)
+  | { type: "editQueued"; threadId: string; queueId: string; text: string; expectedText: string; botId?: string; groupId?: string; onError?: () => void }
+  // the person's order for a thread's queue; `previous` restores a refusal
+  | { type: "reorderQueued"; threadId: string; order: string[]; previous: string[]; botId?: string; groupId?: string; onSaved?: () => void; onError?: () => void }
   | { type: "editMessage"; botId: string; messageId: string; text: string; threadId?: string }
   | { type: "switchBranch"; botId: string; messageId: string; threadId?: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
@@ -1089,6 +1189,9 @@ export type Action =
   | { type: "newTask"; botId: string; projectId?: string }
   | { type: "switchTask"; botId: string; threadId: string }
   | { type: "taskSwitched"; bot: Bot }
+  | { type: "threadPaneOpen"; botId: string; threadId: string }
+  | { type: "threadPaneLoaded"; threadId: string; messages: Message[]; activeLeafId?: string | null; hasMore?: boolean }
+  | { type: "threadPaneClose"; threadId: string }
   | { type: "threadSwitchFailed"; botId: string; threadId: string }
   | { type: "renameTask"; botId: string; threadId: string; title: string }
   | { type: "deleteTask"; botId: string; threadId: string }
@@ -1331,6 +1434,10 @@ function optimisticUserMessage(
 }
 
 export function reducer(state: AppState, action: Action): AppState {
+  if (THREAD_PANE_ACTIONS.has(action.type) && "threadId" in action && typeof action.threadId === "string" &&
+      state.threadPanes[action.threadId]?.loaded && !state.bots.some((bot) => bot.threadId === action.threadId)) {
+    return reduceThreadPane(state, action as Action & { threadId: string });
+  }
   if (action.type === "messageAdded" || action.type === "messagePatched" || action.type === "threadActive" || action.type === "optimisticMessageRemoved") {
     const owner = state.bots.find((bot) => (bot.threadId !== action.threadId || bot.awaitingThreadSnapshot) && bot.tasks?.some((task) => task.threadId === action.threadId));
     if (owner) {
@@ -1396,6 +1503,8 @@ export function reducer(state: AppState, action: Action): AppState {
         computerControl: action.computerControl,
         selectedId,
         backgroundThreadEvents: {},
+        threadPanes: {},
+        threadCache: {},
         loadingOlder: {},
         transcriptGeneration: {},
         pendingThreadSwitch: state.pendingThreadSwitch,
@@ -1405,6 +1514,22 @@ export function reducer(state: AppState, action: Action): AppState {
         action.botQueuedMessages ? replaceBotQueues(hydrated, action.botQueuedMessages) : hydrated,
         [...action.bots, ...action.groups],
       );
+    }
+    case "threadPaneOpen":
+      if (state.threadPanes[action.threadId]) return state;
+      return { ...state, threadPanes: { ...state.threadPanes, [action.threadId]: { botId: action.botId, messages: [], loaded: false } } };
+    case "threadPaneLoaded": {
+      const pane = state.threadPanes[action.threadId];
+      if (!pane) return state;
+      // Frames that raced the page are replayed on top of it.
+      let next: AppState = { ...state, threadPanes: { ...state.threadPanes, [action.threadId]: { ...pane, messages: action.messages, activeLeafId: action.activeLeafId ?? action.messages.at(-1)?.id ?? null, hasMore: action.hasMore, loaded: true } } };
+      for (const frame of state.backgroundThreadEvents[action.threadId] ?? []) next = reducer(next, frame);
+      const { [action.threadId]: _replayed, ...backgroundThreadEvents } = next.backgroundThreadEvents;
+      return { ...next, backgroundThreadEvents };
+    }
+    case "threadPaneClose": {
+      const { [action.threadId]: _closed, ...threadPanes } = state.threadPanes;
+      return { ...state, threadPanes };
     }
     case "loadOlderMessages":
       return state.loadingOlder[action.threadId]
@@ -2128,6 +2253,24 @@ export function reducer(state: AppState, action: Action): AppState {
       // API-only: the effect folds in messageAdded/consumePendingQueued on
       // success, so the chips clear exactly when the words truly landed.
       return state;
+    case "editQueued": {
+      const prev = state.pendingQueued[action.threadId];
+      if (!prev?.some((entry) => entry.queueId === action.queueId)) return state;
+      return {
+        ...state,
+        pendingQueued: {
+          ...state.pendingQueued,
+          [action.threadId]: prev.map((entry) => (entry.queueId === action.queueId ? { ...entry, text: action.text } : entry)),
+        },
+      };
+    }
+    case "reorderQueued": {
+      const prev = state.pendingQueued[action.threadId];
+      if (!prev?.length) return state;
+      const rank = new Map(action.order.map((id, index) => [id, index]));
+      const next = [...prev].sort((a, b) => (rank.get(a.queueId) ?? prev.length) - (rank.get(b.queueId) ?? prev.length));
+      return { ...state, pendingQueued: { ...state.pendingQueued, [action.threadId]: next } };
+    }
     case "cancelGroupQueued": {
       const prev = state.pendingQueued[action.threadId] ?? [];
       const rest = prev.filter((entry) => entry.queueId !== action.queueId);
@@ -2211,17 +2354,33 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, pendingThreadSwitch };
     }
     case "taskSwitched": {
+      // A pane showing the thread being left keeps the transcript on screen.
+      const leaving = state.bots.find((bot) => bot.id === action.bot.id);
+      if (leaving && leaving.threadId !== action.bot.threadId && state.threadPanes[leaving.threadId]) {
+        state = { ...state, threadPanes: { ...state.threadPanes, [leaving.threadId]: { botId: leaving.id, messages: leaving.messages, activeLeafId: leaving.activeLeafId, hasMore: leaving.hasMore, loaded: true } } };
+      }
+      // Remember the thread being left; coming back renders it instantly.
+      if (leaving && leaving.threadId !== action.bot.threadId && leaving.messages.length && !leaving.awaitingThreadSnapshot) {
+        state = { ...state, threadCache: cacheThread(state.threadCache, leaving.threadId, { messages: leaving.messages, activeLeafId: leaving.activeLeafId, hasMore: leaving.hasMore }) };
+      }
+      const returning = state.threadCache[action.bot.threadId];
+      const page = mergeCachedHistory({ messages: action.bot.messages ?? [], hasMore: action.bot.hasMore }, returning);
       let switched = updateBot(bumpTranscriptGeneration(state, action.bot.threadId), action.bot.id, (bot) => ({
         ...bot,
         ...action.bot,
         computer: action.bot.computer,
         sharedWorkComputer: action.bot.sharedWorkComputer,
-        messages: action.bot.messages ?? [],
-        // The snapshot decides whether this thread has scrollback. Merging
-        // would carry the previous thread's answer onto a new one.
-        hasMore: action.bot.hasMore,
+        messages: page.messages,
+        // The snapshot (or the cached history under it) decides whether this
+        // thread has scrollback. Merging with the bot would carry the previous
+        // thread's answer onto a new one.
+        hasMore: page.hasMore,
         awaitingThreadSnapshot: false,
       }));
+      if (returning) {
+        const { [action.bot.threadId]: _back, ...threadCache } = switched.threadCache;
+        switched = { ...switched, threadCache };
+      }
       for (const frame of state.backgroundThreadEvents[action.bot.threadId] ?? []) switched = reducer(switched, frame);
       const { [action.bot.threadId]: _settled, ...backgroundThreadEvents } = switched.backgroundThreadEvents;
       const pendingThreadSwitch = { ...switched.pendingThreadSwitch };
@@ -2274,6 +2433,8 @@ export function reducer(state: AppState, action: Action): AppState {
 const MAX_KEPT_SCREEN_FRAMES = 8;
 
 export const initialState: AppState = {
+  threadPanes: {},
+  threadCache: {},
   pendingThreadSwitch: {},
   modelVariantSessions: {},
   backgroundThreadEvents: {},
@@ -2362,6 +2523,10 @@ export async function createBotWithRole(role?: BotRole, request: typeof api = ap
 export const MESSAGE_PAGE_SIZE = 200;
 // A switch needs only the mounted tail. Older messages use the existing pager.
 export const THREAD_SWITCH_PAGE_SIZE = 80;
+/** Whole turns every transcript page reaches back to (`?turns=`, 2.0
+ * servers). Raw rows alone let one tool-heavy turn push the prompt and the
+ * conversation before it off the page; older servers ignore the parameter. */
+export const THREAD_PAGE_TURNS = 6;
 
 /** A bot row follows the server's current selection (including daily
  * rollover). Background announcements alone must not navigate a window.
@@ -2378,7 +2543,7 @@ export async function refreshBotSelection(
   const visible = current();
   if (!fresh || !visible || fresh.threadId === visible.threadId) return;
   const page = await request<Pick<Bot, "messages" | "hasMore" | "activeLeafId">>(
-    `/api/threads/${fresh.threadId}/messages?limit=${MESSAGE_PAGE_SIZE}`,
+    `/api/threads/${fresh.threadId}/messages?limit=${MESSAGE_PAGE_SIZE}&turns=${THREAD_PAGE_TURNS}`,
   );
   if (current()) apply({ ...fresh, ...page });
 }
@@ -3002,13 +3167,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         action.type !== "deleteBot"
       ) rawDispatch(action);
       switch (action.type) {
+        case "threadPaneOpen": {
+          if (stateRef.current.threadPanes[action.threadId]) break;
+          api<{ messages?: Message[]; hasMore?: boolean; activeLeafId?: string | null }>(`/api/threads/${action.threadId}/messages?limit=${THREAD_SWITCH_PAGE_SIZE}&turns=${THREAD_PAGE_TURNS}`)
+            .then((page) => rawDispatch({ type: "threadPaneLoaded", threadId: action.threadId, messages: page.messages ?? [], activeLeafId: page.activeLeafId, hasMore: page.hasMore }))
+            .catch((error) => {
+              rawDispatch({ type: "threadPaneClose", threadId: action.threadId });
+              showError(error);
+            });
+          break;
+        }
         case "loadOlderMessages": {
           // The reducer's flag is for the UI; this set is the guard, because
           // `stateRef` still holds the state from before this dispatch.
           if (olderPagesInFlight.has(action.threadId)) break;
           olderPagesInFlight.add(action.threadId);
           const current = stateRef.current;
-          const owner = [...current.bots, ...current.groups].find((candidate) => candidate.threadId === action.threadId);
+          const owner = [...current.bots, ...current.groups].find((candidate) => candidate.threadId === action.threadId) ?? current.threadPanes[action.threadId];
           const before = owner?.messages[0]?.id;
           // The transcript this page is being asked about. `loadOlderMessages`
           // does not move it, so the value here is the one the reducer will
@@ -3022,7 +3197,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             break;
           }
           api<{ messages: Message[]; hasMore?: boolean }>(
-            `/api/threads/${action.threadId}/messages?limit=${MESSAGE_PAGE_SIZE}&before=${encodeURIComponent(before)}`,
+            `/api/threads/${action.threadId}/messages?limit=${MESSAGE_PAGE_SIZE}&turns=${THREAD_PAGE_TURNS}&before=${encodeURIComponent(before)}`,
           )
             .finally(() => olderPagesInFlight.delete(action.threadId))
             .then((page) => rawDispatch({
@@ -3087,6 +3262,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               action.onError?.();
             });
           break;
+        case "editQueued": {
+          const owner = action.groupId ? `groups/${action.groupId}` : `bots/${action.botId}`;
+          void api(`/api/${owner}/queue/${action.queueId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ threadId: action.threadId, expectedText: action.expectedText, text: action.text }),
+          }).catch((error) => {
+            rawDispatch({ ...action, text: action.expectedText, expectedText: action.text });
+            showError(error);
+            action.onError?.();
+          });
+          break;
+        }
+        case "reorderQueued": {
+          const owner = action.groupId ? `groups/${action.groupId}` : `bots/${action.botId}`;
+          void api(`/api/${owner}/queue-order`, {
+            method: "POST",
+            body: JSON.stringify({ threadId: action.threadId, order: action.order }),
+          })
+            .then(() => action.onSaved?.())
+            .catch((error) => {
+              rawDispatch({ ...action, order: action.previous });
+              showError(error);
+              action.onError?.();
+            });
+          break;
+        }
         case "cancelGroupQueued":
           void api(`/api/groups/${action.groupId}/queue/${action.queueId}`, { method: "DELETE" })
             .then(() => rawDispatch(action))
@@ -3142,6 +3343,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   text: action.text,
                   reason: body.reason === "capacity" ? "capacity" : undefined,
                 });
+                // follow-ups set to steer: fold it into the running turn
+                // now. An engine that cannot steer just keeps it queued.
+                if (action.priority !== "block" && body.reason !== "capacity" && attentionPreferences().followUps === "steer") {
+                  void api(`/api/bots/${action.botId}/queue/${body.queueId}/steer`, { method: "POST", body: JSON.stringify({ threadId: body.threadId }) })
+                    .then((result) => foldSteerResult(result ? { ...result, queued: false } : result))
+                    .catch(() => {});
+                }
               }
             })
             .catch((error) => {
@@ -3412,6 +3620,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   queueId: body.queueId,
                   text: action.text,
                 });
+                if (action.priority !== "block" && attentionPreferences().followUps === "steer") {
+                  void api(`/api/groups/${action.groupId}/queue/${body.queueId}/steer`, { method: "POST", body: JSON.stringify({ threadId: body.threadId }) })
+                    .then((result) => foldSteerResult(result ? { ...result, queued: false } : result))
+                    .catch(() => {});
+                }
               }
             })
             .catch((error) => {
@@ -3498,7 +3711,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // A new task's thread is empty, so only the switch needs a page.
           void ready.then(() => api<{ bot: Bot }>(action.type === "newTask"
             ? `/api/bots/${action.botId}/tasks`
-            : `/api/bots/${action.botId}/tasks/${action.threadId}?messages=${THREAD_SWITCH_PAGE_SIZE}`, { method: "POST", body: JSON.stringify(action.type === "newTask" ? { projectId: action.projectId } : {}) }))
+            : `/api/bots/${action.botId}/tasks/${action.threadId}?messages=${THREAD_SWITCH_PAGE_SIZE}&turns=${THREAD_PAGE_TURNS}`, { method: "POST", body: JSON.stringify(action.type === "newTask" ? { projectId: action.projectId } : {}) }))
             .then((r) => {
               if (navigation.get(action.botId) !== revision) return;
               if (!r?.bot || r.bot.id !== action.botId || (action.type === "switchTask" && r.bot.threadId !== action.threadId)) throw new Error("Could not load that conversation. Try again.");
@@ -3532,7 +3745,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "switchGroupTask":
           if (onAnotherHome(action.groupId)) break;
-          api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}?messages=${THREAD_SWITCH_PAGE_SIZE}`, { method: "POST" })
+          api<{ group?: Partial<Group> & { id: string } }>(`/api/groups/${action.groupId}/tasks/${action.threadId}?messages=${THREAD_SWITCH_PAGE_SIZE}&turns=${THREAD_PAGE_TURNS}`, { method: "POST" })
             .then((r) => r?.group && dispatch({ type: "groupPatched", group: r.group }))
             .catch(showError);
           break;
@@ -3801,9 +4014,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
-        case "message.patch":
-          rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message as Message });
+        case "message.patch": {
+          const patched = frame.message as Message;
+          // answered anywhere (here, the phone, the banner): its banner goes
+          if (patched.card?.requestId && (patched.card.answered || patched.card.dismissed)) dismissAttention(patched.card.requestId);
+          rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: patched });
           break;
+        }
         case "thread":
           rawDispatch({ type: "threadActive", threadId: frame.threadId, activeLeafId: frame.activeLeafId });
           // a rewind also invalidates any half-streamed text from the old branch
@@ -3861,6 +4078,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               },
               icon,
               visibleNotificationThread(stateRef.current),
+              {
+                // typed into the banner: a question's answer, otherwise a
+                // message into the thread the banner came from
+                reply: (notification, text) => {
+                  if (notification.kind === "question" && notification.requestId) {
+                    return dispatch({ type: "decideRequest", threadId: notification.threadId, requestId: notification.requestId, behavior: "answer", message: text });
+                  }
+                  const group = stateRef.current.groups.find((candidate) =>
+                    candidate.threadId === notification.threadId ||
+                    (candidate.tasks ?? []).some((task) => task.threadId === notification.threadId));
+                  if (group) return dispatch({ type: "sendGroup", groupId: group.id, threadId: notification.threadId, text });
+                  dispatch({ type: "send", botId: notification.botId, threadId: notification.threadId, text });
+                },
+                decide: (notification, behavior) => {
+                  if (!notification.requestId) return;
+                  dispatch({ type: "decideRequest", threadId: notification.threadId, requestId: notification.requestId, behavior });
+                },
+              },
             ),
           );
           break;

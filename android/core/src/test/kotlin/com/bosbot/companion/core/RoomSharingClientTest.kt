@@ -27,10 +27,14 @@ class RoomSharingClientTest {
             server.enqueue(MockResponse().setBody("""{"profile":{"avatarUrl":"/api/attachments/photo.jpg"}}"""))
             assertEquals("/api/attachments/photo.jpg", client.sharedMe().avatar)
             assertEquals("/api/multiplayer/me", server.takeRequest().path); assertEquals("/api/config", server.takeRequest().path)
+            server.enqueue(MockResponse().setBody("""{"profile":{"avatarUrl":"/api/attachments/photo.jpg"}}"""))
             server.enqueue(MockResponse().setBody("{}")); client.setProfilePhoto(null)
+            assertEquals("/api/config", server.takeRequest().path)
             val request = server.takeRequest()
             assertEquals("PUT", request.method); assertEquals("/api/multiplayer/profile-photo", request.path)
-            assertEquals(JsonNull, CompanionJson.parseToJsonElement(request.body.readUtf8()).jsonObject["photo"])
+            val body = CompanionJson.parseToJsonElement(request.body.readUtf8()).jsonObject
+            assertEquals(JsonNull, body["photo"])
+            assertEquals(JsonPrimitive("/api/attachments/photo.jpg"), body["expected"])
         }
     }
 }

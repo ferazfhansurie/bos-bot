@@ -306,6 +306,32 @@ export function editChatFollowup(kind: ChatFollowup["kind"], ownerId: string, th
   return edited;
 }
 
+/** Rewrite one thread's pending follow-ups in a new order. Restore reads
+ * rows by rowid, so the rows are re-inserted in the chosen order inside one
+ * transaction. Refused (false) unless `orderedIds` is exactly the pending
+ * set, so a queue that drained or grew meanwhile is never half-reordered. */
+export function reorderChatFollowups(kind: ChatFollowup["kind"], ownerId: string, threadId: string, orderedIds: string[]): boolean {
+  let reordered = false;
+  writeFollowups((connection) => {
+    const rows = connection.prepare(
+      "SELECT id, kind, owner_id, thread_id, send_id, status, payload FROM chat_followups WHERE kind = ? AND owner_id = ? AND thread_id = ? AND status = 'pending' ORDER BY rowid",
+    ).all(kind, ownerId, threadId) as Array<{ id: string; kind: string; owner_id: string; thread_id: string; send_id: string | null; status: string; payload: string }>;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    if (rows.length !== orderedIds.length || new Set(orderedIds).size !== orderedIds.length || orderedIds.some((id) => !byId.has(id))) return;
+    const remove = connection.prepare("DELETE FROM chat_followups WHERE id = ?");
+    const insert = connection.prepare(
+      "INSERT INTO chat_followups(id, kind, owner_id, thread_id, send_id, status, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (const id of orderedIds) remove.run(id);
+    for (const id of orderedIds) {
+      const row = byId.get(id)!;
+      insert.run(row.id, row.kind, row.owner_id, row.thread_id, row.send_id, row.status, row.payload);
+    }
+    reordered = true;
+  });
+  return reordered;
+}
+
 /** Null retires a dispatch whose canonical transcript is already durable.
  * Cancellation tombstones remain so a retried sendId cannot resurrect it. */
 export function settleChatFollowups(ids: string[], status: FollowupStatus | null): void {

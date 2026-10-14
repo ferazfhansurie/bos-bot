@@ -254,3 +254,6 @@ describe("interactive messages", () => {
     expect(bodyOf({ ...base, type: "image", hasMedia: true, _data: { type: "image", caption: "" } })).toBe("");
   });
 });
+it("reads a sent message id without _serialized (current WhatsApp Web key shape)", () => {
+  expect(serializedMessageId({ fromMe: true, remote: "96396397047822@lid", id: "3EB0ABC" })).toBe("true_96396397047822@lid_3EB0ABC");
+});

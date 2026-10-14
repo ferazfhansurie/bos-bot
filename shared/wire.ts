@@ -127,7 +127,7 @@ export interface WireTask {
   /** Detached routine execution, reachable through its visible results card. */
   routineRunId?: string;
   /** External channel history stays addressable without a desktop chat row. */
-  channelTransport?: "discord";
+  channelTransport?: "discord" | "telegram";
   /** Set when a bot, not a person, opened this thread. */
   openedBy?: TaskOpenedBy;
   /** Set by close_thread; absent while the thread is open. */

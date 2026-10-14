@@ -270,3 +270,50 @@ describe("Claude account HTTP API", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
+
+describe("API connections (Settings → Engines → Add a model)", () => {
+  it("adds any provider as its own OpenAI-compatible connection and removes it again", async () => {
+    const created = await api("POST", "/api/instances/api-connections", { provider: "anthropic", key: "sk-fixture-key", model: "claude-sonnet-5" });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const id = created.body.instanceId as string;
+    expect(id).toMatch(/^api-[0-9a-f]{8}$/);
+    expect(saved().instances[id]).toEqual({
+      driver: "api-key", displayName: "Anthropic", icon: { kind: "preset", preset: "anthropic" },
+      config: { url: "https://api.anthropic.com/v1", key: "sk-fixture-key", model: "claude-sonnet-5" },
+    });
+    expect(JSON.stringify(created.body.instances)).not.toContain("sk-fixture-key");
+    const row = created.body.instances.find((entry: any) => entry.instanceId === id);
+    // Offline fixture: the saved default model still shows in the picker.
+    expect(row).toMatchObject({ driverKind: "api-key", displayName: "Anthropic", models: { default: "claude-sonnet-5" } });
+
+    const custom = await api("POST", "/api/instances/api-connections", { provider: "custom", url: "http://localhost:1234/v1/", key: "local", model: "qwen3" });
+    expect(custom.status, JSON.stringify(custom.body)).toBe(201);
+    expect(saved().instances[custom.body.instanceId]).toMatchObject({ displayName: "localhost", config: { url: "http://localhost:1234/v1", model: "qwen3" } });
+
+    expect((await api("DELETE", `/api/instances/${id}`)).status).toBe(200);
+    expect(saved().instances[id]).toBeUndefined();
+    expect((await api("DELETE", `/api/instances/${custom.body.instanceId}`)).status).toBe(200);
+    // built-in engines stay; only connections added here can be removed here
+    expect((await api("DELETE", "/api/instances/openaiCompat")).status).toBe(400);
+  });
+
+  it("validates input, reports an unreachable provider, and stays admin-only", async () => {
+    for (const body of [
+      {}, { provider: "anthropic", key: "", model: "m" }, { provider: "anthropic", key: "has space", model: "m" },
+      { provider: "anthropic", key: "k", model: " " }, { provider: "nope", key: "k", model: "m" },
+      { provider: "custom", key: "k", model: "m" }, { provider: "custom", url: "http://example.com/v1", key: "k", model: "m" },
+      { provider: "anthropic", key: "k", model: "m", extra: true },
+    ]) {
+      expect((await api("POST", "/api/instances/api-connections", body)).status, JSON.stringify(body)).toBe(400);
+    }
+    expect((await api("POST", "/api/instances/api-connections", { provider: "openai", key: "k", model: "m" }, { "content-type": "text/plain" })).status).toBe(415);
+    // The fixture server is offline: the model list fails with a readable reason.
+    const models = await api("POST", "/api/instances/api-models", { provider: "openai", key: "sk-fixture" });
+    expect(models.status).toBe(400);
+    expect(models.body.error).toMatch(/API|reach/);
+    for (const path of ["/api/instances/api-models", "/api/instances/api-connections"]) {
+      expect((await api("POST", path, { provider: "openai", key: "k", model: "m" }, { authorization: `Bearer ${clientToken}` })).status).toBe(403);
+    }
+    expect(Object.keys(saved().instances).some((id) => id.startsWith("api-"))).toBe(false);
+  });
+});

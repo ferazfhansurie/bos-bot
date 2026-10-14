@@ -5,6 +5,7 @@
 // so the reference's cap radius becomes this bubble's corner radius. That is why it curls in, drops, and ends soft rather than in a
 // point — the shape is the drawing, not a guess at it.
 import SwiftUI
+import CompanionCore
 
 struct SpeechBubble: Shape {
     enum Tail { case none, leading, trailing }
@@ -97,4 +98,51 @@ enum BubbleColor {
     /// What a bot said: the theme's raised surface, or the app's own greys
     /// (near-black on dark, a soft grey on light) on Classic.
     static var theirs: Color { Color(uiColor: ThemeSurfaces.current.bubbleUIColor) }
+
+    /// A bot's bubble washed with that bot's colour, the way Grok tints a
+    /// reply: the theme's bubble with a soft layer of the colour over it,
+    /// a little stronger on dark where a faint tint disappears. Never the
+    /// saturated colour itself; that is reserved for what you said.
+    static func theirs(tint name: String?) -> Color {
+        guard let tint = tintComponents(name) else { return theirs }
+        let base = ThemeSurfaces.current.bubbleUIColor
+        return Color(uiColor: UIColor { trait in blend(base.resolvedColor(with: trait), tint, trait) })
+    }
+
+    /// Text on a tinted bubble: near-black or white, whichever the blended
+    /// fill is lighter or darker than, so a custom theme with a mid-tone
+    /// surface still reads.
+    static func theirsText(tint name: String?) -> Color {
+        guard let tint = tintComponents(name) else { return .primary }
+        let base = ThemeSurfaces.current.bubbleUIColor
+        return Color(uiColor: UIColor { trait in
+            let fill = blend(base.resolvedColor(with: trait), tint, trait)
+            return luminance(fill) > 0.40
+                ? UIColor(red: 0.07, green: 0.07, blue: 0.08, alpha: 1)
+                : UIColor.white
+        })
+    }
+
+    private static func tintComponents(_ name: String?) -> (r: CGFloat, g: CGFloat, b: CGFloat)? {
+        guard let name, !name.isEmpty else { return nil }
+        var value: UInt64 = 0
+        let hex = GlyphFaces.resolveColor(name).replacingOccurrences(of: "#", with: "")
+        guard hex.count == 6, Scanner(string: hex).scanHexInt64(&value) else { return nil }
+        return (CGFloat((value >> 16) & 0xFF) / 255, CGFloat((value >> 8) & 0xFF) / 255, CGFloat(value & 0xFF) / 255)
+    }
+
+    private static func blend(_ base: UIColor, _ tint: (r: CGFloat, g: CGFloat, b: CGFloat), _ trait: UITraitCollection) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        base.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let k: CGFloat = trait.userInterfaceStyle == .dark ? 0.22 : 0.14
+        return UIColor(red: r + (tint.r - r) * k, green: g + (tint.g - g) * k, blue: b + (tint.b - b) * k, alpha: a)
+    }
+
+    /// WCAG relative luminance.
+    private static func luminance(_ color: UIColor) -> CGFloat {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func linear(_ c: CGFloat) -> CGFloat { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
 }

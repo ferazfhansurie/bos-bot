@@ -51,7 +51,9 @@ struct CompanionApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-browser-preview"), let bot = session.state.bots.first {
+            if ProcessInfo.processInfo.arguments.contains("-computer-preview"), let bot = session.state.bots.first {
+                NavigationStack { ComputerView(bot: bot) }.session(session).preferredColorScheme(.dark)
+            } else if ProcessInfo.processInfo.arguments.contains("-browser-preview"), let bot = session.state.bots.first {
                 NavigationStack { BrowserLiveView(bot: bot) }.session(session).preferredColorScheme(.dark)
             } else if CloudRoomsConfig.enabled, let rooms = CloudRoomsConfig.roomsURL, let issuer = CloudRoomsConfig.issuerURL {
                 CloudRoomsRoot(roomsURL: rooms, issuerURL: issuer)

@@ -53,18 +53,20 @@ afterEach(() => {
 
 const render = () => renderToStaticMarkup(createElement(SettingsModal));
 
-describe("Settings → Appearance", () => {
-  it("groups skins, thread visibility, and tool-call display with preservation copy", () => {
+describe("Settings → General", () => {
+  it("keeps the essentials on one page: profile, skin, threads, language, approvals", () => {
     const html = render();
-    expect(html).toContain('<option value="appearance" selected="">Appearance</option>');
+    expect(html).toContain('<option value="general" selected="">General</option>');
+    expect(html).not.toContain('<option value="appearance"');
+    expect(html).toContain("Profile");
     expect(html).toContain("Midnight");
     expect(html).toContain('aria-label="Show threads"');
-    expect(html).toContain('aria-label="Show tool calls in chat"');
-    expect(html).toContain("on this device only");
     expect(html).toContain("all conversation history and running work");
-    expect(html).toContain("channels are unchanged");
-    expect(html).toContain("Turn this back on");
-    expect(html).not.toContain("Maximum turn length");
+    expect(html).toContain('aria-label="App language"');
+    expect(html).toContain("Privacy");
+    for (const removed of ["Maximum turn length", "Maximum running threads per bot", "Show tool calls in chat", "Diagnostics", "Set up my AI team"]) {
+      expect(html).not.toContain(removed);
+    }
   });
 
   it.each([true, false])("only updates the local preference when the switch is %s", (enabled) => {
@@ -78,26 +80,13 @@ describe("Settings → Appearance", () => {
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
-  it("leaves non-appearance General settings in place", () => {
-    fixture.section = "general";
-    const html = render();
-    expect(html).toContain("Profile");
-    expect(html).toContain("Set up my AI team");
-    expect(html).toContain("Maximum turn length");
-    expect(html).toContain("Maximum running threads per bot");
-    expect(html).toContain('aria-label="App language"');
-    expect(html).toContain("Diagnostics");
-    expect(html).not.toContain('aria-label="Show threads"');
-    expect(html).not.toContain('aria-label="Show tool calls in chat"');
-    expect(html).not.toContain("Midnight");
-  });
-
   it("makes local appearance available remotely without exposing server settings", () => {
     vi.stubGlobal("window", { ogb: { remoteClient: { active: true } } });
     const html = render();
-    expect(html).toContain('<option value="appearance" selected="">Appearance</option>');
-    expect(html).toContain('<option value="companion">Remote access</option>');
-    expect(html).not.toContain('<option value="general">');
+    expect(html).toContain('<option value="general" selected="">General</option>');
+    expect(html).toContain('<option value="companion">Connect a device</option>');
+    expect(html).not.toContain("Profile");
+    expect(html).not.toContain('aria-label="App language"');
     expect(html).not.toContain('<option value="connections">');
     expect(html).not.toContain('<option value="engines">');
     expect(html).not.toContain('<option value="backups">');
@@ -118,13 +107,12 @@ describe("Settings → Appearance", () => {
   it("uses English fallback for new keys in untranslated languages", () => {
     setLocale("ja");
     const html = render();
-    expect(html).toContain("Appearance");
     expect(html).toContain('aria-label="Show threads"');
     expect(html).toContain("all conversation history and running work");
     expect(html).not.toContain("settings.threadDisplay");
   });
 
-  it("offers desktop connections as a top-level page without exposing the list remotely", () => {
+  it("keeps desktop connections off the nav, opened only from the Server menu", () => {
     fixture.section = "desktopWorkspaces";
     vi.stubGlobal("window", { ogb: { environments: {} } });
     const local = render();
@@ -134,21 +122,10 @@ describe("Settings → Appearance", () => {
     expect(local).toContain("Your workspaces");
     expect(local).toContain("npx bosbot pair --label");
     fixture.section = "general";
+    const elsewhere = render();
+    expect(elsewhere).not.toContain('<option value="desktopWorkspaces"');
+    expect(elsewhere).not.toContain("Connected workspaces");
     vi.stubGlobal("window", { ogb: { workspaces: {} } });
     expect(render()).not.toContain('<option value="desktopWorkspaces"');
-  });
-
-  it("offers optional Organisation settings only through the local desktop bridge", () => {
-    fixture.section = "organization";
-    vi.stubGlobal("window", { ogb: { organization: {} } });
-    const local = render();
-    expect(local).toContain('<option value="organization" selected="">Organisation</option>');
-    expect(local).toContain("personal and local models");
-    fixture.section = "appearance";
-    vi.stubGlobal("window", {});
-    expect(render()).not.toContain('<option value="organization"');
-    vi.stubGlobal("window", { ogb: { organization: {}, remoteClient: { active: true } } });
-    expect(render()).not.toContain('<option value="organization"');
-    expect(render()).toContain("Midnight");
   });
 });

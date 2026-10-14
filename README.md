@@ -126,13 +126,15 @@ channel and its bots under a named context, then rename it or change its members
 Browse outcome-driven teams on [BotMRR](https://botmrr.io), then choose **Add to BOS Bot**. The app
 opens a review screen before creating the bots, Chief of Staff, channels, playbooks, connector checklist,
 and suggested routines. You can also import the same `.md` file from disk or paste its public GitHub URL
-in **Teams → Import**.
+in **Bot marketplace → Add from a file or link**.
 
 The format stays portable: BOS Bot reads the structured YAML frontmatter for a reliable one-click
 install, while Grok, Claude, ChatGPT, and people can follow the ordinary Markdown playbook. Connections
 remain off until you approve them, routines arrive paused, and packages never carry credentials,
-conversations, permissions, memory, or computer access. The portable format comes from the upstream BOS Bot
-[playbook repository](https://github.com/milind-soni/openmausbot-teams) ([format](https://github.com/milind-soni/openmausbot-teams/blob/main/FORMAT.md)); a BOS team library is not published yet.
+conversations, permissions, memory, or computer access.
+
+Bots BOS Bot publishes itself live in the **Bot marketplace**: download one to run it on your own
+models, or ask to rent it. The catalog is one JSON file, [`shared/marketplace-catalog.json`](shared/marketplace-catalog.json).
 
 ### Bots that talk back
 
@@ -396,4 +398,4 @@ the corresponding notices, license texts, source locations, and SBOM are in
 BOS Bot is an independent, open-source project inspired by Grok Bot. It is
 not affiliated with, endorsed by, or associated with xAI; "Grok" is a trademark
 of its respective owner.
-<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; readme-attribution: Apache attribution to upstream contributors remains intact; upstream-team-library: the existing upstream playbook library remains the configured source until a BOS library is published -->
+<!-- branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; readme-attribution: Apache attribution to upstream contributors remains intact -->

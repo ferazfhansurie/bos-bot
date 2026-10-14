@@ -5,11 +5,11 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-private struct SendableAttachmentImage: @unchecked Sendable {
+struct SendableAttachmentImage: @unchecked Sendable {
     let value: CGImage?
 }
 
-private func decodeAttachmentThumbnail(_ data: Data, maximumPixelSize: Int) -> SendableAttachmentImage {
+func decodeAttachmentThumbnail(_ data: Data, maximumPixelSize: Int) -> SendableAttachmentImage {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
         return SendableAttachmentImage(value: nil)
     }
@@ -45,6 +45,10 @@ enum AttachmentImportError: LocalizedError {
 struct PendingAttachmentChip: View {
     let attachment: PendingMessageAttachment
     let remove: () -> Void
+    var canRemove = true
+    /// Decoded once, off the main thread, at chip size — not a full-size
+    /// photo decode on every composer render.
+    @State private var thumbnail: UIImage?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -59,7 +63,7 @@ struct PendingAttachmentChip: View {
                     .foregroundStyle(Color.secondary)
             }
 
-            Button(action: remove) {
+            if canRemove { Button(action: remove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.secondary)
@@ -68,6 +72,7 @@ struct PendingAttachmentChip: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Remove \(attachment.name)")
+            }
         }
         .padding(.leading, 7)
         .padding(.trailing, 6)
@@ -79,11 +84,19 @@ struct PendingAttachmentChip: View {
                 .strokeBorder(Color.secondary.opacity(0.10))
         )
         .accessibilityElement(children: .contain)
+        .task(id: attachment.id) {
+            guard attachment.kind == .image else { return }
+            let data = attachment.data
+            let decoded = await Task.detached(priority: .userInitiated) {
+                decodeAttachmentThumbnail(data, maximumPixelSize: 120)
+            }.value
+            thumbnail = decoded.value.map { UIImage(cgImage: $0) }
+        }
     }
 
     @ViewBuilder
     private var preview: some View {
-        if attachment.kind == .image, let image = UIImage(data: attachment.data) {
+        if attachment.kind == .image, let image = thumbnail {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()

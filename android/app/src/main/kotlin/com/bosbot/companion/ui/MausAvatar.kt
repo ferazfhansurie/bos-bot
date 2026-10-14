@@ -13,7 +13,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
@@ -102,21 +101,17 @@ internal class MausFrameClock {
     /** Nanoseconds since this avatar's first animated frame; read in the draw phase. */
     val nanos: MutableLongState = mutableLongStateOf(0L)
 
-    /** Built once, handed to `withFrameNanos` on every tick. */
+    /** Built once, handed to `awaitMotionTick` on every tick. */
     val onFrame: (Long) -> Unit = ::publish
 
     private var origin = NO_ORIGIN
-    private var published = 0L
 
     private fun publish(now: Long) {
         if (origin == NO_ORIGIN) origin = now
         val elapsed = now - origin
-        // A face is drawn at 30fps; a roster of them at 60 is twice the work for a
-        // blink nobody can see.
-        if (elapsed - published >= FRAME_INTERVAL_NANOS) {
-            published = elapsed
-            nanos.longValue = elapsed
-        }
+        // The tick itself is held to 30fps by awaitMotionTick; every frame it
+        // delivers is one to draw.
+        nanos.longValue = elapsed
     }
 }
 
@@ -284,6 +279,5 @@ private fun centreY(ring: FloatArray): Float {
 }
 
 private val DEGREES_PER_RADIAN = (180 / PI).toFloat()
-private const val FRAME_INTERVAL_NANOS = 1_000_000_000L / 30
 private const val NO_ORIGIN = Long.MIN_VALUE
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

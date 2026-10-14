@@ -8,6 +8,9 @@ const desktopRemoteClient = process.argv.includes("--openmausbot-remote-client")
 
 let pendingPackageInstallUrl = null;
 const packageInstallListeners = new Set();
+const marketerListeners = new Set();
+let pendingMarketerSetup = false;
+ipcRenderer.on("marketer:setup", () => { pendingMarketerSetup = true; for (const listener of marketerListeners) listener(); });
 ipcRenderer.on("package:install", (_event, url) => {
   if (typeof url !== "string") return;
   pendingPackageInstallUrl = url;
@@ -20,7 +23,7 @@ ipcRenderer.on("package:install", (_event, url) => {
 // helpers here. Main enforces the same rule on the sensitive channels.
 const localOrigin = process.argv.find((arg) => arg.startsWith("--omb-local-origin="))?.slice("--omb-local-origin=".length) ?? null;
 const isLocalPage = !localOrigin || location.origin === localOrigin;
-const REMOTE_SAFE = new Set(["platform", "appChannel", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "focusWindow", "permStatus", "workspaces", "remoteApprovals"]);
+const REMOTE_SAFE = new Set(["platform", "appChannel", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "focusWindow", "permStatus", "workspaces", "remoteApprovals", "attention"]);
 
 // Sandboxed preload cannot import TS or sibling modules. Keep this list in
 // parity with shared/workspace-backup-client.ts (covered by the preload test).
@@ -191,6 +194,11 @@ const bridge = {
     },
   },
   /** A reviewed BotMRR package opened through openmausbot://install. */
+  marketerSetup: {
+    pending: () => ipcRenderer.invoke("marketer:pending"),
+    clear: () => { pendingMarketerSetup = false; return ipcRenderer.invoke("marketer:clear"); },
+    onOpen: (cb) => { marketerListeners.add(cb); if (pendingMarketerSetup) cb(); return () => marketerListeners.delete(cb); },
+  },
   onPackageInstall: (cb) => {
     packageInstallListeners.add(cb);
     if (pendingPackageInstallUrl) cb(pendingPackageInstallUrl);
@@ -203,6 +211,18 @@ const bridge = {
   /** Brings the app window forward after a notification click. A renderer's
    * own window.focus() can't restore a minimised or hidden window on macOS. */
   focusWindow: () => ipcRenderer.send("desktop:focus-window"),
+  /** Native attention banners: approve/deny buttons, reply-from-banner and
+   * the chosen sound. notify resolves false when the renderer should fall
+   * back to a web notification. Safe on a remote page: it only shows text. */
+  attention: {
+    notify: (payload) => ipcRenderer.invoke("attention:notify", payload),
+    dismiss: (id) => ipcRenderer.send("attention:dismiss", id),
+    onEvent: (cb) => {
+      const handler = (_event, value) => cb(value);
+      ipcRenderer.on("attention:event", handler);
+      return () => ipcRenderer.removeListener("attention:event", handler);
+    },
+  },
   /** Live VNC/noVNC in a sandboxed window owned by the app window. */
   desktopViewer: {
     open: (url, title, contextId) => ipcRenderer.invoke("desktop-viewer:open", url, title, contextId),
@@ -231,7 +251,8 @@ const bridge = {
   primaryBrowser: process.argv.includes("--bos-primary-browser=1") ? {
     action: (action, input) => ipcRenderer.invoke("primary-browser:action", action, input),
     onExternalURL: (cb) => { const handler=(_event,value)=>cb(value); ipcRenderer.on("primary-browser:external-url",handler); return ()=>ipcRenderer.removeListener("primary-browser:external-url",handler); },
-    onSharedState: (cb) => { const handler = (_event, state) => cb(state); ipcRenderer.on("primary-browser:shared-state", handler); return () => ipcRenderer.removeListener("primary-browser:shared-state", handler); },
+    onAgentState: (cb) => { const handler = (_event, state) => cb(state); ipcRenderer.on("primary-browser:agent-state", handler); return () => ipcRenderer.removeListener("primary-browser:agent-state", handler); },
+    onAgentCommand: (cb) => { const handler = (_event, command) => cb(command); ipcRenderer.on("primary-browser:agent-command", handler); return () => ipcRenderer.removeListener("primary-browser:agent-command", handler); },
     onShortcut: (cb) => { const handler = (_event, input) => cb(input); ipcRenderer.on("primary-browser:shortcut", handler); return () => ipcRenderer.removeListener("primary-browser:shortcut", handler); },
   } : undefined,
   toolsBrowserPartition: "persist:bos-tools-browser",
@@ -268,6 +289,10 @@ const bridge = {
       const message = String(error?.message ?? error);
       throw new Error(message.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, ""));
     }),
+  /** Move a thread workspace tab into its own window (spec is JSON). */
+  workspaceWindow: (spec) => ipcRenderer.invoke("workspace:open-window", spec),
+  /** Open an absolute workspace path in an editor, Finder or its default app. */
+  workspaceOpenIn: (filePath, target) => ipcRenderer.invoke("workspace:open-in", filePath, target),
   /** Store a provider credential with OS-backed encryption. */
   setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
 

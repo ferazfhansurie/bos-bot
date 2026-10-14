@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ArchiveRestore, CircleCheck, FolderInput, Link2, Loader2, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { ArchiveRestore, CircleCheck, Columns2, FolderInput, Link2, Loader2, MoreHorizontal, Pencil, Pin, PinOff, RotateCcw, Trash2 } from "lucide-react";
 import type { BotProject, Task } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { nextRename } from "@/lib/rename";
 import { threadRefUrl } from "@/lib/thread-refs";
+import { SPLIT_DRAG_TYPE } from "@/lib/split-view";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 type ThreadRowTask = Pick<Task, "threadId" | "title" | "projectId" | "busy" | "activity" | "unread" | "openedBy" | "closedBy" | "archivedAt" | "state"> & { queued?: boolean };
@@ -97,12 +98,17 @@ export function orderedSidebarThreads<T extends ThreadRowTask>(tasks: T[], activ
 
 /** One quiet row for bot and group histories. Surface denotes selection;
  * working/waiting/unread remain independent signals, never different cards. */
-export function SidebarThreadRow({ task, ownerId, current, compact, folders, onSelect, onRename, onDelete, onMove, onArchive, onReopen }: {
+export function SidebarThreadRow({ task, ownerId, current, compact, dense, trailing, pinned, folders, onSelect, onRename, onDelete, onMove, onArchive, onReopen, onTogglePin, onOpenBeside, splitId }: {
   task: ThreadRowTask;
   /** the bot or room that owns the thread: the link's ?bot= */
   ownerId: string;
   current: boolean;
   compact?: boolean;
+  /** one line, no byline: the selected bot's short thread list */
+  dense?: boolean;
+  /** quiet meta at the row's end, such as the last-message time */
+  trailing?: ReactNode;
+  pinned?: boolean;
   folders?: BotProject[];
   onSelect: () => void;
   onRename: (title: string) => void;
@@ -111,6 +117,11 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
   onArchive?: (archivedAt: number | null) => void;
   /** clears a bot's close or the server's idle settle */
   onReopen?: () => void;
+  onTogglePin?: () => void;
+  /** opens this thread in a pane beside the current one */
+  onOpenBeside?: () => void;
+  /** split-pane id carried when the row is dragged onto the chat column */
+  splitId?: string;
 }) {
   const [menu, setMenu] = useState<{ left: number; top: number } | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -120,7 +131,7 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
   const menuRef = useRef<HTMLDivElement>(null);
   const actionRef = useRef<HTMLButtonElement>(null);
   const status = task.activity === "waiting-on-you" ? t("task.waiting") : isWorking(task) ? t("chat.activity.working") : task.queued ? t("task.queued") : null;
-  const byline = threadByline(task);
+  const byline = dense ? null : threadByline(task);
   const dimRunning = isWorking(task) && task.activity !== "waiting-on-you" && !task.unread && !current;
   const closed = isClosed(task) && !status;
   const archived = isArchived(task);
@@ -153,19 +164,22 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
       {renaming ? <input autoFocus value={draft} maxLength={80} aria-label={t("task.renameAria")}
         onFocus={(event) => event.currentTarget.select()} onChange={(event) => setDraft(event.target.value)} onBlur={() => finishRename(true)}
         onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); finishRename(true); } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); finishRename(false); } }}
-        className="m-1 min-w-0 flex-1 rounded border border-accent/50 bg-inset px-2 py-1 text-[12.5px] text-ink outline-none" /> : <button
+        className="m-1 min-w-0 flex-1 rounded border border-hairline bg-inset px-2 py-1 text-[12.5px] text-ink outline-none" /> : <button
         type="button" data-sidebar-thread-row={task.threadId} aria-current={current ? "page" : undefined}
         title={[task.title, status, closed ? t("task.closed") : null, archived ? t("task.archived") : null, task.unread ? t("task.unread") : null].filter(Boolean).join(" · ")}
+        draggable={Boolean(splitId)} onDragStart={splitId ? (event) => { event.stopPropagation(); event.dataTransfer.setData(SPLIT_DRAG_TYPE, splitId); event.dataTransfer.effectAllowed = "copy"; } : undefined}
         onClick={onSelect} onDoubleClick={startRename}
         onContextMenu={(event) => { event.preventDefault(); openMenu(event.clientX, event.clientY); }}
         onKeyDown={(event) => { if (event.key === "ContextMenu" || event.shiftKey && event.key === "F10") { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.left, rect.bottom); } }}
-        className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-[10px] pl-3 pr-1 text-left text-[13px] font-medium outline-none focus-visible:ring-1 focus-visible:ring-accent/60", compact ? "min-h-7 py-1" : "min-h-8 py-1.5", dimRunning && "opacity-50", current ? "font-semibold text-ink" : "text-ink-secondary hover:text-ink")}>
+        className={cn("flex min-w-0 flex-1 items-center gap-2 rounded-[10px] pl-3 pr-1 text-left font-medium outline-none focus-visible:ring-1 focus-visible:ring-hairline", dense ? "text-[12px]" : "text-[13px]", compact || dense ? "min-h-7 py-1" : "min-h-8 py-1.5", dimRunning && "opacity-50", current ? "font-semibold text-ink" : "text-ink-secondary hover:text-ink")}>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className={cn("min-w-0 truncate", task.unread && "font-semibold text-ink", (closed || archived) && !current && "text-ink-secondary/70")}>{task.title}</span>
           {byline && <span className="min-w-0 truncate text-[12px] leading-tight text-ink-secondary/80">{byline}</span>}
         </span>
-        {task.activity === "waiting-on-you" ? <span className="shrink-0 text-[12px] font-medium text-warning">{t("task.waiting")}</span> : isWorking(task) ? <Loader2 size={11} className="shrink-0 animate-spin text-success" aria-label={t("chat.activity.working")} /> : task.queued ? <span className="shrink-0 text-[12px] text-ink-secondary">{t("task.queued")}</span> : null}
+        {task.activity === "waiting-on-you" ? <span className="shrink-0 text-[12px] font-medium text-warning">{t("task.waiting")}</span> : isWorking(task) ? <Loader2 size={11} className="shrink-0 animate-spin text-accent" aria-label={t("chat.activity.working")} /> : task.queued ? <span className="shrink-0 text-[12px] text-ink-secondary">{t("task.queued")}</span> : null}
         {task.unread && <span className="size-1.5 shrink-0 rounded-full bg-accent" aria-label={t("task.unread")} />}
+        {pinned && <Pin size={10} className="shrink-0 text-ink-secondary" aria-label={t("sidebar.bot.unpin")} />}
+        {trailing}
       </button>}
       <button ref={actionRef} type="button" aria-label={t("task.actions", { title: task.title })} aria-expanded={Boolean(menu)}
         onClick={(event) => { if (menu) { setMenu(null); return; } const rect = event.currentTarget.getBoundingClientRect(); openMenu(rect.left, rect.bottom); }}
@@ -177,6 +191,8 @@ export function SidebarThreadRow({ task, ownerId, current, compact, folders, onS
       className="fixed z-50 w-[220px] rounded-lg border border-hairline/50 bg-card p-1 shadow-xl"
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setMenu(null); actionRef.current?.focus(); } }}>
       <button type="button" onClick={copyLink} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised"><Link2 size={12} />{t("task.copyLink")}</button>
+      {onOpenBeside && <button type="button" onClick={() => { setMenu(null); onOpenBeside(); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised"><Columns2 size={12} />{t("split.open")}</button>}
+      {onTogglePin && <button type="button" onClick={() => { setMenu(null); onTogglePin(); }} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised">{pinned ? <PinOff size={12} /> : <Pin size={12} />}{pinned ? t("sidebar.bot.unpin") : t("sidebar.bot.pin")}</button>}
       <button type="button" onClick={startRename} className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-[12px] text-ink hover:bg-raised"><Pencil size={12} />{t("task.renameAria")}</button>
       {onMove && Boolean(folders?.length) && <label className="block rounded px-2.5 py-2 text-[12px] text-ink"><span className="mb-1 flex items-center gap-2 text-ink-secondary"><FolderInput size={12} />{t("folder.move")}</span>
         <select aria-label={t("folder.moveNamed", { title: task.title })} value={folders?.some((folder) => folder.id === task.projectId) ? task.projectId : ""}

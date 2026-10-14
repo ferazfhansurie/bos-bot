@@ -18,7 +18,13 @@ export interface PrimaryBrowserBridge {
   action(action: 'preview-chrome', input: Record<string, unknown>): Promise<ChromePreview>;
   action(action: 'passwords', input: Record<string, unknown>): Promise<{ id: string; origin: string; username: string }[]>;
   action(action: string, input?: Record<string, unknown>): Promise<unknown>;
-  onExternalURL(cb: (value: { profileId: string; url: string }) => void): () => void;
-  onSharedState(cb: (state: { guestId: number; shared: boolean; botId?: string; threadId?: string }) => void): () => void;
+  onExternalURL(cb: (value: { profileId: string; url: string; reveal?: boolean }) => void): () => void;
+  /** Tabs the bot holds: 'bot' while it drives, 'user' after the person took over. */
+  onAgentState(cb: (state: BrowserAgentState) => void): () => void;
+  /** Main asks the renderer to open, show, navigate or close a tab for the bot. */
+  onAgentCommand(cb: (command: BrowserAgentCommand) => void): () => void;
   onShortcut(cb: (input: { command?: string; key: string; shift: boolean; partition: string }) => void): () => void;
 }
+
+export type BrowserAgentState = { tabs: Record<string, { mode: 'bot' | 'user'; busy: boolean; cursor: { x: number; y: number; at: number } | null }> };
+export type BrowserAgentCommand = { op: 'new' | 'activate' | 'navigate' | 'close'; profileId: string; tabId: string; url?: string };

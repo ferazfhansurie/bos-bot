@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { LayoutGrid, RotateCw, SquareTerminal, X } from "lucide-react";
+import { FolderTree, PanelRight, PanelRightClose, RotateCw, SquareTerminal, X } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
-import { useSplitView } from "@/components/SplitViewContext";
+import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import type { PanelSizeSpec } from "@/lib/panel-resize";
+import { bottomVisible, rightVisible, type WorkspaceTabKind } from "@/lib/thread-workspace";
+import { runWorkspaceCommand, type WorkspaceCommandId } from "@/lib/workspace-commands";
 import { parseTerminalFrame, requestTerminalTicket, resizeFrame, sameTerminalTarget, terminalAvailable, terminalSocketUrl, type TerminalClientFrame, type TerminalTarget } from "@/lib/terminal";
 
 /** Width of the terminal beside the chat; the chat keeps at least 360px. */
@@ -146,16 +148,31 @@ export function TerminalPanel({ target, onClose }: { target: TerminalTarget; onC
   );
 }
 
-/** Thread header toggle. Only the desktop owner gets a terminal: hidden in
- * the browser and for remote clients, and the server enforces the same. */
+/** Thread header buttons for the workspace beside the chat: terminal, files
+ * and the panel itself. Only the desktop owner gets them: hidden in the
+ * browser and for remote clients, and the server enforces the same. */
 export function TerminalButton({ target, className }: { target: TerminalTarget; className?: string }) {
-  const { terminal, toggleTerminal } = useSplitView();
+  const workspace = useWorkspace();
   if (!terminalAvailable()) return null;
-  const open = sameTerminalTarget(terminal, target);
+  const here = sameTerminalTarget(workspace.target, target);
+  const state = workspace.workspace;
+  const showing = (kind: WorkspaceTabKind) => here && state.tabs.some((tab) => tab.kind === kind
+    && state.active[tab.pane] === tab.id && (tab.pane === "right" ? rightVisible(state) : bottomVisible(state)));
+  const panelOpen = here && rightVisible(state);
+  const press = (command: WorkspaceCommandId, kind: WorkspaceTabKind | null) => {
+    if (here) { runWorkspaceCommand(command); return; }
+    workspace.show(target);
+    workspace.openTab(kind ?? (workspace.browserAvailable ? "browser" : "files"));
+  };
+  const button = (open: boolean) => cn("p-1.5 hover:bg-raised max-md:hidden", open ? "text-accent" : "text-ink-secondary hover:text-ink", className);
   return (
-    <button type="button" onClick={() => toggleTerminal(target)} aria-label="Open tools" aria-pressed={open} title="Open tools" data-testid="terminal-toggle"
-      className={cn("p-1.5 hover:bg-raised max-md:hidden", open ? "text-accent" : "text-ink-secondary hover:text-ink", className)}>
-      <LayoutGrid size={18} />
-    </button>
+    <>
+      <button type="button" onClick={() => press("workspace-terminal", "terminal")} aria-label="terminal" aria-pressed={showing("terminal")} title="terminal" data-testid="terminal-toggle"
+        className={button(showing("terminal"))}><SquareTerminal size={18} /></button>
+      <button type="button" onClick={() => press("workspace-files", "files")} aria-label="files" aria-pressed={showing("files")} title="files"
+        className={button(showing("files"))}><FolderTree size={18} /></button>
+      <button type="button" onClick={() => press("workspace-layout", null)} aria-label="side panel" aria-pressed={panelOpen} title="side panel"
+        className={button(panelOpen)}>{panelOpen ? <PanelRightClose size={18} /> : <PanelRight size={18} />}</button>
+    </>
   );
 }

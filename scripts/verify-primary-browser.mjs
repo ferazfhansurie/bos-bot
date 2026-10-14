@@ -10,6 +10,8 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const flag = '--bos-primary-browser-fixture';
 if (process.versions.electron && process.argv.includes(flag)) {
  const { app, BrowserWindow, session, webContents, ipcMain, safeStorage } = await import('electron');
+ process.on('uncaughtException', error => { console.error('fixture uncaught error:', error.stack || error); app.exit(1); });
+ process.on('unhandledRejection', error => { console.error('fixture unhandled rejection:', error?.stack || error); app.exit(1); });
  const { createWorkspaceBrowserRegistry } = await import('../electron/workspace-browser.mjs');
  const { createContentBlocker } = await import('../electron/content-blocker.mjs');
  const { browserCommand } = await import('../electron/browser-keybindings.mjs');
@@ -18,7 +20,14 @@ if (process.versions.electron && process.argv.includes(flag)) {
  const { noteBrowserKeyInput, attachToolsBrowserGuest, hardenWebviewAttach, configureToolsBrowserSession } = await import('../electron/tools-browser.mjs');
  const [uiURL, pageURL, output, run] = process.argv.slice(process.argv.indexOf(flag) + 1);
  app.setPath('userData', path.join(output, 'user-data')); app.setPath('sessionData', path.join(output, 'user-data')); app.commandLine.appendSwitch('disable-background-networking'); app.dock?.hide();
- let win, controller, focusedPartition; const shared = createSharedBrowser({ contentsFromId: id => webContents.fromId(id), notify: state => win?.webContents.send('primary-browser:shared-state',state) }); const appOrigins = () => [new URL(uiURL).origin];
+ let win, controller, focusedPartition;
+ const send = (channel, value) => { if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return false; try { win.webContents.send(channel,value); return true; } catch { return false; } };
+ const shared = createSharedBrowser({
+  contentsFromId: id => webContents.fromId(id),
+  guestValid: (id, profileId) => { const c = webContents.fromId(id); return Boolean(c && c.getType() === 'webview' && c.hostWebContents === win?.webContents && registry.source(c)?.partition === controller.partition(profileId)); },
+  host: { available: () => Boolean(win && !win.isDestroyed()), reveal: () => send('primary-browser:external-url', {profileId:controller.store.profiles().selected,url:'',reveal:true}), command: command => send('primary-browser:agent-command',command) },
+  notify: state => send('primary-browser:agent-state',state),
+ }); const appOrigins = () => [new URL(uiURL).origin];
  const registry = createWorkspaceBrowserRegistry({ notify: row => win?.webContents.send('tools-browser:download', row), onDownload: (p, row, file) => controller?.download(p, row, file) });
  const prompts = [];
  const dialog = { async showMessageBox(_owner, options) { prompts.push(options.message); return { response: options.message === 'Delete the unencrypted export?' ? 0 : 1 }; }, async showOpenDialog() { return { canceled: false, filePaths: [path.join(output, 'passwords.csv')] }; } };
@@ -29,7 +38,7 @@ if (process.versions.electron && process.argv.includes(flag)) {
   configureToolsBrowserSession(ses, { appOrigins, shouldBlockRequest:details=>blocker.shouldBlock(controller.profileFor(p),details), requestPermission: (c, permission, details) => controller.permission(p, c, permission, details), checkPermission: (c, permission, origin) => controller.checkPermission(p, c, permission, origin) });
   ses.on('will-download', (e, item, source) => { item.setSavePath(path.join(output, item.getFilename())); registry.trackDownload(p, e, item, source); });
  }
- ipcMain.handle('primary-browser:action', async (event, action, input) => { if (event.sender !== win.webContents || new URL(event.sender.getURL()).origin !== new URL(uiURL).origin) throw new Error('Wrong sender'); if(action==='browser-focus'){focusedPartition=input.focused?controller.partition(input.profileId):undefined;return true;}const result = await controller.action(action, input); if (action === 'read' || action === 'select') setup(typeof result === 'string' ? result : result.partition); return result; });
+ ipcMain.handle('primary-browser:action', async (event, action, input) => { if (event.sender !== win.webContents || new URL(event.sender.getURL()).origin !== new URL(uiURL).origin) throw new Error('Wrong sender'); if(action==='browser-focus'){focusedPartition=input.focused?controller.partition(input.profileId):undefined;return true;}if(action==='consume-external-link')return false;if(action==='agent-tabs')return shared.reportTabs(input);if(['agent-take-over','agent-give-back','agent-stop'].includes(action))return shared.person(action.slice(6),input.tabId);if(action==='reveal')return true;const result = await controller.action(action, input); if (action === 'read' || action === 'select') setup(typeof result === 'string' ? result : result.partition); return result; });
  app.on('web-contents-created', (_event, c) => {
   c.on('before-input-event',(event,input)=>{noteBrowserKeyInput(input);const command=browserCommand(input);if(c===win?.webContents&&focusedPartition&&input.type==='keyDown'&&command){event.preventDefault();c.send('primary-browser:shortcut',{command,key:input.key,shift:input.shift,partition:focusedPartition});}});
   c.on('will-attach-webview', (e, prefs, params) => {  if (c !== win?.webContents || !registry.has(params.partition) || !hardenWebviewAttach(prefs, params, { appOrigins, partition: params.partition, nativePopups: true })) e.preventDefault(); });
@@ -44,16 +53,40 @@ if (process.versions.electron && process.argv.includes(flag)) {
  const click = label => evaluate(`[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')===${JSON.stringify(label)}||b.textContent===${JSON.stringify(label)})?.click()`);
  const go = url => evaluate(`(()=>{const el=document.querySelector('input[aria-label="Search or enter a URL"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(url)});el.dispatchEvent(new Event('input',{bubbles:true}));el.form.requestSubmit();})()`);
  const guest = () => webContents.getAllWebContents().find(c => c.getType() === 'webview' && c.hostWebContents === win.webContents && c.getURL() === pageURL);
+ const verifyShared = async () => {
+   // Production shared browser bridge drives the same guest and exposes real UI authority.
+   const rpc = (name, arguments_ = {}, thread = 'two', profileId = 'personal') => shared.rpc('fixture',thread,'tools/call',{name,arguments:arguments_},Date.now()+20000,{generation:'fixture-turn',profileId});
+   await until(()=>shared.mounted(),'shared tab strip mounted');
+   const snapshot=await rpc('agent_browser_snapshot',{interactive:false});assert.ok(snapshot.content[0].text.includes('Fixture page'));
+   assert.equal(snapshot.content[0].text.includes('fixture-only-password'),false);
+   await until(()=>evaluate('document.body.innerText.includes("bos is browsing")'),'bot control strip');
+   await rpc('agent_browser_fill',{selector:'#draft',text:'bot fixture draft'});await until(()=>guest().executeJavaScript('document.querySelector("#draft").value==="bot fixture draft"'),'shared bot fill lands');
+   await rpc('agent_browser_type',{selector:'#draft',text:' appended'});assert.equal(await guest().executeJavaScript('document.querySelector("#draft").value'),'bot fixture draft appended');
+   await rpc('agent_browser_fill',{selector:'#notes',text:'multiline\nfixture'});assert.equal(await guest().executeJavaScript('document.querySelector("#notes").value'),'multiline\nfixture');
+   await rpc('agent_browser_fill',{selector:'#editor',text:'editable fixture'});await rpc('agent_browser_type',{selector:'#editor',text:' appended'});assert.equal(await guest().executeJavaScript('document.querySelector("#editor").textContent'),'editable fixture appended');
+   await rpc('agent_browser_fill',{selector:'#submit-draft',text:'submit fixture'});assert.equal(await guest().executeJavaScript('document.activeElement.id'),'submit-draft');
+   await rpc('agent_browser_press',{key:'Enter'});await until(()=>guest().executeJavaScript('window.formSubmitted===true'),'fill then Enter submits focused form');
+   await assert.rejects(rpc('agent_browser_fill',{selector:'input[type=password]',text:'blocked'}),/sign|password|person/i);
+   await assert.rejects(rpc('agent_browser_tab_switch',{tab:'t1'},'other-thread'),/conversation/);
+   await assert.rejects(rpc('agent_browser_snapshot',{},'two','other-profile'),/profile/);
+   await click('take over');await until(()=>evaluate('document.body.innerText.includes("you have control")'),'human takes control');await assert.rejects(rpc('agent_browser_snapshot'),/control/);
+   await click('give back to bos');await until(()=>evaluate('document.body.innerText.includes("bos is browsing")'),'human gives back');
+   await rpc('agent_browser_fill',{selector:'#draft',text:'resumed fixture draft'});await until(()=>guest().executeJavaScript('document.querySelector("#draft").value==="resumed fixture draft"'),'shared resumed fill lands');
+   await click('stop');await until(()=>evaluate('!document.querySelector(".browser-agent-strip")'),'human stops browser');await assert.rejects(rpc('agent_browser_snapshot'),/stopped/);
+   shared.releaseAll();
+ };
  try {
   await win.loadURL(uiURL); await until(()=>evaluate('Boolean(document.querySelector("[data-testid=primary-browser] input[aria-label=\\"Search or enter a URL\\"]"))'),'browser rendered');
-  if (run === 'first') {
+  if (run === 'shared') {
+   await go(pageURL); await until(()=>guest()?.getTitle()==='Browser fixture','shared fixture page loads');
+   await verifyShared(); fs.writeFileSync(path.join(output,'shared.json'),JSON.stringify({passed:true,sharedGuestDriven:true,fillThenEnterSubmits:true,takeoverAndGiveBack:true,sameBotThreadIsolation:true,configuredProfileRefused:true,stoppedBrowserRefused:true}));
+  } else if (run === 'first') {
    assert.equal(await evaluate('document.querySelector(".browser-start h1").textContent'), 'bos'); assert.equal(await evaluate('document.body.innerText.includes("Import from chrome")'), false); assert.equal(await evaluate('document.querySelector(".browser-toolbar").getBoundingClientRect().height + document.querySelector(".browser-tabs").getBoundingClientRect().height'),86); fs.writeFileSync(path.join(output,'start.png'),(await win.webContents.capturePage()).toPNG()); assert.equal(await evaluate('Boolean(document.querySelector("datalist"))'),false); assert.equal(await evaluate('getComputedStyle(document.querySelector(".browser-bos-alive")).animationName'), 'browser-bos-breathe');
    await click('Add favourite'); await evaluate(`(()=>{const el=document.querySelector('[aria-label="Favourite site address"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(pageURL)});el.dispatchEvent(new Event('input',{bubbles:true}));const name=document.querySelector('[aria-label="Favourite site name"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(name,'Fixture favourite');name.dispatchEvent(new Event('input',{bubbles:true}));})()`); await click('Add favourite'); await until(()=>evaluate('document.querySelector(".browser-favourites").textContent.includes("Fixture favourite")'),'add favourite tile'); await until(()=>evaluate('document.body.innerText.includes("Added to favourites.")'),'favourite feedback'); fs.writeFileSync(path.join(output,'favourites.png'),(await win.webContents.capturePage()).toPNG());await evaluate('document.querySelector(".browser-favourites button").dispatchEvent(new MouseEvent("click",{metaKey:true,bubbles:true}))');await until(()=>evaluate('document.querySelectorAll(".browser-tab").length===2'),'cmd click favourite opens background tab');assert.equal(await evaluate('document.querySelector(".browser-tab.is-active").textContent.includes("New tab")'),true);await evaluate('[...document.querySelectorAll(".browser-tab-close")].at(-1).click()');await until(()=>evaluate('document.querySelectorAll(".browser-tab").length===1'),'close favourite background tab');await go(pageURL); await until(()=>guest()?.getTitle()==='Browser fixture', 'real webpage loads'); const original = guest().id;
    await guest().executeJavaScript(`document.cookie='fixture=yes; Max-Age=3600';document.querySelector('#draft').value='unsaved fixture draft'`);
    assert.equal(await guest().executeJavaScript('typeof window.ogb'), 'undefined'); assert.equal(await guest().executeJavaScript('typeof require'), 'undefined');
    await evaluate(`window.switchFixtureThread()`); await new Promise(r=>setTimeout(r,100)); assert.equal(guest().id, original); assert.equal(await guest().executeJavaScript('document.querySelector("#draft").value'), 'unsaved fixture draft');
    await click('Workspace tools'); await click('Terminal'); await click('Browser'); assert.equal(guest().id, original);
-   await click('Workspace tools');await click('chat workspace');await until(()=>evaluate('document.body.innerText.includes("Your browser")'),'bot workspace opens only on request');assert.equal(guest().id,original);assert.equal(await guest().executeJavaScript('document.querySelector("#draft").value'),'unsaved fixture draft');await click('Your browser');
    await until(()=>blocker.status('personal',guest()).blocked>0,'real network request blocked');assert.equal(await guest().executeJavaScript('window.adLoaded===true'),false);await until(()=>guest().executeJavaScript('getComputedStyle(document.querySelector(".sponsor")).display==="none"'),'static cosmetic filter');
    await click('Privacy protection');await until(()=>evaluate('document.querySelector("[aria-label=\\\"Browser privacy\\\"]").textContent.includes("requests blocked")'),'privacy UI');await evaluate('[...document.querySelectorAll("[aria-label=\\\"Browser privacy\\\"] input[type=checkbox]")].at(-1).click()');await until(()=>blocker.status('personal',guest()).siteEnabled===false,'site protection paused');await click('Reload page');await until(()=>guest().executeJavaScript('window.adLoaded===true'),'paused site allows request');await blocker.toggle('personal',guest(),{enabled:true,siteOnly:true});
    const linkGesture=async(modifiers,button='left')=>{if(modifiers.length)guest().sendInputEvent({type:'keyDown',keyCode:'Shift',modifiers});const rect=await guest().executeJavaScript('(()=>{const r=document.querySelector("#tablink").getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()');guest().sendInputEvent({type:'mouseDown',...rect,button,clickCount:1,modifiers});guest().sendInputEvent({type:'mouseUp',...rect,button,clickCount:1,modifiers});if(modifiers.length)guest().sendInputEvent({type:'keyUp',keyCode:'Shift',modifiers:[]});};
@@ -78,20 +111,15 @@ if (process.versions.electron && process.argv.includes(flag)) {
    const selected = controller.store.profiles().selected; const selectedPartition = controller.partition(selected); setup(selectedPartition); assert.equal((await session.fromPartition(selectedPartition).cookies.get({ url: pageURL })).length,0);
    // Return through the actual select to keep the original guest and draft.
    await evaluate(`(()=>{const el=document.querySelector('[aria-label="Browser profile"]');el.value='personal';el.dispatchEvent(new Event('change',{bubbles:true}));})()`); await until(()=>evaluate('document.querySelector("[aria-label=\\"Browser profile\\"]").value==="personal"'),'return to personal'); assert.equal(guest().id, original);
-   await click('Close profiles'); await click('Share browser page'); await until(()=>evaluate('[...document.querySelectorAll("button")].some(b=>b.textContent==="Share this tab with chat"&&!b.disabled)'), 'share idle'); await click('Share this tab with chat'); await until(()=>shared.state(guest().id).shared,'tab shared');
-   const snapshot=await shared.rpc('fixture','two','tools/call',{name:'bos_browser_snapshot'});assert.ok(snapshot.content[0].text.includes('Fixture page'));
-   assert.equal(snapshot.content[0].text.includes('fixture-only-password'),false);
-   const draftRef=snapshot.content[0].text.split('\n').find(line=>line.includes('text')&&line.startsWith('@b'))?.split(' ')[0];
-   assert.ok(draftRef);await shared.rpc('fixture','two','tools/call',{name:'bos_browser_fill',arguments:{ref:draftRef,text:'bot fixture draft'}});assert.equal(await guest().executeJavaScript('document.querySelector("#draft").value'),'bot fixture draft');
-   await assert.rejects(shared.rpc('wrong-bot','two','tools/call',{name:'bos_browser_snapshot'}));
-   await click('Take browser control');await until(()=>!shared.state(guest().id).shared,'human takes control');await assert.rejects(shared.rpc('fixture','two','tools/call',{name:'bos_browser_snapshot'}));
+   await click('Close profiles');
+   await verifyShared();
    // Native webview keyboard shortcut routes through production bridge.
    guest().sendInputEvent({type:'keyDown',keyCode:'L',modifiers:['meta']}); await until(()=>evaluate('document.activeElement?.getAttribute("aria-label")==="Search or enter a URL"'),'address shortcut from webpage');
    await new Promise(r=>setTimeout(r,250)); assert.ok(controller.store.read('personal').tabs.some(t=>t.url===pageURL));
    await go(new URL(uiURL).origin); await new Promise(r=>setTimeout(r,500)); assert.equal(webContents.getAllWebContents().some(c=>c.getType()==='webview'&&c.getURL()===new URL(uiURL).origin+'/'),false);
    // Return before restart and store final state.
    await go(pageURL); await until(()=>guest(), 'return after refused app navigation'); await new Promise(r=>setTimeout(r,300));
-   fs.writeFileSync(path.join(output, 'first.json'), JSON.stringify({ passed: true, stableGuestAcrossThreads: true, nativePopupWithOpener: true, isolatedProfile: work.id, prompts, chromeBookmarks: controller.store.read('personal').bookmarks.length, downloadCount: controller.store.read('personal').downloads.length }));
+   fs.writeFileSync(path.join(output, 'first.json'), JSON.stringify({ passed: true, stableGuestAcrossThreads: true, nativePopupWithOpener: true, sharedGuestDriven: true, fillThenEnterSubmits: true, takeoverAndGiveBack: true, sameBotThreadIsolation: true, configuredProfileRefused: true, stoppedBrowserRefused: true, isolatedProfile: work.id, prompts, chromeBookmarks: controller.store.read('personal').bookmarks.length, downloadCount: controller.store.read('personal').downloads.length }));
   } else {
    await until(()=>guest(), 'restored page'); assert.ok((await guest().executeJavaScript('document.cookie')).includes('fixture=yes'));
    assert.equal(controller.store.read('personal').bookmarks.length,2); assert.ok(controller.store.read('personal').downloads.some(d=>d.state==='completed'));
@@ -113,10 +141,11 @@ if (process.versions.electron && process.argv.includes(flag)) {
  const listen = handler=>new Promise(resolve=>{const s=createServer(handler).listen(0,'127.0.0.1',()=>resolve(s));});
  const css = fs.existsSync(path.join(root,'dist/assets')) ? fs.readdirSync(path.join(root,'dist/assets')).filter(f=>f.endsWith('.css')).map(f=>fs.readFileSync(path.join(root,'dist/assets',f),'utf8')).join('\n') : '';
  const ui=await listen((req,res)=>{if(req.url==='/style.css'){res.setHeader('content-type','text/css');res.end(css);return;}res.setHeader('content-type',req.url==='/bundle.js'?'text/javascript':'text/html');res.end(req.url==='/bundle.js'?bundle.outputFiles[0].contents:'<html><link rel="stylesheet" href="/style.css"><body style="background:#111;color:#eee;font:14px system-ui;margin:0"><div id="root"></div><script type="module" src="/bundle.js"></script></body></html>');});
- const page=await listen((req,res)=>{if(req.url==='/ads.js'){res.setHeader('content-type','text/javascript');res.end('window.adLoaded=true');}else if(req.url==='/download'){res.writeHead(200,{'content-type':'text/plain','content-disposition':'attachment; filename="fixture.txt"'});res.end('fixture download');}else{res.setHeader('content-type','text/html');res.end('<title>Browser fixture</title><h1>Fixture page</h1><input id="draft"><form><input type="email" autocomplete="username"><input type="password" autocomplete="current-password"></form><a id="download" href="/download">download</a><p><a id="tablink" href="/newtab">new tab target</a></p><div class="sponsor">advertisement</div><script src="/ads.js"></script>');}});
+ const page=await listen((req,res)=>{if(req.url==='/ads.js'){res.setHeader('content-type','text/javascript');res.end('window.adLoaded=true');}else if(req.url==='/download'){res.writeHead(200,{'content-type':'text/plain','content-disposition':'attachment; filename="fixture.txt"'});res.end('fixture download');}else{res.setHeader('content-type','text/html');res.end('<title>Browser fixture</title><h1>Fixture page</h1><input id="draft"><textarea id="notes"></textarea><div id="editor" contenteditable="true"></div><form id="submit-form" onsubmit="event.preventDefault();window.formSubmitted=true"><input id="submit-draft"><input type="email" autocomplete="username"><input type="password" autocomplete="current-password"><button type="submit">submit fixture form</button></form><a id="download" href="/download">download</a><p><a id="tablink" href="/newtab">new tab target</a></p><div class="sponsor">advertisement</div><script src="/ads.js"></script>');}});
  const uiURL=`http://127.0.0.1:${ui.address().port}/`,pageURL=`http://127.0.0.1:${page.address().port}/`;
  fs.writeFileSync(path.join(output,'passwords.csv'),`name,url,username,password\nFixture,${pageURL},fixture-account,fixture-only-password\n`,{mode:0o600});
  const {ELECTRON_RUN_AS_NODE:_node,...env}=process.env;
- try { for(const run of ['first','restart']) { const child=spawn(path.join(root,'node_modules/.bin/electron'),[fileURLToPath(import.meta.url),flag,uiURL,pageURL,output,run],{env,stdio:['ignore','inherit','inherit']});const code=await new Promise(resolve=>child.on('exit',resolve));assert.equal(code,0,`${run} fixture`); } console.log(JSON.stringify({output,first:JSON.parse(fs.readFileSync(path.join(output,'first.json'))),restart:JSON.parse(fs.readFileSync(path.join(output,'restart.json')))},null,2)); }
+ const runs = process.argv.includes('--shared-only') ? ['shared'] : ['first','restart'];
+ try { for(const run of runs) { const child=spawn(path.join(root,'node_modules/.bin/electron'),[fileURLToPath(import.meta.url),flag,uiURL,pageURL,output,run],{env,stdio:['ignore','inherit','inherit']});const code=await new Promise(resolve=>child.on('exit',resolve));assert.equal(code,0,`${run} fixture`); } console.log(JSON.stringify({output,...Object.fromEntries(runs.map(run=>[run,JSON.parse(fs.readFileSync(path.join(output,`${run}.json`)))]))},null,2)); }
  finally {ui.close();page.close();fs.rmSync(path.join(output,'passwords.csv'),{force:true});}
 }

@@ -23,7 +23,7 @@ import { COMPACT_SQUARE } from "@/lib/compact-chip";
 
 type ModelOption = InstanceInfo["models"]["options"][number];
 const COMPACT_MODEL_COUNT = 5;
-const BOS_DRIVER_KINDS = new Set(["claudeAgent", "codex", "openrouter-free"]);
+const BOS_DRIVER_KINDS = new Set(["claudeAgent", "codex", "openrouter-free", "api-key"]);
 
 function catalogModels(instance: InstanceInfo | undefined) {
   return instance?.models.options.filter(option => isFreeCloud(instance) || !option.custom) ?? [];

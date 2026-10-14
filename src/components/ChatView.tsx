@@ -1,5 +1,5 @@
 import {ThreadDoneButton} from './ThreadDoneButton';
-import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -43,6 +43,7 @@ import { ActivityMascot } from "./ActivityMascot";
 import { turnGesture } from "../../shared/mascot-choreography";
 import { showToolCallsEnabled, skillAuthoringEnabled } from "@/lib/feature-flags";
 import { glyphFaceForBot, normalizeState, stateForBot } from "@/lib/mascot";
+import { resolveMausColor } from "../../shared/glyph-faces";
 import { peerLine, type PeerLine } from "@/lib/peer-message";
 import { showWorkingDots } from "@/lib/turn-tail";
 import { liveActivityLabel } from "@/lib/live-activity";
@@ -50,6 +51,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { RawMarkdownView, RawToggleAction } from "./RawMarkdownToggle";
 import { ThreadChip } from "./ThreadChip";
 import { VerifyCard } from "./VerifyCard";
+import { ApprovalRuleOffer } from "./ApprovalRuleOffer";
 import { askText, runSteps, runSummary, showRun, skillPrompt, skillStaged } from "@/lib/verify-steps";
 import { ToolActivity } from "./ToolActivity";
 import { ThreadRefText } from "./ThreadRefs";
@@ -126,7 +128,8 @@ import { effectivePlace, toolPlace, type EffectivePlace } from "@/lib/place";
 import { cn } from "@/lib/cn";
 import { activeLocale, t } from "@/lib/i18n";
 import { useFocusMessage } from "@/lib/focus-message";
-import { groupTranscript } from "@/lib/activity-runs";
+import { describeRun, groupTranscript, type TranscriptItem } from "@/lib/activity-runs";
+import { includeIndex, resolveVirtualRange, rowHeightCache, sameVirtualRange, spanHeight, tailRange, viewportRange, type IndexRange, type VirtualRange } from "@/lib/virtual-range";
 import { ActivityRun } from "./ActivityRun";
 import { TurnNarrationRun } from "./TurnNarrationRun";
 import { webhookMessageView } from "@/lib/webhook-message";
@@ -138,7 +141,6 @@ import {
   expandWindowStart,
   focusWindowRange,
   resolveTranscriptWindow,
-  tailWindowStart,
 } from "@/lib/transcript-window";
 import { appendComposerDraft, useReplyDraft } from "@/lib/drafts";
 import { isArriving, trackArrivals, type ArrivalState } from "@/lib/message-arrivals";
@@ -148,6 +150,10 @@ import { isArriving, trackArrivals, type ArrivalState } from "@/lib/message-arri
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
 const noop = () => {};
+/** Scrolled within this distance of the top, the next older page loads. */
+const OLDER_PAGE_TRIGGER_PX = 600;
+/** Older pages fetched unasked to fill a thin first page, per thread. */
+const MAX_FILL_PAGES = 4;
 
 /** "Today" / "Yesterday" / "Mon, Aug 11" — real dates, not a hardcoded label. */
 function dayLabel(at: number): string {
@@ -376,6 +382,7 @@ function Bubble({
   const hasAttachments = Boolean(attachments && (attachments.images.length || attachments.files.length));
   const sharedMeta = shared?.messageMeta?.[message.id];
   const sharedSpeaker = shared?.mentionBots.find(candidate => candidate.id === message.from?.botId);
+  const speakerColour = message.from?.color ?? sharedSpeaker?.color ?? (peer?.botId ? state.bots.find(candidate => candidate.id === peer.botId)?.color : undefined) ?? bot.color;
   const collapsible =
     user && !webhookView && !expanded && (visibleText.length > USER_COLLAPSE_CHARS || visibleText.split("\n").length > USER_COLLAPSE_LINES);
 
@@ -476,8 +483,9 @@ function Bubble({
               ? "overflow-hidden border border-accent/25 bg-card text-ink shadow-[0_10px_30px_rgba(0,0,0,0.18)]"
               : user
                 ? "bg-bubble-user px-4 py-2.5 whitespace-pre-wrap text-ink"
-                : "bg-card px-4 py-2.5 text-ink",
+                : "bot-colour-bubble px-4 py-2.5 text-ink",
           )}
+          style={!user ? { "--bot-bubble-colour": resolveMausColor(speakerColour) } as CSSProperties : undefined}
           title={new Date(message.at).toLocaleString()}
         >
           {replyTarget && (
@@ -685,12 +693,267 @@ function ActivityChip({ message, place = "auto" }: { message: Message; place?: E
   return <ToolActivity stopReason={message.turnOutcome?.stopReason} tool={tool} place={toolPlace(tool.name, place)} />;
 }
 
+type RowItem = TranscriptItem;
+
+function rowKey(item: RowItem): string {
+  return item.kind === "message" ? item.message.id : item.id;
+}
+
+/** First-sight height guess (row padding included) until the row is
+ * measured; close enough that spacers rarely jolt the scrollbar. */
+function estimateRowHeight(item: RowItem): number {
+  if (item.kind !== "message") return 48;
+  const m = item.message;
+  switch (m.kind) {
+    case "activity": case "digest": case "compaction": return 44;
+    case "screen": return 360;
+    case "options": case "secret": case "connector": case "routine.run": return 180;
+    default: {
+      const length = m.text?.length ?? 0;
+      return 52 + Math.min(600, Math.ceil(length / 90) * 22);
+    }
+  }
+}
+
+/** Rows that are known to render nothing are left out before windowing, so
+ * they never take a spacer slot or a gap. Mirrors TranscriptRow's nulls. */
+function rowRenders(item: RowItem, showToolCalls: boolean, transcript: Message[]): boolean {
+  if (item.kind === "run") return showToolCalls;
+  if (item.kind === "turn") return showToolCalls || item.messages.some((message) => message.kind === "text");
+  const m = item.message;
+  switch (m.kind) {
+    case "secret": return Boolean(m.secret);
+    case "connector": return Boolean(m.connector);
+    case "options": return !(m.card?.requestId && (m.card.questionRequest || m.card.tool)) ? !shouldHideOnboardingCard(m, transcript) : true;
+    case "activity": return Boolean(m.tool?.name.startsWith("error:")) || showToolCalls || Boolean(m.comm || m.threadRef);
+    case "digest": return showToolCalls;
+    case "screen": return Boolean(m.png);
+    default: return true;
+  }
+}
+
+/** Bot props that matter to a row. The message list itself changes on every
+ * event and rows never read it for anything a new row would not also get. */
+function sameRowBot(a: Bot, b: Bot): boolean {
+  if (a === b) return true;
+  const keys = Object.keys(a) as (keyof Bot)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => key === "messages" || a[key] === b[key]);
+}
+
+function sameRowItem(a: RowItem, b: RowItem): boolean {
+  if (a === b) return true;
+  if (a.kind === "message" || b.kind === "message") {
+    return a.kind === "message" && b.kind === "message" && a.message === b.message;
+  }
+  if (a.kind !== b.kind || a.id !== b.id || a.messages.length !== b.messages.length) return false;
+  if (a.kind === "turn" && b.kind === "turn" && (a.label !== b.label || a.steps.length !== b.steps.length)) return false;
+  return a.messages.every((message, index) => message === b.messages[index]);
+}
+
+interface TranscriptRowProps {
+  item: RowItem;
+  newDay: boolean;
+  bot: Bot;
+  shared?: SharedChatOptions;
+  showToolCalls: boolean;
+  place: EffectivePlace;
+  focusedId: string | null;
+  editing: boolean;
+  isLastBotText: boolean;
+  emerging: boolean;
+  arriving: boolean;
+  eagerAttachments: boolean;
+  /** this row is the newest and a retry is allowed */
+  canRetry: boolean;
+  engine: InstanceInfo | undefined;
+  onStartEdit: (id: string) => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: (id: string, text: string) => void;
+  onRegenerate?: () => void;
+  onReply: (message: Message) => void;
+}
+
+/** One transcript row. Memoized on its own message(s) and flags, so a new
+ * row or a store change re-renders the rows it touches, not the thread. */
+const TranscriptRow = memo(function TranscriptRow({
+  item, newDay, bot, shared, showToolCalls, place, focusedId, editing, isLastBotText, emerging, arriving,
+  eagerAttachments, canRetry, engine, onStartEdit, onCancelEdit, onSubmitEdit, onRegenerate, onReply,
+}: TranscriptRowProps) {
+  const first = item.kind === "message" ? item.message : item.messages[0];
+  if (item.kind === "turn") {
+    const shown = showToolCalls ? item.messages : item.messages.filter((message) => message.kind === "text");
+    if (!shown.length) return null;
+    const label = showToolCalls && item.steps.length ? `${item.label} · ${describeRun(item.steps)}` : item.label;
+    return (
+      <>
+        {newDay && <DaySeparator at={first.at} />}
+        <TurnNarrationRun label={label} forceOpen={item.messages.some((message) => message.id === focusedId)}>
+          {shown.map((message) => (
+            <div key={message.id} className="contents" data-mid={message.id}>
+              {message.kind === "activity" ? <ActivityChip message={message} place={place} /> : (
+                <Bubble
+                  bot={bot}
+                  message={message}
+                  shared={shared}
+                  editing={false}
+                  isLastBotText={false}
+                  onStartEdit={noop}
+                  onCancelEdit={noop}
+                  onSubmitEdit={noop}
+                  replyTarget={message.replyToId
+                    ? bot.messages.find((candidate) => candidate.id === message.replyToId)
+                    : undefined}
+                  onReply={() => onReply(message)}
+                />
+              )}
+            </div>
+          ))}
+        </TurnNarrationRun>
+      </>
+    );
+  }
+  if (item.kind === "run") {
+    if (!showToolCalls) return null;
+    return (
+      <>
+        {newDay && <DaySeparator at={first.at} />}
+        <ActivityRun messages={item.messages} forceOpen={item.messages.some((step) => step.id === focusedId)}>
+          {item.messages.map((step) => (
+            <div key={step.id} className="contents" data-mid={step.id}>
+              <ActivityChip message={step} place={place} />
+            </div>
+          ))}
+        </ActivityRun>
+      </>
+    );
+  }
+  const m = item.message;
+  const row = (() => {
+    switch (m.kind) {
+      case "secret":
+        if (!m.secret) return null;
+        return bot.remote ? <RemoteOnlyCard bot={bot} /> : <SecretRequestCard botId={bot.id} threadId={bot.threadId} message={m} />;
+      case "connector":
+        if (!m.connector) return null;
+        return bot.remote ? <RemoteOnlyCard bot={bot} /> : <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} />;
+      case "options": {
+        // a live permission ask gets the approval box; a structured
+        // ask gets the question box; anything else keeps the list
+        // card. The first-run quiz drops out once they talk (rowRenders).
+        // Cards are bot-authored and persisted, so one that will not
+        // draw must fall back to its text on every open, not take the
+        // whole page down every time this chat is selected.
+        const card = m.card?.requestId && m.card.questionRequest ? (
+          <QuestionCard threadId={bot.threadId} bot={bot} message={m} />
+        ) : m.card?.requestId && m.card.tool ? (
+          <ApprovalCard bot={bot} message={m} />
+        ) : (
+          <OptionCard botId={bot.id} threadId={bot.threadId} message={m} />
+        );
+        return (
+          <MessageBoundary fallbackText={m.card?.subtitle || m.card?.title || ""}>
+            {card}
+          </MessageBoundary>
+        );
+      }
+      case "routine.run":
+        return <RoutineRunRow bot={bot} message={m} />;
+      case "activity": {
+        // a failed turn is an error, not a tool run — render it as one.
+        // bot⇄bot comm chips and opened-thread chips stay because they
+        // link to another conversation.
+        // plain tool runs stay out unless Settings → Tool calls is on.
+        if (m.tool?.name.startsWith("error:")) {
+          return (
+            <ErrorRow
+              message={m.tool.name.slice(6).trim()}
+              onRetry={canRetry ? onRegenerate : undefined}
+              setupInstance={m.tool.setup ? engine : undefined}
+            />
+          );
+        }
+        if (!showToolCalls && !m.comm && !m.threadRef) return null;
+        return <ActivityChip message={m} place={place} />;
+      }
+      case "digest":
+        // the summary of the turn's tool chips: shown under the same setting
+        return showToolCalls ? <DigestChip message={m} /> : null;
+      case "compaction":
+        return <CompactionChip message={m} />;
+      case "screen":
+        return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
+      default:
+        return (
+          <Bubble
+            bot={bot}
+            message={m}
+            shared={shared}
+            emerging={emerging}
+            arriving={arriving}
+            eagerAttachments={eagerAttachments}
+            editing={editing}
+            isLastBotText={isLastBotText}
+            onStartEdit={() => onStartEdit(m.id)}
+            onCancelEdit={onCancelEdit}
+            onSubmitEdit={(text) => onSubmitEdit(m.id, text)}
+            onRegenerate={onRegenerate}
+            replyTarget={m.replyToId ? bot.messages.find((candidate) => candidate.id === m.replyToId) : undefined}
+            onReply={() => onReply(m)}
+          />
+        );
+    }
+  })();
+  if (!row) return null;
+  return (
+    <>
+      {newDay && <DaySeparator at={m.at} />}
+      {row}
+    </>
+  );
+}, (previous, next) => {
+  const keys = Object.keys(next) as (keyof TranscriptRowProps)[];
+  return keys.every((key) => {
+    if (key === "item") return sameRowItem(previous.item, next.item);
+    if (key === "bot") return sameRowBot(previous.bot, next.bot);
+    return previous[key] === next[key];
+  });
+});
+
+/** A routine run card reads the roster to know whether its execution thread
+ * can still be opened; only this row subscribes to that. */
+function RoutineRunRow({ bot, message }: { bot: Bot; message: Message }) {
+  const { state, dispatch } = useStore();
+  const executionThreadId = message.routineRun?.executionThreadId;
+  const canOpen = executionThreadId && state.bots.some((candidate) =>
+    candidate.threadId === executionThreadId || hasRoutineExecutionTask(candidate.tasks, executionThreadId)
+  );
+  return (
+    <RoutineRunCard
+      message={message}
+      onOpen={canOpen && executionThreadId
+        ? () => openNotificationTarget(
+            dispatch,
+            { botId: bot.id, threadId: executionThreadId },
+            state,
+          )
+        : undefined}
+    />
+  );
+}
+
 /** The settled transcript, memoized as one unit: during streaming every
  * frame re-renders ChatView, but all of these props keep their identity
  * (bot/messages only change on real message events), so the whole list —
  * every markdown tree, every code block — bails out of React work and only
  * the streaming tail below it commits. This is the t3code structural-sharing
- * idea at component granularity. */
+ * idea at component granularity.
+ *
+ * Only rows near the viewport mount (lib/virtual-range): each row is a real
+ * box (`data-vkey`) measured by a ResizeObserver, spacers hold the measured
+ * height of the rest. A row above the viewport that changes height (first
+ * measurement, an image, an expanded fold) shifts scrollTop by the same
+ * amount, because the scroller has browser scroll anchoring turned off. */
 const MessagesList = memo(function MessagesList({
   bot,
   messages,
@@ -707,6 +970,8 @@ const MessagesList = memo(function MessagesList({
   onRegenerate,
   onReply,
   shared,
+  scrollRef,
+  following,
 }: {
   bot: Bot;
   messages: Message[];
@@ -727,15 +992,30 @@ const MessagesList = memo(function MessagesList({
   onRegenerate?: () => void;
   onReply: (message: Message) => void;
   shared?: SharedChatOptions;
+  /** The scroller the list virtualizes against. */
+  scrollRef: RefObject<HTMLDivElement | null>;
+  /** Bottom-follow: while set, the newest rows are the ones mounted. */
+  following: RefObject<boolean>;
 }) {
   const { state, dispatch } = useStore();
   const showToolCalls = showToolCallsEnabled(state.config);
   // Messages that land while the chat is open spring in; history stays still.
   const arrivals = useRef<ArrivalState | null>(null);
   arrivals.current = trackArrivals(arrivals.current, bot.threadId, transcript, Date.now());
-  // Finished tool chips become compact runs; settled assistant narration
-  // becomes one reversible turn row while the terminal answer stays visible.
+  // Finished tool chips become compact runs; a settled turn's narration and
+  // steps become one reversible row while the terminal answer stays visible.
   const items = useMemo(() => shared ? messages.map(message => ({ kind: "message" as const, message })) : groupTranscript(messages), [messages, locale, shared]);
+  const rows = useMemo(() => {
+    const out: { key: string; item: RowItem; newDay: boolean }[] = [];
+    items.forEach((item, i) => {
+      const previous = items[i - 1];
+      const prev = previous && (previous.kind === "message" ? previous.message : previous.messages.at(-1));
+      const first = item.kind === "message" ? item.message : item.messages[0];
+      const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
+      if (rowRenders(item, showToolCalls, transcript)) out.push({ key: rowKey(item), item, newDay });
+    });
+    return out;
+  }, [items, showToolCalls, transcript]);
   // Where this conversation works, for the place icon on screen and page tools.
   const place = effectivePlace(bot, bot.tasks?.find((task) => task.threadId === bot.threadId));
   const newestMessageId = messages.at(-1)?.id;
@@ -744,6 +1024,102 @@ const MessagesList = memo(function MessagesList({
   // row out of the DOM, and there is nothing for the scroll to land on.
   const focus = state.focusMessage;
   const focusedId = focus && !focus.consumed && focus.threadId === bot.threadId ? focus.messageId : null;
+
+  // ---- virtualization ----
+  const listRef = useRef<HTMLDivElement>(null);
+  const heightCache = useMemo(() => rowHeightCache(bot.threadId), [bot.threadId]);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const heightOf = (row: { key: string; item: RowItem }) => heightCache.get(row.key) ?? estimateRowHeight(row.item);
+  const [range, setRange] = useState<VirtualRange | null>(null);
+  const computeRange = useCallback((): IndexRange => {
+    const current = rowsRef.current;
+    const heights = current.map((row) => heightCache.get(row.key) ?? estimateRowHeight(row.item));
+    const scroller = scrollRef.current;
+    const list = listRef.current;
+    const viewport = scroller?.clientHeight || window.innerHeight || 800;
+    if (following.current || !scroller || !list) return tailRange(heights, viewport);
+    const viewTop = scroller.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    return viewportRange(heights, viewTop, viewTop + viewport);
+  }, [heightCache, scrollRef, following]);
+  const frame = useRef(0);
+  const scheduleRange = useCallback(() => {
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => {
+      const current = rowsRef.current;
+      if (!current.length) return;
+      const next = computeRange();
+      const following_ = following.current;
+      const nextRange: VirtualRange = {
+        startKey: current[next.start].key,
+        endKey: following_ || next.end >= current.length ? null : current[next.end].key,
+      };
+      setRange((previous) => sameVirtualRange(previous, nextRange) ? previous : nextRange);
+    });
+  }, [computeRange, following]);
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    scroller.addEventListener("scroll", scheduleRange, { passive: true });
+    window.addEventListener("resize", scheduleRange);
+    return () => { scroller.removeEventListener("scroll", scheduleRange); window.removeEventListener("resize", scheduleRange); };
+  }, [scrollRef, scheduleRange]);
+  // New rows: re-derive after the commit (and after ChatView's prepend
+  // restore), never synchronously from a scroll position about to move.
+  useEffect(() => { scheduleRange(); }, [rows, scheduleRange]);
+
+  const keys = useMemo(() => rows.map((row) => row.key), [rows]);
+  let mounted = resolveVirtualRange(keys, range) ?? computeRange();
+  mounted = includeIndex(mounted, focusedId ? rows.findIndex((row) =>
+    row.item.kind === "message" ? row.item.message.id === focusedId : row.item.messages.some((message) => message.id === focusedId)) : -1, rows.length);
+  const heights = rows.map(heightOf);
+  const topSpace = spanHeight(heights, 0, mounted.start);
+  const bottomSpace = spanHeight(heights, mounted.end, rows.length);
+
+  // Measure mounted rows; shift the viewport by growth above it. One
+  // observer for the list's life; it reads the current thread's cache and
+  // scheduler through refs.
+  const heightCacheRef = useRef(heightCache);
+  heightCacheRef.current = heightCache;
+  const scheduleRef = useRef(scheduleRange);
+  scheduleRef.current = scheduleRange;
+  const observer = useRef<ResizeObserver | null>(null);
+  const observed = useRef(new Set<HTMLElement>());
+  useLayoutEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    if (!observer.current) {
+      observer.current = new ResizeObserver((entries) => {
+        const scroller = scrollRef.current;
+        const cache = heightCacheRef.current;
+        const byKey = new Map(rowsRef.current.map((row) => [row.key, row.item]));
+        const viewTop = scroller?.getBoundingClientRect().top ?? 0;
+        let shift = 0;
+        for (const entry of entries) {
+          const element = entry.target as HTMLElement;
+          const key = element.dataset.vkey;
+          const item = key ? byKey.get(key) : undefined;
+          if (!key || !item || !element.isConnected) continue;
+          const height = element.offsetHeight;
+          const before = cache.get(key) ?? estimateRowHeight(item);
+          cache.set(key, height);
+          if (height !== before && !following.current && element.getBoundingClientRect().top < viewTop) shift += height - before;
+        }
+        if (shift && scroller) scroller.scrollTop += shift;
+        scheduleRef.current();
+      });
+    }
+    const list = listRef.current;
+    const live = new Set(list ? [...list.querySelectorAll<HTMLElement>(":scope > [data-vkey]")] : []);
+    for (const element of observed.current) {
+      if (!live.has(element)) { observer.current.unobserve(element); observed.current.delete(element); }
+    }
+    for (const element of live) {
+      if (!observed.current.has(element)) { observer.current.observe(element); observed.current.add(element); }
+    }
+  });
+  useEffect(() => () => { observer.current?.disconnect(); observer.current = null; observed.current.clear(); }, []);
+
   return (
     <>
       {messages.length === 0 && !bot.busy && !shared?.historyLoading && (
@@ -768,157 +1144,42 @@ const MessagesList = memo(function MessagesList({
           </div>
         </div>
       )}
-      {items.map((item, i) => {
-        const previous = items[i - 1];
-        const prev = previous && (previous.kind === "message" ? previous.message : previous.messages.at(-1));
-        const first = item.kind === "message" ? item.message : item.messages[0];
-        const newDay = !prev || new Date(prev.at).toDateString() !== new Date(first.at).toDateString();
-        if (item.kind === "turn") {
-          return (
-            <div key={item.id} className="contents">
-              {newDay && <DaySeparator at={first.at} />}
-              <TurnNarrationRun
-                label={item.label}
-                forceOpen={item.messages.some((message) => message.id === focusedId)}
-              >
-                {item.messages.map((message) => (
-                  <div key={message.id} className="contents" data-mid={message.id}>
-                    <Bubble
-                      bot={bot}
-                      message={message}
-                      shared={shared}
-                      editing={false}
-                      isLastBotText={false}
-                      onStartEdit={noop}
-                      onCancelEdit={noop}
-                      onSubmitEdit={noop}
-                      replyTarget={message.replyToId
-                        ? bot.messages.find((candidate) => candidate.id === message.replyToId)
-                        : undefined}
-                      onReply={() => onReply(message)}
-                    />
-                  </div>
-                ))}
-              </TurnNarrationRun>
-            </div>
-          );
-        }
-        if (item.kind === "run") {
-          if (!showToolCalls) return null;
-          return (
-            <div key={item.id} className="contents">
-              {newDay && <DaySeparator at={first.at} />}
-              <ActivityRun messages={item.messages} forceOpen={item.messages.some((step) => step.id === focusedId)}>
-                {item.messages.map((step) => (
-                  <div key={step.id} className="contents" data-mid={step.id}>
-                    <ActivityChip message={step} place={place} />
-                  </div>
-                ))}
-              </ActivityRun>
-            </div>
-          );
-        }
-        const m = item.message;
-        const row = (() => {
-          switch (m.kind) {
-            case "secret":
-              if (!m.secret) return null;
-              return bot.remote ? <RemoteOnlyCard bot={bot} /> : <SecretRequestCard botId={bot.id} threadId={bot.threadId} message={m} />;
-            case "connector":
-              if (!m.connector) return null;
-              return bot.remote ? <RemoteOnlyCard bot={bot} /> : <ConnectorCard botId={bot.id} threadId={bot.threadId} message={m} />;
-            case "options": {
-              // a live permission ask gets the approval box; a structured
-              // ask gets the question box; anything else keeps the list
-              // card. The first-run quiz drops out once they talk.
-              // Cards are bot-authored and persisted, so one that will not
-              // draw must fall back to its text on every open, not take the
-              // whole page down every time this chat is selected.
-              const card = m.card?.requestId && m.card.questionRequest ? (
-                <QuestionCard threadId={bot.threadId} bot={bot} message={m} />
-              ) : m.card?.requestId && m.card.tool ? (
-                <ApprovalCard bot={bot} message={m} />
-              ) : shouldHideOnboardingCard(m, transcript) ? null : (
-                <OptionCard botId={bot.id} threadId={bot.threadId} message={m} />
-              );
-              if (!card) return null;
-              return (
-                <MessageBoundary fallbackText={m.card?.subtitle || m.card?.title || ""}>
-                  {card}
-                </MessageBoundary>
-              );
-            }
-            case "routine.run": {
-              const executionThreadId = m.routineRun?.executionThreadId;
-              const canOpen = executionThreadId && state.bots.some((candidate) =>
-                candidate.threadId === executionThreadId || hasRoutineExecutionTask(candidate.tasks, executionThreadId)
-              );
-              return (
-                <RoutineRunCard
-                  message={m}
-                  onOpen={canOpen && executionThreadId
-                    ? () => openNotificationTarget(
-                        dispatch,
-                        { botId: bot.id, threadId: executionThreadId },
-                        state,
-                      )
-                    : undefined}
-                />
-              );
-            }
-            case "activity": {
-              // a failed turn is an error, not a tool run — render it as one.
-              // bot⇄bot comm chips and opened-thread chips stay because they
-              // link to another conversation.
-              // plain tool runs stay out unless Settings → Tool calls is on.
-              if (m.tool?.name.startsWith("error:")) {
-                return (
-                  <ErrorRow
-                    message={m.tool.name.slice(6).trim()}
-                    onRetry={m.id === messages.at(-1)?.id && canRetryLast ? onRegenerate : undefined}
-                    setupInstance={m.tool.setup ? engine : undefined}
-                  />
-                );
-              }
-              if (!showToolCalls && !m.comm && !m.threadRef) return null;
-              return <ActivityChip message={m} place={place} />;
-            }
-            case "digest":
-              // the summary of the turn's tool chips: shown under the same setting
-              return showToolCalls ? <DigestChip message={m} /> : null;
-            case "compaction":
-              return <CompactionChip message={m} />;
-            case "screen":
-              return m.png ? <ScreenFrame png={m.png} mime={m.mime} /> : null;
-            default:
-              return (
-                <Bubble
+      {rows.length > 0 && (
+        // -mt-3 cancels the first row's pt-3 against the log's gap-3: rows
+        // carry their own gap so a spacer can stand in for any of them.
+        <div ref={listRef} className="-mt-3 flex flex-col" data-testid="transcript-rows">
+          {topSpace > 0 && <div aria-hidden="true" style={{ height: topSpace }} />}
+          {rows.slice(mounted.start, mounted.end).map(({ key, item, newDay }) => {
+            const m = item.kind === "message" ? item.message : undefined;
+            return (
+              <div key={key} data-vkey={key} data-mid={m?.id} className="flex flex-col gap-3 pt-3 empty:hidden">
+                <TranscriptRow
+                  item={item}
+                  newDay={newDay}
                   bot={bot}
-                  message={m}
                   shared={shared}
-                  emerging={m.id === emergingId}
-                  arriving={isArriving(arrivals.current, m.id)}
-                  eagerAttachments={m.id === newestMessageId || m.id === newestUserMessageId}
-                  editing={editingId === m.id}
-                  isLastBotText={m.id === lastBotTextId}
-                  onStartEdit={() => onStartEdit(m.id)}
+                  showToolCalls={showToolCalls}
+                  place={place}
+                  focusedId={item.kind === "message" ? null : focusedId}
+                  editing={editingId === m?.id}
+                  isLastBotText={m?.id === lastBotTextId}
+                  emerging={m?.id === emergingId}
+                  arriving={m ? isArriving(arrivals.current, m.id) : false}
+                  eagerAttachments={Boolean(m) && (m?.id === newestMessageId || m?.id === newestUserMessageId)}
+                  canRetry={Boolean(m) && m?.id === newestMessageId && canRetryLast}
+                  engine={engine}
+                  onStartEdit={onStartEdit}
                   onCancelEdit={onCancelEdit}
-                  onSubmitEdit={(text) => onSubmitEdit(m.id, text)}
+                  onSubmitEdit={onSubmitEdit}
                   onRegenerate={onRegenerate}
-                  replyTarget={m.replyToId ? bot.messages.find((candidate) => candidate.id === m.replyToId) : undefined}
-                  onReply={() => onReply(m)}
+                  onReply={onReply}
                 />
-              );
-          }
-        })();
-        if (!row) return null;
-        return (
-          <div key={m.id} className="contents" data-mid={m.id}>
-            {newDay && <DaySeparator at={m.at} />}
-            {row}
-          </div>
-        );
-      })}
+              </div>
+            );
+          })}
+          {bottomSpace > 0 && <div aria-hidden="true" style={{ height: bottomSpace }} />}
+        </div>
+      )}
     </>
   );
 });
@@ -1038,11 +1299,13 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   const [runDismissed, setRunDismissed] = useState<ReadonlyMap<string, string>>(() => new Map());
   const lastRunStep = recordedRun.at(-1);
 
-  // Windowed transcript: only a tail of the thread mounts (screenshots make
-  // full threads DOM-heavy). The boundary is anchored per bot+task; a
-  // render-phase reset re-tails it on switch so the old thread's boundary
-  // never flashes into the new one. Everything derived below (lastBotTextId,
-  // lastUserMessage, working dots) stays computed from the FULL list.
+  // Windowed transcript. MessagesList virtualizes its rows, so the whole
+  // held page is handed to it (start 0); the window now only narrows to a
+  // bounded range around a search hit, with Show earlier/later pills. The
+  // boundary is anchored per bot+task; a render-phase reset re-tails it on
+  // switch so the old thread's boundary never flashes into the new one.
+  // Everything derived below (lastBotTextId, lastUserMessage, working dots)
+  // stays computed from the FULL list.
   const transcriptKey = `${bot.id}:${bot.threadId}`;
   const [transcriptWindow, setTranscriptWindow] = useState<{
     key: string;
@@ -1050,11 +1313,11 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
     end: number | null;
   }>(() => ({
     key: transcriptKey,
-    start: tailWindowStart(messages.length),
+    start: 0,
     end: null,
   }));
   if (transcriptWindow.key !== transcriptKey) {
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: 0, end: null });
   }
   const {
     visible: windowedMessages,
@@ -1111,14 +1374,16 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       .catch(cause => setRemoveError(cause instanceof Error ? cause.message : "Could not remove message."))
       .finally(() => { messageMutationPending.current = false; setRemovePending(false); });
   };
-  const renderedShared = shared ? {
+  // Memoized: a fresh object here on every streamed frame would defeat
+  // MessagesList's memo and re-render a shared room's whole transcript.
+  const renderedShared = useMemo(() => shared ? {
     ...shared, editingPending: sharedEditPending, editingError: sharedEditError,
     onRequestDelete: (id: string) => {
       if (messages.some(message => message.id === id && message.role === "user") && !shared.messageMeta?.[id]?.deletedAt) {
         setRemoveError(""); setRemoveTarget(id);
       }
     },
-  } : undefined;
+  } : undefined, [shared, sharedEditPending, sharedEditError, messages]);
   const lastUserMessage = useMemo(
     () => [...messages].reverse().find((m) => m.role === "user" && m.kind === "text" && !peerLine(m)),
     [messages],
@@ -1299,12 +1564,43 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   // the viewport still — here it is applied when the transcript grows at the
   // front rather than when the boundary moves.
   const olderPending = shared ? Boolean(shared.olderLoading) : Boolean(state.loadingOlder[bot.threadId]);
-  const loadOlder = () => {
-    preExpandHeight.current = scrollRef.current ? { key: transcriptKey, height: scrollRef.current.scrollHeight } : null;
-    setBottomFollow(false);
+  // A cached copy shown while its thread switch is in flight (App.tsx): the
+  // store does not own this thread yet, so it cannot page it.
+  const switchPreview = !shared && state.pendingThreadSwitch[bot.id] === bot.threadId;
+  // `fill`: fetched on the reader's behalf (see below) while they may still be
+  // following the bottom; then the prepend must not break follow, and the
+  // follow effect keeps the newest row in view.
+  const lastOlderRequest = useRef(0);
+  const loadOlder = (fill = false) => {
+    lastOlderRequest.current = Date.now();
+    if (!(fill && followRef.current)) {
+      preExpandHeight.current = scrollRef.current ? { key: transcriptKey, height: scrollRef.current.scrollHeight } : null;
+      setBottomFollow(false);
+    }
     if (shared) void shared.loadOlder?.();
     else dispatch({ type: "loadOlderMessages", threadId: bot.threadId });
   };
+  // Scrolling near the top asks for the next page itself; the pill stays for
+  // keyboard and screen-reader use.
+  const nearTopLoad = () => {
+    const el = scrollRef.current;
+    if (!el || switchPreview || followRef.current || hiddenCount > 0 || !bot.hasMore || olderPending) return;
+    if (el.scrollTop > OLDER_PAGE_TRIGGER_PX || Date.now() - lastOlderRequest.current < 800) return;
+    loadOlder();
+  };
+  // A page that holds under two prompts reads as "tool calls and the last
+  // message": an older server ignores ?turns=, and the startup snapshot is a
+  // raw-row page. Fetch on until the conversation shows, a few pages at most.
+  const fillPages = useRef<{ key: string; count: number }>({ key: "", count: 0 });
+  const promptCount = useMemo(() => messages.reduce((count, message) => count + (message.role === "user" && message.kind === "text" ? 1 : 0), 0), [messages]);
+  useEffect(() => {
+    if (fillPages.current.key !== transcriptKey) fillPages.current = { key: transcriptKey, count: 0 };
+    if (switchPreview || hiddenCount > 0 || !bot.hasMore || olderPending || promptCount >= 2) return;
+    if (fillPages.current.count >= MAX_FILL_PAGES) return;
+    fillPages.current.count += 1;
+    loadOlder(true);
+    // loadOlder is recreated every render; the inputs above decide.
+  }, [transcriptKey, switchPreview, hiddenCount, bot.hasMore, olderPending, promptCount]);
   const oldestId = messages[0]?.id;
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -1336,7 +1632,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
   };
   const jumpToLatest = () => {
     setBottomFollow(true);
-    setTranscriptWindow({ key: transcriptKey, start: tailWindowStart(messages.length), end: null });
+    setTranscriptWindow({ key: transcriptKey, start: 0, end: null });
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     });
@@ -1531,6 +1827,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             distanceFromBottom: el.scrollHeight - scrollTop - el.clientHeight,
           });
           previousScrollTop.current = scrollTop;
+          nearTopLoad();
           // Opening a bounded search/source window changes scrollHeight.
           // Its synthetic scroll event must not re-arm bottom-follow before
           // useFocusMessage has landed on the requested row.
@@ -1555,10 +1852,10 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
                 {t("chat.showEarlier", { count: hiddenCount })}
               </button>
             </div>
-          ) : bot.hasMore ? (
+          ) : bot.hasMore && !switchPreview ? (
             <div className="flex justify-center pt-2">
               <button
-                onClick={loadOlder}
+                onClick={() => loadOlder()}
                 disabled={olderPending}
                 className="rounded-full border border-hairline/40 bg-panel px-3 py-1 text-[12.5px] text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-60"
               >
@@ -1583,6 +1880,8 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
             onSubmitEdit={submitEdit}
             onRegenerate={local ? regenerate : undefined}
             onReply={selectReply}
+            scrollRef={scrollRef}
+            following={followRef}
           />
           </SharedTranscriptAnchor>
           {laterCount > 0 && (
@@ -1648,6 +1947,7 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
       {/* Only once it matters: the run is over and could become a skill (a
           verified step, or three or more that passed). While the bot works
           the transcript already shows every step. */}
+      {local && <ApprovalRuleOffer botId={bot.id} threadId={bot.threadId} messages={messages} />}
       {lastRunStep && showRun(recordedRun) && canSaveRun && (recordedRunCounts.verified > 0 || recordedRunCounts.passed >= 3)
         && !skillStaged(messages, recordedRun) && runDismissed.get(transcriptKey) !== lastRunStep.id && (
         <div className="px-5 pb-2">
@@ -1668,7 +1968,9 @@ export function ChatView({ bot: profile, shared }: { bot: Bot; shared?: SharedCh
         key={bot.threadId}
         bot={profile}
         shared={shared}
-        locked={shared?.historyLoading}
+        // A cached transcript shown while its thread switch is in flight is
+        // read-only until the server confirms the switch.
+        locked={shared?.historyLoading || switchPreview}
         replyTo={shared && replyTo ? messages.find(message => message.id === replyTo.id) ?? replyTo : replyTo}
         onClearReply={clearReply}
         onConsumeReply={consumeReply}

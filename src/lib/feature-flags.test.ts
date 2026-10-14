@@ -14,21 +14,21 @@ describe("experimental feature flags", () => {
     expect(skillAuthoringEnabled({ features: { skillAuthoring: false } })).toBe(false);
   });
 
-  it("keeps the experimental browser off until explicitly enabled", () => {
-    expect(builtInBrowserEnabled(null)).toBe(false);
-    expect(builtInBrowserEnabled({})).toBe(false);
-    expect(builtInBrowserEnabled({ features: { browser: false } })).toBe(false);
+  it("keeps the built-in browser on unless a saved config switched it off", () => {
+    expect(builtInBrowserEnabled(null)).toBe(true);
+    expect(builtInBrowserEnabled({})).toBe(true);
     expect(builtInBrowserEnabled({ features: { browser: true } })).toBe(true);
+    expect(builtInBrowserEnabled({ features: { browser: false } })).toBe(false);
   });
 
-  it("hides tool-call chips by default", () => {
-    expect(showToolCallsEnabled(null)).toBe(false);
-    expect(showToolCallsEnabled({})).toBe(false);
-    expect(showToolCallsEnabled({ features: { showToolCalls: false } })).toBe(false);
-  });
-
-  it("shows tool-call chips only after explicit opt-in", () => {
+  it("shows tool-call chips by default", () => {
+    expect(showToolCallsEnabled(null)).toBe(true);
+    expect(showToolCallsEnabled({})).toBe(true);
     expect(showToolCallsEnabled({ features: { showToolCalls: true } })).toBe(true);
+  });
+
+  it("hides tool-call chips only after an explicit opt-out", () => {
+    expect(showToolCallsEnabled({ features: { showToolCalls: false } })).toBe(false);
   });
 
   it("keeps computer sharing off unless the server says it is on", () => {

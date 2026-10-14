@@ -22,7 +22,9 @@ export interface BrandStatus {
 export const DEFAULT_BRAND: Brand = {
   name: "BOS Bot",
   tagline: "your models. your tools. one local desktop.",
-  accent: "#22c55e",
+  // no accent: the default brand defers to the selected skin. A hard accent
+  // here was stamped inline on <html> and painted every skin's focus ring,
+  // tooltips and selection green. Only a white-label brand.json recolours.
 };
 
 let current: BrandStatus = { brand: DEFAULT_BRAND, source: "default", file: "" };

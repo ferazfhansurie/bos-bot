@@ -68,16 +68,27 @@ struct ChatView: View {
     @State private var activeArchive: BotDraft?
     @State private var activeScope: String?
     @State private var archives: [String: BotDraft] = [:]
-    @State private var uploadStatus: String?
     @State private var preparingAttachments = false
-    @State private var sendingMessage = false
     private struct PendingSendPreview {
         let threadId: String
         let id: String
         let text: String
         let steering: Bool
+        var attachments: [PendingMessageAttachment] = []
+        var progress: Double?
+        var status: String?
+        var error: String?
+        var retry: (() -> Void)?
+        var uploading = true
     }
-    @State private var pendingSendPreview: PendingSendPreview?
+    @State private var pendingSends: [String: PendingSendPreview] = [:]
+    // The archive scope includes computer, credentials, bot and exact thread.
+    // A queued upload never draws or exposes retry under another account.
+    private var pendingSendPreview: PendingSendPreview? {
+        get { activeScope.flatMap { pendingSends[$0] } }
+        nonmutating set { if let scope = activeScope { pendingSends[scope] = newValue } }
+    }
+    private var sendingMessage: Bool { pendingSendPreview?.uploading == true }
     /// Direct chats default to immediate steer. An explicit Queue choice
     /// remains selected so the next send respects the person's choice.
     @State private var sendPriority: MessagePriority = .queue
@@ -92,6 +103,7 @@ struct ChatView: View {
     @State private var threadOpenTask: Task<Void, Never>?
     /// Messages that land while the chat is open spring in; history stays still.
     @State private var arrivals = MessageArrivals()
+    @State private var transcriptMemo = TranscriptMemo()
     /// The header face's beats: reading, nods, moods, the card hop.
     @State private var mascot = ThreadMascotDirector()
     @FocusState private var composerFocused: Bool
@@ -116,6 +128,7 @@ struct ChatView: View {
     @State private var newestObservedID: String?
     @State private var readingTarget: String?
     @State private var restoringReading = true
+    @State private var loadingOlder = false
     @State private var readingOpenedUnread = false
     @State private var newMessagesBoundary: String?
     @State private var readingError: String?
@@ -196,7 +209,7 @@ struct ChatView: View {
     }
 
     private var messages: [Message] {
-        session.state.visibleTranscript(forThread: threadId)
+        session.visibleTranscript(forThread: threadId)
     }
 
     /// The transcript as the reader has asked to see it: every chip, folded
@@ -218,7 +231,26 @@ struct ChatView: View {
         if case .room = current {
             return transcriptRows(groupRoomTurns(settled), detail: detail, foldFailures: true)
         }
-        return transcriptRows(settled, detail: detail)
+        // A failed step joins its run too: the run's chip counts what didn't
+        // work, and a long turn reads as one row instead of being split at
+        // every failed command into a wall of chips.
+        return transcriptRows(settled, detail: detail, foldFailures: true)
+    }
+
+    /// One full fold of the open thread; `TranscriptMemo` keeps it until
+    /// something it reads changes.
+    private func deriveTranscript() -> TranscriptMemo.Derived {
+        let held: [Message] = creatingThread ? [] : messages
+        let members = memberSteps(in: held)
+        let tail = liveSteps(in: held)
+        return TranscriptMemo.Derived(
+            visible: held, steps: members, liveSteps: tail,
+            rows: rows(messages: held, liveSteps: tail, memberSteps: members),
+            // Each row's branch versions, worked out once for the whole
+            // transcript rather than by every row scanning all of it.
+            versions: Self.versionsByParent(session.state.transcript(forThread: threadId)),
+            replyTargets: Dictionary(held.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        )
     }
 
     /// The tail of activity belonging to the turn in flight.
@@ -267,15 +299,22 @@ struct ChatView: View {
         // Read the transcript once for this render. Pagination changes the
         // array as a unit; repeatedly reaching through ObservableObject for
         // every row only recomputes the same value.
-        let visible = creatingThread ? [] : messages
-        let steps = memberSteps(in: visible)
-        let liveSteps = liveSteps(in: visible)
-        let transcript = rows(messages: visible, liveSteps: liveSteps, memberSteps: steps)
-        let _ = arrivals.track(threadId: threadId, messages: visible.map { ($0.id, $0.at) }, now: Date().timeIntervalSince1970)
-        // Each row's branch versions, worked out once for the whole
-        // transcript rather than by every row scanning all of it.
-        let versions = Self.versionsByParent(session.state.transcript(forThread: threadId))
-        let replyTargets = Dictionary(visible.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Everything below is a function of the session's state, this
+        // thread, and the reader's activity level. Keyed on the state's
+        // revision, so a render that follows an unrelated change — the
+        // composer, a sheet, the header face — reuses the folded rows
+        // instead of re-walking a long transcript three times over.
+        let derived = transcriptMemo.value(for: TranscriptMemo.Key(
+            revision: session.stateRevision, threadId: threadId,
+            detail: activityDetail, creating: creatingThread
+        ), compute: deriveTranscript)
+        let visible = derived.value.visible
+        let steps = derived.value.steps
+        let liveSteps = derived.value.liveSteps
+        let transcript = derived.value.rows
+        let versions = derived.value.versions
+        let replyTargets = derived.value.replyTargets
+        let _ = arrivals.track(threadId: threadId, messages: derived.fresh ? visible.map { ($0.id, $0.at) } : [], now: Date().timeIntervalSince1970)
         // A VStack with the composer as a sibling, rather than a scroll view
         // with `.safeAreaInset`. The inset version sized itself to its
         // content, so a short transcript left the composer floating in the
@@ -306,19 +345,21 @@ struct ChatView: View {
                         }
 
                         if !creatingThread && session.state.hasMore[threadId] == true {
-                            Button("Load earlier messages") {
-                                // keep the reader where they were: after older
-                                // messages are prepended, sit back on the one
-                                // that used to be at the top
-                                let anchor = transcript.first?.id
-                                Task {
-                                    await session.loadOlder(threadId: threadId)
-                                    if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                            // Scrolling up into this row pages in the turns
+                            // above. The lazy stack builds it a little before
+                            // it is on screen, so the page usually lands
+                            // before the reader reaches the top.
+                            Group {
+                                if loadingOlder {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Button("Load earlier messages") { loadOlderKeepingPlace(proxy) }
+                                        .font(.footnote)
                                 }
                             }
-                            .font(.footnote)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, minHeight: 28)
+                            .padding(.vertical, 4)
+                            .onAppear { if !restoringReading { loadOlderKeepingPlace(proxy) } }
                         }
 
                         if !creatingThread, transcript.isEmpty, case let .bot(bot) = current {
@@ -409,11 +450,20 @@ struct ChatView: View {
                         if !creatingThread, let pending = pendingSendPreview, pending.threadId == threadId,
                            !messages.contains(where: { $0.sendId == pending.id || $0.queueId == pending.id }) {
                             VStack(alignment: .trailing, spacing: 4) {
+                                if !pending.attachments.isEmpty {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack { ForEach(pending.attachments) { item in
+                                            PendingAttachmentChip(attachment: item, remove: {}, canRemove: false)
+                                        } }
+                                    }.frame(maxWidth: 300)
+                                }
                                 Text(pending.text).textSelection(.enabled)
                                     .padding(12)
                                     .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 18))
-                                Text(pending.steering ? "Interrupting…" : "Sending…")
+                                if let progress = pending.progress { ProgressView(value: progress).frame(width: 180) }
+                                Text(pending.error ?? pending.status ?? (pending.steering ? "Interrupting…" : "Sending…"))
                                     .font(.caption).foregroundStyle(.secondary)
+                                if let retry = pending.retry { Button("Retry", action: retry).font(.caption.weight(.semibold)) }
                             }
                             .frame(maxWidth: .infinity, alignment: .trailing)
                             .id("pending-send-" + pending.id)
@@ -567,7 +617,6 @@ struct ChatView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let readingError { Text(readingError).font(.caption).foregroundStyle(.secondary) }
-            if let uploadStatus { Text(uploadStatus).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("composer-upload-progress") }
             if creatingThread {
                 PendingThreadComposer()
             } else {
@@ -594,6 +643,7 @@ struct ChatView: View {
             readingOpenedUnread = unreadAtOpen
             beginReadingPosition()
             await session.loadThreadIfNeeded(openedChat.threadId)
+            await session.ensureConversation(threadId: openedChat.threadId)
             await restoreReadingPosition(thread: openedChat.threadId, unread: unreadAtOpen)
             // opening a chat is what marks it read, exactly as on the desktop
             if openedChat.unread { await session.markRead(openedChat) }
@@ -624,7 +674,12 @@ struct ChatView: View {
         .onChange(of: session.state.hasLoadedPage(forThread: threadId)) { _, loaded in
             let requestedThread = threadId
             if !loaded { Task { await session.loadThreadIfNeeded(requestedThread) } }
-            else if restoringReading { Task { await restoreReadingPosition(thread: requestedThread, unread: readingOpenedUnread) } }
+            else {
+                Task {
+                    await session.ensureConversation(threadId: requestedThread)
+                    if restoringReading { await restoreReadingPosition(thread: requestedThread, unread: readingOpenedUnread) }
+                }
+            }
         }
         .onChange(of: current.unread) { _, unread in
             // A message can arrive while this chat is already on screen. The
@@ -1135,6 +1190,23 @@ struct ChatView: View {
         } catch { readingError = "Couldn’t restore this phone’s reading position." }
     }
 
+    /// Page in older turns without moving what the reader is looking at:
+    /// the row at the top before the page arrives is put back at the top.
+    private func loadOlderKeepingPlace(_ proxy: ScrollViewProxy) {
+        guard !loadingOlder else { return }
+        let thread = threadId
+        let anchor = visibleReadingID ?? messages.first?.id
+        loadingOlder = true
+        Task {
+            let before = messages.first?.id
+            await session.loadOlder(threadId: thread)
+            loadingOlder = false
+            guard thread == threadId, let anchor, before != messages.first?.id else { return }
+            var quiet = Transaction(); quiet.disablesAnimations = true
+            withTransaction(quiet) { proxy.scrollTo(anchor, anchor: .top) }
+        }
+    }
+
     private func restoreReadingPosition(thread: String, unread: Bool) async {
         guard session.state.hasLoadedPage(forThread: thread) else {
             readingError = "Reading position will return when this chat reconnects."
@@ -1242,20 +1314,29 @@ struct ChatView: View {
         let chatAtSend = current
         guard !text.isEmpty || !outgoingAttachments.isEmpty,
               !preparingAttachments,
-              !sendingMessage
+              !sendingMessage, pendingSendPreview?.error == nil
         else { return }
         let priorityAtSend = sendPriority
         checkpointDraft()
-        guard let archive = activeArchive else { return }
+        guard let archive = activeArchive, let scopeAtSend = activeScope else { return }
+        guard let clientAtSend = session.captureSendClient() else {
+            attachmentError = "This computer is offline."; return
+        }
         let durableID: String
         do { durableID = try archive.prepareSend(text: text, priority: priorityAtSend) }
         catch { attachmentError = archive.error; return }
-        sendingMessage = true
-        pendingSendPreview = PendingSendPreview(threadId: chatAtSend.threadId, id: durableID, text: text.isEmpty ? outgoingAttachments.map(\.name).joined(separator: "\n") : text, steering: priorityAtSend == .block && chatAtSend.busy)
+        do { try archive.handoff(sendID: durableID) }
+        catch { attachmentError = archive.error; return }
+        pendingSendPreview = PendingSendPreview(threadId: chatAtSend.threadId, id: durableID, text: text, steering: priorityAtSend == .block && chatAtSend.busy, attachments: outgoingAttachments)
+        draft = ""; attachments = []; replyTarget = nil; mentionPicks = []
+        Haptics.impact(.light)
         attachmentError = nil
         showCommandHUD = false
         showingPlus = false
-        Task {
+        func deliver() async {
+            pendingSends[scopeAtSend]?.uploading = true
+            pendingSends[scopeAtSend]?.error = nil; pendingSends[scopeAtSend]?.retry = nil
+            var sendError: String?
             let sent = await session.send(
                 text: text,
                 attachments: outgoingAttachments,
@@ -1264,37 +1345,43 @@ struct ChatView: View {
                 priority: priorityAtSend,
                 durableSendID: durableID,
                 uploadProgress: { name, completed, total in
-                    if activeArchive === archive { uploadStatus = "\(name) (\(completed)/\(total))" }
-                }
+                    pendingSends[scopeAtSend]?.status = total > 0 && completed < total ? "uploading \(total) attachment\(total == 1 ? "" : "s")" : "sending…"
+                },
+                byteProgress: { value in
+                    if pendingSends[scopeAtSend]?.id == durableID { pendingSends[scopeAtSend]?.progress = value }
+                },
+                sendFailure: { sendError = $0 },
+                sourceClient: clientAtSend
             )
-            sendingMessage = false
-            if pendingSendPreview?.id == durableID { pendingSendPreview = nil }
-            uploadStatus = nil
+            pendingSends[scopeAtSend]?.uploading = false
             guard sent else {
-                let failure = session.actionError ?? "Couldn't send this message. Try again."
+                let failure = sendError ?? "Couldn't send this message. Try again."
                 if activeArchive === archive { attachmentError = failure }
-                session.actionError = nil
+                if activeArchive === archive, draft.isEmpty, attachments.isEmpty, replyTarget == nil,
+                   archive.restoreFailedSend(sendID: durableID) {
+                    draft = archive.text; attachments = archive.files; replyTarget = archive.reply
+                    pendingSends[scopeAtSend] = nil
+                } else if pendingSends[scopeAtSend]?.id == durableID {
+                    pendingSends[scopeAtSend]?.error = failure
+                    pendingSends[scopeAtSend]?.retry = { Task { await deliver() } }
+                }
+                if session.captureSendClient()?.instanceID == clientAtSend.instanceID,
+                   session.actionError == sendError { session.actionError = nil }
                 Haptics.notification(.error)
                 return
             }
             archive.complete(sendID: durableID)
+            if pendingSends[scopeAtSend]?.id == durableID { pendingSends[scopeAtSend] = nil }
             guard activeArchive === archive else { return }
             attachmentError = archive.error
-            if replyTarget?.id == replyAtSend?.id { replyTarget = nil }
             // HUD commands expand `/diff` into a longer prompt. Compare with
             // what was actually in the field at tap time, not the expanded
             // text, so the command clears without erasing a newer edit.
-            if draft == draftAtSend {
-                draft = ""
-            }
-            if !picksAtSend.isEmpty, mentionPicks.map(\.id) == picksAtSend.map(\.id) { mentionPicks = [] }
-            if attachments.map(\.id) == outgoingAttachments.map(\.id) {
-                attachments = []
-            }
             SoundEffects.playSent()
             Haptics.impact(.medium)
             mascot.sent()
         }
+        Task { await deliver() }
     }
 
     private func importPhotos(_ items: [PhotosPickerItem]) async {
@@ -1332,35 +1419,8 @@ struct ChatView: View {
                 guard let raw = try await item.loadTransferable(type: Data.self) else {
                     throw AttachmentImportError.unreadable("that photo")
                 }
-                let actualType = CGImageSourceCreateWithData(raw as CFData, nil)
-                    .flatMap(CGImageSourceGetType)
-                    .flatMap { UTType($0 as String) }
-                let actualMime = actualType?.preferredMIMEType
-                    .map(AttachmentPolicy.normalizedMIME)
-
-                let data: Data
-                let mime: String
-                let fileExtension: String
-                if let actualMime, AttachmentPolicy.imageMIMETypes.contains(actualMime) {
-                    data = raw
-                    mime = actualMime
-                    fileExtension = actualType?.preferredFilenameExtension ?? "jpg"
-                } else if let image = UIImage(data: raw),
-                          let jpeg = image.jpegData(compressionQuality: 0.9) {
-                    data = jpeg
-                    mime = "image/jpeg"
-                    fileExtension = "jpg"
-                } else {
-                    throw AttachmentImportError.unsupported("that photo")
-                }
-
-                let candidate = PendingMessageAttachment(
-                    id: UUID(),
-                    data: data,
-                    name: items.count == 1 ? "Photo.\(fileExtension)" : "Photo \(index + 1).\(fileExtension)",
-                    mime: mime,
-                    kind: .image
-                )
+                let name = items.count == 1 ? "Photo" : "Photo \(index + 1)"
+                let candidate = try await PhotoAttachment.make(from: raw, name: name)
                 try AttachmentPolicy.validate(existingAttachments + imported + [candidate])
                 imported.append(candidate)
             }
@@ -1404,7 +1464,7 @@ struct ChatView: View {
                 if (UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie)) == true {
                     let accessed = url.startAccessingSecurityScopedResource()
                     defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-                    let candidate = try await VideoAttachment.make(from: url, name: url.lastPathComponent)
+                    let candidate = try await VideoAttachment.make(from: url, name: url.lastPathComponent, optimizeForUpload: false)
                     try AttachmentPolicy.validate(existingAttachments + imported + [candidate])
                     imported.append(candidate)
                     continue
@@ -1601,11 +1661,11 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            if preparingAttachments || sendingMessage {
+            if preparingAttachments {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(preparingAttachments ? "Preparing attachments…" : "Sending…")
+                    Text("Preparing attachments…")
                         .font(.system(size: 13, weight: .medium))
                 }
                 .foregroundStyle(Color.secondary)
@@ -2233,7 +2293,7 @@ struct ChatComposerBar: View {
                 .accessibilityLabel(showingPlus ? "Close" : "More")
 
                 HStack(alignment: .bottom, spacing: 6) {
-                    TextField(busy ? "Sending…" : dictation.isListening ? "Listening…" : "Message \(name)…", text: $draft, axis: .vertical)
+                    TextField(dictation.isListening ? "Listening…" : "Message \(name)…", text: $draft, axis: .vertical)
                         .lineLimit(1...5).font(.system(size: 17))
                         .padding(.vertical, 11).padding(.leading, 16)
                         .focused(focus)
@@ -2746,13 +2806,21 @@ struct TextBubble: View {
         // the trailing side.
         let fromPerson = message.role == .user
         let mine = fromPerson && !message.isFromAnotherPerson(selfID: selfID)
-        let customCard = parsedDiff != nil || parsedTable != nil
+        // Each of these scans the whole text; read them once per render,
+        // not once per mention below.
+        let diff = parsedDiff
+        let table = diff == nil ? parsedTable : nil
+        let customCard = diff != nil || table != nil
+        let shared = attachedContent
         // rooms attribute each line to the member who said it
         let speaker = message.from
         // No bot face beside the bubble: the bot's face is in the header, and
         // in a room the name line says who spoke. Another person's lines get
         // their face at the end of each run, as on the desktop.
         let otherPerson = fromPerson && !mine ? roomPerson : nil
+        // A bot's line wears that bot's colour; a person's line does not.
+        let tint: String? = fromPerson ? nil : (speaker?.color ?? (chat.isBot ? chat.color : nil))
+        let ink = mine ? BubbleColor.mineText : (tint == nil ? Color.primary : BubbleColor.theirsText(tint: tint))
         HStack(alignment: .bottom, spacing: 0) {
             if mine { Spacer(minLength: 56) }
             if let otherPerson {
@@ -2785,12 +2853,11 @@ struct TextBubble: View {
                 // Bots get markdown, you do not — the same split the desktop
                 // makes. Markdown you did not intend is worse than markdown
                 // you did: a message about `**` should show the asterisks.
-                if let diff = parsedDiff {
+                if let diff {
                     GitPRDiffCardView(filename: diff.filename, diffText: diff.diff)
-                } else if let table = parsedTable {
+                } else if let table {
                     SQLResultTableView(columns: table.headers, rows: table.rows)
                 } else if fromPerson {
-                    let shared = attachedContent
                     ForEach(Array(shared.attachments.enumerated()), id: \.offset) { _, attachment in
                         TranscriptAttachmentView(
                             attachment: attachment,
@@ -2806,7 +2873,6 @@ struct TextBubble: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    let shared = attachedContent
                     ForEach(Array(shared.attachments.enumerated()), id: \.offset) { _, attachment in
                         if !message.generatedImages.contains(where: { $0.path == attachment.path }) {
                             TranscriptAttachmentView(
@@ -2817,9 +2883,10 @@ struct TextBubble: View {
                     }
                     if ChannelTextPresentation.canCollapse(message) {
                         ExpandableBotReply(source: shared.text) { openLink($0, message) }
+                            .foregroundStyle(ink)
                     } else if !shared.text.isEmpty {
                         MarkdownText(source: shared.text) { openLink($0, message) }
-                            .foregroundStyle(Color.primary).textSelection(.enabled)
+                            .foregroundStyle(ink).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -2830,7 +2897,7 @@ struct TextBubble: View {
                 Group {
                     if !customCard {
                         RoundedRectangle(cornerRadius: 22)
-                            .fill(mine ? BubbleColor.mine : BubbleColor.theirs)
+                            .fill(mine ? BubbleColor.mine : BubbleColor.theirs(tint: tint))
                     }
                 }
             )
@@ -3534,14 +3601,22 @@ struct ScreenShot: View {
         .task {
             guard image == nil else { return }
             let data: Data?
-            if let inline = message.png, let decoded = Data(base64Encoded: inline) {
+            if let inline = message.png,
+               let decoded = await Task.detached(priority: .userInitiated, operation: { Data(base64Encoded: inline) }).value {
                 data = decoded
             } else if message.hasImage == true {
                 data = await session.image(threadId: threadId, messageId: message.id)
             } else {
                 data = nil
             }
-            image = data.flatMap(UIImage.init(data:))
+            // A desktop capture is a few megapixels of PNG. Decode and
+            // shrink it to bubble size off the main thread, not inline on
+            // the frame that scrolls it into view.
+            guard let data else { return }
+            let decoded = await Task.detached(priority: .userInitiated) {
+                decodeAttachmentThumbnail(data, maximumPixelSize: 1_400)
+            }.value
+            image = decoded.value.map { UIImage(cgImage: $0) }
         }
     }
 }
@@ -3784,12 +3859,13 @@ struct StreamingBubble: View {
                     // unclosed fence renders as code, an unclosed link as the
                     // characters typed so far.
                     MarkdownText(source: text, caret: true)
-                        .foregroundStyle(Color.primary)
+                        .foregroundStyle(BubbleColor.theirsText(tint: color))
                 }
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 11)
-            .background(RoundedRectangle(cornerRadius: 22).fill(BubbleColor.theirs))
+            // tinted like the settled bubble, so arriving does not recolour it
+            .background(RoundedRectangle(cornerRadius: 22).fill(BubbleColor.theirs(tint: color)))
             Spacer(minLength: 44)
         }
         // No `.textSelection` on purpose: selecting text that is still growing
@@ -3941,5 +4017,39 @@ private struct QueuedSendPreviewLine: View {
         .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 6))
         .frame(maxWidth: 140, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+
+/// The folded transcript of one render, kept until the state, the thread or
+/// the activity level changes. A reference type held in `@State`, so filling
+/// it from inside `body` is not a state change and causes no extra render.
+final class TranscriptMemo {
+    struct Key: Equatable {
+        var revision: Int
+        var threadId: String
+        var detail: String
+        var creating: Bool
+    }
+
+    struct Derived {
+        var visible: [Message]
+        var steps: [String: [Message]]
+        var liveSteps: [Message]
+        var rows: [TranscriptRow]
+        var versions: [String?: [Message]]
+        var replyTargets: [String: Message]
+    }
+
+    private var key: Key?
+    private var cached: Derived?
+
+    /// The derived transcript, and whether it was just computed.
+    func value(for key: Key, compute: () -> Derived) -> (value: Derived, fresh: Bool) {
+        if key == self.key, let cached { return (cached, false) }
+        let value = compute()
+        self.key = key
+        cached = value
+        return (value, true)
     }
 }

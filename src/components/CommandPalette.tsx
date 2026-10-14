@@ -3,6 +3,7 @@
 // so App.tsx only mounts it.
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
+  BellRing,
   CalendarDays,
   Keyboard,
   Loader2,
@@ -15,7 +16,8 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { api, useStore, visibleMessages, type Bot, type Group } from "@/state/store";
+import { api, openNotificationTarget, useStore, visibleMessages, visibleNotificationThread, type Action, type AppState, type Bot, type Group } from "@/state/store";
+import { fetchInbox, type InboxItem } from "@/lib/inbox";
 import { roomMemberBots } from "@/lib/room-members";
 import {
   bestTier,
@@ -33,11 +35,39 @@ import { landOnSearchHit } from "@/lib/focus-message";
 import { botAvatarProfile } from "../../shared/bot-avatar";
 import { BotAvatar, PersonPhoto } from "./Avatar";
 import { shortcutLabel } from "./ShortcutHint";
+import { terminalAvailable } from "@/lib/terminal";
+import { WORKSPACE_COMMANDS, runWorkspaceCommand } from "@/lib/workspace-commands";
 
 // enough to cover "the last few things I was in" without pushing the full
 // lists below the fold
 const RECENT_LIMIT = 6;
 const AVATAR = 22;
+
+/** The thread to open next: pending approvals and questions first, then
+ * unread finished threads, each oldest first. From inside one of them the
+ * chord moves on to the one after it, so repeated presses walk the list. */
+export function nextThreadNeedingYou(items: InboxItem[], currentThreadId: string | null): InboxItem | null {
+  const rank = (item: InboxItem) => (item.kind === "waiting-on-you" || item.kind === "question" ? 0 : item.kind === "unread" ? 1 : -1);
+  const seen = new Set<string>();
+  const ordered = items
+    .filter((item) => rank(item) >= 0)
+    .sort((a, b) => rank(a) - rank(b) || a.at - b.at)
+    .filter((item) => (seen.has(item.threadId) ? false : (seen.add(item.threadId), true)));
+  if (!ordered.length) return null;
+  const here = ordered.findIndex((item) => item.threadId === currentThreadId);
+  if (here < 0) return ordered[0];
+  return ordered.length > 1 ? ordered[(here + 1) % ordered.length] : null;
+}
+
+async function openNextThreadNeedingYou(dispatch: (action: Action) => void, state: AppState) {
+  const inbox = await fetchInbox().catch(() => null);
+  if (!inbox) return;
+  const next = nextThreadNeedingYou(inbox.items, visibleNotificationThread(state));
+  // nothing left: the needs-me view says so, rather than a silent chord
+  if (!next) return dispatch({ type: "showNeedsMe" });
+  openNotificationTarget(dispatch, { botId: next.botId, threadId: next.threadId }, state);
+  dispatch({ type: "revealThread", threadId: next.threadId });
+}
 
 interface PaletteAction {
   id: string;
@@ -150,6 +180,20 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // ⌘⇧U: the next thread waiting on you (⌘⇧J is the browser's downloads).
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "u") {
+        e.preventDefault();
+        void openNextThreadNeedingYou(dispatch, stateRef.current);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dispatch]);
+
   // fresh palette every open; stale queries from last time would flash
   useEffect(() => {
     if (!open) return;
@@ -211,7 +255,12 @@ export function CommandPalette({ onOpenChange }: { onOpenChange?: (open: boolean
     { id: "automations", label: t("sidebar.nav.automations"), keywords: "routines schedule calendar", icon: CalendarDays, run: () => dispatch({ type: "showRoutines" }) },
     { id: "team-map", label: t("sidebar.nav.teamMap"), keywords: "org chart graph", icon: Network, run: () => dispatch({ type: "showTeamMap" }) },
     { id: "apps", label: t("sidebar.nav.connectedApps"), keywords: "plugins integrations mcp", icon: Puzzle, run: () => dispatch({ type: "togglePlugins", open: true }) },
+    { id: "next-needing-you", label: t("attention.next"), keywords: "approval question unread waiting inbox next", icon: BellRing, hint: shortcutLabel("next-needing-you"), run: () => void openNextThreadNeedingYou(dispatch, state) },
     { id: "shortcuts", label: "Keyboard shortcuts", keywords: "keys hotkeys help", icon: Keyboard, hint: shortcutLabel("shortcuts-cheat-sheet"), run: () => dispatch({ type: "toggleShortcuts", open: true }) },
+    // the thread workspace's own list, the same one its keys run from
+    ...(terminalAvailable() ? WORKSPACE_COMMANDS.filter((command) => command.id !== "workspace-browser" || window.ogb?.primaryBrowser).map((command): PaletteAction => ({
+      id: command.id, label: command.label, keywords: command.keywords, icon: command.icon, hint: shortcutLabel(command.id), run: () => runWorkspaceCommand(command.id),
+    })) : []),
   ];
 
   const botEntry = ({ item, match }: Ranked<Bot>): PaletteEntry => ({ kind: "bot", bot: item, match });

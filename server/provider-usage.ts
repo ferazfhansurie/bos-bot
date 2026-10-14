@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { InstanceConfigMap } from "./contracts.ts";
-import { accountDirectory } from "./claude-accounts.ts";
+import { accountDirectory, configuredAccountDirectory } from "./claude-accounts.ts";
 
 const execFileAsync = promisify(execFile);
 type Window = { usedPercent: number | null; resetsAt: number | null };
@@ -17,9 +18,9 @@ export type ProviderUsage = {
   sevenDay: Window;
   status: "available" | "unavailable";
 };
-const percentage = (value: unknown, utilization = false): number | null => {
+const percentage = (value: unknown): number | null => {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.min(100, Math.max(0, utilization && value <= 1 ? value * 100 : value));
+  return Math.min(100, Math.max(0, value));
 };
 const reset = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -32,7 +33,7 @@ const reset = (value: unknown): number | null => {
 
 export function mapClaudeUsage(account: string, data: any): ProviderUsage {
   const window = (key: string): Window => ({
-    usedPercent: percentage(data?.[key]?.utilization, true),
+    usedPercent: percentage(data?.[key]?.utilization),
     resetsAt: reset(data?.[key]?.resets_at),
   });
   const fiveHour = window("five_hour");
@@ -57,20 +58,38 @@ async function readJson(path: string): Promise<any> {
   try { return JSON.parse(await readFile(path, "utf8")); } catch { return null; }
 }
 
-async function claudeToken(dir: string): Promise<string | null> {
-  let credentials = await readJson(join(dir, ".credentials.json"));
-  // A fixture's temporary HOME must never make its read fall through to the
-  // host user's real Keychain.
-  if (!credentials && process.platform === "darwin" && process.env.HOME === userInfo().homedir && dir === join(homedir(), ".claude")) {
-    try {
-      const result = await execFileAsync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-a", userInfo().username, "-w"], { timeout: 3000 });
-      credentials = JSON.parse(result.stdout);
-    } catch { /* Login may be unavailable on this host. */ }
+export function claudeCredentialService(selectedDirectory: string): string {
+  return "Claude Code-credentials" + (selectedDirectory
+    ? "-" + createHash("sha256").update(selectedDirectory.normalize("NFC")).digest("hex").slice(0, 8) : "");
+}
+
+type CredentialIO = {
+  platform: string; home: string; hostHome: string; username: string;
+  file: (path: string) => Promise<any>;
+  keychain: (service: string, username: string) => Promise<any>;
+};
+export async function readClaudeUsageToken(dir: string, selectedDirectory: string, io?: CredentialIO): Promise<string | null> {
+  const source = io ?? {
+    platform: process.platform, home: process.env.HOME ?? homedir(), hostHome: userInfo().homedir, username: userInfo().username,
+    file: readJson,
+    keychain: async (service: string, username: string) => {
+      const result = await execFileAsync("security", ["find-generic-password", "-s", service, "-a", username, "-w"], { timeout: 3000 });
+      return JSON.parse(result.stdout);
+    },
+  };
+  const candidates: any[] = [];
+  try { candidates.push(await source.file(join(dir, ".credentials.json"))); } catch { /* Missing file. */ }
+  // Only the selected account's exact Keychain service is eligible. A fixture
+  // HOME never falls through to the real user's store, even for named accounts.
+  if (source.platform === "darwin" && source.home === source.hostHome) {
+    try { candidates.push(await source.keychain(claudeCredentialService(selectedDirectory), source.username)); } catch { /* Locked or absent store. */ }
   }
-  const oauth = credentials?.claudeAiOauth ?? credentials?.claude_ai_oauth;
-  const expiry = oauth?.expiresAt ?? oauth?.expires_at;
-  if (typeof expiry === "number" && expiry < Date.now() + 60_000) return null;
-  return oauth?.accessToken ?? oauth?.access_token ?? null;
+  const valid = candidates.map(credentials => credentials?.claudeAiOauth ?? credentials?.claude_ai_oauth)
+    .filter(oauth => oauth && typeof (oauth.accessToken ?? oauth.access_token) === "string"
+      && (oauth.accessToken ?? oauth.access_token).length > 0
+      && !(typeof (oauth.expiresAt ?? oauth.expires_at) === "number" && (oauth.expiresAt ?? oauth.expires_at) < Date.now() + 60_000))
+    .sort((a, b) => (b.expiresAt ?? b.expires_at ?? 0) - (a.expiresAt ?? a.expires_at ?? 0));
+  return valid[0]?.accessToken ?? valid[0]?.access_token ?? null;
 }
 
 async function requestJson(url: string, headers: Record<string, string>): Promise<any> {
@@ -87,7 +106,7 @@ export async function providerUsage(instances: InstanceConfigMap): Promise<Provi
   if (cache && cache.key === key && Date.now() - cache.at < 30_000) return cache.rows;
   const rows = await Promise.all(accounts.map(async ([id, entry]): Promise<ProviderUsage> => {
     if (entry.driver === "claudeAgent") {
-      const token = await claudeToken(accountDirectory(entry));
+      const token = await readClaudeUsageToken(accountDirectory(entry), configuredAccountDirectory(entry));
       const data = token ? await requestJson("https://api.anthropic.com/api/oauth/usage", {
         Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.0.32",
       }) : null;

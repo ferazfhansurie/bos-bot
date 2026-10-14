@@ -20,7 +20,7 @@ vi.mock("@/state/store", async (importOriginal) => {
     useStore: () => ({
       state: {
         ...original.initialState,
-        appSettingsSection: "experimental",
+        appSettingsSection: "backups",
         config: { box: { configured: false }, ...fixture.config },
         instances: [{
           instanceId: "fixture", driverKind: "claudeAgent", displayName: "Fixture",
@@ -54,24 +54,20 @@ const access = () => renderToStaticMarkup(createElement(BotAccess, { bot }));
 const panel = (browser: boolean) => renderToStaticMarkup(createElement(ComputerPanel, { bot: { ...bot, browser } }));
 
 beforeEach(() => {
-  fixture.config = { features: { browser: false }, browserEngine: { kind: "unavailable", installable: true } };
+  fixture.config = { browserEngine: { kind: "unavailable", installable: true } };
   fixture.browserMcp = true;
   fixture.dispatch.mockClear();
 });
 afterAll(() => vi.unstubAllGlobals());
 
 describe("browser installation opt-in", () => {
-  it("exposes the fresh workspace opt-in before installation without enabling it automatically", () => {
-    const toggle = switchTag(settings(), "Enable the built-in browser");
-    expect(toggle).toContain('aria-checked="false"');
-    expect(toggle).not.toContain("disabled=");
+  it("offers no workspace switch in Settings and installs nothing on its own", () => {
+    expect(settings()).not.toContain("Enable the built-in browser");
     expect(panel(false)).not.toContain("Install the browser engine");
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
-  it("allows an explicitly disabled bot to opt in after the workspace, while its browser destination stays unavailable", () => {
-    expect(switchTag(access(), "Give this bot a built-in browser")).toContain("disabled=");
-    fixture.config.features = { browser: true };
+  it("lets an explicitly disabled bot opt in on a fresh workspace, while its browser destination stays unavailable", () => {
     const markup = access();
     const toggle = switchTag(markup, "Give this bot a built-in browser");
     expect(toggle).toContain('aria-checked="false"');
@@ -82,16 +78,18 @@ describe("browser installation opt-in", () => {
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
-  it("keeps both opt-ins unavailable when the server cannot install the engine", () => {
+  it("still honours a saved workspace opt-out", () => {
+    fixture.config.features = { browser: false };
+    expect(switchTag(access(), "Give this bot a built-in browser")).toContain("disabled=");
+  });
+
+  it("keeps the bot opt-in unavailable when the server cannot install the engine", () => {
     fixture.config.browserEngine = { kind: "unavailable", installable: false, reason: "Unsupported platform" };
-    expect(switchTag(settings(), "Enable the built-in browser")).toContain("disabled=");
-    fixture.config.features = { browser: true };
     expect(switchTag(access(), "Give this bot a built-in browser")).toContain("disabled=");
     expect(panel(true)).not.toContain("Install the browser engine");
   });
 
   it("preserves the per-bot provider capability gate", () => {
-    fixture.config.features = { browser: true };
     fixture.browserMcp = false;
     expect(switchTag(access(), "Give this bot a built-in browser")).toContain("disabled=");
   });

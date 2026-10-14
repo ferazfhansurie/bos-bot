@@ -19,7 +19,7 @@ import { assertQueueAttachmentsUnchanged } from "./queue-edit.ts";
 // the feature.
 
 import { newId } from "./contracts.ts";
-import { chatFollowups, editChatFollowup, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
+import { chatFollowups, editChatFollowup, reorderChatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
 import type { BotRecord, Message } from "./store.ts";
 
 /** The slice of Store this module needs — narrow so tests can fake it. */
@@ -157,6 +157,20 @@ export function editSteeredMessage(botId: string, threadId: string, queueId: str
   const next = { ...item, text, prompt: item.text === text ? item.prompt : makePrompt ? makePrompt(item.replyToId) : text };
   if (!editChatFollowup("bot", botId, threadId, queueId, item, next)) return false;
   Object.assign(item, next);
+  changed();
+  return true;
+}
+
+/** Put a thread's waiting sends in the person's order. `order` must name
+ * every waiting item exactly once; a queue that changed meanwhile refuses.
+ * Durable first, so a restart restores the same order. */
+export function reorderSteeredMessages(botId: string, threadId: string, order: string[]): boolean {
+  const entry = queues.get(threadId);
+  if (!entry || entry.botId !== botId) return false;
+  const byId = new Map(entry.items.map((item) => [item.messageId, item]));
+  if (order.length !== entry.items.length || new Set(order).size !== order.length || order.some((id) => !byId.has(id))) return false;
+  if (!reorderChatFollowups("bot", botId, threadId, order)) return false;
+  entry.items = order.map((id) => byId.get(id)!);
   changed();
   return true;
 }

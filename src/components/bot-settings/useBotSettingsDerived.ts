@@ -74,7 +74,7 @@ export function useBotSettingsDerived(bot: Bot) {
   const browserDisabledReason = !desktopBrowser
     ? browserUnavailableReason(state.config)
     : !browserFeature
-      ? "The built-in browser is switched off under App Settings → Experimental"
+      ? "The built-in browser is switched off for this workspace"
       : "This model engine cannot use the built-in browser";
   const sectionName = bot.section?.trim() || "General";
   const currentChief = state.bots.find(

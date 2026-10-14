@@ -26,3 +26,9 @@ it("matches bot defaults by identity rather than display name", () => {
   expect(accountBotNames("personal", [...bots, { name: "Remote bot", homeLink: { id: "another-server" }, modelSelection: { instanceId: "personal" } }])).toEqual(["bos", "money"]);
   expect(accountBotNames("personal", [...bots, { name: "Shared client bot", remote: { id: "another-server" }, modelSelection: { instanceId: "personal" } }])).toEqual(["bos", "money"]);
 });
+
+it("gives every account its own skin hue, even when several are nearly spent", () => {
+  const codex: UsageAccount = { ...personal, provider: "codex", instanceId: "codex", account: "codex", sevenDay: { usedPercent: 99, resetsAt: null } };
+  const rings = accountRings([codex, work, { ...personal, sevenDay: { usedPercent: 95, resetsAt: null } }]);
+  expect(rings.map(r => r.color)).toEqual(["var(--color-usage-1)", "var(--color-usage-2)", "var(--color-usage-3)"]);
+});

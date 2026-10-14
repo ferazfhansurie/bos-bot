@@ -82,3 +82,27 @@ it("revocation preserves read isolation and unknown or different-account history
   expect(store.listMessages({ chatIds: replies.policy("money")!.chatIds ?? [], accountId: account })).toEqual([]);
   expect(send).not.toHaveBeenCalled();
 });
+it("outreach sends to named chats without an incoming message, once per send_key", async () => {
+  const msg = { account_id: account, chat_id: client, send_key: "lead-day3", text: "following up on your ad plan" };
+  replies.configure("money", { accountId: account, chatIds: [client], autoDispatch: true });
+  await expect(replies.send("money", msg)).rejects.toThrow("not granted");
+  expect(() => replies.configure("money", { accountId: account, chatIds: null, outreach: true } as never)).toThrow("named chat list");
+  replies.configure("money", { accountId: account, chatIds: [client], autoDispatch: true, outreach: true } as never);
+  expect(await replies.send("money", msg)).toMatchObject({ state: "submitted", messageId: "outbound-id" });
+  expect(send).toHaveBeenLastCalledWith({ account_id: account, chat_id: client, message_id: "", text: msg.text }, expect.any(Function));
+  expect(await replies.send("money", msg)).toMatchObject({ state: "submitted" });
+  await expect(replies.send("money", { ...msg, text: "different" })).rejects.toThrow("no retry");
+  await expect(replies.send("money", { ...msg, chat_id: privateChat, send_key: "x" })).rejects.toThrow("not granted");
+  expect(send).toHaveBeenCalledTimes(1);
+});
+it("replies and sends to privacy-id (@lid) chats in scope, never to unlisted ones", async () => {
+  const lead = "96396397047822@lid", stranger = "11111111111111@lid";
+  for (const [id, chatId] of [["lid-in", lead], ["lid-out", stranger]] as const) store.insert({ id, chatId, fromMe: false, timestamp: now / 1000, accountId: account, chatName: "fixture", from: chatId, author: null, type: "chat", body: "Hi Money", hasMedia: false });
+  replies.configure("money", { accountId: account, chatIds: [lead], autoDispatch: true, outreach: true } as never);
+  expect(replies.eligible("money", store.listMessages({ chatId: lead })[0]!)).toBe(true);
+  expect(await replies.reply("money", { account_id: account, chat_id: lead, message_id: "lid-in", text: "hi" })).toMatchObject({ state: "submitted" });
+  expect(await replies.send("money", { account_id: account, chat_id: lead, send_key: "lid-day1", text: "follow up" })).toMatchObject({ state: "submitted" });
+  await expect(replies.reply("money", { account_id: account, chat_id: stranger, message_id: "lid-out", text: "hi" })).rejects.toThrow();
+  await expect(replies.send("money", { account_id: account, chat_id: stranger, send_key: "x", text: "hi" })).rejects.toThrow();
+  expect(send).toHaveBeenCalledTimes(2);
+});

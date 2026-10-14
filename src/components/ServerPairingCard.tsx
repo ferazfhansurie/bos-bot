@@ -63,7 +63,6 @@ const quiet = "rounded-md border border-line px-3 py-1.5 text-[13px] text-ink ho
  * paired from (MOCA-84). `canPairDevices` decides who may act. */
 export function ServerPairingCard({ initialSession = null }: { initialSession?: SessionState | null }) {
   const [session, setSession] = useState<SessionState | null>(initialSession);
-  const [scope, setScope] = useState<"admin" | "client">("admin");
   const [offer, setOffer] = useState<PairingOffer | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
@@ -110,7 +109,7 @@ export function ServerPairingCard({ initialSession = null }: { initialSession?: 
     setError(null);
     setCopied(false);
     try {
-      const body: PairingOffer = await api("/api/auth/pairing", { method: "POST", body: JSON.stringify({ scopes: scope === "admin" ? ["admin", "client"] : ["client"] }) });
+      const body: PairingOffer = await api("/api/auth/pairing", { method: "POST", body: JSON.stringify({ scopes: ["admin", "client"] }) });
       setOffer(body);
       setNow(Date.now());
     } catch (e) {
@@ -143,14 +142,6 @@ export function ServerPairingCard({ initialSession = null }: { initialSession?: 
   return (
     <Card title={t("remote.serverPairing.title")} subtitle={t("remote.serverPairing.subtitle")}>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-1.5 text-[13px] text-ink">
-          <input type="radio" name="server-pairing-scope" checked={scope === "admin"} onChange={() => setScope("admin")} />
-          {t("remote.serverPairing.scope.admin")}
-        </label>
-        <label className="flex items-center gap-1.5 text-[13px] text-ink">
-          <input type="radio" name="server-pairing-scope" checked={scope === "client"} onChange={() => setScope("client")} />
-          {t("remote.serverPairing.scope.client")}
-        </label>
         <button type="button" onClick={() => void create()} disabled={busy} className={button}>
           {busy ? t("remote.serverPairing.creating") : t("remote.serverPairing.create")}
         </button>

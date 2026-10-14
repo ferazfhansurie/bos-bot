@@ -8,7 +8,7 @@ import { assertQueueAttachmentsUnchanged } from "./queue-edit.ts";
 // never saw.
 
 import { newId } from "./contracts.ts";
-import { chatFollowups, editChatFollowup, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
+import { chatFollowups, editChatFollowup, reorderChatFollowups, saveChatFollowup, settleChatFollowups } from "./message-db.ts";
 import { sameAttachedSend } from "./steer-queue.ts";
 
 interface ChannelQueueItem {
@@ -109,6 +109,19 @@ export function editChannelMessage(groupId: string, threadId: string, queueId: s
   const next = { ...item, text };
   if (!editChatFollowup("channel", groupId, threadId, queueId, item, next)) return false;
   Object.assign(item, next);
+  changed();
+  return true;
+}
+
+/** Put a room thread's waiting sends in the person's order; the head is
+ * what drains (and steers) next. Refused when the queue changed meanwhile. */
+export function reorderChannelMessages(groupId: string, threadId: string, order: string[]): boolean {
+  const entry = queues.get(threadId);
+  if (!entry || entry.groupId !== groupId) return false;
+  const byId = new Map(entry.items.map((item) => [item.id, item]));
+  if (order.length !== entry.items.length || new Set(order).size !== order.length || order.some((id) => !byId.has(id))) return false;
+  if (!reorderChatFollowups("channel", groupId, threadId, order)) return false;
+  entry.items = order.map((id) => byId.get(id)!);
   changed();
   return true;
 }

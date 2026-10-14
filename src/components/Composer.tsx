@@ -407,37 +407,44 @@ export function Composer({
     else if (bot) dispatch({ type: "interrupt", botId: bot.id, threadId, onError });
   };
   const queueHeadId = queuedMessages[0]?.queueId;
-  // Rooms run several members at once: the head steers into the member the
-  // server will pick for it (its @mention, else the only active speaker),
+  // Rooms run several members at once: a queued item steers into the member
+  // the server will pick for it (its @mention, else the only active speaker),
   // never whoever happens to be listed busy first.
-  const roomSteer = group && queuedMessages[0]
-    ? roomSteerTarget(
-        queuedMessages[0].text,
-        members ?? [],
-        group.activeBotIds?.length ? group.activeBotIds : group.busyBotId ? [group.busyBotId] : [],
-      )
-    : null;
-  const roomSteerMember = roomSteer?.kind === "member" ? roomSteer.member : undefined;
-  const roomSteerCapable = roomSteerMember
-    ? state.instances.find((i) => i.instanceId === roomSteerMember.modelSelection.instanceId)?.capabilities?.queueing === true
-    : canSteer;
-  const roomSteerUnavailable = roomSteer?.kind === "ambiguous"
-    ? t("composer.queued.steerChoose")
-    : roomSteer?.kind === "waiting"
-      ? roomSteer.members.length === 1
-        ? t("composer.queued.waitsFor", { name: roomSteer.members[0]!.name })
-        : t("composer.queued.waitsForTurn")
-      : undefined;
-  const steerQueued = () => {
-    if (!queueHeadId) return;
+  const roomSteerFor = (text: string) => {
+    if (!group) return null;
+    const target = roomSteerTarget(
+      text,
+      members ?? [],
+      group.activeBotIds?.length ? group.activeBotIds : group.busyBotId ? [group.busyBotId] : [],
+    );
+    const member = target.kind === "member" ? target.member : undefined;
+    const capable = member
+      ? state.instances.find((i) => i.instanceId === member.modelSelection.instanceId)?.capabilities?.queueing === true
+      : canSteer;
+    const unavailable = target.kind === "ambiguous"
+      ? t("composer.queued.steerChoose")
+      : target.kind === "waiting"
+        ? target.members.length === 1
+          ? t("composer.queued.waitsFor", { name: target.members[0]!.name })
+          : t("composer.queued.waitsForTurn")
+        : undefined;
+    return { member, capable, unavailable };
+  };
+  const roomSteer = queuedMessages[0] ? roomSteerFor(queuedMessages[0].text) : null;
+  const roomSteerMember = roomSteer?.member;
+  const roomSteerCapable = roomSteer ? roomSteer.capable : canSteer;
+  const roomSteerUnavailable = roomSteer?.unavailable;
+  /** Steer one queued item that already sits at the head. */
+  const steerHeadItem = (queueId: string, text: string) => {
     setSteering(true);
     const settle = () => setSteering(false);
-    if (group && roomSteerMember && roomSteerCapable) {
+    const room = roomSteerFor(text);
+    if (group && room?.member && room.capable) {
       // A steer-capable room folds the queued head into the running turn
       // through the server; it never interrupts the turn to do it. Naming
       // the member makes the server refuse rather than deliver elsewhere.
-      dispatch({ type: "steerGroupQueued", groupId: group.id, threadId, queueId: queueHeadId, botId: roomSteerMember.id, onError: settle, onSettled: settle });
-    } else if (group && roomSteerUnavailable) {
+      dispatch({ type: "steerGroupQueued", groupId: group.id, threadId, queueId, botId: room.member.id, onError: settle, onSettled: settle });
+    } else if (group && room?.unavailable) {
       settle();
     } else if (group) {
       // A room whose running engine cannot steer keeps the old behavior:
@@ -446,13 +453,35 @@ export function Composer({
     } else if (bot && canSteer) {
       // A steer-capable engine folds the queued words into the running turn
       // through the server; it never interrupts the turn to do it.
-      dispatch({ type: "steerQueued", botId: bot.id, threadId, queueId: queueHeadId, onError: settle, onSettled: settle });
+      dispatch({ type: "steerQueued", botId: bot.id, threadId, queueId, onError: settle, onSettled: settle });
     } else if (bot) {
     // Unlike the general Stop control, Steer belongs to this exact queue.
     // Scoping prevents a 1:1 queue from interrupting the same bot in a room
     // (or a routine) whose work is unrelated to the words shown here.
       dispatch({ type: "interrupt", botId: bot.id, threadId, onError: settle });
     }
+  };
+  const steerQueued = (queueId: string | undefined = queueHeadId) => {
+    const item = queuedMessages.find((entry) => entry.queueId === queueId);
+    if (!item) return;
+    if (item.queueId === queueHeadId) {
+      steerHeadItem(item.queueId, item.text);
+      return;
+    }
+    // "send now" on a later item: move it to the front first, then steer it
+    // like the head. A bot queue still carries the rest along behind it.
+    const previous = queuedMessages.map((entry) => entry.queueId);
+    const order = [item.queueId, ...previous.filter((id) => id !== item.queueId)];
+    setSteering(true);
+    dispatch({
+      type: "reorderQueued",
+      threadId,
+      order,
+      previous,
+      ...(group ? { groupId: group.id } : { botId: bot?.id }),
+      onSaved: () => steerHeadItem(item.queueId, item.text),
+      onError: () => setSteering(false),
+    });
   };
   useEffect(() => setSteering(false), [threadId, queueHeadId]);
   // Queue vs block only means something while a turn is running. It is
@@ -1037,7 +1066,8 @@ export function Composer({
         />}
         <QueuedComposerMessages
           items={queuedMessages}
-          onSteer={canSteerQueued ? steerQueued : undefined}
+          onSteer={canSteerQueued ? () => steerQueued() : undefined}
+          onSteerItem={canSteerQueued ? steerQueued : undefined}
           steerInterrupts={group ? !roomSteerCapable : !canSteer}
           steerTargetName={roomSteerMember?.name}
           steerUnavailable={canSteerQueued ? roomSteerUnavailable : undefined}
@@ -1047,6 +1077,21 @@ export function Composer({
             if (group) dispatch({ type: "cancelGroupQueued", groupId: group.id, threadId, queueId });
             else if (bot) dispatch({ type: "cancelQueued", botId: bot.id, threadId, queueId });
           }}
+          onEdit={group || bot ? (queueId, text, expectedText) => dispatch({
+            type: "editQueued",
+            threadId,
+            queueId,
+            text,
+            expectedText,
+            ...(group ? { groupId: group.id } : { botId: bot?.id }),
+          }) : undefined}
+          onReorder={group || bot ? (order) => dispatch({
+            type: "reorderQueued",
+            threadId,
+            order,
+            previous: queuedMessages.map((entry) => entry.queueId),
+            ...(group ? { groupId: group.id } : { botId: bot?.id }),
+          }) : undefined}
         />
         <div className="relative">
           {/* App-ground from the pill midline down, full-bleed. Bubbles may

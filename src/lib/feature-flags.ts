@@ -20,22 +20,24 @@ export function browserUnavailableReason(config: FeatureFlagConfig | null | unde
 }
 
 /** Bots may draft skills (the Verify card's Save as skill, /learn,
- * skill_manage) for the user's review. On unless the Settings toggle was
- * switched off — the same rule as the server's skillAuthoringEnabled. */
+ * skill_manage) for the user's review. On unless a saved config switched it
+ * off — the same rule as the server's skillAuthoringEnabled. */
 export function skillAuthoringEnabled(config: FeatureFlagConfig | null | undefined): boolean {
   return config?.features?.skillAuthoring !== false;
 }
 
-/** The experimental built-in browser is unavailable until the person using
- * the app explicitly opts in. Each bot also has its own switch. */
+/** The built-in browser is on for the workspace unless a saved config
+ * explicitly switched it off; there is no Settings toggle any more. Each bot
+ * still has its own switch, and the engine installs only when asked. Mirrors
+ * the server's builtInBrowserEnabled. */
 export function builtInBrowserEnabled(config: FeatureFlagConfig | null | undefined): boolean {
-  return config?.features?.browser === true;
+  return config?.features?.browser !== false;
 }
 
-/** Tool-run chips in the transcript. Off by default — the mascot already
- * shows that work is happening. */
+/** Tool-run chips in the transcript. On unless switched off from a room's
+ * header; there is no Settings toggle any more. */
 export function showToolCallsEnabled(config: FeatureFlagConfig | null | undefined): boolean {
-  return config?.features?.showToolCalls === true;
+  return config?.features?.showToolCalls !== false;
 }
 
 /** Opt-in computer sharing — lending this desktop's folders, terminal or

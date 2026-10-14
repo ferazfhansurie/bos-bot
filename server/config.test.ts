@@ -75,8 +75,8 @@ describe("configuration boundaries", () => {
     expect(() => parseConfigPatch({ tts: { provider: "unknown" } })).toThrow("provider");
   });
 
-  it("defaults to three parallel threads and validates a configurable maximum of ten", () => {
-    expect(maxConcurrentBotThreads({})).toBe(3);
+  it("defaults to ten parallel threads and validates a configurable maximum of ten", () => {
+    expect(maxConcurrentBotThreads({})).toBe(10);
     expect(parseStoredConfig({ threads: { maxConcurrentPerBot: 10 } })).toEqual({ threads: { maxConcurrentPerBot: 10 } });
     expect(maxConcurrentBotThreads(parseConfigPatch({ threads: { maxConcurrentPerBot: 1 } }))).toBe(1);
     for (const value of [0, -1, 11, 1.5, "10", null]) {
@@ -439,7 +439,7 @@ describe("configuration boundaries", () => {
       rooms: { turnTimeoutMinutes: 20 },
     });
     expect(roomTurnTimeoutMinutes({ rooms: { turnTimeoutMinutes: 20 } })).toBe(20);
-    expect(roomTurnTimeoutMinutes({})).toBe(30);
+    expect(roomTurnTimeoutMinutes({})).toBe(1440);
   });
 
   it.each([0, 1.5, 1441, "20", null])(
@@ -472,9 +472,9 @@ describe("configuration boundaries", () => {
     // the pre-rename flag is dropped as a no-op rather than rejected, so a
     // stale client's PATCH cannot fail the request or re-enable anything
     expect(parseConfigPatch({ features: { skillRecorder: true } })).toEqual({ features: {} });
-    // the built-in browser is an independent explicit opt-in
-    expect(builtInBrowserEnabled({})).toBe(false);
-    expect(builtInBrowserEnabled({ features: { skillAuthoring: true } })).toBe(false);
+    // the built-in browser is on unless a saved config explicitly opts out
+    expect(builtInBrowserEnabled({})).toBe(true);
+    expect(builtInBrowserEnabled({ features: { skillAuthoring: false } })).toBe(true);
     expect(parseConfigPatch({ features: { browser: false } })).toEqual({ features: { browser: false } });
     expect(builtInBrowserEnabled({ features: { browser: false } })).toBe(false);
     expect(builtInBrowserEnabled({ features: { browser: true } })).toBe(true);
@@ -512,8 +512,9 @@ describe("configuration boundaries", () => {
     );
   });
 
-  it("keeps tool-call chips off by default and accepts an explicit opt-in", () => {
-    expect(showToolCallsEnabled({})).toBe(false);
+  it("shows tool-call chips by default and accepts an explicit opt-out", () => {
+    expect(showToolCallsEnabled({})).toBe(true);
+    expect(showToolCallsEnabled({ features: { showToolCalls: false } })).toBe(false);
     expect(parseConfigPatch({ features: { showToolCalls: true } })).toEqual({
       features: { showToolCalls: true },
     });

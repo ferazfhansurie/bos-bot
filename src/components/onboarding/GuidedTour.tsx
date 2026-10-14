@@ -152,7 +152,8 @@ export function GuidedTour() {
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? null;
   const held = Boolean(bot?.busy) || Boolean(bot && streaming[bot.threadId]) ||
     Boolean(bot?.messages.some((m) => m.kind === "options" && m.card?.requestId && !m.card.answered && !m.card.dismissed));
-  const active = !dismissed && Boolean(record?.completedAt) && !state.welcomeOpen && step !== null && !held;
+  const quietMarketer = record?.marketerAssignment?.botId === state.selectedId && !state.tourOpen;
+  const active = !quietMarketer && !dismissed && Boolean(record?.completedAt) && !state.welcomeOpen && step !== null && !held;
 
   // entering a step runs its effect once per step
   useEffect(() => {

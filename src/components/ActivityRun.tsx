@@ -1,12 +1,11 @@
-// A folded stretch of tool chips: one row saying what ran, click to open.
-//
-// Collapsed by default. A search hit inside a run opens it, and a run stays
-// open once the user has opened it. Failed steps never enter a folded run.
-import { useEffect, useState } from "react";
-import { ChevronRight, Check } from "lucide-react";
+// One quiet row for consecutive work, including a truthful live state.
+// Failed tools and recovery reviews remain outside this disclosure.
+import { useEffect, useId, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import type { Message } from "@/state/store";
 import { describeRun } from "@/lib/activity-runs";
 import { t } from "@/lib/i18n";
+import { WorkingDots } from "./WorkingIndicator";
 
 export function ActivityRun({
   messages,
@@ -14,47 +13,39 @@ export function ActivityRun({
   children,
 }: {
   messages: Message[];
-  /** landing on a step inside this run — a search hit cannot scroll to a
-   * row that a fold has kept out of the DOM */
+  /** A search hit reveals the step inside this run. */
   forceOpen?: boolean;
-  /** the individual chips, rendered by whichever transcript owns them */
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(forceOpen);
+  const contentId = useId();
   useEffect(() => {
     if (forceOpen) setOpen(true);
   }, [forceOpen]);
-  if (open) {
-    return (
-      <div className="flex flex-col gap-1">
-        <div className="flex justify-start">
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            aria-expanded
-            className="flex min-h-9 max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-raised/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-          >
-            <ChevronRight size={13} className="rotate-90" />
-            <span>{describeRun(messages)}</span>
-          </button>
-        </div>
-        {children}
-      </div>
-    );
-  }
+  const running = messages.filter(message => message.tool?.ok === undefined);
+  const label = describeRun(messages);
+  const liveLabel = running.length
+    ? `${t("toolDetail.running")} · ${running[running.length - 1].tool?.name}`
+    : null;
   return (
-    <div className="flex justify-start">
+    <div className="max-w-full" data-testid="activity-run" data-running={running.length > 0 || undefined}>
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        aria-expanded={false}
-        title={t("chat.run.showSteps")}
-        className="flex min-h-9 max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-ink-secondary hover:bg-raised/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        onClick={() => setOpen(value => !value)}
+        aria-expanded={open}
+        aria-controls={contentId}
+        aria-label={liveLabel ? `${liveLabel} · ${label}` : undefined}
+        title={label}
+        className="flex min-h-8 max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-ink-secondary hover:bg-raised/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
-        <Check size={13} className="text-success" />
-        <span className="max-w-[480px] truncate">{describeRun(messages)}</span>
-        <ChevronRight size={13} />
+        {liveLabel ? <WorkingDots size={3.5} /> : <span className="size-1 shrink-0 rounded-full bg-ink-tertiary" aria-hidden="true" />}
+        <span className="min-w-0 truncate">{liveLabel ?? label}</span>
+        {liveLabel && <span className="shrink-0 text-ink-tertiary">{messages.length}</span>}
+        <ChevronRight size={12} className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true" />
       </button>
+      <div id={contentId} hidden={!open} className="ml-3 mt-1 flex flex-col gap-1 border-l border-hairline/40 pl-3">
+        {open && children}
+      </div>
     </div>
   );
 }

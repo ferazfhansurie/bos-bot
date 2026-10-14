@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { createPrimaryBrowserStore, createBrowserVault, chromeProfiles, chromePreview, parsePasswordCSV, webURL, cleanTabs, chromeRoot } from './primary-browser.mjs';
 
 // Only wired to the main window's local-only IPC. No HTTP/tool/model access.
-export function createPrimaryBrowserController({ root, encryption, registry, sessionFromPartition, contentsFromId, dialog, owner, shell, chromeDirectory, shared, contentBlocker, allowInsecureTestOrigins = [] }) {
+export function createPrimaryBrowserController({ root, encryption, registry, sessionFromPartition, contentsFromId, dialog, owner, shell, chromeDirectory, contentBlocker, allowInsecureTestOrigins = [] }) {
   const store = createPrimaryBrowserStore(root);
   const vault = createBrowserVault(root, encryption);
   const profiles = new Map(); const previews = new Map(); const downloadPaths = new Map();
@@ -41,9 +41,6 @@ export function createPrimaryBrowserController({ root, encryption, registry, ses
       const id = input.profileId; store.fileFor(id);
       if (action === 'blocker-status') return contentBlocker?.status(id, input.guestId ? guestFor(id,input.guestId) : undefined);
       if (action === 'blocker-toggle') return contentBlocker?.toggle(id, input.guestId ? guestFor(id,input.guestId) : undefined, {enabled:input.enabled,siteOnly:input.siteOnly===true});
-      if (action === 'share') { const guest = guestFor(id, input.guestId); if (!webURL(guest.getURL())) throw new Error('Open a webpage before sharing'); return shared.grant({ botId: input.botId, threadId: input.threadId, guestId: guest.id }); }
-      if (action === 'take-control') { const guest = guestFor(id, input.guestId); shared.revoke(guest.id); return true; }
-      if (action === 'shared-state') return shared?.state(guestFor(id, input.guestId).id) ?? { shared: false };
       if (action === 'select') { store.select(id); return partition(id); }
       if (action === 'read') { const d = store.read(id); return { ...d, downloads: d.downloads.map(({ file: _file, ...row }) => row), partition: partition(id), ...(contentBlocker ? {blocker:contentBlocker.status(id)} : {}) }; }
       if (action === 'tabs') { store.saveTabs(id, input.state); return true; }

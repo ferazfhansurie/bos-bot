@@ -45,3 +45,20 @@
 @keyframes browser-bos-breathe { 0%,100% { transform:translateY(0) scale(1); } 50% { transform:translateY(-3px) scale(1.025); } }
 .browser-bos-alive { animation:browser-bos-breathe 4800ms ease-in-out infinite; }
 @media(prefers-reduced-motion:reduce){.browser-bos-alive { animation:none; }}
+/* Hidden tabs and profiles are parked, never display:none: the webview keeps
+   its size (no relayout or blank frame on switch) and the bot can still drive
+   and screenshot a tab the person is not looking at. Idle parked tabs are also
+   visibility:hidden so Chromium throttles them. */
+.browser-parked { position:absolute; inset:0; opacity:.001; pointer-events:none; z-index:0; }
+.browser-parked.browser-idle { visibility:hidden; }
+.browser-agent-driving::after { content:""; position:absolute; inset:0; z-index:5; pointer-events:none; box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--color-accent) 55%,transparent); }
+.browser-agent-strip { position:absolute; left:50%; bottom:14px; z-index:20; transform:translateX(-50%); display:flex; align-items:center; gap:8px; max-width:calc(100% - 24px); padding:5px 6px 5px 12px; border:1px solid var(--color-hairline); border-radius:999px; background:var(--color-card); box-shadow:0 8px 24px #0003; font-size:12px; white-space:nowrap; }
+.browser-agent-strip > button { padding:4px 10px; border-radius:999px; color:var(--color-ink-secondary); }
+.browser-agent-strip > button:hover { background:var(--color-raised); color:var(--color-ink); }
+.browser-agent-dot { display:inline-block; flex-shrink:0; width:7px; height:7px; border-radius:999px; background:var(--color-accent); }
+.browser-agent-dot.is-paused { background:var(--color-ink-secondary); }
+.browser-agent-dot.is-busy { animation:browser-agent-pulse 1.2s ease-in-out infinite; }
+.browser-agent-cursor { position:absolute; z-index:10; width:14px; height:14px; margin:-7px 0 0 -7px; border-radius:999px; background:color-mix(in srgb,var(--color-accent) 35%,transparent); border:2px solid var(--color-accent); pointer-events:none; animation:browser-agent-click 600ms ease-out; }
+@keyframes browser-agent-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+@keyframes browser-agent-click { from { transform:scale(2.2); opacity:.2; } to { transform:scale(1); opacity:1; } }
+@media(prefers-reduced-motion:reduce){.browser-agent-dot.is-busy,.browser-agent-cursor { animation:none; }}

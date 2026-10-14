@@ -13,8 +13,8 @@ struct ExpandableBotReply: View {
     @State private var fullHeight: CGFloat = 0
     private var sixLines: CGFloat { UIFont.systemFont(ofSize: bodySize).lineHeight * 6 }
     private var preview: AttributedString {
-        var text = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(source)
-        text.styleInlineCode()
+        // Cached: this is the long-reply path, where the parse costs most.
+        var text = MarkdownCache.inline(source) ?? AttributedString(source)
         text.styleMentions(mentions, mine: false)
         return text
     }

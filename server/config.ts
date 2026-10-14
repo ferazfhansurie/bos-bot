@@ -25,14 +25,16 @@ const SSH_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const LEGACY_BROWSER_PROFILE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 const BROWSER_PROFILE_ID = /^[a-z0-9_-]{1,40}$/;
 
-export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 30;
+// Owner defaults (1.9.9): a room turn may run a full day and a bot may run
+// its full ten threads at once; neither is a Settings control any more.
+export const DEFAULT_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
 export const MIN_ROOM_TURN_TIMEOUT_MINUTES = 1;
 export const MAX_ROOM_TURN_TIMEOUT_MINUTES = 1_440;
 export const DEFAULT_ROOM_HANDOFF_LIFETIME_MINUTES = 30;
 export const DEFAULT_ROOM_HANDOFF_MIN_RUNWAY_MINUTES = 10;
 export const DEFAULT_ROOM_HANDOFF_HARD_CAP_MINUTES = 240;
-export const DEFAULT_MAX_CONCURRENT_BOT_THREADS = 3;
 export const MAX_CONCURRENT_BOT_THREADS = 10;
+export const DEFAULT_MAX_CONCURRENT_BOT_THREADS = MAX_CONCURRENT_BOT_THREADS;
 /** Bounds for threads.eventLogMaxBytes: the floor keeps the kept tail large
  * enough to still serve the event inspector's recent-line window; the
  * ceiling just rejects absurd hand edits. */
@@ -292,14 +294,21 @@ const featureConfigSchema = z.object({
    * enabled; a one-shot that fails or answers junk leaves the first-message
    * snippet in place — see llmThreadTitlesEnabled. */
   llmThreadTitles: z.boolean().optional(),
+  /** Publish to the BOS marketplace from this install. Off everywhere but
+   * the publisher's own machine; there is no Settings toggle — see
+   * marketplacePublisherEnabled. */
+  marketplacePublisher: z.boolean().optional(),
 });
 /** First-run progress. Kept in the workspace config rather than a browser so
  * it survives cleared site data and is shared by every paired client. Hint
  * ids are short renderer-chosen slugs; the list is capped so a buggy client
  * cannot grow the file without bound. */
 const onboardingConfigSchema = z.object({
+  pendingOffer: z.enum(["generic", "digital-marketer"]).optional(),
   firstAssignment: z.object({ prepared: z.boolean().optional(), botId: z.string().regex(/^[\w-]+$/).max(80), threadId: z.string().regex(/^[\w-]+$/).max(80), sendId: z.string().regex(/^[A-Za-z0-9_-]{16,80}$/), text: z.string().min(1).max(5000), selection: z.object({ instanceId: z.string().min(1).max(120), model: z.string().min(1).max(200) }).strict() }).strict().optional(),
-  businessBrief: z.object({ business: z.string().max(1000), customers: z.string().max(500), outcome: z.enum(["website", "dashboard", "crm", "motion"]), approach: z.enum(["bos", "specialist"]) }).optional(),
+  marketerAssignment: z.object({ prepared: z.boolean().optional(), botId: z.string().regex(/^[\w-]+$/).max(80), threadId: z.string().regex(/^[\w-]+$/).max(80), sendId: z.string().regex(/^[A-Za-z0-9_-]{16,80}$/), text: z.string().min(1).max(5000), selection: z.object({ instanceId: z.string().min(1).max(120), model: z.string().min(1).max(200) }).strict() }).strict().optional(),
+  businessBrief: z.object({ business: z.string().max(1000), customers: z.string().max(500), outcome: z.enum(["website", "dashboard", "crm", "motion", "digital-marketer"]), approach: z.enum(["bos", "specialist"]) }).optional(),
+  marketerBrief: z.object({ business: z.string().max(1000), customers: z.string().max(500), outcome: z.enum(["website", "dashboard", "crm", "motion", "digital-marketer"]), approach: z.enum(["bos", "specialist"]) }).optional(),
   /** ISO timestamp of finishing (or skipping to the end of) the welcome flow. */
   completedAt: z.string().trim().max(40).optional(),
   /** Which welcome flow was completed; a newer flow may re-show itself. */
@@ -509,9 +518,9 @@ export interface AppConfig {
    * separate container, durable workspace, viewer and lease. */
   localVm?: { mode?: "shared" | "per-bot"; maxInstances?: number };
   /** Opt-in product experiments. Every flag defaults to disabled. */
-  features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean };
+  features?: { skillAuthoring?: boolean; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; marketplacePublisher?: boolean };
   /** First-run progress; see onboardingConfigSchema. */
-  onboarding?: { firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; chat?: import("../shared/onboarding-chat.ts").OnboardingChatState };
+  onboarding?: { pendingOffer?: "generic" | "digital-marketer"; marketerAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; marketerBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; firstAssignment?: import("../shared/bos-onboarding.ts").FirstAssignment; businessBrief?: import("../shared/bos-onboarding.ts").BusinessBrief; completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; chat?: import("../shared/onboarding-chat.ts").OnboardingChatState };
   /** Named browser sessions any bot can be pointed at. */
   browserProfiles?: BrowserProfile[];
   /** CDP target of a Chrome the operator already has running (a bare port,
@@ -697,20 +706,22 @@ export function localVmMaxInstances(cfg: AppConfig): number {
   return cfg.localVm?.maxInstances ?? DEFAULT_LOCAL_VM_MAX_INSTANCES;
 }
 
-/** On by default; only an explicit `false` (the Settings toggle, or a legacy
+/** On by default; only an explicit saved `false` (or a legacy
  * `skillRecorder: false` carried over at startup) switches it off. */
 export function skillAuthoringEnabled(cfg: AppConfig): boolean {
   return cfg.features?.skillAuthoring !== false;
 }
 
+/** Tool-run chips in transcripts: on unless a room header switched them off. */
 export function showToolCallsEnabled(cfg: AppConfig): boolean {
-  return cfg.features?.showToolCalls === true;
+  return cfg.features?.showToolCalls !== false;
 }
 
-/** Workspace-level gate for the experimental built-in browser. A bot's own
+/** Workspace-level gate for the built-in browser: on unless the saved config
+ * explicitly says `false` (Settings no longer offers a toggle). A bot's own
  * switch sits under it, so either can withhold the browser. */
 export function builtInBrowserEnabled(cfg: AppConfig): boolean {
-  return cfg.features?.browser === true;
+  return cfg.features?.browser !== false;
 }
 
 /** Opt-in computer sharing: the routes, the agent tools, the advertised
@@ -742,6 +753,13 @@ export function claudeUserMcpEnabled(cfg: AppConfig): boolean {
  * answers anything unusable leaves the snippet untouched. */
 export function llmThreadTitlesEnabled(cfg: AppConfig): boolean {
   return cfg.features?.llmThreadTitles === true;
+}
+
+/** The marketplace's publish path. Only BOS Bot's publisher turns this on,
+ * by hand in the config (`{"features": {"marketplacePublisher": true}}`);
+ * every other install sees the shelf without a publish button. */
+export function marketplacePublisherEnabled(cfg: AppConfig): boolean {
+  return cfg.features?.marketplacePublisher === true;
 }
 
 /** Config sections no provider driver reads. A write that touches only
@@ -1186,7 +1204,15 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   // New default-fleet engines that existing product configs would otherwise
   // never see. Custom-only engines stay in CUSTOM_ONLY so a one-off test map
   // is not expanded, matching the claude/grok/codex product-fleet probe.
+  // The agent CLI engines are listed too: a product config saved while BOS
+  // shipped only Claude and Codex would otherwise never offer them under
+  // Settings → Engines → Add an engine.
   const PRODUCT_FLEET_ADDITIONS = {
+    grok: { driver: "grokAgent" },
+    kimi: { driver: "kimiAgent" },
+    droid: { driver: "droidAgent" },
+    antigravity: { driver: "antigravityAgent" },
+    opencodeGo: { driver: "opencodeGo" },
     cursor: { driver: "cursorAgent" },
     openaiCompat: { driver: "openai-compat" },
     ...CUSTOM_ONLY,

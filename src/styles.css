@@ -82,6 +82,16 @@
   /* onboarding: a bolt travelling from a webhook address to the bot */
   --animate-bolt: bolt 0.9s cubic-bezier(0.77, 0, 0.175, 1) infinite;
 
+  /* usage rings: one hue per AI account, in ring order. The same token
+     paints the ring, its tooltip dot and the profile menu bar. Dark skins
+     use these; light skins carry deeper twins. pnpm check:contrast keeps
+     every value at 3:1 on the sidebar and on menus. */
+  --color-usage-1: #E8875F;
+  --color-usage-2: #5B9BF8;
+  --color-usage-3: #B98CF0;
+  --color-usage-4: #3FBFB2;
+  --color-usage-5: #E879A8;
+
   /* Defaults = Midnight. Kept here so the app is never unstyled. */
   --color-app: #070707;
   --color-panel: #111111;
@@ -192,6 +202,12 @@
    value is named next to each, so the drift stays auditable.
    ───────────────────────────────────────────────────────────────────────── */
 [data-skin="atelier"] {
+  /* usage rings: deeper twins of the dark-skin hues */
+  --color-usage-1: #B9501C;
+  --color-usage-2: #2563EB;
+  --color-usage-3: #7C3AED;
+  --color-usage-4: #0B7A70;
+  --color-usage-5: #BE2F6E;
   --code-color-scheme: light;
   --color-app: #f5f1eb;           /* outermost ground */
   --color-panel: #fbf8f2;         /* sidebar */
@@ -306,6 +322,12 @@
    round more than paper does, and far more than sheet metal.
    ───────────────────────────────────────────────────────────────────────── */
 [data-skin="lagoon"] {
+  /* usage rings: deeper twins of the dark-skin hues */
+  --color-usage-1: #B9501C;
+  --color-usage-2: #2563EB;
+  --color-usage-3: #7C3AED;
+  --color-usage-4: #0B7A70;
+  --color-usage-5: #BE2F6E;
   --code-color-scheme: light;
   /* The tint is the point, so it is carried by the surfaces, not by a button:
      the ground sits 13 points of green-blue above its red channel, roughly
@@ -405,6 +427,12 @@
    crisp and familiar instead of colourful.
    ───────────────────────────────────────────────────────────────────────── */
 [data-skin="linen"] {
+  /* usage rings: deeper twins of the dark-skin hues */
+  --color-usage-1: #B9501C;
+  --color-usage-2: #2563EB;
+  --color-usage-3: #7C3AED;
+  --color-usage-4: #0B7A70;
+  --color-usage-5: #BE2F6E;
   --code-color-scheme: light;
   --color-app: #eceff3;
   --color-panel: #f5f6f8;
@@ -498,6 +526,12 @@
    #f7f7f7, selected row #e1e1e1.
    ───────────────────────────────────────────────────────────────────────── */
 [data-skin="daylight"] {
+  /* usage rings: deeper twins of the dark-skin hues */
+  --color-usage-1: #B9501C;
+  --color-usage-2: #2563EB;
+  --color-usage-3: #7C3AED;
+  --color-usage-4: #0B7A70;
+  --color-usage-5: #BE2F6E;
   --code-color-scheme: light;
   --color-app: #fcfcfc;           /* the thread */
   --color-panel: #f7f7f7;         /* sidebar, one step down from the thread */
@@ -625,9 +659,11 @@ body {
 }
 
 /* Keep focus visible after components clear the browser outline. These
-   unlayered rules outrank Tailwind utilities without needing !important. */
+   unlayered rules outrank Tailwind utilities without needing !important.
+   Neutral on purpose: the skin accent as a 2px ring read as a stray
+   line on every handle and row, so keyboard focus is a quiet grey hairline. */
 :focus-visible {
-  outline: 2px solid var(--color-focus);
+  outline: 1px solid var(--color-ink-secondary);
   outline-offset: 2px;
 }
 
@@ -1323,6 +1359,12 @@ body {
   color: var(--color-bubble-user-ink);
 }
 
+/* Keep the theme's readable ink while carrying the speaker's colour through
+   the entire bubble, including its tail. Custom black/white bots remain legible. */
+.bot-colour-bubble {
+  background-color: color-mix(in srgb, var(--bot-bubble-colour) 18%, var(--color-card));
+}
+
 /* Daylight's inverted bubble is a dark surface, including its editor,
    quoted replies and attachment controls. Keep their normal semantic tokens
    together; overriding only the parent's color leaves explicit child ink dark.
@@ -1386,6 +1428,12 @@ button:disabled.bg-danger {
 }
 /* Putri pink skins. */
 [data-skin="sakura"] {
+  /* usage rings: deeper twins of the dark-skin hues */
+  --color-usage-1: #B9501C;
+  --color-usage-2: #2563EB;
+  --color-usage-3: #7C3AED;
+  --color-usage-4: #0B7A70;
+  --color-usage-5: #BE2F6E;
   --code-color-scheme: light;
   --color-app: #fdf7f9;
   --color-panel: #f9eef2;
@@ -1419,6 +1467,12 @@ button:disabled.bg-danger {
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
 }
 [data-skin="blossom"] {
+  /* usage rings: deeper twins of the dark-skin hues */
+  --color-usage-1: #B9501C;
+  --color-usage-2: #2563EB;
+  --color-usage-3: #7C3AED;
+  --color-usage-4: #0B7A70;
+  --color-usage-5: #BE2F6E;
   --code-color-scheme: light;
   --color-app: #fdf7f9;
   --color-panel: #f9eef2;
@@ -1486,6 +1540,12 @@ button:disabled.bg-danger {
 }
 @media (prefers-color-scheme: dark) {
   [data-skin="sakura"] {
+    /* usage rings: back to the dark-skin hues */
+    --color-usage-1: #E8875F;
+    --color-usage-2: #5B9BF8;
+    --color-usage-3: #B98CF0;
+    --color-usage-4: #3FBFB2;
+    --color-usage-5: #E879A8;
     --code-color-scheme: dark;
     --color-app: #141016;
     --color-panel: #1c1620;

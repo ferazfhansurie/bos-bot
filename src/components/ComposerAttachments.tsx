@@ -129,7 +129,7 @@ export function ComposerAttachments({
     <>
       {dragging && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-10">
-          <div className="rounded-2xl border-2 border-dashed border-accent/70 bg-panel/90 px-8 py-6 text-[14px] font-medium text-ink shadow-2xl">
+          <div className="rounded-2xl border border-dashed border-ink-secondary/50 bg-panel/90 px-8 py-6 text-[14px] font-medium text-ink shadow-2xl">
             Drop to attach
           </div>
         </div>
@@ -187,7 +187,7 @@ export function ComposerAttachments({
                   }}
                   disabled={!attachmentImageUrl(a.path) && !a.previewUrl}
                   aria-busy={a.uploading || undefined}
-                  className="relative flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-default"
+                  className="relative flex h-[76px] w-full items-center justify-center overflow-hidden rounded-lg bg-inset focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-hairline disabled:cursor-default"
                   aria-label={`Preview ${a.name}`}
                 >
                   <img

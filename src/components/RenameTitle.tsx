@@ -16,6 +16,7 @@ export function RenameTitle({
   showEditButton = false,
   className,
   inputClassName,
+  editRequest = 0,
 }: {
   value: string;
   onCommit: (next: string) => void;
@@ -26,9 +27,20 @@ export function RenameTitle({
   showEditButton?: boolean;
   className?: string;
   inputClassName?: string;
+  /** bump to start editing from outside, e.g. a context menu's Rename */
+  editRequest?: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    if (!editRequest) return;
+    setDraft(value);
+    setEditing(true);
+    onEditingChange?.(true);
+    // only a new request opens the editor; value and callback changes do not
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editRequest]);
 
   useEffect(() => {
     if (!editing) setDraft(value);

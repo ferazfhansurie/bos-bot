@@ -1,13 +1,9 @@
-import { useRef } from "react";
 import { t } from "@/lib/i18n";
 import {
-  Cloud,
   Loader2,
-  LogOut,
   ShieldCheck,
   Smartphone,
   Trash2,
-  Wifi,
 } from "lucide-react";
 import {
   PhoneSetupFlowView,
@@ -20,7 +16,6 @@ import {
   usePhoneSetupController,
 } from "./PhoneSetupFlow";
 import { companionPairingMode } from "../lib/phone-setup";
-import { ConnectionDetail } from "./ConnectionDetail";
 import { Card, Switch } from "./SettingsPrimitives";
 import { brand } from "../lib/brand";
 
@@ -34,51 +29,6 @@ export {
 export interface CompanionPanelStatus {
   label: string;
   good: boolean;
-}
-
-export interface TailscalePairingStatus {
-  kind: "unchecked" | "unavailable" | "magicdns" | "ready" | "error";
-  title: string;
-  detail: string;
-}
-
-export function deriveTailscalePairingStatus(
-  state: Pick<CompanionState, "enabled" | "tailscale" | "tailnetName" | "error">,
-  routeAvailable: boolean,
-): TailscalePairingStatus {
-  if (state.error) {
-    return {
-      kind: "error",
-      title: t("remote.status.attention"),
-      detail: state.error,
-    };
-  }
-  if (routeAvailable && state.tailnetName) {
-    return {
-      kind: "ready",
-      title: t("remote.tailscale.ready", { name: state.tailnetName }),
-      detail: t("remote.tailscale.readyDetail"),
-    };
-  }
-  if (state.tailscale) {
-    return {
-      kind: "magicdns",
-      title: t("remote.tailscale.magicDns"),
-      detail: t("remote.tailscale.magicDnsDetail"),
-    };
-  }
-  if (state.enabled) {
-    return {
-      kind: "unavailable",
-      title: t("remote.tailscale.notConnected"),
-      detail: t("remote.tailscale.notConnectedDetail"),
-    };
-  }
-  return {
-    kind: "unchecked",
-    title: t("remote.tailscale.already"),
-    detail: t("remote.tailscale.alreadyDetail"),
-  };
 }
 
 export function pairingSurfaceCopy(
@@ -125,18 +75,9 @@ const relative = (at: number) => {
   return t("remote.time.days", { count: Math.round(hours / 24) });
 };
 
-const endpointHost = (url: string): string => {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-};
-
 export function CompanionSection({ profileEmail = "" }: { profileEmail?: string }) {
   const c = usePhoneSetupController(profileEmail);
   const state = c.state;
-  const pairingFlow = useRef<HTMLDivElement>(null);
 
   if (!companionBridge()) {
     return (
@@ -157,27 +98,10 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
 
   const pairedCount = state.devices.length;
   const panelStatus = deriveCompanionPanelStatus(state);
-  const accountActionError = companionAccountActionError(c.account, c.accountError);
   const pairingCopy = pairingSurfaceCopy(c);
-  const tailscaleStatus = deriveTailscalePairingStatus(state, c.tailscaleAvailable);
-  const hosted = state.endpoints?.find((endpoint) => endpoint.kind === "hosted");
-  const localRoutes = [
-    state.tailnetName ? { label: "Tailscale", value: `${state.tailnetName}:${state.port}` } : null,
-    state.lan ? { label: t("remote.connection.wifi"), value: `${state.lan}:${state.port}` } : null,
-    state.discovery?.name
-      ? { label: t("remote.connection.discovery"), value: `${state.discovery.name}:${state.port}` }
-      : null,
-    ...(state.addresses ?? [])
-      .filter((address) => address !== state.lan && address !== state.tailscale)
-      .map((address, index) => ({
-        label: t("remote.connection.localRoute", { index: index + 1 }),
-        value: `${address}:${state.port}`,
-      })),
-  ].filter((route): route is { label: string; value: string } => Boolean(route));
-
   return (
     <div className="flex flex-col gap-4">
-      <div ref={pairingFlow} tabIndex={-1} className="scroll-mt-4 focus:outline-none">
+      <div>
         <Card title={pairingCopy.title} subtitle={pairingCopy.subtitle}>
           {(panelStatus || (pairedCount > 0 && c.hostedReady)) && (
             <div className="mb-4 flex items-center justify-between gap-3">
@@ -199,51 +123,9 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
             </div>
           )}
           <PhoneSetupFlowView controller={c} variant="settings" />
+          {state.error && <div className="mt-3 text-[12px] text-danger">{state.error}</div>}
         </Card>
       </div>
-
-      <Card
-        title={t("remote.pairing.tailscale.title")}
-        subtitle={t("remote.tailscaleCard.subtitle")}
-      >
-        <div className="rounded-xl bg-inset px-3 py-3" aria-live="polite">
-          <div className="flex items-start gap-2.5">
-            <ShieldCheck
-              size={16}
-              className={`mt-0.5 shrink-0 ${tailscaleStatus.kind === "ready" ? "text-success" : "text-ink-secondary"}`}
-            />
-            <div className="min-w-0">
-              <div className="text-[13px] font-medium text-ink">{tailscaleStatus.title}</div>
-              <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">
-                {tailscaleStatus.detail}
-              </div>
-            </div>
-          </div>
-        </div>
-        {tailscaleStatus.kind === "ready" ? (
-          <button
-            disabled={c.busy || c.accountBusy}
-            onClick={() => {
-              c.useTailscale();
-              window.requestAnimationFrame(() => {
-                pairingFlow.current?.scrollIntoView({ block: "start" });
-                pairingFlow.current?.focus({ preventScroll: true });
-              });
-            }}
-            className="mt-3 rounded-lg border border-hairline/40 px-3 py-1.5 text-[12px] text-ink hover:bg-control disabled:opacity-40"
-          >
-            {t("remote.pairOverTailscale")}
-          </button>
-        ) : (
-          <button
-            disabled={c.busy || c.accountBusy}
-            onClick={c.refreshTailscale}
-            className="mt-3 rounded-lg border border-hairline/40 px-3 py-1.5 text-[12px] text-ink hover:bg-control disabled:opacity-40"
-          >
-            {c.busy ? t("common.checking") : state.enabled ? t("remote.checkAgain") : t("remote.turnOnAndCheck")}
-          </button>
-        )}
-      </Card>
 
       <Card
         title={t("remote.devices.title")}
@@ -294,125 +176,20 @@ export function CompanionSection({ profileEmail = "" }: { profileEmail?: string 
             ))}
           </ul>
         )}
-      </Card>
-
-      <details className="rounded-xl border border-hairline/40 bg-card">
-        <summary className="cursor-pointer px-4 py-3.5 text-[13px] font-medium text-ink">
-          {t("remote.advanced")}
-        </summary>
-        <div className="flex flex-col gap-4 border-t border-hairline/30 px-4 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <div className="text-[13px] text-ink">{t("remote.title")}</div>
-              <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">
-                {t("remote.toggleDetail")}
-              </div>
-            </div>
-            <Switch
-              checked={state.enabled}
-              aria-label={t("remote.title")}
-              disabled={c.busy}
-              onClick={() => void c.act((companion) => (state.enabled ? companion.stop() : companion.start()))}
-            />
+        {/* on by default; the switch stays for a laptop that should sleep */}
+        <div className="mt-3 flex items-center justify-between gap-4 border-t border-hairline/30 pt-3">
+          <div className="min-w-0">
+            <div className="text-[13px] text-ink">{t("remote.keepAwake")}</div>
+            <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">{t("remote.keepAwakeDetail")}</div>
           </div>
-
-          <div className="flex items-center justify-between gap-4 border-t border-hairline/30 pt-4">
-            <div className="min-w-0">
-              <div className="text-[13px] text-ink">{t("remote.keepAwake")}</div>
-              <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">
-                {t("remote.keepAwakeDetail")}
-              </div>
-            </div>
-            <Switch
-              checked={state.keepAwake}
-              aria-label={t("remote.keepAwakeAria")}
-              disabled={c.busy || !state.enabled}
-              onClick={() => void c.act((companion) => companion.keepAwake(!state.keepAwake))}
-            />
-          </div>
-
-          <div className="border-t border-hairline/30 pt-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 items-start gap-2.5">
-                <Cloud size={15} className="mt-0.5 shrink-0 text-accent" />
-                <div className="min-w-0">
-                  <div className="text-[13px] text-ink">{t("remote.account.title")}</div>
-                  <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">
-                    {c.account?.status === "ready"
-                      ? t("remote.account.signedIn", {
-                          email: c.account.email ?? t("remote.account.yourAccount"),
-                        })
-                      : c.account?.status === "connecting"
-                        ? t("remote.account.connecting")
-                        : c.account?.status === "error"
-                          ? c.account.message ?? t("remote.account.error")
-                          : t("remote.account.idle")}
-                  </div>
-                </div>
-              </div>
-              {(c.account?.status === "ready" || c.account?.status === "connecting" || c.account?.status === "error") && (
-                <button
-                  disabled={c.accountBusy}
-                  onClick={() => void c.accountAct((remote) => remote.signOut())}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg border border-hairline/40 px-2.5 py-1.5 text-[11.5px] text-ink-secondary hover:bg-control hover:text-ink disabled:opacity-40"
-                >
-                  <LogOut size={12} /> {t("remote.account.signOut")}
-                </button>
-              )}
-            </div>
-            {c.account?.status === "error" && (
-              <button
-                disabled={c.accountBusy}
-                onClick={c.retryAccount}
-                className="mt-3 rounded-lg border border-hairline/40 px-3 py-1.5 text-[12px] text-ink hover:bg-control disabled:opacity-40"
-              >
-                {c.accountBusy ? t("remote.account.retrying") : t("remote.account.retry")}
-              </button>
-            )}
-            {accountActionError && <div className="mt-2 text-[12px] text-danger">{accountActionError}</div>}
-          </div>
-
-          <div className="border-t border-hairline/30 pt-4">
-            <div className="text-[13px] text-ink">{t("remote.connection.title")}</div>
-            <div className="mt-0.5 text-[11.5px] text-ink-secondary">
-              {t("remote.connection.detail")}
-            </div>
-            <div className="mt-3 flex flex-col gap-2">
-              {hosted && <ConnectionDetail label={t("remote.connection.secureRoute")} value={endpointHost(hosted.url)} />}
-              {localRoutes.map((route) => <ConnectionDetail key={`${route.label}:${route.value}`} {...route} />)}
-              {!hosted && localRoutes.length === 0 && (
-                <div className="text-[12px] text-ink-secondary">{t("remote.connection.none")}</div>
-              )}
-            </div>
-          </div>
-
-          <div className="border-t border-hairline/30 pt-4">
-            <div className="flex items-start gap-2.5">
-              <Wifi size={15} className="mt-0.5 shrink-0 text-ink-secondary" />
-              <div>
-                <div className="text-[13px] text-ink">{t("remote.pairing.wifi.title")}</div>
-                <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-secondary">
-                  {t("remote.wifi.detail")}
-                </div>
-              </div>
-            </div>
-            <button
-              disabled={c.busy || c.accountBusy}
-              onClick={c.useLocal}
-              className="mt-3 rounded-lg border border-hairline/40 px-3 py-1.5 text-[12px] text-ink hover:bg-control disabled:opacity-40"
-            >
-              {t("remote.wifi.pair")}
-            </button>
-          </div>
-
-          {state.enabled && !hosted && !state.tailscale && (
-            <div className="rounded-lg bg-inset px-3 py-2 text-[11.5px] leading-relaxed text-ink-secondary">
-              {t("remote.localOnly")}
-            </div>
-          )}
-          {(c.error || state.error) && <div className="text-[12px] text-danger">{c.error ?? state.error}</div>}
+          <Switch
+            checked={state.keepAwake}
+            aria-label={t("remote.keepAwakeAria")}
+            disabled={c.busy || !state.enabled}
+            onClick={() => void c.act((companion) => companion.keepAwake(!state.keepAwake))}
+          />
         </div>
-      </details>
+      </Card>
     </div>
   );
 }

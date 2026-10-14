@@ -39,7 +39,7 @@ describe("Settings → General", () => {
     expect(pt).toContain("Configurações");
     expect(pt).toContain("Mecanismos");
     expect(pt).toContain("Idioma do app");
-    expect(pt).toContain("Duração máxima do turno");
+    expect(pt).toContain("Perfil");
 
     // same module instance, no reload: a frozen label would still say
     // "Mecanismos" here
@@ -55,13 +55,13 @@ describe("Settings → General", () => {
     const en = await renderSettings();
     expect(en).toContain("Settings");
     expect(en).toContain("Engines");
-    expect(en).toContain("Maximum turn length");
+    expect(en).toContain("Profile");
   });
 
   it("offers a labeled compact section picker without removing desktop navigation", async () => {
     const html = await renderSettings();
     expect(html).toMatch(/<select[^>]*aria-label="Settings"[^>]*sm:hidden/);
-    expect(html).toContain('<option value="companion">Remote access</option>');
+    expect(html).toContain('<option value="companion">Connect a device</option>');
     expect(html).toMatch(/<nav[^>]*hidden[^>]*sm:flex/);
     expect(html).toContain('id="app-settings-title" class="sr-only"');
   });

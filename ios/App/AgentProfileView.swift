@@ -296,6 +296,10 @@ struct AgentProfileView: View {
                     }
                 }
 
+                Section("Channels") {
+                    NavigationLink("Telegram") { TelegramChannelView(bot: current) }
+                }
+
                 Section("Identity") {
                     NavigationLink {
                         BotOverviewView(bot: current)
@@ -823,6 +827,86 @@ private extension AvatarCrop {
         case .circle: "Circle"
         case .rounded: "Rounded"
         case .square: "Square"
+        }
+    }
+}
+
+private struct TelegramChannelView: View {
+    let bot: Bot
+    @EnvironmentObject private var session: Session
+    @State private var revision = 0
+    @State private var status: TelegramChannelStatus?
+    @State private var link: URL?
+    @State private var invite = false
+    @State private var busy = false
+    @State private var problem: String?
+
+    var body: some View {
+        Form {
+            Section {
+                if let status {
+                    if !status.configured {
+                        Text("telegram needs a management bot set up once on this server. then you can connect here without copying tokens.")
+                    } else if let connection = status.connection {
+                        Text("@\(connection.username)")
+                        Text("\(connection.members) paired people · \(connection.groups) groups")
+                        Text("add the bot to a group, then send /connect@\(connection.username) as a group admin. only paired people can use it.")
+                        Button("create private invite") { perform(invite: true) }
+                        Button("disconnect telegram", role: .destructive) {
+                            revision += 1; busy = true
+                            let connectionID = session.connection?.id
+                            Task {
+                                defer { revision += 1; busy = false }
+                                do {
+                                    let value = try await session.disconnectTelegramChannel(botId: bot.id)
+                                    guard session.connection?.id == connectionID else { return }
+                                    statusUpdate(value); link = nil
+                                } catch { problem = error.localizedDescription }
+                            }
+                        }
+                    } else {
+                        Text("paired people can use this bot’s configured tools and permissions.")
+                        Button("connect telegram") { perform(invite: false) }
+                    }
+                    if status.interrupted > 0 { Text("interrupted deliveries: \(status.interrupted). check bos before sending those requests again.") }
+                    if let error = status.error { Text(error) }
+                } else { ProgressView("loading channels…") }
+                if let link, invite || status?.connection == nil {
+                    Link(invite ? "open private invite" : "continue in telegram", destination: link)
+                    if invite {
+                        ShareLink("share private invite", item: link)
+                        Text("one person, valid for 15 minutes. only share with someone allowed to use this bot.")
+                    }
+                }
+                if let problem { Text(problem).foregroundStyle(.red) }
+            } footer: { Text("text chats are supported. approvals stay in bos.") }
+            .disabled(busy)
+        }
+        .navigationTitle("telegram")
+        .task(id: session.connection?.id) {
+            let connectionID = session.connection?.id
+            while !Task.isCancelled {
+                let version = revision
+                do {
+                    let value = try await session.telegramChannel(botId: bot.id)
+                    guard !Task.isCancelled, session.connection?.id == connectionID else { return }
+                    if version == revision { statusUpdate(value) }
+                } catch { if !Task.isCancelled { problem = error.localizedDescription } }
+                try? await Task.sleep(for: .seconds(4))
+            }
+        }
+    }
+    private func statusUpdate(_ value: TelegramChannelStatus) { status = value }
+    private func perform(invite: Bool) {
+        revision += 1; busy = true; problem = nil
+        let connectionID = session.connection?.id
+        Task {
+            defer { revision += 1; busy = false }
+            do {
+                let result = try await session.connectTelegramChannel(botId: bot.id, invite: invite)
+                guard session.connection?.id == connectionID else { return }
+                self.invite = invite; link = result.url
+            } catch { problem = error.localizedDescription }
         }
     }
 }

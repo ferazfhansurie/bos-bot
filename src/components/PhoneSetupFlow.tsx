@@ -1125,33 +1125,39 @@ export function PhoneSetupFlowView({
           </button>
         )}
         {actionError && <p role="alert" className="mt-3 text-[12.5px] text-danger">{actionError}</p>}
-        <div className="my-4 flex items-center gap-3 text-[11px] text-ink-secondary">
-          <span className="h-px flex-1 bg-hairline/40" /> {t("phone.signIn.or")} <span className="h-px flex-1 bg-hairline/40" />
-        </div>
-        {variant === "onboarding" && c.tailscaleAvailable && (
+        {/* One way to connect: the secure sign-in. The other routes only show
+            when it cannot work right now, so nobody has to choose a network. */}
+        {(unavailable || failed) && (
           <>
+            <div className="my-4 flex items-center gap-3 text-[11px] text-ink-secondary">
+              <span className="h-px flex-1 bg-hairline/40" /> {t("phone.signIn.or")} <span className="h-px flex-1 bg-hairline/40" />
+            </div>
+            {variant === "onboarding" && c.tailscaleAvailable && (
+              <>
+                <button
+                  disabled={c.busy || c.accountBusy}
+                  onClick={c.useTailscale}
+                  className="flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
+                >
+                  <ShieldCheck size={15} /> {t("remote.pairOverTailscale")}
+                </button>
+                <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
+                  {t("phone.signIn.tailnetNote")}
+                </p>
+              </>
+            )}
             <button
               disabled={c.busy || c.accountBusy}
-              onClick={c.useTailscale}
-              className="flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
+              onClick={c.useLocal}
+              className={`${variant === "onboarding" && c.tailscaleAvailable ? "mt-3" : ""} flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40`}
             >
-              <ShieldCheck size={15} /> {t("remote.pairOverTailscale")}
+              <Wifi size={15} /> {t("phone.signIn.wifiInstead")}
             </button>
             <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
-              {t("phone.signIn.tailnetNote")}
+              {t("phone.signIn.wifiNote")}
             </p>
           </>
         )}
-        <button
-          disabled={c.busy || c.accountBusy}
-          onClick={c.useLocal}
-          className={`${variant === "onboarding" && c.tailscaleAvailable ? "mt-3" : ""} flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40`}
-        >
-          <Wifi size={15} /> {t("phone.signIn.wifiInstead")}
-        </button>
-        <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
-          {t("phone.signIn.wifiNote")}
-        </p>
       </div>
     );
   }

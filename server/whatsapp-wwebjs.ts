@@ -9,7 +9,7 @@
 // checks. Replies are reachable only through the owner-configured server gate.
 import wwebjs from "whatsapp-web.js";
 
-import { captureFields, serializedWid } from "./whatsapp-capture.ts";
+import { captureFields, serializedMessageId, serializedWid } from "./whatsapp-capture.ts";
 import { historyStage, WhatsAppHistoryError } from "./whatsapp-history.ts";
 import type {
   CapturedMessage,
@@ -207,11 +207,13 @@ export function createReadOnlyClient(
       accountId: () => serializedWid(client.info?.wid) || null,
       reply: async (input, authorized) => {
         if (serializedWid(client.info?.wid) !== input.account_id) throw new Error("WhatsApp account changed");
-        const recipient = input.chat_id.endsWith("@c.us") ? await client.getNumberId(input.chat_id.split("@")[0]) : (await client.getChatById(input.chat_id)).id;
+        // getChatById serializes the full chat model, which throws an IndexedDB DataError on
+        // current WhatsApp Web; the plain lookup is the same one sendMessage uses.
+        const recipient = input.chat_id.endsWith("@c.us") ? await client.getNumberId(input.chat_id.split("@")[0]) : await client.pupPage!.evaluate(`(async () => { const c = await window.WWebJS.getChat(${JSON.stringify(input.chat_id)}, { getAsModel: false }); return c && c.id ? c.id._serialized : null; })()`);
         if (await client.getState() !== "CONNECTED" || serializedWid(recipient) !== input.chat_id || serializedWid(client.info?.wid) !== input.account_id) throw new Error("WhatsApp account or recipient mismatch");
         if (!authorized()) throw new Error("WhatsApp reply authorization revoked");
-        const sent = await client.sendMessage(input.chat_id, input.text, { sendSeen: false, quotedMessageId: input.message_id });
-        return serializedWid(sent.id) ?? "";
+        const sent = await client.sendMessage(input.chat_id, input.text, { sendSeen: false, ...(input.message_id ? { quotedMessageId: input.message_id } : {}) });
+        return serializedMessageId(sent.id) ?? "";
       },
     },
     initialize: async () => {

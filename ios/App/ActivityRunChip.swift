@@ -17,31 +17,76 @@ struct ActivityRunChip: View {
     let items: [Message]
     /// Where an "Opened thread" chip inside the run goes once unfolded.
     var openThread: ((ThreadRef) -> Void)? = nil
-    @Environment(\.colorScheme) private var colorScheme
+    @State private var expanded = false
     @State private var showingDetail = false
 
-    private var steps: [ToolStep] { items.map(toolStep(from:)) }
-    private var status: ToolStep.Status { activityStatus(steps) }
-    private var summary: String { activitySummary(steps) }
+    /// Unfolding inline stops here; the sheet has every step.
+    private static let inlineCap = 30
 
     var body: some View {
-        Button {
-            Haptics.selection()
-            showingDetail = true
-        } label: {
-            ActivityDisclosureRow(
-                symbol: steps.first?.symbol ?? "wrench.and.screwdriver",
-                label: summary,
-                status: status,
-                count: steps.count
-            )
+        // Built once per body: a long run is hundreds of steps, and the
+        // label, status and list each read all of them.
+        let steps = items.map(toolStep(from:))
+        let label = runLabel(steps)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                Haptics.selection()
+                withAnimation(.snappy(duration: 0.22)) { expanded.toggle() }
+            } label: {
+                ActivityDisclosureRow(
+                    symbol: steps.first?.symbol ?? "wrench.and.screwdriver",
+                    label: label,
+                    status: steps.contains(where: { $0.status == .running }) ? .running : .ok,
+                    count: steps.count,
+                    expanded: expanded
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(label)
+            .accessibilityHint(expanded ? "Hides the steps" : "Shows the steps")
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(items.prefix(Self.inlineCap).enumerated()), id: \.element.id) { index, message in
+                        ToolStepRow(step: steps[index], threadRef: message.threadRef, openThread: openThread)
+                    }
+                    if items.count > Self.inlineCap {
+                        Button("Show all \(items.count) steps") { showingDetail = true }
+                            .font(.system(size: 12.5, weight: .medium))
+                            .padding(.vertical, 4)
+                    }
+                }
+                .padding(.leading, 12)
+                .padding(.vertical, 6)
+                .transition(.opacity)
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(summary)
-        .accessibilityHint("Shows what ran")
         .sheet(isPresented: $showingDetail) {
-            ActivityDetailSheet(title: summary, items: items, openThread: openThread)
+            ActivityDetailSheet(title: label, items: items, openThread: openThread)
         }
+    }
+
+    /// "read 3 files" when the run did one kind of thing; otherwise what a
+    /// long turn actually was: "worked for 4m · 23 steps". Steps that didn't
+    /// work are counted, not shouted; the bot usually tried another way.
+    private func runLabel(_ steps: [ToolStep]) -> String {
+        var label = activitySummary(steps)
+        if label == "\(steps.count) steps", let first = steps.first, let last = steps.last {
+            let seconds = Int(max(0, last.at - first.at) / 1000)
+            if seconds > 0 { label = "worked for \(Self.compactDuration(seconds)) · \(steps.count) steps" }
+        }
+        let misses = steps.filter { $0.status == .failed }.count
+        if misses > 0 { label += " · \(misses) didn't work" }
+        return label
+    }
+
+    /// "40s", "4m", "1h 12m": a settled run's length, rounded the way a
+    /// person would say it.
+    static func compactDuration(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3_600 { return "\(seconds / 60)m" }
+        let minutes = seconds % 3_600 / 60
+        return minutes == 0 ? "\(seconds / 3_600)h" : "\(seconds / 3_600)h \(minutes)m"
     }
 }
 
@@ -51,6 +96,8 @@ struct ActivityDisclosureRow: View {
     let label: String
     let status: ToolStep.Status
     var count: Int = 1
+    /// An inline-unfolding row turns its chevron down while open.
+    var expanded = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -74,6 +121,7 @@ struct ActivityDisclosureRow: View {
             Image(systemName: "chevron.right")
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(Color.secondary.opacity(0.6))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
         }
         .padding(.horizontal, 11)
         .frame(minHeight: 44)

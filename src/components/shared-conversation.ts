@@ -143,3 +143,17 @@ export function sharedMentionBots(bots: readonly SharedEligibleBot[], people: re
 export function sharedBotTargets(text: string, bots: readonly Pick<Bot, "id" | "name">[]): string[] {
   return sharedMentionTargets(text, bots.map(bot => ({ ...bot, kind: "bot" })));
 }
+
+/** The sidebar's People list: other people only. A linked home whose owner
+ * never set a profile name reports its owner as "Owner" — on a person's own
+ * headless servers that is the person themself — and another of my homes
+ * reports me under my own name. Neither is someone to chat with. */
+export function sidebarPeople<T extends { id: string; name: string; kind: string }>(contacts: readonly T[], me: { actorId: string | null; name?: string | null }): T[] {
+  const myName = me.name?.trim().toLowerCase() ?? "";
+  return contacts.filter(contact => {
+    if (contact.kind !== "person" || contact.id === me.actorId) return false;
+    const name = contact.name.trim().toLowerCase();
+    if (contact.id.endsWith(":person:owner") && (name === "owner" || name === "")) return false;
+    return !myName || name !== myName;
+  });
+}

@@ -9,8 +9,13 @@ export function saveProfileField(field: "name" | "email", value: string, request
   return request("/api/config", { method: "PUT", body: JSON.stringify({ profile: { [field]: field === "email" ? trimmed.toLowerCase() : trimmed } }) });
 }
 
+/** Replace this server owner's photo. Only an explicit profile action calls
+ * this; `expected` names the photo being replaced, so the server can refuse
+ * a stale or automatic write from a device that is not the owner's. */
 export async function saveProfilePhoto(photo: string | null, request: Request = api): Promise<string> {
-  const result = await request("/api/multiplayer/profile-photo", { method: "PUT", body: JSON.stringify({ photo }) });
+  const config = await request("/api/config") as { profile?: { avatarUrl?: string } } | undefined;
+  const expected = config?.profile?.avatarUrl ?? "";
+  const result = await request("/api/multiplayer/profile-photo", { method: "PUT", body: JSON.stringify({ photo, expected }) });
   if (result.avatarUrl !== "" && !botAvatarUrlSchema.safeParse(result.avatarUrl).success) throw new Error("The saved profile photo could not be used");
   return result.avatarUrl;
 }

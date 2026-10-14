@@ -24,6 +24,15 @@ export function normalizeApiUrl(value: string): string {
 
 class SetupApiError extends Error {}
 
+/** Request headers for an API key. Anthropic's own /models only accepts
+ * x-api-key; its OpenAI-compatible chat endpoint takes the Bearer header. */
+export function apiKeyHeaders(base: string, key: string): Record<string, string> {
+  const host = new URL(base).hostname.toLowerCase();
+  return host === "api.anthropic.com"
+    ? { authorization: `Bearer ${key}`, "x-api-key": key, "anthropic-version": "2023-06-01" }
+    : { authorization: `Bearer ${key}` };
+}
+
 function httpFailure(status: number, completion: boolean): SetupApiError {
   const prefix = `API returned HTTP ${status}.`;
   if (status === 401 || status === 403) return new SetupApiError(`${prefix} Check the API key and its access permissions.`);
@@ -55,7 +64,7 @@ async function setupJson(url: string, key: string, body?: Record<string, unknown
       (async () => {
         const response = await fetch(`${base}${completion ? "/chat/completions" : "/models"}`, {
           method: completion ? "POST" : "GET",
-          headers: { authorization: `Bearer ${token}`, ...(completion ? { "content-type": "application/json" } : {}) },
+          headers: { ...apiKeyHeaders(base, token), ...(completion ? { "content-type": "application/json" } : {}) },
           ...(completion ? { body: JSON.stringify(body) } : {}),
           signal: abort.signal,
           redirect: "error",
@@ -96,8 +105,9 @@ export async function fetchSetupModels(url: string, key: string): Promise<Array<
     // Model IDs and display labels reach the terminal; block control sequences.
     // eslint-disable-next-line no-control-regex
     if (!id || /[\u0000-\u001f\u007f]/u.test(id) || models.has(id)) continue;
+    const rawName = typeof item?.name === "string" ? item.name : item?.display_name;
     // eslint-disable-next-line no-control-regex
-    const name = typeof item?.name === "string" ? item.name.replace(/[\u0000-\u001f\u007f]/gu, "").trim() : "";
+    const name = typeof rawName === "string" ? rawName.replace(/[\u0000-\u001f\u007f]/gu, "").trim() : "";
     models.set(id, { id, label: name || id });
   }
   if (!models.size) throw new SetupApiError("The API returned no usable models. Check the API URL and model access, or enter a model ID from your provider manually.");

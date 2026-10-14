@@ -251,9 +251,15 @@ class CompanionClient(
         val avatar = (profile?.get("avatarUrl") as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content?.takeIf { it.isNotEmpty() }
         return me.copy(avatar = avatar)
     }
+    /** Replace the server owner's photo, naming the one it replaces: the
+     * server refuses a write without it, so no device can silently swap a
+     * linked owner's photo for its own. */
     suspend fun setProfilePhoto(jpegBase64: String?) {
+        val profile = send<JsonObject>(makeRequest("GET", "/api/config"))["profile"] as? JsonObject
+        val expected = (profile?.get("avatarUrl") as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content.orEmpty()
         sendUnit(makeRequest("PUT", "/api/multiplayer/profile-photo", body = buildJsonObject {
             put("photo", jpegBase64?.let(::JsonPrimitive) ?: JsonNull)
+            put("expected", JsonPrimitive(expected))
         }))
     }
 

@@ -34,7 +34,10 @@ struct MarkdownText: View {
     @Environment(\.mentionContext) private var mentions
 
     var body: some View {
-        let blocks = Markdown.blocks(source)
+        // A settled reply's blocks never change; a lazy transcript rebuilds
+        // its rows every time they scroll back on screen, so keep the split.
+        // The streaming bubble's source changes with every token: never cache.
+        let blocks = caret ? Markdown.blocks(source) : MarkdownCache.blocks(source)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { item in
                 // Equatable, so while a reply streams only the block being
@@ -187,11 +190,7 @@ private struct MarkdownBlockView: View, Equatable {
     /// sent so far, not vanish until it closes the bracket.
     private func inline(_ text: String, tail: Bool = false) -> Text {
         let rendered: Text
-        if var attributed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            attributed.styleInlineCode()
+        if var attributed = MarkdownCache.inline(text, cache: !tail) {
             attributed.styleMentions(mentions, mine: false)
             rendered = Text(attributed)
         } else {
@@ -207,6 +206,52 @@ private struct MarkdownBlockView: View, Equatable {
     /// concatenated in costs nothing and keeps the callers branch-free.
     private func caretText(_ tail: Bool) -> Text {
         tail ? Text("\u{2007}▍").foregroundStyle(Color.secondary) : Text("")
+    }
+}
+
+/// Parsed markdown, kept across renders. Foundation's markdown parser is the
+/// most expensive thing a bubble does, and a lazy transcript asks for it
+/// again every time a row scrolls back into view. Bounded; NSCache also
+/// drops it under memory pressure. Main-thread only, like the views that
+/// read it.
+@MainActor
+enum MarkdownCache {
+    private final class Box<Value> {
+        let value: Value
+        init(_ value: Value) { self.value = value }
+    }
+
+    private static let blockCache: NSCache<NSString, Box<[MarkdownBlock]>> = {
+        let cache = NSCache<NSString, Box<[MarkdownBlock]>>()
+        cache.countLimit = 600
+        return cache
+    }()
+
+    private static let inlineCache: NSCache<NSString, Box<AttributedString?>> = {
+        let cache = NSCache<NSString, Box<AttributedString?>>()
+        cache.countLimit = 3_000
+        return cache
+    }()
+
+    static func blocks(_ source: String) -> [MarkdownBlock] {
+        let key = source as NSString
+        if let hit = blockCache.object(forKey: key) { return hit.value }
+        let blocks = Markdown.blocks(source)
+        blockCache.setObject(Box(blocks), forKey: key)
+        return blocks
+    }
+
+    /// Inline markdown with code spans styled; nil when it does not parse.
+    static func inline(_ text: String, cache: Bool = true) -> AttributedString? {
+        let key = text as NSString
+        if cache, let hit = inlineCache.object(forKey: key) { return hit.value }
+        var parsed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )
+        parsed?.styleInlineCode()
+        if cache { inlineCache.setObject(Box(parsed), forKey: key) }
+        return parsed
     }
 }
 

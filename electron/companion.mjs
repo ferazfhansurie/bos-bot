@@ -66,9 +66,11 @@ const settingsFile = () => path.join(app.getPath("userData"), "companion-setting
 function companionSettings() {
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsFile(), "utf8"));
-    return { enabled: parsed?.enabled === true, keepAwake: parsed?.keepAwake === true };
+    // Keep-awake is on unless someone switched it off: a paired phone is
+    // only useful while this computer can answer it.
+    return { enabled: parsed?.enabled === true, keepAwake: parsed?.keepAwake !== false };
   } catch {
-    return { enabled: false, keepAwake: false };
+    return { enabled: false, keepAwake: true };
   }
 }
 

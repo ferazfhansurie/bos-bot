@@ -624,7 +624,28 @@ private final class BoundedFileDownload: NSObject, URLSessionDownloadDelegate, @
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }
 
+/// One delegate per attempt: byte counts belong to that transfer, not the
+/// logical upload across retries. The caller's session and its security policy
+/// remain in use; this delegate only observes request-body transmission.
+final class UploadByteProgress: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let totalBytes: Int64
+    private let progress: @Sendable (Int64, Int64) -> Void
+
+    init(totalBytes: Int64, progress: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.totalBytes = totalBytes
+        self.progress = progress
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        progress(totalBytesSent, totalBytesExpectedToSend > 0 ? totalBytesExpectedToSend : totalBytes)
+    }
+}
+
 public struct CompanionClient: Sendable {
+    /// Copies belong to the same captured client. Re-pairing, credential
+    /// rotation or route replacement creates a different client identity.
+    public let instanceID = UUID()
     public static let maximumImageUploadBytes = AttachmentPolicy.maximumImageBytes
     public static let maximumFileUploadBytes = AttachmentPolicy.maximumFileBytes
     public static let maximumFileDownloadBytes = AttachmentPolicy.maximumBufferedFileBytes
@@ -694,8 +715,9 @@ public struct CompanionClient: Sendable {
     }
 
     @discardableResult
-    private func send<T: Decodable>(_ request: URLRequest, as type: T.Type, retrySafe: Bool = false) async throws -> T {
-        let (data, response) = try await (retrySafe ? performIdempotent(request) : perform(request))
+    private func send<T: Decodable>(_ request: URLRequest, as type: T.Type, retrySafe: Bool = false,
+                                    progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> T {
+        let (data, response) = try await (retrySafe ? performIdempotent(request, progress: progress) : perform(request, progress: progress))
         try verify(response, data)
         do {
             return try JSONDecoder().decode(T.self, from: data)
@@ -718,6 +740,18 @@ public struct CompanionClient: Sendable {
         try verify(response, data)
         authorityObserver?(.accepted)
         return (try? JSONDecoder().decode(SendReceipt.self, from: data)) ?? SendReceipt()
+    }
+
+    public func telegramChannel(botId: String) async throws -> TelegramChannelStatus {
+        try await send(makeRequest("GET", "/api/bots/\(botId)/telegram-channel"), as: TelegramChannelStatus.self)
+    }
+
+    public func connectTelegramChannel(botId: String, invite: Bool = false) async throws -> TelegramChannelLink {
+        try await send(makeRequest("POST", "/api/bots/\(botId)/telegram-channel/\(invite ? "invite" : "connect")"), as: TelegramChannelLink.self)
+    }
+
+    public func disconnectTelegramChannel(botId: String) async throws -> TelegramChannelStatus {
+        try await send(makeRequest("DELETE", "/api/bots/\(botId)/telegram-channel"), as: TelegramChannelStatus.self)
     }
 
     public func sharedMe() async throws -> SharedMe {
@@ -746,9 +780,10 @@ public struct CompanionClient: Sendable {
         try await send(makeRequest("GET", "/api/multiplayer/contacts"), as: SharedContactsResponse.self).contacts
     }
 
-    public func setProfilePhoto(_ jpegBase64: String?) async throws {
+    /// `expected` is the owner photo URL being replaced ("" for none).
+    public func setProfilePhoto(_ jpegBase64: String?, expected: String) async throws {
         let value: Any = jpegBase64.map { $0 as Any } ?? NSNull()
-        try await send(makeRequest("PUT", "/api/multiplayer/profile-photo", body: ["photo": value]))
+        try await send(makeRequest("PUT", "/api/multiplayer/profile-photo", body: ["photo": value, "expected": expected]))
     }
 
     public func sharedRooms() async throws -> [SharedRoomSummary] {
@@ -890,13 +925,12 @@ public struct CompanionClient: Sendable {
 
     /// Only sends/uploads with a stable identity can be replayed after a lost
     /// response. Other mutations must retain their single-attempt behavior.
-    private func performIdempotent(_ request: URLRequest, fromFile: URL? = nil) async throws -> (Data, URLResponse) {
+    private func performIdempotent(_ request: URLRequest, fromFile: URL? = nil,
+                                   progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> (Data, URLResponse) {
         for attempt in 0..<3 {
             try Task.checkCancellation()
             do {
-                let result: (Data, URLResponse)
-                if let fromFile { result = try await session.upload(for: request, fromFile: fromFile) }
-                else { result = try await session.data(for: request) }
+                let result = try await transfer(request, fromFile: fromFile, progress: progress)
                 if let http = result.1 as? HTTPURLResponse,
                    [408, 502, 503, 504].contains(http.statusCode), attempt < 2 {
                     try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 500_000_000)
@@ -915,12 +949,36 @@ public struct CompanionClient: Sendable {
         throw APIError.transport("Couldn't reach this computer. Your message is still here.")
     }
 
-    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    private func perform(_ request: URLRequest, progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> (Data, URLResponse) {
         do {
-            return try await session.data(for: request)
+            try Task.checkCancellation()
+            return try await transfer(request, progress: progress)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw APIError.transport(error.localizedDescription)
         }
+    }
+
+    private func transfer(_ request: URLRequest, fromFile: URL? = nil,
+                          progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> (Data, URLResponse) {
+        let totalBytes = fromFile == nil ? Int64(request.httpBody?.count ?? 0)
+            : Int64(request.value(forHTTPHeaderField: "Content-Length") ?? "0") ?? 0
+        let delegate = progress.map { UploadByteProgress(totalBytes: totalBytes, progress: $0) }
+        // Reset before each attempt. Reaching the body size means bytes sent,
+        // never that the server accepted the attachment.
+        progress?(0, totalBytes)
+        if let fromFile {
+            return try await session.upload(for: request, fromFile: fromFile, delegate: delegate)
+        }
+        if delegate != nil, let body = request.httpBody {
+            var uploadRequest = request
+            uploadRequest.httpBody = nil
+            return try await session.upload(for: uploadRequest, from: body, delegate: delegate)
+        }
+        return try await session.data(for: request)
     }
 
     /// Turn a non-2xx into an `APIError` carrying the harness's own message.
@@ -1202,9 +1260,14 @@ public struct CompanionClient: Sendable {
     }
 
     /// Scrollback: the page before a message already held.
-    public func messages(threadId: String, before: String? = nil, limit: Int = 50) async throws -> ThreadPage {
+    /// `turns` asks for whole turns: the page reaches back to the Nth newest
+    /// prompt, with `limit` as the minimum row count. Servers before 2.0
+    /// ignore it and return the newest `limit` rows, so callers must still
+    /// cope with a page that is all tool calls.
+    public func messages(threadId: String, before: String? = nil, limit: Int = 50, turns: Int? = nil) async throws -> ThreadPage {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
         if let before { query.append(URLQueryItem(name: "before", value: before)) }
+        if let turns { query.append(URLQueryItem(name: "turns", value: String(turns))) }
         return try await send(try makeRequest("GET", "/api/threads/\(threadId)/messages", query: query), as: ThreadPage.self)
     }
 
@@ -1628,10 +1691,13 @@ public struct CompanionClient: Sendable {
 
     /// Upload raw image bytes and return the path the agent can open on its
     /// Mac. This is also the primitive used by avatar upload and sharing.
+    /// Progress runs off the main actor, resets to zero on retry, and reports
+    /// transmitted bytes only; await the result for server acceptance.
     public func uploadImage(
         data: Data,
         mime: String,
-        uploadId: String? = nil
+        uploadId: String? = nil,
+        progress: (@Sendable (_ bytesSent: Int64, _ totalBytes: Int64) -> Void)? = nil
     ) async throws -> String {
         let normalizedMime = mime.lowercased()
         guard Self.validUploadID(uploadId) else { throw APIError.badURL }
@@ -1648,7 +1714,7 @@ public struct CompanionClient: Sendable {
         request.setValue(normalizedMime, forHTTPHeaderField: "Content-Type")
         request.httpBody = data
         request.timeoutInterval = 300
-        let saved = try await send(request, as: AttachmentResponse.self, retrySafe: uploadId != nil)
+        let saved = try await send(request, as: AttachmentResponse.self, retrySafe: uploadId != nil, progress: progress)
         guard Self.validUploadedPath(saved.path) else {
             throw APIError.transport("The uploaded image could not be used.")
         }
@@ -1668,7 +1734,8 @@ public struct CompanionClient: Sendable {
         data: Data,
         name: String,
         mime: String,
-        uploadId: String? = nil
+        uploadId: String? = nil,
+        progress: (@Sendable (_ bytesSent: Int64, _ totalBytes: Int64) -> Void)? = nil
     ) async throws -> UploadedFile {
         let displayName = URL(fileURLWithPath: name).lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1690,7 +1757,7 @@ public struct CompanionClient: Sendable {
         request.setValue(normalizedMime, forHTTPHeaderField: "Content-Type")
         request.httpBody = data
         request.timeoutInterval = 300
-        let saved = try await send(request, as: FileUploadResponse.self, retrySafe: uploadId != nil)
+        let saved = try await send(request, as: FileUploadResponse.self, retrySafe: uploadId != nil, progress: progress)
         let returnedName = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.validUploadedPath(saved.path), Self.validUploadedName(returnedName) else {
             throw APIError.transport("The uploaded file could not be used.")
@@ -1700,7 +1767,8 @@ public struct CompanionClient: Sendable {
 
     /// File-backed uploads retain the same UUID and file across retries without
     /// allocating the whole video as an HTTP body on the phone.
-    public func uploadFile(fileURL: URL, name: String, mime: String, uploadId: String) async throws -> UploadedFile {
+    public func uploadFile(fileURL: URL, name: String, mime: String, uploadId: String,
+                           progress: (@Sendable (_ bytesSent: Int64, _ totalBytes: Int64) -> Void)? = nil) async throws -> UploadedFile {
         let displayName = URL(fileURLWithPath: name).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedMime = AttachmentPolicy.normalizedMIME(mime)
         let values = try fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
@@ -1716,7 +1784,7 @@ public struct CompanionClient: Sendable {
         request.setValue(normalizedMime, forHTTPHeaderField: "Content-Type")
         request.setValue(String(size), forHTTPHeaderField: "Content-Length")
         request.timeoutInterval = 300
-        let (data, response) = try await performIdempotent(request, fromFile: fileURL)
+        let (data, response) = try await performIdempotent(request, fromFile: fileURL, progress: progress)
         try verify(response, data)
         let saved = try JSONDecoder().decode(FileUploadResponse.self, from: data)
         let returnedName = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2235,6 +2303,14 @@ public struct CompanionClient: Sendable {
         )
     }
 
+    /// Capture the conversation's existing computer. This never starts a VM,
+    /// creates a desktop or takes control; the server chooses its pinned surface.
+    public func computerPreview(botId: String, threadId: String) async throws -> ComputerPreview {
+        try await send(try makeRequest("GET", "/api/bots/\(botId)/computer/preview",
+                                       query: [URLQueryItem(name: "threadId", value: threadId)]),
+                       as: ComputerPreview.self)
+    }
+
     public func markRead(botId: String, threadId: String? = nil) async throws {
         try await send(try makeRequest("POST", "/api/bots/\(botId)/read", body: threadId.map { ["threadId": $0] }))
     }
@@ -2328,3 +2404,21 @@ public struct CompanionClient: Sendable {
     }
 }
 // branding compatibility (electron/branding-compat.json): peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; health: legacy app health identity is checked by old clients and updater preflight
+
+public struct TelegramChannelLink: Decodable, Sendable {
+    public let url: URL
+}
+
+public struct TelegramChannelStatus: Decodable, Sendable {
+    public struct Connection: Decodable, Sendable {
+        public let username: String
+        public let members: Int
+        public let groups: Int
+    }
+    public let configured: Bool
+    public let ready: Bool
+    public let pending: Bool
+    public let interrupted: Int
+    public let error: String?
+    public let connection: Connection?
+}

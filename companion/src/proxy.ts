@@ -547,6 +547,12 @@ export function createProxyHandler(options: ProxyOptions) {
         });
         harness.on("error", () => res.destroy());
         harness.on("end", () => {
+          if (isCloudDesktopAccess(method, path) || isBrowserAccess(method, path)) {
+            const currentDevice = options.authenticate(token);
+            if (currentDevice?.id !== device?.id || !currentDevice?.cloudDesktopAccess) {
+              return sendJson(res, 403, { error: "computer access is off for this device" });
+            }
+          }
           const body = Buffer.concat(chunks).toString("utf8");
 
           // Two failures live here and they are not the same failure.

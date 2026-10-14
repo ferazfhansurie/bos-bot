@@ -104,6 +104,10 @@ private val appVersionCode = run {
     parts[0] * 10_000 + parts[1] * 100 + parts[2]
 }
 
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("app/compose-stability.conf"))
+}
+
 android {
     namespace = "com.openmausbot.companion"
     compileSdk = 37

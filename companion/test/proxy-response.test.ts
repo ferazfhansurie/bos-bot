@@ -205,6 +205,19 @@ describe("preparing a harness response for a device", () => {
     }
   });
 
+  it("withholds a computer frame when device access is revoked during capture", async () => {
+    respond = res => {
+      res.writeHead(200, { "content-type": "application/json" });
+      cloudDesktopAccess = false;
+      res.end(JSON.stringify({ surface: "local", png: "aGVsbG8=", format: "png" }));
+    };
+    try {
+      const result = await device("/api/bots/b1/computer/preview?threadId=exact");
+      expect(result.status).toBe(403);
+      expect(result.text).not.toContain("aGVsbG8=");
+    } finally { cloudDesktopAccess = true; }
+  });
+
   it("forwards only the enabled device's request for a fresh viewer", async () => {
     respond = (res) => {
       res.writeHead(200, { "content-type": "application/json" });

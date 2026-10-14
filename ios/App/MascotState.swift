@@ -60,14 +60,14 @@ extension MausState {
     /// bot it is the truth, and its busiest thread wins, so a bot working in
     /// another thread still animates its row. Otherwise the face is read
     /// from the exact open thread, its pending request and live reasoning.
-    static func forChat(_ chat: Chat, in state: CompanionState) -> MausState {
+    static func forChat(_ chat: Chat, in state: CompanionState, transcript cached: [Message]? = nil) -> MausState {
         switch chat {
         case let .bot(bot):
             if let live = state.activityFeed.busiest(bot: bot.id) { return forFeed(live) }
         case let .room(room):
             if let live = state.activityFeed.busiest(room: room.id, thread: room.threadId) { return forFeed(live) }
         }
-        let transcript = state.visibleTranscript(forThread: chat.threadId)
+        let transcript = cached ?? state.visibleTranscript(forThread: chat.threadId)
         let pending = transcript.last { $0.card?.isPending == true || $0.secret?.isPending == true }
         switch chat {
         case let .bot(bot):

@@ -44,3 +44,24 @@ it("retries completion only through the same accepted send id without changing a
   await startFirstAssignment(request,proposed);
   expect(request.mock.calls.some(([,options])=>options?.method==="PATCH")).toBe(false);
 });
+
+it("keeps marketer recovery independent from an existing first assignment",async()=>{
+  const original={...proposed,prepared:true};
+  const marketer={...proposed,botId:"money",threadId:"marketer-thread",sendId:"marketer_marketer-thread",text:"Learn my business"};
+  let config:any={onboarding:{firstAssignment:original}};
+  const sends:any[]=[];let fail=true;
+  const request=vi.fn(async(path:string,options?:any)=>{
+    if(path==="/api/config"){
+      if(options?.method==="PUT")config={onboarding:{...config.onboarding,...JSON.parse(options.body).onboarding}};
+      return structuredClone(config);
+    }
+    if(options.method==="PATCH")return {};
+    sends.push(JSON.parse(options.body));
+    if(fail){fail=false;throw new Error("lost marketer response");}return {};
+  });
+  await expect(startFirstAssignment(request,marketer,"marketerAssignment")).rejects.toThrow("lost marketer");
+  await startFirstAssignment(request,{...marketer,text:"changed",threadId:"different"},"marketerAssignment");
+  expect(config.onboarding.firstAssignment).toEqual(original);
+  expect(sends[1]).toEqual(sends[0]);
+  expect(sends[1].threadId).toBe("marketer-thread");
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sharedVisibleMessages, sharedReplyReference, sharedActivityLabel, sharedHasActiveWork, sharedActiveBotIds } from "./shared-conversation";
-import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedRoomUnread, sharedAttachmentError, isDirectSharedRoom, sharedBotTargets, sharedMentionBots, type SharedMessage } from "./shared-conversation";
+import { emptySharedHistory, mergeSharedHistory, sharedReadSequenceToSave, sharedRoomUnread, sharedAttachmentError, isDirectSharedRoom, sidebarPeople, sharedBotTargets, sharedMentionBots, type SharedMessage } from "./shared-conversation";
 
 describe("shared conversations", () => {
   it("keeps explicit two-person groups separate from direct chats", () => {
@@ -134,5 +134,20 @@ describe("shared speaker appearance", () => {
     expect(sharedHasActiveWork(messages)).toBe(true);
     messages.push({ ...activity("b", "request-b", 5), sendId: "activity-work-ok", tool: { name: "working", ok: true } });
     expect(sharedActiveBotIds(messages)).toEqual([]);
+  });
+});
+
+describe("sidebar people", () => {
+  const me = { actorId: "home:person:owner", name: "Firaz" };
+  it("drops me, my other homes and unnamed home owners", () => {
+    const contacts = [
+      { id: "home:person:owner", name: "Firaz", kind: "person" },
+      { id: "server:person:owner", name: "Owner", kind: "person" },
+      { id: "laptop:person:owner", name: "firaz ", kind: "person" },
+      { id: "putri:person:owner", name: "Putri", kind: "person" },
+      { id: "home:person:guest", name: "Owner", kind: "person" },
+      { id: "home:bot:one", name: "Koda", kind: "bot" },
+    ];
+    expect(sidebarPeople(contacts, me).map(contact => contact.id)).toEqual(["putri:person:owner", "home:person:guest"]);
   });
 });

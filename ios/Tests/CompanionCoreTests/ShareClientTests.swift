@@ -87,6 +87,29 @@ final class ShareClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testComputerPreviewPinsThreadAndOnlyReads() async throws {
+        ShareRequestStub.responseBody = Data(#"{"surface":"vm","png":"fixture","format":"image/png"}"#.utf8)
+        let preview = try await client.computerPreview(botId: "bot-a", threadId: "thread+b")
+        XCTAssertEqual(preview.surface, "vm")
+        XCTAssertEqual(ShareRequestStub.capturedRequest?.httpMethod, "GET")
+        let url = try XCTUnwrap(ShareRequestStub.capturedRequest?.url)
+        XCTAssertEqual(url.path, "/api/bots/bot-a/computer/preview")
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+                       [URLQueryItem(name: "threadId", value: "thread+b")])
+        ShareRequestStub.statusCode = 403
+        do { _ = try await client.computerPreview(botId: "bot-a", threadId: "thread+b"); XCTFail("permission refusal must propagate") }
+        catch APIError.status(code: 403, message: _) {}
+    }
+
+    func testCapturedClientIdentitySurvivesCopiesButNotCredentialRotation() {
+        let connection = Connection(id: "same-computer", name: "fixture", host: "127.0.0.1", port: 1)
+        let captured = CompanionClient(connection: connection, token: "fixture-old")
+        let copied = captured
+        let rotated = CompanionClient(connection: connection, token: "fixture-new")
+        XCTAssertEqual(captured.instanceID, copied.instanceID)
+        XCTAssertNotEqual(captured.instanceID, rotated.instanceID)
+    }
+
     func testSharedSearchEncodesTextAndKeepsResultCursor() async throws {
         ShareRequestStub.responseBody = Data(#"{"messages":[{"id":"hit","roomId":"room-a","sequence":42,"actor":{"homeId":"home","kind":"person","localId":"owner"},"text":"café + 中文","at":1000,"sendId":"send"}],"hasMore":true,"before":42}"#.utf8)
         let page = try await client.searchSharedMessages(roomId: "room-a", text: "café + 中文", kind: "people", author: "home:person:owner", before: 100)
@@ -527,5 +550,70 @@ extension ShareClientTests {
         ShareRequestStub.networkFailures = 5
         do { _ = try await client.send(text: "fixture", to: .room(id: "room-1", threadId: "thread-1"), sendId: "11111111-1111-4111-8111-111111111111"); XCTFail("expected failure") }
         catch { XCTAssertEqual(ShareRequestStub.requests.count, 3) }
+    }
+}
+
+private final class ShareUploadProgressCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [(Int64, Int64)] = []
+    func append(_ sent: Int64, _ total: Int64) {
+        lock.lock(); defer { lock.unlock() }
+        events.append((sent, total))
+    }
+    var snapshot: [(Int64, Int64)] {
+        lock.lock(); defer { lock.unlock() }
+        return events
+    }
+}
+
+extension ShareClientTests {
+    func testProgressResetsEachRetryWithoutManufacturingCompletion() async throws {
+        ShareRequestStub.transientFailures = 1
+        ShareRequestStub.responseBody = Data(#"{"path":"/tmp/progress.pdf","name":"progress.pdf","mime":"application/pdf","bytes":3}"#.utf8)
+        let capture = ShareUploadProgressCapture()
+        let bytes = Data([1, 2, 3])
+        let id = UUID().uuidString
+        _ = try await client.uploadFile(data: bytes, name: "progress.pdf", mime: "application/pdf", uploadId: id,
+                                        progress: { capture.append($0, $1) })
+        XCTAssertEqual(ShareRequestStub.requests.count, 2)
+        XCTAssertEqual(ShareRequestStub.bodies, [bytes, bytes])
+        XCTAssertEqual(ShareRequestStub.requests[0].url, ShareRequestStub.requests[1].url)
+        XCTAssertTrue(ShareRequestStub.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer paired-token" })
+        // URLProtocol sends no transport progress. A successful response must
+        // not invent an event claiming that all body bytes were transmitted.
+        XCTAssertEqual(capture.snapshot.map { $0.0 }, [0, 0])
+        XCTAssertEqual(capture.snapshot.map { $0.1 }, [3, 3])
+    }
+
+    func testProgressUploadAuthorizationFailureDoesNotRetryOrPretendSuccess() async {
+        ShareRequestStub.statusCode = 401
+        ShareRequestStub.responseBody = Data(#"{"error":"device revoked"}"#.utf8)
+        let capture = ShareUploadProgressCapture()
+        do {
+            _ = try await client.uploadImage(data: Data([1, 2, 3]), mime: "image/png", uploadId: UUID().uuidString,
+                                              progress: { capture.append($0, $1) })
+            XCTFail("expected authorization rejection")
+        } catch let error as APIError {
+            XCTAssertTrue(error.isUnauthorized)
+        } catch { XCTFail("unexpected error: \(error)") }
+        XCTAssertEqual(ShareRequestStub.requests.count, 1)
+        XCTAssertEqual(capture.snapshot.map { $0.0 }, [0])
+    }
+
+    func testCancelledProgressUploadNeverStartsAnAttempt() async {
+        let capture = ShareUploadProgressCapture()
+        let client = self.client!
+        let upload = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await client.uploadFile(data: Data([1]), name: "progress.pdf", mime: "application/pdf",
+                                               progress: { capture.append($0, $1) })
+        }
+        do {
+            _ = try await upload.value
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+            XCTAssertTrue(ShareRequestStub.requests.isEmpty)
+            XCTAssertTrue(capture.snapshot.isEmpty)
+        } catch { XCTFail("cancellation was rewritten as \(error)") }
     }
 }

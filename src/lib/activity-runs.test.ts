@@ -37,10 +37,10 @@ describe("groupActivityRuns", () => {
     expect(items.map((i) => i.kind)).toEqual(["message", "message", "message"]);
   });
 
-  it("keeps a step that is still running out of the run, so live progress stays visible", () => {
+  it("groups a running step with preceding work for one live disclosure", () => {
     const items = groupActivityRuns([tool("Edit"), tool("Edit"), running("Bash")]);
-    expect(items.map((i) => i.kind)).toEqual(["run", "message"]);
-    expect(items[1].kind === "message" && items[1].message.tool?.name).toBe("Bash");
+    expect(items.map((i) => i.kind)).toEqual(["run"]);
+    expect(items[0].kind === "run" && items[0].messages[2].tool?.name).toBe("Bash");
   });
 
   it("never folds a failed turn, which renders as an error not a tool run", () => {
@@ -57,6 +57,17 @@ describe("groupActivityRuns", () => {
       tool("Write"),
     ]);
     expect(items.map((i) => i.kind)).toEqual(["run", "message", "run"]);
+  });
+
+  it("never hides an outcome review, even for a successful tool", () => {
+    const review = { ...tool("Bash"), tool: { name: "Bash", ok: true, recovery: { id: "r", botId: "b", threadId: "t" } } };
+    expect(groupActivityRuns([tool("Read"), tool("Edit"), review]).map(item => item.kind)).toEqual(["run", "message"]);
+  });
+
+  it("keeps provider turn boundaries between runs", () => {
+    const a = [tool("Read"), tool("Read")].map(message => ({ ...message, turnId: "a" }));
+    const b = [tool("Read"), running("Bash")].map(message => ({ ...message, turnId: "b" }));
+    expect(groupActivityRuns([...a, ...b]).map(item => item.kind)).toEqual(["run", "run"]);
   });
 
   it("gives a run a stable id taken from its first step", () => {
@@ -142,6 +153,7 @@ describe("groupTranscript", () => {
       id: "turn:turn-1",
       label: "Worked for 4s",
       messages: [first, second],
+      steps: [],
     });
     expect(items[2].kind === "message" && items[2].message).toBe(final);
   });
@@ -155,6 +167,45 @@ describe("groupTranscript", () => {
   it("keeps a lone terminal message as the answer", () => {
     const only = assistant("I could not finish, but here is what I found.", "turn-short", true);
     expect(groupTranscript([only])).toEqual([{ kind: "message", message: only }]);
+  });
+
+  it("folds a settled turn's tool steps and narration into one row before the answer", () => {
+    const step = (name: string, at: number, ok = true): Message =>
+      ({ id: `t${++seq}`, at, role: "bot", kind: "activity", tool: { name, ok }, turnId: "turn-tools" });
+    const user: Message = { id: "u-tools", at: 1_000, role: "user", kind: "text", text: "fix the build" };
+    const a = step("Bash", 2_000);
+    const note = assistant("Reading the config.", "turn-tools", false, 3_000);
+    const b = step("Read", 4_000);
+    const failed = step("Bash", 5_000, false);
+    const c = step("Edit", 6_000);
+    const final = assistant("Fixed.", "turn-tools", true, 241_000);
+
+    const items = groupTranscript([user, a, note, b, failed, c, final]);
+    expect(items.map((item) => item.kind)).toEqual(["message", "turn", "message", "message"]);
+    expect(items[1]).toMatchObject({ kind: "turn", label: "Worked for 4m 00s", messages: [a, note, b, c], steps: [a, b, c] });
+    // a failed step is never folded away
+    expect(items[2].kind === "message" && items[2].message).toBe(failed);
+    expect(items[3].kind === "message" && items[3].message).toBe(final);
+  });
+
+  it("leaves a settled turn with one step and no narration unfolded", () => {
+    const user: Message = { id: "u-one", at: 1_000, role: "user", kind: "text", text: "date?" };
+    const only: Message = { id: `t${++seq}`, at: 2_000, role: "bot", kind: "activity", tool: { name: "Bash", ok: true }, turnId: "turn-one" };
+    const final = assistant("Tuesday.", "turn-one", true, 3_000);
+    expect(groupTranscript([user, only, final]).map((item) => item.kind)).toEqual(["message", "message", "message"]);
+  });
+
+  it("does not reach back past the previous prompt", () => {
+    const earlier = [tool("Bash"), tool("Read")];
+    const user: Message = { id: "u-next", at: ++seq, role: "user", kind: "text", text: "next" };
+    const progress = assistant("Checking.", "turn-next");
+    const final = assistant("Done.", "turn-next", true);
+    expect(groupTranscript([...earlier, user, progress, final]).map((item) => item.kind)).toEqual([
+      "run",
+      "message",
+      "turn",
+      "message",
+    ]);
   });
 
   it("does not fold narration from a different turn", () => {

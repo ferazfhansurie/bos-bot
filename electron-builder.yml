@@ -1,5 +1,6 @@
 appId: ai.bos.bot
 productName: BOS Bot
+copyright: Copyright © 2026 BOS Bot
 artifactName: BOS-Bot-${version}-${arch}.${ext}
 
 protocols:
@@ -56,6 +57,8 @@ files:
 asar: true
 
 extraResources:
+  - from: NOTICE
+    to: NOTICE
   # Ship the app's own license terms in every desktop distribution.
   - from: LICENSE
     to: licenses/BOS-Bot-LICENSE.txt

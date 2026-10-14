@@ -1,4 +1,6 @@
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+
+import { startResizeDrag } from "@/lib/resize-drag";
 
 import { cn } from "@/lib/cn";
 import { clampPanelSize, loadPanelSize, maxPanelSize, panelSizeFromKey, panelSizeFromPointer, savePanelSize, type PanelDock, type PanelSizeSpec } from "@/lib/panel-resize";
@@ -27,6 +29,8 @@ export function useResizablePanel(spec: PanelSizeSpec, dock: PanelDock, containe
   const [stored, setStored] = useState(() => loadPanelSize(spec));
   const [available, setAvailable] = useState(Number.NaN);
   const [resizing, setResizing] = useState(false);
+  const cancelDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => { cancelDrag.current?.(); }, [dock, spec.key]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -45,23 +49,23 @@ export function useResizablePanel(spec: PanelSizeSpec, dock: PanelDock, containe
     if (event.button !== 0 || !container) return;
     event.preventDefault();
     const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
+    cancelDrag.current?.();
     setResizing(true);
+    const original = stored;
     let latest = size;
-    const move = (moveEvent: PointerEvent) => {
-      latest = clampPanelSize(panelSizeFromPointer(dock, moveEvent, container.getBoundingClientRect()), containerSpan(container, dock), spec);
-      setStored(latest);
-    };
-    const end = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", end);
-      handle.removeEventListener("pointercancel", end);
-      setResizing(false);
-      savePanelSize(spec, latest);
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", end);
-    handle.addEventListener("pointercancel", end);
+    cancelDrag.current = startResizeDrag({
+      handle, pointerId: event.pointerId, cursor: dock === "right" ? "col-resize" : "row-resize",
+      move: (moveEvent) => {
+        latest = clampPanelSize(panelSizeFromPointer(dock, moveEvent, container.getBoundingClientRect()), containerSpan(container, dock), spec);
+        setStored(latest);
+      },
+      end: (cancelled) => {
+        cancelDrag.current = null;
+        setResizing(false);
+        if (cancelled) setStored(original);
+        else savePanelSize(spec, latest);
+      },
+    });
   };
 
   const onDoubleClick = () => {
@@ -89,8 +93,8 @@ export function PanelResizeHandle({ panel, dock, label, testId }: { panel: Resiz
     <div role="separator" tabIndex={0} aria-orientation={dock === "right" ? "vertical" : "horizontal"} aria-label={label} title={label}
       aria-valuenow={panel.size} aria-valuemin={panel.min} aria-valuemax={panel.max} data-testid={testId}
       onPointerDown={panel.onPointerDown} onDoubleClick={panel.onDoubleClick} onKeyDown={panel.onKeyDown}
-      className={cn("absolute z-30 transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none",
-        panel.resizing && "bg-accent/40",
+      className={cn("absolute z-30 touch-none transition-colors hover:bg-hairline focus-visible:bg-hairline focus-visible:outline-none",
+        panel.resizing && "bg-hairline",
         dock === "right" ? "-left-[3px] inset-y-0 w-[6px] cursor-col-resize" : "-top-[3px] inset-x-0 h-[6px] cursor-row-resize")} />
   );
 }

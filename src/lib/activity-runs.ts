@@ -15,25 +15,48 @@ export type ActivityTranscriptItem =
 
 export type TranscriptItem =
   | ActivityTranscriptItem
-  | { kind: "turn"; id: string; turnId: string; label: string; messages: Message[] };
+  | {
+      kind: "turn";
+      id: string;
+      turnId: string;
+      /** "Worked for 4m": the turn's wall time, prompt to answer. */
+      label: string;
+      /** Everything folded, in transcript order: narration and steps. */
+      messages: Message[];
+      /** The folded tool steps alone, for the "N steps" half of the label. */
+      steps: Message[];
+    };
 
 /** A step that may be folded away: finished, a real tool, and not a
  * bot⇄bot or opened-thread chip (those are navigation, not work) or a
- * failed turn (that renders as an error). A step still running stays out,
- * so live progress is never hidden behind a fold. */
+ * failed turn (that renders as an error). */
 function foldable(message: Message): boolean {
   const tool = message.tool;
   if (message.kind !== "activity" || !tool) return false;
-  if (message.comm || message.threadRef) return false;
+  if (message.comm || message.threadRef || tool.recovery) return false;
   if (tool.ok !== true) return false;
   return !tool.name.startsWith("error:");
 }
 
+/** Pending work can share a disclosure while its header shows the live tool.
+ * Outcome reviews and navigation must stay actionable in the conversation. */
+function groupable(message: Message): boolean {
+  if (foldable(message)) return true;
+  const tool = message.tool;
+  return message.kind === "activity" && Boolean(tool) && tool?.ok === undefined &&
+    !message.comm && !message.threadRef && !tool?.recovery &&
+    !tool?.name.startsWith("error:") && tool?.name !== "stopped" && tool?.name !== "turn failed";
+}
+
 type TurnFold = Extract<TranscriptItem, { kind: "turn" }>;
 
-/** Settled providers may emit several ordinary assistant messages around
- * tool calls. Keep the terminal answer in the transcript and replace the
- * earlier narration with one reversible row, matching T3 Code's turn fold. */
+/** A settled turn folds into one reversible row: its narration (earlier
+ * assistant messages of the same provider turn) and its finished tool steps,
+ * from the prompt up to the terminal answer, which stays visible. Failed
+ * steps, cards and bot⇄bot chips are not foldable and keep their place, so a
+ * long tool-heavy turn reads as prompt, "Worked for 4m · 23 steps", answer.
+ * A turn with one step and no narration is left as it is: a fold that hides
+ * one chip costs more than the chip. */
 function assistantTurnFolds(messages: Message[]): {
   byAnchorId: Map<string, TurnFold>;
   hiddenIds: Set<string>;
@@ -49,23 +72,28 @@ function assistantTurnFolds(messages: Message[]): {
       !terminal.turnTerminal
     ) return;
 
-    const narration = messages.slice(0, terminalIndex).filter((message) =>
-      message.role === "bot" &&
-      message.kind === "text" &&
-      message.turnId === terminal.turnId &&
-      !message.turnTerminal
-    );
-    if (!narration.length) return;
-
-    const anchor = narration[0];
-    const anchorIndex = messages.findIndex((message) => message.id === anchor.id);
-    let startedAt = anchor.at;
-    for (let i = anchorIndex - 1; i >= 0; i -= 1) {
-      if (messages[i].role === "user") {
-        startedAt = messages[i].at;
-        break;
-      }
+    // The turn began after the prompt (or the previous settled answer).
+    let start = terminalIndex;
+    while (start > 0) {
+      const before = messages[start - 1];
+      if (before.role === "user" || (before.turnTerminal && before.turnId !== terminal.turnId)) break;
+      start -= 1;
     }
+    const members = messages.slice(start, terminalIndex).filter((message) =>
+      !hiddenIds.has(message.id) && (
+        (message.role === "bot" &&
+          message.kind === "text" &&
+          message.turnId === terminal.turnId &&
+          !message.turnTerminal) ||
+        (foldable(message) && (!message.turnId || message.turnId === terminal.turnId))
+      )
+    );
+    const steps = members.filter((message) => message.kind === "activity");
+    if (members.length === steps.length && steps.length < 2) return;
+
+    const anchor = members[0];
+    const prompt = start > 0 && messages[start - 1].role === "user" ? messages[start - 1] : undefined;
+    const startedAt = prompt?.at ?? anchor.at;
     const elapsed = Math.max(0, terminal.at - startedAt);
     const label =
       elapsed >= 1_000
@@ -76,10 +104,11 @@ function assistantTurnFolds(messages: Message[]): {
       id: `turn:${terminal.turnId}`,
       turnId: terminal.turnId,
       label,
-      messages: narration,
+      messages: members,
+      steps,
     };
     byAnchorId.set(anchor.id, fold);
-    for (const message of narration) hiddenIds.add(message.id);
+    for (const message of members) hiddenIds.add(message.id);
   });
 
   return { byAnchorId, hiddenIds };
@@ -105,12 +134,13 @@ function group(messages: Message[], foldAssistantTurns: boolean): TranscriptItem
       continue;
     }
     if (folds.hiddenIds.has(message.id)) continue;
-    if (foldable(message)) {
+    if (groupable(message)) {
       const first = run[0];
       if (
         first &&
         (first.role !== message.role ||
           first.from?.botId !== message.from?.botId ||
+          first.turnId !== message.turnId ||
           new Date(first.at).toDateString() !== new Date(message.at).toDateString())
       ) {
         flush();

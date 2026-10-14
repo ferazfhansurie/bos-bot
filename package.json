@@ -4,7 +4,7 @@
   "bosUpdatePolicy": {
     "mode": "offline"
   },
-  "version": "1.9.8",
+  "version": "2.0.2",
   "description": "Open-source, local-first AI workspace for people and bots, with desktop and mobile clients.",
   "homepage": "https://github.com/ferazfhansurie/bos-bot",
   "repository": {
@@ -12,9 +12,10 @@
     "url": "https://github.com/ferazfhansurie/bos-bot.git"
   },
   "author": {
-    "name": "Milind Soni",
-    "email": "46266943+milind-soni@users.noreply.github.com"
+    "name": "BOS Bot",
+    "email": "bos@aihlete.com"
   },
+  "bosUpstream": { "name": "OpenMausBot", "author": "Milind Soni", "license": "Apache-2.0" },
   "license": "Apache-2.0",
   "desktopName": "ai.bos.bot.desktop",
   "type": "module",

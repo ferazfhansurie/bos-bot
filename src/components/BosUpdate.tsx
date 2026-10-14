@@ -228,16 +228,20 @@ export function UpdatesPanel({
       </div>
     );
   }
+  // One status line: "Up to date" stands alone, so neither the guard's own
+  // "up to date: …" reason nor a green "Updated to …" repeats it.
+  const upToDate = !status.shellRequired && (status.upToDate === true || /^(up to date:|already on the newest prod build)/i.test(status.reason ?? "")) && !candidate && !running && (!notice || notice.tone === "ok");
+  const shownNotice = notice && !running && !(upToDate && notice.tone === "ok") ? notice : null;
+  const reason = !candidate && !running && !upToDate && !status.shellRequired ? status.reason : undefined;
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-xl bg-card p-4">
-        <div className="flex items-start gap-3">
+        <div className="flex items-center gap-3">
           <img src="/app-icon.png" alt="" width={40} height={40} className="size-10 shrink-0" />
           <div className="min-w-0 flex-1">
-            <div className="text-[15px] font-medium text-ink">BOS {status.current.version}</div>
-            <div className="mt-0.5 font-mono text-[12px] text-ink-secondary">{shortSha(status.current.sha)}</div>
+            <div className="text-[15px] font-medium text-ink" title={shortSha(status.current.sha)}>BOS {status.current.version}</div>
           </div>
-          {!status.shellRequired && (status.upToDate === true || /^(up to date:|already on the newest prod build)/i.test(status.reason ?? "")) && !candidate && !running && (!notice || notice.tone === "ok") && (
+          {upToDate && (
             <span className="flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[12px] text-success">
               <Check size={12} /> Up to date
             </span>
@@ -280,17 +284,17 @@ export function UpdatesPanel({
           </div>
         )}
 
-        {notice && !running && (
+        {shownNotice && (
           <div
             className={cn(
               "mt-4 flex items-start gap-2 rounded-lg px-3 py-2 text-[13px]",
-              notice.tone === "ok" ? "bg-success/10 text-success" : notice.tone === "warn" ? "bg-amber-500/10 text-amber-500" : "bg-red-500/10 text-red-500",
+              shownNotice.tone === "ok" ? "bg-success/10 text-success" : shownNotice.tone === "warn" ? "bg-amber-500/10 text-amber-500" : "bg-red-500/10 text-red-500",
             )}
           >
-            {notice.tone === "ok" ? <Check size={14} className="mt-0.5 shrink-0" /> : notice.tone === "warn" ? <RotateCcw size={14} className="mt-0.5 shrink-0" /> : <CircleX size={14} className="mt-0.5 shrink-0" />}
+            {shownNotice.tone === "ok" ? <Check size={14} className="mt-0.5 shrink-0" /> : shownNotice.tone === "warn" ? <RotateCcw size={14} className="mt-0.5 shrink-0" /> : <CircleX size={14} className="mt-0.5 shrink-0" />}
             <span>
-              {notice.title}
-              {notice.detail ? ` · ${notice.detail}` : ""}
+              {shownNotice.title}
+              {shownNotice.detail ? ` · ${shownNotice.detail}` : ""}
             </span>
           </div>
         )}
@@ -336,7 +340,7 @@ export function UpdatesPanel({
               {view.pending === "restart" ? <Loader2 size={13} className="animate-spin" /> : null}
               Restart
             </button>
-            {!candidate && !running && status.reason && <span className="text-[12px] text-ink-secondary">{status.reason}</span>}
+            {reason && <span className="text-[12px] text-ink-secondary">{reason}</span>}
           </div>
         )}
         {busy.length > 0 && !running && !confirm && candidate && (

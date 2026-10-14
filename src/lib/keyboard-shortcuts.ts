@@ -2,6 +2,7 @@
  * Keyboard shortcuts catalog and platform-specific key resolution.
  * Provides structured shortcut groups for navigation, chat, and workspace management.
  */
+import { WORKSPACE_SHORTCUTS } from "@/lib/workspace-commands";
 
 /** Single keyboard shortcut entry with descriptions and platform-specific keys. */
 export interface ShortcutItem {
@@ -48,6 +49,12 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
         description: "Jump to bot 1–9 in the roster",
         macKeys: ["⌘", "1–9"],
         winKeys: ["Ctrl", "1–9"],
+      },
+      {
+        id: "next-needing-you",
+        description: "next thread needing you: approvals and questions, then unread",
+        macKeys: ["⌘", "⇧", "U"],
+        winKeys: ["Ctrl", "Shift", "U"],
       },
       {
         id: "switch-bot",
@@ -121,6 +128,8 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       },
     ],
   },
+  // read from the workspace command registry, so the sheet never drifts from the keys
+  { category: "Workspace", items: WORKSPACE_SHORTCUTS },
 ];
 
 /** Help chords must not interrupt editing, composition, or another dialog. */

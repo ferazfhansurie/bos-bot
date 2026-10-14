@@ -249,6 +249,7 @@ const __APP_VERSION__: string;
         onMaximizedChanged(cb: (maximized: boolean) => void): () => void;
       };
       /** Receives a GitHub package URL opened through openmausbot://install. */
+      marketerSetup?: { pending(): Promise<boolean>; clear(): Promise<void>; onOpen(callback: () => void): () => void };
       onPackageInstall?(cb: (url: string) => void): () => void;
       /** The desktop shell's app-menu Preferences… item was activated; open
        * app Settings. Local-shell only: remote server pages never receive
@@ -259,6 +260,12 @@ const __APP_VERSION__: string;
       /** JSON squad for the next launch splash (lib/launch-splash). */
       saveSplashSquad?(squad: string): Promise<boolean>;
       focusWindow?(): void;
+      /** Native attention banners (electron/attention-notifications.mjs). */
+      attention?: {
+        notify(payload: import("@/lib/notify").AttentionPayload): Promise<boolean>;
+        dismiss(id: string): void;
+        onEvent(cb: (event: import("@/lib/notify").AttentionEvent) => void): () => void;
+      };
       /** Partition for the side-panel Browser tool's <webview>. */
       primaryBrowser?: import("@/lib/primary-browser-types").PrimaryBrowserBridge;
       toolsBrowserPartition?: string;
@@ -303,6 +310,10 @@ const __APP_VERSION__: string;
        * it there and reveals it. Resolves the chosen path, or null if the
        * user cancelled the dialog. */
       saveFile?(filePath: string): Promise<string | null>;
+      /** Opens a thread workspace tab in its own window; spec is JSON. */
+      workspaceWindow?(spec: string): Promise<boolean>;
+      /** Opens an absolute path from the workspace elsewhere. */
+      workspaceOpenIn?(filePath: string, target: "cursor" | "vscode" | "reveal" | "default"): Promise<boolean>;
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(
         name: "composioApiKey" | "xaiApiKey" | "xaiManagementKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "openaiImageApiKey" | "customImageApiKey",

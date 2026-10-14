@@ -433,8 +433,10 @@ beforeAll(async () => {
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({
       // generated titles are opt-in; this suite turns them on because it
-      // owns the one-shot's reply file (FAKE_CLAUDE_TEXT_FILE below)
-      features: { llmThreadTitles: true },
+      // owns the one-shot's reply file (FAKE_CLAUDE_TEXT_FILE below). The
+      // built-in browser is on by default now; this suite was written against
+      // a browser-off workspace, and its browser tests switch it on themselves.
+      features: { llmThreadTitles: true, browser: false },
       instances: {
         ghost: { driver: "not-a-real-driver", displayName: "Ghost" },
         claude: { driver: "claudeAgent", displayName: "Fixture Claude", config: { cli: FAKE_CLAUDE_CLI } },
@@ -1004,6 +1006,8 @@ beforeAll(async () => {
       OMB_COMPOSIO_API: `http://127.0.0.1:${boxStubPort}/api/v3.1`,
       OMB_COMPOSIO_TOOLKITS_API: `http://127.0.0.1:${boxStubPort}/api/v3`,
       OMB_STATIC_DIR: staticDir,
+      // the marketplace stays on its bundled catalog: no live GitHub fetch
+      OMB_MARKETPLACE_URL: "off",
       // The bots' browser engine: a stand-in binary the fake engine CLIs never
       // run; the turn only has to mount it.
       OMB_AGENT_BROWSER_PATH: join(home, "fake-agent-browser"),
@@ -4675,46 +4679,44 @@ describe("harness HTTP API", () => {
     for (const bot of installed.body.bots) await api("DELETE", `/api/bots/${bot.id}`);
   });
 
-  it("the scout reads a folder, proposes an importable team, and creates nothing until the human imports", async () => {
-    const folder = mkdtempSync(join(tmpdir(), "omb-scout-"));
-    writeFileSync(join(folder, "README.md"), "# Demo Shop\n\nA storefront demo.\n");
-    writeFileSync(
-      join(folder, "package.json"),
-      JSON.stringify({ dependencies: { react: "^19" }, devDependencies: { vitest: "^3" } }),
-    );
+  it("the marketplace lists BOS bots, installs one through the importer, keeps rent requests, and gates publishing", async () => {
+    const listing = await api("GET", "/api/marketplace");
+    expect(listing.status).toBe(200);
+    expect(listing.body).toMatchObject({ source: "bundled", publisher: false });
+    const bos = listing.body.catalog.bots.find((bot: { slug: string }) => bot.slug === "bos");
+    expect(bos.price.download).toBeTruthy();
 
-    const before = (await api("GET", "/api/bots")).body;
+    // download = the ordinary additive import of the entry's package
+    const installed = await api("POST", "/api/teams/import?mode=add", bos.package);
+    expect(installed.status).toBe(201);
+    expect(installed.body.bots).toHaveLength(1);
+    const bot = installed.body.bots[0];
+    expect(bot.soul).toContain("co-founder");
+    const skills = await api("GET", `/api/bots/${bot.id}/skills`);
+    expect(JSON.stringify(skills.body)).toContain("done-check");
 
-    expect((await api("GET", "/api/teams/scout")).status).toBe(400);
-    expect((await api("GET", `/api/teams/scout?cwd=${encodeURIComponent(join(folder, "nope"))}`)).status).toBe(400);
+    const rent = await api("POST", "/api/marketplace/rent-requests", { slug: "bos", note: "for my agency" });
+    expect(rent.status).toBe(201);
+    expect(rent.body.request).toMatchObject({ slug: "bos", status: "pending" });
+    expect(readFileSync(join(home, ".openmausbot", "marketplace-rent-requests.json"), "utf8")).toContain("for my agency");
+    expect((await api("POST", "/api/marketplace/rent-requests", { slug: "missing" })).status).toBe(404);
 
-    const scouted = await api("GET", `/api/teams/scout?cwd=${encodeURIComponent(folder)}`);
-    expect(scouted.status).toBe(200);
-    expect(scouted.body.profile).toMatchObject({ name: "Demo Shop", summary: "A storefront demo." });
-    expect(scouted.body.profile.stacks).toContain("React");
-    expect(scouted.body.suggestion.roomName).toBe("Demo Shop");
-    const keys = scouted.body.suggestion.manifest.team.members.map((member: { key: string }) => member.key);
-    expect(keys).toEqual(["lead", "frontend", "testing"]);
-    expect(Object.keys(scouted.body.suggestion.reasons).sort()).toEqual(keys.slice().sort());
-
-    // scouting is read-only: no bot and no room exists until the import
-    const after = (await api("GET", "/api/bots")).body;
-    expect(after.bots).toHaveLength(before.bots.length);
-    expect(after.groups).toHaveLength(before.groups.length);
-
-    // and the suggestion goes through the real importer verbatim
-    const imported = await api(
-      "POST",
-      `/api/teams/import?mode=project&cwd=${encodeURIComponent(folder)}&room=${encodeURIComponent(scouted.body.suggestion.roomName)}`,
-      scouted.body.suggestion.manifest,
-    );
-    expect(imported.status).toBe(201);
-    expect(imported.body.group).toMatchObject({ name: "Demo Shop", cwd: folder });
-    expect(imported.body.bots).toHaveLength(3);
-
-    expect((await api("DELETE", `/api/groups/${imported.body.group.id}`)).status).toBe(200);
-    for (const bot of imported.body.bots) await api("DELETE", `/api/bots/${bot.id}`);
-    rmSync(folder, { recursive: true, force: true });
+    const publish = { botId: bot.id, slug: "house-bos", tagline: "The house co-founder.", price: { download: "Free", rent: "Ask" }, terms: "Own use only." };
+    expect((await api("POST", "/api/marketplace/publish", publish)).status).toBe(403);
+    expect((await api("PATCH", "/api/config", { features: { marketplacePublisher: true } })).status).toBe(200);
+    try {
+      expect((await api("GET", "/api/marketplace")).body.publisher).toBe(true);
+      const published = await api("POST", "/api/marketplace/publish", publish);
+      expect(published.status).toBe(201);
+      expect(published.body.entry.package.package.id).toBe("house-bos");
+      expect(published.body.entry.package.package.skills.entries.map((skill: { name: string }) => skill.name)).toEqual(["done-check"]);
+      const written = JSON.parse(readFileSync(published.body.file, "utf8"));
+      expect(written.bots.map((entry: { slug: string }) => entry.slug)).toEqual(["bos", "house-bos"]);
+      expect((await api("POST", "/api/marketplace/publish", { ...publish, slug: "Bad Slug" })).status).toBe(400);
+    } finally {
+      await api("PATCH", "/api/config", { features: { marketplacePublisher: false } });
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
   });
 
   it("team import is additive-only: smuggled grants, claimed ids, and re-imports never touch existing records", async () => {
@@ -6522,7 +6524,7 @@ describe("harness HTTP API", () => {
   it("validates and persists the global room turn timeout", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
-    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 30 });
+    expect(before.body.rooms).toEqual({ turnTimeoutMinutes: 1440 });
 
     for (const turnTimeoutMinutes of [0, 1.5, 1441, "20", null]) {
       const invalid = await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes } });
@@ -6540,7 +6542,7 @@ describe("harness HTTP API", () => {
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(disk.rooms).toEqual({ turnTimeoutMinutes: 20 });
 
-    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 30 } });
+    await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 1440 } });
   });
 
   it("cards every ask when Claude's reviewer never started, says so once, and can hand the allow to Claude for the session", async () => {
@@ -6860,7 +6862,7 @@ describe("harness HTTP API", () => {
   it("keeps skill authoring on by default and persists an explicit opt-out", async () => {
     const before = await api("GET", "/api/config");
     expect(before.status).toBe(200);
-    expect(before.body.features).toEqual({ browser: false, skillAuthoring: true, showToolCalls: false, sharedComputers: false, claudeUserMcp: false });
+    expect(before.body.features).toEqual({ browser: false, skillAuthoring: true, showToolCalls: true, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
     // the default is the absence of the key: nothing is written until the toggle is used
     const untouched = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     expect(untouched.features?.skillAuthoring).toBeUndefined();
@@ -6872,7 +6874,7 @@ describe("harness HTTP API", () => {
       features: { skillAuthoring: false },
     });
     expect(saved.status).toBe(200);
-    expect(saved.body.features).toEqual({ browser: false, skillAuthoring: false, showToolCalls: false, sharedComputers: false, claudeUserMcp: false });
+    expect(saved.body.features).toEqual({ browser: false, skillAuthoring: false, showToolCalls: true, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
 
     const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
     // Earlier browser coverage may have persisted its own toggle. Opting out
@@ -6880,9 +6882,9 @@ describe("harness HTTP API", () => {
     expect(disk.features).toEqual({ ...untouched.features, skillAuthoring: false });
 
     // the opt-out survives patches to sibling flags
-    const tools = await api("PATCH", "/api/config", { features: { showToolCalls: true } });
+    const tools = await api("PATCH", "/api/config", { features: { showToolCalls: false } });
     expect(tools.status).toBe(200);
-    expect(tools.body.features).toEqual({ browser: false, skillAuthoring: false, showToolCalls: true, sharedComputers: false, claudeUserMcp: false });
+    expect(tools.body.features).toEqual({ browser: false, skillAuthoring: false, showToolCalls: false, sharedComputers: false, claudeUserMcp: false, marketplacePublisher: false });
 
     // an opted-out workspace refuses the skill routes a turn would otherwise reach
     const bot = (await api("POST", "/api/bots", {})).body.bot;
@@ -6898,7 +6900,7 @@ describe("harness HTTP API", () => {
       await api("DELETE", `/api/bots/${bot.id}`);
     }
 
-    await api("PATCH", "/api/config", { features: { skillAuthoring: true, showToolCalls: false } });
+    await api("PATCH", "/api/config", { features: { skillAuthoring: true, showToolCalls: true } });
   });
 
   it("refuses to delete a bot while it owns an active channel turn", async () => {
@@ -7680,7 +7682,7 @@ describe("harness HTTP API", () => {
       }, { timeout: 5_000 }).toEqual({ botBusy: false, roomBusyBotId: null });
       await api("DELETE", `/api/groups/${room.id}`);
       await api("DELETE", `/api/bots/${botId}`);
-      await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 30 } });
+      await api("PUT", "/api/config", { rooms: { turnTimeoutMinutes: 1440 } });
     }
   });
 
@@ -10466,3 +10468,16 @@ describe("computer control API (who is driving)", () => {
   });
 });
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1; wire-formats: stored backups, portable packages and peer metadata retain their schema identifiers; ipc: IPC and updater restart arguments preserve mixed-version desktop recovery; container-identity: existing managed containers, labels and pinned image entry points remain recognized; health: legacy app health identity is checked by old clients and updater preflight; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling; stored-prompt-tags: existing message and skill delimiters are still readable by the current parsers
+
+it("computer preview pins the exact thread and refuses disabled or nonexistent surfaces without capturing", async () => {
+  const made = await api("POST", "/api/bots", { name: "Preview isolation", modelSelection: { instanceId: "shadow", model: "fixture" }, computer: "off", browser: false });
+  expect(made.status).toBe(201);
+  const bot = made.body.bot ?? made.body;
+  const route = `/api/bots/${bot.id}/computer/preview`;
+  expect((await api("GET", route)).status).toBe(400);
+  expect((await api("GET", `${route}?threadId=missing-preview-thread`)).status).toBe(404);
+  const result = await api("GET", `${route}?threadId=${bot.threadId}`);
+  expect(result.status).toBe(409);
+  expect(result.body.error).toContain("off");
+  expect(result.body.png).toBeUndefined();
+});

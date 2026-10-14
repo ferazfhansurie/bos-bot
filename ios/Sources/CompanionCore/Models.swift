@@ -1057,6 +1057,8 @@ public struct ConfigFlag: Codable, Hashable, Sendable {
 public struct Profile: Codable, Hashable, Sendable {
     public var name: String
     public var email: String
+    /// The server owner's photo path; absent from older servers.
+    public var avatarUrl: String?
 }
 
 public struct InboxThreadSettings: Codable, Sendable {
@@ -1485,6 +1487,13 @@ public struct APIErrorBody: Codable, Sendable {
 }
 
 /// One frame of a bot's computer, as it arrives on the stream.
+/// A fresh read-only preview of the selected conversation's computer.
+public struct ComputerPreview: Decodable, Sendable {
+    public let surface: String
+    public let png: String
+    public let format: String
+}
+
 public struct ScreenFrame: Hashable, Sendable {
     public var png: String
     public var mime: String

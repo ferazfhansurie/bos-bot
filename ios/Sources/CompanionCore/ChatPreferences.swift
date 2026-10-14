@@ -112,7 +112,11 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
     public var id: String {
         switch self {
         case let .message(message): message.id
-        case let .activityRun(items): "run.\(items[0].id)"
+        // Keyed by the last step: an older page prepended above can extend
+        // a run backwards, and a changed id there would rebuild the row and
+        // lose the reader's place. Settled runs never grow at their end —
+        // a running turn's steps live in the working row until it settles.
+        case let .activityRun(items): "run.\(items[items.count - 1].id)"
         }
     }
 

@@ -9,6 +9,7 @@ import { resolveMausColor } from "../../shared/glyph-faces";
 import { botMascotEyes, type MascotEyes } from "../../shared/mascot-eyes";
 import { glyphFaceMarkup, glyphFaceParts } from "./glyph-face";
 import { type MausColor } from "./mascot";
+import { attentionPreferences, type DoneNotifyMode, type NotifySound } from "./attention-preferences";
 
 export type NotifyFrame = Notification;
 
@@ -110,30 +111,176 @@ export async function notificationIcon(
   return notificationPhoto(bot) ?? (await mascotIcon(bot.color, bot.mascotBody, bot.mascotEyes));
 }
 
-/** Show one unless the exact destination conversation is already visible.
- * A focused app may still be showing another task (routine runs are detached),
- * so window focus alone is not proof that the actionable card can be seen. */
+/** The four kinds the person sets preferences for. Everything a bot can
+ * notify about lands in one of them. */
+export type AttentionKind = "approval" | "question" | "done" | "message";
+
+export function attentionKind(kind: NotifyFrame["kind"]): AttentionKind {
+  switch (kind) {
+    case "approval":
+      return "approval";
+    case "question":
+    case "takeover":
+      return "question";
+    case "done":
+    case "voice_work_done":
+      return "done";
+    default:
+      return "message";
+  }
+}
+
+/** One identity per thing to look at, so a re-sent frame never re-banners
+ * and an answered card can take its banner down. */
+export function attentionId(frame: Pick<NotifyFrame, "kind" | "threadId" | "requestId" | "messageId" | "body">): string {
+  if (frame.requestId) return `req:${frame.requestId}`;
+  if (frame.messageId) return `msg:${frame.messageId}`;
+  return `${frame.kind}:${frame.threadId}:${frame.body.slice(0, 120)}`;
+}
+
+/** Sent to the desktop shell (electron/attention-notifications.mjs). */
+export interface AttentionPayload {
+  id: string;
+  kind: AttentionKind;
+  title: string;
+  subtitle?: string;
+  body: string;
+  icon?: string;
+  groupId?: string;
+  sound: NotifySound;
+  done: DoneNotifyMode;
+  canReply: boolean;
+  replyPlaceholder?: string;
+  approveText?: string;
+  denyText?: string;
+}
+
+/** What the person did with a native banner. */
+export type AttentionEvent =
+  | { type: "open"; id: string }
+  | { type: "reply"; id: string; text: string }
+  | { type: "action"; id: string; action: "approve" | "deny" };
+
+export interface AttentionHandlers {
+  open: (target: NotificationTarget) => void;
+  /** Words typed into the banner: an answer for a question, otherwise a
+   * message into the thread. */
+  reply?: (frame: NotifyFrame, text: string) => void;
+  /** Approve/deny pressed on an approval banner. */
+  decide?: (frame: NotifyFrame, behavior: "allow" | "deny") => void;
+}
+
+interface Shown {
+  frame: NotifyFrame;
+  handlers: AttentionHandlers;
+  web?: globalThis.Notification;
+  at: number;
+}
+
+const SHOWN_TTL_MS = 30 * 60_000;
+const shown = new Map<string, Shown>();
+let unsubscribe: (() => void) | null = null;
+
+function pruneShown() {
+  const cutoff = Date.now() - SHOWN_TTL_MS;
+  for (const [id, entry] of shown) if (entry.at < cutoff) shown.delete(id);
+}
+
+function focusApp() {
+  window.ogb?.focusWindow?.();
+  window.focus();
+}
+
+function listenForBannerEvents() {
+  if (unsubscribe || !window.ogb?.attention) return;
+  unsubscribe = window.ogb.attention.onEvent((event) => {
+    const entry = shown.get(event?.id);
+    if (!entry) return;
+    const target = { botId: entry.frame.botId, threadId: entry.frame.threadId };
+    if (event.type === "open") {
+      focusApp();
+      entry.handlers.open(target);
+    } else if (event.type === "reply" && typeof event.text === "string" && entry.handlers.reply) {
+      entry.handlers.reply(entry.frame, event.text);
+    } else if (event.type === "action" && entry.handlers.decide) {
+      entry.handlers.decide(entry.frame, event.action === "approve" ? "allow" : "deny");
+    }
+  });
+}
+
+/** Takes an approval or question banner down once its card is answered,
+ * wherever it was answered from. */
+export function dismissAttention(requestId: string) {
+  const id = `req:${requestId}`;
+  const entry = shown.get(id);
+  if (!entry) return;
+  entry.web?.close();
+  window.ogb?.attention?.dismiss(id);
+}
+
+/** Show one unless the person turned this kind off, or the exact destination
+ * conversation is already visible. A focused app may still be showing
+ * another task (routine runs are detached), so window focus alone is not
+ * proof that the actionable card can be seen. */
 export function showNotification(
   frame: NotifyFrame,
   onOpen: (target: NotificationTarget) => void,
   avatarUrl?: string | null,
   visibleThreadId?: string | null,
+  actions?: Omit<AttentionHandlers, "open">,
 ) {
-  if (typeof Notification === "undefined") return;
-  if (document.hasFocus() && visibleThreadId === frame.threadId) return;
+  const on: AttentionHandlers = { ...actions, open: onOpen };
+  const prefs = attentionPreferences();
+  const kind = attentionKind(frame.kind);
+  if (kind === "done" ? prefs.done === "off" : !prefs[kind]) return;
+  const focused = typeof document !== "undefined" && document.hasFocus();
+  if (focused && visibleThreadId === frame.threadId) return;
 
-  const open = () => {
-    window.ogb?.focusWindow?.();
-    window.focus();
-    onOpen({ botId: frame.botId, threadId: frame.threadId });
-  };
+  pruneShown();
+  const id = attentionId(frame);
+  if (shown.has(id)) return;
+  const entry: Shown = { frame, handlers: on, at: Date.now() };
+  shown.set(id, entry);
 
-  if (Notification.permission === "granted") {
+  const sticky = kind === "approval" || kind === "question";
+  const canReply = Boolean(on.reply) && kind !== "approval" && Boolean(frame.threadId);
+  const web = () => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    // Without the desktop shell "no window focused" is this window's focus.
+    if (kind === "done" && prefs.done === "unfocused" && focused) return;
     const options: NotificationOptions = {
       body: frame.body,
       ...buildNotificationOptions({ id: frame.botId, avatarUrl }),
+      ...(sticky ? { tag: id, requireInteraction: true } : {}),
+      // no system sounds to pick from here: anything but none is the default
+      silent: prefs.sound === "none",
     };
-    new Notification(frame.title, options).onclick = open;
-  }
+    const notification = new Notification(frame.title, options);
+    notification.onclick = () => {
+      focusApp();
+      on.open({ botId: frame.botId, threadId: frame.threadId });
+    };
+    entry.web = notification;
+  };
+
+  const bridge = typeof window !== "undefined" ? window.ogb?.attention : undefined;
+  if (!bridge) return web();
+  listenForBannerEvents();
+  const payload: AttentionPayload = {
+    id,
+    kind,
+    title: frame.title,
+    body: frame.body,
+    ...(avatarUrl?.startsWith("data:image/") ? { icon: avatarUrl } : {}),
+    groupId: frame.groupId ?? frame.botId,
+    sound: prefs.sound,
+    done: prefs.done,
+    canReply,
+    ...(canReply ? { replyPlaceholder: kind === "question" ? "answer" : "reply" } : {}),
+    ...(kind === "approval" && on.decide ? { approveText: "approve", denyText: "deny" } : {}),
+  };
+  bridge.notify(payload).then((handled) => {
+    if (!handled) web();
+  }, web);
 }
 // branding compatibility (electron/branding-compat.json): pairing: old QR codes remain readable; server emission stays old until both native apps have shipped support

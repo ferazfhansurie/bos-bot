@@ -15,7 +15,8 @@ import { compatEnv } from "./branding-env.cjs";
 // The resulting connection descriptor is written to
 // <userData>/cua-connection.json for the harness server to hand to drivers.
 
-import { app, ipcMain } from "electron";
+import { app, ipcMain, systemPreferences } from "electron";
+import { STAGING } from "./release-channel.mjs";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
@@ -48,7 +49,8 @@ const STANDALONE_SOCKET = path.join(
   app.getPath("home"),
   "Library/Caches/cua-driver/cua-driver.sock",
 );
-const HOST_BUNDLE_ID = "com.openmausbot.app";
+// Match the enclosing app identity reported by the embedded daemon health check.
+const HOST_BUNDLE_ID = STAGING ? "ai.bos.bot.staging" : "ai.bos.bot";
 const CUA_ENV = { CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" };
 const execFileAsync = promisify(execFile);
 compatEnv.CUA_DRIVER_RS_TELEMETRY_ENABLED ??= "0";
@@ -185,12 +187,13 @@ async function loadEmbeddedSdk() {
   return import(pathToFileURL(path.join(process.resourcesPath, "cua-sdk", "cua-sdk.mjs")).href);
 }
 
-async function attachStandalone(signal) {
+async function attachStandalone(signal, allowLaunch = true) {
   // Windows must stay on the owned embedded host, never an unrelated daemon.
   if (process.platform !== "darwin") return null;
   const driver = fs.existsSync(INSTALLED_DRIVER) ? INSTALLED_DRIVER : null;
   if (!driver) return null;
   if (!(await socketAlive(STANDALONE_SOCKET))) {
+    if (!allowLaunch) return null;
     signal.throwIfAborted();
     // Launch CuaDriver.app through LaunchServices so Accessibility /
     // Screen Recording stay on com.trycua.driver — the identity this
@@ -221,7 +224,7 @@ async function attachStandalone(signal) {
   };
 }
 
-async function startEmbedded(binary, signal) {
+async function startEmbedded(binary, signal, requestPermissions) {
   // Import from the staged Resources tree in production. The app intentionally
   // excludes general node_modules, so a bare package import only works in dev.
   const sdk = await loadEmbeddedSdk();
@@ -230,7 +233,15 @@ async function startEmbedded(binary, signal) {
   // these SDK calls execute in Electron main so macOS attributes them to
   // BOS Bot rather than to a terminal or helper process.
   if (process.platform === "darwin") {
-    const permissionStatus = sdk.requestMacOSPermissions();
+    // App startup must only inspect grants. Reinstalling/updating the app
+    // must not invoke a prompt-enabled AX check or launch another permission owner.
+    let permissionStatus = {
+      accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+      screenRecording: systemPreferences.getMediaAccessStatus("screen") === "granted",
+    };
+    if (requestPermissions && !sdk.hasRequiredMacOSPermissions(permissionStatus)) {
+      permissionStatus = sdk.requestMacOSPermissions();
+    }
     if (!sdk.hasRequiredMacOSPermissions(permissionStatus)) {
       const missing = [
         !permissionStatus.accessibility && "Accessibility",
@@ -262,7 +273,7 @@ async function startEmbedded(binary, signal) {
   }
 }
 
-export async function startCua() {
+export async function startCua({ requestPermissions = false } = {}) {
   if (process.platform === "linux") return ensureLinuxRuntime().initialize();
   lifecycleGeneration++;
   startupAbort?.abort();
@@ -282,11 +293,11 @@ export async function startCua() {
 
   if (wantEmbedded) {
     try {
-      nextConnection = await startEmbedded(binary, signal);
+      nextConnection = await startEmbedded(binary, signal, requestPermissions);
     } catch (err) {
       signal.throwIfAborted();
       try {
-        nextConnection = await attachStandalone(signal);
+        nextConnection = await attachStandalone(signal, requestPermissions || !app.isPackaged);
       } catch (standaloneError) {
         signal.throwIfAborted();
         nextConnection = {
@@ -409,7 +420,7 @@ export function registerCuaIpc() {
           const generation = lifecycleGeneration;
           await stopping;
           if (generation !== lifecycleGeneration) throw new Error("Computer use restart cancelled");
-          const connection = await startCua();
+          const connection = await startCua({ requestPermissions: true });
           const ready = connection?.mode === "embedded" || connection?.mode === "standalone";
           return {
             enabled: ready,

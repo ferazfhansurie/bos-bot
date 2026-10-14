@@ -1227,7 +1227,7 @@ export function ComputerPanel({
         onPointerMove={onResizeMove}
         onPointerUp={onResizeEnd}
         onPointerCancel={onResizeEnd}
-        className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60"
+        className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-hairline focus-visible:bg-hairline"
       />
       {/* Header */}
       <div className={cn("flex items-center justify-between px-4 py-3", padClass)}>
@@ -1306,6 +1306,14 @@ export function ComputerPanel({
       {panelView === "routines" ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
           <RoutinesSection key={bot.id} bot={bot} routines={botRoutines} runs={state.routineRuns} defaultRunOn={cloudRoutineReady ? "cloud" : "maus"} />
+        </div>
+      ) : panelView === "browser" && browserEnabled && window.ogb?.primaryBrowser && !bot.remote ? (
+        // On the desktop app the bot browses in the person's own BOS browser,
+        // not a separate headless one, so there is no second view to show.
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <Globe size={22} className="text-ink-secondary" />
+          <p className="max-w-64 text-[13px] text-ink-secondary">{bot.name.toLowerCase()} browses in your browser on this computer. you can watch and take over there.</p>
+          <button className="rounded-lg border border-hairline px-3 py-1.5 text-[12.5px] hover:bg-control" onClick={() => void window.ogb?.primaryBrowser?.action("reveal").catch(() => {})}>open browser</button>
         </div>
       ) : panelView === "browser" && browserEnabled ? (
         <div className="flex min-h-0 flex-1 flex-col px-4 pb-4">

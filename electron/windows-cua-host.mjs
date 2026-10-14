@@ -172,17 +172,16 @@ export async function verifyStagedWindowsCua({ resourcesPath, identity, probe, f
     files[name] = file;
     identities[name] = contentIdentity(fileSystem, file);
   }
-  for (const target of [resourcesPath, path.join(resourcesPath, "cua-sdk"), path.join(resourcesPath, "cua-sdk", "native"), manifestPath, ...Object.values(files)]) {
-    let acl;
-    try {
-      acl = await probe.acl(target);
-    } catch (error) {
-      throw unavailable("sdk-acl", "Computer use SDK permissions could not be verified", error);
-    }
-    if (!aclAllowsOnlyTrustedWriters(acl, identity)) {
+  // Each probe is its own PowerShell process; checked in parallel, not one by one.
+  const aclTargets = [resourcesPath, path.join(resourcesPath, "cua-sdk"), path.join(resourcesPath, "cua-sdk", "native"), manifestPath, ...Object.values(files)];
+  const acls = await Promise.all(aclTargets.map((target) => probe.acl(target).catch((error) => {
+    throw unavailable("sdk-acl", "Computer use SDK permissions could not be verified", error);
+  })));
+  aclTargets.forEach((target, index) => {
+    if (!aclAllowsOnlyTrustedWriters(acls[index], identity)) {
       throw unavailable("sdk-acl", `Computer use SDK path is writable by an untrusted principal: ${path.basename(target)}`);
     }
-  }
+  });
   return Object.freeze({
     version: manifest.version,
     contractVersion: manifest.contractVersion ?? null,
@@ -762,7 +761,9 @@ export function serverOnlyCuaEnvironment(descriptorPath) {
 const STOP_EXIT_GRACE_MS = 3_000;
 // The server must never wait on the host for long: past this, the host is
 // stopped (it cannot publish or spawn after stop) and the server starts without it.
-const HOST_START_TIMEOUT_MS = 15_000;
+// A start runs ~20 PowerShell probes at ~1s each (PARTNERHOST, 2026-10-14): 15s timed
+// out after every reboot.
+const HOST_START_TIMEOUT_MS = 60_000;
 
 export async function startServerOnlyWindowsCua(config, {
   createHost = createWindowsCuaHost,

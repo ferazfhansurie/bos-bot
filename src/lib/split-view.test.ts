@@ -13,6 +13,7 @@ import {
   saveSplitPanes,
   swapIntoPrimary,
   visibleSplitPanes,
+  threadPaneId,
 } from "./split-view";
 
 describe("split view panes", () => {
@@ -42,6 +43,16 @@ describe("split view panes", () => {
     expect(visibleSplitPanes(["b", "gone", "a", "c"], new Set(["a", "b", "c"]), "a")).toEqual(["b", "c"]);
   });
 
+  it("trades pinned threads of the same bot without collapsing a column", () => {
+    const first = threadPaneId("a", "first");
+    const second = threadPaneId("a", "second");
+    const swapped = swapIntoPrimary([second], second, first);
+    expect(swapped).toEqual([first]);
+    expect(visibleSplitPanes(swapped, new Set(["a"]), "a", () => "second")).toEqual([first]);
+    expect(addSplitPane([second], second, first)).toEqual([second]);
+    expect(addSplitPane([], first, first)).toEqual([]);
+  });
+
   it("round-trips through storage and ignores junk", () => {
     const data = new Map<string, string>();
     const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => void data.set(key, value) };
@@ -64,9 +75,10 @@ describe("split pane width", () => {
     expect(clampPaneShare(Number.NaN, 1)).toBe(DEFAULT_PANE_SHARE);
   });
 
-  it("maps the pointer to a share, leaving panes on the right alone", () => {
+  it("maps the pointer to equal shares for all panes to its right", () => {
     expect(shareFromPointer(600, 0, 1000, 0, 0.4)).toBeCloseTo(0.4);
-    expect(shareFromPointer(300, 0, 1000, 1, 0.3)).toBeCloseTo(0.4);
+    expect(shareFromPointer(300, 0, 1000, 1, 0.3)).toBeCloseTo(0.35);
+    expect(shareFromPointer(300, 0, 1000, 1, 0.35)).toBeCloseTo(0.35);
     expect(shareFromPointer(300, 0, 0, 0, 0.4)).toBe(0.4);
   });
 

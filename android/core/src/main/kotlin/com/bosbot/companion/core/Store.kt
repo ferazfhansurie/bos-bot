@@ -63,6 +63,10 @@ data class CompanionState(
         val leafId = if (activeLeafIds.containsKey(threadId)) activeLeafIds[threadId]
             else botForThread(threadId)?.activeLeafId
         if (leafId == null) return all
+        return TranscriptMemo.visible.get(threadId, all, leafId) { walkBranch(all, leafId) }
+    }
+
+    private fun walkBranch(all: List<Message>, leafId: String): List<Message> {
         val byId = all.associateBy(Message::id)
         var current = byId[leafId] ?: return all
         val visible = mutableListOf<Message>()
@@ -143,9 +147,10 @@ data class CompanionState(
         get() = (bots.flatMap { bot -> listOf(bot.threadId) + bot.tasks.orEmpty().map(BotTask::threadId) } +
             rooms.map(Room::threadId)).distinct()
             .flatMap { threadId ->
-                visibleTranscript(threadId)
-                    .filter { it.card?.isPending == true }
-                    .map { PendingApproval(threadId, it) }
+                val visible = visibleTranscript(threadId)
+                TranscriptMemo.pending.get(threadId, visible, null) {
+                    visible.filter { it.card?.isPending == true }.map { PendingApproval(threadId, it) }
+                }
             }
             .sortedByDescending { it.message.at }
 
@@ -568,3 +573,30 @@ data class CompanionState(
 
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data
+
+/**
+ * Per-thread results of a transcript walk, reused while that thread's message
+ * list is the same object. A streaming bot publishes a new state per token but
+ * only replaces its own thread's list, so the roster's fold over every other
+ * thread (branch walk, preview, pending cards) becomes a lookup.
+ */
+internal class TranscriptMemo<V>(private val capacity: Int = 1024) {
+    private class Entry<V>(val source: List<Message>, val key: Any?, val value: V)
+
+    private val entries = object : LinkedHashMap<String, Entry<V>>(64, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Entry<V>>?) = size > capacity
+    }
+
+    @Synchronized
+    fun get(threadId: String, source: List<Message>, key: Any?, compute: () -> V): V {
+        val hit = entries[threadId]
+        if (hit != null && hit.source === source && hit.key == key) return hit.value
+        return compute().also { entries[threadId] = Entry(source, key, it) }
+    }
+
+    companion object {
+        val visible = TranscriptMemo<List<Message>>()
+        val pending = TranscriptMemo<List<PendingApproval>>()
+        val preview = TranscriptMemo<String>()
+    }
+}

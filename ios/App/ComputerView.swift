@@ -1,15 +1,3 @@
-// A bot's computer, live.
-//
-// The harness already screenshots a working bot every few seconds and pushes
-// the frame to any client that asked for it. This is that, and nothing more:
-// no clicking, no typing, no control. Watching is the useful half on a phone
-// — you want to know what it is doing, not to do it yourself on a screen the
-// size of a playing card.
-//
-// Frames are expensive (hundreds of kilobytes of base64 each), so they are
-// off unless this view is on screen. `watchScreen` reopens the stream asking
-// for them and `stopWatchingScreen` reopens it asking not to; both resume
-// from the cursor, so the reconnect costs nothing but a round trip.
 import SwiftUI
 import CompanionCore
 // Unconditional for the same reason as ChatView: `UIImage` is used below
@@ -21,14 +9,19 @@ struct ComputerView: View {
     let bot: Bot
     @EnvironmentObject private var session: Session
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showingBrowser = false
-    @State private var previewWaitExpired = false
+    @State private var image: UIImage?
+    @State private var previewError: String?
+    @State private var connected = false
+    @State private var loading = true
+    @State private var surface = ""
+    @State private var attempt = 0
+    @State private var generation = UUID()
     @State private var confirmingDesktop = false
     @State private var openingDesktop = false
     @State private var desktopURL: URL?
     @State private var desktopError: String?
-
-    private var frame: ScreenFrame? { session.state.screens[bot.id] }
 
     /// The latest bot state. Busy alone does not guarantee a screen frame.
     private var current: Bot { session.state.bot(bot.id) ?? bot }
@@ -37,14 +30,12 @@ struct ComputerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let image = frame.flatMap(\.data).flatMap(UIImage.init(data:)) {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
-                    // The desktop is wider than the phone, so it lands as a
-                    // letterbox. Pinch-to-zoom would be the obvious next
-                    // thing; scaledToFit is the honest starting point.
-                    .accessibilityLabel("\(current.name)'s computer")
+                    .accessibilityLabel("Live computer preview")
+                    .opacity(connected ? 1 : 0.55)
             } else {
                 waiting
             }
@@ -59,9 +50,9 @@ struct ComputerView: View {
                 // Busy is the difference between "the picture is a moment old"
                 // and "the picture is however it was left" — worth saying,
                 // because a still frame looks identical either way.
-                Text(frame == nil ? "No screen" : current.busy == true ? "Preview" : "Idle")
+                Text(connected ? "watching" : image == nil ? "connecting" : "offline · last frame")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(frame != nil && current.busy == true ? Color.green : Color.secondary)
+                    .foregroundStyle(.secondary)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -119,40 +110,74 @@ struct ComputerView: View {
             }
         }
         .navigationDestination(isPresented: $showingBrowser) { BrowserLiveView(bot: bot) }
-        .task(id: "\(current.id):\(current.busy == true):\(frame != nil)") {
-            previewWaitExpired = false
-            guard frame == nil, current.busy == true else { return }
-            do { try await Task.sleep(for: .seconds(10)) } catch { return }
-            guard frame == nil else { return }
-            previewWaitExpired = true
+        .safeAreaInset(edge: .bottom) {
+            if let previewError {
+                VStack(spacing: 8) {
+                    Text(previewError).font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Reconnect computer") { attempt += 1 }.buttonStyle(.bordered)
+                }.padding(12).frame(maxWidth: .infinity).background(.ultraThinMaterial)
+            }
         }
-        .onAppear {
-            session.watchScreen(of: bot.id)
+        .task(id: "\(session.browserClient?.instanceID.uuidString ?? "none"):\(session.connection?.id ?? "none"):\(session.credentialEntryResetGeneration):\(bot.id):\(bot.threadId):\(scenePhase == .active):\(attempt)") {
+            guard scenePhase == .active else { connected = false; return }
+            await observe()
         }
-        .onDisappear {
-            session.stopWatchingScreen(of: bot.id)
-        }
+        .onDisappear { generation = UUID(); connected = false }
+
     }
 
     private var waiting: some View {
         VStack(spacing: 14) {
-            if current.busy == true && !previewWaitExpired {
+            if loading {
                 ProgressView().tint(.white)
-                Text("Waiting for screen activity…").foregroundStyle(.white.opacity(0.7))
+                Text("Opening the live computer…").foregroundStyle(.white.opacity(0.7))
             } else {
                 Image(systemName: "display").font(.system(size: 30)).foregroundStyle(.white.opacity(0.4))
-                Text("No screen activity yet").foregroundStyle(.white.opacity(0.7))
+                Text(surface == "browser" ? "This conversation is using the browser" : "Computer unavailable")
+                    .foregroundStyle(.white.opacity(0.7))
             }
-            Text("Computer previews appear when \(current.name) uses a screen. Open the browser to see web pages.")
-                .font(.footnote).foregroundStyle(.white.opacity(0.5))
-                .multilineTextAlignment(.center).padding(.horizontal, 32)
             if current.remote == nil {
                 Button("Open browser") { showingBrowser = true }
                     .buttonStyle(.bordered).tint(.white)
                     .accessibilityIdentifier("preview-open-browser")
             }
+        }.font(.subheadline)
+    }
+
+    @MainActor
+    private func observe() async {
+        generation = UUID()
+        let token = generation
+        // Never show another account's cached desktop during reconnect.
+        image = nil; previewError = nil; loading = true; connected = false
+        guard let client = session.browserClient else {
+            loading = false; previewError = "Connect to your computer first."; return
         }
-        .font(.subheadline)
+        while !Task.isCancelled, generation == token, scenePhase == .active {
+            do {
+                let preview = try await client.computerPreview(botId: bot.id, threadId: bot.threadId)
+                try Task.checkCancellation()
+                let decoded = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                    guard preview.png.utf8.count <= 24 * 1024 * 1024,
+                          let bytes = Data(base64Encoded: preview.png), let result = UIImage(data: bytes),
+                          result.size.width * result.size.height * result.scale * result.scale <= 16_777_216 else { return nil }
+                    return result.preparingForDisplay() ?? result
+                }.value
+                guard !Task.isCancelled, generation == token,
+                      session.browserClient?.instanceID == client.instanceID else { return }
+                guard let decoded else { throw APIError.transport("The computer sent an invalid preview.") }
+                image = decoded; surface = preview.surface; connected = true; loading = false; previewError = nil
+            } catch {
+                guard !Task.isCancelled, generation == token,
+                      session.browserClient?.instanceID == client.instanceID else { return }
+                connected = false; loading = false; previewError = error.localizedDescription
+                if case APIError.status(code: 401, message: _) = error { return }
+                if case APIError.status(code: 403, message: _) = error { return }
+            }
+            do { try await Task.sleep(for: .seconds(connected && current.busy == true ? 3 : 10)) }
+            catch { return }
+        }
     }
 
     @MainActor

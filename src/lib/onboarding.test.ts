@@ -112,3 +112,12 @@ describe("team setup coordinator", () => {
     expect(teamSetupBot([chief], { botId: "missing" })).toBeNull();
   });
 });
+
+it("restores the saved marketer choice after generic first-run restart",async()=>{
+  const {onboardingEntry}=await import("./onboarding");
+  const brief={business:"bakery",customers:"neighbours",outcome:"digital-marketer",approach:"bos" as const};
+  expect(onboardingEntry({pendingOffer:"digital-marketer",marketerBrief:brief}).brief).toEqual(brief);
+  const generic={botId:"bos",threadId:"generic",sendId:"generic-original",text:"site",selection:{instanceId:"model",model:"model"}};
+  expect(onboardingEntry({firstAssignment:generic,pendingOffer:"generic"}).assignment).toEqual(generic);
+  expect(onboardingEntry({firstAssignment:generic},"digital-marketer").marketer).toBe(true);
+});

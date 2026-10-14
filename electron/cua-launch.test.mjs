@@ -5,11 +5,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixture = vi.hoisted(() => ({ home: "", script: "", socketReady: false, children: [], calls: [], embeddedDelays: [], hosts: [], handlers: new Map() }));
-vi.mock("electron", () => ({ app: { isPackaged: false, getPath: () => fixture.home }, ipcMain: { handle: (name, handler) => fixture.handlers.set(name, handler) } }));
+const fixture = vi.hoisted(() => ({ home: "", script: "", socketReady: false, children: [], calls: [], embeddedDelays: [], hosts: [], packaged: false, granted: false, permissionRequests: 0, handlers: new Map() }));
+vi.mock("electron", () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => fixture.home }, systemPreferences: { isTrustedAccessibilityClient: () => fixture.granted || fixture.embeddedDelays.length > 0, getMediaAccessStatus: () => fixture.granted || fixture.embeddedDelays.length > 0 ? "granted" : "denied" }, ipcMain: { handle: (name, handler) => fixture.handlers.set(name, handler) } }));
 vi.mock("@trycua/cua-driver/embedded", () => ({
   EmbeddedCuaDriverHost: class {
-    constructor() { this.delay = fixture.embeddedDelays.shift(); fixture.hosts.push(this); }
+    constructor(binary, bundleId) { this.bundleId = bundleId; this.delay = fixture.embeddedDelays.shift(); fixture.hosts.push(this); }
     async start({ signal }) {
       if (this.delay === "until-abort") {
         await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
@@ -23,8 +23,8 @@ vi.mock("@trycua/cua-driver/embedded", () => ({
   },
 }));
 vi.mock("@trycua/cua-driver/electron", () => ({
-  requestMacOSPermissions: () => ({ accessibility: false, screenRecording: false }),
-  hasRequiredMacOSPermissions: () => fixture.embeddedDelays.length > 0,
+  requestMacOSPermissions: () => { fixture.permissionRequests++; return { accessibility: true, screenRecording: true }; },
+  hasRequiredMacOSPermissions: (status) => status.accessibility && status.screenRecording,
 }));
 vi.mock("node:fs", async (original) => {
   const fs = await original();
@@ -78,6 +78,9 @@ beforeEach(async () => {
   fixture.calls = [];
   fixture.embeddedDelays = [];
   fixture.hosts = [];
+  fixture.packaged = false;
+  fixture.granted = false;
+  fixture.permissionRequests = 0;
   fixture.handlers.clear();
   vi.stubEnv("OPENMAUSBOT_CUA_EMBEDDED", "1");
   vi.stubEnv("CUA_DRIVER_PATH", "/fixture/cua-driver");
@@ -100,6 +103,34 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "darwin")("async standalone CUA launch (isolated commands)", () => {
+  it("checks existing grants without requesting permission on app startup", async () => {
+    fixture.granted = true;
+    fixture.embeddedDelays = [1];
+    await expect(cua.startCua()).resolves.toMatchObject({ mode: "embedded", mcpEnv: { CUA_DRIVER_HOST_BUNDLE_ID: "ai.bos.bot" } });
+    expect(fixture.permissionRequests).toBe(0);
+    expect(fixture.hosts[0].bundleId).toBe("ai.bos.bot");
+  });
+
+  it("does not prompt or launch another permission owner when packaged grants are missing", async () => {
+    // SDK import uses its dev fixture; switch to packaged only after that import
+    // reaches the read-only grant probes.
+    const probe = vi.spyOn((await import("electron")).systemPreferences, "isTrustedAccessibilityClient").mockImplementation(() => {
+      fixture.packaged = true;
+      return false;
+    });
+    try {
+      await expect(cua.startCua()).resolves.toMatchObject({ mode: "unavailable", reason: expect.stringContaining("Accessibility") });
+      expect(fixture.permissionRequests).toBe(0);
+      expect(fixture.calls).toHaveLength(0);
+      expect(fixture.hosts).toHaveLength(0);
+    } finally { probe.mockRestore(); }
+  });
+
+  it("requests missing grants only for an explicit permission retry", async () => {
+    await expect(cua.startCua({ requestPermissions: true })).resolves.toMatchObject({ mode: "embedded" });
+    expect(fixture.permissionRequests).toBe(1);
+  });
+
   it("keeps the event loop responsive and publishes the existing descriptor shape", async () => {
     let ticks = 0;
     const timer = setInterval(() => ticks++, 10);

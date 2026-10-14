@@ -1308,6 +1308,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       // bounded and are deliberately left alone.
       const budget = resultBudget(turnEnvironment);
       for (const name of botOwned) {
+        const server = mcpServers[name] as Record<string, unknown>;
+        if (typeof server.command === "string" && server.command) {
+          // A custom stdio process belongs to this native conversation. Do
+          // not infer its caller from whichever bot thread happens to be busy,
+          // or let project/config env impersonate another conversation. These
+          // IDs identify the thread; they grant no capability or turn authority.
+          mcpServers[name] = {
+            ...server,
+            env: {
+              ...(server.env as Record<string, string> | undefined),
+              OMB_BOT_ID: botId ?? "",
+              OMB_THREAD_ID: threadId,
+            },
+          };
+        }
         const gated = gateServer({ name, server: mcpServers[name], threadId, budget, nodeEnv: NODE_ENV_FLAG });
         if (gated) mcpServers[name] = gated;
       }

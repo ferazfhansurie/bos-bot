@@ -160,10 +160,11 @@ const WHATSAPP_ROUTES: Record<string, { path: string; params: string[] }> = {
 
 const WHATSAPP_REPLY_TOOLS = [
   { name: "BOS_WHATSAPP_REPLY", description: "Reply without additional approval to one captured incoming text from the last 24 hours, only in the owner's configured scope. Verify account and chat first. No outreach. One attempt per incoming message; never retry outcome_unknown. submitted is not recipient delivery.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, chat_id: { type: "string" }, message_id: { type: "string" }, text: { type: "string", minLength: 1, maxLength: 4000 } }, required: ["account_id", "chat_id", "message_id", "text"], additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true } },
+  { name: "BOS_WHATSAPP_SEND", description: "Send a message without an incoming message or time window, only when the owner granted outreach and only to a chat in the configured list (follow-ups). Pick a unique send_key per intended message; one attempt per key, never retry outcome_unknown. submitted is not recipient delivery.", inputSchema: { type: "object", properties: { account_id: { type: "string" }, chat_id: { type: "string" }, send_key: { type: "string", pattern: "^[\\w.:-]{1,120}$" }, text: { type: "string", minLength: 1, maxLength: 4000 } }, required: ["account_id", "chat_id", "send_key", "text"], additionalProperties: false }, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: true } },
 ] as const;
 
 async function whatsappReplyTool(name: string, args: unknown): Promise<string> {
-  const response = await fetch(`${HARNESS}/api/internal/connectors/whatsapp/${name === "BOS_WHATSAPP_GET_ACCOUNT" ? "account" : name === "BOS_WHATSAPP_SYNC_HISTORY" ? "sync-history" : "reply"}`, {
+  const response = await fetch(`${HARNESS}/api/internal/connectors/whatsapp/${name === "BOS_WHATSAPP_GET_ACCOUNT" ? "account" : name === "BOS_WHATSAPP_SYNC_HISTORY" ? "sync-history" : name === "BOS_WHATSAPP_SEND" ? "send" : "reply"}`, {
     method: name === "BOS_WHATSAPP_GET_ACCOUNT" ? "GET" : "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
     ...(name !== "BOS_WHATSAPP_GET_ACCOUNT" ? { body: JSON.stringify(args) } : {}),
@@ -301,8 +302,8 @@ async function handle(message: Json): Promise<void> {
   if (method === "tools/call") {
     const params = (message.params ?? {}) as Json;
     const name = String(params.name ?? "");
-    if (name === "BOS_WHATSAPP_GET_ACCOUNT" || name === "BOS_WHATSAPP_SYNC_HISTORY" || name === "BOS_WHATSAPP_REPLY") {
-      if (!WHATSAPP_NATIVE || (name === "BOS_WHATSAPP_REPLY" && !WHATSAPP_REPLIES)) { send(textResult(id, "WhatsApp replies are not enabled for this bot", true)); return; }
+    if (name === "BOS_WHATSAPP_GET_ACCOUNT" || name === "BOS_WHATSAPP_SYNC_HISTORY" || name === "BOS_WHATSAPP_REPLY" || name === "BOS_WHATSAPP_SEND") {
+      if (!WHATSAPP_NATIVE || ((name === "BOS_WHATSAPP_REPLY" || name === "BOS_WHATSAPP_SEND") && !WHATSAPP_REPLIES)) { send(textResult(id, "WhatsApp replies are not enabled for this bot", true)); return; }
       try { send(textResult(id, await whatsappReplyTool(name, params.arguments))); }
       catch (error) { send(textResult(id, error instanceof Error ? error.message : String(error), true)); }
       return;

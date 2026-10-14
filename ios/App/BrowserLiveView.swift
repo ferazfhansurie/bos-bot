@@ -18,7 +18,7 @@ struct BrowserLiveView: View {
     @State private var frame: DecodedBrowserFrame?
     @State private var tabs: [BrowserViewerTab] = []
     @State private var viewerId = ""
-    @State private var frameConnectionId: String?
+    @State private var frameClientID: UUID?
     @State private var controlling = false
     @State private var held = false
     @State private var pending = false
@@ -171,7 +171,7 @@ struct BrowserLiveView: View {
         } message: { Text("This closes its open pages. Active bot work must finish first.") }
         .onDisappear { invalidate() }
         .onChange(of: scenePhase) { _, phase in if phase != .active { invalidate() } }
-        .task(id: "\(session.connection?.id ?? "none"):\(scenePhase == .active):\(attempt)") {
+        .task(id: "\(session.browserClient?.instanceID.uuidString ?? "none"):\(session.connection?.id ?? "none"):\(session.credentialEntryResetGeneration):\(scenePhase == .active):\(attempt)") {
             guard scenePhase == .active else { connected = false; controlling = false; return }
             await observe()
         }
@@ -199,14 +199,14 @@ struct BrowserLiveView: View {
     private func schedule(_ action: BrowserViewerAction, onSuccess: @escaping @MainActor () -> Void = {}) {
         guard let client = session.browserClient, !viewerId.isEmpty, connected, !pending, scenePhase == .active else { return }
         // Capture before scheduling: a gesture never adopts the next viewer.
-        let id = viewerId, token = generation, connectionId = client.connection.id
+        let id = viewerId, token = generation, clientID = client.instanceID
         pending = true
         actionTask = Task { @MainActor in
             defer { if generation == token { pending = false; actionTask = nil } }
-            guard !Task.isCancelled, generation == token, viewerId == id, scenePhase == .active, session.connection?.id == connectionId else { return }
+            guard !Task.isCancelled, generation == token, viewerId == id, scenePhase == .active, session.browserClient?.instanceID == clientID else { return }
             do {
                 try await client.browserAction(botId: bot.id, viewerId: id, action: action)
-                guard !Task.isCancelled, generation == token, session.connection?.id == connectionId else { return }
+                guard !Task.isCancelled, generation == token, session.browserClient?.instanceID == clientID else { return }
                 onSuccess()
             } catch { if !Task.isCancelled && generation == token {
                 self.error = error.localizedDescription
@@ -217,10 +217,10 @@ struct BrowserLiveView: View {
     private func observe() async {
         invalidate()
         let token = generation
-        if frameConnectionId != session.connection?.id {
+        if frameClientID != session.browserClient?.instanceID {
             frame = nil; tabs = []; address = ""; resetTransform()
         }
-        frameConnectionId = session.connection?.id
+        frameClientID = session.browserClient?.instanceID
         error = nil; accessRequired = false
         guard let client = session.browserClient else { error = "Connect to your computer first."; return }
         do {
@@ -244,8 +244,10 @@ struct BrowserLiveView: View {
                     }.value
                     try Task.checkCancellation()
                     guard generation == token else { return }
-                    frame = decoded; frameCurrent = false
-                    guard decoded != nil else { throw APIError.transport("The browser frame could not be decoded.") }
+                    guard let decoded else { throw APIError.transport("The browser frame could not be decoded.") }
+                    frame = decoded; frameCurrent = true
+                    // The displayed frame is already current. ACK paces the next
+                    // network frame; it must never dim this one or disable controls.
                     // Yield to SwiftUI before asking for the next paced frame.
                     await Task.yield()
                     try Task.checkCancellation()

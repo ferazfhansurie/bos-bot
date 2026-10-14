@@ -94,9 +94,46 @@ final class Session: ObservableObject {
     private(set) var state = CompanionState() {
         willSet { if !foldingQuietly { objectWillChange.send() } }
         didSet {
+            stateRevision &+= 1
             liveText.sync(from: state)
             stateChanges.send(state)
         }
+    }
+    /// Bumped on every assignment of `state`. Views key their derived
+    /// values on it, so a render that follows no change reuses them.
+    private(set) var stateRevision = 0
+    /// Values derived from `state` that every render asked for again: the
+    /// active branch of a thread (a dictionary build and a parent walk over
+    /// the whole transcript) and the roster's summaries (that walk for every
+    /// chat, then a sort). The roster read them five or six times per body,
+    /// and its body re-ran on every publish even with a chat pushed on top.
+    private var derivedRevision = -1
+    private var visibleCache: [String: [Message]] = [:]
+    private var summaryCache: [ActivityDetail: [ChatSummary]] = [:]
+
+    private func syncDerived() {
+        guard derivedRevision != stateRevision else { return }
+        derivedRevision = stateRevision
+        visibleCache.removeAll(keepingCapacity: true)
+        summaryCache.removeAll(keepingCapacity: true)
+    }
+
+    /// `state.visibleTranscript(forThread:)`, computed once per change.
+    func visibleTranscript(forThread threadId: String) -> [Message] {
+        syncDerived()
+        if let hit = visibleCache[threadId] { return hit }
+        let visible = state.visibleTranscript(forThread: threadId)
+        visibleCache[threadId] = visible
+        return visible
+    }
+
+    /// `state.chatSummaries(activity:)`, computed once per change.
+    func chatSummaries(activity: ActivityDetail = .full) -> [ChatSummary] {
+        syncDerived()
+        if let hit = summaryCache[activity] { return hit }
+        let summaries = state.chatSummaries(activity: activity)
+        summaryCache[activity] = summaries
+        return summaries
     }
     /// Every assignment of `state`, quiet ones included, for code that
     /// watches it outside a view (what `$state` was).
@@ -504,7 +541,7 @@ final class Session: ObservableObject {
         }
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("-browser-preview"),
+        if (arguments.contains("-browser-preview") || arguments.contains("-computer-preview")),
            let index = arguments.firstIndex(of: "-browser-preview-url"), index + 1 < arguments.count,
            let url = URL(string: arguments[index + 1]), url.scheme == "http", url.host == "127.0.0.1", let port = url.port,
            let fixtureURL = Bundle.main.url(forResource: "StorePreview", withExtension: "json"),
@@ -1135,7 +1172,10 @@ final class Session: ObservableObject {
 
     func setProfilePhoto(_ jpegBase64: String?) async throws {
         guard let client else { throw APIError.transport("Computer is offline") }
-        try await client.setProfilePhoto(jpegBase64)
+        // Name the photo being replaced; the server refuses a write that
+        // does not, so a stale or automatic push can't swap owners' photos.
+        let expected = try await client.config().profile?.avatarUrl ?? ""
+        try await client.setProfilePhoto(jpegBase64, expected: expected)
     }
 
     func openSharedDM(targetId: String) async throws -> SharedRoomSummary {
@@ -2148,8 +2188,10 @@ final class Session: ObservableObject {
 
     /// Send a composer draft with app-owned attachments. The destination
     /// includes the exact active thread at tap time, so neither a desktop task
-    /// switch nor an upload delay can move the message elsewhere. Callers only
-    /// clear their draft when this returns true.
+    /// switch nor an upload delay can move the message elsewhere. The composer
+    /// retains an immutable durable payload until this returns true.
+    func captureSendClient() -> CompanionClient? { client }
+
     func send(
         text: String,
         attachments: [PendingMessageAttachment],
@@ -2157,21 +2199,27 @@ final class Session: ObservableObject {
         replyToId: String? = nil,
         priority: MessagePriority = .queue,
         durableSendID: String? = nil,
-        uploadProgress: ((String, Int, Int) -> Void)? = nil
+        uploadProgress: ((String, Int, Int) -> Void)? = nil,
+        byteProgress: (@MainActor (Double) -> Void)? = nil,
+        sendFailure: ((String) -> Void)? = nil,
+        sourceClient: CompanionClient? = nil
     ) async -> Bool {
-        guard let client else {
+        guard let client = sourceClient ?? client else {
             actionError = "This computer is offline."
             return false
         }
         connect()
-        let connectionID = client.connection.id
-        actionError = nil
+        if self.client?.instanceID == client.instanceID { actionError = nil }
+        func fail(_ message: String) -> Bool {
+            sendFailure?(message)
+            if self.client?.instanceID == client.instanceID { actionError = message }
+            return false
+        }
         do {
             try AttachmentPolicy.validate(attachments)
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty || !attachments.isEmpty else {
-                actionError = "Write a message or attach a file first."
-                return false
+                return fail("Write a message or attach a file first.")
             }
 
             if attachments.contains(where: { $0.kind == .image }) {
@@ -2179,12 +2227,10 @@ final class Session: ObservableObject {
                 do {
                     capable = try await client.imageCapableInstanceIDs()
                 } catch APIError.status(code: 404, message: _) {
-                    actionError = "Update BOS on this computer before sending images."
-                    return false
+                    return fail("Update BOS on this computer before sending images.")
                 }
                 guard imageSupported(by: chat, capableInstances: capable) else {
-                    actionError = imageCompatibilityMessage(for: chat)
-                    return false
+                    return fail(imageCompatibilityMessage(for: chat))
                 }
             }
 
@@ -2201,36 +2247,40 @@ final class Session: ObservableObject {
             let sendID = durableSendID ?? attachmentSendIDs[draftKey] ?? UUID().uuidString
             attachmentSendIDs[draftKey] = sendID
 
-            var uploaded: [SharedAttachmentReference] = []
-            uploaded.reserveCapacity(attachments.count)
-            for (index, attachment) in attachments.enumerated() {
-                uploadProgress?(attachment.name, index, attachments.count)
-                try Task.checkCancellation()
-                let mime = AttachmentPolicy.normalizedMIME(attachment.mime)
-                switch attachment.kind {
-                case .image:
-                    let path = try await client.uploadImage(
-                        data: attachment.data,
-                        mime: mime,
-                        uploadId: attachment.id.uuidString
-                    )
-                    uploaded.append(SharedAttachmentReference(
-                        path: path,
-                        kind: .image,
-                        displayName: attachment.name
-                    ))
-                case .file:
-                    let file: UploadedFile
-                    if let fileURL = attachment.fileURL {
-                        file = try await client.uploadFile(fileURL: fileURL, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString)
-                    } else {
-                        file = try await client.uploadFile(data: attachment.data, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString)
+            let tracker = PhoneAttachmentProgress(sizes: attachments.map { Int64($0.bytes) }, report: byteProgress)
+            var uploaded = Array<SharedAttachmentReference?>(repeating: nil, count: attachments.count)
+            // Two transfers at a time use the link without uploading a whole
+            // camera roll concurrently. Preserve the person's attachment order.
+            for start in stride(from: 0, to: attachments.count, by: 2) {
+                uploadProgress?("Uploading attachments", start, attachments.count)
+                try await withThrowingTaskGroup(of: (Int, SharedAttachmentReference).self) { group in
+                    for index in start..<min(start + 2, attachments.count) {
+                        let attachment = attachments[index]
+                        group.addTask {
+                            try Task.checkCancellation()
+                            let mime = AttachmentPolicy.normalizedMIME(attachment.mime)
+                            let progress: @Sendable (Int64, Int64) -> Void = { sent, _ in
+                                Task { @MainActor in tracker.update(index: index, bytes: sent) }
+                            }
+                            let reference: SharedAttachmentReference
+                            switch attachment.kind {
+                            case .image:
+                                let path = try await client.uploadImage(data: attachment.data, mime: mime, uploadId: attachment.id.uuidString, progress: progress)
+                                reference = SharedAttachmentReference(path: path, kind: .image, displayName: attachment.name)
+                            case .file:
+                                let file: UploadedFile
+                                if let url = attachment.fileURL {
+                                    file = try await client.uploadFile(fileURL: url, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString, progress: progress)
+                                } else {
+                                    file = try await client.uploadFile(data: attachment.data, name: attachment.name, mime: mime, uploadId: attachment.id.uuidString, progress: progress)
+                                }
+                                reference = SharedAttachmentReference(path: file.path, kind: .file, displayName: file.name)
+                            }
+                            await tracker.update(index: index, bytes: Int64(attachment.bytes))
+                            return (index, reference)
+                        }
                     }
-                    uploaded.append(SharedAttachmentReference(
-                        path: file.path,
-                        kind: .file,
-                        displayName: file.name
-                    ))
+                    for try await (index, reference) in group { uploaded[index] = reference }
                 }
             }
 
@@ -2239,7 +2289,7 @@ final class Session: ObservableObject {
                 instruction: text,
                 text: [],
                 urls: [],
-                attachments: uploaded
+                attachments: uploaded.compactMap { $0 }
             )
             traceConnection("send begins busy=\(chat.busy)")
             let receipt = try await client.send(text: message, to: destination, sendId: sendID, replyToId: replyToId, priority: priority)
@@ -2247,21 +2297,19 @@ final class Session: ObservableObject {
             // The send succeeded on the computer it was addressed to, so the
             // draft clears either way. Its queue row belongs to that computer,
             // and must not be drawn on one selected mid-upload.
-            if self.client?.connection.id == connectionID {
+            if self.client?.instanceID == client.instanceID {
                 rememberQueuedSend(from: receipt, text: text)
             }
             attachmentSendIDs.removeValue(forKey: draftKey)
-            actionError = nil
+            if self.client?.instanceID == client.instanceID { actionError = nil }
             return true
         } catch is CancellationError {
             return false
         } catch let error as APIError where error.isUnauthorized {
-            status = .unauthorized
-            actionError = error.localizedDescription
-            return false
+            if self.client?.instanceID == client.instanceID { status = .unauthorized }
+            return fail(error.localizedDescription)
         } catch {
-            actionError = error.localizedDescription
-            return false
+            return fail(error.localizedDescription)
         }
     }
 
@@ -2898,23 +2946,60 @@ final class Session: ObservableObject {
         }
     }
 
-    func loadOlder(threadId: String) async {
-        guard let client, let oldest = state.transcript(forThread: threadId).first else { return }
+    /// One older page above what is held. Pages are counted in whole turns
+    /// so a tool-heavy turn arrives with its prompt; the row floor keeps a
+    /// pre-2.0 server (which ignores `turns`) paging at the old size.
+    /// Overlapping calls for one thread collapse into the first.
+    @discardableResult
+    func loadOlder(threadId: String, turns: Int = 4, limit: Int = 50) async -> Bool {
+        guard let client, let oldest = state.transcript(forThread: threadId).first,
+              olderInFlight.insert(threadId).inserted else { return false }
+        defer { olderInFlight.remove(threadId) }
         do {
-            let page = try await client.messages(threadId: threadId, before: oldest.id, limit: 50)
+            let page = try await client.messages(threadId: threadId, before: oldest.id, limit: limit, turns: turns)
             state.prepend(page, toThread: threadId)
+            return true
         } catch {
-            actionError = error.localizedDescription
+            if !Task.isCancelled { actionError = error.localizedDescription }
+            return false
         }
     }
+    private var olderInFlight: Set<String> = []
 
     /// A pinned background thread may not be in a fresh fleet snapshot.
     func loadThreadIfNeeded(_ threadId: String) async {
         guard let client, !state.hasLoadedPage(forThread: threadId) else { return }
         do {
-            let page = try await client.messages(threadId: threadId)
-            state.merge(page, intoThread: threadId)
+            let page = try await client.messages(threadId: threadId, turns: Self.openTurns)
+            state.mergeTail(page, intoThread: threadId)
         } catch { if !Task.isCancelled { actionError = error.localizedDescription } }
+    }
+
+    static let openTurns = 6
+
+    /// The fleet snapshot is each thread's newest 50 raw rows, which on a
+    /// tool-heavy thread holds no prompt at all. Before a thread is shown,
+    /// make sure it holds some actual conversation: one turn-counted page
+    /// from a 2.0 server, then a few bounded older pages for older servers.
+    func ensureConversation(threadId: String) async {
+        guard let client else { return }
+        func enough() -> Bool {
+            let held = state.transcript(forThread: threadId)
+            guard state.hasMore[threadId] == true else { return true }
+            var prompts = 0, said = 0
+            for message in held where message.kind != .activity {
+                if message.role == .user { prompts += 1 }
+                said += 1
+            }
+            return prompts >= 3 || said >= 16
+        }
+        guard !enough() else { return }
+        if let page = try? await client.messages(threadId: threadId, turns: Self.openTurns) {
+            state.mergeTail(page, intoThread: threadId)
+        }
+        for _ in 0..<4 where !Task.isCancelled && !enough() {
+            guard await loadOlder(threadId: threadId, limit: 100) else { return }
+        }
     }
 
     func image(threadId: String, messageId: String) async -> Data? {
@@ -3319,6 +3404,21 @@ final class Session: ObservableObject {
     func configStatus() async -> ConfigStatus? {
         guard let client else { return nil }
         return try? await client.config()
+    }
+
+    func telegramChannel(botId: String) async throws -> TelegramChannelStatus {
+        guard let client else { throw URLError(.notConnectedToInternet) }
+        return try await client.telegramChannel(botId: botId)
+    }
+
+    func connectTelegramChannel(botId: String, invite: Bool) async throws -> TelegramChannelLink {
+        guard let client else { throw URLError(.notConnectedToInternet) }
+        return try await client.connectTelegramChannel(botId: botId, invite: invite)
+    }
+
+    func disconnectTelegramChannel(botId: String) async throws -> TelegramChannelStatus {
+        guard let client else { throw URLError(.notConnectedToInternet) }
+        return try await client.disconnectTelegramChannel(botId: botId)
     }
 
     func botOverview(for bot: Bot) async -> BotOverview? {
@@ -3880,3 +3980,25 @@ extension CompanionState {
 
 }
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; peer-http: HTTP authentication headers, discovery and domain verification still interoperate with 1.9.1
+
+@MainActor
+private final class PhoneAttachmentProgress {
+    private let sizes: [Int64]
+    private var sent: [Int64]
+    private let report: (@MainActor (Double) -> Void)?
+    private var lastReport = Date.distantPast
+    init(sizes: [Int64], report: (@MainActor (Double) -> Void)?) {
+        self.sizes = sizes; self.sent = sizes.map { _ in 0 }; self.report = report
+    }
+    func update(index: Int, bytes: Int64) {
+        guard sizes.indices.contains(index) else { return }
+        sent[index] = max(0, min(bytes, sizes[index]))
+        let total = sizes.reduce(0, +)
+        guard total > 0 else { return }
+        let value = Double(sent.reduce(0, +)) / Double(total)
+        let now = Date()
+        if value == 0 || value == 1 || now.timeIntervalSince(lastReport) >= 0.1 {
+            lastReport = now; report?(value)
+        }
+    }
+}
