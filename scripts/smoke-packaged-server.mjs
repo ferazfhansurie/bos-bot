@@ -282,8 +282,8 @@ if (
 }
 
 if (browserBundle && (browserReport?.error || browserReport?.browserEngine?.kind !== "engine" ||
-  browserReport.browserEngine.version !== browserSpec.engine.version || browserReport.browserEnabled !== false)) {
-  console.error("The fresh-home packaged server did not discover its browser bundle with browser access still opt-in:");
+  browserReport.browserEngine.version !== browserSpec.engine.version || browserReport.browserEnabled !== true)) {
+  console.error("The fresh-home packaged server did not discover its browser bundle with the built-in browser on by default:");
   console.error(JSON.stringify(browserReport, null, 2));
   process.exit(1);
 }
@@ -308,5 +308,5 @@ console.log(`all ${count} spawned proxy paths resolve inside the packaged server
 console.log(`packaged native WhatsApp runtime loads with no node_modules in reach ✓ ${runtimeReport.whatsapp.path}`);
 console.log(`packaged native WhatsApp runtime constructs a real client ✓ [${runtimeReport.whatsapp.constructed.join(", ")}]`);
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");
-if (browserBundle) console.log(`packaged browser discovered without installation; access remains opt-in ✓ ${JSON.stringify(browserReport)}`);
+if (browserBundle) console.log(`packaged browser discovered without installation; built-in browser on by default ✓ ${JSON.stringify(browserReport)}`);
 // branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data; environment-aliases: legacy launchd/systemd and provider subprocess environment labels stay accepted; the central resolver always prefers the new spelling
