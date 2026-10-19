@@ -1074,4 +1074,3 @@ internal object MausBodies {
      */
     fun body(id: String?): Body = id?.let { all[it] } ?: all.getValue(DEFAULT_ID)
 }
-// branding compatibility (electron/branding-compat.json): data-home: existing desktop and companion homes, backups and lease recovery must open the same data

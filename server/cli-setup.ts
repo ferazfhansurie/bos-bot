@@ -14,6 +14,8 @@ import { augmentedPath, resetPathCache } from "./env-path.ts";
 import { resolveCli } from "./procs.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
+import { API_KEY_DRIVER, ApiKeyDriver } from "./drivers/api-key.ts";
+import { OpenAICompatDriver } from "./drivers/openai-compat.ts";
 import { defaultSetupIo, SetupCancelled, type SetupIo } from "./cli-prompts.ts";
 import { API_ENDPOINTS, fetchSetupModels, normalizeApiUrl, verifySetupCompletion } from "./cli-api-setup.ts";
 
@@ -175,7 +177,7 @@ export async function runSetup(
     const cfg = loadConfig();
     const runtime = instanceConfigs(cfg);
     const existing = Object.entries(runtime).filter(([id, entry]) =>
-      !!cfg.instances?.[id] && ["codex", "claudeAgent", "openai-compat"].includes(entry.driver) && entry.enabled !== false);
+      !!cfg.instances?.[id] && ["codex", "claudeAgent", "openai-compat", API_KEY_DRIVER].includes(entry.driver) && entry.enabled !== false);
     io.log("\nWelcome to BOS Bot\n");
     io.log("Let's connect your AI. Choose a provider, then a model.");
     io.log("Existing bots and conversations stay untouched. Ctrl-C cancels.");
@@ -216,15 +218,21 @@ export async function runSetup(
           let key: string;
           let label: string;
           let reuse = false;
-          let routingProvider: string | undefined;
           if (prior) {
             const config = rawObject(prior[1].config);
-            const decoded = BUILT_IN_DRIVERS.find((d) => d.driverKind === "openai-compat")!.decodeConfig(config);
-            url = normalizeApiUrl(decoded.url);
-            key = decoded.key ?? prior[1].environment?.[decoded.apiKeyEnv]
-              ?? prior[1].environment?.OPENAI_COMPAT_API_KEY
-              ?? process.env[decoded.apiKeyEnv] ?? process.env.OPENAI_COMPAT_API_KEY ?? "";
-            routingProvider = decoded.provider;
+            if (prior[1].driver === API_KEY_DRIVER) {
+              const decoded = ApiKeyDriver.decodeConfig(config);
+              url = decoded.url;
+              key = decoded.key;
+            } else {
+              // A connection saved before the openai-compat driver stopped shipping:
+              // read it the way that driver did, then save it on the api-key driver.
+              const decoded = OpenAICompatDriver.decodeConfig(config);
+              url = normalizeApiUrl(decoded.url);
+              key = decoded.key ?? prior[1].environment?.[decoded.apiKeyEnv]
+                ?? prior[1].environment?.OPENAI_COMPAT_API_KEY
+                ?? process.env[decoded.apiKeyEnv] ?? process.env.OPENAI_COMPAT_API_KEY ?? "";
+            }
             label = prior[1].displayName ?? prior[0];
             reuse = !!key;
             if (!key) key = (await io.secret(`API key for ${url} (hidden): `)).trim();
@@ -254,16 +262,20 @@ export async function runSetup(
           io.log("Choose a chat model; image, audio and embedding-only models cannot reply here.");
           model = await chooseModel(io, { default: typeof preferredModel === "string" ? preferredModel : "", options: models });
           if (!await io.confirm("Send one short test message? Your API provider may charge for this request.", true)) throw new SetupCancelled();
-          if (routingProvider) await deps.verify(url, key, model, routingProvider);
-          else await deps.verify(url, key, model);
+          // The api-key driver sends no provider routing, so the test call doesn't either.
+          await deps.verify(url, key, model);
           io.log("Test reply received.");
           // API additions never change the URL/key behind an existing bot. A new
           // isolated instance also avoids inherited global URL/key overrides.
           id = reuse && prior ? prior[0] : `api-${randomUUID().slice(0, 8)}`;
-          entry = reuse && prior
-            ? { ...cfg.instances![id]!, config: { ...rawObject(cfg.instances![id]!.config), model } }
-            : { driver: "openai-compat", displayName: label, config: { url, key, model, provider: routingProvider ?? "" } };
-          if (!reuse) io.log("The key will be stored in your private config.json (plaintext, owner-only permissions on Unix). Never share this file.");
+          const legacy = reuse && prior?.[1].driver !== API_KEY_DRIVER;
+          if (reuse && !legacy) {
+            entry = { ...cfg.instances![id]!, config: { ...rawObject(cfg.instances![id]!.config), model } };
+          } else {
+            // The api-key driver reads no env, so a legacy connection's resolved key moves into its config.
+            entry = { ...(legacy ? cfg.instances![id]! : { displayName: label }), driver: API_KEY_DRIVER, config: { url, key, model } };
+          }
+          if (!reuse || legacy) io.log("The key will be stored in your private config.json (plaintext, owner-only permissions on Unix). Never share this file.");
         }
         break;
       } catch (error) {

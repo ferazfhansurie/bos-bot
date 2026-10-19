@@ -89,7 +89,8 @@ it("runs structured MCP calls through real harness approval and continuation, pr
     return result;
   };
   try {
-    await api("PATCH", "/api/config", { openaiCompat: { key: "synthetic-fixture-key", url: `http://127.0.0.1:${address.port}/v1`, model: "fixture-model" } });
+    // Settings → Engines → "Add a model" is the shipped API-key route (the openai-compat driver is retired).
+    const { instanceId } = await api("POST", "/api/instances/api-connections", { provider: "custom", key: "synthetic-fixture-key", url: `http://127.0.0.1:${address.port}/v1`, model: "fixture-model" }, 201);
     const mcpScript = join(fixture.info.dataDir, "fixture-mcp.mjs");
     writeFileSync(mcpScript, MCP_FIXTURE);
     for (const mode of ["allow", "deny", "cancel", "text", "ordinary", "tools-off"]) {
@@ -98,15 +99,15 @@ it("runs structured MCP calls through real harness approval and continuation, pr
       const startupMarker = join(fixture.info.dataDir, `${mode}-mcp-started.txt`);
       await api("POST", "/api/mcp/servers", { name: mode, command: process.execPath, args: [mcpScript], env: { FIXTURE_ARTIFACT: artifact, FIXTURE_STARTED: startupMarker }, enabled: true });
       if (mode === "tools-off") {
-        await api("PATCH", "/api/instances/openaiCompat", { tools: "false" }, 400);
+        await api("PATCH", `/api/instances/${instanceId}`, { tools: "false" }, 400);
         await api("PATCH", "/api/instances/claude", { tools: false }, 400);
-        const changed = await api("PATCH", "/api/instances/openaiCompat", { tools: false });
-        const instance = changed.instances.find((item: any) => item.instanceId === "openaiCompat");
+        const changed = await api("PATCH", `/api/instances/${instanceId}`, { tools: false });
+        const instance = changed.instances.find((item: any) => item.instanceId === instanceId);
         expect(instance.capabilities).toMatchObject({ agentsMcp: false, composioMcp: false });
       }
       await api("PATCH", `/api/mcp/servers/${mode}`, { enabled: true });
       const { bot } = await control(["new-bot", "--name", `API tool ${mode}`]);
-      await control(["set-model", "--bot", bot.id, "--instance", "openaiCompat", "--model", "fixture-model"]);
+      await control(["set-model", "--bot", bot.id, "--instance", instanceId, "--model", "fixture-model"]);
       await api("PATCH", `/api/bots/${bot.id}`, { mcpServers: [mode], description: "Verification assistant", soul: "Use structured tools when an operation is requested." });
       const memoryDirectory = join(fixture.info.dataDir, "workspaces", bot.id);
       mkdirSync(memoryDirectory, { recursive: true });

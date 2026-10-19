@@ -49,11 +49,11 @@ describe("live browser route authorization", () => {
     const crossOrigin = await call(method, path, body, { ...remote, cookie: ownerCookie, origin: "https://attacker.invalid" });
     expect(crossOrigin.status).toBe(403);
     expect(crossOrigin.body.error).toContain("cross-origin");
-    // Authenticated owner reaches the feature gate; no native browser is
-    // installed or launched in this fixture.
+    // Authenticated owner gets past auth. The browser is on by default, so it
+    // stops at the engine check: no native browser is installed in this fixture.
     const owner = await call(method, path, body, { ...remote, cookie: ownerCookie });
-    expect(owner.status).toBe(409);
-    expect(owner.body.error).toContain("Enable this bot's browser");
+    expect(owner.status).toBe(503);
+    expect(owner.body.error).toContain("Install the browser engine first");
   });
 
   it("does not let client sessions change the bot's browser identity or shared logins", async () => {

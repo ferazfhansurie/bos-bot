@@ -94,6 +94,7 @@
     "package:win:live": "node scripts/release-contract.mjs check live win && pnpm package:prepare && pnpm build:cua:win && node scripts/release-contract.mjs package live win",
     "package:linux:live": "node scripts/release-contract.mjs check live linux && pnpm package:prepare && pnpm build:cua:linux && node scripts/release-contract.mjs package live linux",
     "test:release-contract": "node --test scripts/release-contract.test.mjs",
+    "test:scripts": "node --test scripts/bos-readiness.test.mjs scripts/enterprise-export-bot.test.mjs scripts/linux-package-contract.test.mjs scripts/release-contract.test.mjs",
     "build:adblock": "node scripts/prepare-adblock.mjs"
   },
   "dependencies": {

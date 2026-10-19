@@ -6,7 +6,6 @@ import { DATA_DIR, instanceConfigs, loadConfig, PROVIDER_CREDENTIAL_ENV, WORKSPA
 import { acquireDataDirLease } from "./data-dir-lease.ts";
 import { SetupCancelled, type SetupIo } from "./cli-prompts.ts";
 import { isSetupComplete, readCliStartup, runSetup, saveCliStartup } from "./cli-setup.ts";
-import { OpenAICompatDriver } from "./drivers/openai-compat.ts";
 
 const options = { dataDir: DATA_DIR, port: 8799 };
 const configPath = join(DATA_DIR, "config.json");
@@ -271,11 +270,12 @@ describe("API onboarding", () => {
     expect(deps.models).toHaveBeenCalledWith("https://api.example.test/v1", expected);
     expect(deps.verify).toHaveBeenCalledWith("https://api.example.test/v1", expected, "fixture-default");
     expect(ui.io.secret).not.toHaveBeenCalled();
-    expect(loadConfig().instances?.existing).toEqual({ ...original, config: { ...original.config, model: "fixture-default" } });
+    // The retired openai-compat entry moves onto the api-key driver with the key it resolved.
+    expect(loadConfig().instances?.existing).toEqual({ driver: "api-key", ...(environment ? { environment } : {}), config: { url: "https://api.example.test/v1", key: expected, model: "fixture-default" } });
     ui.assertConsumed();
   });
 
-  it("verifies an existing connection using its effective workspace routing provider", async () => {
+  it("moves an existing routed connection onto the api-key driver, which sends no routing pin", async () => {
     persist({
       openaiCompat: { provider: "fireworks" },
       instances: { routed: { driver: "openai-compat", config: { url: "https://openrouter.ai/api/v1", key: "fixture-key" } } },
@@ -283,7 +283,8 @@ describe("API onboarding", () => {
     const deps = dependencies();
     const ui = prompts({ choices: [3, 0], confirms: [true, true] });
     expect(await runSetup(options, ui.io, deps)).toBe(true);
-    expect(deps.verify).toHaveBeenCalledWith("https://openrouter.ai/api/v1", "fixture-key", "fixture-default", "fireworks");
+    expect(deps.verify).toHaveBeenCalledWith("https://openrouter.ai/api/v1", "fixture-key", "fixture-default");
+    expect(loadConfig().instances?.routed.driver).toBe("api-key");
     expect(loadConfig().instances?.routed.config).toEqual({ url: "https://openrouter.ai/api/v1", key: "fixture-key", model: "fixture-default" });
     ui.assertConsumed();
   });
@@ -298,12 +299,12 @@ describe("API onboarding", () => {
     const saved = loadConfig();
     const id = saved.defaultModelSelection!.instanceId;
     const liveEntry = instanceConfigs(saved)[id]!;
-    expect(liveEntry.config).toMatchObject({ provider: "" });
-    expect(OpenAICompatDriver.decodeConfig(liveEntry.config).provider).toBeUndefined();
+    expect(liveEntry.driver).toBe("api-key");
+    expect(liveEntry.config).toEqual({ url: "https://openrouter.ai/api/v1", key: "fixture-new-key", model: "fixture-default" });
     ui.assertConsumed();
   });
 
-  it("keeps verified routing when a missing-key connection is saved as a new additive instance", async () => {
+  it("saves a missing-key connection as a new additive api-key instance", async () => {
     const original = {
       driver: "openai-compat", displayName: "Pinned OpenRouter",
       config: { url: "https://openrouter.ai/api/v1", provider: "fireworks", model: "old-model" },
@@ -313,15 +314,15 @@ describe("API onboarding", () => {
     const ui = prompts({ choices: [3, 0], secrets: ["fixture-new-key"], confirms: [true, true] });
     expect(await runSetup(options, ui.io, deps)).toBe(true);
     expect(ui.io.secret).toHaveBeenCalledTimes(1);
-    expect(deps.verify).toHaveBeenCalledWith("https://openrouter.ai/api/v1", "fixture-new-key", "fixture-default", "fireworks");
+    expect(deps.verify).toHaveBeenCalledWith("https://openrouter.ai/api/v1", "fixture-new-key", "fixture-default");
     const saved = loadConfig();
     const id = saved.defaultModelSelection!.instanceId;
     expect(id).toMatch(/^api-[\da-f]{8}$/);
     expect(saved.instances?.pinned).toEqual(original);
-    expect(saved.instances?.[id]?.config).toEqual({
-      url: "https://openrouter.ai/api/v1", key: "fixture-new-key", model: "fixture-default", provider: "fireworks",
+    expect(saved.instances?.[id]).toEqual({
+      driver: "api-key", displayName: "Pinned OpenRouter",
+      config: { url: "https://openrouter.ai/api/v1", key: "fixture-new-key", model: "fixture-default" },
     });
-    expect(OpenAICompatDriver.decodeConfig(instanceConfigs(saved)[id]!.config).provider).toBe("fireworks");
     ui.assertConsumed();
   });
 
@@ -351,7 +352,7 @@ describe("API onboarding", () => {
     expect(id).toMatch(/^api-[\da-f]{8}$/);
     expect(saved.defaultModelSelection).toEqual({ instanceId: id, model: "fixture-selected" });
     expect(saved.instances.oldApi).toEqual(existing.instances.oldApi);
-    expect(saved.instances[id]).toMatchObject({ driver: "openai-compat", config: { url: "https://api.openai.com/v1", key: "new-fixture-secret", model: "fixture-selected" } });
+    expect(saved.instances[id]).toMatchObject({ driver: "api-key", config: { url: "https://api.openai.com/v1", key: "new-fixture-secret", model: "fixture-selected" } });
     expect(saved).toMatchObject({ openaiCompat: existing.openaiCompat, xai: existing.xai, profile: existing.profile, futureSetting: existing.futureSetting });
     expect(readFileSync(join(DATA_DIR, "bots.json"), "utf8")).toBe(sentinel);
     expect(readFileSync(join(DATA_DIR, "messages-existing-thread.json"), "utf8")).toBe(transcript);
@@ -416,7 +417,7 @@ describe("API onboarding", () => {
     // The explicit saved fleet has Codex, Claude, OpenAI-compatible, then
     // this newly added API connection in the existing-connections list.
     const existingIds = Object.entries(before.instances!).filter(([, entry]) =>
-      ["codex", "claudeAgent", "openai-compat"].includes(entry.driver) && entry.enabled !== false).map(([id]) => id);
+      ["codex", "claudeAgent", "openai-compat", "api-key"].includes(entry.driver) && entry.enabled !== false).map(([id]) => id);
     const chosen = existingIds.indexOf(priorId) + 3;
     const second = prompts({ choices: [chosen, 1], confirms: [true, true] });
     expect(await runSetup(options, second.io, deps)).toBe(true);

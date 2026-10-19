@@ -519,7 +519,11 @@ describe("pairing", () => {
     expect(paired.status).toBe(200);
     const h = (extra: Record<string, string> = {}) => remote("10.0.0.40", { authorization: `Bearer ${paired.body.token}`, ...extra });
     expect((await call("/api/bots", { headers: h() })).status).toBe(200);
-    for (const [method, path] of [["POST", "/api/cli-test"], ["GET", "/api/instances"], ["POST", "/api/webhooks"], ["GET", "/api/mcp/servers"], ["POST", "/api/local-computer/run"]] as const) {
+    // The model picker is client-visible since staff image uploads, but only as a scoped, sanitized catalog.
+    const catalog = await call("/api/instances", { headers: h() });
+    expect(catalog.status).toBe(200);
+    expect(Array.isArray(catalog.body.instances)).toBe(true);
+    for (const [method, path] of [["POST", "/api/cli-test"], ["POST", "/api/webhooks"], ["GET", "/api/mcp/servers"], ["POST", "/api/local-computer/run"]] as const) {
       const r = await call(path, { method, headers: h(), body: method === "POST" ? "{}" : undefined });
       expect(r.status, `${method} ${path}`).toBe(403);
       expect(r.body.error, `${method} ${path}`).toContain("admin scope");

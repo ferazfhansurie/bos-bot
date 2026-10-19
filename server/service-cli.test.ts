@@ -29,7 +29,7 @@ describe("bosbot service", () => {
     const unit = readFileSync(join(dir, "openmausbot.service"), "utf8");
     expect(unit).toContain("--domain maus.example.com");
     expect(unit).toContain("AmbientCapabilities=CAP_NET_BIND_SERVICE");
-    expect(out.join("\n")).toContain("sudo systemctl enable --now bosbot");
+    expect(out.join("\n")).toContain("sudo systemctl enable --now openmausbot");
     expect(out.join("\n")).toContain("no setcap is needed");
 
     out.length = 0;
@@ -45,7 +45,7 @@ describe("bosbot service", () => {
     expect(out.join("\n")).toContain("launchctl bootstrap");
     out.length = 0;
     expect(runServiceCommand({ action: "uninstall", dataDir: dir, port: 8799, script: "/x", node: "/n", platform: "linux" }, io)).toBe(0);
-    expect(out.join("\n")).toContain("sudo systemctl disable --now bosbot");
+    expect(out.join("\n")).toContain("sudo systemctl disable --now openmausbot");
     expect(runServiceCommand({ action: "install", dataDir: dir, port: 8799, script: "/x", node: "/n", platform: "win32" }, io)).toBe(1);
   });
 });

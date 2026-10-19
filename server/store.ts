@@ -504,7 +504,9 @@ export function foreignFolder(path: string, home = homedir()): boolean {
   if (!isAbsolute(path) || existsSync(path)) return false;
   const rel = relative(resolve(home), resolve(path));
   if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return false;
-  return /^(?:\/home\/[^/]+|\/Users\/[^/]+|\/root)(?:\/|$)/.test(resolve(path));
+  // Windows resolves "/home/x" to "C:\\home\\x"; compare drive-less and with
+  // forward slashes so a thread restored from a mac or linux home is caught.
+  return /^(?:\/home\/[^/]+|\/Users\/[^/]+|\/root)(?:\/|$)/i.test(resolve(path).replace(/\\/g, "/").replace(/^[a-z]:/i, ""));
 }
 
 export class Store {

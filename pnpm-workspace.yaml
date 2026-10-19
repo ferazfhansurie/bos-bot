@@ -15,7 +15,9 @@ supportedArchitectures:
 allowBuilds:
   electron: true # postinstall downloads the Electron dist
   esbuild: true # postinstall validates the platform binary
+  node-pty: true # linux has no prebuild; install compiles pty.node (mac/windows use the shipped prebuilds)
   electron-winstaller: false # unused — Windows builds ship NSIS
 onlyBuiltDependencies:
   - electron
   - esbuild
+  - node-pty

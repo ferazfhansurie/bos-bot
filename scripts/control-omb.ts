@@ -463,7 +463,7 @@ export async function launchVerificationServer(
     delegatedFixture.prepare(dataDir);
     const shim = join(dataDir, "delegated-fixture-transport.mjs");
     writeFileSync(shim, `const original = globalThis.fetch; globalThis.fetch = (input, init) => { const url = new URL(input instanceof Request ? input.url : String(input)); if (url.origin === "https://delegated-fixture.example.ts.net:8443") return original(${JSON.stringify(delegatedFixture.origin)} + url.pathname + url.search, init); return original(input, init); };`, { mode: 0o600 });
-    childArgs.unshift("--import", shim);
+    childArgs.unshift("--import", pathToFileURL(shim).href);
   }
   const child = spawn(process.execPath, childArgs, {
     cwd: ROOT,

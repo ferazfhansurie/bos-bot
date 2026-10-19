@@ -76,7 +76,7 @@ const release: Message[] = [
   chip("c4", "npm publish", true),
 ];
 // An engine with the agents tools, which Save needs alongside the flag.
-const agentsEngine = { instanceId: "test", driverKind: "claude", displayName: "Test", capabilities: { agentsMcp: true } } as unknown as InstanceInfo;
+const agentsEngine = { instanceId: "test", driverKind: "claude", displayName: "Test", capabilities: { agentsMcp: true }, snapshot: { state: "available", authenticated: true } } as unknown as InstanceInfo;
 const saveable = (): void => {
   fixture.state = { instances: [agentsEngine], config: { features: { skillAuthoring: true } } as AppState["config"] };
 };

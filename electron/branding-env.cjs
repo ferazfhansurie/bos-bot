@@ -17,20 +17,12 @@ function compatEnvironment(environment) {
       }
       return ok;
     },
+    // Only real keys. Copying the environment ({ ...compatEnv }) used to
+    // materialise BOS_X beside every OMB_X, so a child spawned with
+    // { ...compatEnv, OMB_X: next } saw the parent's value under the new
+    // spelling and the override lost. The child resolves aliases itself.
     ownKeys(target) {
-      const keys = new Set(Reflect.ownKeys(target));
-      for (const key of Array.from(keys)) {
-        if (typeof key !== "string") continue;
-        for (const [current, legacy] of prefixAliases) {
-          if (key.startsWith(legacy)) {
-            const suffix = key.slice(legacy.length);
-            keys.add(current + suffix);
-            keys.add("BOSBOT_" + suffix);
-            keys.add("BOS_" + suffix);
-          }
-        }
-      }
-      return Array.from(keys);
+      return Reflect.ownKeys(target);
     },
     getOwnPropertyDescriptor(target, key) {
       const existing = Reflect.getOwnPropertyDescriptor(target, key);

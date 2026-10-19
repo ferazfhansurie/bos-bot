@@ -450,7 +450,8 @@ beforeAll(async () => {
         // registers it by default); it talks only to the Box stub
         computer: { driver: "boxAgent", displayName: "Computer" },
         // a driver BOS stopped shipping: kept in config, hidden from lists
-        oldGrok: { driver: "grokAgent", displayName: "Old Grok" },
+        // (grokAgent came back in 26d954c01; the API-key minimax did not)
+        oldGrok: { driver: "minimax", displayName: "Old Grok" },
       },
     }),
   );
@@ -1140,7 +1141,8 @@ describe("harness HTTP API", () => {
     expect(theirs.body.message).toMatchObject({ role: "user", sender: { name: "Safari on Mac" } });
 
     // Steering into that still-running turn is the same person, still named.
-    const steered = await person.call("POST", `/api/bots/${bot.id}/messages`, { text: "and one more" });
+    // Since 8cf7db43c a send steers only when it asks to.
+    const steered = await person.call("POST", `/api/bots/${bot.id}/messages`, { text: "and one more", priority: "steer" });
     expect(steered.status).toBe(202);
     expect(steered.body.message).toMatchObject({ steered: true, sender: { name: "Safari on Mac" } });
 
@@ -1164,8 +1166,8 @@ describe("harness HTTP API", () => {
     const bots = (await api("GET", "/api/bots?messages=30")).body.bots;
     const theirMessages = bots.find((b: any) => b.id === bot.id)?.messages ?? [];
     const myMessages = bots.find((b: any) => b.id === second.body.bot.id)?.messages ?? [];
-    expect(theirMessages.find((m: any) => m.text === "from the paired person")?.sender).toEqual({ name: "Safari on Mac" });
-    expect(theirMessages.find((m: any) => m.text === "and one more")?.sender).toEqual({ name: "Safari on Mac" });
+    expect(theirMessages.find((m: any) => m.text === "from the paired person")?.sender).toMatchObject({ name: "Safari on Mac" });
+    expect(theirMessages.find((m: any) => m.text === "and one more")?.sender).toMatchObject({ name: "Safari on Mac" });
     expect(myMessages.find((m: any) => m.text === "from the owner")?.sender).toBeUndefined();
     } finally {
       // Stop the fixture turns and take the bots and the paired session back
@@ -2152,12 +2154,12 @@ describe("harness HTTP API", () => {
       const busyToken = await mintTestCapability(BASE, chief.id, chief.threadId);
       expect((await api("POST", `/api/groups/${roomId}/messages`, { text: "Hold this room turn" })).status).toBe(202);
       await expect.poll(async () => (await readRoom()).working).toBe(true);
-      const blocked = await chiefRoomRequest(BASE, busyToken, "manage-room", { roomId, action: "set_members", memberIds: [chief.id] });
-      expect(blocked.status).toBe(409);
-      expect(blocked.body.error).toMatch(/working or waiting/);
+      // Since 90fada0e9 a roster edit applies to future dispatch while a
+      // turn runs; only an open approval card holds it back.
+      expect((await chiefRoomRequest(BASE, busyToken, "manage-room", { roomId, action: "set_members", memberIds: [chief.id] })).status).toBe(200);
       // the bulletin applies from the next turn, so it can change mid-turn
       expect((await chiefRoomRequest(BASE, busyToken, "manage-room", { roomId, action: "set_bulletin", bulletin: "Changed mid-turn" })).status).toBe(200);
-      expect(await readRoom()).toMatchObject({ bulletin: "Changed mid-turn", memberIds: [chief.id, peer.id] });
+      expect(await readRoom()).toMatchObject({ bulletin: "Changed mid-turn", memberIds: [chief.id] });
     } finally {
       for (const id of roomIds) {
         await api("POST", `/api/groups/${id}/interrupt`, {});
@@ -7827,7 +7829,8 @@ describe("harness HTTP API", () => {
       const immediate = (await api("GET", "/api/bots?messages=0")).body;
       expect(immediate.groups.find((group: { id: string }) => group.id === room.id)?.working).toBe(true);
       expect((await api("POST", `/api/groups/${room.id}/tasks`, { title: "Too soon" })).status).toBe(409);
-      expect((await api("PATCH", `/api/groups/${room.id}`, { memberIds: [first.id] })).status).toBe(409);
+      // Roster edits apply to future dispatch mid-turn since 90fada0e9.
+      expect((await api("PATCH", `/api/groups/${room.id}`, { memberIds: room.memberIds })).status).toBe(200);
 
       const interrupted = await api("POST", `/api/groups/${room.id}/interrupt`, {
         threadId: room.threadId,
@@ -9823,7 +9826,7 @@ describe("bot memory API", () => {
         id: "persona",
         label: "Identity",
         text: "You are Kiwi, a personal bot in BOS Bot. Role: Tracker. About: Files bugs.",
-        bytes: 78,
+        bytes: 74,
       });
       expect(before.body.sections.map((s: { id: string }) => s.id)).not.toContain("soul");
       expect(before.body.sections.map((s: { id: string }) => s.id)).toContain("memory");

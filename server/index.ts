@@ -7300,6 +7300,7 @@ async function steerInboxQueue(botId: string, threadId: string, queueId: string,
       steered: steered === "steered",
       steerDelivery: steered === "indeterminate" ? "outcome_unknown" : instance?.adapter.provider === "claudeAgent" ? "transport_written" : "provider_accepted",
       ...(item.origin ? { origin: item.origin } : {}),
+      ...(item.sender ? { sender: item.sender } : {}),
     }));
     // Words from a call folded into the running turn: that turn's settle is
     // the answer the caller is waiting for.
@@ -7643,7 +7644,7 @@ function drainQueuedSends() {
 
 /** Keep a person's words off the transcript until a direct-thread slot is
  * available. Reuse the existing cancellable, idempotent composer queue. */
-async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: { name: string }, requestGuard?: () => void, origin?: VoiceCallOrigin) {
+async function startOrQueueDirectMessage(botId: string, threadId: string, text: string, replyTo?: Message, sendId?: string, sender?: Message["sender"], requestGuard?: () => void, origin?: VoiceCallOrigin) {
   requestGuard?.();
   const capacity = botAtThreadCapacity(botId);
   if (capacity || threadBusy(botId, threadId) || parksBehindCoordination(botId, threadId)) {
@@ -7655,6 +7656,7 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
       deferUntilIdle: true,
       prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
       ...(origin ? { origin } : {}),
+      ...(sender ? { sender } : {}),
     });
     return { ok: true as const, queued: true as const, queueId: queued.id, threadId, reason };
   }
@@ -12623,6 +12625,9 @@ async function interruptRoom(
       askMessageByRequest.delete(key);
     }
   }));
+  // A room-wide stop also closes cards no live runtime owns (one left open
+  // across a restart): the composer stays blocked until they settle.
+  if (!opts.botId) for (const threadId of targetThreadIds) closeOpenApprovals(threadId);
   return scopedRuntime.length;
 }
 
@@ -20189,6 +20194,10 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     m = path.match(/^\/api\/groups\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const body = await readBody(req);
+      // Checked before any field read: a null body must be a 400, not a TypeError.
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return json(res, 400, { error: "body must be a JSON object" });
+      }
       if (body.peopleIds !== undefined && (!requestActor || !workspaceMembers.canManage(requestActor))) return json(res, 403, { error: "room people require owner or admin" });
       if (auth.kind === "session" && !auth.scopes.includes("admin")) {
         const field = clientGroupPatchViolation(body);
@@ -22183,6 +22192,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
               replyToId: replyTo?.id, sendId, deferUntilIdle: true,
               prompt: promptWithReply(text, replyTo, cfg.profile?.name?.trim() || "User"),
               ...(origin ? { origin } : {}),
+              ...(messageSender(auth) ? { sender: messageSender(auth) } : {}),
             });
             // A duplicate that joined a waiting item was already tried and refused.
             if (!queued.joined && body.priority === "steer" && currentAtStart.busy) {

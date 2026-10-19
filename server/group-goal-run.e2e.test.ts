@@ -1102,10 +1102,11 @@ describe("goal-driven channel runs", () => {
       return state.groups.find((candidate: { id: string }) => candidate.id === room.id)?.working;
     }).toBe(true);
 
-    const queuedBody = { text: "second request", sendId: secondSendId };
+    // Since 8cf7db43c the composer marks a send as a steer explicitly.
+    const queuedBody = { text: "second request", sendId: secondSendId, priority: "steer" };
     const queued = await api("POST", `/api/groups/${room.id}/messages`, queuedBody);
     expect(queued.status).toBe(202);
-    // Always-steer: the busy addressed member takes it mid-turn; no chip.
+    // The busy addressed member takes it mid-turn; no chip.
     expect(queued.body).toMatchObject({ steered: true, threadId: room.threadId });
     expect(queued.body.queued).toBeUndefined();
     expect(queued.body.message).toMatchObject({ role: "user", text: "second request", sendId: secondSendId });

@@ -625,7 +625,7 @@ describe("Cua integration", () => {
     expect(dockerfile).toContain(`cua-driver ${CUA_DRIVER_VERSION}`);
     expect(dockerfile).toContain(`serve --socket ${CUA_SOCKET} --permission-mode standard`);
     expect(dockerfile).toContain("CUA_DRIVER_RS_TELEMETRY_ENABLED=0");
-    expect(dockerfile).toContain("prepare-bosbot-workspace.sh");
+    expect(dockerfile).toContain("prepare-openmausbot-workspace.sh");
     expect(dockerfile).toContain('if ! chmod 0700 "$workspace"');
     expect(dockerfile).toContain('test -r "$directory" && test -w "$directory" && test -x "$directory"');
     expect(dockerfile).toContain("migrate_profile google-chrome");
@@ -903,7 +903,7 @@ describe("setupCommands", () => {
   });
 
   it("uses an explicit local image name so Podman never resolves the managed build on Docker Hub", () => {
-    expect(IMAGE).toMatch(/^localhost\/bosbot\/cua-local-vm:/);
+    expect(IMAGE).toMatch(/^localhost\/openmausbot\/cua-local-vm:/);
     expect(setupCommands("podman", "darwin").run).toContain(IMAGE);
     expect(setupCommands("podman", "darwin").run).not.toContain("docker.io/bosbot");
   });

@@ -29,6 +29,10 @@ function fail(status: number, message: string): never {throw Object.assign(new E
 function json(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, {"content-type":"application/json", "cache-control":"no-store"}); res.end(JSON.stringify(body));
 }
+/** The root as the filesystem spells it. Windows realpath expands 8.3 short
+ * names (RUNNER~1), junctions and drive-letter case, so a root compared
+ * as given never contains its own realpath'd children. */
+const canonicalRoot = (root: string) => realpath(root).catch(() => root);
 const inside = (root: string, real: string) => real === root || real.startsWith(root.endsWith(sep) ? root : root + sep);
 function fsStatus(e: unknown): number {
   const code = (e as {code?: string}).code;
@@ -95,19 +99,19 @@ export class WorkspaceFilesService {
       const botId = url.searchParams.get("botId") ?? "", threadId = url.searchParams.get("threadId") ?? "";
       if (!ID.test(botId) || !ID.test(threadId)) fail(400, "Send botId and threadId");
       if (!["list","search","read","stat","raw","locate","changes"].includes(action)) fail(404, "Unknown workspace files route");
-      const root = this.options.resolveRoot(botId, threadId);
+      const given = this.options.resolveRoot(botId, threadId), root = await canonicalRoot(given);
       const path = url.searchParams.get("path") ?? "";
       if (action === "stat") json(res, 200, await this.stat(root, path));
-      else if (action === "locate") json(res, 200, await this.locate(root, path));
+      else if (action === "locate") json(res, 200, {...await this.locate(root, path), root: given});
       else if (action === "raw") await this.raw(root, path, res);
       else if (action === "changes") json(res, 200, await this.changes(root));
-      else if (action === "list") json(res, 200, {root, ...await this.list(root, path)});
+      else if (action === "list") json(res, 200, {root: given, ...await this.list(root, path)});
       else if (action === "search") {
         const limit = Math.min(200, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "", 10) || 50));
         const q = url.searchParams.get("q") ?? "";
         if (q.length > 256) fail(400, "Query too long");
         const {files, truncated} = await this.walk(root);
-        json(res, 200, {root, files: rankFilePaths(files, q, limit), truncated});
+        json(res, 200, {root: given, files: rankFilePaths(files, q, limit), truncated});
       } else json(res, 200, await this.read(root, path));
     } catch (e) {
       const status = (e as {status?: number}).status ?? 500;
@@ -237,7 +241,7 @@ export class WorkspaceFilesService {
     if (!body || typeof body !== "object" || !ID.test(String(body.botId)) || !ID.test(String(body.threadId)) || typeof body.path !== "string") fail(400, "Send botId, threadId and path");
     const rel: string = body.path;
     if (!rel || rel.length > 4096 || rel.includes("\0") || rel.startsWith("/") || /^[a-z]:/i.test(rel) || rel.split(/[\\/]/).includes("..")) fail(400, "Invalid path");
-    const root = this.options.resolveRoot(body.botId, body.threadId);
+    const root = await canonicalRoot(this.options.resolveRoot(body.botId, body.threadId));
     // Validate the exact file before any index/worktree mutation. A directory
     // or a path beneath an escaping link must never turn into a bulk checkout.
     const full = join(root, ...rel.split("/"));

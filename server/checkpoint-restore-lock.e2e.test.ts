@@ -70,7 +70,8 @@ it("refuses a checkpoint restore across bots while canonical and nested project 
     // Settling both releases all shared claims; a refused restore never leaked its lease.
     writeFileSync(gate, "finish writers");
     for (const bot of [aliasWriter, nestedWriter]) await expect.poll(async () => (await state(bot.id)).busy, { timeout: 15_000 }).toBe(false);
-    expect((await restore()).status).toBe(200);
+    // Match the whole response so a refusal shows its reason in the failure.
+    expect(await restore()).toMatchObject({ status: 200 });
     expect(readFileSync(join(project, "work.txt"), "utf8")).toBe("checkpoint version");
     // Room conversations must participate in the same canonical lease protocol.
     unlinkSync(gate);

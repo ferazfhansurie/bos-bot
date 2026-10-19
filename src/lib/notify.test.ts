@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildNotificationOptions,
@@ -10,7 +10,7 @@ import {
   type NotifyFrame,
 } from "./notify";
 
-const frame: NotifyFrame = {
+const baseFrame: NotifyFrame = {
   kind: "done",
   botId: "bot-1",
   botName: "Maus",
@@ -18,6 +18,11 @@ const frame: NotifyFrame = {
   title: "Maus finished",
   body: "All done",
 };
+// showNotification drops a banner it already showed (same kind, thread and
+// body) for 30 minutes, so each test gets its own body.
+let frame: NotifyFrame = baseFrame;
+let seq = 0;
+beforeEach(() => { frame = { ...baseFrame, body: `All done ${++seq}` }; });
 
 function installNotification(permission: NotificationPermission, focused = false) {
   const notices: Array<{ title: string; options?: NotificationOptions; onclick: (() => void) | null }> = [];
@@ -70,7 +75,8 @@ describe("desktop notifications", () => {
   it("still alerts a focused app when another task is visible", () => {
     const { notices } = installNotification("granted", true);
 
-    showNotification(frame, vi.fn(), undefined, "another-thread");
+    // done banners default to "only when unfocused"; a question still alerts
+    showNotification({ ...frame, kind: "question" }, vi.fn(), undefined, "another-thread");
 
     expect(notices).toHaveLength(1);
   });
@@ -103,7 +109,7 @@ describe("desktop notifications", () => {
     // rather than stacks; another bot gets its own key
     expect(notices[0]?.options?.tag).toBe(`openmausbot:${frame.botId}`);
     expect(notices[1]?.options?.tag).toBe(`openmausbot:${frame.botId}`);
-    showNotification({ ...frame, botId: "bot-2" }, vi.fn());
+    showNotification({ ...frame, botId: "bot-2", threadId: "thread-3" }, vi.fn());
     expect(notices[2]?.options?.tag).toBe(`openmausbot:bot-2`);
   });
 
@@ -114,7 +120,7 @@ describe("desktop notifications", () => {
     showNotification(frame, vi.fn(), avatarUrl);
     expect(notices[0]?.options?.icon).toBe(avatarUrl);
 
-    showNotification(frame, vi.fn(), null);
+    showNotification({ ...frame, body: "Another result" }, vi.fn(), null);
     expect(notices[1]?.options?.icon).toBeUndefined();
   });
 });

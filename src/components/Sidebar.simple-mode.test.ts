@@ -55,12 +55,13 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("bot-first sidebar", () => {
   it.each([
-    { enabled: true, density: "comfortable", size: 32, spacing: ["gap-2", "py-2", "pl-6"] },
-    { enabled: true, density: "compact", size: 26, spacing: ["gap-1.5", "py-1", "pl-6"] },
-    { enabled: true, density: "icons", size: 44, spacing: ["justify-center", "px-1", "py-1.5"] },
-    { enabled: false, density: "comfortable", size: 56, spacing: ["gap-3", "py-2.5", "pl-2"] },
-    { enabled: false, density: "compact", size: 40, spacing: ["gap-2", "py-1.5", "pl-2"] },
-    { enabled: false, density: "icons", size: 44, spacing: ["justify-center", "px-1", "py-1.5"] },
+    // One row size since the grok-style sidebar (3e58e94da); only icons density centres it.
+    { enabled: true, density: "comfortable", size: 40, spacing: ["gap-2", "px-1", "py-3"] },
+    { enabled: true, density: "compact", size: 40, spacing: ["gap-2", "px-1", "py-3"] },
+    { enabled: true, density: "icons", size: 40, spacing: ["justify-center", "px-1", "py-1.5"] },
+    { enabled: false, density: "comfortable", size: 40, spacing: ["gap-2", "px-1", "py-3"] },
+    { enabled: false, density: "compact", size: 40, spacing: ["gap-2", "px-1", "py-3"] },
+    { enabled: false, density: "icons", size: 40, spacing: ["justify-center", "px-1", "py-1.5"] },
   ] as const)("sizes bot portraits and row spacing in $density density with threads $enabled", ({ enabled, density, size, spacing }) => {
     fixture.showThreads = enabled;
     for (const avatar of [{}, { avatarUrl: "/api/attachments/portrait.png", avatarCrop: "circle" as const }]) {
@@ -96,11 +97,13 @@ describe("bot-first sidebar", () => {
     });
   }
 
-  it.each(densities)("keeps selection separate from expansion in %s density", (density) => {
+  it.each(densities)("opens a selected bot's threads inline, except in the %s icon rail", (density) => {
     fixture.state.selectedId = bot.id;
     const markup = renderToStaticMarkup(createElement(BotListItem, rowProps(density)));
-    expect(markup).not.toContain("data-sidebar-thread-row");
-    if (density !== "icons") expect(markup).toContain('aria-label="Expand Atlas threads" aria-expanded="false"');
+    // Since the grok-style sidebar (3e58e94da) selection expands the bot;
+    // icons density slides threads out beside the avatar instead.
+    if (density === "icons") expect(markup).not.toContain("data-sidebar-thread-row");
+    else expect(markup).toContain('data-sidebar-thread-row="last-selected"');
   });
 
   it.each(densities)("hides thread browsing and creation but keeps attention accessible in %s density", (density) => {
@@ -114,10 +117,9 @@ describe("bot-first sidebar", () => {
     expect(markup).not.toContain("New folder");
     expect(markup).not.toContain("Expand Atlas threads");
     expect(markup).toContain('data-testid="waiting-dot"');
-    for (const id of ["approval", "working", "queued", "unread"]) expect(markup).toContain(`data-sidebar-activity-row="${id}"`);
-    expect(markup).toContain('aria-label="Atlas: Review permission · Waiting for you…"');
-    expect(markup).toContain('aria-label="Atlas: Next job · Queued"');
-    expect(markup).toContain('aria-label="Atlas: Finished reply · Unread"');
+    // Per-task attention moved to the cross-bot list (SidebarActiveThreads);
+    // the row itself still says the bot is waiting.
+    expect(markup).toContain(density === "icons" ? 'aria-label="Atlas · Waiting for you… · Unread"' : "Waiting for you…");
   });
 
   it("removes child controls and portals from a retained hidden folder list", () => {
@@ -153,9 +155,8 @@ describe("bot-first sidebar", () => {
     };
     fixture.state.selectedId = group.id;
     const markup = renderToStaticMarkup(createElement(GroupListItem, { group, density: "comfortable", onMenu: vi.fn() }));
-    expect(markup).toContain('data-sidebar-thread-row="group-thread"');
-    expect(markup).toContain("New thread");
-    expect(markup).toContain('aria-label="Collapse Planning threads"');
+    // Hiding bot threads leaves a room's history one click away.
+    expect(markup).toContain('aria-label="Expand Planning threads"');
   });
 });
 

@@ -11,10 +11,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import * as enterprise from "./enterprise.ts";
 import { launchVerificationServer, runControlOmb, type VerificationServer } from "../scripts/control-omb.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
-describe("spend cap inside a team goal run", () => {
+// The personal-edition stub never loads a layer, so there is no cap to hit.
+const layerSupported = (enterprise as { layerSupported?: boolean }).layerSupported !== false;
+
+describe.skipIf(!layerSupported)("spend cap inside a team goal run", () => {
   let session: VerificationServer;
   let layerDir: string;
 

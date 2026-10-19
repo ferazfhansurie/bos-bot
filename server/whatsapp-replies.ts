@@ -34,9 +34,12 @@ export class WhatsAppReplies {
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     const file = join(this.root, name);
     writeFileSync(file + ".tmp", JSON.stringify(value), { mode: 0o600 });
-    const fd = openSync(file + ".tmp", "r");
+    const fd = openSync(file + ".tmp", "r+"); // Windows refuses fsync on a read-only handle (EPERM)
     try { fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(file + ".tmp", file);
+    // Windows cannot open a directory for fsync (EPERM), which used to fail
+    // every reply-policy write there; NTFS commits the rename itself.
+    if (process.platform === "win32") return;
     const dir = openSync(this.root, "r");
     try { fsyncSync(dir); } finally { closeSync(dir); }
   }

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { verificationServerEnvironment } from "../scripts/control-omb.ts";
 import { freePortBlock } from "./testing/ports.ts";
@@ -38,7 +38,7 @@ globalThis.fetch = (input, init) => {
         instances: { claude: { driver: "claudeAgent", config: { cli: join(root, "server/testing/fake-claude-cli.ts") } } } }));
       const env = verificationServerEnvironment({}, data, basePort + 2 * index);
       env.OMB_FEDERATION_ORIGIN = origins[index];
-      const child = spawn(process.execPath, ["--experimental-strip-types", "--import", transport, join(root, "server/index.ts")],
+      const child = spawn(process.execPath, ["--experimental-strip-types", "--import", pathToFileURL(transport).href, join(root, "server/index.ts")],
         { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
       children.push(child);
       let stderr = ""; child.stdout!.resume(); child.stderr!.on("data", chunk => { stderr += String(chunk); });

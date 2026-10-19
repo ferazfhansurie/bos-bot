@@ -44,7 +44,7 @@ describe("HomeLinks", () => {
     expect(home).toMatchObject({ id: "env-other", name: "bos-laptop", origin: "https://laptop.example.com" });
     expect(JSON.stringify(links.list())).not.toContain("secret-token");
     expect(readFileSync(join(dir, "homes.json"), "utf8")).toContain("secret-token");
-    expect(statSync(join(dir, "homes.json")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(join(dir, "homes.json")).mode & 0o777).toBe(0o600); // Windows has no POSIX modes
     expect(new HomeLinks(dir, { environmentId: "env-self", label: () => "mac" }).list()).toHaveLength(1);
   });
 

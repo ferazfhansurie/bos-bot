@@ -502,6 +502,12 @@ describe("independent bot tasks through the isolated control surface", () => {
     await control(["interrupt", "--bot", botId, "--task", taskB]);
     expect((await gate(launchedB)).status).toBe(401);
 
+    // Stop pauses the thread's queue (8cf7db43c): a send that lands while A
+    // is still settling would wait behind that pause, so let A go idle first.
+    await expect.poll(async () => {
+      const bot = (await api("GET", "/api/bots?messages=0")).body.bots.find((candidate: any) => candidate.id === botId);
+      return bot?.tasks?.find((task: any) => task.threadId === taskA)?.busy ?? bot?.busy;
+    }, { timeout: 15_000 }).toBeFalsy();
     await control(["send", "--bot", botId, "--task", taskA, "--text", "COMPUTER_A_NEW_GENERATION"]);
     await expect.poll(async () => (await dump(models[0])).pid !== launchedA.pid).toBe(true);
     const relaunchedA = await dump(models[0]);

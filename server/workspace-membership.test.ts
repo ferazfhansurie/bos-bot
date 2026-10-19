@@ -40,7 +40,7 @@ describe("workspace membership authority", () => {
     expect(restored.list()).toEqual(ledger.list());
     expect(restored.grants("room-a")).toEqual(["home:bot:api", "other:bot:ui"]);
     expect(restored.grants("room-b")).toEqual([]);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600); // Windows has no POSIX modes
     const view = restored.list(); view[1]!.role = "admin";
     const grants = restored.grants("room-a"); grants.push("bad");
     expect(restored.role(member)).toBe("member");
@@ -117,7 +117,7 @@ describe("restoring a membership ledger onto another home", () => {
     ledger.setGrants("room-a", ["src:bot:helper", "other:bot:ui"]);
     ledger.setGrants("room-b", ["src:bot:helper"]);
     rebaseWorkspaceMembershipLedger(file, destination);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600); // Windows has no POSIX modes
     expect(() => new WorkspaceMembership(file, source)).toThrow("invalid workspace membership ledger");
     const restored = new WorkspaceMembership(file, destination);
     expect(restored.list()).toEqual([

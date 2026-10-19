@@ -25,6 +25,8 @@ export interface HostedWorkspaceConfiguration {
 }
 
 const STATUS: EditionStatus = { edition: "oss", features: [] };
+/** This build carries the personal-edition stub: an enterprise layer is never loaded. */
+export const layerSupported = false;
 export function hostedWorkspaceConfigured(_env: NodeJS.ProcessEnv = process.env): boolean { return false }
 export function hostedWorkspaceConfiguration(_env: NodeJS.ProcessEnv = process.env): HostedWorkspaceConfiguration | null { return null }
 export function createWorkspaceAccess(_options: Omit<WorkspaceAccessOptions, "entitled">): WorkspaceAccess | null { return null }

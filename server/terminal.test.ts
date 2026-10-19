@@ -91,7 +91,36 @@ async function denied(t: string, origin = url) {
   });
   return status;
 }
-it("runs a real pty in the server folder, resizes it and emits exit", async () => {
+// The shell is cmd.exe on Windows (terminal-pty.ts), so the POSIX shell
+// scripts below run on macOS and Linux and Windows gets cmd equivalents.
+const posix = process.platform !== "win32";
+it.runIf(!posix)("runs a real cmd.exe pty in the server folder and emits exit on Windows", async () => {
+  const ws = connect(await ticket());
+  await waitFor(ws, items => items.some(f => f.type === "ready" && f.cwd === cwd));
+  ws.send(JSON.stringify({type: "input", data: "cd & dir /b\r"}));
+  // ConPTY wraps long lines and interleaves cursor sequences; flatten both.
+  const screen = (items: any[]) => items.filter(f => f.type === "output").map(f => f.data).join("").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r?\n/g, "");
+  const items = await waitFor(ws, items => screen(items).includes("fixture-file"), 15_000);
+  expect(screen(items).toLowerCase()).toContain(cwd.toLowerCase());
+  ws.send(JSON.stringify({type: "input", data: "exit 7\r"}));
+  await waitFor(ws, items => items.some(f => f.type === "exit" && f.code === 7), 15_000);
+});
+it.runIf(!posix)("strips workspace credentials from the real cmd.exe shell on Windows", async () => {
+  for (const key of ["XAI_API_KEY", "BOX_TOKEN", "OMB_TTS_KEY"]) vi.stubEnv(key, "fixture-workspace-secret");
+  vi.stubEnv("TERMINAL_FIXTURE_SAFE", "safe-value");
+  try {
+    const ws = connect(await ticket());
+    await waitFor(ws, items => items.some(f => f.type === "ready"));
+    // An unset variable stays literal in cmd, so only a leak prints the value.
+    ws.send(JSON.stringify({type: "input", data: "echo state-%XAI_API_KEY%-%BOX_TOKEN%-%OMB_TTS_KEY%-%TERMINAL_FIXTURE_SAFE%-end & exit\r"}));
+    const items = await waitFor(ws, items => items.some(f => f.type === "exit"), 15_000);
+    const output = items.filter(f => f.type === "output").map(f => f.data).join("");
+    expect(output).toContain("safe-value-end");
+    expect(output).not.toContain("fixture-workspace-secret");
+    for (const key of ["XAI_API_KEY", "BOX_TOKEN", "OMB_TTS_KEY"]) expect(compatEnv[key]).toBe("fixture-workspace-secret");
+  } finally { vi.unstubAllEnvs(); }
+});
+it.runIf(posix)("runs a real pty in the server folder, resizes it and emits exit", async () => {
   const ws = connect(await ticket());
   await waitFor(ws, items => items.some(f => f.type === "ready" && f.cwd === cwd));
   ws.send(JSON.stringify({type: "resize", cols: 53, rows: 31}));
@@ -102,7 +131,7 @@ it("runs a real pty in the server folder, resizes it and emits exit", async () =
   ws.send(JSON.stringify({type: "input", data: "exit 7\r"}));
   await waitFor(ws, items => items.some(f => f.type === "exit" && f.code === 7));
 });
-it("strips workspace credentials from the real shell without changing the server env", async () => {
+it.runIf(posix)("strips workspace credentials from the real shell without changing the server env", async () => {
   vi.stubEnv("SHELL", "/bin/sh");
   vi.stubEnv("HOME", cwd);
   for (const key of ["XAI_API_KEY", "BOX_TOKEN", "OMB_TTS_KEY"]) vi.stubEnv(key, "fixture-workspace-secret");
@@ -142,7 +171,8 @@ it.each(["not json", JSON.stringify({type:"resize",cols:501,rows:24}), JSON.stri
   ws.send(frame); await waitFor(ws, items => items.some(f => f.type === "error"));
 });
 // Leave headroom for both frame waits, child cleanup and scheduler load.
-it.each(["socket", "server"])("kills shell-owned background children when the %s closes", async mode => {
+// Windows ends the tree with taskkill /T; the job-control fixture is POSIX.
+it.runIf(posix).each(["socket", "server"])("kills shell-owned background children when the %s closes", async mode => {
   const ws = connect(await ticket());
   // ready confirms PTY allocation; the prompt confirms shell initialization.
   await waitFor(ws, items => items.some(f => f.type === "ready") &&
@@ -173,9 +203,11 @@ it("closes a slow output consumer before buffering unbounded terminal data", asy
   const ws = connect(await ticket()); await waitFor(ws, items => items.some(f => f.type === "ready"));
   const backlog = vi.spyOn(WebSocket.prototype, "bufferedAmount", "get").mockReturnValue(2*1024*1024);
   try {
+    // Since 2bf258c69 a stalled client loses its socket, not the shell: it
+    // repaints from the replay on reattach, so there is no error frame.
+    const closed = new Promise<number>(resolve => ws.once("close", resolve));
     ws.send(JSON.stringify({type:"input",data:"echo output-overflow\r"}));
-    const items = await waitFor(ws, items => items.some(f => f.type === "error"));
-    expect(items.find(f => f.type === "error").error).toMatch(/buffer/);
+    expect(await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 8000, "still open"))])).not.toBe("still open");
   } finally {backlog.mockRestore();}
 });
 it("rejects non-loopback and ipc peers regardless of forged headers", () => {

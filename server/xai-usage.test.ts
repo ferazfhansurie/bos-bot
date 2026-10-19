@@ -55,7 +55,7 @@ describe("voice call tally", () => {
       { date: "2026-10-08", calls: 1, seconds: 95 },
     ]);
     const file = voiceUsageFileFor(dir, day);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600); // Windows has no POSIX modes
     // ids and seconds only
     expect(readFileSync(file, "utf8")).not.toMatch(/transcript|audio|text/);
   });

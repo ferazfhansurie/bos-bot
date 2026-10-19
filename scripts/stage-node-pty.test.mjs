@@ -64,7 +64,8 @@ it.each(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-arm64"
   expect(readFileSync(join(destination, `prebuilds/${target}`, platform === "win32" ? "conpty.node" : "pty.node"))).toEqual(binary(target));
   expect(existsSync(join(destination, `prebuilds/${target}`, "ignored.o"))).toBe(false);
   expect(existsSync(join(destination, "lib", "index.test.js"))).toBe(false);
-  if (platform !== "win32") expect(statSync(join(destination, `prebuilds/${target}`, "spawn-helper")).mode & 0o777).toBe(0o755);
+  // Windows has no POSIX mode bits to check on the host either.
+  if (platform !== "win32" && process.platform !== "win32") expect(statSync(join(destination, `prebuilds/${target}`, "spawn-helper")).mode & 0o777).toBe(0o755);
 });
 
 it("retains a compatible local release build when no prebuild exists", () => {

@@ -23,6 +23,9 @@ it("revokes an existing peer thread when its owner makes the bot private, then r
     const peerPairing = await request("POST", "/api/auth/pairing", { scopes: ["peer"] });
     const linkedHome = await request("POST", "/api/auth/pair", { code: peerPairing.body.code, label: "Linked home fixture" });
     expect((await request("POST", "/api/multiplayer/actor-bindings", { sessionId: linkedHome.body.session.id, personId: "other-home:person:owner", name: "Other owner" })).status).toBe(200);
+    // Since workspace roles (decc80669) a newly bound person is a client guest;
+    // this fixture covers bot privacy for a full member.
+    expect((await request("PUT", `/api/multiplayer/members/${encodeURIComponent("other-home:person:owner")}`, { role: "member" })).status).toBe(200);
     expect((await request("GET", "/api/multiplayer/contacts", undefined, linkedHome.body.token)).body.contacts.some((contact: any) => contact.id === contactId)).toBe(true);
     const pairing = await request("POST", "/api/auth/pairing", { scopes: ["client"] });
     const phone = await request("POST", "/api/auth/pair", { code: pairing.body.code, label: "BOS multiplayer bridge" });

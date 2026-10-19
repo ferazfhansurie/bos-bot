@@ -213,16 +213,11 @@ posixOnly("conversation branching e2e (fake ACP fleet)", () => {
       expect(midTurn.status).toBe(409);
       expect((await getBot(created.id)).messages.filter((m: Msg) => m.text === "second try")).toHaveLength(0);
 
-      // stop the turn; the queued "sneaky second" auto-runs on settle
-      // (stop-then-steer), so that drained turn must be stopped too before
-      // the thread is truly quiet enough to edit
+      // stop the turn; since 8cf7db43c stop pauses the queue, so "sneaky
+      // second" stays queued (editable, not run) and the thread goes quiet
       expect((await api("POST", `/api/bots/${created.id}/interrupt`)).status).toBe(200);
-      await waitFor(async () => {
-        const b = await getBot(created.id);
-        return b.busy === true && b.messages.some((m: Msg) => m.text === "sneaky second" && !m.queued);
-      }, "the queued message to drain into its own turn", 20_000);
-      expect((await api("POST", `/api/bots/${created.id}/interrupt`)).status).toBe(200);
-      await waitFor(async () => (await getBot(created.id)).busy === false, "the drained turn to settle", 20_000);
+      await waitFor(async () => (await getBot(created.id)).busy === false, "the stopped turn to settle", 20_000);
+      expect((await getBot(created.id)).messages.some((m: Msg) => m.text === "sneaky second" && !m.queued)).toBe(false);
       expect((await api("POST", `/api/bots/${created.id}/messages/${first.id}/edit`, { text: "second try" })).status).toBe(202);
 
       await waitFor(async () => {

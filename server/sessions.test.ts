@@ -541,7 +541,7 @@ describe("reusable review pairing", () => {
     if (!paired.ok) throw new Error(paired.error);
     const raw = readFileSync(file(), "utf8");
     for (const secret of [review.code, review.credential, paired.token, ordinary.code, ordinary.credential]) expect(raw).not.toContain(secret);
-    expect(statSync(file()).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(file()).mode & 0o777).toBe(0o600); // Windows has no POSIX modes
     if (!unclean) registry.close();
     registry = new SessionRegistry({ file: file(), now: () => clock });
     expect(registry.openPairings()).toHaveLength(1);

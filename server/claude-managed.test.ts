@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CLAUDE_RELEASES_URL,
@@ -82,8 +82,9 @@ describe("claude release manifest", () => {
     expect(managedClaudeWanted({ flag: undefined, otherClaudeOnPath: false, supported: true })).toBe(true);
     expect(managedClaudeWanted({ flag: undefined, otherClaudeOnPath: true, supported: true })).toBe(false);
     expect(managedClaudeWanted({ flag: true, otherClaudeOnPath: false, supported: false })).toBe(false);
-    const base = "/data";
-    expect(otherClaudeCandidates(["/data/tools/claude/current/claude", "/usr/local/bin/claude"], base)).toEqual(["/usr/local/bin/claude"]);
+    const base = join(sep, "data");
+    const other = join(sep, "usr", "local", "bin", "claude");
+    expect(otherClaudeCandidates([join(base, "tools", "claude", "current", "claude"), other], base)).toEqual([other]);
   });
 });
 
@@ -97,7 +98,8 @@ describe("installing Claude Code", () => {
     expect(readdirSync(join(base, "tools", "claude"))).toEqual([]);
   });
 
-  it("installs, activates and updates through the shared updater", async () => {
+  // The fake release is a #!/bin/sh script, which Windows cannot execute.
+  it.skipIf(process.platform === "win32")("installs, activates and updates through the shared updater", async () => {
     const base = scratch();
     const state = { version: "2.1.0", binary: fakeClaude("2.1.0") };
     const bucket = fakeBucket(state);

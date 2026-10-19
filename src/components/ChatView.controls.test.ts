@@ -16,7 +16,7 @@ const fixture = vi.hoisted(() => {
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return { ...original, useStore: () => ({
-    state: { ...original.initialState, instances: [{ instanceId: "test", driverKind: "codex", displayName: "Test" } as InstanceInfo] },
+    state: { ...original.initialState, instances: [{ instanceId: "test", driverKind: "codex", displayName: "Test", snapshot: { state: "available", authenticated: true } } as unknown as InstanceInfo] },
     dispatch: fixture.dispatch,
   }) };
 });

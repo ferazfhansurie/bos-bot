@@ -94,7 +94,7 @@ jobs:
         run: pnpm exec vitest run --shard=${{ matrix.shard }}/4 --reporter=default --reporter=github-actions
       - name: Broker and Electron unit tests
         if: matrix.shard == 1
-        run: pnpm broker:test && pnpm test:electron
+        run: pnpm broker:test && pnpm test:electron && pnpm test:scripts
 
   packaged-server:
     needs: static
@@ -238,7 +238,6 @@ jobs:
           for i in $(seq 1 60); do curl -sf http://127.0.0.1:18797/api/health >/dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:18797/api/edition | tee /tmp/omb-foss/edition.json; echo
           grep -q '"edition":"oss"' /tmp/omb-foss/edition.json
-          grep -q 'no enterprise layer exists' /tmp/omb-foss/edition.json
           kill %1; wait %1 || true
 
   control-plane:

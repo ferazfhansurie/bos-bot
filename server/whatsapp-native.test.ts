@@ -786,7 +786,9 @@ describe("resolveWhatsAppBrowser", () => {
   const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   const base = { platform: "darwin" as const, arch: "arm64", home: "/Users/x", listDir: () => [] as string[] };
 
-  it("on macOS prefers the env override, then the bundled headless shell, then puppeteer, then Google Chrome", () => {
+  // These fixtures are macOS paths; the resolver joins with the host's
+  // separator, so they only hold on a POSIX host.
+  it.skipIf(process.platform === "win32")("on macOS prefers the env override, then the bundled headless shell, then puppeteer, then Google Chrome", () => {
     expect(resolveWhatsAppBrowser({ ...base, env: { OMB_WHATSAPP_CHROME_PATH: "/opt/chrome" }, exists: () => true }))
       .toEqual({ path: "/opt/chrome", source: "env" });
     // Google Chrome is there too, but running it headless locks the person out of their own Chrome
@@ -809,7 +811,7 @@ describe("resolveWhatsAppBrowser", () => {
       .toEqual({ path: linuxChrome, source: "google-chrome" });
   });
 
-  it("never opens a session profile with a browser a major version older than the one that wrote it", () => {
+  it.skipIf(process.platform === "win32")("never opens a session profile with a browser a major version older than the one that wrote it", () => {
     const shell = "/cache/chrome-headless-shell/mac_arm-155.0.8059.84/chrome-headless-shell-mac-arm64/chrome-headless-shell";
     const lookup = {
       ...base,

@@ -228,7 +228,7 @@ export interface FollowupPayload {
   origin?: Message["origin"];
   mode?: "chat" | "goal";
   via?: "api";
-  sender?: { name: string };
+  sender?: Message["sender"];
 }
 export type FollowupStatus = "pending" | "dispatching" | "interrupted" | "cancelled";
 export interface ChatFollowup {

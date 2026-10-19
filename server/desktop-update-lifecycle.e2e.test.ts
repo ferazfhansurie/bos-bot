@@ -3,7 +3,7 @@ import { request as httpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { launchVerificationServer, verificationServerEnvironment } from "../scripts/control-omb.ts";
 import { waitForExit } from "./testing/cleanup.ts";
@@ -20,7 +20,7 @@ it("desktop update endpoint refuses busy work and retains exclusive maintenance 
   const env=verificationServerEnvironment({...compatEnv,FAKE_CLAUDE_MODE:"slow",FAKE_CLAUDE_SLOW_FINISH_GATE:finish},dataDir,Number(new URL(url).port));
   env.OMB_DESKTOP_PARENT="1";
   env.OMB_DESKTOP_LIFECYCLE_GENERATION="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  child=spawn(process.execPath,["--experimental-strip-types","--import",pathToFileURL(preload).href,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
   let log="";child.stdout?.on("data",b=>{log+=String(b)});child.stderr?.on("data",b=>{log+=String(b)});
   const api=async(method:string,path:string,body?:unknown,owner:string=token)=>{
    const response=await fetch(url+path,{method,headers:{"content-type":"application/json","x-openmausbot-desktop-owner":owner,origin:url},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(10_000)});
@@ -53,7 +53,7 @@ it("desktop update endpoint refuses busy work and retains exclusive maintenance 
   expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"must refuse"})).status).toBe(503);
   const oldPid = child!.pid;
   await waitForExit(child,{signal:"SIGKILL"});
-  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  child=spawn(process.execPath,["--experimental-strip-types","--import",pathToFileURL(preload).href,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
   child.stderr?.on("data",b=>{log+=String(b)});
   await expect.poll(async()=>{if(child?.exitCode!==null)throw new Error(log);return (await api("GET","/api/health")).body.pid},{timeout:15000}).toBe(child.pid);
   expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"new child must retain update hold"})).status).toBe(503);
@@ -75,14 +75,14 @@ it("desktop update endpoint refuses busy work and retains exclusive maintenance 
   expect((await api("POST","/api/desktop/lifecycle/update",{action:"commit",expectedPid:child!.pid,nonce})).body.state).toBe("committed");
   expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409);
   await waitForExit(child,{signal:"SIGKILL"});
-  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  child=spawn(process.execPath,["--experimental-strip-types","--import",pathToFileURL(preload).href,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
   child.stderr?.on("data",b=>{log+=String(b)});
   await expect.poll(async()=>{if(child?.exitCode!==null)throw new Error(log);return (await api("GET","/api/health")).body.pid},{timeout:15000}).toBe(child.pid);
   expect((await api("POST",`/api/bots/${bot.id}/messages`,{threadId:bot.activeTaskId,text:"committed restart must stay held"})).status).toBe(503);
   expect((await api("POST","/api/desktop/lifecycle/update",{action:"cancel",expectedPid:child!.pid,nonce})).status).toBe(409);
   await waitForExit(child,{signal:"SIGKILL"});
   env.OMB_DESKTOP_LIFECYCLE_GENERATION="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-  child=spawn(process.execPath,["--experimental-strip-types","--import",preload,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
+  child=spawn(process.execPath,["--experimental-strip-types","--import",pathToFileURL(preload).href,fileURLToPath(new URL("./index.ts",import.meta.url))],{env,stdio:["ignore","pipe","pipe"]});
   child.stderr?.on("data",b=>{log+=String(b)});
   await expect.poll(async()=>{if(child?.exitCode!==null)throw new Error(log);return (await api("GET","/api/health")).body.pid},{timeout:15000}).toBe(child.pid);
   expect((await api("GET","/api/bots?messages=0")).status).toBe(200);

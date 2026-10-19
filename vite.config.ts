@@ -1,7 +1,7 @@
 import { compatEnv } from "./electron/branding-env.cjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -32,6 +32,8 @@ export default defineConfig({
       "scripts/**/*.test.ts",
       "standalone/**/*.test.mjs",
     ],
+    // node:test suites; `pnpm test:scripts` runs them under node --test.
+    exclude: [...configDefaults.exclude, "scripts/bos-readiness.test.mjs", "scripts/enterprise-export-bot.test.mjs", "scripts/linux-package-contract.test.mjs", "scripts/release-contract.test.mjs"],
     setupFiles: ["server/testing/setup.ts"],
     // the suite spawns fake provider CLIs and a real harness server;
     // parallel files introduce load-sensitive flakes for no win

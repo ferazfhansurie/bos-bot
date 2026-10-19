@@ -110,7 +110,9 @@ describe("build commit stamp", () => {
     expect(written).toEqual(stamp);
     expect(written.commit).toBe(sha);
     expect(written.server_sha256).toMatch(/^[0-9a-f]{64}$/);
-    // the shipped guard must read this stamp as valid for these exact trees
+    // the shipped guard must read this stamp as valid for these exact trees;
+    // it is the mac updater's /usr/bin/python3 guard, absent on Windows
+    if (process.platform === "win32") return;
     const app = path.join(resources, "..", "Stamped.app");
     fs.mkdirSync(path.join(app, "Contents"), { recursive: true });
     fs.renameSync(resources, path.join(app, "Contents", "Resources"));

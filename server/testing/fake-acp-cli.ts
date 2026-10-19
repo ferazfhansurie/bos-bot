@@ -1,5 +1,11 @@
 #!/usr/bin/env node
-import { compatEnv } from "../../electron/branding-env.cjs";
+// Tests copy this file into temp folders, so it cannot import repo modules by
+// relative path. Inline the one alias the dump needs: OMB_* also reads BOS_*.
+const compatEnv: NodeJS.ProcessEnv = new Proxy(process.env, {
+  get: (env, key) => typeof key === "string" && key.startsWith("OMB_")
+    ? env[key] ?? env[`BOS_${key.slice(4)}`] ?? env[`BOSBOT_${key.slice(4)}`]
+    : Reflect.get(env, key),
+});
 // Fake of an ACP (Agent Client Protocol) CLI's stdio surface, for driver
 // tests of acp/core.ts + its harness shims (grok, gemini). Speaks JSON-RPC
 // 2.0 over stdin/stdout: answers initialize / authenticate / session/new /

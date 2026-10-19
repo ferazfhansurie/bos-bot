@@ -44,6 +44,8 @@ interface QueueEntry {
     peerAsk?: Message["peerAsk"];
     /** A send spoken on a live voice call keeps its call through the wait. */
     origin?: Message["origin"];
+    /** A paired person's send keeps their name through the wait. */
+    sender?: Message["sender"];
   }>;
 }
 
@@ -111,7 +113,7 @@ export function queueSteeredMessage(
   botId: string,
   threadId: string,
   text: string,
-  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; deferUntilIdle?: boolean; unattended?: boolean; peerAsk?: Message["peerAsk"]; origin?: Message["origin"] } = {},
+  options: { prompt?: string; replyToId?: string; sendId?: string; reason?: "capacity"; deferUntilIdle?: boolean; unattended?: boolean; peerAsk?: Message["peerAsk"]; origin?: Message["origin"]; sender?: Message["sender"] } = {},
 ): QueuedSteer {
   const id = newId();
   const entry = queues.get(threadId) ?? { botId, items: [] };
@@ -136,6 +138,7 @@ export function queueSteeredMessage(
     unattended: options.unattended,
     peerAsk: options.peerAsk,
     ...(options.origin ? { origin: options.origin } : {}),
+    ...(options.sender ? { sender: options.sender } : {}),
   };
   saveChatFollowup({ id, kind: "bot", ownerId: botId, threadId, payload: item });
   entry.items.push(item);
@@ -245,6 +248,7 @@ export function drainSteeredMessages(
           queueId: item.messageId,
           peerAsk: item.peerAsk,
           ...(item.origin ? { origin: item.origin } : {}),
+          ...(item.sender ? { sender: item.sender } : {}),
         }),
       );
     }
