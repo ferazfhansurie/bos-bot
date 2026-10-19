@@ -61,7 +61,10 @@ def annotate(text, path):
         comment = '// ' + note
     elif suffix in ('.py', '.sh', '.yml', '.yaml', '.toml', '.apparmor'):
         comment = '# ' + note
-    elif suffix in ('.md', '.mdx', '.xml', '.plist', '.entitlements', '.html'):
+    elif suffix == '.mdx':
+        # MDX rejects HTML comments; the docs build fails on `<!--`.
+        comment = '{/* ' + note + ' */}'
+    elif suffix in ('.md', '.xml', '.plist', '.entitlements', '.html'):
         comment = '<!-- ' + note + ' -->'
     else: return text
     # Remove the previous generated note, so adding a row also stays idempotent.
